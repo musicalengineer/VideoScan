@@ -79,6 +79,12 @@ struct MusicTriageSheet: View {
     @Environment(\.dismiss) private var dismiss
     let candidateIDs: [UUID]
 
+    /// The way out (Rick 2026-08-14): every row is CHECKED for removal by
+    /// default, and unchecking keeps that file in the catalog. Stored
+    /// inverted -- only the exceptions -- so an 80k-candidate set needs no
+    /// prefilled Set and "all checked" costs nothing.
+    @State private var keptIDs: Set<UUID> = []
+
     /// Live resolution of the candidate list. O(candidates) via the
     /// model's O(1) id index — no full-catalog walk in body.
     private var candidates: [VideoRecord] {
@@ -121,10 +127,22 @@ struct MusicTriageSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // List is lazy, so an 80k-row candidate set renders only
-                // the visible rows. Rows are read-only — this is a
-                // confirm-the-batch view, not a per-row triage UI.
+                // the visible rows. Mostly confirm-the-batch — but each
+                // row has a checkbox so one or two genuine keepers can be
+                // spared without graduating into a full triage UI.
                 List(recs) { rec in
                     HStack(spacing: 8) {
+                        let kept = keptIDs.contains(rec.id)
+                        Button {
+                            if kept { keptIDs.remove(rec.id) } else { keptIDs.insert(rec.id) }
+                        } label: {
+                            Image(systemName: kept ? "square" : "checkmark.square.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(kept ? .secondary : .orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help(kept ? "Will stay in the catalog — click to include in removal"
+                                   : "Will be removed — click to keep this one")
                         Text(rec.ext.uppercased())
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .padding(.horizontal, 4)
@@ -148,6 +166,7 @@ struct MusicTriageSheet: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
+                    .opacity(keptIDs.contains(rec.id) ? 0.45 : 1.0)
                 }
                 .listStyle(.inset)
             }
@@ -162,15 +181,21 @@ struct MusicTriageSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Remove \(recs.count) from Catalog") {
+                let removing = Set(recs.map(\.id)).subtracting(keptIDs)
+                if !keptIDs.isEmpty {
+                    Text("keeping \(recs.filter { keptIDs.contains($0.id) }.count)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Button("Remove \(removing.count) from Catalog") {
                     // The EXISTING soft-delete: sets purgedAt, persists,
                     // arms the purge undo banner. No new machinery.
-                    model.purgeRecords(ids: Set(recs.map(\.id)))
+                    model.purgeRecords(ids: removing)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
-                .disabled(recs.isEmpty)
+                .disabled(removing.isEmpty)
             }
             .padding(12)
         }
