@@ -1122,7 +1122,7 @@ extension CatalogContent {
 
         if activeRecs.count == 1,
            let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
-            Button("Verification Results…") {
+            Button("Audio Info…") {
                 verifyAudioRequest = VerifyAudioRequest(
                     record: rec,
                     diagnosis: cached,

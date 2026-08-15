@@ -488,7 +488,7 @@ final class MediaFileOperationsCenter: ObservableObject {
     // MARK: Verify Audio diagnosis cache (GH #135)
     //
     // Completed VerifyAudioJobs park their computed AudioVerifyDiagnosis
-    // here, keyed by record id, so "Verification Results…" can present
+    // here, keyed by record id, so "Audio Info…" can present
     // it instantly — no re-probe, and NEVER a re-run of the levels pass
     // (the whole-track decode that motivated moving verify off the
     // sheet). Session-scoped, newest-wins per record.

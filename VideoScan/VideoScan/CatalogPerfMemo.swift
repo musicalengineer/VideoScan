@@ -80,11 +80,11 @@ final class RenderMemo<Key: Equatable, Value> {
 /// Laziness contract: the index rebuilds itself whenever the passed-in
 /// array's count differs from the count it was built against. VideoRecord
 /// is a class, so in-place field mutations are visible through the index
-/// without a rebuild. The one hole — a same-count membership swap (old
-/// instance out, new instance in, e.g. a rescan that lands on the exact
-/// prior count) — is covered by the miss fallback: an id the map doesn't
-/// know triggers one linear scan + rebuild, so worst case degrades to the
-/// pre-index behavior instead of returning a stale/missing answer.
+/// without a rebuild. The model's `records.didSet` calls `invalidate()` so a
+/// same-count membership swap cannot stale-hit an orphaned old instance. The
+/// miss fallback remains a second safety layer: an id the map doesn't know
+/// triggers one linear scan + rebuild, so worst case degrades to the pre-index
+/// behavior instead of returning a stale/missing answer.
 ///
 /// NOT thread-safe — designed to live on the @MainActor model.
 final class RecordIDIndex {

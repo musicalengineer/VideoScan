@@ -745,7 +745,7 @@ struct CatalogContent: View {
         .sheet(item: $trimRequest) { request in
             TrimSheet(request: request)
         }
-        // "Verification Results" (GH #128/#135) — presentation-only;
+        // "Audio Info ..." (GH #128/#135) — presentation-only;
         // carries the Balance Audio offer since the GH #137
         // consolidation. Same .sheet(item:) shape.
         .sheet(item: $verifyAudioRequest) { request in

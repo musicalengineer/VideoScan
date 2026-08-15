@@ -86,7 +86,7 @@ struct VerifyAudioSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Verification Results")
+            Text("Audio Information")
                 .font(.title2.weight(.semibold))
                 .accessibilityIdentifier("verifySheet.title")
 
