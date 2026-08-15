@@ -52,8 +52,15 @@ extension VideoScanModel {
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.directory]
         let host = CatalogHost.currentName.replacingOccurrences(of: " ", with: "_")
-        let dateStr = ISO8601DateFormatter().string(from: Date()).prefix(10)
-        panel.nameFieldStringValue = "VideoScan_\(host)_\(dateStr).videoscanbundle"
+        // Date AND time in the suggested name (Rick 2026-08-14): a second
+        // same-day backup used to collide with the first, and replacing a
+        // DIRECTORY bundle in an iCloud folder trips iCloud's
+        // delete-then-copy semantics — the user got an error and had to
+        // pick a new place. Unique-per-minute names never enter the
+        // overwrite path at all.
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HHmm"
+        panel.nameFieldStringValue = "VideoScan_\(host)_\(df.string(from: Date())).videoscanbundle"
         // Default to wherever the last backup landed (when that folder
         // still exists) so repeat backups are click → Return → done.
         if let dir = Self.defaultBackupDirectory(lastBackupPath: lastBackupPath) {
