@@ -97,6 +97,24 @@ struct CatalogToolbar<Dashboard: View>: View {
     // SwiftUI `@State` here ≈ a C++ member variable that triggers a view
     // re-render when written. The struct is a value type but @State boxes
     // its storage so mutations persist across re-renders.
+    // MARK: - Toolbar layout tuning
+    //
+    // The toolbar deliberately mirrors the VOLUME TABLE's column positions
+    // above it, so the eye reads down a column and lands on the related
+    // control. TWO fixed insets do that. A flexible Spacer anywhere between
+    // them would collapse the alignment by absorbing all the slack — which
+    // is exactly what pinned the Archivist to the far right before.
+    //
+    //   searchLeftInset — gap from the last left-hand control to the
+    //                     magnifier.  Target: magnifier under MEDIA SIZE.
+    //   archivistGap    — gap from the `?` help button to the sparkles.
+    //                     Target: sparkles under PHASE.
+    //
+    // Bigger = further right. Tune these two and rebuild; nothing else in
+    // the row needs touching. Rick 2026-08-14.
+    static var searchLeftInset: CGFloat { 460 }
+    static var archivistGap: CGFloat { 70 }
+
     @State private var showJunkConfirmSheet = false
     @State private var showJunkResultSheet = false
     @State private var junkResult: VideoScanModel.JunkDeletionResult?
@@ -180,7 +198,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Button("Decade…") { insertSearchPrefix("decade:") }
             }
         } label: {
+            // Matched to the `?` beside it (Rick 2026-08-14). Both are
+            // discovery affordances sitting next to an 18pt magnifier; at
+            // body default they read as specks rather than as buttons.
             Image(systemName: "plus.circle")
+                .font(.system(size: 17, weight: .medium))
                 .foregroundColor(.secondary)
         }
         .menuStyle(.borderlessButton)
@@ -475,12 +497,14 @@ struct CatalogToolbar<Dashboard: View>: View {
                 .buttonStyle(.bordered)
             }
 
-            // Centre the search group: a Spacer on each side pins it to
-            // the middle of the row (Rick 2026-08-11 — which lands it
-            // between the Media Size and Scanned columns above). Search
-            // is the thing you reach for most, so it gets the middle
-            // rather than whatever width was left over.
-            Spacer(minLength: 12)
+            // FIXED inset, not a flexible Spacer (Rick 2026-08-14). This is
+            // the one number that positions the search capsule: it is the
+            // gap between the last left-hand control and the magnifier, so
+            // raising it slides search right, lowering it slides search
+            // left. The goal is the capsule centred under the Errors
+            // column. Tune HERE — the flexible Spacer that pushes the
+            // Archivist away lives further down, so the two do not fight.
+            Spacer().frame(width: Self.searchLeftInset)
 
             HStack(spacing: 6) {
                 // Deliberately oversized (18pt semibold vs the old 13pt
@@ -490,8 +514,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.accentColor)
-                TextField("Try: donna 1990s · mark dan grampa · cape cod beach",
-                          text: $searchText)
+                // Just "Search" (Rick 2026-08-14). The old example-laden
+                // placeholder taught the grammar but filled the capsule with
+                // text that read as content rather than an empty field — and
+                // the `?` popover teaches the grammar properly anyway.
+                TextField("Search", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .frame(width: 320)
@@ -517,8 +544,19 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(Color(NSColor.textBackgroundColor))
-            .cornerRadius(7)
+            // Capsule rather than a 7pt rounded rect (Rick 2026-08-14): the
+            // squared-off box read as "a field among fields". A full capsule
+            // with a hairline border is the Finder search idiom — it reads as
+            // a distinct place you type into rather than another control in
+            // the row.
+            .background(Capsule().fill(Color(NSColor.textBackgroundColor)))
+            // Ring weight is deliberate (Rick 2026-08-14: "maybe even more
+            // emphasized given this dark background"). A hairline that reads
+            // fine on light chrome vanishes on dark, so this is a 1.5pt ring
+            // at higher opacity plus a soft halo — the capsule should read as
+            // a lit portal, not a faint outline.
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5))
+            .shadow(color: Color.white.opacity(0.12), radius: 3)
             // Searching... indicator. Shows while the user is mid-typing
             // and the 250 ms debounce window hasn't yet propagated
             // searchText → debouncedSearchText. Distinguishes the "still
@@ -563,7 +601,11 @@ struct CatalogToolbar<Dashboard: View>: View {
             Button {
                 showSearchHelp.toggle()
             } label: {
+                // Sized up from body-default (Rick 2026-08-14: "make the ?
+                // bigger so people can see help is available"). At default
+                // weight it was invisible next to the 18pt magnifier.
                 Image(systemName: "questionmark.circle")
+                    .font(.system(size: 17, weight: .medium))
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
@@ -571,6 +613,13 @@ struct CatalogToolbar<Dashboard: View>: View {
             .popover(isPresented: $showSearchHelp, arrowEdge: .bottom) {
                 CatalogSearchHelpPopover()
             }
+
+            // FIXED, not flexible. The Archivist has to land under PHASE,
+            // and a flexible Spacer here would push it to the far right
+            // regardless of what we ask for. Close enough to the search
+            // that the pair reads as one idea: "Search, or Chat with the
+            // Family Archivist."
+            Spacer().frame(width: Self.archivistGap)
 
             // Family Archivist — opens the floating chat window
             // (2026-08-07: outgrew the popover; the conversation lives
@@ -592,7 +641,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .padding(.horizontal, 2)
             }
             .buttonStyle(.plain)
-            .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for the quick popover)")
+            .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for Quick Catalog Filter)")
             .accessibilityIdentifier("archivist.askButton")
 
             // The sparkle alone never said what it did. Labelling it is
@@ -611,7 +660,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
 
 
-            Spacer(minLength: 12)
+            // The row's ONE flexible Spacer, and it lives here — after the
+            // Archivist — so everything to its left keeps the fixed column
+            // alignment and only the inspector toggle floats right.
+            Spacer(minLength: 16)
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
