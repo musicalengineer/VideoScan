@@ -10,9 +10,10 @@
 // unchanged.
 //
 // 2026-08-16 — volume-role taxonomy cleanup (docs/volume_taxonomy_proposal.md,
-// approved by Rick): `.retired` REMOVED (retirement is a lifecycle event
-// owned solely by `CatalogScanTarget.retiredAt`), `.lta` RENAMED `.offsite`
-// (raw "Offsite"), `.working` ADDED. Legacy raw strings still decode via
+// finalized by Rick): `.retired` REMOVED (retirement is a lifecycle event
+// owned solely by `CatalogScanTarget.retiredAt`), `.original` MERGED into
+// the new `.workspace`, `.lta` RENAMED `.cloud`, `.archive` displays as
+// "Master Archive". Legacy raw strings still decode via
 // `VolumeRole.decodeLegacy(_:)` — every persistence path goes through it.
 
 import Foundation
@@ -51,27 +52,29 @@ public enum VolumePhase: String, CaseIterable, Codable {
 /// is NOT a role (see `CatalogScanTarget.retiredAt`), safety is derived
 /// (`destinationPolicy`), condition is `VolumeTrust`.
 ///
+/// Final set (Rick, 2026-08-16):
 ///   unassigned  — never classified
 ///   system      — the boot volume root; auto-assigned, never user-picked
-///   working     — current-time media, scratch, edits, projects
-///   original    — source-of-truth camera/tape captures
-///   backup      — a copy of something else
+///   workspace   — everything the user actively uses: source drives,
+///                 current-time media, scratch, edits, projects
+///   backup      — a copy of something else; the delete/dup-safety role
+///                 (never elected Keep over a live file; preferred place
+///                 to delete an extra copy from)
+///   cloud       — the 3-2-1 offsite/cloud leg (was "Long-Term Archive")
 ///   archive     — THE Master Archive; set only by Initialize, never picked
-///   offsite     — the 3-2-1 third leg (was "Long-Term Archive")
 public enum VolumeRole: String, CaseIterable, Codable, Sendable {
     case unassigned  = "Unassigned"
     case system      = "System"
-    case working     = "Working"
-    case original    = "Original"
+    case workspace   = "Workspace"
     case backup      = "Backup"
-    case archive     = "Archive"
-    case offsite     = "Offsite"
+    case cloud       = "Cloud"
+    case archive     = "Master Archive"
 
     /// The roles a user may CHOOSE in any role picker/menu. `.archive` is
     /// reserved for the Master Archive (Initialize sets it) and `.system`
     /// is auto-assigned to the boot volume — both are display-only.
     /// Every role picker in the app must iterate this, never `allCases`.
-    public static let pickerCases: [VolumeRole] = [.unassigned, .working, .original, .backup, .offsite]
+    public static let pickerCases: [VolumeRole] = [.unassigned, .workspace, .backup, .cloud]
 
     /// True for roles the user may set by hand.
     public var isUserSelectable: Bool { Self.pickerCases.contains(self) }
@@ -79,7 +82,7 @@ public enum VolumeRole: String, CaseIterable, Codable, Sendable {
     /// Picker menu contents for a target currently holding `current`:
     /// `pickerCases`, plus `current` when it is a display-only role so
     /// SwiftUI's Picker still has a valid selection (a legacy non-master
-    /// "Archive" target keeps showing Archive until the user picks
+    /// "Archive" target keeps showing Master Archive until the user picks
     /// something else; nothing offers Archive/System afresh).
     public static func pickerChoices(including current: VolumeRole) -> [VolumeRole] {
         pickerCases.contains(current) ? pickerCases : pickerCases + [current]
@@ -106,14 +109,21 @@ public enum VolumeRole: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// Pre-taxonomy raw strings and their targets. Kept as data so the
-    /// test matrix and the decoder agree by construction.
-    ///   "Long-Term Archive" → .offsite   (rename)
+    /// Pre-final raw strings and their targets. Kept as data so the test
+    /// matrix and the decoder agree by construction.
+    ///   "Original"          → .workspace (merged into Workspace)
+    ///   "Working"           → .workspace (interim build name)
+    ///   "Long-Term Archive" → .cloud     (rename)
+    ///   "LTA" / "Offsite"   → .cloud     (short label / interim build name)
+    ///   "Archive"           → .archive   (display name is now "Master Archive")
     ///   "Retired"           → .unassigned + wasRetired (role → lifecycle event)
-    ///   "LTA"               → .offsite   (short label some hand-edits used)
     public static let legacyRawValues: [String: VolumeRole] = [
-        "Long-Term Archive": .offsite,
-        "LTA":               .offsite,
+        "Original":          .workspace,
+        "Working":           .workspace,
+        "Long-Term Archive": .cloud,
+        "LTA":               .cloud,
+        "Offsite":           .cloud,
+        "Archive":           .archive,
         "Retired":           .unassigned,
     ]
 

@@ -644,7 +644,7 @@ extension VideoScanModel {
         let archivedCount = allRecords.filter { rec in
             if rec.archiveStage == .archived { return true }
             let role = resolveVolumeSafety(rec.fullPath).role
-            return role == .offsite || role == .archive
+            return role == .cloud || role == .archive
         }.count
         let funnel: [TriageFunnelStage] = [
             TriageFunnelStage(label: "Scanned",
@@ -667,7 +667,7 @@ extension VideoScanModel {
         for rec in allRecords where rec.combinedFromPairID != nil {
             let isArchived = rec.archiveStage == .archived
             let role = resolveVolumeSafety(rec.fullPath).role
-            let onSafeHome = role == .offsite || role == .archive
+            let onSafeHome = role == .cloud || role == .archive
             if isArchived || onSafeHome {
                 bestStuffCount += 1
                 bestStuffBytes += rec.sizeBytes

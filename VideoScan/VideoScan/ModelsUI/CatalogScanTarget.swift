@@ -116,7 +116,7 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// Computed archival-destination suitability. Rules (first match wins):
     ///   1. RAID-0 or trust=Unreliable → Forbidden
     ///   2. Offline → Discouraged (can't write to it now)
-    ///   3. Role not Archive/Offsite → Acceptable (it's not meant as a target)
+    ///   3. Role not Master Archive/Cloud → Acceptable (it's not meant as a target)
     ///   4. Trust=Aging → Discouraged
     ///   5. ≥12 yr old, or ≥8 yr old without redundancy → Discouraged
     ///   6. Trust=Unknown on plain HDD/Network → Acceptable
@@ -126,7 +126,7 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
         if trust == .unreliable { return .forbidden }
         if !isReachable { return .discouraged }
 
-        let isDestRole = (role == .archive || role == .offsite)
+        let isDestRole = (role == .archive || role == .cloud)
         if !isDestRole { return .acceptable }
 
         if trust == .aging { return .discouraged }
@@ -239,7 +239,7 @@ extension CatalogScanTarget {
 // MARK: - Boot-volume / home-folder classification (role taxonomy 2026-08-16)
 
 /// Path predicates the role migration uses to auto-assign `.system` (the
-/// boot volume root — never user-picked) and default `.working` (folder
+/// boot volume root — never user-picked) and default `.workspace` (folder
 /// targets inside the user's home, e.g. ~/Movies). Pure string logic
 /// except the one `realpath` step needed to recognise the boot volume's
 /// `/Volumes/<BootName>` alias — a symlink macOS keeps pointing at "/".
@@ -276,7 +276,7 @@ extension CatalogScanTarget {
 
     /// True when `path` lies inside a user home directory (`/Users/<name>`
     /// or deeper) — the ~/Movies-style folder target. Such targets are
-    /// NOT system; the migration defaults them to `.working` when they are
+    /// NOT system; the migration defaults them to `.workspace` when they are
     /// still unassigned. `homeDirectory` is injectable for tests; the
     /// default also recognises any `/Users/<name>/…` so a target created
     /// under another account's home still classifies sensibly.

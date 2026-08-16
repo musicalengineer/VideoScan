@@ -163,7 +163,7 @@ extension VideoScanModel {
     /// remains in the catalog notes and relocate.log.
     ///
     /// Each sample carries the host volume's role + trust so the sheet
-    /// can render the `✅ LaCieWorkspace · Offsite · Reliable`
+    /// can render the `✅ LaCieWorkspace · Cloud · Reliable`
     /// badge line. Pure / nonisolated for tests.
     nonisolated static func witnessSamples(
         from entries: [SafelyRedundantEntry],

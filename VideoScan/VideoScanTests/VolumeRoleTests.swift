@@ -3,36 +3,35 @@ import Foundation
 @testable import VideoScan
 
 /// VolumeRole enum-level contract after the 2026-08-16 taxonomy cleanup
-/// (docs/volume_taxonomy_proposal.md): `.retired` gone, `.lta` → `.offsite`,
-/// `.working` added, `pickerCases` excludes Archive/System, and every
-/// legacy raw string still decodes. Model-level migration lives in
-/// VolumeRoleTaxonomyMigrationTests.
+/// (docs/volume_taxonomy_proposal.md, final names by Rick): `.retired`
+/// gone, `.original` merged into `.workspace`, `.lta` → `.cloud`,
+/// `.archive` displays as "Master Archive", `pickerCases` excludes
+/// Archive/System, and every legacy raw string still decodes. Model-level
+/// migration lives in VolumeRoleTaxonomyMigrationTests.
 @Suite("VolumeRole")
 struct VolumeRoleTests {
 
     @Test func allCasesPresent() {
         let all = VolumeRole.allCases
-        #expect(all.count == 7)
-        #expect(all.contains(.unassigned))
-        #expect(all.contains(.system))
-        #expect(all.contains(.working))
-        #expect(all.contains(.original))
-        #expect(all.contains(.backup))
-        #expect(all.contains(.archive))
-        #expect(all.contains(.offsite))
+        #expect(all.count == 6)
+        #expect(all == [.unassigned, .system, .workspace, .backup, .cloud, .archive])
+        #expect(VolumeRole.archive.rawValue == "Master Archive")
+        #expect(VolumeRole.cloud.rawValue == "Cloud")
+        #expect(VolumeRole.workspace.rawValue == "Workspace")
     }
 
-    /// The old case names must be gone — a `.retired` or `.lta` sneaking
-    /// back in would re-open the two-owners bug.
-    @Test func retiredAndLTARawValuesAreNotCurrentCases() {
-        #expect(VolumeRole(rawValue: "Retired") == nil)
-        #expect(VolumeRole(rawValue: "Long-Term Archive") == nil)
+    /// The old case names must be gone — any of them sneaking back in
+    /// would re-open the two-owners bug or split Workspace again.
+    @Test func retiredLTAOriginalWorkingOffsiteAreNotCurrentCases() {
+        for old in ["Retired", "Long-Term Archive", "Original", "Working", "Offsite", "Archive"] {
+            #expect(VolumeRole(rawValue: old) == nil, "'\(old)' must be legacy-only")
+        }
     }
 
     @Test func pickerCasesExcludeDisplayOnlyRoles() {
         let p = VolumeRole.pickerCases
-        #expect(p == [.unassigned, .working, .original, .backup, .offsite])
-        #expect(!p.contains(.archive), "Archive is set only by Initialize")
+        #expect(p == [.unassigned, .workspace, .backup, .cloud])
+        #expect(!p.contains(.archive), "Master Archive is set only by Initialize")
         #expect(!p.contains(.system), "System is auto-assigned to the boot volume")
         for r in VolumeRole.allCases {
             #expect(r.isUserSelectable == p.contains(r))
@@ -51,6 +50,7 @@ struct VolumeRoleTests {
             #expect(!r.shortLabel.isEmpty, "shortLabel empty for \(r.rawValue)")
             _ = r.color
         }
+        #expect(VolumeRole.cloud.icon == "icloud.fill", "Cloud's icon is the cloud")
     }
 
     @Test func shortLabelsAreUnique() {
@@ -75,23 +75,33 @@ struct VolumeRoleTests {
 
     // MARK: - Legacy raw-string decode matrix
 
-    /// Every string a pre-taxonomy build could have persisted, plus the
-    /// three current display-only/renamed ones, plus junk. ONE table, so
-    /// adding a legacy string means adding a row here.
+    /// Every string any earlier build could have persisted (original set,
+    /// the interim Working/Offsite/Archive build, hand-edits), plus the
+    /// current set, plus junk. ONE table, so adding a legacy string means
+    /// adding a row here.
     static let legacyMatrix: [(raw: String, role: VolumeRole, wasRetired: Bool, unknown: Bool)] = [
+        // current
         ("Unassigned",        .unassigned, false, false),
         ("System",            .system,     false, false),
-        ("Original",          .original,   false, false),
+        ("Workspace",         .workspace,  false, false),
         ("Backup",            .backup,     false, false),
-        ("Archive",           .archive,    false, false),
-        ("Long-Term Archive", .offsite,    false, false),   // rename
+        ("Cloud",             .cloud,      false, false),
+        ("Master Archive",    .archive,    false, false),
+        // original 2026 set
+        ("Original",          .workspace,  false, false),   // merged into Workspace
+        ("Archive",           .archive,    false, false),   // display name changed
+        ("Long-Term Archive", .cloud,      false, false),   // rename
         ("Retired",           .unassigned, true,  false),   // role → lifecycle stamp
-        ("Working",           .working,    false, false),
-        ("Offsite",           .offsite,    false, false),
-        ("LTA",               .offsite,    false, false),   // hand-edited short label
+        // interim build names
+        ("Working",           .workspace,  false, false),
+        ("Offsite",           .cloud,      false, false),
+        // hand-edits
+        ("LTA",               .cloud,      false, false),
         (" backup ",          .backup,     false, false),   // whitespace + case
         ("retired",           .unassigned, true,  false),   // case-insensitive legacy
-        ("Bogus",             .unassigned, false, true),    // junk → unassigned, flagged
+        ("original",          .workspace,  false, false),
+        // junk
+        ("Bogus",             .unassigned, false, true),
         ("",                  .unassigned, false, true),
     ]
 
@@ -128,8 +138,9 @@ struct VolumeRoleTests {
 
     @Test func encodingUsesCurrentRawValues() throws {
         let encoder = JSONEncoder()
-        #expect(String(data: try encoder.encode(VolumeRole.offsite), encoding: .utf8) == "\"Offsite\"")
-        #expect(String(data: try encoder.encode(VolumeRole.working), encoding: .utf8) == "\"Working\"")
+        #expect(String(data: try encoder.encode(VolumeRole.cloud), encoding: .utf8) == "\"Cloud\"")
+        #expect(String(data: try encoder.encode(VolumeRole.workspace), encoding: .utf8) == "\"Workspace\"")
+        #expect(String(data: try encoder.encode(VolumeRole.archive), encoding: .utf8) == "\"Master Archive\"")
         #expect(String(data: try encoder.encode(VolumeRole.system), encoding: .utf8) == "\"System\"")
     }
 }

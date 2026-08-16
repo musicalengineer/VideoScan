@@ -71,7 +71,7 @@ struct VolumesWindow: View {
     @State private var masterArchiveInitOffer: MasterArchiveInitOffer?
 
     /// Volume-role taxonomy migration (2026-08-16): one-time "these were
-    /// Archive; pick Original / Backup / Working" sheet. Presented when
+    /// Archive; pick Workspace / Backup" sheet. Presented when
     /// the window opens with a non-empty `model.pendingRoleReclassifications`
     /// and again whenever the queue refills (bundle import). "Decide
     /// later" simply dismisses; the queue persists in-memory until answered.

@@ -570,14 +570,13 @@ struct ModelSchemaTests {
     func volumeRoleRawValues() {
         #expect(VolumeRole.unassigned.rawValue == "Unassigned")
         #expect(VolumeRole.system.rawValue == "System")
-        #expect(VolumeRole.original.rawValue == "Original")
+        #expect(VolumeRole.workspace.rawValue == "Workspace")
         #expect(VolumeRole.backup.rawValue == "Backup")
-        #expect(VolumeRole.archive.rawValue == "Archive")
-        #expect(VolumeRole.working.rawValue == "Working")
-        #expect(VolumeRole.offsite.rawValue == "Offsite")
-        // Taxonomy 2026-08-16: `.retired` removed (retirement = retiredAt),
-        // `.lta` renamed `.offsite`, `.working` added.
-        #expect(VolumeRole.allCases.count == 7)
+        #expect(VolumeRole.cloud.rawValue == "Cloud")
+        #expect(VolumeRole.archive.rawValue == "Master Archive")
+        // Taxonomy 2026-08-16 (final): `.retired` removed (retirement =
+        // retiredAt), `.original` merged into `.workspace`, `.lta` → `.cloud`.
+        #expect(VolumeRole.allCases.count == 6)
     }
 
     @Test

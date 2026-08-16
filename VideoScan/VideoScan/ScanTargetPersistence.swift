@@ -23,7 +23,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
     /// the ONE decode path for roles (UserDefaults restore AND bundle /
     /// volume-snapshot import both route here) so every legacy rule lives
     /// in exactly one place:
-    ///   - "Long-Term Archive" / "LTA" → `.offsite`
+    ///   - "Original" / "Working" → `.workspace`; "Long-Term Archive" / "LTA" /
+    ///     "Offsite" → `.cloud`; "Archive" → `.archive` (now "Master Archive")
     ///   - "Retired" → `.unassigned` AND `retiredAt` stamped if nil
     ///     (`lastScannedDate` if known, else `now`), reason set if empty
     ///   - unknown string → `.unassigned` + one log line, target kept
@@ -215,7 +216,7 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         t.retiredWitnesses = s.retiredWitnesses
         // Role LAST and legacy-aware: a pre-taxonomy bundle carrying
         // role "Retired" (no stamp) becomes an unassigned target WITH a
-        // stamp; "Long-Term Archive" becomes Offsite. Same rules as the
+        // stamp; "Long-Term Archive" becomes Cloud. Same rules as the
         // UserDefaults restore path — one decoder for both.
         applyPersistedRole(s.role, to: t)
     }

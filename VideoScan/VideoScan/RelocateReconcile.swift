@@ -150,7 +150,7 @@ struct SafeWitnessInfo: Equatable, Hashable, Sendable {
     var safetyScore: Int { (isRetired ? 0 : roleScore) * 10 + trustScore }
 
     /// "Safe enough to count toward Bucket E classification." Conservative:
-    /// an Offsite volume marked Unreliable is NOT safe, a RETIRED host is
+    /// a Cloud volume marked Unreliable is NOT safe, a RETIRED host is
     /// never safe (a shelved disk must never authorize a destructive
     /// disposition), and an Unassigned/Unknown volume IS safe by default
     /// (we don't punish a witness for never being categorized —
@@ -161,11 +161,10 @@ struct SafeWitnessInfo: Equatable, Hashable, Sendable {
 
     var roleScore: Int {
         switch role {
-        case .offsite:    return 6
+        case .cloud:      return 6
         case .archive:    return 5
         case .backup:     return 4
-        case .original:   return 3
-        case .working:    return 2
+        case .workspace:  return 3
         case .system:     return 2
         case .unassigned: return 1
         }

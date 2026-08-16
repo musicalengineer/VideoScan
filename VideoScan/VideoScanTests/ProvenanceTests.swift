@@ -80,9 +80,9 @@ struct ProvenanceTests {
                             stage: .manuallyDeleted, notes: witnessNote2)
 
         let res = resolver([
-            "/Volumes/Mini2TB":           (.original, .unreliable),
+            "/Volumes/Mini2TB":           (.workspace, .unreliable),
             "/Volumes/MyBook3Terabytes":  (.backup,   .reliable),
-            "/Volumes/LaCieWorkspace":    (.offsite,  .reliable)
+            "/Volumes/LaCieWorkspace":    (.cloud,    .reliable)
         ])
         let prov = VideoScanModel.buildVolumeProvenance(
             sourceVolumeRootPath: "/Volumes/Mini2TB",
@@ -122,7 +122,7 @@ struct ProvenanceTests {
         let r2 = makeRecord(fullPath: "/Volumes/Mini2TB/clip2.mxf",
                             stage: .manuallyDeleted, notes: retiredNote)
         let res = resolver([
-            "/Volumes/Mini2TB":           (.original, .unreliable),
+            "/Volumes/Mini2TB":           (.workspace, .unreliable),
             "/Volumes/MyBook3Terabytes":  (.backup,   .reliable),
             "/Volumes/AncientDrive":      (.backup,   .unreliable)
         ])
@@ -156,7 +156,7 @@ struct ProvenanceTests {
         let r = makeRecord(fullPath: "/Volumes/Mini2TB/clip.mxf",
                            stage: .manuallyDeleted, notes: note)
         let res = resolver([
-            "/Volumes/Mini2TB":         (.original, .unreliable),
+            "/Volumes/Mini2TB":         (.workspace, .unreliable),
             "/Volumes/OldButReliable":  (.backup,   .aging)
         ])
         let prov = VideoScanModel.buildVolumeProvenance(
@@ -280,7 +280,7 @@ struct ProvenanceTests {
                             originVolume: "Drive1")
         let r3 = makeRecord(fullPath: "/Volumes/Drive2/c.mxf")
         let res = resolver([
-            "/Volumes/Drive1": (.original, .reliable),
+            "/Volumes/Drive1": (.workspace, .reliable),
             "/Volumes/Drive2": (.backup,   .reliable)
         ])
         let mo = VideoScanModel.buildMigrationOverview(
@@ -291,10 +291,10 @@ struct ProvenanceTests {
         #expect(mo.totalRecords == 3)
         // Find the Original-source bar — it should have 1 → original
         // and 1 → backup.
-        let origBar = mo.flowBars.first { $0.sourceRole == .original }
+        let origBar = mo.flowBars.first { $0.sourceRole == .workspace }
         #expect(origBar != nil)
         #expect(origBar?.totalRecords == 2)
-        let origToOrig = origBar?.entries.first { $0.destinationRole == .original }
+        let origToOrig = origBar?.entries.first { $0.destinationRole == .workspace }
         let origToBackup = origBar?.entries.first { $0.destinationRole == .backup }
         #expect(origToOrig?.recordCount == 1)
         #expect(origToBackup?.recordCount == 1)
@@ -325,7 +325,7 @@ struct ProvenanceTests {
                             combinedFromPairID: nil)
         let res = resolver([
             "/Volumes/Backup": (.backup, .reliable),
-            "/Volumes/LTA":    (.offsite, .reliable)
+            "/Volumes/LTA":    (.cloud,   .reliable)
         ])
         let mo = VideoScanModel.buildMigrationOverview(
             allRecords: [r1, r2, r3, r4],

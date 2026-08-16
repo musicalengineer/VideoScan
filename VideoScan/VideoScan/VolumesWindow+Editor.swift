@@ -213,7 +213,7 @@ struct VolumeEditor: View {
                                 .foregroundColor(target.role.color)
                             Text(target.role.rawValue)
                             Text(model.isMasterArchive(target)
-                                 ? "(Master Archive — set by Initialize)"
+                                 ? "(set by Initialize)"
                                  : "(boot volume)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)

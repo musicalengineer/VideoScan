@@ -15,19 +15,19 @@ import Foundation
 //   Sensor    — legacy "Retired" → stamp; retired host never "safe"
 //
 // Rule ↔ test map (for the report):
-//   D1 legacy "Long-Term Archive"/"LTA" → .offsite   applyPersistedRole_legacyStrings
+//   D1 legacy LTA/Offsite → .cloud, Original/Working → .workspace, Archive → .archive   applyPersistedRole_legacyStrings
 //   D2 legacy "Retired" → .unassigned + retiredAt    applyPersistedRole_retiredStampsOnce (+ RelocateRetireVolumeTests)
 //   D3 unknown raw → .unassigned, target kept        applyPersistedRole_unknownKeepsTarget / restore_legacyAndJunkRoles_allTargetsKept_realPrefsUntouched
 //   R1 boot volume root → .system                    migrate_bootVolumeBecomesSystem
-//   R2 .system on ~/folder → .working                migrate_homeFolderTaggedSystemBecomesWorking
-//   R3 unassigned ~/folder → .working                migrate_homeFolderDefaultsToWorking
+//   R2 .system on ~/folder → .workspace              migrate_homeFolderTaggedSystemBecomesWorkspace
+//   R3 unassigned ~/folder → .workspace              migrate_homeFolderDefaultsToWorkspace
 //   R4 non-master Archive → pending (master kept)    migrate_nonMasterArchiveQueued_masterUntouched
 //   R4' no designation → Archive left alone          migrate_noDesignationLeavesArchiveAlone
 //   Idempotency                                      migrate_isIdempotent / applyPersistedRole_retiredStampsOnce
 //   Reclassify sheet contract                        resolveReclassification_acceptsPickerRoles_refusesArchiveSystem
 //   Retired badge from retiredAt only                isRetired_isRetiredAtOnly / volumeSafety_retiredHostNeverSafe
 //   Bundle round-trip                                bundleSnapshot_roundTripPreservesEveryRole / bundleSnapshot_legacyStringsMigrate
-//   Symlink in ~/Movies pin                          symlinkInHomeMovies_resolvesToRealVolume_isWorkingNotSystem
+//   Symlink in ~/Movies pin                          symlinkInHomeMovies_resolvesToRealVolume_isWorkspaceNotSystem
 
 @Suite("Volume role taxonomy migration") @MainActor
 struct VolumeRoleTaxonomyMigrationTests {
@@ -59,12 +59,26 @@ struct VolumeRoleTaxonomyMigrationTests {
     @Test func applyPersistedRole_legacyStrings() {
         let lta = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
         ScanTargetPersistence.applyPersistedRole("Long-Term Archive", to: lta)
-        #expect(lta.role == .offsite)
+        #expect(lta.role == .cloud)
         #expect(lta.retiredAt == nil, "rename must not stamp retirement")
 
         let short = CatalogScanTarget(searchPath: "/Volumes/Cloud")
         ScanTargetPersistence.applyPersistedRole("LTA", to: short)
-        #expect(short.role == .offsite)
+        #expect(short.role == .cloud)
+
+        // Final-name merges/renames (Rick 2026-08-16): Original and the
+        // interim Working → Workspace; interim Offsite → Cloud; the old
+        // "Archive" raw string → .archive (now displayed "Master Archive").
+        let table: [(String, VolumeRole)] = [
+            ("Original", .workspace), ("Working", .workspace),
+            ("Offsite", .cloud), ("Archive", .archive),
+        ]
+        for (raw, expected) in table {
+            let t = CatalogScanTarget(searchPath: "/Volumes/\(raw)")
+            ScanTargetPersistence.applyPersistedRole(raw, to: t)
+            #expect(t.role == expected, "'\(raw)' → \(t.role)")
+            #expect(t.retiredAt == nil)
+        }
 
         // Current strings are plain assignments.
         for r in VolumeRole.allCases {
@@ -170,7 +184,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         let restored = restore(k)
         #expect(restored.count == 5, "no target is dropped for a bad role")
         let byPath = Dictionary(uniqueKeysWithValues: restored.map { ($0.searchPath, $0) })
-        #expect(byPath["/Volumes/A"]?.role == .offsite)
+        #expect(byPath["/Volumes/A"]?.role == .cloud)
         #expect(byPath["/Volumes/B"]?.role == .unassigned)
         #expect(byPath["/Volumes/B"]?.retiredAt != nil, "legacy Retired → stamp on restore")
         #expect(byPath["/Volumes/B"]?.isRetired == true)
@@ -271,34 +285,34 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(changed == 2)
     }
 
-    @Test func migrate_homeFolderDefaultsToWorking() {
+    @Test func migrate_homeFolderDefaultsToWorkspace() {
         let m = makeModel()
         let movies = CatalogScanTarget(searchPath: NSHomeDirectory() + "/Movies")
         #expect(movies.role == .unassigned, "precondition")
         let ext = CatalogScanTarget(searchPath: "/Volumes/MyBook")   // unassigned, NOT home
         m.scanTargets = [movies, ext]
         m.migrateVolumeRoles()
-        #expect(movies.role == .working)
-        #expect(ext.role == .unassigned, "only home folders get the Working default")
+        #expect(movies.role == .workspace)
+        #expect(ext.role == .unassigned, "only home folders get the Workspace default")
         #expect(!movies.isBootVolumeRoot, "~/Movies is inside the boot volume but is not its root")
     }
 
-    @Test func migrate_homeFolderTaggedSystemBecomesWorking() {
+    @Test func migrate_homeFolderTaggedSystemBecomesWorkspace() {
         let m = makeModel()
         let movies = CatalogScanTarget(searchPath: NSHomeDirectory() + "/Movies")
         movies.role = .system
         m.scanTargets = [movies]
         m.migrateVolumeRoles()
-        #expect(movies.role == .working, "folder targets inside ~ are NOT system")
+        #expect(movies.role == .workspace, "folder targets inside ~ are NOT system")
     }
 
     @Test func migrate_explicitHomeRolesAreKept() {
         let m = makeModel()
         let movies = CatalogScanTarget(searchPath: NSHomeDirectory() + "/Movies")
-        movies.role = .original
+        movies.role = .backup
         m.scanTargets = [movies]
         m.migrateVolumeRoles()
-        #expect(movies.role == .original, "a chosen role is never overridden by the default")
+        #expect(movies.role == .backup, "a chosen role is never overridden by the default")
     }
 
     @Test func migrate_nonMasterArchiveQueued_masterUntouched() {
@@ -355,7 +369,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         let snapshot2 = m.scanTargets.map { ($0.role, $0.retiredAt) }
         let pending2 = m.pendingRoleReclassifications.map(\.searchPath)
 
-        #expect(first == 2, "root → System, ~/Movies → Working")
+        #expect(first == 2, "root → System, ~/Movies → Workspace")
         #expect(second == 0, "second pass changes nothing")
         #expect(snapshot1.map(\.0) == snapshot2.map(\.0))
         #expect(snapshot1.map(\.1) == snapshot2.map(\.1))
@@ -398,12 +412,13 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(m.pendingRoleReclassifications.count == 1, "refused answer keeps the question")
         #expect(m.resolveRoleReclassification(legacy, to: .system) == false)
 
+        #expect(RoleReclassificationSheet.choices == [.workspace, .backup], "sheet asks Workspace or Backup only")
         for choice in RoleReclassificationSheet.choices {
             #expect(VolumeRole.pickerCases.contains(choice), "sheet offers only user-selectable roles")
         }
-        #expect(RoleReclassificationSheet.defaultChoice == .original)
-        #expect(m.resolveRoleReclassification(legacy, to: .original))
-        #expect(legacy.role == .original)
+        #expect(RoleReclassificationSheet.defaultChoice == .workspace)
+        #expect(m.resolveRoleReclassification(legacy, to: .workspace))
+        #expect(legacy.role == .workspace)
         #expect(m.pendingRoleReclassifications.isEmpty)
     }
 
@@ -472,10 +487,10 @@ struct VolumeRoleTaxonomyMigrationTests {
             #expect(!VolumeSafety(role: r, trust: .unreliable).isSafe)
         }
         #expect(VolumeSafety.unknown.isSafe, "unknown host stays safe-by-default")
-        let w = SafeWitnessInfo(path: "/Volumes/Old/x", role: .offsite, trust: .reliable, isRetired: true)
+        let w = SafeWitnessInfo(path: "/Volumes/Old/x", role: .cloud, trust: .reliable, isRetired: true)
         #expect(!w.isSafe)
         #expect(w.safetyScore == 3, "retired host scores 0 on the role axis (old .retired rank) + trust")
-        #expect(SafeWitnessInfo(path: "", role: .offsite, trust: .reliable).safetyScore == 63)
+        #expect(SafeWitnessInfo(path: "", role: .cloud, trust: .reliable).safetyScore == 63)
 
         // The model resolver carries the stamp through.
         let m = makeModel()
@@ -505,7 +520,7 @@ struct VolumeRoleTaxonomyMigrationTests {
     }
 
     /// A pre-taxonomy bundle: role strings "Long-Term Archive" / "Retired"
-    /// (no stamp) import as Offsite / Unassigned+stamp. Hand-built JSON so
+    /// (no stamp) import as Cloud / Unassigned+stamp. Hand-built JSON so
     /// the fixture cannot drift with the encoder.
     @Test func bundleSnapshot_legacyStringsMigrate() throws {
         func snap(_ role: String) throws -> VolumeMetadataSnapshot {
@@ -517,7 +532,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         }
         let lta = CatalogScanTarget(searchPath: "/Volumes/Legacy")
         ScanTargetPersistence.applyVolumeSnapshot(try snap("Long-Term Archive"), to: lta)
-        #expect(lta.role == .offsite)
+        #expect(lta.role == .cloud)
         #expect(lta.retiredAt == nil)
 
         let ret = CatalogScanTarget(searchPath: "/Volumes/Legacy")
@@ -536,9 +551,9 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// A symlinked folder inside a home-style tree that points at another
     /// location keeps resolving to its REAL location for reachability and
     /// free-space (URL resource values follow the link), and classifies as
-    /// a Working home folder — never System. Built under the temp dir so
+    /// a Workspace home folder — never System. Built under the temp dir so
     /// the real ~/Movies is untouched.
-    @Test func symlinkInHomeMovies_resolvesToRealVolume_isWorkingNotSystem() throws {
+    @Test func symlinkInHomeMovies_resolvesToRealVolume_isWorkspaceNotSystem() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory
             .appendingPathComponent("test_roletax_symlink_\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -563,7 +578,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         // Classification: a home folder, not the boot root.
         #expect(CatalogScanTarget.isHomeFolderPath(link.path, homeDirectory: fakeHome.path))
         #expect(!CatalogScanTarget.isBootVolumeRootPath(link.path))
-        // Migration default for it is Working (rule R3), pinned via the
+        // Migration default for it is Workspace (rule R3), pinned via the
         // predicate the migration uses.
         let m = makeModel()
         let t = CatalogScanTarget(searchPath: link.path)
@@ -571,7 +586,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         // isHomeFolderTarget uses the REAL home; the fake tree lives under
         // tmp, so exercise the rule through the injectable predicate here
         // and the model rule through a real-home path in
-        // migrate_homeFolderDefaultsToWorking.
+        // migrate_homeFolderDefaultsToWorkspace.
         #expect(!t.isBootVolumeRoot)
 
         // Removing the real target makes the link dangling — reachability
@@ -606,7 +621,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         }
         #expect(m.scanTargets.count == 1000)
         #expect(m.scanTargets.filter { $0.isRetired }.count == 125, "every legacy 'Retired' stamped")
-        #expect(m.scanTargets.filter { $0.role == .offsite }.count == 250)
+        #expect(m.scanTargets.filter { $0.role == .cloud }.count == 250)
         #expect(elapsed < .seconds(3), "1,000-target decode+migrate took \(elapsed)")
     }
 }

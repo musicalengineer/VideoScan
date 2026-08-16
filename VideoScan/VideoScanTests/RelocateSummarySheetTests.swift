@@ -447,7 +447,7 @@ struct RelocateSummarySheetTests {
         let resolverWithSafe: VolumeSafetyResolver = { p in
             if p.hasPrefix("/Volumes/OldMaxtor/") { return VolumeSafety(role: .backup, trust: .reliable, isRetired: true) }
             if p.hasPrefix("/Volumes/FlakyDrive/") { return VolumeSafety(role: .backup, trust: .unreliable) }
-            if p.hasPrefix("/Volumes/LaCieWorkspace/") { return VolumeSafety(role: .offsite, trust: .reliable) }
+            if p.hasPrefix("/Volumes/LaCieWorkspace/") { return VolumeSafety(role: .cloud, trust: .reliable) }
             return VolumeSafety.unknown
         }
         let result2 = RelocateReconcile.reconcile(
@@ -484,9 +484,9 @@ struct RelocateSummarySheetTests {
 
         let witnesses = [
             ("/Volumes/A/x.bin", VolumeRole.backup, VolumeTrust.reliable),
-            ("/Volumes/B/x.bin", VolumeRole.offsite, VolumeTrust.aging),
+            ("/Volumes/B/x.bin", VolumeRole.cloud, VolumeTrust.aging),
             ("/Volumes/C/x.bin", VolumeRole.archive, VolumeTrust.unknown),
-            ("/Volumes/D/x.bin", VolumeRole.original, VolumeTrust.reliable)
+            ("/Volumes/D/x.bin", VolumeRole.workspace, VolumeTrust.reliable)
         ]
         let resolver: VolumeSafetyResolver = { p in
             for (path, role, trust) in witnesses where p.hasPrefix(path) {
@@ -515,16 +515,16 @@ struct RelocateSummarySheetTests {
         )
         let entry = try? #require(result.safelyRedundant.first)
         // Expected order (highest safetyScore first):
-        //   Offsite + Aging  → 6*10 + 2 = 62
+        //   Cloud + Aging    → 6*10 + 2 = 62
         //   Archive + Unknown→ 5*10 + 1 = 51
         //   Backup + Reliable→ 4*10 + 3 = 43
-        //   Original + Reliable → 3*10 + 3 = 33
+        //   Workspace + Reliable → 3*10 + 3 = 33
         let safePaths = entry?.safeWitnesses.map(\.path) ?? []
         #expect(safePaths == [
             "/Volumes/B/x.bin",   // LTA + Aging
             "/Volumes/C/x.bin",   // Archive + Unknown
             "/Volumes/A/x.bin",   // Backup + Reliable
-            "/Volumes/D/x.bin"    // Original + Reliable
+            "/Volumes/D/x.bin"    // Workspace + Reliable
         ])
     }
 
@@ -606,7 +606,7 @@ struct RelocateSummarySheetTests {
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
-        safeWitness.role = .offsite
+        safeWitness.role = .cloud
         safeWitness.trust = .reliable
         model.scanTargets = [
             CatalogScanTarget(searchPath: ws.source.path),
@@ -630,7 +630,7 @@ struct RelocateSummarySheetTests {
         #expect(summary.degradedOnlyCount == 0)
         // Sample carries the safe host's role/trust.
         let sample = try #require(summary.witnessSamples.first)
-        #expect(sample.witnessRole == .offsite)
+        #expect(sample.witnessRole == .cloud)
         #expect(sample.witnessTrust == .reliable)
         #expect(sample.isSafe)
     }

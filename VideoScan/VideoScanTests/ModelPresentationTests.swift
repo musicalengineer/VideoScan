@@ -129,12 +129,11 @@ struct ModelPresentationTests {
     func volumeRoleIcons() {
         #expect(VolumeRole.unassigned.icon == "questionmark.circle")
         #expect(VolumeRole.system.icon     == "internaldrive.fill")
-        #expect(VolumeRole.original.icon   == "film.stack")
+        #expect(VolumeRole.workspace.icon  == "film.stack")
         #expect(VolumeRole.backup.icon     == "doc.on.doc")
+        #expect(VolumeRole.cloud.icon      == "icloud.fill")
         #expect(VolumeRole.archive.icon    == "archivebox.fill")
-        #expect(VolumeRole.offsite.icon    == "icloud.fill")
-        #expect(VolumeRole.working.icon    == "hammer")
-        #expect(VolumeRole.allCases.count == 7)
+        #expect(VolumeRole.allCases.count == 6)
     }
 
     // VolumeRole.shortLabel (CaseIterable).
@@ -142,12 +141,11 @@ struct ModelPresentationTests {
     func volumeRoleShortLabels() {
         #expect(VolumeRole.unassigned.shortLabel == "—")
         #expect(VolumeRole.system.shortLabel     == "SYS")
-        #expect(VolumeRole.original.shortLabel   == "ORIG")
+        #expect(VolumeRole.workspace.shortLabel  == "WKSP")
         #expect(VolumeRole.backup.shortLabel     == "BKUP")
+        #expect(VolumeRole.cloud.shortLabel      == "CLD")
         #expect(VolumeRole.archive.shortLabel    == "ARCH")
-        #expect(VolumeRole.offsite.shortLabel    == "OFFS")
-        #expect(VolumeRole.working.shortLabel    == "WORK")
-        #expect(VolumeRole.allCases.count == 7)
+        #expect(VolumeRole.allCases.count == 6)
     }
 
     // VolumeTrust.icon (CaseIterable).

@@ -258,8 +258,8 @@ extension CatalogView {
             }
             .width(min: 95, ideal: 115)
 
-            // Role column — shows volume role (Original/Backup/Archive/
-            // LTA/etc.) on its own when trust is .reliable or .unknown,
+            // Role column — shows volume role (Workspace/Backup/Cloud/
+            // Master Archive/etc.) on its own when trust is .reliable or .unknown,
             // and "Role · Trust" when trust is degraded so the user can
             // spot drives that need attention without opening the
             // editor. Trust word inherits VolumeTrust.color so .aging is

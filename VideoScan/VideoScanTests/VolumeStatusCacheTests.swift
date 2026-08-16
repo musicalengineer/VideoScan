@@ -244,7 +244,7 @@ struct VolumeStatusCacheTests {
                 notes: nil)
         }
         let targets = volumes.map {
-            VolumeStatusTargetSnap(searchPath: $0, role: .original, trust: .reliable)
+            VolumeStatusTargetSnap(searchPath: $0, role: .workspace, trust: .reliable)
         }
         let start = Date()
         let out = await VideoScanModel.computeVolumeStatuses(records: records,

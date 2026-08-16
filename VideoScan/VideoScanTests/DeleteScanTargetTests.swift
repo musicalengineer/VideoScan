@@ -76,7 +76,7 @@ struct DeleteScanTargetTests {
         let doomed = CatalogScanTarget(searchPath: doomedPath)
         doomed.lastScannedDate = Date()
         doomed.phase = .cataloged
-        doomed.role = .original
+        doomed.role = .workspace
         doomed.trust = .aging
         doomed.filesystem = "APFS"
         doomed.mediaTech = .hdd
@@ -154,7 +154,7 @@ struct DeleteScanTargetTests {
         defaults.set(retiredWitnesses, forKey: retiredWitnessesKey)
 
         // Sanity check the seed.
-        #expect((defaults.dictionary(forKey: rolesKey)?[doomedPath] as? String) == "Original")
+        #expect((defaults.dictionary(forKey: rolesKey)?[doomedPath] as? String) == "Workspace")
 
         // Simulate the post-delete rebuild: rebuild dicts from the
         // surviving targets only (== what persistMetadata does).

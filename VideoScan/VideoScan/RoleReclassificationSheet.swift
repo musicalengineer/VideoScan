@@ -6,8 +6,8 @@
 //  Targets whose persisted role was "Archive" but which are NOT the
 //  designated Master Archive land in `model.pendingRoleReclassifications`;
 //  `.archive` now means THE Master Archive, so we ask rather than rename.
-//  Per row: a picker limited to Original / Backup / Working (default
-//  Original). "Apply" commits every row; "Decide later" leaves the queue
+//  Per row: a picker limited to Workspace / Backup (default Workspace).
+//  "Apply" commits every row; "Decide later" leaves the queue
 //  intact so the sheet returns on the next Volumes-window open.
 //
 
@@ -18,11 +18,11 @@ struct RoleReclassificationSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     /// The roles offered per row — a strict subset of `pickerCases`:
-    /// Unassigned/Offsite are not answers to "was this an original or a
-    /// backup of the archive?". Default is Original (the conservative
-    /// answer: a source of truth, never treated as an expendable copy).
-    static let choices: [VolumeRole] = [.original, .backup, .working]
-    static let defaultChoice: VolumeRole = .original
+    /// Unassigned/Cloud are not answers to "is this something you use, or
+    /// a copy?". Default is Workspace (the conservative answer: a live
+    /// drive, never treated as an expendable copy).
+    static let choices: [VolumeRole] = [.workspace, .backup]
+    static let defaultChoice: VolumeRole = .workspace
 
     /// Per-target selection, keyed by target id. Swift `Dictionary` ≈
     /// C++ `std::unordered_map`; missing key falls back to the default.
@@ -39,7 +39,7 @@ struct RoleReclassificationSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("These volumes were marked Archive")
                         .font(.title3.bold())
-                    Text("Only the Master Archive can be Archive now — pick a role for each.")
+                    Text("Only the Master Archive can hold that role now — pick Workspace or Backup for each.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                 }

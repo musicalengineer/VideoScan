@@ -298,7 +298,7 @@ struct MigrationOverview: Identifiable, Equatable {
 
     // 4. Best stuff highlight
     /// Records that went through Combine AND reached `.archived` OR live
-    /// on an `.offsite`/`.archive` role volume. The friendly count.
+    /// on a `.cloud`/`.archive` role volume. The friendly count.
     let bestStuffCount: Int
     /// Total bytes the best-stuff cohort represents — for the friendly
     /// subhead, since users think in GB more than file counts.

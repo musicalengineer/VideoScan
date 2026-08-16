@@ -5,9 +5,10 @@ import os
 //
 // docs/volume_taxonomy_proposal.md, approved by Rick 2026-08-16. The
 // VolumeRole enum lost `.retired` (retirement is a lifecycle event owned by
-// `CatalogScanTarget.retiredAt`), renamed `.lta` → `.offsite`, and gained
-// `.working`. `.archive` now means THE Master Archive and `.system` the
-// boot volume — neither is user-pickable.
+// `CatalogScanTarget.retiredAt`), merged `.original` into the new
+// `.workspace`, renamed `.lta` → `.cloud`. `.archive` ("Master Archive")
+// means THE Master Archive and `.system` the boot volume — neither is
+// user-pickable.
 //
 // Two layers do the migration:
 //   1. DECODE — `ScanTargetPersistence.applyPersistedRole` (UserDefaults
@@ -30,12 +31,12 @@ extension VideoScanModel {
     ///   R1. boot volume root ("/", "/System/Volumes/Data", "/Volumes/<Boot>")
     ///       → `.system` (auto-assigned; hidden from pickers)
     ///   R2. `.system` on a NON-boot path inside a home folder (e.g. a hand-
-    ///       tagged ~/Movies) → `.working` — folder targets in ~ are not system
-    ///   R3. `.unassigned` inside a home folder → `.working` (default)
+    ///       tagged ~/Movies) → `.workspace` — folder targets in ~ are not system
+    ///   R3. `.unassigned` inside a home folder → `.workspace` (default)
     ///   R4. `.archive` on a target that is NOT the designated Master
     ///       Archive, while a Master Archive IS designated → queued in
     ///       `pendingRoleReclassifications` (never silently renamed; the
-    ///       Volumes window asks Original / Backup / Working once). With
+    ///       Volumes window asks Workspace / Backup once). With
     ///       no designation yet, an Archive-role target is left alone —
     ///       it may well be the one Rick is about to Initialize.
     ///   R5. legacy "Retired" role → handled at decode time (stamp), so by
@@ -55,10 +56,10 @@ extension VideoScanModel {
                 if t.role != .system { t.role = .system }
             } else if t.role == .system, t.isHomeFolderTarget {
                 // R2
-                t.role = .working
+                t.role = .workspace
             } else if t.role == .unassigned, t.isHomeFolderTarget {
                 // R3
-                t.role = .working
+                t.role = .workspace
             } else if t.role == .archive, masterArchive != nil,
                       master !== t, !isMasterArchive(t) {
                 // R4 — flag, don't rename. Dedup so a second pass (or a
@@ -79,12 +80,12 @@ extension VideoScanModel {
             t.role != .archive || isMasterArchive(t) || !scanTargets.contains(where: { $0 === t })
         }
         if changed > 0 {
-            log("Volume roles updated for \(changed) target(s) (System / Working defaults).")
+            log("Volume roles updated for \(changed) target(s) (System / Workspace defaults).")
             persistScanDates()
             notifyTargetsChanged()
         }
         if queued > 0 {
-            log("\(queued) volume(s) were marked Archive but only the Master Archive can be Archive now — the Volumes window will ask you to pick a role for each.")
+            log("\(queued) volume(s) were marked Archive but only the Master Archive can be that now — the Volumes window will ask you to pick Workspace or Backup for each.")
         }
         return changed
     }

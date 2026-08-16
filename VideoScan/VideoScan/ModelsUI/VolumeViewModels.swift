@@ -29,7 +29,7 @@ struct VolumeRow: Identifiable {
     let isReachable: Bool
     let isNetwork: Bool
     let catalogStatusText: String
-    /// Volume role (Original / Backup / Archive / LTA / etc.). Surfaced
+    /// Volume role (Workspace / Backup / Cloud / Master Archive / etc.). Surfaced
     /// in the Role column so the user can see at a glance which drives
     /// in the table are the source-of-truth vs duplicates vs long-term
     /// archives, without opening the Volumes editor.

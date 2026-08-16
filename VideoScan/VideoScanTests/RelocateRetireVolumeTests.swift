@@ -412,7 +412,7 @@ struct RelocateRetireVolumeTests {
     @Test
     func volumeMetadataSnapshot_roundTripsRetireFields() throws {
         let target = CatalogScanTarget(searchPath: "/Volumes/Maxtor500FW")
-        target.role = .original
+        target.role = .workspace
         target.trust = .aging
         target.mediaTech = .hdd
         target.retiredAt = Date(timeIntervalSince1970: 1_717_000_000)
