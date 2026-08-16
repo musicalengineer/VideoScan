@@ -16,7 +16,17 @@ struct PromoteToArchiveSheet: View {
 
     let request: ArchivePromoteRequest
 
+    /// "Archive anyway (I know this file)" — Rick's explicit override for
+    /// un-probeable files (the ONE blocking readiness state).
+    @State var overrideUnprobeable = false
+
     private var plan: ArchivePromotePlan { request.plan }
+
+    /// Confirm is blocked ONLY by un-probeable files without the override
+    /// (plus the pre-existing free-space / read-only / identity gates).
+    private var blockedByReadiness: Bool {
+        plan.unprobeableCount > 0 && !overrideUnprobeable
+    }
 
     private var rootLabel: String {
         VolumeReachability.displayLabel(forPath: plan.rootPath)
@@ -57,6 +67,8 @@ struct PromoteToArchiveSheet: View {
                 }
             }
 
+            readinessSection
+
             warnings
 
             HStack {
@@ -67,7 +79,8 @@ struct PromoteToArchiveSheet: View {
                     confirm()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(plan.entries.isEmpty || !plan.hasEnoughFreeSpace || model.isReadOnly || model.masterArchiveIdentityMismatch != nil)
+                .disabled(plan.entries.isEmpty || !plan.hasEnoughFreeSpace || model.isReadOnly
+                          || model.masterArchiveIdentityMismatch != nil || blockedByReadiness)
                 .accessibilityIdentifier("promote.confirm")
             }
         }
@@ -137,7 +150,9 @@ struct PromoteToArchiveSheet: View {
     }
 
     private func confirm() {
-        fileOpsCenter.startPromote(plan: plan, model: model)
+        var confirmed = plan
+        confirmed.allowUnprobeable = overrideUnprobeable
+        fileOpsCenter.startPromote(plan: confirmed, model: model)
         dismiss()
         openWindow(id: "combine")   // Media File Operations window (legacy id)
     }

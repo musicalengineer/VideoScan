@@ -472,7 +472,7 @@ enum ArchivePromoteEngine {
     /// `expectedHeader` (when given). Otherwise (the journal) O_CREAT is
     /// allowed but never through a symlink. Returns the fd (caller closes).
     static func openIndexFile(root: String, name: String, mustExist: Bool,
-                              expectedHeader: String? = nil) throws -> Int32 {
+                              expectedHeaders: [String]? = nil) throws -> Int32 {
         let indexFD = try openIndexDirectory(root: root)
         defer { Darwin.close(indexFD) }
         var flags = O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC
@@ -488,16 +488,29 @@ enum ArchivePromoteEngine {
             Darwin.close(fd)
             throw Failure.manifestInvalid("\(name) is not a regular file")
         }
-        if let expectedHeader {
-            let want = Data(expectedHeader.utf8)
-            var head = [UInt8](repeating: 0, count: want.count)
-            let n = pread(fd, &head, want.count, 0)
-            guard n == want.count, Data(head) == want else {
+        if let expectedHeaders {
+            // The FIRST LINE must equal one of the accepted headers exactly
+            // (legacy 12-column and current 13-column manifests both pass;
+            // "header + junk on the same line" does not).
+            guard let first = firstLine(fd: fd), expectedHeaders.contains(first) else {
                 Darwin.close(fd)
-                throw Failure.manifestInvalid("\(name) does not start with the expected header")
+                throw Failure.manifestInvalid("\(name) does not start with a recognized header")
             }
         }
         return fd
+    }
+
+    /// The first line (without its newline) of an open descriptor, read via
+    /// pread from offset 0; nil when unreadable or longer than 8 KB.
+    static func firstLine(fd: Int32) -> String? {
+        var head = [UInt8](repeating: 0, count: 8192)
+        let n = pread(fd, &head, head.count, 0)
+        guard n > 0 else { return nil }
+        let bytes = head.prefix(n)
+        guard let nl = bytes.firstIndex(of: 0x0A) else {
+            return n < head.count ? String(decoding: bytes, as: UTF8.self) : nil
+        }
+        return String(decoding: bytes[..<nl], as: UTF8.self)
     }
 
     /// One O_APPEND write of `data` + the requested barrier; a short write

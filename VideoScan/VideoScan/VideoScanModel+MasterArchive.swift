@@ -78,6 +78,9 @@ struct ArchivePromotePlan: Sendable {
         let folder: String
         let dateHint: ArchiveDateHint
         let lowConfidenceDate: Bool
+        /// Archival readiness (ArchiveReadiness, 2026-08-16): playable /
+        /// audio / format / date + warnings. Computed once per plan entry.
+        let readiness: ArchiveReadiness
     }
     enum Skip: Sendable, Equatable {
         case alreadyPromoted
@@ -91,6 +94,17 @@ struct ArchivePromotePlan: Sendable {
     let skipped: [(id: UUID, filename: String, reason: Skip)]
     let totalBytes: Int64
     let freeBytesAtRoot: Int64?
+    /// "Archive anyway (I know this file)" — the user's explicit override
+    /// that lets un-probeable entries through (Rick: never block except
+    /// un-probeable, and even that within reason). Set by the sheet.
+    var allowUnprobeable: Bool = false
+
+    // MARK: Readiness counters (O(selection))
+    var audioNotVerifiedCount: Int { entries.filter { $0.readiness.audio == .notVerified }.count }
+    var audioProblemCount: Int { entries.filter { if case .verifiedProblem = $0.readiness.audio { return true }; return false }.count }
+    var atRiskFormatCount: Int { entries.filter { if case .atRisk = $0.readiness.format { return true }; return false }.count }
+    var dateWarningCount: Int { entries.filter { $0.readiness.date != .known }.count }
+    var unprobeableCount: Int { entries.filter { $0.readiness.blocking }.count }
 
     var undatedCount: Int { entries.filter { $0.dateHint == .unknown }.count }
     var lowConfidenceCount: Int { entries.filter { $0.lowConfidenceDate }.count }
@@ -525,7 +539,8 @@ extension VideoScanModel {
                                  folder: ArchivePathResolver.folder(for: facts.streamType,
                                                                     hint: facts.dateHint),
                                  dateHint: facts.dateHint,
-                                 lowConfidenceDate: facts.dateIsLowConfidence))
+                                 lowConfidenceDate: facts.dateIsLowConfidence,
+                                 readiness: ArchiveReadiness.assess(record: rec)))
             total += rec.sizeBytes
         }
         let free = Self.freeBytes(atPath: root)
@@ -586,7 +601,8 @@ extension VideoScanModel {
                               relativePath: String,
                               sha256: String,
                               probed copy: VideoRecord,
-                              promotedAt: Date = Date()) -> VideoRecord {
+                              promotedAt: Date = Date(),
+                              readiness: ArchiveReadiness? = nil) -> VideoRecord {
         // Self-contained provenance on the COPY (codex QA major b): the
         // source's id, path and volume live on this record, so a later
         // retired-volume cleanup that removes the source record leaves
@@ -629,7 +645,8 @@ extension VideoScanModel {
 
         let stamp = ISO8601DateFormatter().string(from: promotedAt)
         let sourceNote = "Promote \(stamp): promoted to Master Archive as \(relativePath)"
-        let copyNote = "Promote \(stamp): promoted from \(source.fullPath) · sha256 \(sha256)"
+        let readinessNote = readiness.map { " · readiness: \($0.summary)" } ?? ""
+        let copyNote = "Promote \(stamp): promoted from \(source.fullPath) · sha256 \(sha256)\(readinessNote)"
         source.notes = source.notes.isEmpty ? sourceNote : "\(source.notes)\n\(sourceNote)"
         copy.notes = copy.notes.isEmpty ? copyNote : "\(copy.notes)\n\(copyNote)"
 

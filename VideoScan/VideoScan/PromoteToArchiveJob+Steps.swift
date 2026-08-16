@@ -185,6 +185,11 @@ extension PromoteToArchiveJob {
         guard let source = model.record(forID: entry.recordID) else {
             return .skipped("record no longer in the catalog")
         }
+        // ---- Readiness gate (Rick: never block except un-probeable, and
+        // even that the user can override with "Archive anyway").
+        if entry.readiness.blocking && !plan.allowUnprobeable {
+            return .skipped("un-probeable (no decodable streams) — tick \"Archive anyway (I know this file)\" to promote it regardless")
+        }
         // ---- Idempotency by SOURCE IDENTITY (catalog leg).
         if model.masterArchiveCopy(of: source) != nil {
             return .skipped("already in the Master Archive")
@@ -236,7 +241,8 @@ extension PromoteToArchiveJob {
             }
             try await finishPublished(sourceID: source.id, source: source, sourcePath: source.fullPath,
                                       relPath: row.relPath, destURL: dest, sha: actual,
-                                      model: model, ctx: ctx, journalBase: nil)
+                                      model: model, ctx: ctx, journalBase: nil,
+                                      readiness: entry.readiness)
             return .adopted(relPath: row.relPath)
         } catch is CancellationError {
             return .cancelled
@@ -296,7 +302,8 @@ extension PromoteToArchiveJob {
 
         try await finishPublished(sourceID: source.id, source: source, sourcePath: source.fullPath,
                                   relPath: choice.relPath, destURL: destURL, sha: sha,
-                                  model: model, ctx: ctx, journalBase: journalEntry)
+                                  model: model, ctx: ctx, journalBase: journalEntry,
+                                  readiness: entry.readiness)
         model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓")
         promoteLog.info("promoted \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public)")
         return choice.identicalExistingSHA == nil ? .promoted(relPath: choice.relPath)
@@ -321,7 +328,8 @@ extension PromoteToArchiveJob {
                          sha: String,
                          model: VideoScanModel,
                          ctx: RunContext,
-                         journalBase: ArchivePromoteJournal.Entry?) async throws {
+                         journalBase: ArchivePromoteJournal.Entry?,
+                         readiness: ArchiveReadiness? = nil) async throws {
         // The catalog record's id: when the manifest already names this
         // copy, REUSE its record_id so manifest ↔ catalog join on one id
         // (codex R5 major 5); a fresh id only for a brand-new row. A
@@ -356,7 +364,8 @@ extension PromoteToArchiveJob {
                 recordDate: recordDate,
                 dateConfidence: dateConfidence,
                 people: people,
-                starRating: max(source?.starRating ?? 0, 3))
+                starRating: max(source?.starRating ?? 0, 3),
+                readiness: (readiness ?? source.map { ArchiveReadiness.assess(record: $0) })?.token ?? "")
             // Manifest row + F_FULLFSYNC — a barrier failure throws and the
             // file is reported failed (it stays in place; the journal's
             // `renamed` entry converges it next run).
@@ -368,7 +377,8 @@ extension PromoteToArchiveJob {
         if let source {
             model.registerPromotedCopy(source: source, destinationURL: destURL,
                                        relativePath: relPath, sha256: sha,
-                                       probed: copyProbe, promotedAt: now)
+                                       probed: copyProbe, promotedAt: now,
+                                       readiness: readiness ?? ArchiveReadiness.assess(record: source))
         } else {
             model.registerOrphanPromotedCopy(sourceID: sourceID, sourcePath: sourcePath,
                                              destinationURL: destURL, relativePath: relPath,

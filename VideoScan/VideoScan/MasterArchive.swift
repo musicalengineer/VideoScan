@@ -195,9 +195,18 @@ enum MasterArchiveLayout {
         only grows.
     """
 
-    /// Manifest header — spec §2 column list, in order.
-    static let manifestHeader =
+    /// Manifest header as written by Initialize BEFORE 2026-08-16 (12
+    /// columns). Existing archives keep it — rows appended to such a
+    /// manifest keep 12 columns; the file is never rewritten.
+    static let manifestHeaderLegacy =
         "promoted_at,archive_relpath,sha256,size_bytes,original_path,original_volume,record_id,source_record_id,record_date,date_confidence,people,star_rating"
+
+    /// Current manifest header — spec §2 columns + the ADDITIVE trailing
+    /// `readiness` token column (ArchiveReadiness, 2026-08-16).
+    static let manifestHeader = manifestHeaderLegacy + ",readiness"
+
+    /// Every header a manifest may carry; validation accepts either.
+    static let acceptedManifestHeaders: [String] = [manifestHeader, manifestHeaderLegacy]
 }
 
 // MARK: - Date hint
@@ -478,6 +487,10 @@ enum ArchiveManifestCSV {
         let dateConfidence: String
         let people: [String]
         let starRating: Int
+        /// ArchiveReadiness token ("playable;audio=verified;format=safe;
+        /// date=known"). Written only when the manifest carries the
+        /// current 13-column header.
+        var readiness: String = ""
     }
 
     /// One CSV field — ALWAYS quoted (codex QA round 2, blocker 3: no
@@ -512,8 +525,8 @@ enum ArchiveManifestCSV {
 
     /// The row as one line, WITH its trailing newline (so a single write
     /// is a complete record).
-    static func line(for row: Row) -> String {
-        let fields: [String] = [
+    static func line(for row: Row, legacy: Bool = false) -> String {
+        var fields: [String] = [
             iso8601.string(from: row.promotedAt),
             row.archiveRelPath,
             row.sha256,
@@ -527,8 +540,12 @@ enum ArchiveManifestCSV {
             row.people.joined(separator: "; "),
             String(row.starRating)
         ]
+        if !legacy { fields.append(row.readiness) }
         return fields.map(escape).joined(separator: ",") + "\n"
     }
+
+    /// Column index of `readiness` (13-column manifests only).
+    static let readinessColumn = 12
 
     /// Append one row with a single O_APPEND write + F_FULLFSYNC (codex R3
     /// blockers 3+4). The manifest is opened DESCRIPTOR-RELATIVE from the
@@ -540,11 +557,14 @@ enum ArchiveManifestCSV {
     /// (`nonisolated` ≈ a free function: safe to call from the job's
     /// background work.)
     nonisolated static func append(_ row: Row, rootPath: String) throws {
-        let data = Data(line(for: row).utf8)
         let fd = try ArchivePromoteEngine.openIndexFile(
             root: rootPath, name: MasterArchiveLayout.manifestFilename,
-            mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
+            mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
         defer { close(fd) }
+        // Rows match the file's OWN header: a legacy 12-column manifest keeps
+        // 12 columns (never rewritten); a current one gets the readiness token.
+        let legacy = ArchivePromoteEngine.firstLine(fd: fd) == MasterArchiveLayout.manifestHeaderLegacy
+        let data = Data(line(for: row, legacy: legacy).utf8)
         try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
     }
 
@@ -554,7 +574,7 @@ enum ArchiveManifestCSV {
     nonisolated static func validate(rootPath: String) throws {
         let fd = try ArchivePromoteEngine.openIndexFile(
             root: rootPath, name: MasterArchiveLayout.manifestFilename,
-            mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
+            mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
         close(fd)
     }
 
@@ -629,7 +649,7 @@ enum ArchiveManifestCSV {
         do {
             fd = try ArchivePromoteEngine.openIndexFile(
                 root: rootPath, name: MasterArchiveLayout.manifestFilename,
-                mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
+                mustExist: true, expectedHeaders: MasterArchiveLayout.acceptedManifestHeaders)
         } catch {
             return [:]
         }

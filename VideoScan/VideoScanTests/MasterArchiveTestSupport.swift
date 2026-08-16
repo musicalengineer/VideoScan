@@ -114,6 +114,8 @@ enum MasterArchiveTestSupport {
         var out: [String] = []
         for case let rel as String in e {
             if rel.hasPrefix(MasterArchiveLayout.indexFolder) { continue }
+            // Finder custom-icon resource written by MasterArchiveIcon on Initialize.
+            if rel == "Icon\r" || rel.hasSuffix("/Icon\r") { continue }
             var isDir: ObjCBool = false
             let full = sandbox.archiveRoot.appendingPathComponent(rel).path
             if fm.fileExists(atPath: full, isDirectory: &isDir), !isDir.boolValue { out.append(rel) }
