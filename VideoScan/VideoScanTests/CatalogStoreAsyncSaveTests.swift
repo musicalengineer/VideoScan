@@ -199,6 +199,66 @@ struct CatalogStoreAsyncSaveTests {
         #expect(loaded.first?.notes == "v3", "Latest edit wins")
     }
 
+    // MARK: Generation allocation across the two save paths (codex #385)
+
+    /// Tie race: a terminal saveNow issued while an async save is in flight
+    /// used to stamp the SAME generation as the in-flight write. Now they
+    /// get distinct, increasing generations; the sync save (freshest
+    /// content) lands last with the higher number; and the late-arriving
+    /// async completion must not regress `loadedGeneration`.
+    @Test
+    func saveNowDuringInFlightAsyncSaveGetsDistinctHigherGeneration() async throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let waiter = WriteWaiter()
+        store.observer = waiter
+        store.testWriteDelay = 0.25
+
+        let rec = makeRecord(name: "clip.mov", notes: "v1")
+        store.saveAsync(records: [rec])          // claims gen 1, in flight
+        rec.notes = "v2"
+        #expect(store.saveNow(records: [rec]))   // must claim gen 2, land last
+
+        let url = dir.appendingPathComponent("catalog.json")
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 2)
+        #expect(store.loadedGeneration == 2)
+
+        await waiter.waitForWrites(2)            // async completion arrives late
+        #expect(store.loadedGeneration == 2, "late async completion must not regress the generation")
+        #expect(CatalogStore(directory: dir).load().first?.notes == "v2")
+
+        // And the session is not poisoned: the next save is not refused
+        // as "stale" by our own earlier writes.
+        rec.notes = "v3"
+        #expect(store.saveNow(records: [rec]))
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 3)
+    }
+
+    /// Our own landed-but-not-yet-completed async write must not make the
+    /// quit-time saveNow refuse itself as stale. Main is blocked with
+    /// Thread.sleep (not a suspension) so the write lands but the
+    /// main-actor completion cannot run before saveNow's precondition.
+    @Test
+    func saveNowIsNotRefusedAsStaleByOwnLandedAsyncWrite() async throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let waiter = WriteWaiter()
+        store.observer = waiter
+
+        let rec = makeRecord(name: "clip.mov", notes: "v1")
+        store.saveAsync(records: [rec])
+        Thread.sleep(forTimeInterval: 0.3)      // write lands; completion starved
+        let url = dir.appendingPathComponent("catalog.json")
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 1, "precondition: async write already on disk")
+
+        rec.notes = "v2"
+        #expect(store.saveNow(records: [rec]), "refused as stale by our own write: \(String(describing: store.lastWriteError))")
+        await waiter.waitForWrites(2)
+        #expect(CatalogStore(directory: dir).load().first?.notes == "v2")
+    }
+
     // MARK: 5a. Clone parity — fully-populated record encodes identically
 
     @Test

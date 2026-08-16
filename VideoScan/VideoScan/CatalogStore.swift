@@ -248,6 +248,23 @@ final class CatalogStore {
     /// could never have caught the incident it was written for.
     private(set) var loadedGeneration: Int = 0
 
+    /// Highest generation this session has CLAIMED -- stamped into a
+    /// payload that may or may not have landed yet. Single allocator for
+    /// both save paths (codex #385 tie race): before this, `saveNow` and
+    /// `saveAsync` each computed `loadedGeneration + 1` independently, so a
+    /// terminal save issued while an async save was in flight stamped the
+    /// SAME generation as the in-flight write. Monotonic within a session;
+    /// gaps (a failed write) are harmless because the OCC check is `>`.
+    private var claimedGeneration: Int = 0
+
+    /// The generation the next write will stamp. Always strictly greater
+    /// than anything this session has loaded or claimed.
+    private func allocateGeneration() -> Int {
+        let next = max(loadedGeneration, claimedGeneration) + 1
+        claimedGeneration = next
+        return next
+    }
+
     /// Non-nil when load() refused the on-disk catalog (written by a NEWER
     /// build). While set, EVERY write path refuses — otherwise the
     /// unconditional quit-time save overwrites a future-schema catalog
@@ -300,8 +317,12 @@ final class CatalogStore {
         // that does not exist yet cannot be stale; a header we cannot
         // parse is treated as generation 0 rather than a refusal, because
         // pre-generation catalogs are legitimate.
+        // Compare against everything WE have claimed, not just what we
+        // have loaded: an in-flight async save that has already landed but
+        // whose main-actor completion has not run yet is our own write, and
+        // must not make the quit-time saveNow refuse itself as "stale".
         let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
-        if onDisk > loadedGeneration {
+        if onDisk > max(loadedGeneration, claimedGeneration) {
             lock.release()   // we will not be writing; do not squat on it
             return fail(.staleGeneration(loaded: loadedGeneration, onDisk: onDisk))
         }
@@ -313,7 +334,11 @@ final class CatalogStore {
     /// write stamped on disk.
     private func finishWrite(success: Bool, wroteGeneration: Int) {
         if success {
-            loadedGeneration = wroteGeneration
+            // max(): completions can arrive out of order (an async save's
+            // main-actor completion may land AFTER a later saveNow already
+            // advanced us). Never regress -- a regression would make the
+            // next save see its own predecessor as a foreign, newer write.
+            loadedGeneration = max(loadedGeneration, wroteGeneration)
             lastWriteError = nil
         } else if lastWriteError == nil {
             lastWriteError = .writeFailed("encode or atomic write failed")
@@ -523,8 +548,8 @@ final class CatalogStore {
         pendingRecords = nil  // superseded by this synchronous save
         // Build the Sendable DTO payload ON the main actor (the only place
         // VideoRecord is read), then encode it off-thread on the write queue.
-        // CAS stamp: this write claims generation N+1 (design doc §4.1).
-        let nextGeneration = loadedGeneration + 1
+        // CAS stamp: this write claims the next generation (design doc §4.1).
+        let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration)
         var ok = false
         writeQueue.sync {
@@ -589,8 +614,8 @@ final class CatalogStore {
         // yielding a fully-independent Sendable payload that crosses the actor
         // boundary with no @unchecked hatch and no live VideoRecord.
         let t0 = CFAbsoluteTimeGetCurrent()
-        // CAS stamp: this write claims generation N+1 (design doc §4.1).
-        let nextGeneration = loadedGeneration + 1
+        // CAS stamp: this write claims the next generation (design doc §4.1).
+        let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration)
         let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
