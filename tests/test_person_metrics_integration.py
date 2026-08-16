@@ -26,8 +26,8 @@ class PersonMetricsIntegrationSensors(unittest.TestCase):
         self.assertIn('person_eval_status: "stale"', page)
         self.assertIn('person_eval_publish_eligible: false', page)
         self.assertIn('personStatusValue.textContent', page)
-        self.assertIn('poi_cycle_stream_status', page)
-        self.assertIn('poi_cycle_production_label', page)
+        self.assertNotIn('rawUrl("poi_cycles.jsonl")', page)
+        self.assertNotIn('id="poi-cycle-cards"', page)
 
     def test_morning_digest_rejects_stale_and_non_main_rows(self):
         script = (ROOT / "scripts/morning_metrics.sh").read_text()

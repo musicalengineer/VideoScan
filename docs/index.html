@@ -246,22 +246,6 @@
 
 <div id="status">Loading metrics&hellip;</div>
 
-<!-- ============ POI IMPROVEMENT CYCLES ============ -->
-<h3 class="section-heading">Donna Recognition &mdash; POI improvement cycles</h3>
-
-<div class="cards" id="poi-cycle-cards"></div>
-
-<div class="charts">
-  <div class="chart-box">
-    <h2>POI Cycle Quality &mdash; balanced accuracy, precision, recall, and F1</h2>
-    <canvas id="chart-poi-cycles"></canvas>
-    <div id="chart-poi-cycle-note" class="chart-note hidden">
-      No POI cycle metrics have been published yet.
-    </div>
-    <div class="chart-note">Points marked “dev” are cross-validated development evidence, not sealed-holdout grades.</div>
-  </div>
-</div>
-
 <!-- ============ CATALOG SEARCH PERFORMANCE ============ -->
 <h3 class="section-heading">Performance Benchmarks &mdash; Catalog Search</h3>
 <div class="cards" id="search-benchmark-cards"></div>
@@ -366,19 +350,12 @@ const CACHE_BUSTER = `t=${Date.now()}`;
 const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
 const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
-const POI_CYCLES_LOCAL = `./poi_cycles.jsonl?${CACHE_BUSTER}`;
 const SEARCH_BENCHMARKS_LOCAL = `./search_benchmarks.jsonl?${CACHE_BUSTER}`;
 const EXPECTED_SEARCH_QUERIES = [
   "d", "don", "donna", "xylotheremin", "zzqx", "donna christmas 1997",
   "1990s", "people:donna", '"cape cod"', "pelicanwharf sunsetreel",
 ];
-const POI_CYCLE_SENSOR_SOURCES = new Set(["nightly-local", "poi-cycle-metrics"]);
 const isTestRunRow = row => row.source !== "poi-cycle-metrics";
-const isPoiCycleSensorRow = row =>
-  row.poi_cycle_stream_status != null &&
-  POI_CYCLE_SENSOR_SOURCES.has(row.source) &&
-  (row.source === "poi-cycle-metrics" ||
-    (row.branch === "main" && row.dirty !== true));
 
 // Resolved at load time. If the API call fails (rate limit, offline,
 // etc.) these stay null and the fetch path uses the branch-pinned URL.
@@ -647,75 +624,14 @@ async function loadData() {
     pointBorderColor: color,
   });
 
-  // Fetch the local-nightly stream before the POI section so the dashboard
-  // can reconcile the canonical cycle graph with its daily regression sensor.
+  // A poi-cycle-metrics replay is not a product test run and must never
+  // affect host/latest/delta/chart state on the nightly metrics page.
   const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
   const allTdRows = tdText ? parseJsonl(tdText) : [];
   allTdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  // A poi-cycle-metrics replay refreshes only the POI sensor. It is not a
-  // product test run and must never affect host/latest/delta/chart state.
   const tdRows = allTdRows.filter(isTestRunRow);
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
-
-  // ---- POI improvement cycles ----
-  const poiCycleText = await fetchText(rawUrl("poi_cycles.jsonl"), POI_CYCLES_LOCAL);
-  const poiCycles = poiCycleText ? parseJsonl(poiCycleText) : [];
-  poiCycles.sort((a, b) => Number(a.cycle) - Number(b.cycle));
-  const poiCards = document.getElementById("poi-cycle-cards");
-  if (poiCycles.length) {
-    const latestCycle = poiCycles[poiCycles.length - 1];
-    const previousCycle = poiCycles.length > 1 ? poiCycles[poiCycles.length - 2] : {};
-    const productionCycle = poiCycles.find(row => row.productionBaseline === true);
-    const cycleSensorRows = allTdRows.filter(isPoiCycleSensorRow);
-    const cycleSensor = cycleSensorRows.length ? cycleSensorRows[cycleSensorRows.length - 1] : null;
-    const cycleSensorStale = cycleSensor && hoursSince(cycleSensor.ts) > PERSON_METRIC_STALE_HOURS;
-    const cycleSensorMatches = cycleSensor && productionCycle &&
-      cycleSensor.poi_cycle_stream_status === "ok" &&
-      cycleSensor.poi_cycle_production_label === productionCycle.cycleLabel;
-    const tierLabel = latestCycle.evidenceTier === "development" ? "development (not a grade)" : "formal grade";
-    poiCards.appendChild(card("Latest Cycle", `${latestCycle.cycleLabel} · ${latestCycle.verdict}`,
-      null, null, false, latestCycle.verdict === "pass" ? "var(--good)" : latestCycle.verdict === "fail" ? "var(--bad)" : "var(--warn)"));
-    poiCards.appendChild(card("Balanced Accuracy", metricPercent(latestCycle.balancedAccuracy),
-      previousCycle.balancedAccuracy, latestCycle.balancedAccuracy, false, "var(--good)"));
-    poiCards.appendChild(card("Precision", metricPercent(latestCycle.precision),
-      previousCycle.precision, latestCycle.precision, false, "var(--accent)"));
-    poiCards.appendChild(card("Recall", metricPercent(latestCycle.recall),
-      previousCycle.recall, latestCycle.recall, false, "var(--purple)"));
-    poiCards.appendChild(card("F1", metricPercent(latestCycle.f1),
-      previousCycle.f1, latestCycle.f1, false, "var(--orange)"));
-    poiCards.appendChild(card("Evidence", tierLabel, null, null, false,
-      latestCycle.evidenceTier === "development" ? "var(--warn)" : "var(--good)"));
-    poiCards.appendChild(card("Production Baseline",
-      productionCycle ? `${productionCycle.cycleLabel} · ${metricPercent(productionCycle.balancedAccuracy)} BA` : "Not declared",
-      null, null, false, productionCycle ? "var(--good)" : "var(--bad)"));
-    const sensorText = !cycleSensor ? "Awaiting sensor row"
-      : cycleSensorStale ? `Stale · ${cycleSensor.poi_cycle_production_label || "no baseline"}`
-      : cycleSensorMatches ? `Current · ${cycleSensor.poi_cycle_production_label}`
-      : `${cycleSensor.poi_cycle_stream_status} · baseline mismatch`;
-    poiCards.appendChild(card("POI Sensor", sensorText, null, null, false,
-      cycleSensorMatches && !cycleSensorStale ? "var(--good)" : "var(--bad)"));
-
-    const poiLabels = poiCycles.map(row => `${row.cycleLabel}${row.evidenceTier === "development" ? " (dev)" : ""}`);
-    new Chart(document.getElementById("chart-poi-cycles"), {
-      type: "line",
-      data: { labels: poiLabels, datasets: [
-        { label: "balanced accuracy", data: poiCycles.map(row => row.balancedAccuracy * 100), ...lineStyle("#3fb950") },
-        { label: "precision", data: poiCycles.map(row => row.precision * 100), ...lineStyle("#58a6ff") },
-        { label: "recall", data: poiCycles.map(row => row.recall * 100), ...lineStyle("#bc8cff") },
-        { label: "F1", data: poiCycles.map(row => row.f1 * 100), ...lineStyle("#f0883e") },
-      ]},
-      options: {
-        ...chartDefaults,
-        plugins: { ...chartDefaults.plugins, legend: { display: true, labels: { color: "#8b949e" } } },
-        scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, min: 0, max: 100 } },
-      },
-    });
-  } else {
-    document.getElementById("chart-poi-cycles").classList.add("hidden");
-    document.getElementById("chart-poi-cycle-note").classList.remove("hidden");
-    poiCards.innerHTML = `<div class="card"><div class="label">Cycle metrics</div><div class="value">Not published</div></div>`;
-  }
 
   // Dedicated catalog-search stream only. Never render the unrelated
   // generated-media benchmarks.jsonl rows in this section.

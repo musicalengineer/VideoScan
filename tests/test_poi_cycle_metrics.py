@@ -70,14 +70,14 @@ class POICycleMetricsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "f1 does not match"):
             module.validate_row(row, 1)
 
-    def test_dashboard_consumes_cycle_stream_and_renders_graph(self):
+    def test_dashboard_does_not_render_retired_cycle_scoreboard(self):
         page = (ROOT / "docs" / "index.html").read_text()
-        self.assertIn('rawUrl("poi_cycles.jsonl")', page)
-        self.assertIn('id="chart-poi-cycles"', page)
-        self.assertIn('evidenceTier === "development"', page)
-        self.assertIn('balancedAccuracy', page)
-        self.assertIn('poi_cycle_stream_status', page)
-        self.assertIn('poi_cycle_production_label', page)
+        self.assertNotIn('rawUrl("poi_cycles.jsonl")', page)
+        self.assertNotIn('id="chart-poi-cycles"', page)
+        self.assertNotIn('id="poi-cycle-cards"', page)
+        self.assertNotIn("POI Cycle Quality", page)
+        self.assertNotIn("Production Baseline", page)
+        self.assertNotIn("POI Sensor", page)
 
 
 if __name__ == "__main__":

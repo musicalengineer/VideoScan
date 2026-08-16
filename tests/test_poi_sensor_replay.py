@@ -47,11 +47,8 @@ class POISensorReplayTests(unittest.TestCase):
         self.assertTrue(all(key.startswith("poi_cycle_") for key in row))
         self.assertIsNone(row["poi_cycle_production_label"])
 
-    def test_dashboard_accepts_both_sensor_sources_but_filters_replay_from_tests(self):
+    def test_dashboard_filters_cycle_replay_from_product_tests_without_rendering_it(self):
         page = DASHBOARD.read_text()
-        start = page.index('const POI_CYCLE_SENSOR_SOURCES')
-        end = page.index("\n\n", start)
-        predicates = page[start:end]
         rows = [
             {"source": "nightly-local", "branch": "main", "dirty": False,
              "poi_cycle_stream_status": "ok", "passed": 100},
@@ -60,21 +57,18 @@ class POISensorReplayTests(unittest.TestCase):
             {"source": "nightly-local", "branch": "feature", "dirty": True,
              "poi_cycle_stream_status": "ok", "passed": 50},
         ]
-        program = predicates + "\n" + f"""
-const rows = {json.dumps(rows)};
-process.stdout.write(JSON.stringify({{
-  tests: rows.filter(isTestRunRow).map(row => row.passed),
-  sensors: rows.filter(isPoiCycleSensorRow).map(row => row.source)
-}}));
-"""
-        result = subprocess.run(
-            ["node", "-e", program], check=True, capture_output=True, text=True,
+        product_tests = [
+            row["passed"] for row in rows
+            if row.get("source") != "poi-cycle-metrics"
+        ]
+        self.assertEqual(product_tests, [100, 50])
+        self.assertIn(
+            'const isTestRunRow = row => row.source !== "poi-cycle-metrics";',
+            page,
         )
-        selection = json.loads(result.stdout)
-        self.assertEqual(selection["tests"], [100, 50])
-        self.assertEqual(selection["sensors"], ["nightly-local", "poi-cycle-metrics"])
         self.assertIn("const tdRows = allTdRows.filter(isTestRunRow);", page)
-        self.assertIn("const cycleSensorRows = allTdRows.filter(isPoiCycleSensorRow);", page)
+        self.assertNotIn("isPoiCycleSensorRow", page)
+        self.assertNotIn('rawUrl("poi_cycles.jsonl")', page)
 
     def test_morning_replay_updates_sensor_not_host_or_green_run_state(self):
         script = MORNING.read_text()
