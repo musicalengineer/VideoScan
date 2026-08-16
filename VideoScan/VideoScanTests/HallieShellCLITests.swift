@@ -13,6 +13,7 @@ struct HallieShellCLITests {
         var translatedQuestions: [String] = []
         var translationOptions: [HallieShellCLI.Options] = []
         var mediaActions: [HallieShellCLI.MediaAction] = []
+        var transcriptEvents: [HallieTranscriptEvent] = []
         var readCount = 0
         var records: [VideoRecord]
         var profiles: [POIProfile]
@@ -80,7 +81,10 @@ struct HallieShellCLITests {
                     mediaActions.append(action)
                     return mediaActionShouldSucceed
                 },
-                performMediaAction: { _ in })
+                performMediaAction: { _ in },
+                recordTranscript: { [self] events in
+                    transcriptEvents.append(contentsOf: events)
+                })
         }
 
         func nextInput() -> String? {
@@ -290,6 +294,37 @@ struct HallieShellCLITests {
         #expect(harness.readCount == 0)
         #expect(harness.inputs == ["this must remain unread"])
         #expect(harness.mediaActions.isEmpty)
+    }
+
+    @Test func onceRecordsExactQuestionAndBoundedAnswerEvidence() async throws {
+        let item = record("/isolated/Donna/Cape.mov", confirmed: ["Donna"])
+        let harness = Harness(
+            records: [item],
+            translations: [.presence(.init(people: ["Donna"]))])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--model", "fixture-model",
+            "--once", "Was Donna there?",
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.transcriptEvents.count == 2)
+        let user = harness.transcriptEvents[0]
+        let answer = harness.transcriptEvents[1]
+        #expect(user.kind == .user)
+        #expect(user.text == "Was Donna there?")
+        #expect(user.sequence == 1)
+        #expect(answer.kind == .assistant)
+        #expect(answer.sequence == 2)
+        #expect(answer.sessionID == user.sessionID)
+        #expect(answer.model == "fixture-model")
+        #expect(answer.responder == "fixture-translator")
+        #expect(answer.route == "presence")
+        #expect(answer.outcome == "answered")
+        #expect(answer.mediaEvidence.map(\.recordID) == [item.id])
     }
 
     @Test func translatorFailureAssertsNoFactAndPerformsNoMediaAction() async throws {

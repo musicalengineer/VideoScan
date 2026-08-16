@@ -342,6 +342,27 @@ Referents are stored as stable IDs, never merely as pronoun text. Each follow-up
 is reduced deterministically into a new query before execution. The translator
 may propose a delta, but it cannot silently replace an established identity.
 
+### 10.1 Development conversation transcript
+
+During active development, the app and standalone shell keep a private JSONL
+transcript at:
+
+```text
+~/Library/Logs/VideoScan/Hallie/hallie-conversation-YYYY-MM-DD.jsonl
+```
+
+Each displayed turn records a session ID and sequence, exact user/assistant
+text, interpreted query, model/responder, route/outcome, and bounded media and
+CyberBrain citation references. It does not copy source documents or the
+catalog into the log. Files rotate daily in UTC, are created mode `0600` in a
+mode `0700` directory, reject symbolic-link destinations, serialize concurrent
+app/shell writers, and are synchronized after each batch.
+
+This transcript is intentionally on while Hallie's behavior is evolving. It is
+local private family data: it is not committed, bundled, uploaded, or included
+in metrics. Retention and a user-facing logging switch can be decided after the
+interaction design stabilizes.
+
 ## 11. Biography behavior
 
 A biography is a synthesis, not a concatenated database row. The deterministic

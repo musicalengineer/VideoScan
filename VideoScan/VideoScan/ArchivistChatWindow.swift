@@ -59,6 +59,7 @@ struct ArchivistMessage: Identifiable {
     }
 
     let id = UUID()
+    let createdAt = Date()
     let role: Role
     let text: String
     /// Monospaced sub-line showing the exact query (assistant only).
@@ -74,6 +75,12 @@ struct ArchivistMessage: Identifiable {
     /// Curated biography / GEDCOM sources. Locators remain relative and are
     /// display-only until a separately verified source-opening action exists.
     var knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = []
+    /// Per-message diagnostics. Keeping these on the message prevents a later
+    /// answer from rewriting which model/route produced an earlier bubble.
+    var responder: String? = nil
+    var model: String? = nil
+    var route: String? = nil
+    var outcome: String? = nil
     var chips: [Chip] = []
 
     /// Production seam for person clarification.  These must be resolved
@@ -147,6 +154,9 @@ struct ArchivistChatWindow: View {
     @AppStorage("archivist.ollamaModel") private var ollamaModel = "qwen3.6:35b-a3b-nvfp4"
 
     @State private var messages: [ArchivistMessage] = []
+    @State private var transcriptSessionID = UUID()
+    @State private var transcriptSequence: UInt64 = 0
+    @State private var loggedMessageIDs: Set<UUID> = []
     @State private var input = ""
     @State private var isThinking = false
     @State private var activeRequestID: UUID?
@@ -220,6 +230,7 @@ struct ArchivistChatWindow: View {
                     .padding(12)
                 }
                 .onChange(of: messages.count) {
+                    queueTranscriptWrites()
                     withAnimation {
                         proxy.scrollTo(messages.last?.id, anchor: .bottom)
                     }
@@ -512,6 +523,51 @@ struct ArchivistChatWindow: View {
         }
     }
 
+    /// Snapshot newly displayed bubbles before leaving MainActor. The actor
+    /// performs filesystem I/O; sequence numbers make ordering reconstructible
+    /// even when separate Swift tasks reach it at slightly different times.
+    private func queueTranscriptWrites() {
+        var events: [HallieTranscriptEvent] = []
+        for message in messages where !loggedMessageIDs.contains(message.id) {
+            loggedMessageIDs.insert(message.id)
+            transcriptSequence += 1
+            let media = message.citations.map { citation in
+                HallieTranscriptEvent.MediaEvidence(
+                    recordID: citation.recordID,
+                    filename: citation.filename,
+                    fullPath: citation.fullPath,
+                    playbackSeconds: citation.playbackSeconds,
+                    bases: citation.bases.map(citationBasis))
+            }
+            let knowledge = message.knowledgeCitations.map { citation in
+                HallieTranscriptEvent.KnowledgeEvidence(
+                    id: citation.id,
+                    title: citation.title,
+                    attribution: citation.attribution,
+                    locator: citation.locator)
+            }
+            events.append(HallieTranscriptEvent(
+                timestamp: message.createdAt,
+                sessionID: transcriptSessionID,
+                eventID: message.id,
+                sequence: transcriptSequence,
+                client: .app,
+                kind: message.role == .user ? .user : .assistant,
+                text: message.text,
+                queryDescription: message.queryLine,
+                basisLine: message.basisLine,
+                responder: message.responder,
+                model: message.model,
+                route: message.route,
+                outcome: message.outcome,
+                offeredActions: message.chips.map(\.label),
+                mediaEvidence: media,
+                knowledgeEvidence: knowledge))
+        }
+        guard !events.isEmpty else { return }
+        Task { await HallieConversationRecorder.shared.append(events) }
+    }
+
     private func playCitation(_ citation: HallieTurnExecutor.Citation) {
         guard let record = model.record(forID: citation.recordID) else {
             messages.append(ArchivistMessage(
@@ -769,9 +825,33 @@ struct ArchivistChatWindow: View {
             biographyPhoto: response.biographyPhoto,
             citations: citations,
             knowledgeCitations: response.result.knowledgeCitations,
+            responder: response.responderHost,
+            model: ollamaModel,
+            route: Self.transcriptLabel(response.result.route),
+            outcome: Self.transcriptLabel(response.result.outcome),
             chips: clarificationChips))
         if response.playAfterAnswer, !lastMatches.isEmpty {
             play(bestOf: lastMatches)
+        }
+    }
+
+    private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
+        switch route {
+        case .presence: return "presence"
+        case .temporal: return "temporal"
+        case .aggregate: return "aggregate"
+        case .graph: return "graph"
+        case .unsupportedEvent: return "unsupported-event"
+        case .unsupportedCross: return "unsupported-cross"
+        }
+    }
+
+    private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {
+        switch outcome {
+        case .answered: return "answered"
+        case .declined: return "declined"
+        case .unsupported: return "unsupported"
+        case .needsClarification: return "needs-clarification"
         }
     }
 

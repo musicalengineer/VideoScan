@@ -118,6 +118,8 @@ enum HallieShellCLI {
         var mediaURLIsAvailable: (URL) -> Bool
         var tryPerformMediaAction: (MediaAction) -> Bool
         var performMediaAction: (MediaAction) -> Void
+        /// Injected as a no-op so unit tests never touch Rick's real log.
+        var recordTranscript: ([HallieTranscriptEvent]) async -> Void
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -140,7 +142,8 @@ enum HallieShellCLI {
             ) async throws -> HallieTurnExecutor.Result)? = nil,
             mediaURLIsAvailable: @escaping (URL) -> Bool = { _ in true },
             tryPerformMediaAction: ((MediaAction) -> Bool)? = nil,
-            performMediaAction: @escaping (MediaAction) -> Void
+            performMediaAction: @escaping (MediaAction) -> Void,
+            recordTranscript: @escaping ([HallieTranscriptEvent]) async -> Void = { _ in }
         ) {
             self.loadCatalog = loadCatalog
             self.loadProfiles = loadProfiles
@@ -161,6 +164,7 @@ enum HallieShellCLI {
                 return true
             }
             self.performMediaAction = performMediaAction
+            self.recordTranscript = recordTranscript
         }
 
         static var production: Dependencies {
@@ -239,6 +243,9 @@ enum HallieShellCLI {
                     case .reveal(let url):
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
+                },
+                recordTranscript: { events in
+                    await HallieConversationRecorder.shared.append(events)
                 })
         }
     }
@@ -325,7 +332,8 @@ enum HallieShellCLI {
             records: records,
             profiles: profiles,
             graph: graph,
-            cyberBrain: cyberBrain)
+            cyberBrain: cyberBrain,
+            model: options.model)
 
         output("Hallie Mae — headless read-only shell")
         output("catalog: \(records.count) records · \(options.catalogURL.path)")
@@ -366,6 +374,9 @@ enum HallieShellCLI {
         let profiles: [POIProfile]?
         let graph: GedcomFamilyGraph?
         let cyberBrain: CyberBrainIndex?
+        let model: String
+        let transcriptSessionID = UUID()
+        var transcriptSequence: UInt64 = 0
         var presenceSnapshots: [ArchivistPresenceRecordSnapshot]?
         var aggregateSnapshots: [ArchivistAggregateRecordSnapshot]?
         var citations: [HallieTurnExecutor.Citation] = []
@@ -385,6 +396,9 @@ enum HallieShellCLI {
         output: (String) -> Void,
         dependencies: Dependencies
     ) async -> AnswerOutcome {
+        let userEvent = transcriptEvent(
+            kind: .user, text: question, state: &state)
+        await dependencies.recordTranscript([userEvent])
         if let pending = state.pendingClarification {
             return await continueClarification(
                 question,
@@ -445,6 +459,11 @@ enum HallieShellCLI {
                 state: &state,
                 output: output)
             output("interpreted by \(translation.responderHost)")
+            let assistantEvent = transcriptEvent(
+                result: result,
+                responder: translation.responderHost,
+                state: &state)
+            await dependencies.recordTranscript([assistantEvent])
             switch result.outcome {
             case .answered: return .answered
             case .declined: return .declined
@@ -455,6 +474,14 @@ enum HallieShellCLI {
             state.citations = []
             output("I couldn't safely interpret that question: \(error.localizedDescription)")
             output("No catalog query or media action was performed.")
+            let event = transcriptEvent(
+                kind: .error,
+                text: "I couldn't safely interpret that question: "
+                    + error.localizedDescription,
+                basisLine: "No catalog query or media action was performed.",
+                outcome: "interpretation-failed",
+                state: &state)
+            await dependencies.recordTranscript([event])
             return .interpretationFailed
         }
     }
@@ -470,6 +497,14 @@ enum HallieShellCLI {
             reply, from: pending.value.candidates) else {
             output("I need one of the listed names or numbers so I don't guess.")
             printClarification(pending.value, output: output)
+            let event = transcriptEvent(
+                kind: .assistant,
+                text: "I need one of the listed names or numbers so I don't guess.",
+                basisLine: "The reply did not select exactly one stable identity.",
+                outcome: "needs-clarification",
+                offeredActions: pending.value.candidates.map(\.label),
+                state: &state)
+            await dependencies.recordTranscript([event])
             return .declined
         }
         do {
@@ -482,6 +517,11 @@ enum HallieShellCLI {
                 context: pending.context,
                 state: &state,
                 output: output)
+            let event = transcriptEvent(
+                result: result,
+                responder: state.lastResponder,
+                state: &state)
+            await dependencies.recordTranscript([event])
             switch result.outcome {
             case .answered: return .answered
             case .declined, .needsClarification: return .declined
@@ -491,7 +531,94 @@ enum HallieShellCLI {
             state.citations = []
             output("I couldn't continue that identity choice: \(error.localizedDescription)")
             output("No catalog query or media action was performed.")
+            let event = transcriptEvent(
+                kind: .error,
+                text: "I couldn't continue that identity choice: "
+                    + error.localizedDescription,
+                basisLine: "No catalog query or media action was performed.",
+                outcome: "interpretation-failed",
+                state: &state)
+            await dependencies.recordTranscript([event])
             return .interpretationFailed
+        }
+    }
+
+    private static func transcriptEvent(
+        result: HallieTurnExecutor.Result,
+        responder: String,
+        state: inout Session
+    ) -> HallieTranscriptEvent {
+        transcriptEvent(
+            kind: .assistant,
+            text: result.prose,
+            queryDescription: result.queryDescription,
+            basisLine: result.basisLine,
+            responder: responder,
+            route: transcriptLabel(result.route),
+            outcome: transcriptLabel(result.outcome),
+            offeredActions: result.clarification?.candidates.map(\.label) ?? [],
+            citations: result.citations,
+            knowledgeCitations: result.knowledgeCitations,
+            state: &state)
+    }
+
+    private static func transcriptEvent(
+        kind: HallieTranscriptEvent.Kind,
+        text: String,
+        queryDescription: String? = nil,
+        basisLine: String? = nil,
+        responder: String? = nil,
+        route: String? = nil,
+        outcome: String? = nil,
+        offeredActions: [String] = [],
+        citations: [HallieTurnExecutor.Citation] = [],
+        knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = [],
+        state: inout Session
+    ) -> HallieTranscriptEvent {
+        state.transcriptSequence += 1
+        return HallieTranscriptEvent(
+            sessionID: state.transcriptSessionID,
+            sequence: state.transcriptSequence,
+            client: .shell,
+            kind: kind,
+            text: text,
+            queryDescription: queryDescription,
+            basisLine: basisLine,
+            responder: responder,
+            model: state.model,
+            route: route,
+            outcome: outcome,
+            offeredActions: offeredActions,
+            mediaEvidence: citations.map {
+                .init(recordID: $0.recordID,
+                      filename: $0.filename,
+                      fullPath: $0.fullPath,
+                      playbackSeconds: $0.playbackSeconds,
+                      bases: $0.bases.map(evidenceDescription))
+            },
+            knowledgeEvidence: knowledgeCitations.map {
+                .init(id: $0.id, title: $0.title,
+                      attribution: $0.attribution, locator: $0.locator)
+            })
+    }
+
+    private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
+        switch route {
+        case .presence: return "presence"
+        case .temporal: return "temporal"
+        case .aggregate: return "aggregate"
+        case .graph: return "graph"
+        case .unsupportedEvent: return "unsupported-event"
+        case .unsupportedCross: return "unsupported-cross"
+        }
+    }
+
+    private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {
+        switch outcome {
+        case .answered: return "answered"
+        case .declined: return "declined"
+        case .unsupported: return "unsupported"
+        case .needsClarification: return "needs-clarification"
         }
     }
 
