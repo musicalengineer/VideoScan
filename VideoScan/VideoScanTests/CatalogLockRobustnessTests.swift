@@ -205,6 +205,35 @@ final class CatalogLockRobustnessTests: XCTestCase {
 
     // MARK: - Scale
 
+    /// Streaming verify (#161 suspect 3) must agree with the in-memory
+    /// digest byte-for-byte across chunk boundaries -- 3.5 MB spans four
+    /// 1 MB chunks with a ragged tail.
+    func testStreamingSHA256MatchesInMemoryAcrossChunkBoundaries() throws {
+        var payload = Data(count: 3 * 1024 * 1024 + 512 * 1024)
+        payload.withUnsafeMutableBytes { buf in
+            for i in 0..<buf.count { buf[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7) }
+        }
+        let url = dir.appendingPathComponent("stream.bin")
+        try payload.write(to: url)
+        XCTAssertEqual(try CatalogStore.sha256HexStreaming(fileURL: url),
+                       CatalogStore.sha256Hex(payload))
+        // And an empty file hashes to the SHA-256 of nothing.
+        let empty = dir.appendingPathComponent("empty.bin")
+        try Data().write(to: empty)
+        XCTAssertEqual(try CatalogStore.sha256HexStreaming(fileURL: empty),
+                       CatalogStore.sha256Hex(Data()))
+    }
+
+    /// fullFsync is best-effort: a path that does not exist must not crash
+    /// or throw, and a real file survives it unchanged.
+    func testFullFsyncIsBestEffortAndHarmless() throws {
+        CatalogStore.fullFsync(fileURL: dir.appendingPathComponent("does-not-exist.json"))
+        let url = dir.appendingPathComponent("real.json")
+        try Data("{}".utf8).write(to: url)
+        CatalogStore.fullFsync(fileURL: url)
+        XCTAssertEqual(try Data(contentsOf: url), Data("{}".utf8))
+    }
+
     func testChecksumOfA100kRecordSizedPayloadIsFast() {
         // A 100k-record catalog is roughly 400 MB of JSON. Verification runs
         // on every save, so it must not dominate the write.

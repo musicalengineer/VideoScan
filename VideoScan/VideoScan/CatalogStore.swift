@@ -712,6 +712,38 @@ final class CatalogStore {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Streaming SHA-256 of a file in 1 MB chunks -- constant memory
+    /// regardless of catalog size. (Deliberately its own copy rather than
+    /// calling CatalogSync's: the dependency direction is CatalogSync →
+    /// CatalogStore, never the reverse.)
+    nonisolated static func sha256HexStreaming(fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        let chunkSize = 1024 * 1024
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Best-effort durability barrier for a just-renamed file: F_FULLFSYNC
+    /// the file, then fsync its parent directory. Failures are logged, not
+    /// thrown -- a filesystem that refuses the barrier (some network/USB
+    /// volumes) must not turn a successful save into a reported failure.
+    nonisolated static func fullFsync(fileURL: URL) {
+        let fd = open(fileURL.path, O_RDONLY)
+        if fd >= 0 {
+            if fcntl(fd, F_FULLFSYNC) != 0 { fsync(fd) }
+            close(fd)
+        }
+        let dirFD = open(fileURL.deletingLastPathComponent().path, O_RDONLY)
+        if dirFD >= 0 {
+            fsync(dirFD)
+            close(dirFD)
+        }
+    }
+
     nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO, to fileURL: URL) -> Bool {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
@@ -725,15 +757,28 @@ final class CatalogStore {
             // the new file, never a partial.
             try data.write(to: fileURL, options: Data.WritingOptions.atomic)
 
+            // Durability. Foundation's atomic write renames a temp file into
+            // place but makes no promise the bytes -- or the new directory
+            // entry -- have reached stable storage. Codex #385: "durability
+            // claim unproven". F_FULLFSYNC (macOS: fsync alone only reaches
+            // the drive cache) on the file, then fsync the parent directory
+            // so the rename itself is durable. Runs on the write queue, so
+            // the cost is off the UI thread except for the quit-time save,
+            // where durability is the whole point.
+            Self.fullFsync(fileURL: fileURL)
+
             // Read-back verification. The atomic rename guarantees readers
             // never see a partial file, but it does NOT guarantee the bytes
             // that landed are the bytes we produced -- truncation, a media
             // error, or a filesystem that lied about durability all survive
             // an atomic write. For the one file that is the entire catalog,
             // paying one re-read to prove it is cheap insurance.
-            let written = try Data(contentsOf: fileURL)
+            //
+            // The re-read is STREAMED (1 MB chunks) rather than loaded as a
+            // second Data: at the pre-reduction size the old whole-file
+            // re-read doubled peak memory per save (#161 suspect 3).
             let expected = Self.sha256Hex(data)
-            let actual = Self.sha256Hex(written)
+            let actual = try Self.sha256HexStreaming(fileURL: fileURL)
             guard expected == actual else {
                 let err = CatalogWriteError.verificationFailed(
                     expectedSHA256: expected, actualSHA256: actual, bytes: data.count)
