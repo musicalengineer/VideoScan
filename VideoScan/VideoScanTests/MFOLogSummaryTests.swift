@@ -33,7 +33,7 @@ import Foundation
 /// on the stored state means every assignment fires `objectWillChange`
 /// — exactly what a real job's terminal transition does.
 @MainActor
-private final class FakeSummaryJob: MediaFileOperationJob {
+private final class FakeSummaryJob: @MainActor MediaFileOperationJob {
     let id = UUID()
     let kind: MediaFileOperationKind
     let title: String

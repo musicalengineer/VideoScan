@@ -26,7 +26,7 @@ import Foundation
 /// Minimal protocol conformer so center list tests don't need real
 /// comparisons. State is settable so tests can flip running→finished.
 @MainActor
-private final class FakeOperationJob: MediaFileOperationJob {
+private final class FakeOperationJob: @MainActor MediaFileOperationJob {
     let id = UUID()
     let kind: MediaFileOperationKind
     let title: String

@@ -167,7 +167,7 @@ final class VolumeRescueOperation: ObservableObject {
     /// in the Compare UI's "Folder name" TextField. The folder is created
     /// under destPath, then the source's relative directory structure
     /// preserved underneath.
-    static let defaultRescueFolderName = "Rescued"
+    nonisolated static let defaultRescueFolderName = "Rescued"
 
     /// Pure sanitizer for the user-entered rescue folder name. Trims
     /// whitespace, falls back to the default when empty. Exposed as

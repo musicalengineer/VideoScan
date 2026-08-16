@@ -66,9 +66,10 @@ final class ArcFacePredictor {
             if let m { built.append((model: m, lock: OSAllocatedUnfairLock())) }
         }
         guard built.count == want else { return }   // partial build → stay serialized
+        let completedBuild = built
 
         stateLock.withLock {
-            slots = built
+            slots = completedBuild
             configuredK = want
             nextSlot = 0
         }

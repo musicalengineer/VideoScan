@@ -135,7 +135,7 @@ import CoreML
         // Wait for all threads. If any thread crashed the host process with
         // SIGABRT, xcodebuild reports the test as crashed (this wait never
         // returns because the process is already dead).
-        group.wait()
+        await awaitCompletion(of: group)
 
         // Reaching this line means all threads completed without crashing.
         // Under the pre-fix singleton bug, the test process would have died

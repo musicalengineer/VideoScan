@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 
 // MARK: - VolumeKeepalive Tests
@@ -34,12 +35,12 @@ struct VolumeKeepaliveTests {
     }
 
     @Test func unreachableVolumeDetected() async {
-        var logMessages: [String] = []
+        let logMessages = OSAllocatedUnfairLock(initialState: [String]())
         let ka = VolumeKeepalive(
             volumePath: "/Volumes/NoSuchVolume_\(UUID().uuidString)",
             pollInterval: 0.1,
             recoveryPollInterval: 0.05
-        ) { msg in logMessages.append(msg) }
+        ) { msg in logMessages.withLock { $0.append(msg) } }
         let gate = PauseGate()
         await ka.start(pauseGate: gate)
         try? await Task.sleep(for: .milliseconds(300))
@@ -48,7 +49,9 @@ struct VolumeKeepaliveTests {
         let isPaused = await gate.isPaused
         #expect(isPaused)
         await ka.stop()
-        #expect(logMessages.contains { $0.contains("unreachable") })
+        #expect(logMessages.withLock {
+            $0.contains { $0.contains("unreachable") }
+        })
     }
 }
 

@@ -29,7 +29,7 @@ private let findLog = Logger(subsystem: "Rick-Breen.VideoScan",
                              category: "fileOps")
 
 @MainActor
-final class FindPersonJob: MediaFileOperationJob {
+final class FindPersonJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .findPerson

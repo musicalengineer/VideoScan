@@ -52,7 +52,7 @@ private let cleanupLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                 category: "cleanup")
 
 @MainActor
-final class CleanupJob: MediaFileOperationJob {
+final class CleanupJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .cleanup

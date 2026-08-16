@@ -302,31 +302,7 @@ enum BundleImporter {
         let fm = FileManager.default
         guard fm.isUbiquitousItem(at: dir) else { return }
 
-        // Enumerate every file in the POI dir, kick off downloads on
-        // anything not-current.
-        guard let it = fm.enumerator(
-            at: dir,
-            includingPropertiesForKeys: [.isRegularFileKey, .ubiquitousItemDownloadingStatusKey],
-            options: []
-        ) else { return }
-
-        var pending: [URL] = []
-        for case let url as URL in it {
-            guard
-                let vals = try? url.resourceValues(forKeys: [
-                    .isRegularFileKey,
-                    .ubiquitousItemDownloadingStatusKey
-                ]),
-                vals.isRegularFile == true
-            else { continue }
-
-            if vals.ubiquitousItemDownloadingStatus != .current {
-                // Try to start the download — even on a current file this is
-                // a cheap no-op.
-                try? fm.startDownloadingUbiquitousItem(at: url)
-                pending.append(url)
-            }
-        }
+        var pending = beginDownloadingNoncurrentFiles(at: dir, fileManager: fm)
         if pending.isEmpty { return }
 
         // Poll until every pending file reaches .current, or we exceed the
@@ -354,6 +330,39 @@ enum BundleImporter {
         if let stuck = pending.first {
             throw BundleError.iCloudDownloadTimeout(stuck.path)
         }
+    }
+
+    /// `NSDirectoryEnumerator` is synchronous-only in Swift 6. Keeping the
+    /// iterator in a synchronous helper prevents it from crossing an async
+    /// suspension boundary while retaining the bounded per-POI URL list.
+    private static func beginDownloadingNoncurrentFiles(
+        at dir: URL,
+        fileManager fm: FileManager
+    ) -> [URL] {
+        guard let it = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.isRegularFileKey, .ubiquitousItemDownloadingStatusKey],
+            options: []
+        ) else { return [] }
+
+        var pending: [URL] = []
+        for case let url as URL in it {
+            guard
+                let vals = try? url.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .ubiquitousItemDownloadingStatusKey
+                ]),
+                vals.isRegularFile == true
+            else { continue }
+
+            if vals.ubiquitousItemDownloadingStatus != .current {
+                // Try to start the download — even on a current file this is
+                // a cheap no-op.
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                pending.append(url)
+            }
+        }
+        return pending
     }
 
     // MARK: - Part 1.C & 1.D: safe-swap install

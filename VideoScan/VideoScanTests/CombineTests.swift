@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 
 // MARK: - CombineEngine Tests
@@ -22,12 +23,11 @@ import Foundation
         let outputPath = NSTemporaryDirectory() + "combine_test_\(UUID()).mov"
         defer { try? FileManager.default.removeItem(atPath: outputPath) }
 
-        var logLines: [String] = []
         let result = await CombineEngine.runFFMpeg(
             videoPath: videoPath,
             audioPath: audioPath,
             outputPath: outputPath,
-            log: { logLines.append($0) }
+            log: { _ in }
         )
 
         #expect(result.success, "Combine should succeed: exit \(result.exitCode)\n\(result.stderr)")
@@ -226,8 +226,7 @@ import Foundation
         let outPath = NSTemporaryDirectory() + "combine_progress_\(UUID().uuidString.prefix(8)).mov"
         defer { try? FileManager.default.removeItem(atPath: outPath) }
 
-        var progressValues: [Double] = []
-        let lock = NSLock()
+        let progressValues = OSAllocatedUnfairLock(initialState: [Double]())
 
         let result = await CombineEngine.runFFMpeg(
             videoPath: pair.videoPath,
@@ -236,15 +235,13 @@ import Foundation
             technique: .streamCopy,
             durationSeconds: 3.0,
             onProgress: { frac in
-                lock.lock()
-                progressValues.append(frac)
-                lock.unlock()
+                progressValues.withLock { $0.append(frac) }
             },
             log: { _ in }
         )
 
         #expect(result.success == true)
-        #expect(!progressValues.isEmpty)
+        #expect(progressValues.withLock { !$0.isEmpty })
 
         let verify = await Self.fullVerify(path: outPath, expectedDuration: 3.0)
         #expect(verify.ok == true, "Full verify failed: \(verify.reason)")

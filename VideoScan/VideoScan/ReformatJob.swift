@@ -56,7 +56,7 @@ private let reformatLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                  category: "fileOps")
 
 @MainActor
-final class ReformatJob: MediaFileOperationJob {
+final class ReformatJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .reformat

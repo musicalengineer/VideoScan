@@ -47,7 +47,7 @@ private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
 // `@MainActor` isolation: the protocol's requirements may only be
 // used from the main actor — which is exactly how the window uses them.
 @MainActor
-final class ExtractFramesJob: MediaFileOperationJob {
+final class ExtractFramesJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .extract

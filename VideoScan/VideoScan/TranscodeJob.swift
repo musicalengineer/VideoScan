@@ -53,7 +53,7 @@ private let transcodeLog = Logger(subsystem: "Rick-Breen.VideoScan",
 // MARK: - Job
 
 @MainActor
-final class TranscodeJob: MediaFileOperationJob {
+final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .transcode

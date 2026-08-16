@@ -26,7 +26,7 @@ import os
 //
 // If a future Apple SDK fixes MLE5 concurrency, this can be replaced
 // with a no-op or removed.
-nonisolated(unsafe) let arcfacePredictionLock = OSAllocatedUnfairLock()
+let arcfacePredictionLock = OSAllocatedUnfairLock()
 
 private let arcfaceLogger = Logger(subsystem: "Rick-Breen.VideoScan", category: "ArcFace")
 

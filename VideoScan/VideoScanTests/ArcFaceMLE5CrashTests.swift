@@ -89,7 +89,7 @@ struct ArcFaceMLE5CrashTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
         let errorCount = errors.withLock { $0 }
         #expect(errorCount == 0, "ObjC exception catcher produced wrong results under concurrency: \(errorCount) errors")
     }
@@ -199,7 +199,7 @@ struct ArcFaceMLE5CrashTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
         let total = completedPredictions.withLock { $0 }
         #expect(total == threadCount * predictionsPerThread,
                 "All \(threadCount * predictionsPerThread) predictions must complete (got \(total))")
@@ -246,7 +246,7 @@ struct ArcFaceMLE5CrashTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
         let total = completed.withLock { $0 }
         #expect(total == threadCount * predictionsPerThread,
                 "All \(threadCount * predictionsPerThread) shared-model predictions must complete")

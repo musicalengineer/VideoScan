@@ -309,7 +309,7 @@ enum BalanceAudioFix {
 // MARK: - Job
 
 @MainActor
-final class BalanceAudioJob: MediaFileOperationJob {
+final class BalanceAudioJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .balanceAudio

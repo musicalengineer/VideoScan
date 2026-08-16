@@ -102,7 +102,7 @@ struct ArcFaceMLE5ProvocationTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
 
         let caught = caughtExceptions.withLock { $0 }
         let ok = completedOK.withLock { $0 }
@@ -207,7 +207,7 @@ struct ArcFaceMLE5ProvocationTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
 
         let caught = caughtExceptions.withLock { $0 }
         let ok = completedOK.withLock { $0 }
@@ -275,7 +275,7 @@ struct ArcFaceMLE5ProvocationTests {
                     }
                 }
             }
-            group.wait()
+            await awaitCompletion(of: group)
 
             if cycle % 10 == 9 {
                 let caught = caughtExceptions.withLock { $0 }
@@ -373,7 +373,7 @@ struct ArcFaceMLE5ProvocationTests {
                 }
             }
 
-            group.wait()
+            await awaitCompletion(of: group)
 
             if round % 3 == 2 || round == rounds - 1 {
                 let ok = completedOK.withLock { $0 }
@@ -481,7 +481,7 @@ struct ArcFaceMLE5ProvocationTests {
             }
         }
 
-        group.wait()
+        await awaitCompletion(of: group)
 
         let caught = caughtExceptions.withLock { $0 }
         let ok = completedOK.withLock { $0 }

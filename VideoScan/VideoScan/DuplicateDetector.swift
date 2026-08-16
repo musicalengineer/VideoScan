@@ -335,7 +335,7 @@ enum DuplicateDetector {
     // even though ScoringRule isn't Sendable (closure parameter type
     // VideoRecord is a class). The table is built once at type-init and
     // never mutated thereafter.
-    nonisolated(unsafe) private static let scoringRules: [ScoringRule] = [
+    private static let scoringRules: [ScoringRule] = [
         // Strongest available SIGNAL — but not proof, and the comment
         // here used to claim "byte-identical content", which is false
         // and was load-bearing in the wrong direction (codex #333).

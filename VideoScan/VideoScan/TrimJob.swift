@@ -44,7 +44,7 @@ private let trimLog = Logger(subsystem: "Rick-Breen.VideoScan",
                              category: "trim")
 
 @MainActor
-final class TrimJob: MediaFileOperationJob {
+final class TrimJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .trim

@@ -52,7 +52,7 @@ enum AnalyzeStage: String, Hashable, Sendable {
 }
 
 @MainActor
-final class AnalyzeJob: MediaFileOperationJob {
+final class AnalyzeJob: @MainActor MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .analyze
