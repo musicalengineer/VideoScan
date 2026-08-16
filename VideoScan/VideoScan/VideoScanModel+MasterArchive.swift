@@ -548,6 +548,42 @@ extension VideoScanModel {
                                   totalBytes: total, freeBytesAtRoot: free)
     }
 
+    /// Every plan-time skip becomes a durable decisions-log line AND a
+    /// console line naming the file and the reason — so "I promoted five,
+    /// four landed" is answerable from the logs, not from memory.
+    private func recordPromoteSkips(_ plan: ArchivePromotePlan) {
+        guard !plan.skipped.isEmpty else { return }
+        let now = Date()
+        var entries: [ArchivePromoteDecisions.Entry] = []
+        for skip in plan.skipped {
+            let rec = record(forID: skip.id)
+            var detail: String?
+            if skip.reason == .alreadyPromoted, let rec, let copy = masterArchiveCopy(of: rec) {
+                detail = copy.fullPath
+            }
+            let reason = Self.skipReasonLabel(skip.reason)
+            entries.append(.init(at: now, recordID: skip.id, filename: skip.filename,
+                                 sourcePath: rec?.fullPath ?? "", decision: "skipped",
+                                 reason: reason, detail: detail))
+            log("promote: skipped \(skip.filename) — \(reason)\(detail.map { " (\($0))" } ?? "")")
+        }
+        let root = plan.rootPath
+        let batch = entries
+        Task.detached(priority: .utility) {
+            _ = ArchivePromoteDecisions.record(batch, rootPath: root)
+        }
+    }
+
+    nonisolated static func skipReasonLabel(_ reason: ArchivePromotePlan.Skip) -> String {
+        switch reason {
+        case .alreadyPromoted: return "already in the Master Archive"
+        case .isArchiveCopy: return "is itself an archive copy"
+        case .insideArchiveRoot: return "already lives inside the archive tree"
+        case .purged: return "record is purged"
+        case .offline: return "source volume offline"
+        }
+    }
+
     /// Entry point for every "Promote to Archive" gesture: no master →
     /// the alert with the fix-it button; master → the confirmation sheet.
     func requestPromote(recordIDs ids: [UUID]) {
@@ -566,6 +602,7 @@ extension VideoScanModel {
             return
         }
         guard let plan = buildPromotePlan(recordIDs: ids) else { return }
+        recordPromoteSkips(plan)
         pendingPromoteRequest = ArchivePromoteRequest(plan: plan)
     }
 

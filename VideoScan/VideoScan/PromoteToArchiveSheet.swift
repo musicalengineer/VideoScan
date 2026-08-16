@@ -114,15 +114,13 @@ struct PromoteToArchiveSheet: View {
                 warnLine("\(low) with a low-confidence inferred date — treated as undated rather than filed under a guess",
                          color: .orange)
             }
-            if already > 0 {
-                warnLine("\(already) already promoted — skipped", color: .secondary)
+            // Skips are named, not just counted (Rick 2026-08-16: "I
+            // promoted five, four landed — which one and why?").
+            ForEach(Array(plan.skipped.enumerated()), id: \.offset) { _, skip in
+                warnLine("Skipped \(skip.filename) — \(VideoScanModel.skipReasonLabel(skip.reason))",
+                         color: .secondary)
             }
-            if inside > 0 {
-                warnLine("\(inside) already inside the archive tree — skipped", color: .secondary)
-            }
-            if offline > 0 {
-                warnLine("\(offline) on a disconnected volume — skipped", color: .secondary)
-            }
+            let _ = (already, inside, offline)
             if let free = plan.freeBytesAtRoot {
                 let ok = plan.hasEnoughFreeSpace
                 warnLine(ok

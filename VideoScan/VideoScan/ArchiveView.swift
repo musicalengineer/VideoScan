@@ -94,7 +94,7 @@ struct ArchiveView: View {
                         if retiredCount > 0 {
                             Toggle(isOn: $showRetiredVolumes) {
                                 Text("Show retired (\(retiredCount))")
-                                    .font(.caption)
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
                             }
                             .toggleStyle(.checkbox)
@@ -126,7 +126,7 @@ struct ArchiveView: View {
     private var masterArchivePanel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("MASTER ARCHIVE")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 8)
             if let designation = model.masterArchive {
@@ -139,9 +139,9 @@ struct ArchiveView: View {
                         .foregroundStyle(reachable ? Color.green : Color.yellow)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(VolumeReachability.displayLabel(forPath: designation.targetPath))
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 16, weight: .medium))
                         Text(reachable ? "Breen_Family_Archive" : "offline")
-                            .font(.caption)
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -151,13 +151,13 @@ struct ArchiveView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(totals.verified > 0 ? Color.green : Color.secondary)
-                        .font(.caption)
+                        .font(.system(size: 13))
                     Text("\(totals.verified) verified · \(ByteCountFormatter.string(fromByteCount: totals.verifiedBytes, countStyle: .file))")
-                        .font(.caption)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                     if totals.unverified > 0 {
                         Text("· \(totals.unverified) unverified")
-                            .font(.caption)
+                            .font(.system(size: 13))
                             .foregroundStyle(Color.yellow)
                             .help("Archive copies cataloged by rescan without a fixity record — re-promote or verify to record their checksums.")
                     }
@@ -169,7 +169,7 @@ struct ArchiveView: View {
                     Button("Manifest") { model.openMasterArchiveManifest() }
                 }
                 .buttonStyle(.link)
-                .font(.caption)
+                .font(.system(size: 13))
                 .disabled(!reachable)
                 .padding(.leading, 8)
             } else {
@@ -177,7 +177,7 @@ struct ArchiveView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(Color.yellow)
                     Text("None designated")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Color.yellow)
                     Spacer()
                 }
@@ -198,7 +198,7 @@ struct ArchiveView: View {
     private func sidebarSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
@@ -222,7 +222,7 @@ struct ArchiveView: View {
                     .lineLimit(1)
                 Spacer()
                 Text("\(count)")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal, 8)
@@ -251,18 +251,18 @@ struct ArchiveView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(target.isReachable ? .primary : .secondary)
                         .lineLimit(1)
                     if !target.isReachable {
                         Text("offline")
-                            .font(.system(size: 11))
+                            .font(.system(size: 14))
                             .foregroundColor(.orange)
                     }
                 }
                 HStack(spacing: 4) {
                     Text("\(fileCount)")
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                     PolicyBadge(policy: target.destinationPolicy)
                         .scaleEffect(0.75, anchor: .leading)
@@ -324,12 +324,12 @@ struct ArchiveView: View {
 
         return VStack(alignment: .leading, spacing: 4) {
             Text("\(total) keepers")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.secondary)
             ProgressView(value: pct)
                 .tint(pct >= 1.0 ? .green : .accentColor)
             Text("\(backedUp) backed up · \(fullyArchived) archived")
-                .font(.system(size: 11))
+                .font(.system(size: 14))
                 .foregroundColor(.secondary)
         }
     }
@@ -370,7 +370,7 @@ struct ArchiveView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: selectedCategory == .archived ? "checkmark.seal" : "tray")
-                .font(.system(size: 40))
+                .font(.system(size: 43))
                 .foregroundColor(.secondary)
             Text(emptyMessage)
                 .font(.headline)
@@ -411,7 +411,7 @@ struct ArchiveView: View {
         return Table(sorted, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
                 Text(rec.filename)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: 16, design: .monospaced))
                     .foregroundColor(.green)
                     .lineLimit(1)
                     .help(rec.fullPath)
@@ -420,7 +420,7 @@ struct ArchiveView: View {
 
             TableColumn("Duration", value: \.durationSeconds) { rec in
                 Text(rec.duration.isEmpty ? "—" : rec.duration)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
             }
             .width(min: 60, ideal: 75)
@@ -428,11 +428,11 @@ struct ArchiveView: View {
             TableColumn("People") { rec in
                 if rec.detectedPeople.isEmpty {
                     Text("—")
-                        .font(.system(size: 12))
+                        .font(.system(size: 15))
                         .foregroundColor(.secondary)
                 } else {
                     Text(rec.detectedPeople.joined(separator: ", "))
-                        .font(.system(size: 12))
+                        .font(.system(size: 15))
                         .foregroundColor(.blue)
                         .lineLimit(1)
                 }
@@ -463,17 +463,17 @@ struct ArchiveView: View {
         HStack(spacing: 6) {
             if rec.backupDestinations.isEmpty && rec.masterLocation.isEmpty {
                 Text("No destinations recorded")
-                    .font(.system(size: 12))
+                    .font(.system(size: 15))
                     .foregroundColor(.orange)
             } else {
                 if !rec.masterLocation.isEmpty {
                     Label(rec.masterLocation, systemImage: "crown.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 14))
                         .foregroundColor(.purple)
                 }
                 ForEach(rec.backupDestinations) { entry in
                     Label(entry.name, systemImage: entry.kind.icon)
-                        .font(.system(size: 11))
+                        .font(.system(size: 14))
                         .foregroundColor(entry.kind == .cloud ? .blue : entry.kind == .offsite ? .teal : .secondary)
                 }
             }
@@ -498,7 +498,7 @@ struct ArchiveView: View {
 
     private func checkmark(_ letter: String, passed: Bool, help: String) -> some View {
         Text(letter)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .font(.system(size: 13, weight: .bold, design: .monospaced))
             .foregroundColor(passed ? .white : .secondary.opacity(0.5))
             .frame(width: 18, height: 18)
             .background(
@@ -624,6 +624,16 @@ struct ArchiveView: View {
         pfActiveRecords(model.records).filter { $0.lifecycleStage == .archived }
     }
 
+    /// Master Set = one entry per archived asset (see filteredRecords).
+    private var masterSetRecords: [VideoRecord] {
+        pfActiveRecords(model.records).filter { rec in
+            if model.isArchiveCopy(rec) {
+                return model.promotionSource(of: rec) == nil      // orphan copy stands in for its source
+            }
+            return model.masterArchiveCopy(of: rec) != nil
+        }
+    }
+
     private var filteredRecords: [VideoRecord] {
         let byCategory: [VideoRecord]
         switch selectedCategory {
@@ -632,7 +642,11 @@ struct ArchiveView: View {
         case .hasFamily:
             byCategory = keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }
         case .masterSet:
-            byCategory = keeperRecords.filter { $0.archiveStage == .masterAssigned }
+            // ONE row per archived asset: the source that has a verified
+            // master copy, or an orphan copy whose source is gone. Never
+            // both the source and its copy (Rick 2026-08-16: "Master Set
+            // 5" vs "4 verified" was this double count).
+            byCategory = masterSetRecords
         case .backedUp:
             byCategory = keeperRecords.filter { $0.archiveStage == .backedUp }
         case .ready:
@@ -656,7 +670,7 @@ struct ArchiveView: View {
         switch cat {
         case .allFiles:      return keeperRecords.count
         case .hasFamily:     return keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }.count
-        case .masterSet:     return keeperRecords.filter { $0.archiveStage == .masterAssigned }.count
+        case .masterSet:     return masterSetRecords.count
         case .backedUp:      return keeperRecords.filter { $0.archiveStage == .backedUp }.count
         case .ready:         return keeperRecords.filter { $0.archiveStage == .readyForArchive }.count
         case .archived:      return keeperRecords.filter { $0.archiveStage == .archived }.count
@@ -731,7 +745,7 @@ struct ArchiveDetailSheet: View {
                     Text(record.filename)
                         .font(.headline)
                     Text(record.fullPath)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -782,7 +796,7 @@ struct ArchiveDetailSheet: View {
                     if !record.notes.isEmpty {
                         detailSection("Notes") {
                             Text(record.notes)
-                                .font(.system(size: 13))
+                                .font(.system(size: 16))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -797,9 +811,9 @@ struct ArchiveDetailSheet: View {
                                         .frame(width: 16)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(dup.filename)
-                                            .font(.system(size: 12, weight: .medium))
+                                            .font(.system(size: 15, weight: .medium))
                                         Text("\(dup.volumeName)\(VolumeReachability.isReachable(path: dup.fullPath) ? "" : " (offline)")")
-                                            .font(.system(size: 11))
+                                            .font(.system(size: 14))
                                             .foregroundColor(.secondary)
                                     }
                                 }
@@ -826,7 +840,7 @@ struct ArchiveDetailSheet: View {
     private func detailSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.secondary)
             content()
         }
@@ -836,7 +850,7 @@ struct ArchiveDetailSheet: View {
                            icon: String? = nil, color: Color? = nil) -> some View {
         HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 13))
+                .font(.system(size: 16))
                 .foregroundColor(.secondary)
                 .frame(width: 120, alignment: .trailing)
             if let icon = icon {
@@ -845,7 +859,7 @@ struct ArchiveDetailSheet: View {
                     .frame(width: 16)
             }
             Text(value)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
             Spacer()
         }
     }
@@ -856,11 +870,11 @@ struct ArchiveDetailSheet: View {
                 .foregroundColor(passed ? .green : .secondary.opacity(0.4))
                 .frame(width: 16)
             Text(label)
-                .font(.system(size: 13, weight: passed ? .medium : .regular))
+                .font(.system(size: 16, weight: passed ? .medium : .regular))
                 .foregroundColor(passed ? .primary : .secondary)
             if let detail = detail {
                 Text("— \(detail)")
-                    .font(.system(size: 12))
+                    .font(.system(size: 15))
                     .foregroundColor(.secondary)
             }
             Spacer()
