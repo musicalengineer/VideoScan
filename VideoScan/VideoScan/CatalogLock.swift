@@ -205,6 +205,10 @@ final class CatalogLock: @unchecked Sendable {
         _ = data.withUnsafeBytes { buf in
             write(fd, buf.baseAddress, buf.count)
         }
-        fsync(fd)
+        // Deliberately NO fsync. The metadata is diagnostic (who holds it),
+        // not what protects the catalog -- flock(2) does that and the
+        // kernel drops it on death regardless of what reached the platter.
+        // The lock is taken per write on the main actor, and an fsync per
+        // save was one of the ranked #161 beachball contributors.
     }
 }

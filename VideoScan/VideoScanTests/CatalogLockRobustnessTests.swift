@@ -228,6 +228,21 @@ final class CatalogLockRobustnessTests: XCTestCase {
                           "1000 re-entrant acquires took \(elapsed)s; budget is 1s")
     }
 
+    /// #161 sensor: the store takes and releases the lock around EVERY save,
+    /// on the main actor. A full acquire/release cycle must therefore be
+    /// microseconds, not an fsync -- 200 cycles well under 250 ms.
+    func testFullAcquireReleaseCycleIsCheap_noFsyncPerSave() {
+        let lock = CatalogLock(lockURL: lockURL)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<200 {
+            XCTAssertEqual(lock.acquire(), .acquired)
+            lock.release()
+        }
+        let elapsed = CFAbsoluteTimeGetCurrent() - t0
+        XCTAssertLessThan(elapsed, 0.25,
+                          "200 acquire/release cycles took \(elapsed)s; an fsync per acquire has crept back in")
+    }
+
     // MARK: - The August 14 regression sensor
     //
     // This is the one that matters. The header used to CLAIM this test
