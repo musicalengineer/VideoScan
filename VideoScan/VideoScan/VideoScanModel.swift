@@ -940,6 +940,10 @@ final class VideoScanModel: ObservableObject {
         }
         enforcePhaseConsistency()
         repairCorruptedPhases()
+        // Volume-role taxonomy migration (2026-08-16): boot volume → System,
+        // ~/… folders → Working, legacy non-master "Archive" → ask once.
+        // Idempotent; runs after the Master Archive designation is known.
+        migrateVolumeRoles()
         detectResumableTargets()
         installVolumeMountObservers()
         refreshTargetReachability()
@@ -1228,6 +1232,14 @@ final class VideoScanModel: ObservableObject {
     /// the UI surfaces it. Cleared by a successful re-resolution or a
     /// fresh Initialize.
     @Published var masterArchiveIdentityMismatch: String?
+
+    /// Volume-role taxonomy migration (2026-08-16): targets whose persisted
+    /// role was "Archive" but which are NOT the designated Master Archive.
+    /// `.archive` now means THE Master Archive, so we do not silently
+    /// rename these — the Volumes window surfaces a one-time sheet asking
+    /// Original / Backup / Working for each. Filled by
+    /// `migrateVolumeRoles()`, drained by `resolveRoleReclassification`.
+    @Published var pendingRoleReclassifications: [CatalogScanTarget] = []
 
     // MARK: - Logging (delegates to DashboardState)
 

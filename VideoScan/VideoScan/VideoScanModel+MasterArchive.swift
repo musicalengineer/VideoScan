@@ -362,9 +362,14 @@ extension VideoScanModel {
             persistScanTargets()
             result.addedScanTarget = true
         }
-        if target.role != .archive && target.role != .lta {
+        // `.archive` is reserved for THE Master Archive and set only here
+        // (taxonomy 2026-08-16) — never offered in a role picker.
+        if target.role != .archive {
             target.role = .archive
         }
+        // A target that was waiting in the reclassification queue (legacy
+        // non-master Archive) is resolved by becoming the master.
+        pendingRoleReclassifications.removeAll { $0 === target }
         persistScanDates()
         notifyTargetsChanged()
         refreshTargetReachability()

@@ -295,13 +295,12 @@ extension VideoScanModel {
     /// `records` regardless of target count (checklist: no O(records ×
     /// targets) scans).
     func retiredCatalogCleanupCandidates() -> [(target: CatalogScanTarget, recordCount: Int)] {
-        // Retirement currently has two owners (codex #385 / taxonomy
-        // proposal): the retire FLOW stamps `retiredAt`, but a user can
-        // also set the role chip to Retired by hand and never get a
-        // stamp. Rick 2026-08-16: RicksBackups + 500USB were role=Retired
-        // with retiredAt=nil, so this nag never fired for them. Honor
-        // both until retirement is centralized on retiredAt.
-        let retired = scanTargets.filter { $0.isRetired      // covers stamp OR role chip
+        // Retirement has ONE owner — `retiredAt` (taxonomy cleanup
+        // 2026-08-16; the `.retired` role case is gone and legacy role
+        // strings are converted to a stamp at decode time). Rick's
+        // RicksBackups + 500USB were role=Retired with retiredAt=nil and
+        // this nag never fired for them; the migration stamps them.
+        let retired = scanTargets.filter { $0.isRetired
                                            && $0.phase != .noCatalog
                                            && !$0.searchPath.isEmpty }
         guard !retired.isEmpty else { return [] }

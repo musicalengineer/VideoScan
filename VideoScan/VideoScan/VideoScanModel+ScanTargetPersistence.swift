@@ -125,6 +125,11 @@ extension VideoScanModel {
 
     func setRole(_ role: VolumeRole, for target: CatalogScanTarget) {
         target.role = role
+        // A legacy non-master "Archive" target re-roled by hand no longer
+        // needs the reclassification prompt.
+        if role != .archive {
+            pendingRoleReclassifications.removeAll { $0 === target }
+        }
         persistScanDates()
         notifyTargetsChanged()
     }

@@ -349,6 +349,10 @@ extension VideoScanModel {
             }
         }
         if updated > 0 || addedVolumes > 0 {
+            // Imported snapshots may carry pre-taxonomy roles (legacy
+            // "Archive" on a non-master volume) — same idempotent pass
+            // the launch path runs.
+            migrateVolumeRoles()
             persistScanTargets()
             persistScanDates()
             notifyTargetsChanged()

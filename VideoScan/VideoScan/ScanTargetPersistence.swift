@@ -1,10 +1,57 @@
 import Foundation
+import os
+
+private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                        category: "volumeRoles")
 
 /// Persistence helpers for CatalogScanTarget metadata (phase, role, trust,
 /// filesystem, purchaseYear, capacityTB, notes, lastScannedDate, plus the
 /// §1B retire fields: retiredAt, retiredReason, retiredWitnesses).
 /// All data stored in UserDefaults using the provided key prefix.
 @MainActor enum ScanTargetPersistence {
+
+    // MARK: - Role decoding (legacy-aware, ONE place)
+
+    /// Reason stamped onto a target whose persisted role was the pre-
+    /// taxonomy "Retired" string with no `retiredAt` of its own. Retirement
+    /// has one owner (`retiredAt`), so the migration converts the role into
+    /// a stamp rather than losing the fact.
+    static let legacyRetiredMigrationReason =
+        "Marked retired before retirement had a date (migrated 2026-08-16)"
+
+    /// Apply a persisted role string — current or legacy — to `t`. This is
+    /// the ONE decode path for roles (UserDefaults restore AND bundle /
+    /// volume-snapshot import both route here) so every legacy rule lives
+    /// in exactly one place:
+    ///   - "Long-Term Archive" / "LTA" → `.offsite`
+    ///   - "Retired" → `.unassigned` AND `retiredAt` stamped if nil
+    ///     (`lastScannedDate` if known, else `now`), reason set if empty
+    ///   - unknown string → `.unassigned` + one log line, target kept
+    /// Idempotent: a target that already carries a stamp is not re-stamped,
+    /// and a current raw string is a plain assignment.
+    /// Returns the decode so callers can act on `unknownRaw`.
+    @discardableResult
+    static func applyPersistedRole(_ raw: String,
+                                   to t: CatalogScanTarget,
+                                   now: Date = Date()) -> VolumeRole.LegacyDecode {
+        let d = VolumeRole.decodeLegacy(raw)
+        t.role = d.role
+        if d.wasRetired {
+            if t.retiredAt == nil {
+                t.retiredAt = t.lastScannedDate ?? now
+                rolePersistenceLog.notice("legacy 'Retired' role on \(t.searchPath, privacy: .public) → retiredAt stamped (\(t.lastScannedDate == nil ? "now" : "lastScannedDate", privacy: .public))")
+            }
+            if (t.retiredReason ?? "").isEmpty {
+                t.retiredReason = legacyRetiredMigrationReason
+            }
+        }
+        if let unknown = d.unknownRaw {
+            rolePersistenceLog.error("unknown persisted VolumeRole '\(unknown, privacy: .public)' on \(t.searchPath, privacy: .public) → Unassigned (target kept)")
+        } else if raw != d.role.rawValue {
+            rolePersistenceLog.notice("legacy VolumeRole '\(raw, privacy: .public)' on \(t.searchPath, privacy: .public) → \(d.role.rawValue, privacy: .public)")
+        }
+        return d
+    }
 
     // MARK: - Restore
 
@@ -58,9 +105,6 @@ import Foundation
                         t.phase = .noCatalog
                     }
                 }
-                if let raw = roles[p], let role = VolumeRole(rawValue: raw) {
-                    t.role = role
-                }
                 if let raw = trusts[p], let trust = VolumeTrust(rawValue: raw) {
                     t.trust = trust
                 }
@@ -73,9 +117,15 @@ import Foundation
                 t.notes = notes[p] ?? ""
                 // §1B Retire — three parallel optional fields. Missing keys
                 // round-trip as nil so legacy installs come back not-retired.
+                // Applied BEFORE the role so a legacy "Retired" role string
+                // sees the real stamp (if any) and doesn't overwrite it.
                 t.retiredAt = retiredAt[p]
                 t.retiredReason = retiredReason[p]
                 t.retiredWitnesses = retiredWitnesses[p]
+                // Role last: legacy-aware (may stamp retiredAt — see above).
+                if let raw = roles[p] {
+                    applyPersistedRole(raw, to: t)
+                }
                 result.append(t)
             }
         }
@@ -150,7 +200,6 @@ import Foundation
 
     static func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
         if let phase = VolumePhase(rawValue: s.phase) { t.phase = phase }
-        if let role = VolumeRole(rawValue: s.role) { t.role = role }
         if let trust = VolumeTrust(rawValue: s.trust) { t.trust = trust }
         if let tech = VolumeMediaTech(rawValue: s.mediaTech) { t.mediaTech = tech }
         t.filesystem = s.filesystem
@@ -164,5 +213,10 @@ import Foundation
         t.retiredAt = s.retiredAt
         t.retiredReason = s.retiredReason
         t.retiredWitnesses = s.retiredWitnesses
+        // Role LAST and legacy-aware: a pre-taxonomy bundle carrying
+        // role "Retired" (no stamp) becomes an unassigned target WITH a
+        // stamp; "Long-Term Archive" becomes Offsite. Same rules as the
+        // UserDefaults restore path — one decoder for both.
+        applyPersistedRole(s.role, to: t)
     }
 }

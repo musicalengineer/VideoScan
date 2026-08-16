@@ -103,19 +103,20 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var retiredWitnesses: [String]?
 
     /// ONE definition of "retired" (codex #385 / docs/volume_taxonomy_proposal.md
-    /// — retirement had two owners). The retire FLOW stamps `retiredAt`;
-    /// the role chip can be set to Retired by hand and never gets a stamp.
-    /// Rick 2026-08-16: RicksBackups + 500USB were role=Retired, stamp
-    /// nil — the cleanup nag skipped them AND the scan/resume gates would
-    /// have let a plugged-in retired drive be rescanned. Every consumer
-    /// (scan gates, nag, Volumes window, master-archive refusals) goes
-    /// through this predicate; `reinstateVolume` clears BOTH owners.
-    var isRetired: Bool { retiredAt != nil || role == .retired }
+    /// — retirement used to have two owners: this stamp AND a `.retired`
+    /// VolumeRole case). The taxonomy cleanup (2026-08-16) removed the
+    /// role case; `retiredAt` is the sole owner again. Legacy persisted
+    /// "Retired" role strings are converted to a stamp at decode time
+    /// (`ScanTargetPersistence` / bundle import), so this predicate no
+    /// longer needs the role fallback. Every consumer (scan gates, nag,
+    /// Volumes window, master-archive refusals, safety resolvers) goes
+    /// through this predicate.
+    var isRetired: Bool { retiredAt != nil }
 
     /// Computed archival-destination suitability. Rules (first match wins):
     ///   1. RAID-0 or trust=Unreliable → Forbidden
     ///   2. Offline → Discouraged (can't write to it now)
-    ///   3. Role not Archive/LTA → Acceptable (it's not meant as a target)
+    ///   3. Role not Archive/Offsite → Acceptable (it's not meant as a target)
     ///   4. Trust=Aging → Discouraged
     ///   5. ≥12 yr old, or ≥8 yr old without redundancy → Discouraged
     ///   6. Trust=Unknown on plain HDD/Network → Acceptable
@@ -125,7 +126,7 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
         if trust == .unreliable { return .forbidden }
         if !isReachable { return .discouraged }
 
-        let isDestRole = (role == .archive || role == .lta)
+        let isDestRole = (role == .archive || role == .offsite)
         if !isDestRole { return .acceptable }
 
         if trust == .aging { return .discouraged }
@@ -233,6 +234,56 @@ extension CatalogScanTarget {
     static func excludingScratch(_ targets: [CatalogScanTarget]) -> [CatalogScanTarget] {
         targets.filter { !$0.isScratchVolume }
     }
+}
+
+// MARK: - Boot-volume / home-folder classification (role taxonomy 2026-08-16)
+
+/// Path predicates the role migration uses to auto-assign `.system` (the
+/// boot volume root — never user-picked) and default `.working` (folder
+/// targets inside the user's home, e.g. ~/Movies). Pure string logic
+/// except the one `realpath` step needed to recognise the boot volume's
+/// `/Volumes/<BootName>` alias — a symlink macOS keeps pointing at "/".
+extension CatalogScanTarget {
+
+    /// True when `path` IS the boot volume root: "/", the APFS data
+    /// volume mount "/System/Volumes/Data", or the `/Volumes/<BootName>`
+    /// alias (resolved via `URL.resolvingSymlinksInPath()` ≈ C `realpath()`,
+    /// so a folder INSIDE the boot volume — ~/Movies — is never "system").
+    /// `resolveAlias` is injectable so tests can pin the alias rule
+    /// without depending on the host's boot-volume name.
+    nonisolated static func isBootVolumeRootPath(
+        _ path: String,
+        resolveAlias: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+    ) -> Bool {
+        let p = PathScope.normalize(path)
+        if p == "/" || p == "/System/Volumes/Data" { return true }
+        let comps = (p as NSString).pathComponents
+        // Exactly "/Volumes/<name>" — deeper paths are folders, not roots.
+        guard comps.count == 3, comps[1] == "Volumes" else { return false }
+        let resolved = PathScope.normalize(resolveAlias(p))
+        return resolved == "/" || resolved == "/System/Volumes/Data"
+    }
+
+    /// True when `path` lies inside a user home directory (`/Users/<name>`
+    /// or deeper) — the ~/Movies-style folder target. Such targets are
+    /// NOT system; the migration defaults them to `.working` when they are
+    /// still unassigned. `homeDirectory` is injectable for tests; the
+    /// default also recognises any `/Users/<name>/…` so a target created
+    /// under another account's home still classifies sensibly.
+    nonisolated static func isHomeFolderPath(
+        _ path: String,
+        homeDirectory: String = NSHomeDirectory()
+    ) -> Bool {
+        let p = PathScope.normalize(path)
+        let home = PathScope.normalize(homeDirectory)
+        if !home.isEmpty, home != "/", (p == home || p.hasPrefix(home + "/")) { return true }
+        let comps = (p as NSString).pathComponents
+        // "/Users/<name>" (3 comps) or deeper; "/Users" itself is not a home.
+        return comps.count >= 3 && comps[1] == "Users" && comps[2] != "Shared"
+    }
+
+    var isBootVolumeRoot: Bool { Self.isBootVolumeRootPath(searchPath) }
+    var isHomeFolderTarget: Bool { Self.isHomeFolderPath(searchPath) }
 }
 
 // MARK: - Dashboard Types

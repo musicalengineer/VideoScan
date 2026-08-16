@@ -229,9 +229,8 @@ extension VideoScanModel {
         target.retiredAt = nil
         target.retiredReason = nil
         target.retiredWitnesses = nil
-        // The role chip is the second owner of "retired" — clear it too,
-        // or isRetired stays true and the scan gates keep refusing.
-        if target.role == .retired { target.role = .unassigned }
+        // `retiredAt` is the ONE owner of retirement (taxonomy 2026-08-16);
+        // the role is untouched — a reinstated Backup is still a Backup.
         persistScanDates()
         persistScanTargets()
         notifyTargetsChanged()
