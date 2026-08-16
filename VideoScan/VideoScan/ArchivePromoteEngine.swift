@@ -258,6 +258,81 @@ enum ArchivePromoteEngine {
                            create: false, displayRoot: root)
     }
 
+    // MARK: Contained lookups for journal / manifest relpaths (codex R4-A)
+
+    /// True when `relativePath` is a safe archive-relative path: canonical
+    /// component-wise containment under `root`, no empty/`.`/`..` parts,
+    /// at least one directory below the root, and a non-empty leaf.
+    static func isContainedRelPath(_ relativePath: String, root: String) -> Bool {
+        let comps = (relativePath as NSString).pathComponents
+        guard comps.count >= 2, !relativePath.hasPrefix("/") else { return false }
+        for c in comps where c.isEmpty || c == "." || c == ".." || c.contains("/") { return false }
+        let full = URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(relativePath).standardizedFileURL.path
+        return ArchivePathResolver.isInside(path: full, root: root) && full != PathScope.normalize(root)
+    }
+
+    /// Open the archive-relative regular file `relativePath` for reading
+    /// THROUGH the dirfd chain (every component O_NOFOLLOW; leaf O_NOFOLLOW).
+    /// nil ⇒ absent (a missing directory or leaf). Throws for a non-contained
+    /// relpath, a symlink at any depth, or a non-regular leaf — callers log
+    /// and skip such entries, never act on them. Caller closes the fd.
+    static func openContainedFile(root: String, relativePath: String) throws -> Int32? {
+        guard isContainedRelPath(relativePath, root: root) else {
+            throw Failure.destinationEscapesRoot(relativePath)
+        }
+        let dirfd: Int32
+        do {
+            dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: false)
+        } catch Failure.createFailed(_, let e) where e == ENOENT {
+            return nil
+        }
+        defer { Darwin.close(dirfd) }
+        let name = (relativePath as NSString).lastPathComponent
+        let fd = openat(dirfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else {
+            let e = errno
+            if e == ENOENT { return nil }
+            if e == ELOOP || FileIdentity.at(dirfd: dirfd, name: name)?.mode == S_IFLNK {
+                throw Failure.symlinkInArchivePath(relativePath)
+            }
+            throw Failure.createFailed(relativePath, errno: e)
+        }
+        guard let (_, mode) = FileIdentity.of(fd: fd), mode == S_IFREG else {
+            Darwin.close(fd)
+            throw Failure.sourceNotRegularFile(relativePath)
+        }
+        return fd
+    }
+
+    /// Streamed digest of a contained archive file (see openContainedFile).
+    /// nil ⇒ absent.
+    static func sha256(root: String, relativePath: String, shouldCancel: () -> Bool = { false }) throws -> String? {
+        guard let fd = try openContainedFile(root: root, relativePath: relativePath) else { return nil }
+        defer { Darwin.close(fd) }
+        return try sha256(fd: fd, shouldCancel: shouldCancel)
+    }
+
+    /// Remove `<relativePath>.partial` if present — via the dirfd chain,
+    /// unlinkat, never through a symlink. Non-contained ⇒ throws (nothing
+    /// removed). Returns true when something was removed.
+    @discardableResult
+    static func removeContainedPartial(root: String, relativePath: String) throws -> Bool {
+        guard isContainedRelPath(relativePath, root: root) else {
+            throw Failure.destinationEscapesRoot(relativePath)
+        }
+        let dirfd: Int32
+        do {
+            dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: false)
+        } catch Failure.createFailed(_, let e) where e == ENOENT {
+            return false
+        }
+        defer { Darwin.close(dirfd) }
+        let name = (relativePath as NSString).lastPathComponent + ".partial"
+        guard let (_, mode) = FileIdentity.at(dirfd: dirfd, name: name) else { return false }
+        guard mode == S_IFREG else { throw Failure.symlinkInArchivePath(relativePath + ".partial") }
+        return unlinkat(dirfd, name, 0) == 0
+    }
+
     // MARK: Copy → verify → publish
 
     struct PublishResult: Equatable, Sendable {

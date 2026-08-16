@@ -109,18 +109,35 @@ extension PromoteToArchiveJob {
         var completed = 0
         for (sourceID, entry) in latest where entry.state != .done && entry.state != .abandoned {
             if Task.isCancelled { break }
+            let fm = FileManager.default
+            // Containment FIRST (codex R4-A): a journal relpath is data from
+            // disk, not a trusted value. Non-contained ⇒ logged and skipped —
+            // never unlinked, read, or adopted.
+            guard ArchivePromoteEngine.isContainedRelPath(entry.destRelPath, root: ctx.root) else {
+                promoteLog.error("promote reconcile: journal relpath escapes the archive root — ignored: \(entry.destRelPath, privacy: .public)")
+                appLog.write("promote reconcile: journal entry \(entry.destRelPath) is not inside the archive root — ignored")
+                continue
+            }
             let dest = URL(fileURLWithPath: ctx.root, isDirectory: true)
                 .appendingPathComponent(entry.destRelPath).standardizedFileURL
-            let fm = FileManager.default
             // Already linked (a crash between catalog save and 'done')? The
             // link is in memory now; the batch-end durable save re-marks it.
             if let src = model.record(forID: sourceID), model.masterArchiveCopy(of: src) != nil {
                 publishedThisBatch.append(entry.with(state: .published))
                 continue
             }
-            guard fm.fileExists(atPath: dest.path) else {
-                // Never published: clean the partial, close the intent.
-                try? fm.removeItem(atPath: dest.path + ".partial")
+            // Presence + digest THROUGH the dirfd O_NOFOLLOW chain.
+            let actualOrNil: String?
+            do {
+                actualOrNil = try await Self.hashContainedOffMain(root: ctx.root, relPath: entry.destRelPath)
+            } catch {
+                promoteLog.error("promote reconcile: \(entry.destRelPath, privacy: .public) refused — \(Self.describe(error), privacy: .public)")
+                appLog.write("promote reconcile: \(entry.destRelPath) refused (\(Self.describe(error))) — ignored")
+                continue
+            }
+            guard let actual = actualOrNil else {
+                // Never published: clean the partial (dirfd chain), close the intent.
+                _ = try? ArchivePromoteEngine.removeContainedPartial(root: ctx.root, relativePath: entry.destRelPath)
                 try? ArchivePromoteJournal.append(entry.with(state: .abandoned), rootPath: ctx.root)
                 continue
             }
@@ -135,7 +152,7 @@ extension PromoteToArchiveJob {
             } else {
                 expected = nil
             }
-            guard let expected, let actual = try? await Self.hashOffMain(path: dest.path), actual == expected else {
+            guard let expected, actual == expected else {
                 promoteLog.error("promote reconcile: \(entry.destRelPath, privacy: .public) is in the archive but its digest could not be confirmed — left in place, NOT indexed; check it by hand")
                 appLog.write("promote reconcile: \(entry.destRelPath) could not be verified against its source — left in place, not indexed")
                 continue
@@ -201,14 +218,20 @@ extension PromoteToArchiveJob {
                                    entry: ArchivePromotePlan.Entry,
                                    model: VideoScanModel,
                                    ctx: RunContext) async -> FileResult {
+        // Containment FIRST (codex R4-A): the manifest relpath is data from
+        // disk. Non-contained / symlinked ⇒ refused, never read or adopted.
+        guard ArchivePromoteEngine.isContainedRelPath(row.relPath, root: ctx.root) else {
+            appLog.write("promote: manifest row for \(entry.filename) points outside the archive root (\(row.relPath)) — ignored")
+            return .failed("the manifest row for this file points outside the archive root (\(row.relPath)) — refused; check the manifest by hand")
+        }
         let dest = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(row.relPath).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: dest.path) else {
-            appLog.write("promote reconcile: manifest lists \(entry.filename) at \(row.relPath) but the file is missing — skipped; check the archive by hand")
-            return .skipped("the manifest already lists this file at \(row.relPath) but it is missing from the archive — check by hand")
-        }
         do {
-            guard let actual = try await Self.hashOffMain(path: dest.path), actual == row.sha256 else {
+            guard let actual = try await Self.hashContainedOffMain(root: ctx.root, relPath: row.relPath) else {
+                appLog.write("promote reconcile: manifest lists \(entry.filename) at \(row.relPath) but the file is missing — skipped; check the archive by hand")
+                return .skipped("the manifest already lists this file at \(row.relPath) but it is missing from the archive — check by hand")
+            }
+            guard actual == row.sha256 else {
                 return .failed("manifest lists \(row.relPath) but the file there does not match the recorded digest — refused")
             }
             try await finishPublished(sourceID: source.id, source: source, sourcePath: source.fullPath,
@@ -447,6 +470,15 @@ extension PromoteToArchiveJob {
         return try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
             progress: progress, shouldCancel: { Task.isCancelled })
+    }
+
+    /// Digest of an archive-relative file resolved through the dirfd
+    /// O_NOFOLLOW chain; nil ⇒ absent; throws for non-contained / symlink.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func hashContainedOffMain(root: String, relPath: String) async throws -> String? {
+        try ArchivePromoteEngine.sha256(root: root, relativePath: relPath, shouldCancel: { Task.isCancelled })
     }
 
     #if compiler(>=6.2)

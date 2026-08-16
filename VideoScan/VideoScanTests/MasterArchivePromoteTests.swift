@@ -382,26 +382,60 @@ struct MasterArchivePromoteSensorTests {
         #expect(archived.count == model.records.filter { model.isArchiveCopy($0) }.count)
     }
 
-    @Test("ISOLATION: nothing under App Support and no UserDefaults key is written by Initialize + Promote")
+    @Test("ISOLATION (poisoned-state): UserDefaults VALUES and the real App Support tree are byte-for-byte unchanged by Initialize + Promote + save; a poisoned shared designation is not inherited")
     func isolation() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("iso")
         defer { sb.cleanup() }
-        let sharedPath = CatalogStore.shared.fileLocation
-        let sharedBefore = (try? FileManager.default.attributesOfItem(atPath: sharedPath))?[.modificationDate] as? Date
-        let keysBefore = Set(UserDefaults.standard.dictionaryRepresentation().keys)
+        // Poison the shared store's designation slot — a fresh test-host
+        // model must NOT inherit it (narrow gate in VideoScanModel.init).
+        let poisoned = MasterArchiveDesignation(targetPath: "/Volumes/Poison", rootPath: "/Volumes/Poison/Breen_Family_Archive")
+        let sharedSlotBefore = CatalogStore.shared.masterArchive
+        CatalogStore.shared.masterArchive = poisoned
+        defer { CatalogStore.shared.masterArchive = sharedSlotBefore }
+
+        let defaultsBefore = UserDefaults.standard.dictionaryRepresentation() as NSDictionary
+        let appSupportBefore = Self.appSupportSnapshot()
 
         let src = try seed(sb, count: 1)[0]
         let model = MasterArchiveTestSupport.makeModel(sb)
+        #expect(model.masterArchive == nil, "poisoned shared designation not inherited")
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src.path)
         model.records = [rec]
         _ = await MasterArchiveTestSupport.promote(model, ids: [rec.id])
         model.saveCatalogNow()
+        model.persistScanTargets()
+        model.persistScanDates()
 
-        let sharedAfter = (try? FileManager.default.attributesOfItem(atPath: sharedPath))?[.modificationDate] as? Date
-        #expect(sharedBefore == sharedAfter, "shared catalog.json untouched")
-        let added = Set(UserDefaults.standard.dictionaryRepresentation().keys).subtracting(keysBefore)
-        #expect(added.isEmpty, "UserDefaults polluted with: \(added.sorted())")
+        let defaultsAfter = UserDefaults.standard.dictionaryRepresentation() as NSDictionary
+        #expect(defaultsBefore.isEqual(to: defaultsAfter as! [AnyHashable: Any]),
+                "UserDefaults values changed: \(Self.diffKeys(defaultsBefore, defaultsAfter))")
+        #expect(Self.appSupportSnapshot() == appSupportBefore, "real App Support tree changed")
         #expect(model.masterArchive?.rootPath.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path) == true)
+        #expect(model.masterArchive?.targetPath != "/Volumes/Poison")
+    }
+
+    /// path → (size, mtime) for everything under ~/Library/Application Support/VideoScan.
+    private static func appSupportSnapshot() -> [String: String] {
+        let dir = (CatalogStore.shared.fileLocation as NSString).deletingLastPathComponent
+        let fm = FileManager.default
+        var out: [String: String] = [:]
+        guard let e = fm.enumerator(atPath: dir) else { return out }
+        for case let rel as String in e {
+            let attrs = (try? fm.attributesOfItem(atPath: (dir as NSString).appendingPathComponent(rel))) ?? [:]
+            let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
+            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+            out[rel] = "\(size):\(mtime)"
+        }
+        return out
+    }
+
+    private static func diffKeys(_ a: NSDictionary, _ b: NSDictionary) -> [String] {
+        var out: [String] = []
+        for case let k as String in Set(a.allKeys.compactMap { $0 as? String }).union(b.allKeys.compactMap { $0 as? String }) {
+            let x = a[k] as AnyObject?, y = b[k] as AnyObject?
+            if !(x?.isEqual(y) ?? (y == nil)) { out.append(k) }
+        }
+        return out.sorted()
     }
 }

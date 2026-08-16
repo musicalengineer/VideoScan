@@ -494,8 +494,19 @@ enum ArchiveManifestCSV {
                 cleaned.unicodeScalars.append(scalar)
             }
         }
+        // Formula neutralization (OWASP CSV injection, codex R4-C): a field
+        // that begins with = + - @ (or a control char, already a space by
+        // now) would be evaluated by Excel/Numbers on open — prefix a
+        // single quote so it is text. `record_id`/digits never start with
+        // these, so numeric columns are unaffected.
+        if let first = cleaned.unicodeScalars.drop(while: { $0 == " " }).first, Self.formulaLeaders.contains(first) {
+            cleaned = "'" + cleaned
+        }
         return "\"" + cleaned.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
+
+    /// Characters a spreadsheet treats as "this cell is a formula".
+    static let formulaLeaders: Set<Unicode.Scalar> = ["=", "+", "-", "@", "\t", "\r"]
 
     /// The row as one line, WITH its trailing newline (so a single write
     /// is a complete record).

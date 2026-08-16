@@ -88,8 +88,9 @@ extension VideoScanModel {
         // Seed identity set from existing records so an import can't create
         // a duplicate of something we already have locally.
         var seen = Set<String>()
+        var localByKey: [String: VideoRecord] = [:]
         for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
         }
 
         // Fall back to filename-without-extension if the file forgot to stamp
@@ -101,18 +102,26 @@ extension VideoScanModel {
 
         var added = 0
         var skipped = 0
+        var addedRecords: [VideoRecord] = []
+        var idRemap: [UUID: UUID] = [:]
         for rec in snapshot.records {
             if let key = Self.identityKey(for: rec), seen.contains(key) {
                 skipped += 1
+                // Remember which LOCAL record stands in for this skipped one so
+                // imported provenance links (archive copies' derivedFrom) can
+                // be re-pointed instead of dangling (codex R4-D).
+                if let local = localByKey[key], local.id != rec.id { idRemap[rec.id] = local.id }
                 continue
             }
             if rec.sourceHost.isEmpty {
                 rec.sourceHost = effectiveHost
             }
             records.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            addedRecords.append(rec)
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
             added += 1
         }
+        Self.relinkImportedProvenance(addedRecords, idRemap: idRemap)
 
         let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
         if invalidPairEndpoints > 0 {
@@ -139,6 +148,19 @@ extension VideoScanModel {
     /// Primary: partial-MD5 + size. Fallback: filename + size + duration.
     /// Returns nil if the record has no identifying info at all — such
     /// records are always added rather than silently dropped.
+    /// Import relink (codex R4-D): when the import DEDUPED a source record
+    /// (kept the local one), every imported record whose `derivedFrom`
+    /// pointed at the skipped id is re-pointed at the local record's id —
+    /// archive copies (and any other derivation) never dangle. Identical
+    /// ids need no change.
+    static func relinkImportedProvenance(_ added: [VideoRecord], idRemap: [UUID: UUID]) {
+        guard !idRemap.isEmpty else { return }
+        for rec in added {
+            if let d = rec.derivedFrom, let local = idRemap[d] { rec.derivedFrom = local }
+            if let s = rec.supersededByID, let local = idRemap[s] { rec.supersededByID = local }
+        }
+    }
+
     static func identityKey(for rec: VideoRecord) -> String? {
         if !rec.partialMD5.isEmpty && rec.sizeBytes > 0 {
             return "md5:\(rec.partialMD5):\(rec.sizeBytes)"

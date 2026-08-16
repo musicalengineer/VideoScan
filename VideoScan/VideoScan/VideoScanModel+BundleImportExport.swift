@@ -293,26 +293,34 @@ extension VideoScanModel {
                             bundleURL: URL) async -> BundleImportResult {
         // Catalog — seed identity set from existing records, dedup on insert.
         var seen = Set<String>()
+        var localByKey: [String: VideoRecord] = [:]
         for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
         }
         let effectiveHost = payload.catalog.savedFromHost.isEmpty
             ? payload.manifest.exportedFromHost
             : payload.catalog.savedFromHost
         var added = 0
         var skipped = 0
+        var addedRecords: [VideoRecord] = []
+        var idRemap: [UUID: UUID] = [:]
         for rec in payload.catalog.records {
             if let key = Self.identityKey(for: rec), seen.contains(key) {
                 skipped += 1
+                if let local = localByKey[key], local.id != rec.id { idRemap[rec.id] = local.id }
                 continue
             }
             if rec.sourceHost.isEmpty {
                 rec.sourceHost = effectiveHost
             }
             records.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            addedRecords.append(rec)
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
             added += 1
         }
+        // Archive copies whose source was deduped keep a resolvable
+        // derivedFrom (codex R4-D).
+        Self.relinkImportedProvenance(addedRecords, idRemap: idRemap)
         let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
         if invalidPairEndpoints > 0 {
             log("Bundle import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")

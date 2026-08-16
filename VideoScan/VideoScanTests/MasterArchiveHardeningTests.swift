@@ -419,6 +419,163 @@ struct MasterArchiveHardeningTests {
         guard case .finished = job3.state else { Issue.record("\(job3.state)"); return }
         #expect(MasterArchiveTestSupport.archivedFiles(sb).count == 1)
     }
+
+    // MARK: R4-A — reconciliation containment
+
+    @Test("R4-A: journal entry / manifest row with a relpath outside the root (or through a symlink) is ignored — nothing outside is removed, read, or adopted")
+    func reconcileContainment() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("contain")
+        defer { sb.cleanup() }
+        let src = try seed(sb, count: 2)
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let recA = MasterArchiveTestSupport.makeRecord(path: src[0].path)
+        let recB = MasterArchiveTestSupport.makeRecord(path: src[1].path)
+        model.records = [recA, recB]
+        let fm = FileManager.default
+
+        // Evil targets OUTSIDE the archive root (two levels up = sb.root).
+        let evil = sb.root.appendingPathComponent("evil.mov")
+        let evilPartial = sb.root.appendingPathComponent("evil.mov.partial")
+        try fm.copyItem(at: src[0], to: evil)
+        try "partial".write(to: evilPartial, atomically: true, encoding: .utf8)
+        let evilSHA = try #require(MasterArchiveTestSupport.sha256(ofFile: evil.path))
+
+        // Journal: intent for recA pointing outside (would "clean" evil.mov.partial),
+        // and a published entry pointing outside (would "adopt" evil.mov).
+        try ArchivePromoteJournal.append(.init(sourceRecordID: recA.id, sourcePath: src[0].path,
+                                               destRelPath: "../../evil.mov", state: .intent, sha256: nil,
+                                               copyRecordID: nil, at: Date()), rootPath: sb.archiveRoot.path)
+        let ghost = UUID()
+        try ArchivePromoteJournal.append(.init(sourceRecordID: ghost, sourcePath: "/x/y.mov",
+                                               destRelPath: "30_Video/../../../evil.mov", state: .published,
+                                               sha256: evilSHA, copyRecordID: nil, at: Date()), rootPath: sb.archiveRoot.path)
+        // Manifest row for recB pointing outside with the RIGHT digest.
+        try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: "../../evil.mov", sha256: evilSHA, sizeBytes: 1,
+                                            originalPath: src[1].path, originalVolume: "v", recordID: UUID(),
+                                            sourceRecordID: recB.id, recordDate: "", dateConfidence: "", people: [], starRating: 3),
+                                      rootPath: sb.archiveRoot.path)
+        // A symlinked leaf INSIDE the tree pointing at the evil file.
+        let linkRel = "30_Video/Undated/xxxx-xx-xx_link.mov"
+        try fm.createDirectory(at: sb.archiveRoot.appendingPathComponent("30_Video/Undated"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: sb.archiveRoot.appendingPathComponent(linkRel), withDestinationURL: evil)
+        let ghost2 = UUID()
+        try ArchivePromoteJournal.append(.init(sourceRecordID: ghost2, sourcePath: "/x/z.mov", destRelPath: linkRel,
+                                               state: .published, sha256: evilSHA, copyRecordID: nil, at: Date()),
+                                         rootPath: sb.archiveRoot.path)
+
+        let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [recA.id, recB.id]))
+        // recA is promoted normally (its bogus intent was ignored, not "cleaned");
+        // recB fails (manifest row outside root) — never adopted.
+        #expect(fm.fileExists(atPath: evil.path), "evil.mov untouched")
+        #expect(fm.fileExists(atPath: evilPartial.path), "nothing outside the root was unlinked")
+        #expect(MasterArchiveTestSupport.sha256(ofFile: evil.path) == evilSHA)
+        let copies = model.records.filter { model.isArchiveCopy($0) }
+        #expect(copies.allSatisfy { ArchivePathResolver.isInside(path: $0.fullPath, root: sb.archiveRoot.path) },
+                "no catalog record points outside the root")
+        #expect(!copies.contains { $0.derivedFrom == ghost || $0.derivedFrom == ghost2 || $0.derivedFrom == recB.id })
+        #expect(model.masterArchiveCopy(of: recA) != nil)
+        #expect(model.masterArchiveCopy(of: recB) == nil)
+        let outB = job.outcomes.first { $0.filename == recB.filename }
+        #expect(outB?.kind == .failed && outB?.detail.contains("outside the archive root") == true, "\(outB?.detail ?? "")")
+        // The symlink leaf inside the tree is still a symlink, still points at evil, nothing adopted.
+        let attrs = try fm.attributesOfItem(atPath: sb.archiveRoot.appendingPathComponent(linkRel).path)
+        #expect(attrs[.type] as? FileAttributeType == .typeSymbolicLink)
+        // Journal: bogus entries were NOT advanced to abandoned/done by acting on them.
+        let latest = ArchivePromoteJournal.latestBySource(in: sb.journalURL)
+        #expect(latest[ghost]?.state == .published && latest[ghost2]?.state == .published)
+    }
+
+    @Test("R4-A: engine contained-lookup helpers refuse escapes and symlinks, report absence as nil")
+    func containedHelpers() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("helpers")
+        defer { sb.cleanup() }
+        _ = try VideoScanModel.scaffoldMasterArchive(rootURL: sb.archiveRoot)
+        let root = sb.archiveRoot.path
+        #expect(!ArchivePromoteEngine.isContainedRelPath("../x.mov", root: root))
+        #expect(!ArchivePromoteEngine.isContainedRelPath("30_Video/../../x.mov", root: root))
+        #expect(!ArchivePromoteEngine.isContainedRelPath("/abs/x.mov", root: root))
+        #expect(!ArchivePromoteEngine.isContainedRelPath("x.mov", root: root), "must sit in a bucket")
+        #expect(ArchivePromoteEngine.isContainedRelPath("30_Video/Undated/x.mov", root: root))
+        #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: "../x.mov") }
+        #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.removeContainedPartial(root: root, relativePath: "../x.mov") }
+        #expect(try ArchivePromoteEngine.openContainedFile(root: root, relativePath: "30_Video/Nope/x.mov") == nil)
+        #expect(try ArchivePromoteEngine.openContainedFile(root: root, relativePath: "30_Video/x.mov") == nil)
+        let outside = sb.root.appendingPathComponent("o.mov")
+        try "o".write(to: outside, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: sb.archiveRoot.appendingPathComponent("30_Video/l.mov"), withDestinationURL: outside)
+        #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: "30_Video/l.mov") }
+        try "p".write(to: sb.archiveRoot.appendingPathComponent("30_Video/real.mov.partial"), atomically: true, encoding: .utf8)
+        #expect(try ArchivePromoteEngine.removeContainedPartial(root: root, relativePath: "30_Video/real.mov"))
+        #expect(!FileManager.default.fileExists(atPath: sb.archiveRoot.appendingPathComponent("30_Video/real.mov.partial").path))
+    }
+
+    // MARK: R4-C — CSV formula neutralization
+
+    @Test("R4-C: fields starting with = + - @ (after leading spaces) are quoted AND prefixed with a single quote; round-trip keeps the prefix",
+          arguments: ["=HYPERLINK(\"http://x\",\"click\")", "+1+1", "-2+3", "@SUM(A1)", "  =cmd|' /C calc'!A0"])
+    func csvFormulaNeutralized(field: String) {
+        let escaped = ArchiveManifestCSV.escape(field)
+        #expect(escaped.hasPrefix("\"'"), "\(escaped)")
+        let inner = String(escaped.dropFirst().dropLast()).replacingOccurrences(of: "\"\"", with: "\"")
+        #expect(inner.hasPrefix("'"))
+        #expect(!ArchiveManifestCSV.escape("plain").contains("'"))
+        #expect(ArchiveManifestCSV.escape("1992-07-15") == "\"1992-07-15\"", "dates keep their leading digit")
+        // Whole row: a formula-shaped slug in the relpath and a formula person.
+        let row = ArchiveManifestCSV.Row(promotedAt: Date(), archiveRelPath: "30_Video/Undated/xxxx-xx-xx_" + field,
+                                         sha256: "s", sizeBytes: 1, originalPath: "/p", originalVolume: "v",
+                                         recordID: UUID(), sourceRecordID: UUID(), recordDate: "", dateConfidence: "",
+                                         people: [field], starRating: 3)
+        let fields = ArchiveManifestCSV.fields(ofLine: ArchiveManifestCSV.line(for: row))
+        #expect(fields[10].hasPrefix("'"))
+        #expect(!fields[10].dropFirst().hasPrefix("'"), "exactly one quote added")
+    }
+
+    // MARK: R4-D — import relink
+
+    @Test("R4-D: importing a catalog whose SOURCE is deduped against a local record relinks the archive copy's derivedFrom → promotionSource resolves")
+    func importRelinksArchiveCopy() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("relink")
+        defer { sb.cleanup() }
+        // Local catalog: source S (id X).
+        let local = MasterArchiveTestSupport.makeModel(sb)
+        let localSource = VideoRecord()
+        localSource.filename = "tape.mov"; localSource.fullPath = "/Volumes/A/tape.mov"
+        localSource.partialMD5 = "deadbeef"; localSource.sizeBytes = 4_242
+        local.records = [localSource]
+
+        // Remote catalog: the SAME source under a different id + its archive copy.
+        let remote = MasterArchiveTestSupport.makeModel(sb)
+        let remoteSource = VideoRecord()
+        remoteSource.filename = "tape.mov"; remoteSource.fullPath = "/Volumes/A/tape.mov"
+        remoteSource.partialMD5 = "deadbeef"; remoteSource.sizeBytes = 4_242
+        let copy = VideoRecord()
+        copy.filename = "1992-xx-xx_tape.mov"
+        copy.fullPath = "/Volumes/Archive/Breen_Family_Archive/30_Video/1990-1999/1992/1992-xx-xx_tape.mov"
+        copy.partialMD5 = "cafef00d"; copy.sizeBytes = 4_242
+        copy.derivedFrom = remoteSource.id
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.archiveFixity = ArchiveFixity(digest: "abc", verifiedAt: Date(), sizeBytes: 4_242)
+        remote.records = [remoteSource, copy]
+        let exportURL = sb.root.appendingPathComponent("remote_catalog.json")
+        try remote.exportCatalog(to: exportURL)
+
+        let result = try local.importCatalog(from: exportURL)
+        #expect(result.added == 1 && result.skipped == 1)
+        let importedCopy = try #require(local.records.first { $0.fullPath == copy.fullPath })
+        #expect(importedCopy.derivedFrom == localSource.id, "relinked to the LOCAL source id")
+        #expect(local.promotionSource(of: importedCopy) === localSource)
+        #expect(local.masterArchiveCopy(of: localSource) === importedCopy)
+        // Identical ids: no change needed — importing the same export into an
+        // empty model keeps the remote ids and still resolves.
+        let sb2 = try MasterArchiveTestSupport.makeSandbox("relink2")
+        defer { sb2.cleanup() }
+        let fresh = MasterArchiveTestSupport.makeModel(sb2)
+        _ = try fresh.importCatalog(from: exportURL)
+        let c2 = try #require(fresh.records.first { $0.fullPath == copy.fullPath })
+        #expect(c2.derivedFrom == remoteSource.id)
+        #expect(fresh.promotionSource(of: c2)?.id == remoteSource.id)
+    }
 }
 
 /// Mutable call counter usable from a @Sendable barrier closure (tests are serialized).
