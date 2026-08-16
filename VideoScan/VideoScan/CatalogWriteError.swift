@@ -161,12 +161,36 @@ enum CatalogWriteJournal {
         guard var data = try? encoder.encode(entry) else { return }
         data.append(0x0A)   // newline — one object per line
 
-        if let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-        } else {
-            try? data.write(to: url, options: .atomic)
+        rotateIfOversized(url)
+        appendAtomically(data, to: url)
+    }
+
+    /// Rotation cap. One rotated generation (`.1`) is kept, so worst case
+    /// on disk is ~2x this. Internal so tests can shrink it.
+    static var maxBytes: Int = 1_000_000
+
+    /// Rename `url` → `url.1` (replacing any older `.1`) once it exceeds
+    /// `maxBytes`. Codex #385: the journal was unbounded — a wedged
+    /// external writer retrying every 2 s could grow it without limit.
+    private static func rotateIfOversized(_ url: URL) {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue,
+              size > maxBytes else { return }
+        let rotated = url.appendingPathExtension("1")
+        try? FileManager.default.removeItem(at: rotated)
+        try? FileManager.default.moveItem(at: url, to: rotated)
+    }
+
+    /// O_APPEND append. `seekToEnd` + `write` was two syscalls with a race
+    /// between them: two processes (app + maintenance script, which is the
+    /// exact scenario the journal exists for) could interleave and one line
+    /// would clobber the other. With O_APPEND the kernel positions and
+    /// writes atomically per call.
+    private static func appendAtomically(_ data: Data, to url: URL) {
+        let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        _ = data.withUnsafeBytes { buf in
+            write(fd, buf.baseAddress, buf.count)
         }
     }
 

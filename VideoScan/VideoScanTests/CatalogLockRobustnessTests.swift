@@ -180,6 +180,39 @@ final class CatalogLockRobustnessTests: XCTestCase {
                        "each refusal must survive; the journal is append-only")
     }
 
+    /// Codex #385: the journal was unbounded. It now rotates to `.1` once it
+    /// passes `maxBytes`, keeping one older generation.
+    func testJournalRotatesInsteadOfGrowingWithoutBound() throws {
+        let saved = CatalogWriteJournal.maxBytes
+        defer { CatalogWriteJournal.maxBytes = saved }
+        CatalogWriteJournal.maxBytes = 600     // ~3 entries
+        for _ in 0..<40 {
+            CatalogWriteJournal.record(.readOnlyViewer, catalogURL: catalogURL)
+        }
+        let url = CatalogWriteJournal.journalURL(besideCatalogAt: catalogURL)
+        let rotated = url.appendingPathExtension("1")
+        let liveSize = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        XCTAssertLessThan(liveSize, 600 + 400, "live journal must be capped near maxBytes, was \(liveSize)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rotated.path), "one rotated generation is kept")
+        // Whatever is live is still well-formed JSONL.
+        XCTAssertFalse(CatalogWriteJournal.recent(50, catalogURL: catalogURL).isEmpty)
+    }
+
+    /// O_APPEND: 8 concurrent writers x 50 entries must yield exactly 400
+    /// intact lines -- no interleaved/torn lines, no lost appends.
+    func testJournalConcurrentAppendsAreNeverTornOrLost() {
+        let saved = CatalogWriteJournal.maxBytes
+        defer { CatalogWriteJournal.maxBytes = saved }
+        CatalogWriteJournal.maxBytes = .max     // no rotation during this test
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            for _ in 0..<50 {
+                CatalogWriteJournal.record(.readOnlyViewer, catalogURL: catalogURL)
+            }
+        }
+        let entries = CatalogWriteJournal.recent(1000, catalogURL: catalogURL)
+        XCTAssertEqual(entries.count, 400, "every concurrent append must land intact")
+    }
+
     func testJournalSurvivesAMissingDirectoryWithoutThrowing() {
         // Error handling must not itself become a source of errors.
         let bogus = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)/catalog.json")
