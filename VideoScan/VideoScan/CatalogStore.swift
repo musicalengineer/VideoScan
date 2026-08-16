@@ -346,6 +346,23 @@ final class CatalogStore {
         lock.release()
     }
 
+    /// Adopt the on-disk generation after in-memory state has been
+    /// RECONCILED with the file — i.e. the live dossier reload decoded the
+    /// current catalog.json and merged its fields onto our records. This
+    /// is the design doc's "reconcile-then-save" path: a cooperating
+    /// external writer (merge_dossier_jsonl) bumps `generation`; without
+    /// this call the OCC guard would then refuse every save for the rest
+    /// of the session. Only ever moves forward. Callers MUST have merged
+    /// first — adopting without merging is exactly the lost update the
+    /// guard exists to prevent.
+    func adoptOnDiskGenerationAfterReconcile() {
+        let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
+        if onDisk > loadedGeneration {
+            catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
+            loadedGeneration = onDisk
+        }
+    }
+
     /// Release ownership on orderly shutdown. The kernel releases it anyway
     /// if we die without getting here — that is the point of flock.
     func relinquishLock() {

@@ -315,6 +315,33 @@ final class CatalogLockRobustnessTests: XCTestCase {
     // well-formed and correctly serialised, so a lock alone would NOT have
     // caught it. Only a staleness check does.
 
+    /// Reconcile-then-save (design doc): after the live dossier reload has
+    /// merged a cooperating writer's file, adopting its generation lets the
+    /// session save again -- stamping on top of the foreign write, never
+    /// underneath it. Adopt is forward-only and a no-op when disk is not
+    /// ahead of us.
+    @MainActor
+    func testAdoptOnDiskGenerationAfterReconcileUnblocksSaves() throws {
+        let store = CatalogStore(directory: dir)
+        try Data("{\"version\":6,\"generation\":3,\"records\":[]}".utf8).write(to: catalogURL)
+        _ = store.load()
+        XCTAssertEqual(store.loadedGeneration, 3)
+
+        // A cooperating external writer (merge_dossier_jsonl) bumps to 4.
+        try Data("{\"version\":6,\"generation\":4,\"records\":[]}".utf8).write(to: catalogURL)
+        XCTAssertFalse(store.saveNow(records: []), "must refuse before reconcile")
+
+        // No-op when not behind (simulate: nothing newer) -- adopt is forward-only.
+        store.adoptOnDiskGenerationAfterReconcile()
+        XCTAssertEqual(store.loadedGeneration, 4)
+        store.adoptOnDiskGenerationAfterReconcile()
+        XCTAssertEqual(store.loadedGeneration, 4, "adopt never regresses or double-counts")
+
+        XCTAssertTrue(store.saveNow(records: []), "after reconcile the session may save again")
+        XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 5,
+                       "the save stamps on top of the foreign write")
+    }
+
     @MainActor
     func testStaleWriteIsRefused_theAugust14Regression() throws {
         let store = CatalogStore(directory: dir)

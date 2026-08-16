@@ -90,12 +90,59 @@ def save_offsets(path: Path, offsets: dict[str, int]):
     os.replace(tmp, path)
 
 
+def header_generation(path: Path, head_bytes: int = 8192):
+    """Cheap OCC probe mirroring CatalogSnapshot.headerProbe (the app emits
+    savedAt then generation at the head of the object). None = key not in
+    the head (pre-generation catalog) — 'cannot tell', not 0."""
+    import re
+    try:
+        with open(path, "rb") as f:
+            head = f.read(head_bytes).decode("utf-8", "ignore")
+    except OSError:
+        return None
+    m = re.search(r'"generation"\s*:\s*(\d+)', head)
+    return int(m.group(1)) if m else None
+
+
+class CatalogBusy(Exception):
+    """Another writer holds catalog.lock or wrote between our read and our
+    lock. Caller should drop this cycle's work and re-read next cycle."""
+
+
 def atomic_write_catalog(catalog: dict, path: Path):
-    if path.exists():
-        shutil.copy2(path, path.with_suffix(".json.prev"))
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(catalog, indent=2, ensure_ascii=False))
-    os.replace(tmp, path)
+    """External-writer contract (docs/catalog_write_safety_design.md §5),
+    same as scripts/catalog_reduce.py:
+      1. flock catalog.lock non-blocking — the app holds it only for the
+         milliseconds of its own write, so 'held' means retry next cycle;
+      2. re-validate under the lock that the generation we derived from is
+         still the one on disk (TOCTOU);
+      3. bump `generation` so the app's OCC guard sees a foreign write and
+         reconciles (its live dossier reload adopts the new generation);
+      4. atomic replace, .prev rotated, then release.
+    Raises CatalogBusy instead of writing when 1 or 2 fails."""
+    import fcntl
+    lock_path = path.parent / "catalog.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise CatalogBusy("catalog.lock held by another writer")
+        derived_from = int(catalog.get("generation", 0))
+        on_disk = header_generation(path)
+        if on_disk is not None and on_disk != derived_from:
+            raise CatalogBusy(f"catalog.json generation moved {derived_from} -> {on_disk} since read")
+        catalog["generation"] = derived_from + 1
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(".json.prev"))
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(catalog, indent=2, ensure_ascii=False))
+        os.replace(tmp, path)
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +481,16 @@ def main():
                 continue
             applied = apply_deltas(catalog, deltas, log)
             if applied:
-                atomic_write_catalog(catalog, args.catalog)
+                try:
+                    atomic_write_catalog(catalog, args.catalog)
+                except CatalogBusy as e:
+                    # Offsets NOT saved: the deltas are re-read and
+                    # re-applied against a fresh catalog next cycle.
+                    log(f"  catalog busy ({e}); deferring {applied} delta(s) to next cycle")
+                    if args.once:
+                        break
+                    time.sleep(args.interval)
+                    continue
                 save_offsets(args.offsets, offsets)
                 # Re-stamp manifest.sha256 so viewers can verify the
                 # freshly-written catalog. Otherwise the rsync succeeds

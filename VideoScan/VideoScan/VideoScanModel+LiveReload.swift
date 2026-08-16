@@ -95,6 +95,11 @@ extension VideoScanModel {
 
         let merged = mergeDossierFields(from: snapshot)
         lastLiveReloadMtime = mtime
+        // We have now reconciled with whatever a cooperating external
+        // writer put on disk, so its generation is ours to build on.
+        // Without this, a merger that bumps `generation` (as the write
+        // contract requires) would make every later save refuse as stale.
+        catalogStore.adoptOnDiskGenerationAfterReconcile()
         if merged > 0 {
             liveReloadLogger.info("Live dossier reload: merged dossier fields onto \(merged, privacy: .public) record(s)")
             objectWillChange.send()
