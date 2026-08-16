@@ -341,7 +341,11 @@ extension VideoScanModel {
             return
         }
 
-        let lines = candidates.map { c -> String in
+        // One checkbox per retired volume, all ON by default (Rick
+        // 2026-08-16): "not sure why they would deselect, but it is most
+        // flexible this way" — e.g. keep one volume's entries while a
+        // comparison is still in progress.
+        let checks: [NSButton] = candidates.map { c in
             let name = VolumeReachability.volumeName(forPath: c.target.searchPath)
             let age: String
             if let r = c.target.retiredAt {
@@ -350,31 +354,41 @@ extension VideoScanModel {
             } else {
                 age = "retired"
             }
-            return "• \(name) — \(c.recordCount.formatted()) record\(c.recordCount == 1 ? "" : "s"), \(age)"
-        }.joined(separator: "\n")
+            let b = NSButton(checkboxWithTitle:
+                "\(name) — \(c.recordCount.formatted()) record\(c.recordCount == 1 ? "" : "s"), \(age)",
+                target: nil, action: nil)
+            b.state = .on
+            return b
+        }
+        let stack = NSStackView(views: checks)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let width = max(360, checks.map { $0.intrinsicContentSize.width }.max() ?? 0)
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: width).isActive = true
 
         let alert = NSAlert()
-        alert.messageText = "Retired volumes still have catalog entries"
+        alert.messageText = "Remove catalogs from retired volumes"
         alert.informativeText = """
-        These volumes are retired — their media has moved on — but their \
-        old catalog entries are still being counted and can be resurrected \
-        by rescans:
+        Removing catalogs of retired volumes improves search and promotes \
+        better organization. This removes catalog entries only — the drives \
+        themselves are untouched.
 
-        \(lines)
-
-        Deleting their catalogs keeps the numbers honest. This removes \
-        records only; the drives themselves are untouched.
+        Remove catalogs from retired volumes:
         """
+        alert.accessoryView = stack
         // "Not Yet" is the DEFAULT (first) button: a destructive action
         // should never be one accidental Return away. The nag returning at
         // every backup is what applies the pressure, not button order.
         alert.addButton(withTitle: "Not Yet")
-        alert.addButton(withTitle: "Delete \(candidates.count == 1 ? "Catalog" : "\(candidates.count) Catalogs")")
+        alert.addButton(withTitle: "Remove Catalogs")
         if alert.runModal() == .alertSecondButtonReturn {
-            for c in candidates {
+            let chosen = zip(candidates, checks).filter { $0.1.state == .on }.map(\.0)
+            for c in chosen {
                 deleteCatalogForTarget(c.target)
             }
-            log("Retired-volume cleanup: deleted catalogs for \(candidates.count) volume(s) at backup prompt.")
+            log("Retired-volume cleanup: removed catalogs for \(chosen.count) of \(candidates.count) volume(s) at prompt.")
         } else {
             log("Retired-volume cleanup deferred — will ask again at next backup (\(candidates.count) volume(s) pending).")
         }
