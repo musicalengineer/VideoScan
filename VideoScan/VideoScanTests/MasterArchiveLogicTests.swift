@@ -110,7 +110,7 @@ struct ArchivePathResolverTests {
     func extensionStrict() {
         #expect(ArchivePathResolver.normalizedExtension(".MOV", filename: "x") == "mov")
         #expect(ArchivePathResolver.normalizedExtension("", filename: "x.MXF") == "mxf")
-        #expect(ArchivePathResolver.normalizedExtension("", filename: "noext") == "")
+        #expect(ArchivePathResolver.normalizedExtension("", filename: "noext") .isEmpty)
         #expect(ArchivePathResolver.normalizedExtension("mov/../x", filename: "x") == "movx")
         #expect(ArchivePathResolver.normalizedExtension("m\nov", filename: "x") == "mov")
         #expect(ArchivePathResolver.normalizedExtension(String(repeating: "a", count: 40), filename: "x").count == 16)
@@ -172,10 +172,10 @@ struct ArchiveDateHintTests {
     }
 
     @Test("inferred date used only at ≥ 0.6 confidence; below → unknown + low flag")
-    func inferredThreshold() {
+    func inferredThreshold() throws {
         var comps = DateComponents(); comps.year = 2005; comps.month = 3; comps.day = 9
-        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
-        let d = cal.date(from: comps)!
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let d = try #require(cal.date(from: comps))
         let ok = ArchivePathResolver.dateHint(userDate: nil, inferredRecordDate: d, inferredDateConfidence: 0.6)
         #expect(ok.hint == .day(year: 2005, month: 3, day: 9)); #expect(!ok.lowConfidence)
         let low = ArchivePathResolver.dateHint(userDate: nil, inferredRecordDate: d, inferredDateConfidence: 0.59)
@@ -191,7 +191,7 @@ struct ArchiveDateHintTests {
         #expect(ArchiveDateHint.year(1992).filenamePrefix == "1992-xx-xx")
         #expect(ArchiveDateHint.decade(startYear: 1990).filenamePrefix == "xxxx-xx-xx")
         #expect(ArchiveDateHint.unknown.filenamePrefix == "xxxx-xx-xx")
-        #expect(ArchiveDateHint.unknown.manifestDate == "")
+        #expect(ArchiveDateHint.unknown.manifestDate .isEmpty)
         #expect(ArchiveDateHint.decade(startYear: 1990).manifestDate == "1990s")
     }
 }

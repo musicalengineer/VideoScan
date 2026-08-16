@@ -90,3 +90,18 @@ Cancel-safe: partial files are removed on cancel; completed files stay (they're 
 
 ## 8. Decisions taken (Rick may override)
 - Promote implies ★★★ (one-way). Copy, not move. Warn-not-block on undated. Filenames date-prefixed. `Undated/` per bucket. Manifest = CSV (human) — no JSONL twin unless CSV appends prove fragile.
+
+---
+
+## 9. Implementation notes (branch `feature/master-archive`, 8/15→8/16 — codex QA rounds 1–2 absorbed)
+
+Where the code deviates from or refines §2–§5 above, the code wins; this section records why.
+
+- **Designation key.** `masterArchiveTargetID` is NOT durable (`CatalogScanTarget.id` is per-launch and never persisted). The persisted `MasterArchiveDesignation` is `{targetPath, rootPath, volumeUUID?, designatedAt}` — canonical path + the volume's `volumeUUIDString`. Re-resolution on load and on every mount: UUID first, then path (`reresolveMasterArchiveMount`). `masterArchiveTargetID` is derived at runtime. The designation rides catalog.json (`masterArchive` additive key, after `records`; header probe untouched), and travels in `Back Up Catalog…` bundles and catalog exports; imports adopt it only when the local catalog has none.
+- **Retirement.** Every check uses `isRetired` (`retiredAt != nil`), never `role == .retired`. Initialize refuses a retired volume; the Promote job refuses a retired master at preflight.
+- **Fixity field.** The full-file SHA-256 lives in the new additive `VideoRecord.archiveFixity: ArchiveFixity? {algorithm, digest, verifiedAt, sizeBytes}` — NOT in `contentHash` (the v1 segmented candidate signature). The manifest row and the Promote journey stamp carry the same digest.
+- **Copy contract (ArchivePromoteEngine).** Source opened `O_RDONLY|O_NOFOLLOW`, regular file only; dev/ino/size/mtime captured before and re-checked after the copy. Destination `.partial` opened `O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW`; written, `F_FULLFSYNC`'d, verify-hashed THROUGH THE SAME DESCRIPTOR; `renamex_np(RENAME_EXCL)`; directory fsync; then `fstat(fd)` must equal `stat(dest)`. Every directory component under the root is `lstat`'d — a symlink anywhere refuses. Containment is component-wise on `standardizedFileURL`.
+- **Convergence.** Intent journal `00_Index/.promote_journal.jsonl` (append-only, states intent → renamed → manifest → done / abandoned). Every job start reconciles the journal first: file present + no row → verify digest (journal / manifest / source) → append row + link; row + no record → link; intent + no file → drop partial. Idempotency is by SOURCE IDENTITY (source record id) in the catalog AND the manifest — never by destination filename. On a name collision the existing file's bytes are compared with the source and ADOPTED if identical; `_NN` is minted only for a genuinely different file.
+- **Manifest CSV.** Every field is quoted; control characters (incl. CR/LF) are replaced by a space so a row is always one physical line. Slugs are letters/digits/`_`/`-` only; extensions ASCII alnum ≤16.
+- **Wording.** The Initialize sheet shows a "Destination assessment (from your volume settings — not a health check)" — role / media type / trust / reachability. It never claims RAID health.
+- **Not done (later phase):** journal reconcile at app launch (only at job start today); Refile; `.backedUp` cloud leg; a Volumes-window "Safe Archive ✓" chip (only the "Master Archive" chip ships).
