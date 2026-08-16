@@ -15,8 +15,8 @@
 //   - `VideoRecord.resolvedDateSortKey` / `.resolvedDateDisplay` — the
 //     "best date" resolution: Rick's date (either confidence) OUTRANKS
 //     any machine date (the 2026-on-a-VHS-conversion case proves the
-//     ordering), then the dossier's inferred date, then the file's
-//     creation date. O(1) per record — these back a catalog table
+//     ordering), then the container's embedded creation date, then the
+//     dossier's inferred date, then the file's creation date. O(1) per record — these back a catalog table
 //     column, so no allocation-heavy work here (NO DateFormatter on
 //     the sort path; see the Julian-day math below).
 //
@@ -235,6 +235,10 @@ extension VideoRecord {
     /// for sort comparators over a 100k-row catalog.
     public var resolvedDateSortKey: Date {
         if let ud = userDate, let d = UserDateEntry.date(from: ud) { return d }
+        // The container's own creation stamp (2026-08-16) outranks the
+        // dossier's inference and the filesystem date — same order the
+        // Master Archive resolver uses (RecordDateResolver).
+        if let embedded = embeddedCreationDate { return embedded }
         if let inferred = inferredRecordDate { return inferred }
         return dateCreatedRaw ?? .distantPast
     }
@@ -248,6 +252,9 @@ extension VideoRecord {
     public var resolvedDateDisplay: String {
         if let ud = userDate {
             return userDateStatus == .known ? ud : ud + " (est.)"
+        }
+        if let embedded = embeddedCreationDate {
+            return Self.isoDayString(from: embedded)
         }
         if let inferred = inferredRecordDate {
             return Self.isoDayString(from: inferred)
@@ -264,6 +271,9 @@ extension VideoRecord {
         case .estimated:
             return "Your date — best guess. It outranks any machine date; refine it any time."
         case .unconfirmed:
+            if embeddedCreationDate != nil {
+                return "Creation date written inside the file by the camera or app that made it (\(embeddedDateOriginLabel)). Survives copies; enter your own in the inspector to override it."
+            }
             if inferredRecordDate != nil {
                 return "Date figured out from the video (on-screen dates / speech). Enter your own in the inspector to override it."
             }
