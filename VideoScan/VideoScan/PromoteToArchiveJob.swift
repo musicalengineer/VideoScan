@@ -241,6 +241,10 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         // journal entries marked done. Runs on cancel too — whatever was
         // published stays published and must be persisted.
         let saved = finalizeBatch(model: model, ctx: ctx)
+        finishRun(tally: tally, saved: saved, model: model)
+    }
+
+    private func finishRun(tally: Tally, saved: Bool, model: VideoScanModel) {
         if Task.isCancelled || state == .cancelling {
             let kept = tally.promoted + tally.adopted
             let done = kept > 0 ? " (\(kept) already promoted stay in the archive)" : ""
