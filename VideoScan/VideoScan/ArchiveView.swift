@@ -10,6 +10,9 @@ struct ArchiveView: View {
     @State private var searchText: String = ""
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State private var archiveDetailRecord: VideoRecord?
+    /// Retired volumes are noise in the archive sidebar by default — same
+    /// convention as the Volumes window's "show retired" (Rick 2026-08-16).
+    @AppStorage("archive.sidebar.showRetired") private var showRetiredVolumes = false
 
     var body: some View {
         HSplitView {
@@ -59,6 +62,12 @@ struct ArchiveView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
+                    masterArchivePanel
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 6)
+
+                    Divider().padding(.vertical, 4)
+
                     sidebarRow(.allFiles)
 
                     Divider().padding(.vertical, 4)
@@ -75,9 +84,23 @@ struct ArchiveView: View {
 
                     sidebarSection("VOLUMES") {
                         // Screen the RAM-disk scratch volume — plumbing,
-                        // not an archive target.
-                        ForEach(CatalogScanTarget.excludingScratch(model.scanTargets), id: \.id) { target in
+                        // not an archive target. Retired volumes hidden
+                        // unless asked for.
+                        let all = CatalogScanTarget.excludingScratch(model.scanTargets)
+                        let retiredCount = all.filter(\.isRetired).count
+                        ForEach(all.filter { showRetiredVolumes || !$0.isRetired }, id: \.id) { target in
                             volumeRoleRow(target)
+                        }
+                        if retiredCount > 0 {
+                            Toggle(isOn: $showRetiredVolumes) {
+                                Text("Show retired (\(retiredCount))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                            .padding(.leading, 8)
+                            .padding(.top, 4)
                         }
                     }
                 }
@@ -92,6 +115,63 @@ struct ArchiveView: View {
                 .padding(12)
         }
         .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    // MARK: Master Archive panel (docs/archive_promotion_workflow.md §4)
+    //
+    // The archive's home base: the ONE designated volume, or the way to
+    // designate one. Rick 2026-08-16: "not seeing any Archive: none in
+    // the sidebar" — it should be discoverable without knowing the menu.
+    @ViewBuilder
+    private var masterArchivePanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("MASTER ARCHIVE")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+            if let designation = model.masterArchive {
+                let reachable = FileManager.default.fileExists(atPath: designation.rootPath)
+                HStack(spacing: 6) {
+                    Image(systemName: reachable ? "archivebox.fill" : "archivebox")
+                        .foregroundStyle(reachable ? Color.accentColor : .secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(VolumeReachability.displayLabel(forPath: designation.targetPath))
+                            .font(.system(size: 13, weight: .medium))
+                        Text(reachable ? "Breen_Family_Archive" : "offline")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                HStack(spacing: 8) {
+                    Button("Reveal") { model.revealMasterArchiveInFinder() }
+                    Button("Manifest") { model.openMasterArchiveManifest() }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .disabled(!reachable)
+                .padding(.leading, 8)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "archivebox")
+                        .foregroundStyle(.secondary)
+                    Text("None designated")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                Button("Initialize Master Archive…") {
+                    model.chooseAndOfferInitializeMasterArchive()
+                }
+                .controlSize(.small)
+                .disabled(model.isReadOnly)
+                .padding(.leading, 8)
+                .help("Choose the volume that will hold the family's master archive; the app creates the Breen_Family_Archive tree, manifest and README.")
+            }
+        }
+        .padding(.top, 8)
     }
 
     @ViewBuilder
