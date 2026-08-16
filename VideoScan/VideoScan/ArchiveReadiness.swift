@@ -138,7 +138,15 @@ struct ArchiveReadiness: Equatable, Sendable {
                                                        inferredDateConfidence: i.inferredDateConfidence)
         let date: DateState = hint == .unknown ? (low ? .lowConfidence : .undated) : .known
 
-        // ---- Warnings, audio first.
+        let warnings = composeWarnings(i, stream: stream, hasMedia: hasMedia, hasAudio: hasAudio,
+                                       blocking: blocking, audio: audio, format: format, date: date)
+        return ArchiveReadiness(playable: playable, audio: audio, format: format, date: date,
+                                warnings: warnings, blocking: blocking)
+    }
+
+    /// Warning sentences — AUDIO FIRST, then format, then date, then other.
+    private static func composeWarnings(_ i: Inputs, stream: StreamType, hasMedia: Bool, hasAudio: Bool,
+                                        blocking: Bool, audio: Audio, format: Format, date: DateState) -> [String] {
         var warnings: [String] = []
         if blocking {
             warnings.append(stream == .ffprobeFailed
@@ -168,8 +176,7 @@ struct ArchiveReadiness: Equatable, Sendable {
         case .undated: warnings.append("Undated — will land in Undated/ (refile later once the date is known)")
         case .known: break
         }
-        return ArchiveReadiness(playable: playable, audio: audio, format: format, date: date,
-                                warnings: warnings, blocking: blocking)
+        return warnings
     }
 
     /// Format risk from the codec table (case-insensitive; aliases welcome).
