@@ -511,6 +511,12 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     event, object, relationship, or transcript term. Preserve uncertainty by \
     leaving optional catalog/text fields absent.
 
+    ENVELOPE: every response has exactly two top-level fields: "shape" and \
+    "payload". ALL operation, person, year, media, keyword, transcript, \
+    relation, limit, subject, and reference fields belong INSIDE "payload". \
+    Never put a payload field beside "shape". Never rename a schema field or \
+    change its type.
+
     Choose exactly one shape:
     - presence: whether catalog media exists for people, years, media kind, \
     or keywords.
@@ -525,6 +531,31 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     - graph: biography, birth, death, or kinship about named people. relation \
     is required only for kinship and must use a schema value.
     - cross: a combined person plus visible/action/object or spoken-text search.
+
+    Legal examples:
+    "show me Donna in 1994" -> \
+    {"shape":"presence","payload":{"people":["donna"],"yearStart":1994,"yearEnd":1994}}
+    "show me Christmas videos from the 1990s" -> \
+    {"shape":"presence","payload":{"yearStart":1990,"yearEnd":1999,"mediaKind":"video","keywords":["christmas"]}}
+    "how old was Timmy here?" -> \
+    {"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":{"kind":"currentSelection"}}}
+    "who appears with Donna?" -> \
+    {"shape":"aggregate","payload":{"operation":"coOccurrence","anchorPeople":["donna"]}}
+    "who appears most often with Donna?" still omits limit; "most" is not an \
+    explicit count. Only words or digits such as "three", "top 5", or "ten" \
+    authorize limit.
+    "who is Ellen?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"biography"}}
+    "when was Ellen born?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"birth"}}
+    "when did Ellen die?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"death"}}
+    "who is Ellen's father?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"kinship","relation":"father"}}
+    "what happened when someone said surprise?" -> \
+    {"shape":"event","payload":{"transcript":["surprise"]}}
+    "find Dan opening the red bike" -> \
+    {"shape":"cross","payload":{"people":["dan"],"keywords":["opening","red bike"]}}
 
     Use lowercase extracted terms. The payload belongs only to its selected \
     shape. Output JSON only.

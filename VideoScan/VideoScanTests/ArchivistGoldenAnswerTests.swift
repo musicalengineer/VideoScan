@@ -178,7 +178,11 @@ struct ArchivistLiveGoldenAnswerTests {
         let records = makeArchivistGoldenCatalog()
         let index = CatalogSearchIndex()
         index.rebuild(records: records)
-        let brain = OllamaQueryTranslator(transport: .curl)
+        var brain = OllamaQueryTranslator(transport: .curl)
+        if let host = ProcessInfo.processInfo.environment["NL_EVAL_HOST"],
+           !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            brain.host = host
+        }
         var rows: [[String: Any]] = []
         var passes = 0
 

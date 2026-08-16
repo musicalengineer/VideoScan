@@ -3,11 +3,12 @@
 //
 // This is deliberately not an app-launch service. Hallie pays no process or
 // memory cost until somebody talks to her. The first turn probes the local
-// endpoint, starts `ollama serve` when needed, waits a bounded five seconds
+// endpoint, starts `ollama serve` when needed, waits a bounded interval
 // for /api/tags, and only then sends the translation request. Remote laptops
 // and cloud endpoints are never launched by this machine.
 
 import Foundation
+import SystemConfiguration
 import VideoScanCore
 
 actor OllamaLocalServerBootstrap {
@@ -59,6 +60,9 @@ actor OllamaLocalServerBootstrap {
                 _ = try launcher.spawnDetached(
                     executableURL: URL(fileURLWithPath: "/usr/bin/env"),
                     arguments: [
+                        // Fleet peers need the M4 endpoint. Ollama has no
+                        // authentication, so this is deliberately a LAN-wide
+                        // bind and must never be used on an untrusted network.
                         "OLLAMA_HOST=0.0.0.0:\(port)",
                         path,
                         "serve",
@@ -82,7 +86,9 @@ actor OllamaLocalServerBootstrap {
     }
 
     /// Ensure the first endpoint that names THIS Mac is serving. A fleet with
-    /// only remote/cloud endpoints passes through untouched.
+    /// only remote/cloud endpoints passes through untouched. Local readiness
+    /// is probed through loopback: a manually started loopback-only Ollama must
+    /// be reused, not mistaken for a dead `.local` endpoint and spawned again.
     @discardableResult
     func ensureRunning(for hosts: [String]) async throws -> Outcome {
         guard let endpoint = Self.localEndpoint(
@@ -94,7 +100,8 @@ actor OllamaLocalServerBootstrap {
             try await current.value
             return .started
         }
-        if await dependencies.probe(endpoint) { return .alreadyRunning }
+        let loopback = Self.loopbackEndpoint(for: endpoint)
+        if await dependencies.probe(loopback) { return .alreadyRunning }
 
         // Actor reentrancy: another ask may have created the task while this
         // one awaited its probe. Join it instead of spawning a second server.
@@ -108,7 +115,7 @@ actor OllamaLocalServerBootstrap {
         let task = Task {
             try deps.spawn(port)
             for _ in 0..<max(1, deps.readinessAttempts) {
-                if await deps.probe(endpoint) { return }
+                if await deps.probe(loopback) { return }
                 await deps.pause()
             }
             throw BootstrapError.didNotBecomeReady(endpoint)
@@ -142,16 +149,31 @@ actor OllamaLocalServerBootstrap {
         localEndpoint(in: [endpoint], localHostNames: currentLocalHostNames()) != nil
     }
 
+    /// Replace endpoints naming this Mac with loopback after startup. This
+    /// makes a loopback-only manually started server usable while retaining
+    /// the original names of every remote/cloud failover host.
+    static func routeLocalEndpointsToLoopback(
+        _ hosts: [String],
+        localHostNames: Set<String> = currentLocalHostNames()
+    ) -> [String] {
+        hosts.map { endpoint in
+            localEndpoint(in: [endpoint], localHostNames: localHostNames) == nil
+                ? endpoint : loopbackEndpoint(for: endpoint)
+        }
+    }
+
     static func currentLocalHostNames() -> Set<String> {
         var names: Set<String> = ["localhost", "127.0.0.1", "::1"]
-        let hostName = ProcessInfo.processInfo.hostName
-        names.insert(normalizedHost(hostName))
-        if let short = hostName.split(separator: ".").first {
-            let shortName = normalizedHost(String(short))
+        if let localName = SCDynamicStoreCopyLocalHostName(nil) as String? {
+            let shortName = normalizedHost(localName)
             names.insert(shortName)
             names.insert(shortName + ".local")
         }
         return names
+    }
+
+    static func loopbackEndpoint(for endpoint: String) -> String {
+        "127.0.0.1:\(port(for: endpoint))"
     }
 
     static func port(for endpoint: String) -> Int {

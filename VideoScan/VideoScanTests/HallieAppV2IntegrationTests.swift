@@ -102,7 +102,7 @@ struct HallieAppV2IntegrationTests {
         graph: GedcomFamilyGraph? = nil
     ) -> HallieAppTurnCoordinator.Dependencies {
         HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in },
+            startLocalBrain: { hosts in hosts },
             translateAST: { question, hosts, modelName in
                 #expect(question == "fixture question")
                 #expect(hosts == ["fixture.invalid"])
@@ -213,7 +213,10 @@ struct HallieAppV2IntegrationTests {
     @Test func translationFailureNeverLoadsEvidenceOrExecutes() async {
         let calls = Recorder<String>()
         let dependencies = HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in calls.append("start") },
+            startLocalBrain: { hosts in
+                calls.append("start")
+                return hosts
+            },
             translateAST: { _, _, _ in
                 calls.append("translate")
                 throw FixtureError.translationFailed
@@ -379,7 +382,7 @@ struct HallieAppV2IntegrationTests {
             recordID: oldID, fullPath: "/isolated/old.mov",
             date: Date(timeIntervalSince1970: 1_600_000_000))
         let dependencies = HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in },
+            startLocalBrain: { hosts in hosts },
             translateAST: { _, _, _ in
                 await gate.pause()
                 return .init(ast: ast, responderHost: "fixture-host")
@@ -447,7 +450,7 @@ struct HallieAppV2IntegrationTests {
                 birthdate: Date(timeIntervalSince1970: 965_779_200)),
         ]
         let dependencies = HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in },
+            startLocalBrain: { hosts in hosts },
             translateAST: { question, _, _ in
                 translations.append(question)
                 return .init(ast: ast, responderHost: "fixture-host")
@@ -517,7 +520,7 @@ struct HallieAppV2IntegrationTests {
             fileURL: URL(fileURLWithPath: "/isolated/mary.png"),
             cropOffsetX: 0, cropOffsetY: 0, cropScale: 1)
         let dependencies = HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in },
+            startLocalBrain: { hosts in hosts },
             translateAST: { question, _, _ in
                 translations.append(question)
                 return .init(ast: ast, responderHost: "fixture-host")
@@ -567,7 +570,10 @@ struct HallieAppV2IntegrationTests {
         let gate = Gate()
         let calls = Recorder<String>()
         let dependencies = HallieAppTurnCoordinator.Dependencies(
-            startLocalBrain: { _ in calls.append("start") },
+            startLocalBrain: { hosts in
+                calls.append("start")
+                return hosts
+            },
             translateAST: { _, _, _ in
                 calls.append("translate")
                 await gate.pause()
@@ -613,7 +619,7 @@ struct HallieAppV2IntegrationTests {
         #expect(calls.values == ["start", "translate"])
     }
 
-    @Test func localBrainStartsBeforeTranslationAndFailureStopsTheTurn() async {
+    @Test func localBrainStartupFailureStillUsesConfiguredFleet() async throws {
         let calls = Recorder<String>()
         let dependencies = HallieAppTurnCoordinator.Dependencies(
             startLocalBrain: { hosts in
@@ -635,19 +641,15 @@ struct HallieAppV2IntegrationTests {
             continueTurn: { _, _, _ in throw FixtureError.translationFailed },
             resolveBiographyPhoto: { _ in nil })
 
-        do {
-            _ = try await HallieAppTurnCoordinator.execute(
-                question: "Where is Donna?", records: [],
-                referent: .init(recordID: nil, temporalDate: nil),
-                hosts: ["RicksM4.local"], modelName: "fixture-model",
-                dependencies: dependencies)
-            Issue.record("turn continued after local-brain startup failed")
-        } catch FixtureError.translationFailed {
-            // Expected.
-        } catch {
-            Issue.record("unexpected error: \(error)")
-        }
-        #expect(calls.values == ["start:RicksM4.local"])
+        _ = try await HallieAppTurnCoordinator.execute(
+            question: "Where is Donna?", records: [],
+            referent: .init(recordID: nil, temporalDate: nil),
+            hosts: ["RicksM4.local", "ricksm5.local"],
+            modelName: "fixture-model", dependencies: dependencies)
+
+        #expect(calls.values == [
+            "start:RicksM4.local,ricksm5.local", "translate", "execute",
+        ])
     }
 
     @Test func oneHundredThousandRecordCoordinatorBudgetAndYieldSensor() async throws {

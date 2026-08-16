@@ -54,7 +54,7 @@ struct OllamaLocalServerBootstrapTests {
 
         #expect(outcome == .alreadyRunning)
         #expect(fixture.spawns.isEmpty)
-        #expect(fixture.probes == ["RicksM4.local"])
+        #expect(fixture.probes == ["127.0.0.1:11434"])
     }
 
     @Test func firstQuestionStartsLocalServerAndWaitsForReadiness() async throws {
@@ -93,6 +93,9 @@ struct OllamaLocalServerBootstrapTests {
         _ = try await bootstrap.ensureRunning(for: ["RicksM4.local:12345"])
 
         #expect(fixture.spawns == [12345])
+        #expect(fixture.probes == [
+            "127.0.0.1:12345", "127.0.0.1:12345",
+        ])
     }
 
     @Test func simultaneousFirstQuestionsSpawnExactlyOneServer() async throws {
@@ -139,5 +142,30 @@ struct OllamaLocalServerBootstrapTests {
             in: ["https://ricksm4.local"], localHostNames: local) == nil)
         #expect(OllamaLocalServerBootstrap.localEndpoint(
             in: ["ricksm4.local:443"], localHostNames: local) == nil)
+    }
+
+    @Test func localRoutingUsesLoopbackAndPreservesRemoteOrderAndPorts() {
+        let routed = OllamaLocalServerBootstrap.routeLocalEndpointsToLoopback(
+            [
+                "RicksM4.local",
+                "ricksm5.local",
+                "http://ricksm4.local:12345",
+                "https://ollama.example.com",
+            ],
+            localHostNames: ["ricksm4.local", "ricksm4"])
+
+        #expect(routed == [
+            "127.0.0.1:11434",
+            "ricksm5.local",
+            "127.0.0.1:12345",
+            "https://ollama.example.com",
+        ])
+    }
+
+    @Test func currentHostNamesAlwaysIncludeLoopbackIdentities() {
+        let names = OllamaLocalServerBootstrap.currentLocalHostNames()
+        #expect(names.contains("localhost"))
+        #expect(names.contains("127.0.0.1"))
+        #expect(names.contains("::1"))
     }
 }

@@ -186,7 +186,11 @@ struct NLTranslatorLiveEvalTests {
         let corpus = try loadCorpus()
         // curl transport: the headless test host has no Local Network
         // TCC grant, so URLSession to a .local host silently times out.
-        let brain = OllamaQueryTranslator(transport: .curl)
+        var brain = OllamaQueryTranslator(transport: .curl)
+        if let host = ProcessInfo.processInfo.environment["NL_EVAL_HOST"],
+           !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            brain.host = host
+        }
         var rows: [[String: Any]] = []
         var strictPasses = 0
 

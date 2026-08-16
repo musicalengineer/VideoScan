@@ -37,7 +37,10 @@ enum HallieAppTurnCoordinator {
     }
 
     struct Dependencies: Sendable {
-        let startLocalBrain: @Sendable ([String]) async throws -> Void
+        /// Starts a local endpoint when appropriate and returns the effective
+        /// routing order. Production rewrites this Mac's hostname to loopback
+        /// so a loopback-only Ollama is reusable; remote hosts are unchanged.
+        let startLocalBrain: @Sendable ([String]) async throws -> [String]
         let translateAST: @Sendable (
             String, [String], String
         ) async throws -> Translation
@@ -57,6 +60,8 @@ enum HallieAppTurnCoordinator {
             startLocalBrain: { hosts in
                 _ = try await OllamaLocalServerBootstrap.shared
                     .ensureRunning(for: hosts)
+                return OllamaLocalServerBootstrap
+                    .routeLocalEndpointsToLoopback(hosts)
             },
             translateAST: { question, hosts, modelName in
                 let responder = ResponderBox()
@@ -143,10 +148,21 @@ enum HallieAppTurnCoordinator {
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
-        try await dependencies.startLocalBrain(hosts)
+        let effectiveHosts: [String]
+        do {
+            effectiveHosts = try await dependencies.startLocalBrain(hosts)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Demand-start is an optimization, not the fleet gatekeeper. A
+            // local executable/startup failure must still allow an already-up
+            // remote host to answer through the established failover path.
+            appLog.write("Hallie: local Ollama demand-start failed; trying configured fleet — \(error.localizedDescription)")
+            effectiveHosts = hosts
+        }
         try Task.checkCancellation()
         let translation = try await dependencies.translateAST(
-            question, hosts, modelName)
+            question, effectiveHosts, modelName)
         try Task.checkCancellation()
 
         let context = try await captureContext(
