@@ -46,24 +46,22 @@ enum MasterArchiveIcon {
         return out
     }
 
-    /// Apply the badge to the designated volume/folder and the archive root.
-    /// Returns the paths that took the icon; logs and skips anything that
+    /// Apply the badge to the archive ROOT FOLDER only (Breen_Family_Archive).
+    /// Rick 2026-08-16: the volume may carry other, unrelated folders, so
+    /// the volume icon stays stock — the badge marks exactly what the app
+    /// manages. Returns the paths that took the icon; skips anything that
     /// refuses (network volumes, read-only media, permissions).
     @discardableResult
     static func apply(volumeOrFolderPath: String, archiveRootPath: String) -> [String] {
-        let img = image()
-        var done: [String] = []
-        for path in [volumeOrFolderPath, archiveRootPath] where FileManager.default.fileExists(atPath: path) {
-            if NSWorkspace.shared.setIcon(img, forFile: path, options: []) {
-                done.append(path)
-            }
-        }
-        return done
+        _ = volumeOrFolderPath   // deliberately not badged
+        guard FileManager.default.fileExists(atPath: archiveRootPath) else { return [] }
+        return NSWorkspace.shared.setIcon(image(), forFile: archiveRootPath, options: []) ? [archiveRootPath] : []
     }
 
-    /// Remove the badge (v1 clear). Best-effort.
+    /// Remove the badge (v1 clear). Best-effort. Also clears a volume-level
+    /// icon left by the short-lived build that badged both.
     static func remove(volumeOrFolderPath: String, archiveRootPath: String) {
-        for path in [volumeOrFolderPath, archiveRootPath] where FileManager.default.fileExists(atPath: path) {
+        for path in [archiveRootPath, volumeOrFolderPath] where FileManager.default.fileExists(atPath: path) {
             _ = NSWorkspace.shared.setIcon(nil, forFile: path, options: [])
         }
     }
