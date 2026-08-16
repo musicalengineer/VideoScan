@@ -131,9 +131,12 @@ struct ArchiveView: View {
                 .padding(.leading, 8)
             if let designation = model.masterArchive {
                 let reachable = FileManager.default.fileExists(atPath: designation.rootPath)
+                // Green = designated and reachable; yellow = designated
+                // but offline; the "none" state below is yellow too —
+                // attention, not alarm (Rick 2026-08-16).
                 HStack(spacing: 6) {
-                    Image(systemName: reachable ? "archivebox.fill" : "archivebox")
-                        .foregroundStyle(reachable ? Color.accentColor : .secondary)
+                    Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(reachable ? Color.green : Color.yellow)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(VolumeReachability.displayLabel(forPath: designation.targetPath))
                             .font(.system(size: 13, weight: .medium))
@@ -154,11 +157,11 @@ struct ArchiveView: View {
                 .padding(.leading, 8)
             } else {
                 HStack(spacing: 6) {
-                    Image(systemName: "archivebox")
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.yellow)
                     Text("None designated")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.yellow)
                     Spacer()
                 }
                 .padding(.horizontal, 8)
