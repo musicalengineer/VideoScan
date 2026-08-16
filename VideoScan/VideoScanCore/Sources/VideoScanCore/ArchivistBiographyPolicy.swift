@@ -54,8 +54,8 @@ public enum ArchivistBiographyPolicy {
         _ people: [GedcomFamilyGraph.Person]
     ) -> [GedcomFamilyGraph.Person] {
         people.sorted { lhs, rhs in
-            let left = normalizedName(lhs.name)
-            let right = normalizedName(rhs.name)
+            let left = FamilyIdentityText.normalized(lhs.name)
+            let right = FamilyIdentityText.normalized(rhs.name)
             if left != right { return left < right }
             return lhs.id < rhs.id
         }
@@ -223,14 +223,5 @@ public enum ArchivistBiographyPolicy {
             text: "Which \(typedName) do you mean?",
             basis: gedcomCheck,
             candidates: candidates.map(disambiguationCandidate))
-    }
-
-    private static func normalizedName(_ value: String) -> String {
-        value.folding(
-            options: [.diacriticInsensitive, .caseInsensitive],
-            locale: Locale(identifier: "en_US_POSIX"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .precomposedStringWithCanonicalMapping
     }
 }

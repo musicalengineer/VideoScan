@@ -14,6 +14,7 @@ public struct CyberBrainIndex: Sendable {
 
     private let peopleByID: [String: CyberBrainPerson]
     private let peopleByLookupName: [String: [String]]
+    private let peopleByLookupToken: [String: [String]]
     private let sourcesByID: [String: CyberBrainSource]
     private let activeItemsByPersonID: [String: [CyberBrainItem]]
 
@@ -25,16 +26,19 @@ public struct CyberBrainIndex: Sendable {
         self.sourcesByID = Dictionary(uniqueKeysWithValues:
             archive.sources.map { ($0.id, $0) })
 
-        var names: [String: [String]] = [:]
+        var names: [String: Set<String>] = [:]
+        var tokens: [String: Set<String>] = [:]
         for person in archive.people {
             for value in [person.canonicalName] + person.aliases {
-                let key = Self.normalized(value)
-                if !names[key, default: []].contains(person.id) {
-                    names[key, default: []].append(person.id)
+                let key = FamilyIdentityText.normalized(value)
+                names[key, default: []].insert(person.id)
+                for token in Set(FamilyIdentityText.tokens(value)) {
+                    tokens[token, default: []].insert(person.id)
                 }
             }
         }
         self.peopleByLookupName = names.mapValues { $0.sorted() }
+        self.peopleByLookupToken = tokens.mapValues { $0.sorted() }
 
         let allItems = archive.people.flatMap(\.items)
         let superseded = Set(allItems.compactMap { item in
@@ -51,35 +55,41 @@ public struct CyberBrainIndex: Sendable {
             $0.sorted(by: Self.itemPrecedes)
         }
 
-        // A deterministic revision token suitable for cache invalidation. It
-        // deliberately tracks semantic IDs and update dates, not JSON layout.
-        let personMaterial = archive.people.map {
-            "person:\($0.id):\($0.canonicalName):\($0.aliases.sorted().joined(separator: ",")):"
-                + "\($0.terminology.sorted().joined(separator: ",")):"
-                + "\($0.gedcomPersonID ?? ""):\($0.profileStableID?.uuidString ?? "")"
-        }
-        let itemMaterial = allItems.map {
-            "item:\($0.id):\($0.updatedAt.timeIntervalSince1970):\($0.status.rawValue):"
-                + "\($0.confidence.rawValue):\($0.privacy.rawValue):\($0.text)"
-        }
-        let sourceMaterial = archive.sources.map {
-            "source:\($0.id):\($0.type.rawValue):\($0.title):"
-                + "\($0.attribution ?? ""):\($0.locator ?? "")"
-        }
-        let revisionMaterial = (personMaterial + itemMaterial + sourceMaterial)
-            .sorted().joined(separator: "|")
+        // The token covers every persisted field, including references and
+        // source metadata. Cache invalidation does not rely on an editor
+        // remembering to bump updatedAt.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let revisionMaterial = try encoder.encode(archive)
         self.generation = "v\(archive.schemaVersion):\(archive.archiveID):"
-            + String(revisionMaterial.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
+            + String(revisionMaterial.reduce(UInt64(14_695_981_039_346_656_037)) {
                 ($0 ^ UInt64($1)) &* 1_099_511_628_211
             }, radix: 16)
     }
 
     public func resolve(_ name: String) -> CyberBrainIdentityResolution {
-        let ids = peopleByLookupName[Self.normalized(name)] ?? []
+        let normalized = FamilyIdentityText.normalized(name)
+        let queryTokens = FamilyIdentityText.tokens(name)
+        guard !queryTokens.isEmpty else { return .notFound }
+
+        let exact = peopleByLookupName[normalized] ?? []
+        let ids: [String]
+        if !exact.isEmpty {
+            ids = exact
+        } else {
+            let tokenSets = queryTokens.compactMap {
+                peopleByLookupToken[$0].map(Set.init)
+            }
+            guard tokenSets.count == queryTokens.count,
+                  let first = tokenSets.first else { return .notFound }
+            ids = tokenSets.dropFirst().reduce(first) { $0.intersection($1) }
+                .sorted()
+        }
         let people = ids.compactMap { peopleByID[$0] }
             .sorted { lhs, rhs in
-                let left = Self.normalized(lhs.canonicalName)
-                let right = Self.normalized(rhs.canonicalName)
+                let left = FamilyIdentityText.normalized(lhs.canonicalName)
+                let right = FamilyIdentityText.normalized(rhs.canonicalName)
                 return left == right ? lhs.id < rhs.id : left < right
             }
         if people.count == 1 { return .resolved(people[0]) }
@@ -96,11 +106,18 @@ public struct CyberBrainIndex: Sendable {
         limit: Int = 12
     ) -> [CyberBrainItem] {
         let bounded = min(max(0, limit), 50)
-        return (activeItemsByPersonID[personID] ?? [])
-            .lazy
-            .filter { $0.privacy.isVisible(at: privacyCeiling) }
+        return visibleEvidence(for: personID, privacyCeiling: privacyCeiling)
             .prefix(bounded)
             .map { $0 }
+    }
+
+    fileprivate func visibleEvidence(
+        for personID: String,
+        privacyCeiling: CyberBrainItem.Privacy
+    ) -> [CyberBrainItem] {
+        (activeItemsByPersonID[personID] ?? []).filter {
+            $0.privacy.isVisible(at: privacyCeiling)
+        }
     }
 
     private static func itemPrecedes(_ lhs: CyberBrainItem,
@@ -117,17 +134,12 @@ public struct CyberBrainIndex: Sendable {
         if left.1 != right.1 { return left.1 < right.1 }
         return lhs.id < rhs.id
     }
-
-    private static func normalized(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive],
-                      locale: Locale(identifier: "en_US_POSIX"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .precomposedStringWithCanonicalMapping
-    }
 }
 
 public enum CyberBrainBiographyPlanner {
+    public static let gedcomFactPrivacy = CyberBrainItem.Privacy.private
+    public static let gedcomFactConfidence = CyberBrainItem.Confidence.probable
+
     public static func plan(
         personName: String,
         index: CyberBrainIndex,
@@ -137,20 +149,16 @@ public enum CyberBrainBiographyPlanner {
     ) -> CyberBrainAnswerPlan {
         switch index.resolve(personName) {
         case .notFound:
-            return CyberBrainAnswerPlan(
-                subject: personName,
-                answerState: .noEvidence,
-                uncertaintyStatements: [
-                    "I don't find that person in the CyberBrain identity index."
-                ],
-                forbiddenClaims: ["Do not infer an identity from a partial name."])
+            return graphFallbackPlan(
+                personName: personName, graph: graph,
+                privacyCeiling: privacyCeiling)
         case .ambiguous(let people):
             return CyberBrainAnswerPlan(
                 subject: personName,
                 answerState: .ambiguous,
                 uncertaintyStatements: ["More than one person uses that name or alias."],
-                permittedActions: ["narrow"],
-                forbiddenClaims: ["Do not choose one ambiguous identity."],
+                permittedActions: [.narrow],
+                constraints: [.doNotChooseAmbiguousIdentity],
                 ambiguityCandidates: people.map {
                     .init(id: $0.id, canonicalName: $0.canonicalName)
                 })
@@ -171,37 +179,29 @@ public enum CyberBrainBiographyPlanner {
         var claims: [CyberBrainAnswerPlan.Claim] = []
         var citations: [String: CyberBrainAnswerPlan.Citation] = [:]
         var uncertainty: [String] = []
-        var forbidden = ["Do not add biographical facts absent from these claims."]
+        var constraints: [CyberBrainAnswerPlan.Constraint] = [
+            .doNotAddUnsupportedFacts,
+        ]
 
         if let gedcomID = person.gedcomPersonID,
-           let gedcomPerson = graph?.people[gedcomID] {
-            let sourceID = "gedcom:\(gedcomID)"
-            citations[sourceID] = .init(
-                id: sourceID,
-                title: "Imported family tree (GEDCOM)",
-                attribution: nil,
-                locator: nil)
-            if let birth = gedcomPerson.birthDate {
-                claims.append(.init(
-                    id: "gedcom:\(gedcomID):birth",
-                    text: "The imported family tree records \(birth) as \(person.canonicalName)'s birth date.",
-                    evidenceIDs: [sourceID],
-                    confidence: .probable))
-            }
-            if let death = gedcomPerson.deathDate {
-                claims.append(.init(
-                    id: "gedcom:\(gedcomID):death",
-                    text: "The imported family tree records \(death) as \(person.canonicalName)'s death date.",
-                    evidenceIDs: [sourceID],
-                    confidence: .probable))
-            }
+           let graph,
+           let gedcomPerson = graph.people[gedcomID],
+           gedcomFactPrivacy.isVisible(at: privacyCeiling) {
+            appendGEDCOMClaims(
+                person: gedcomPerson, displayName: person.canonicalName,
+                graph: graph, claims: &claims, citations: &citations)
         } else if person.gedcomPersonID != nil {
-            uncertainty.append("The person's GEDCOM bridge is not available in the current family tree.")
+            if !gedcomFactPrivacy.isVisible(at: privacyCeiling) {
+                uncertainty.append("Imported family-tree facts are above this privacy ceiling.")
+            } else {
+                uncertainty.append("The person's GEDCOM bridge is not available in the current family tree.")
+            }
         }
 
-        let evidence = index.evidence(for: person.id,
-                                      privacyCeiling: privacyCeiling,
-                                      limit: itemLimit)
+        let allVisible = index.visibleEvidence(
+            for: person.id, privacyCeiling: privacyCeiling)
+        let selection = selectEvidence(allVisible, limit: itemLimit)
+        let evidence = selection.items
         for item in evidence {
             claims.append(.init(id: item.id, text: item.text,
                                 evidenceIDs: item.sourceIDs,
@@ -224,9 +224,12 @@ public enum CyberBrainBiographyPlanner {
         }
 
         let state: CyberBrainAnswerState
-        if evidence.contains(where: { $0.confidence == .disputed }) {
+        if selection.hasDispute {
             state = .disputed
-            forbidden.append("Do not resolve the disputed account without new evidence.")
+            constraints.append(.doNotResolveDispute)
+            if !uncertainty.contains(where: { $0.contains("disputed") }) {
+                uncertainty.append("The archive contains a disputed account about this person.")
+            }
         } else {
             state = claims.isEmpty ? .noEvidence : .answered
         }
@@ -240,8 +243,147 @@ public enum CyberBrainBiographyPlanner {
             suggestedFollowups: claims.isEmpty ? [] : [
                 "Would you like to see the supporting sources?"
             ],
-            permittedActions: citations.isEmpty ? [] : ["showSource"],
-            forbiddenClaims: forbidden)
+            permittedActions: citations.isEmpty ? [] : [.showSource],
+            constraints: constraints)
+    }
+
+    private static func selectEvidence(
+        _ allVisible: [CyberBrainItem],
+        limit: Int
+    ) -> (items: [CyberBrainItem], hasDispute: Bool) {
+        let disputed = allVisible.filter { $0.confidence == .disputed }
+        let bounded = min(max(0, limit), 50)
+        guard bounded > 0, let representative = disputed.first else {
+            return (Array(allVisible.prefix(bounded)), !disputed.isEmpty)
+        }
+
+        let visibleByID = Dictionary(uniqueKeysWithValues:
+            allVisible.map { ($0.id, $0) })
+        var disputeSet = [representative.id: representative]
+        for counterID in representative.disputesItemIDs {
+            if let counter = visibleByID[counterID] {
+                disputeSet[counter.id] = counter
+            }
+        }
+        // A dispute and its counter-claim are an indivisible evidence group.
+        // It may exceed a small presentation limit, but remains bounded by
+        // the validator's eight-counter cap.
+        let completeDispute = allVisible.filter { disputeSet[$0.id] != nil }
+        let ordinaryCapacity = max(0, bounded - completeDispute.count)
+        let ordinary = allVisible.filter { disputeSet[$0.id] == nil }
+            .prefix(ordinaryCapacity)
+        let selectedByID = Dictionary(uniqueKeysWithValues:
+            (Array(ordinary) + completeDispute).map { ($0.id, $0) })
+        return (allVisible.filter { selectedByID[$0.id] != nil }, true)
+    }
+
+    private static func graphFallbackPlan(
+        personName: String,
+        graph: GedcomFamilyGraph?,
+        privacyCeiling: CyberBrainItem.Privacy
+    ) -> CyberBrainAnswerPlan {
+        guard let graph else {
+            return CyberBrainAnswerPlan(
+                subject: personName,
+                answerState: .noEvidence,
+                uncertaintyStatements: [
+                    "I don't find that person in CyberBrain, and no imported family tree is available."
+                ],
+                constraints: [.doNotInferIdentity])
+        }
+        let matches = graph.people(matching: personName)
+        guard matches.count == 1 else {
+            if matches.isEmpty {
+                return CyberBrainAnswerPlan(
+                    subject: personName,
+                    answerState: .noEvidence,
+                    uncertaintyStatements: [
+                        "I don't find that person in CyberBrain or the imported family tree."
+                    ],
+                    constraints: [.doNotInferIdentity])
+            }
+            return CyberBrainAnswerPlan(
+                subject: personName,
+                answerState: .ambiguous,
+                uncertaintyStatements: [
+                    "More than one imported family-tree person matches that name."
+                ],
+                permittedActions: [.narrow],
+                constraints: [.doNotChooseAmbiguousIdentity],
+                ambiguityCandidates: matches.map {
+                    .init(id: "gedcom:\($0.id)", canonicalName: $0.name)
+                })
+        }
+        guard gedcomFactPrivacy.isVisible(at: privacyCeiling) else {
+            return CyberBrainAnswerPlan(
+                subject: matches[0].name,
+                answerState: .noEvidence,
+                uncertaintyStatements: [
+                    "Imported family-tree facts are above this privacy ceiling."
+                ],
+                constraints: [.doNotAddUnsupportedFacts])
+        }
+
+        var claims: [CyberBrainAnswerPlan.Claim] = []
+        var citations: [String: CyberBrainAnswerPlan.Citation] = [:]
+        appendGEDCOMClaims(
+            person: matches[0], displayName: matches[0].name,
+            graph: graph, claims: &claims, citations: &citations)
+        return CyberBrainAnswerPlan(
+            subject: matches[0].name,
+            answerState: claims.isEmpty ? .noEvidence : .answered,
+            claims: claims,
+            uncertaintyStatements: claims.isEmpty
+                ? ["The person is in the imported family tree, but it records no biographical facts."]
+                : [],
+            sourceCitations: citations.values.sorted { $0.id < $1.id },
+            suggestedFollowups: claims.isEmpty ? [] : [
+                "Would you like to see the supporting family-tree record?"
+            ],
+            permittedActions: claims.isEmpty ? [] : [.showSource],
+            constraints: [.doNotAddUnsupportedFacts])
+    }
+
+    private static func appendGEDCOMClaims(
+        person: GedcomFamilyGraph.Person,
+        displayName: String,
+        graph: GedcomFamilyGraph,
+        claims: inout [CyberBrainAnswerPlan.Claim],
+        citations: inout [String: CyberBrainAnswerPlan.Citation]
+    ) {
+        let sourceID = "gedcom:\(person.id)"
+        func claim(_ id: String, _ text: String) -> CyberBrainAnswerPlan.Claim {
+            .init(
+                id: id, text: text, evidenceIDs: [sourceID],
+                confidence: gedcomFactConfidence)
+        }
+        if let birth = person.birthDate {
+            claims.append(claim(
+                "\(sourceID):birth",
+                "The imported family tree records \(birth) as \(displayName)'s birth date."))
+        }
+        if let death = person.deathDate {
+            claims.append(claim(
+                "\(sourceID):death",
+                "The imported family tree records \(death) as \(displayName)'s death date."))
+        }
+        let relationships: [(GedcomFamilyGraph.Relation, String)] = [
+            (.parents, "parents"), (.spouse, "spouse"), (.children, "children"),
+        ]
+        for (relation, label) in relationships {
+            let names = ArchivistBiographyPolicy.orderedPeople(
+                graph.relatives(relation, of: person)).map(\.name)
+            if !names.isEmpty {
+                claims.append(claim(
+                    "\(sourceID):\(label)",
+                    "The imported family tree records \(displayName)'s \(label) as \(names.joined(separator: ", "))."))
+            }
+        }
+        if !claims.filter({ $0.evidenceIDs.contains(sourceID) }).isEmpty {
+            citations[sourceID] = .init(
+                id: sourceID, title: "Imported family tree (GEDCOM)",
+                attribution: nil, locator: nil)
+        }
     }
 }
 

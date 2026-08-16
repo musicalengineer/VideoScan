@@ -21,6 +21,7 @@ struct CyberBrainTests {
         privacy: CyberBrainItem.Privacy = .family,
         status: CyberBrainItem.Status = .active,
         supersedes: String? = nil,
+        disputes: [String] = [],
         updatedAt: Date = Self.instant
     ) -> CyberBrainItem {
         CyberBrainItem(
@@ -33,6 +34,7 @@ struct CyberBrainTests {
             privacy: privacy,
             status: status,
             supersedesItemID: supersedes,
+            disputesItemIDs: disputes,
             createdAt: Self.instant,
             updatedAt: updatedAt)
     }
@@ -72,7 +74,7 @@ struct CyberBrainTests {
         """)
         let plan = CyberBrainBiographyPlanner.plan(
             personName: "Jordy", index: index, graph: graph,
-            privacyCeiling: .family)
+            privacyCeiling: .private)
         let prose = CyberBrainDeterministicComposer.compose(plan)
 
         #expect(plan.answerState == .answered)
@@ -132,14 +134,17 @@ struct CyberBrainTests {
         #expect(plan.claims.isEmpty)
         #expect(plan.ambiguityCandidates.map(\.id)
                 == ["person.jordan.two", "person.jordan"])
-        #expect(plan.forbiddenClaims.contains(
-            "Do not choose one ambiguous identity."))
+        #expect(plan.constraints.contains(.doNotChooseAmbiguousIdentity))
     }
 
     @Test func disputedAccountIsLabeledAndNeverResolvedByComposer() throws {
-        let disputed = item(text: "Two witnesses remember different years.",
-                              confidence: .disputed)
-        let index = try CyberBrainIndex(archive: archive(items: [disputed]))
+        let counter = item(id: "item.counter",
+                           text: "One witness remembers the earlier year.")
+        let disputed = item(
+            text: "Another witness remembers a later year.",
+            confidence: .disputed, disputes: ["item.counter"])
+        let index = try CyberBrainIndex(
+            archive: archive(items: [counter, disputed]))
         let plan = CyberBrainBiographyPlanner.plan(
             personName: "Jordan River", index: index,
             privacyCeiling: .family)
@@ -149,10 +154,84 @@ struct CyberBrainTests {
         #expect(plan.uncertaintyStatements.contains(where: {
             $0.lowercased().contains("disputed")
         }))
-        #expect(plan.forbiddenClaims.contains(where: {
-            $0.lowercased().contains("do not resolve")
-        }))
+        #expect(plan.constraints.contains(.doNotResolveDispute))
         #expect(prose.lowercased().contains("disputed"))
+    }
+
+    @Test func gedcomFactsArePrivateAndNeverCrossLowerPrivacyCeilings() throws {
+        let index = try CyberBrainIndex(archive: archive(items: []))
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Jordan /River/
+        1 BIRT
+        2 DATE 4 MAR 1944
+        0 TRLR
+        """)
+
+        for ceiling in [CyberBrainItem.Privacy.public, .family] {
+            let plan = CyberBrainBiographyPlanner.plan(
+                personName: "Jordan", index: index, graph: graph,
+                privacyCeiling: ceiling)
+            #expect(plan.answerState == .noEvidence)
+            #expect(plan.claims.isEmpty)
+            #expect(plan.sourceCitations.isEmpty)
+            #expect(plan.uncertaintyStatements.contains(where: {
+                $0.contains("privacy ceiling")
+            }))
+        }
+
+        let privatePlan = CyberBrainBiographyPlanner.plan(
+            personName: "Jordan", index: index, graph: graph,
+            privacyCeiling: .private)
+        #expect(privatePlan.answerState == .answered)
+        #expect(privatePlan.claims.map(\.text).contains(where: {
+            $0.contains("4 MAR 1944")
+        }))
+    }
+
+    @Test func disputeBeyondClaimLimitStillControlsStateAndIsCited() throws {
+        let confirmed = item(id: "item.00", text: "A confirmed account.")
+        let disputed = item(
+            id: "item.99", text: "A disputed account.",
+            confidence: .disputed, disputes: ["item.00"])
+        let index = try CyberBrainIndex(
+            archive: archive(items: [confirmed, disputed]))
+        let plan = CyberBrainBiographyPlanner.plan(
+            personName: "Jordan", index: index,
+            privacyCeiling: .family, itemLimit: 1)
+
+        #expect(plan.answerState == .disputed)
+        #expect(plan.claims.map(\.id) == ["item.00", "item.99"])
+        #expect(plan.sourceCitations.map(\.id) == ["source.interview"])
+        #expect(plan.constraints.contains(.doNotResolveDispute))
+    }
+
+    @Test func graphOnlyPersonFallsBackWithoutRequiringCyberBrainEntry() throws {
+        let index = try CyberBrainIndex(archive: archive())
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 @I9@ INDI
+        1 NAME Ellen /Stone/
+        1 BIRT
+        2 DATE ABT 1930
+        0 TRLR
+        """)
+        let plan = CyberBrainBiographyPlanner.plan(
+            personName: "Ellen", index: index, graph: graph,
+            privacyCeiling: .private)
+
+        #expect(plan.answerState == .answered)
+        #expect(plan.subject == "Ellen Stone")
+        #expect(plan.claims.map(\.id) == ["gedcom:@I9@:birth"])
+        #expect(plan.sourceCitations.map(\.id) == ["gedcom:@I9@"])
+    }
+
+    @Test func sharedTokenIdentityPolicySupportsUnambiguousPartialName() throws {
+        let index = try CyberBrainIndex(archive: archive())
+        guard case .resolved(let person) = index.resolve("Jordan") else {
+            Issue.record("Expected token-subset identity resolution")
+            return
+        }
+        #expect(person.id == "person.jordan")
     }
 
     @Test func validatorRejectsDanglingAndTraversalReferences() {
@@ -229,6 +308,44 @@ struct CyberBrainTests {
         #expect(!plan.claims.map(\.text).contains(item().text))
     }
 
+    @Test func anyPersistedReferenceOrSourceChangeInvalidatesGeneration() throws {
+        let first = try CyberBrainIndex(archive: archive())
+        let changedSource = CyberBrainSource(
+            id: "source.interview", type: .familyWitness,
+            title: "Synthetic family interview", attribution: "Alex River",
+            locator: "sources/interviews/alex.txt",
+            notes: "Corrected transcription notes")
+        let second = try CyberBrainIndex(archive: archive(sources: [changedSource]))
+
+        #expect(first.generation != second.generation)
+    }
+
+    @Test func answerPlanRoundTripsForFutureRedactedRendererBoundary() throws {
+        let index = try CyberBrainIndex(archive: archive())
+        let plan = CyberBrainBiographyPlanner.plan(
+            personName: "Jordy", index: index, privacyCeiling: .family)
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(
+            CyberBrainAnswerPlan.self, from: data)
+        #expect(decoded == plan)
+    }
+
+    @Test func supersessionCyclesAndUnlinkedDisputesAreRejected() {
+        let first = item(id: "item.first", supersedes: "item.second")
+        let second = item(id: "item.second", supersedes: "item.first")
+        #expect(throws: CyberBrainError.self) {
+            try CyberBrainValidator.validate(
+                archive(items: [first, second]))
+        }
+
+        let unsupported = item(
+            id: "item.disputed", confidence: .disputed)
+        #expect(throws: CyberBrainError.self) {
+            try CyberBrainValidator.validate(
+                archive(items: [unsupported]))
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func hundredThousandPeopleIndexAndLookupStayWithinExplicitBudget() throws {
         var people: [CyberBrainPerson] = []
@@ -255,6 +372,29 @@ struct CyberBrainTests {
         #expect(person.id == "person.99999")
         #expect(elapsed < .seconds(3),
                 "100k CyberBrain index+lookup exceeded 3 seconds: \(elapsed)")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func hundredThousandItemsIndexSortHashAndBoundedQueryStayWithinBudget() throws {
+        var items: [CyberBrainItem] = []
+        items.reserveCapacity(100_000)
+        for index in 0..<100_000 {
+            items.append(item(
+                id: String(format: "item.%06d", index),
+                text: "Synthetic evidence \(index)"))
+        }
+        let large = archive(items: items)
+
+        let started = ContinuousClock.now
+        let index = try CyberBrainIndex(archive: large)
+        let evidence = index.evidence(
+            for: "person.jordan", privacyCeiling: .family, limit: 12)
+        let elapsed = started.duration(to: .now)
+
+        #expect(evidence.count == 12)
+        #expect(evidence.first?.id == "item.000000")
+        #expect(elapsed < .seconds(3),
+                "100k CyberBrain item index+query exceeded 3 seconds: \(elapsed)")
     }
 
     private func temporaryRoot() throws -> URL {

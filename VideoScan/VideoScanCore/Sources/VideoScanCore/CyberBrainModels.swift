@@ -105,6 +105,10 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
     public let privacy: Privacy
     public let status: Status
     public let supersedesItemID: String?
+    /// Explicit counter-claims required when confidence is `disputed`.
+    /// IDs keep disagreement inspectable instead of grouping unrelated claims
+    /// merely because they share a person.
+    public let disputesItemIDs: [String]
     public let createdAt: Date
     public let updatedAt: Date
 
@@ -120,6 +124,7 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         privacy: Privacy,
         status: Status = .active,
         supersedesItemID: String? = nil,
+        disputesItemIDs: [String] = [],
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -134,6 +139,7 @@ public struct CyberBrainItem: Codable, Sendable, Equatable, Identifiable {
         self.privacy = privacy
         self.status = status
         self.supersedesItemID = supersedesItemID
+        self.disputesItemIDs = disputesItemIDs
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -205,8 +211,19 @@ public enum CyberBrainAnswerState: String, Codable, Sendable, Equatable {
     case answered, ambiguous, noEvidence, disputed
 }
 
-public struct CyberBrainAnswerPlan: Sendable, Equatable {
-    public struct Candidate: Sendable, Equatable, Identifiable {
+public struct CyberBrainAnswerPlan: Codable, Sendable, Equatable {
+    public enum PermittedAction: String, Codable, Sendable, Equatable {
+        case play, reveal, narrow, showSource
+    }
+
+    public enum Constraint: String, Codable, Sendable, Equatable {
+        case doNotInferIdentity
+        case doNotChooseAmbiguousIdentity
+        case doNotAddUnsupportedFacts
+        case doNotResolveDispute
+    }
+
+    public struct Candidate: Codable, Sendable, Equatable, Identifiable {
         public let id: String
         public let canonicalName: String
 
@@ -216,7 +233,7 @@ public struct CyberBrainAnswerPlan: Sendable, Equatable {
         }
     }
 
-    public struct Claim: Sendable, Equatable, Identifiable {
+    public struct Claim: Codable, Sendable, Equatable, Identifiable {
         public let id: String
         public let text: String
         public let evidenceIDs: [String]
@@ -231,7 +248,7 @@ public struct CyberBrainAnswerPlan: Sendable, Equatable {
         }
     }
 
-    public struct Citation: Sendable, Equatable, Identifiable {
+    public struct Citation: Codable, Sendable, Equatable, Identifiable {
         public let id: String
         public let title: String
         public let attribution: String?
@@ -252,8 +269,8 @@ public struct CyberBrainAnswerPlan: Sendable, Equatable {
     public let uncertaintyStatements: [String]
     public let sourceCitations: [Citation]
     public let suggestedFollowups: [String]
-    public let permittedActions: [String]
-    public let forbiddenClaims: [String]
+    public let permittedActions: [PermittedAction]
+    public let constraints: [Constraint]
     public let ambiguityCandidates: [Candidate]
 
     public init(
@@ -263,8 +280,8 @@ public struct CyberBrainAnswerPlan: Sendable, Equatable {
         uncertaintyStatements: [String] = [],
         sourceCitations: [Citation] = [],
         suggestedFollowups: [String] = [],
-        permittedActions: [String] = [],
-        forbiddenClaims: [String] = [],
+        permittedActions: [PermittedAction] = [],
+        constraints: [Constraint] = [],
         ambiguityCandidates: [Candidate] = []
     ) {
         self.subject = subject
@@ -274,7 +291,7 @@ public struct CyberBrainAnswerPlan: Sendable, Equatable {
         self.sourceCitations = sourceCitations
         self.suggestedFollowups = suggestedFollowups
         self.permittedActions = permittedActions
-        self.forbiddenClaims = forbiddenClaims
+        self.constraints = constraints
         self.ambiguityCandidates = ambiguityCandidates
     }
 }

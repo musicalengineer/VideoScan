@@ -29,17 +29,26 @@ public enum CyberBrainError: Error, Sendable, Equatable, LocalizedError {
 
 public enum CyberBrainValidator {
     public static func validate(_ archive: CyberBrainArchive) throws {
+        try validateHeader(archive)
+        let peopleByID = try unique(archive.people, id: \CyberBrainPerson.id)
+        let sourcesByID = try unique(archive.sources, id: \CyberBrainSource.id)
+        try validateSources(archive.sources)
+        let itemsByID = try collectItems(archive.people)
+        try validateReferences(
+            itemsByID, peopleByID: peopleByID, sourcesByID: sourcesByID)
+        try validateSupersessionCycles(itemsByID)
+    }
+
+    private static func validateHeader(_ archive: CyberBrainArchive) throws {
         guard archive.schemaVersion == CyberBrainArchive.currentSchemaVersion else {
             throw CyberBrainError.unsupportedSchema(archive.schemaVersion)
         }
         try requireText(archive.archiveID, "archiveID")
         try requireText(archive.displayName, "displayName")
+    }
 
-        let peopleByID = try unique(archive.people, id: \CyberBrainPerson.id)
-        let sourcesByID = try unique(archive.sources, id: \CyberBrainSource.id)
-        var itemsByID: [String: CyberBrainItem] = [:]
-
-        for source in archive.sources {
+    private static func validateSources(_ sources: [CyberBrainSource]) throws {
+        for source in sources {
             try requireText(source.id, "source.id")
             try requireText(source.title, "source.title")
             if let locator = source.locator {
@@ -47,15 +56,21 @@ public enum CyberBrainValidator {
             }
             if let date = source.sourceDate { try validate(date) }
         }
+    }
 
-        for person in archive.people {
+    private static func collectItems(
+        _ people: [CyberBrainPerson]
+    ) throws -> [String: CyberBrainItem] {
+        var itemsByID: [String: CyberBrainItem] = [:]
+        for person in people {
             try requireText(person.id, "person.id")
             try requireText(person.canonicalName, "person.canonicalName")
             for alias in person.aliases { try requireText(alias, "person.alias") }
             for term in person.terminology {
                 try requireText(term, "person.terminology")
             }
-            guard Set(person.aliases.map(normalized)).count == person.aliases.count else {
+            guard Set(person.aliases.map(FamilyIdentityText.normalized)).count
+                    == person.aliases.count else {
                 throw CyberBrainError.invalidField("duplicate alias for \(person.id)")
             }
 
@@ -67,33 +82,51 @@ public enum CyberBrainValidator {
             ]
             for (section, expectedKind, sectionName) in sections {
                 for item in section {
-                    guard item.kind == expectedKind else {
-                        throw CyberBrainError.invalidField(
-                            "\(sectionName) item \(item.id) has kind \(item.kind.rawValue)")
-                    }
-                    guard item.subjectPersonIDs.contains(person.id) else {
-                        throw CyberBrainError.invalidField(
-                            "item \(item.id) does not name owning person \(person.id)")
-                    }
-                    try requireText(item.id, "item.id")
+                    try validateItem(
+                        item, ownerID: person.id,
+                        expectedKind: expectedKind, sectionName: sectionName)
                     guard itemsByID.updateValue(item, forKey: item.id) == nil else {
                         throw CyberBrainError.duplicateID(item.id)
                     }
-                    try requireText(item.text, "item.text")
-                    guard !item.subjectPersonIDs.isEmpty else {
-                        throw CyberBrainError.invalidField("item.subjectPersonIDs")
-                    }
-                    guard !item.sourceIDs.isEmpty else {
-                        throw CyberBrainError.invalidField("item.sourceIDs")
-                    }
-                    guard item.updatedAt >= item.createdAt else {
-                        throw CyberBrainError.invalidField("item.updatedAt before createdAt")
-                    }
-                    if let date = item.eventDate { try validate(date) }
                 }
             }
         }
+        return itemsByID
+    }
 
+    private static func validateItem(
+        _ item: CyberBrainItem,
+        ownerID: String,
+        expectedKind: CyberBrainItem.Kind,
+        sectionName: String
+    ) throws {
+        guard item.kind == expectedKind else {
+            throw CyberBrainError.invalidField(
+                "\(sectionName) item \(item.id) has kind \(item.kind.rawValue)")
+        }
+        guard item.subjectPersonIDs.contains(ownerID) else {
+            throw CyberBrainError.invalidField(
+                "item \(item.id) does not name owning person \(ownerID)")
+        }
+        try requireText(item.id, "item.id")
+        try requireText(item.text, "item.text")
+        guard !item.subjectPersonIDs.isEmpty else {
+            throw CyberBrainError.invalidField("item.subjectPersonIDs")
+        }
+        guard !item.sourceIDs.isEmpty else {
+            throw CyberBrainError.invalidField("item.sourceIDs")
+        }
+        guard item.updatedAt >= item.createdAt else {
+            throw CyberBrainError.invalidField("item.updatedAt before createdAt")
+        }
+        if let date = item.eventDate { try validate(date) }
+    }
+
+    private static func validateReferences(
+        _ itemsByID: [String: CyberBrainItem],
+        peopleByID: [String: CyberBrainPerson],
+        sourcesByID: [String: CyberBrainSource]
+    ) throws {
         for item in itemsByID.values {
             for personID in item.subjectPersonIDs where peopleByID[personID] == nil {
                 throw CyberBrainError.danglingReference(personID)
@@ -101,11 +134,70 @@ public enum CyberBrainValidator {
             for sourceID in item.sourceIDs where sourcesByID[sourceID] == nil {
                 throw CyberBrainError.danglingReference(sourceID)
             }
-            if let prior = item.supersedesItemID {
-                guard prior != item.id, itemsByID[prior] != nil else {
-                    throw CyberBrainError.danglingReference(prior)
-                }
+            try validateSupersession(item, itemsByID: itemsByID)
+            try validateDispute(item, itemsByID: itemsByID)
+        }
+    }
+
+    private static func validateSupersession(
+        _ item: CyberBrainItem,
+        itemsByID: [String: CyberBrainItem]
+    ) throws {
+        guard let prior = item.supersedesItemID else { return }
+        guard prior != item.id, let priorItem = itemsByID[prior] else {
+            throw CyberBrainError.danglingReference(prior)
+        }
+        guard Set(priorItem.subjectPersonIDs) == Set(item.subjectPersonIDs) else {
+            throw CyberBrainError.invalidField(
+                "superseding item \(item.id) changes its subjects")
+        }
+    }
+
+    private static func validateDispute(
+        _ item: CyberBrainItem,
+        itemsByID: [String: CyberBrainItem]
+    ) throws {
+        if item.confidence == .disputed {
+            guard (1...8).contains(item.disputesItemIDs.count) else {
+                throw CyberBrainError.invalidField(
+                    "disputed item \(item.id) needs 1...8 counter-claims")
             }
+        } else if !item.disputesItemIDs.isEmpty {
+            throw CyberBrainError.invalidField(
+                "non-disputed item \(item.id) links counter-claims")
+        }
+        for disputedID in item.disputesItemIDs {
+            guard disputedID != item.id,
+                  let counter = itemsByID[disputedID] else {
+                throw CyberBrainError.danglingReference(disputedID)
+            }
+            guard Set(counter.subjectPersonIDs) == Set(item.subjectPersonIDs),
+                  counter.privacy == item.privacy else {
+                throw CyberBrainError.invalidField(
+                    "disputed item \(item.id) has an incompatible counter-claim")
+            }
+        }
+    }
+
+    private static func validateSupersessionCycles(
+        _ itemsByID: [String: CyberBrainItem]
+    ) throws {
+        enum Visit: Equatable { case visiting, done }
+        var visits: [String: Visit] = [:]
+        for start in itemsByID.keys where visits[start] == nil {
+            var path: [String] = []
+            var current: String? = start
+            while let id = current, let item = itemsByID[id] {
+                if visits[id] == .done { break }
+                guard visits[id] != .visiting else {
+                    throw CyberBrainError.invalidField(
+                        "supersession cycle containing \(id)")
+                }
+                visits[id] = .visiting
+                path.append(id)
+                current = item.supersedesItemID
+            }
+            for id in path { visits[id] = .done }
         }
     }
 
@@ -138,19 +230,17 @@ public enum CyberBrainValidator {
         guard !value.hasPrefix("/"), !value.hasPrefix("~") else {
             throw CyberBrainError.unsafePath(value)
         }
+        guard value.unicodeScalars.allSatisfy({
+            !CharacterSet.controlCharacters.contains($0)
+        }) else {
+            throw CyberBrainError.unsafePath(value)
+        }
         let components = value.split(separator: "/", omittingEmptySubsequences: false)
         guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw CyberBrainError.unsafePath(value)
         }
     }
 
-    private static func normalized(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive],
-                      locale: Locale(identifier: "en_US_POSIX"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .precomposedStringWithCanonicalMapping
-    }
 }
 
 public struct CyberBrainLoader: Sendable {
@@ -169,9 +259,6 @@ public struct CyberBrainLoader: Sendable {
         let candidate = rootURL.appendingPathComponent(Self.defaultFilename,
                                                         isDirectory: false)
         let root = rootURL.standardizedFileURL
-        guard candidate.deletingLastPathComponent().standardizedFileURL == root else {
-            throw CyberBrainError.unsafePath(candidate.path)
-        }
         guard FileManager.default.fileExists(atPath: candidate.path) else {
             throw CyberBrainError.missingArchive
         }
@@ -200,7 +287,8 @@ public struct CyberBrainLoader: Sendable {
     }
 
     private func readNoFollow(_ url: URL) throws -> Data {
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let descriptor = open(
+            url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard descriptor >= 0 else {
             if errno == ELOOP { throw CyberBrainError.unsafePath(url.path) }
             throw CyberBrainError.unreadableFile
@@ -262,7 +350,8 @@ public struct CyberBrainLoader: Sendable {
                     try known(item, allowed: ["id", "kind", "text", "subjectPersonIDs",
                                               "eventDate", "place", "sourceIDs",
                                               "confidence", "privacy", "status",
-                                              "supersedesItemID", "createdAt", "updatedAt"],
+                                              "supersedesItemID", "disputesItemIDs",
+                                              "createdAt", "updatedAt"],
                               at: "\(key)[\(itemIndex)]")
                     if let date = item["eventDate"] as? [String: Any] {
                         try knownDate(date, at: "\(key)[\(itemIndex)].eventDate")
@@ -290,7 +379,7 @@ public struct CyberBrainLoader: Sendable {
 
     private static func known(_ value: [String: Any], allowed: Set<String>,
                               at path: String) throws {
-        if let unknown = Set(value.keys).subtracting(allowed).sorted().first {
+        if let unknown = Set(value.keys).subtracting(allowed).min() {
             throw CyberBrainError.invalidJSON("unknown field \(path).\(unknown)")
         }
     }
