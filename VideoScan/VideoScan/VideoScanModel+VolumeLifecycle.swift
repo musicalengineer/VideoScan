@@ -364,9 +364,17 @@ extension VideoScanModel {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let width = max(360, checks.map { $0.intrinsicContentSize.width }.max() ?? 0)
-        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: width).isActive = true
+        // NSAlert sizes itself to the accessory view's FRAME, not to
+        // autolayout hints — an autolayout-only width left the sheet at
+        // its default ~360 pt and clipped long volume names (Rick
+        // 2026-08-16). Give it an explicit frame wide enough for the
+        // longest row, within sane bounds.
+        checks.forEach { $0.sizeToFit() }
+        let rowWidth = checks.map { $0.frame.width }.max() ?? 0
+        let width = min(max(rowWidth + 24, 480), 800)
+        let height = checks.reduce(0) { $0 + $1.frame.height } + CGFloat(max(0, checks.count - 1)) * 6
+        stack.translatesAutoresizingMaskIntoConstraints = true
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
         let alert = NSAlert()
         alert.messageText = "Remove catalogs from retired volumes"
