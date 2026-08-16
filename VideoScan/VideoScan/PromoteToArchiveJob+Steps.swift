@@ -285,15 +285,30 @@ extension PromoteToArchiveJob {
             sha = existingSHA
         } else {
             let totalBytes = max(1, plan.totalBytes)
-            let progress: @Sendable (Int64) -> Void = { [weak self] copied in
+            let fileBytes = max(1, source.sizeBytes)
+            let filename = source.filename
+            // Each file is copied AND read back; the bar spends the first
+            // half of this file's share copying, the second half verifying.
+            // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
+            // otherwise post 70k main-actor hops.
+            let reporter = PromoteProgressReporter()
+            let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
+                guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
+                let share = Double(fileBytes) / Double(totalBytes)
+                let within = (phase == .copying ? 0.0 : 0.5) + 0.5 * min(1.0, Double(done) / Double(fileBytes))
+                let overall = (Double(bytesDone) / Double(totalBytes)) + share * within
+                let verb = phase == .copying ? "Copying" : "Verifying"
+                let sub = "\(verb) \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
                 Task { @MainActor [weak self] in
-                    self?.applyProgress(Double(bytesDone + copied) / Double(totalBytes))
+                    self?.applyProgress(overall)
+                    self?.applyPhaseSubtitle(sub)
                 }
             }
             let published = try await Self.copyOffMain(sourcePath: source.fullPath,
                                                        root: ctx.root,
                                                        relPath: choice.relPath,
-                                                       progress: progress)
+                                                       progress: { _ in },
+                                                       phaseProgress: phaseProgress)
             sha = published.sha256
             journalEntry = journalEntry.with(state: .renamed, sha256: sha)
             try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
@@ -497,12 +512,13 @@ extension PromoteToArchiveJob {
     static func copyOffMain(sourcePath: String,
                             root: String,
                             relPath: String,
-                            progress: @escaping @Sendable (Int64) -> Void) async throws -> ArchivePromoteEngine.PublishResult {
+                            progress: @escaping @Sendable (Int64) -> Void,
+                            phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in }) async throws -> ArchivePromoteEngine.PublishResult {
         let source = try ArchivePromoteEngine.openSource(path: sourcePath)
         defer { source.close() }
         return try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
-            progress: progress, shouldCancel: { Task.isCancelled })
+            progress: progress, phaseProgress: phaseProgress, shouldCancel: { Task.isCancelled })
     }
 
     /// Digest of an archive-relative file resolved through the dirfd

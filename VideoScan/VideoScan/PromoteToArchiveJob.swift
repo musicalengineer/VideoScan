@@ -277,6 +277,14 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         fractionValue = min(1, max(fractionValue, fraction))
     }
 
+    /// Phase text from the copy/verify loop ("Copying X · 47 of 69 GB ·
+    /// 187 MB/s · ~2 min"). Only while active — a finished/cancelled row
+    /// keeps its summary.
+    func applyPhaseSubtitle(_ text: String) {
+        guard state.isActive else { return }
+        subtitleText = text
+    }
+
     // MARK: Finish helpers
 
     func finish(success: String) {

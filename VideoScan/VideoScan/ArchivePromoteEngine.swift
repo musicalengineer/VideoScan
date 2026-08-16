@@ -166,16 +166,20 @@ enum ArchivePromoteEngine {
 
     /// Streamed SHA-256 through an already-open descriptor, from offset 0.
     /// `shouldCancel` is polled per chunk. Returns nil on cancel.
-    static func sha256(fd: Int32, shouldCancel: () -> Bool = { false }) throws -> String? {
+    static func sha256(fd: Int32, shouldCancel: () -> Bool = { false },
+                       progress: (Int64) -> Void = { _ in }) throws -> String? {
         guard lseek(fd, 0, SEEK_SET) == 0 else { throw Failure.writeFailed("lseek") }
         var hasher = SHA256()
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
         defer { buffer.deallocate() }
+        var seen: Int64 = 0
         while true {
             if shouldCancel() { return nil }
             let n = read(fd, buffer, chunkSize)
             if n > 0 {
                 hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buffer, count: n))
+                seen += Int64(n)
+                progress(seen)
             } else if n == 0 {
                 break
             } else if errno != EINTR {
@@ -348,10 +352,17 @@ enum ArchivePromoteEngine {
     /// `relativePath` must not exist; its `.partial` sibling must not exist
     /// (O_EXCL). On ANY failure or cancel the partial is removed. Returns
     /// the digest (identical for source and published copy by construction).
+    /// Progress phases reported to the job. Copy and verify each read the
+    /// whole file, so a 69 GB VHS capture spends minutes in EACH — the
+    /// UI must be able to say which (Rick 2026-08-16: bar sat at 100%
+    /// "stuck" during the verify read-back).
+    enum ProgressPhase: Sendable { case copying, verifying }
+
     static func copyVerifyPublish(source: SourceHandle,
                                   root: String,
                                   relativePath: String,
                                   progress: (Int64) -> Void = { _ in },
+                                  phaseProgress: (ProgressPhase, Int64) -> Void = { _, _ in },
                                   shouldCancel: () -> Bool = { false }) throws -> PublishResult {
         let destURL = URL(fileURLWithPath: root, isDirectory: true)
             .appendingPathComponent(relativePath).standardizedFileURL
@@ -377,14 +388,16 @@ enum ArchivePromoteEngine {
 
         // ---- 1. Copy pass (source fd → dest fd, hashing source bytes).
         let (sourceSHA, copied) = try copyPass(source: source, dfd: dfd, partialPath: destURL.path,
-                                               progress: progress, shouldCancel: shouldCancel)
+                                               progress: { progress($0); phaseProgress(.copying, $0) },
+                                               shouldCancel: shouldCancel)
         // ---- Source unchanged? (dev/ino/size/mtime re-sampled on the SAME fd)
         guard let (after, _) = FileIdentity.of(fd: source.fd), after == source.identity,
               copied == source.identity.size else {
             throw Failure.sourceChangedDuringCopy(source.path)
         }
         // ---- 2. Verify pass through the SAME descriptor.
-        guard let destSHA = try sha256(fd: dfd, shouldCancel: shouldCancel) else {
+        guard let destSHA = try sha256(fd: dfd, shouldCancel: shouldCancel,
+                                       progress: { phaseProgress(.verifying, $0) }) else {
             throw Failure.cancelled
         }
         guard destSHA == sourceSHA else {
