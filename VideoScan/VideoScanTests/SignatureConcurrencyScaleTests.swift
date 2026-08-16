@@ -302,6 +302,31 @@ struct SignatureVerificationTests {
                 == Data(replacementBytes))
         #expect((try? Data(contentsOf: URL(fileURLWithPath: path))) == Data(bytes))
     }
+
+    /// Cleanup residue must never turn a successful media deletion into a
+    /// failure result, which would leave a stale catalog row behind.
+    @Test func emptyQuarantineCleanupFailureStillReportsDeleted() throws {
+        struct InjectedCleanupFailure: Error {}
+        let bytes: [UInt8] = [2, 4, 6, 8]
+        let keeper = tempFile("cleanup-keeper.mov", bytes)
+        let duplicate = tempFile("cleanup-copy.mov", bytes)
+        let proof = try #require(SignatureVerification.verify(
+            keeperPath: keeper, duplicatePath: duplicate).successValue)
+        var quarantinePath = ""
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { false },
+            didQuarantine: { quarantinePath = $0 },
+            removeQuarantineDirectory: { _ in throw InjectedCleanupFailure() })
+
+        let result = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+
+        #expect(result == .deleted(bytes: Int64(bytes.count)))
+        #expect(!FileManager.default.fileExists(atPath: duplicate))
+        #expect(!FileManager.default.fileExists(atPath: quarantinePath))
+        #expect(FileManager.default.fileExists(
+            atPath: URL(fileURLWithPath: quarantinePath)
+                .deletingLastPathComponent().path))
+    }
 }
 
 private extension Result {

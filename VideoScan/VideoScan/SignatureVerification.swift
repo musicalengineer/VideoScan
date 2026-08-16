@@ -89,6 +89,7 @@ enum SignatureVerification {
         var shouldCancel: () -> Bool
         var didReadBlock: ((String) -> Void)?
         var didQuarantine: ((String) -> Void)?
+        var removeQuarantineDirectory: ((URL) throws -> Void)?
 
         static let live = Hooks(shouldCancel: { Task.isCancelled })
     }
@@ -235,16 +236,29 @@ enum SignatureVerification {
         }
 
         do {
-            // No await or callback follows the identity check. The entry is
-            // isolated in a fresh owner-only directory with a random name.
+            // No await or callback precedes this removal after the identity
+            // check. The entry is isolated in a fresh owner-only directory.
             try FileManager.default.removeItem(at: quarantined)
-            try FileManager.default.removeItem(at: quarantineDirectory)
-            return .deleted(bytes: proof.duplicateSize)
         } catch {
             return .retainedQuarantine(
                 path: quarantined.path,
                 reason: "verified file retained because final removal failed: \(error.localizedDescription)")
         }
+
+        // Empty-directory cleanup is housekeeping, not part of the media
+        // deletion transaction. Once the quarantined file is gone, report
+        // success so the catalog cannot retain a row for nonexistent media.
+        do {
+            if let removeDirectory = hooks.removeQuarantineDirectory {
+                try removeDirectory(quarantineDirectory)
+            } else {
+                try FileManager.default.removeItem(at: quarantineDirectory)
+            }
+        } catch {
+            NSLog("VideoScan: deleted verified duplicate but could not remove empty quarantine directory %@: %@",
+                  quarantineDirectory.path, error.localizedDescription)
+        }
+        return .deleted(bytes: proof.duplicateSize)
     }
 
     private static func restoreOrRetain(quarantined: URL, original: URL,
