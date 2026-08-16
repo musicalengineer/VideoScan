@@ -591,6 +591,80 @@ struct CatalogStoreObserverTests {
     }
 }
 
+// MARK: - Off-main, coalesced manifest refresh (#161)
+
+@MainActor
+struct ManifestRefreshOffMainTests {
+
+    private func makeMaster(tag: String) throws -> (CatalogSync, CatalogSyncPaths, URL) {
+        let root = scratchDir(tag)
+        let paths = makePaths(under: root)
+        try populateMasterTree(at: paths.liveDir)
+        let sync = makeSync(paths: paths,
+                            localHost: "RicksM4.local",
+                            masterHost: "RicksM4.local",
+                            runner: StubRsync(sourceTree: paths.liveDir))
+        return (sync, paths, root)
+    }
+
+    /// Sensor: the async path produces byte-identical output to the
+    /// synchronous path, and `flushManifestRefresh` really waits for it.
+    @Test
+    func scheduledRefreshWritesSameManifestAsSyncPath() async throws {
+        let (sync, paths, root) = try makeMaster(tag: "refresh-parity")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manifestURL = paths.liveDir.appendingPathComponent("manifest.sha256")
+
+        sync.writeManifestIfMaster()
+        let syncText = try String(contentsOf: manifestURL, encoding: .utf8)
+        try FileManager.default.removeItem(at: manifestURL)
+
+        sync.scheduleManifestRefresh()
+        await sync.flushManifestRefresh()
+        let asyncText = try String(contentsOf: manifestURL, encoding: .utf8)
+        #expect(asyncText == syncText)
+        #expect(sync.manifestRefreshCount == 1)
+    }
+
+    /// Sensor: N rapid requests (one per debounced save) coalesce — at most
+    /// two computations run (the in-flight one + one follow-up), and the
+    /// manifest ends up describing the FINAL catalog.json.
+    @Test
+    func rapidRequestsCoalesceAndConvergeOnLatestContent() async throws {
+        let (sync, paths, root) = try makeMaster(tag: "refresh-coalesce")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalogURL = paths.liveDir.appendingPathComponent("catalog.json")
+
+        for i in 0..<10 {
+            try Data("{\"rev\": \(i)}".utf8).write(to: catalogURL)
+            sync.scheduleManifestRefresh()
+        }
+        await sync.flushManifestRefresh()
+
+        #expect(sync.manifestRefreshCount <= 2,
+                "10 back-to-back requests must coalesce, got \(sync.manifestRefreshCount) computations")
+        // Manifest must verify against the final tree — i.e. it was
+        // computed AFTER the last write, not from a stale mid-burst state.
+        #expect(throws: Never.self) { try sync.verifyManifest(in: paths.liveDir) }
+    }
+
+    @Test
+    func scheduledRefreshIsNoOpOnViewer() async throws {
+        let root = scratchDir("refresh-viewer")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = makePaths(under: root)
+        try populateMasterTree(at: paths.liveDir)
+        let sync = makeSync(paths: paths,
+                            localHost: "ricksmacbookpro.local",
+                            masterHost: "RicksM4.local",
+                            runner: StubRsync(sourceTree: paths.liveDir))
+        sync.scheduleManifestRefresh()
+        await sync.flushManifestRefresh()
+        #expect(sync.manifestRefreshCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: paths.liveDir.appendingPathComponent("manifest.sha256").path))
+    }
+}
+
 // MARK: - End-to-end sync round-trip
 
 @MainActor

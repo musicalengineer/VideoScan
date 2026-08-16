@@ -444,8 +444,9 @@ struct VideoScanApp: App {
                             // Seed the manifest once at launch so a
                             // viewer that connects before the master
                             // has saved anything still has something
-                            // to verify against.
-                            catalogSync.writeManifestIfMaster()
+                            // to verify against. Off-main: a cold hash of
+                            // a large catalog must not stall first paint.
+                            catalogSync.scheduleManifestRefresh()
                         } else {
                             // Initial sync at launch — pulls the
                             // latest catalog from M4 if the master is

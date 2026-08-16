@@ -304,7 +304,7 @@ final class CatalogSync: ObservableObject {
 
     /// Files that participate in the manifest, relative to liveDir.
     /// Anything not in this allow-list is invisible to the viewer.
-    private static let manifestRoots = ["catalog.json", "catalog.json.prev", "POI"]
+    nonisolated private static let manifestRoots = ["catalog.json", "catalog.json.prev", "POI"]
 
     /// Write `manifest.sha256` in liveDir covering catalog.json, .prev, and
     /// everything under POI/. No-op on a viewer (defense in depth — the
@@ -317,20 +317,100 @@ final class CatalogSync: ObservableObject {
         if isInert { return }
         guard mode == .master else { return }
         do {
-            let lines = try Self.computeManifestLines(rootDir: paths.liveDir)
-            let text = lines.joined(separator: "\n") + "\n"
-            let manifestURL = paths.liveDir.appendingPathComponent("manifest.sha256")
-            try text.write(to: manifestURL, atomically: true, encoding: .utf8)
-            log("CatalogSync: wrote manifest.sha256 (\(lines.count) files)")
+            let count = try Self.computeAndWriteManifest(liveDir: paths.liveDir)
+            log("CatalogSync: wrote manifest.sha256 (\(count) files)")
         } catch {
             log("CatalogSync: failed to write manifest.sha256: \(error.localizedDescription)")
         }
     }
 
+    // MARK: Off-main, coalesced manifest refresh (#161 beachball fix)
+
+    /// True while a background manifest computation is running.
+    private var manifestRefreshRunning = false
+    /// Set when a refresh was requested while one was already running; the
+    /// running one re-arms itself on completion so the manifest always
+    /// ends up describing the LATEST catalog.json.
+    private var manifestRefreshDirty = false
+    /// Number of background computations actually started. Test sensor for
+    /// coalescing (N rapid requests → far fewer than N computations).
+    private(set) var manifestRefreshCount = 0
+    /// The in-flight refresh, so tests (and quit-time code) can await it.
+    private(set) var manifestRefreshTask: Task<Void, Never>?
+
+    /// Refresh `manifest.sha256` WITHOUT blocking the main actor.
+    ///
+    /// Why this exists: the store's observer callback used to call
+    /// `writeManifestIfMaster()` synchronously after every successful save.
+    /// That re-hashed catalog.json + catalog.json.prev + POI/ — hundreds of
+    /// megabytes at the pre-reduction size — on the main thread, and was
+    /// codex's #1-ranked contributor to the Catalog beachballs (#161).
+    /// Hashing now runs on a detached utility task; requests that arrive
+    /// while one is in flight coalesce into a single follow-up run.
+    ///
+    /// Same guards as the synchronous variant: no-op on a viewer, no-op on
+    /// an inert (test-host) instance.
+    func scheduleManifestRefresh() {
+        if isInert { return }
+        guard mode == .master else { return }
+        if manifestRefreshRunning {
+            manifestRefreshDirty = true
+            return
+        }
+        manifestRefreshRunning = true
+        manifestRefreshCount += 1
+        let liveDir = paths.liveDir
+        manifestRefreshTask = Task { [weak self] in
+            // Task.detached: explicitly OFF the main actor. (A plain
+            // nonisolated async call would inherit the caller's actor —
+            // see the "approachable concurrency" trap notes.)
+            let outcome: Result<Int, Error> = await Task.detached(priority: .utility) {
+                Result { try Self.computeAndWriteManifest(liveDir: liveDir) }
+            }.value
+            guard let self else { return }
+            self.manifestRefreshDidFinish(outcome)
+        }
+    }
+
+    /// Await any in-flight manifest refresh (and the follow-up it may
+    /// re-arm). Used by tests; harmless to call when idle.
+    func flushManifestRefresh() async {
+        // Each completion clears manifestRefreshTask (or replaces it with
+        // the re-armed follow-up), so looping until nil drains the chain.
+        while let task = manifestRefreshTask {
+            await task.value
+        }
+    }
+
+    private func manifestRefreshDidFinish(_ outcome: Result<Int, Error>) {
+        switch outcome {
+        case .success(let count):
+            log("CatalogSync: wrote manifest.sha256 (\(count) files, background)")
+        case .failure(let error):
+            log("CatalogSync: failed to write manifest.sha256: \(error.localizedDescription)")
+        }
+        manifestRefreshRunning = false
+        manifestRefreshTask = nil
+        if manifestRefreshDirty {
+            manifestRefreshDirty = false
+            scheduleManifestRefresh()
+        }
+    }
+
+    /// Compute + atomically write manifest.sha256 under `liveDir`. Returns
+    /// the number of files covered. Pure filesystem work, safe off-main.
+    nonisolated static func computeAndWriteManifest(liveDir: URL) throws -> Int {
+        let lines = try computeManifestLines(rootDir: liveDir)
+        let text = lines.joined(separator: "\n") + "\n"
+        let manifestURL = liveDir.appendingPathComponent("manifest.sha256")
+        try text.write(to: manifestURL, atomically: true, encoding: .utf8)
+        return lines.count
+    }
+
     /// Compute the manifest lines (sorted) for everything under `rootDir`
     /// that lives within `manifestRoots`. Pure function — no I/O on the
     /// app-support tree other than reads.
-    static func computeManifestLines(rootDir: URL) throws -> [String] {
+    nonisolated static func computeManifestLines(rootDir: URL) throws -> [String] {
         let fm = FileManager.default
         var entries: [(relPath: String, hash: String)] = []
 
@@ -363,7 +443,7 @@ final class CatalogSync: ObservableObject {
     }
 
     /// Relative path from `root` to `url`, using `/` separators.
-    static func relativePath(of url: URL, under root: URL) -> String {
+    nonisolated static func relativePath(of url: URL, under root: URL) -> String {
         let rootPath = root.standardizedFileURL.path
         let urlPath = url.standardizedFileURL.path
         if urlPath.hasPrefix(rootPath + "/") {
@@ -375,7 +455,7 @@ final class CatalogSync: ObservableObject {
     /// Streaming SHA-256 hex digest of a file. Reads in 1 MB chunks so a
     /// huge catalog.json doesn't balloon the process RSS.
     /// Worst-case memory: ~1 MB (chunk size).
-    static func sha256Hex(of fileURL: URL) throws -> String {
+    nonisolated static func sha256Hex(of fileURL: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
@@ -656,7 +736,9 @@ final class CatalogSync: ObservableObject {
 /// data layer also refuses the write, so we'd never get here anyway).
 extension CatalogSync: CatalogStoreObserver {
     func catalogStoreDidWrite(_ store: CatalogStore) {
-        writeManifestIfMaster()
+        // Off-main + coalesced — never hash the catalog on the UI thread
+        // in response to a save (#161).
+        scheduleManifestRefresh()
     }
 }
 
