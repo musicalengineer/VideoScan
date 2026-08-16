@@ -86,7 +86,8 @@ enum BundleExporter {
                             scanTargets: [CatalogScanTarget],
                             to bundleURL: URL,
                             dossierDeltaDirOverride: URL? = nil,
-                            catalogManifestOverride: URL? = nil) throws -> Summary {
+                            catalogManifestOverride: URL? = nil,
+                            masterArchive: MasterArchiveDesignation? = nil) throws -> Summary {
         guard bundleURL.pathExtension == "videoscanbundle" else {
             throw BundleError.badExtension
         }
@@ -114,7 +115,8 @@ enum BundleExporter {
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
             records: records,
-            savedFromHost: CatalogHost.currentName
+            savedFromHost: CatalogHost.currentName,
+            masterArchive: masterArchive   // designation travels with the catalog (§3)
         )
         // Encode through the Sendable DTO — VideoRecord is Decodable-only
         // (step 5b); CatalogSnapshotDTO owns the single encoder.

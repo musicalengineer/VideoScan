@@ -29,6 +29,15 @@ enum ArchivePromotion {
     static let derivationKind = "archivePromotion"
 }
 
+/// Initialize refusals (retired volume, scratch volume) — surfaced in the
+/// sheet's error line. Filesystem errors propagate as CocoaError.
+enum MasterArchiveError: Error, LocalizedError, Equatable {
+    case refused(String)
+    var errorDescription: String? {
+        switch self { case .refused(let why): return why }
+    }
+}
+
 // MARK: - UI payloads (model-driven sheets / alerts)
 
 /// "Initialize as Master Archive…" sheet payload. `isNewTarget` is true
@@ -151,11 +160,50 @@ extension VideoScanModel {
 
     // MARK: Designation
 
-    /// The scan target designated as Master Archive (resolved by path —
-    /// target ids are per-launch). nil when none or the target is gone.
+    /// The scan target designated as Master Archive (resolved by canonical
+    /// path — target ids are per-launch and never persisted). nil when
+    /// none or the target is gone.
     var masterArchiveTarget: CatalogScanTarget? {
         guard let path = masterArchive?.targetPath else { return nil }
-        return scanTargets.first { PathScope.normalize($0.searchPath) == PathScope.normalize(path) }
+        return scanTargets.first { Self.samePath($0.searchPath, path) }
+    }
+
+    /// Canonical path equality (standardized, trailing slash stripped).
+    nonisolated static func samePath(_ a: String, _ b: String) -> Bool {
+        PathScope.normalize(URL(fileURLWithPath: a).standardizedFileURL.path)
+            == PathScope.normalize(URL(fileURLWithPath: b).standardizedFileURL.path)
+    }
+
+    /// Volume-UUID-first re-resolution (codex QA blocker 1). If the
+    /// designated path is not reachable but a mounted volume under
+    /// /Volumes carries the designation's volume UUID, the designation
+    /// follows the volume to its new mount point. Called at load and on
+    /// every mount notification. No-op when the path is fine, the UUID is
+    /// unknown, or no mounted volume matches.
+    func reresolveMasterArchiveMount() {
+        guard let current = masterArchive, let uuid = current.volumeUUID else { return }
+        let fm = FileManager.default
+        if fm.fileExists(atPath: current.rootPath) { return }
+        // The stored target may be a folder inside a volume — recover the
+        // volume-relative tail so a rename keeps the sub-folder.
+        guard let mounts = try? fm.contentsOfDirectory(atPath: "/Volumes") else { return }
+        for name in mounts {
+            let mountPath = "/Volumes/\(name)"
+            guard MasterArchiveDesignation.volumeUUID(forPath: mountPath) == uuid else { continue }
+            let oldComps = URL(fileURLWithPath: current.targetPath).standardizedFileURL.pathComponents
+            // "/Volumes/<old>/<tail…>" → keep <tail…> under the new mount.
+            let tail = oldComps.count > 3 ? Array(oldComps[3...]) : []
+            var newURL = URL(fileURLWithPath: mountPath, isDirectory: true)
+            for comp in tail { newURL.appendPathComponent(comp) }
+            let rehomed = current.rehomed(to: newURL.path)
+            guard fm.fileExists(atPath: rehomed.rootPath) else { continue }
+            masterArchive = rehomed
+            noteCatalogRecordsMutated()
+            saveCatalogDebounced()
+            log("Master Archive volume found at \(rehomed.targetPath) (same volume UUID; was \(current.targetPath)).")
+            masterArchiveLog.notice("rehomed master archive \(current.targetPath, privacy: .public) → \(rehomed.targetPath, privacy: .public)")
+            return
+        }
     }
 
     /// The designated CatalogScanTarget's id, or nil.
@@ -175,7 +223,20 @@ extension VideoScanModel {
     /// "Master Archive" chip on the volume row.
     func isMasterArchive(_ target: CatalogScanTarget) -> Bool {
         guard let path = masterArchive?.targetPath else { return false }
-        return PathScope.normalize(target.searchPath) == PathScope.normalize(path)
+        return Self.samePath(target.searchPath, path)
+    }
+
+    /// Why a path may not become / serve as the Master Archive right now,
+    /// or nil when it is fine. Retirement is `isRetired` (`retiredAt`),
+    /// NEVER `role == .retired` (codex QA blocker 2 — two owners).
+    func masterArchiveRefusal(forTargetPath path: String) -> String? {
+        if let t = scanTargets.first(where: { Self.samePath($0.searchPath, path) }), t.isRetired {
+            return "\(VolumeReachability.displayLabel(forPath: path)) is retired — reinstate it in the Volumes window before making it the Master Archive."
+        }
+        if CatalogScanTarget.isScratchVolumePath(path) {
+            return "That's VideoScan's RAM-disk scratch volume — not a place for the archive."
+        }
+        return nil
     }
 
     /// What Initialize did — for the log line and the sheet's summary.
@@ -194,7 +255,10 @@ extension VideoScanModel {
     /// the catalog mutated and schedules a save.
     @discardableResult
     func initializeMasterArchive(at volumeOrFolderURL: URL) throws -> MasterArchiveInitResult {
-        let targetPath = volumeOrFolderURL.standardizedFileURL.path
+        let targetPath = PathScope.normalize(volumeOrFolderURL.standardizedFileURL.path)
+        if let refusal = masterArchiveRefusal(forTargetPath: targetPath) {
+            throw MasterArchiveError.refused(refusal)
+        }
         let rootURL = MasterArchiveLayout.rootURL(forTargetPath: targetPath)
         var result = MasterArchiveInitResult(rootPath: rootURL.path)
 
@@ -203,9 +267,7 @@ extension VideoScanModel {
         // Scan target: add if never seen; either way it becomes role
         // Archive so the tree is cataloged like any volume.
         let target: CatalogScanTarget
-        if let existing = scanTargets.first(where: {
-            PathScope.normalize($0.searchPath) == PathScope.normalize(targetPath)
-        }) {
+        if let existing = scanTargets.first(where: { Self.samePath($0.searchPath, targetPath) }) {
             target = existing
         } else {
             target = CatalogScanTarget(searchPath: targetPath)
@@ -220,7 +282,10 @@ extension VideoScanModel {
         notifyTargetsChanged()
         refreshTargetReachability()
 
-        masterArchive = MasterArchiveDesignation(targetPath: targetPath, rootPath: rootURL.path)
+        masterArchive = MasterArchiveDesignation(
+            targetPath: targetPath,
+            rootPath: rootURL.path,
+            volumeUUID: MasterArchiveDesignation.volumeUUID(forPath: targetPath))
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
 
@@ -230,6 +295,17 @@ extension VideoScanModel {
         log("Master Archive: \(rootURL.path) (\(created)\(result.addedScanTarget ? "; added as scan target" : "")).")
         masterArchiveLog.info("initialize: root=\(rootURL.path, privacy: .public) created=\(result.createdPaths.count) addedTarget=\(result.addedScanTarget)")
         return result
+    }
+
+    /// Import / bundle round-trip (codex QA blocker 1): a catalog.json or
+    /// bundle carrying a designation seeds ours when we have none. An
+    /// existing local designation is never overwritten silently — the
+    /// user changes masters explicitly.
+    func adoptImportedMasterArchive(_ imported: MasterArchiveDesignation?) {
+        guard let imported, masterArchive == nil else { return }
+        masterArchive = imported
+        log("Adopted the imported Master Archive designation: \(imported.targetPath).")
+        reresolveMasterArchiveMount()
     }
 
     /// v1 clear: forget the designation. The on-disk tree and its
@@ -314,10 +390,11 @@ extension VideoScanModel {
         record.derivationKind == ArchivePromotion.derivationKind
     }
 
-    /// True when `path` lies inside the Master Archive root.
+    /// True when `path` lies inside the Master Archive root — canonical,
+    /// component-wise (codex QA major c), never a string prefix.
     func isInsideMasterArchive(path: String) -> Bool {
         guard let root = masterArchiveRootPath else { return false }
-        return PathScope.contains(path, within: root)
+        return ArchivePathResolver.isInside(path: path, root: root)
     }
 
     // MARK: Promote — plan + routing
@@ -406,10 +483,18 @@ extension VideoScanModel {
                               sha256: String,
                               probed copy: VideoRecord,
                               promotedAt: Date = Date()) -> VideoRecord {
+        // Self-contained provenance on the COPY (codex QA major b): the
+        // source's id, path and volume live on this record, so a later
+        // retired-volume cleanup that removes the source record leaves
+        // the archive copy still able to say where it came from.
         copy.derivedFrom = source.id
         copy.derivationKind = ArchivePromotion.derivationKind
         copy.originalFullPath = source.fullPath
         copy.originVolume = source.volumeName
+        // Full-file fixity — its OWN field (codex QA blocker 3), never
+        // `contentHash` (the segmented candidate signature).
+        copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt,
+                                           sizeBytes: copy.sizeBytes)
         copy.starRating = max(source.starRating, 3)
         copy.archiveStage = .masterAssigned
         copy.lifecycleStage = .archived

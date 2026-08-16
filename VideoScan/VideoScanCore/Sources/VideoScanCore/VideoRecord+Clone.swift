@@ -144,6 +144,7 @@ extension VideoRecord {
         c.audioVerifyDate = audioVerifyDate
         c.supersededByID = supersededByID
         c.repairConfirmedDate = repairConfirmedDate
+        c.archiveFixity = archiveFixity
         c.scanContext = scanContext
         return c
     }

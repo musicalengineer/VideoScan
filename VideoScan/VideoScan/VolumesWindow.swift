@@ -64,6 +64,12 @@ struct VolumesWindow: View {
     /// orphans" without re-walking records on each render.
     @State private var deleteTarget: DeleteTarget?
 
+    /// "Initialize as Master Archive…" sheet backing for THIS window's
+    /// right-click (docs/archive_promotion_workflow.md §4). Local (not
+    /// the model's shared offer) so the sheet attaches to the Volumes
+    /// window rather than the main window behind it.
+    @State private var masterArchiveInitOffer: MasterArchiveInitOffer?
+
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
@@ -185,6 +191,11 @@ struct VolumesWindow: View {
             NonVideoMediaPurgeSheet(preselectedVolumeKey: target.volumeKey)
                 .environmentObject(model)
         }
+        // Master Archive — Initialize confirmation for the row right-click.
+        .sheet(item: $masterArchiveInitOffer) { offer in
+            MasterArchiveInitSheet(offer: offer)
+                .environmentObject(model)
+        }
     }
 
     private func honorPendingSelection() {
@@ -200,7 +211,8 @@ struct VolumesWindow: View {
                 ForEach(sortedTargets) { target in
                     VolumeListRow(target: target,
                                   scale: sidebarScale,
-                                  retireStatus: retireStatus(for: target))
+                                  retireStatus: retireStatus(for: target),
+                                  isMasterArchive: model.isMasterArchive(target))
                         .tag(Optional(target.id))
                         // §1B + 2026-05-30: right-click menu surfaces
                         // Reinstate for retired volumes AND Mark Retired
@@ -351,6 +363,33 @@ struct VolumesWindow: View {
 
         Divider()
 
+        // Master Archive (docs/archive_promotion_workflow.md §4): ONE
+        // gesture — designate + scaffold the tree + index files. Shown
+        // for every non-retired volume; the sheet spells out the Safe
+        // Archive assessment so a bad choice is visible before Confirm.
+        if !target.isRetired {
+            let isMaster = model.isMasterArchive(target)
+            Button(isMaster ? "Master Archive ✓ (re-initialize…)" : "Initialize as Master Archive…") {
+                masterArchiveInitOffer = MasterArchiveInitOffer(
+                    targetPath: target.searchPath, isNewTarget: false)
+            }
+            .disabled(!target.isReachable)
+            .help(target.isReachable
+                  ? (isMaster
+                     ? "This is the Master Archive. Re-running Initialize repairs missing folders/index files without touching existing ones."
+                     : "Designate this volume as the family's Master Archive and create the Breen_Family_Archive tree with its manifest and README.")
+                  : "Volume is offline — connect it to initialize the archive.")
+            .accessibilityIdentifier("volumeRow.initializeMasterArchive")
+            if isMaster {
+                Button("Reveal Master Archive in Finder") {
+                    model.revealMasterArchiveInFinder()
+                }
+                .accessibilityIdentifier("volumeRow.revealMasterArchive")
+            }
+        }
+
+        Divider()
+
         if target.isRetired {
             Button("Reinstate \(volumeName(target))") {
                 reinstateTarget = ReinstateTarget(
@@ -473,6 +512,10 @@ private struct VolumeListRow: View {
     /// parent only computes it for non-retired rows; retired rows get
     /// the brown badge instead.
     var retireStatus: VolumeRetireStatus?
+    /// Master Archive chip (docs/archive_promotion_workflow.md §4) —
+    /// the ONE designated volume. Passed in by the parent (O(1) path
+    /// compare on the model), never derived here.
+    var isMasterArchive: Bool = false
 
     // 2026-05-31: Rick's "old eyes" font bump — base sizes bumped +2pt
     // across every text element in this row. The existing `scale`
@@ -495,6 +538,13 @@ private struct VolumeListRow: View {
                     Text(VolumeReachability.displayLabel(forPath: target.searchPath))
                         .font(.system(size: 16 * scale, weight: .medium))
                         .lineLimit(1)
+                    // Master Archive chip — the designated volume. Rendered
+                    // before the retire pills so it reads first.
+                    if isMasterArchive {
+                        retirePill(text: "Master Archive",
+                                   bg: .yellow,
+                                   identifier: "volumeRow.masterArchiveBadge")
+                    }
                     // §1B retired badge. "Retired YYYY-MM-DD" — replaces
                     // the policy badge visually because a retired volume
                     // isn't a viable destination.

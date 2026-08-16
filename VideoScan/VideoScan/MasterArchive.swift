@@ -35,17 +35,63 @@ import Foundation
 /// `targetPath` is the CatalogScanTarget's `searchPath` (the volume or
 /// folder Rick picked); `rootPath` is `<targetPath>/Breen_Family_Archive`.
 /// Scan-target ids are regenerated every launch (`CatalogScanTarget.id`
-/// is `let id = UUID()`), so the STABLE key is the path — the model
-/// resolves `masterArchiveTargetID` from it at runtime.
+/// is `let id = UUID()`) and are NOT persisted anywhere, so the durable
+/// keys are (codex QA blocker 1): the volume's UUID
+/// (`URLResourceKey.volumeUUIDStringKey`, captured at Initialize) FIRST,
+/// then the canonical normalized path. Re-resolution on load / mount:
+/// if the stored path is not reachable but a mounted volume carries the
+/// stored UUID, the designation follows the volume to its new mount
+/// point (`VideoScanModel.reresolveMasterArchiveMount`).
 struct MasterArchiveDesignation: Codable, Equatable, Sendable {
+    /// Canonical (standardized, no trailing slash) path Rick picked.
     let targetPath: String
+    /// `<targetPath>/Breen_Family_Archive`, canonical.
     let rootPath: String
+    /// The volume's filesystem UUID at designation time; nil when the
+    /// filesystem does not report one (some network/FAT volumes).
+    let volumeUUID: String?
     let designatedAt: Date
 
-    init(targetPath: String, rootPath: String, designatedAt: Date = Date()) {
-        self.targetPath = targetPath
-        self.rootPath = rootPath
+    init(targetPath: String, rootPath: String, volumeUUID: String? = nil, designatedAt: Date = Date()) {
+        self.targetPath = PathScope.normalize(URL(fileURLWithPath: targetPath).standardizedFileURL.path)
+        self.rootPath = PathScope.normalize(URL(fileURLWithPath: rootPath).standardizedFileURL.path)
+        self.volumeUUID = volumeUUID
         self.designatedAt = designatedAt
+    }
+
+    /// The path this designation would have if the same volume were
+    /// mounted at `newTargetPath` (volume renamed / remounted).
+    func rehomed(to newTargetPath: String) -> MasterArchiveDesignation {
+        MasterArchiveDesignation(
+            targetPath: newTargetPath,
+            rootPath: MasterArchiveLayout.rootURL(forTargetPath: newTargetPath).path,
+            volumeUUID: volumeUUID,
+            designatedAt: designatedAt)
+    }
+
+    /// `volumeUUIDString` for the filesystem holding `path`, or nil.
+    /// (Pure I/O read of a resource value — no side effects.)
+    static func volumeUUID(forPath path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        return (try? url.resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
+    }
+}
+
+// MARK: - Canonical containment
+
+extension ArchivePathResolver {
+    /// Component-wise "is `path` at or under `root`" on standardized file
+    /// URLs — no prefix-string tricks (codex QA major c): "/Volumes/A"
+    /// never contains "/Volumes/AB/x", and "a/../b" forms are collapsed
+    /// before comparing. Symlinks are NOT resolved (catalog paths are
+    /// already absolute; resolving would touch the disk per call).
+    static func isInside(path: String, root: String) -> Bool {
+        let rootComps = URL(fileURLWithPath: root).standardizedFileURL.pathComponents
+        let pathComps = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        // A root of "/" would contain everything — the catalog-wide
+        // footgun PathScope.contains also refuses.
+        guard rootComps.count > 1, pathComps.count >= rootComps.count else { return false }
+        return Array(pathComps.prefix(rootComps.count)) == rootComps
     }
 }
 
@@ -211,13 +257,25 @@ enum ArchivePathResolver {
     /// pure functions — so the job can resolve paths off-main with a
     /// Sendable value.
     struct RecordFacts: Sendable, Equatable {
-        let streamType: StreamType
+        /// Raw stream-type string (StreamType itself is not Sendable).
+        let streamTypeRaw: String
         let filename: String
         let ext: String
         let dateHint: ArchiveDateHint
         /// True when the date came from an inferred signal below the
         /// confidence floor (or none at all) — surfaced as a warning.
         let dateIsLowConfidence: Bool
+
+        var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
+
+        init(streamType: StreamType, filename: String, ext: String,
+             dateHint: ArchiveDateHint, dateIsLowConfidence: Bool) {
+            self.streamTypeRaw = streamType.rawValue
+            self.filename = filename
+            self.ext = ext
+            self.dateHint = dateHint
+            self.dateIsLowConfidence = dateIsLowConfidence
+        }
     }
 
     /// Which numbered bucket a stream shape belongs in.
@@ -318,10 +376,17 @@ enum ArchivePathResolver {
     /// Records store `ext` sometimes with a leading dot, sometimes not,
     /// and sometimes empty (extensionless media). Prefer the record's
     /// field, fall back to the filename, lower-case for consistency.
+    /// STRICT: ASCII letters/digits only, ≤ 16 chars — anything else
+    /// (separators, dots, control chars, unicode look-alikes) is dropped
+    /// so an extension can never smuggle a path component (codex QA
+    /// round 2, blocker 3). Empty ⇒ extensionless archive filename.
     static func normalizedExtension(_ ext: String, filename: String) -> String {
         var e = ext.hasPrefix(".") ? String(ext.dropFirst()) : ext
         if e.isEmpty { e = (filename as NSString).pathExtension }
-        return e.lowercased()
+        let strict = e.lowercased().unicodeScalars.filter {
+            ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x61 && $0.value <= 0x7A)
+        }
+        return String(String.UnicodeScalarView(strict).prefix(16))
     }
 
     // MARK: Date hint from record fields
@@ -406,12 +471,23 @@ enum ArchiveManifestCSV {
         let starRating: Int
     }
 
-    /// One CSV field, quoted only when it has to be.
+    /// One CSV field — ALWAYS quoted (codex QA round 2, blocker 3: no
+    /// field is ever emitted bare, so a comma/quote in a title or path
+    /// can never re-shape the row), embedded quotes doubled (RFC 4180),
+    /// and control characters (including CR/LF — CSV-injection vectors and
+    /// line-splitter breakers) replaced by a space so every row stays one
+    /// physical line.
     static func escape(_ field: String) -> String {
-        let needsQuote = field.contains(",") || field.contains("\"")
-            || field.contains("\n") || field.contains("\r")
-        guard needsQuote else { return field }
-        return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        var cleaned = ""
+        cleaned.reserveCapacity(field.count)
+        for scalar in field.unicodeScalars {
+            if scalar.value < 0x20 || scalar.value == 0x7F {
+                cleaned.append(" ")
+            } else {
+                cleaned.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"" + cleaned.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
     /// The row as one line, WITH its trailing newline (so a single write
@@ -495,6 +571,38 @@ enum ArchiveManifestCSV {
             pending = next
         }
         out.append(current)
+        return out
+    }
+
+    /// Column index of `source_record_id` in the header (0-based).
+    static let sourceRecordIDColumn = 7
+    /// Column index of `archive_relpath`.
+    static let relPathColumn = 1
+    /// Column index of `sha256`.
+    static let sha256Column = 2
+
+    /// The set of source record ids already listed in the manifest — the
+    /// second leg of the promote idempotency check (codex QA major a: a
+    /// crash between manifest append and catalog record must not yield a
+    /// second copy on the next run). Reads the whole file: the manifest
+    /// is ~200 bytes/row, so even 100k promotions is ~20 MB, once per
+    /// job. Missing/unreadable file ⇒ empty set (the job's preflight
+    /// already refused a missing manifest).
+    nonisolated static func sourceRecordIDs(in url: URL) -> Set<UUID> {
+        Set(rowsBySource(in: url).keys)
+    }
+
+    /// What the manifest already says about each source: its archive
+    /// relpath and digest, keyed by source record id (latest row wins).
+    nonisolated static func rowsBySource(in url: URL) -> [UUID: (relPath: String, sha256: String)] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        var out: [UUID: (relPath: String, sha256: String)] = [:]
+        for line in text.split(separator: "\n").dropFirst() {   // header
+            let fields = fields(ofLine: String(line))
+            guard fields.count > sourceRecordIDColumn,
+                  let id = UUID(uuidString: fields[sourceRecordIDColumn]) else { continue }
+            out[id] = (fields[relPathColumn], fields[sha256Column])
+        }
         return out
     }
 

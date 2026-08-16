@@ -248,7 +248,8 @@ struct CatalogContent: View {
         RecordsVersion(count: records.count, revision: model.volumeAggregatesRevision)
     }
 
-    private var selectedRecord: VideoRecord? {
+    /// Internal (was private) so CatalogContent+Promote.swift can read it.
+    var selectedRecord: VideoRecord? {
         guard let id = selectedIDs.first else { return nil }
         // O(1) via the model's id index — this is evaluated several times
         // per body, and the old linear scan was ~27K iterations each.
@@ -549,6 +550,14 @@ struct CatalogContent: View {
         if viewFilters.contains(.awaitingConfirmation) {
             out = out.filter(pfAwaitingConfirmation)
         }
+        // Master Archive worklists (2026-08-15). Event-driven pass; the
+        // model's memoized reverse index makes each predicate O(1).
+        if viewFilters.contains(.notYetArchived) {
+            out = out.filter { model.pfNotYetArchived($0) }
+        }
+        if viewFilters.contains(.hasMasterCopy) {
+            out = out.filter { model.pfHasMasterCopy($0) }
+        }
         return out
     }
 
@@ -623,7 +632,9 @@ struct CatalogContent: View {
                     repairCopy: repairCopy,
                     onConfirmRepair: { id in
                         _ = model.confirmRepair(repairID: id)
-                    }
+                    },
+                    masterCopy: masterCopyOfSelected,
+                    promotionSource: promotionSourceOfSelected
                 )
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
             }

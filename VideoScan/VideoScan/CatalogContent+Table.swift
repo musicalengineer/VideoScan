@@ -661,6 +661,11 @@ extension CatalogContent {
                           : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
                     .accessibilityIdentifier("catalog.row.trimMaster")
 
+                    // Promote to Archive (Master Archive, 2026-08-15) —
+                    // single + multi select; the model routes to the
+                    // no-master alert or the confirmation sheet.
+                    promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+
                     // Verify Audio / Verification Results / Repair
                     // Damaged Audio / Confirm Repair — extracted to
                     // a dedicated builder (GH #132/#135) so the

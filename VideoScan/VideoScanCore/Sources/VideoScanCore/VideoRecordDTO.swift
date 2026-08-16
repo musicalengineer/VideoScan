@@ -140,6 +140,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let audioVerifyDate: Date?
     public let supersededByID: UUID?
     public let repairConfirmedDate: Date?
+    public let archiveFixity: ArchiveFixity?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -251,6 +252,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         audioVerifyDate             = r.audioVerifyDate
         supersededByID              = r.supersededByID
         repairConfirmedDate         = r.repairConfirmedDate
+        archiveFixity               = r.archiveFixity
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -454,5 +456,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // records (all legacy records) round-trip byte-identical.
         try c.encodeIfPresent(supersededByID, forKey: .supersededByID)
         try c.encodeIfPresent(repairConfirmedDate, forKey: .repairConfirmedDate)
+        // Master Archive fixity (2026-08-15): key written only for archive
+        // copies — every other record round-trips byte-identical.
+        try c.encodeIfPresent(archiveFixity, forKey: .archiveFixity)
     }
 }

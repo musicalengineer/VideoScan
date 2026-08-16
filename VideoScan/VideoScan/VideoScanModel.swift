@@ -861,6 +861,7 @@ final class VideoScanModel: ObservableObject {
         // Master Archive designation rides the same snapshot (additive
         // key) — adopt it before anything else reads `masterArchive`.
         masterArchive = catalogStore.masterArchive
+        reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")

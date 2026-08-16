@@ -154,6 +154,12 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     /// for Rick's one-click "Sounds Good" — the listen-then-confirm
     /// queue. Backed by pfAwaitingConfirmation.
     case awaitingConfirmation = "Repaired — Awaiting Confirmation"
+    /// Master Archive (2026-08-15): live sources without a promoted copy
+    /// (the "what still needs promoting" worklist). Backed by
+    /// pfNotYetArchived (memoized reverse index — O(1) per record).
+    case notYetArchived = "Not Yet Archived"
+    /// Master Archive: sources that HAVE a promoted copy.
+    case hasMasterCopy = "Has Master Copy"
 
     var icon: String {
         switch self {
@@ -164,6 +170,8 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .workspaceOnly:        return "hammer.fill"
         case .untaggedOnly:         return "questionmark.folder"
         case .awaitingConfirmation: return "checkmark.seal"
+        case .notYetArchived:       return "archivebox"
+        case .hasMasterCopy:        return "archivebox.fill"
         }
     }
 }
@@ -382,6 +390,10 @@ struct CatalogView: View {
     /// actions) — the file-scoped lint can't see across the extension split.
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
+    /// Handed to the Promote confirmation sheet (Master Archive) so its
+    /// Confirm can enqueue the MFO job — intentional forwarding only.
+    // vs-lint:disable-next vs-env-object-unused
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
     @State var showCaptionProgress = false
     /// Opens an independent resizable window keyed by CatalogInfoItem value.
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
@@ -584,6 +596,9 @@ struct CatalogView: View {
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
                     ? selectedIDs.first
                     : nil
+                // Mirror for the File ▸ Archive ▸ Promote Selected menu
+                // command (plain var — no publish, no re-render).
+                model.catalogSelectedIDs = selectedIDs
                 // Update volume highlight when table selection changes.
                 // O(1) index lookup — runs per arrow-key step.
                 if let id = selectedIDs.first,
@@ -787,6 +802,34 @@ struct CatalogView: View {
         .sheet(isPresented: $model.showNonVideoMediaPurgeSheet) {
             NonVideoMediaPurgeSheet(preselectedVolumeKey: nil)
                 .environmentObject(model)
+        }
+        // Master Archive (docs/archive_promotion_workflow.md). All three
+        // are MODEL-driven so the Volumes-window right-click, the catalog
+        // right-click, and the File ▸ Archive menu share ONE sheet each
+        // (.sheet(item:) per the chained-sheet antipattern memo).
+        .sheet(item: $model.pendingMasterArchiveInitOffer) { offer in
+            MasterArchiveInitSheet(offer: offer)
+                .environmentObject(model)
+        }
+        .sheet(item: $model.pendingPromoteRequest) { request in
+            PromoteToArchiveSheet(request: request)
+                .environmentObject(model)
+                .environmentObject(fileOpsCenter)
+        }
+        .alert(item: $model.pendingPromoteWithoutMaster) { pending in
+            Alert(
+                title: Text("You need to designate a volume as the master archive."),
+                message: Text("Promote copies files into one Master Archive tree. Pick the volume that will hold it (the RAID, for example) — Initialize creates the folders and index files, then the promotion continues."),
+                primaryButton: .default(Text("Initialize Master Archive…")) {
+                    // Hop a turn: never present the next sheet from inside
+                    // an alert's dismissal (chained-sheet antipattern).
+                    let ids = pending.recordIDs
+                    Task { @MainActor in
+                        model.chooseAndOfferInitializeMasterArchive(promoteAfterwards: ids)
+                    }
+                },
+                secondaryButton: .cancel()
+            )
         }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
         // Window scene (defined in VideoScanApp.swift, id: "compare").

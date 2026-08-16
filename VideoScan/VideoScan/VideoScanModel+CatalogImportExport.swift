@@ -43,7 +43,8 @@ extension VideoScanModel {
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
             records: exportable,
-            savedFromHost: CatalogHost.currentName
+            savedFromHost: CatalogHost.currentName,
+            masterArchive: masterArchive   // travels with the catalog (§3)
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -117,6 +118,7 @@ extension VideoScanModel {
         if invalidPairEndpoints > 0 {
             log("Import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
         }
+        adoptImportedMasterArchive(snapshot.masterArchive)
         saveCatalogNow()
         return CatalogImportResult(added: added, skipped: skipped, sourceHost: effectiveHost)
     }

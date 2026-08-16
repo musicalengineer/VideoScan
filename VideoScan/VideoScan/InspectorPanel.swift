@@ -27,6 +27,12 @@ struct InspectorPanel: View {
     var repairCopy: VideoRecord?
     /// One-click confirm for the selected awaiting-confirmation repair.
     var onConfirmRepair: ((UUID) -> Void)?
+    /// Master Archive (2026-08-15), resolved by the CALLER (memoized
+    /// reverse index + O(1) id lookup — no O(records) work here).
+    /// `masterCopy` = the archive copy promoted from this record;
+    /// `promotionSource` = the record this archive copy came from.
+    var masterCopy: VideoRecord?
+    var promotionSource: VideoRecord?
 
     var body: some View {
         if let rec = record {
@@ -272,6 +278,28 @@ struct InspectorPanel: View {
                             }
                             ForEach(trimDerivatives, id: \.id) { derived in
                                 trimLinkRow(label: "Trimmed version", target: derived)
+                            }
+                        }
+                    }
+
+                    // Master Archive (docs/archive_promotion_workflow.md
+                    // §4): "Master copy ✓ · Reveal" on sources with a
+                    // promoted copy; "Promoted from … · Reveal source" on
+                    // archive copies. Both links jump to the other record;
+                    // Reveal opens Finder on the file.
+                    if masterCopy != nil || promotionSource != nil {
+                        inspectorSection("Master Archive", systemImage: "archivebox") {
+                            if let copy = masterCopy {
+                                promotionLinkRow(label: "Master copy ✓", target: copy, revealTitle: "Reveal")
+                                if let fixity = copy.archiveFixity {
+                                    inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))…")
+                                }
+                            }
+                            if let source = promotionSource {
+                                promotionLinkRow(label: "Promoted from", target: source, revealTitle: "Reveal source")
+                            }
+                            if let fixity = rec.archiveFixity, promotionSource != nil {
+                                inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))… · verified \(fixity.verifiedAt.formatted(date: .abbreviated, time: .shortened))")
                             }
                         }
                     }
@@ -776,6 +804,44 @@ struct InspectorPanel: View {
 
     /// Clickable record link for the Repair section — trimLinkRow's
     /// visual language with the lifecycle's swap glyph (GH #132).
+    /// Master Archive link row: filename link (selects the other record)
+    /// plus a small Reveal button that opens Finder on that file.
+    private func promotionLinkRow(label: String, target: VideoRecord, revealTitle: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Button {
+                onSelectRecord?(target.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "star.circle")
+                        .font(.system(size: 9))
+                    Text(target.filename)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundColor(.accentColor)
+            }
+            .buttonStyle(.plain)
+            Text("·").font(.system(size: 11)).foregroundColor(.secondary)
+            Button(revealTitle) {
+                if VolumeReachability.isReachable(path: target.fullPath) {
+                    NSWorkspace.shared.selectFile(target.fullPath, inFileViewerRootedAtPath: "")
+                }
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 11))
+            .disabled(!VolumeReachability.isReachable(path: target.fullPath))
+            .help(VolumeReachability.isReachable(path: target.fullPath)
+                  ? target.fullPath
+                  : "\(target.fullPath) (volume offline)")
+            Spacer()
+        }
+    }
+
     private func repairLinkRow(label: String, target: VideoRecord) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(label)

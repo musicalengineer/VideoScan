@@ -443,6 +443,15 @@ public class VideoRecord: Identifiable, Decodable {
     /// additive / delta-minimal migration as `supersededByID`.
     public var repairConfirmedDate: Date?
 
+    /// Full-file fixity of a Master Archive copy (2026-08-15): the
+    /// whole-file SHA-256 verified by read-back after promotion. nil for
+    /// every record that is not an archive copy. DISTINCT from
+    /// `contentHash` (the segmented candidate signature) — see
+    /// ArchiveFixity.swift. Additive optional — legacy catalogs decode as
+    /// nil, the DTO encodes the key only when present, old catalog.json
+    /// files round-trip byte-identical.
+    public var archiveFixity: ArchiveFixity?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -609,6 +618,8 @@ public class VideoRecord: Identifiable, Decodable {
         // unconfirmed; superseded/confirmed records round-trip unchanged.
         supersededByID              = try c.decodeIfPresent(UUID.self, forKey: .supersededByID)
         repairConfirmedDate         = try c.decodeIfPresent(Date.self, forKey: .repairConfirmedDate)
+        // Master Archive fixity (2026-08-15) — additive optional.
+        archiveFixity               = try c.decodeIfPresent(ArchiveFixity.self, forKey: .archiveFixity)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

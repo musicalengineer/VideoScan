@@ -77,5 +77,6 @@ extension VideoRecord {
         case audioVerifyDate
         case supersededByID
         case repairConfirmedDate
+        case archiveFixity
     }
 }

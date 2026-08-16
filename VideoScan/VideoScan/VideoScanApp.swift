@@ -541,6 +541,34 @@ struct VideoScanApp: App {
                     catalogModel.importBundleViaPanel()
                 }
                 .keyboardShortcut("i", modifiers: [.command])
+
+                Divider()
+                // Master Archive (docs/archive_promotion_workflow.md §4).
+                // Every item routes through the model so the same sheets
+                // the Volumes / Catalog right-clicks use are presented
+                // (bound in ContentView).
+                Menu("Archive") {
+                    Button("Initialize Master Archive…") {
+                        catalogModel.chooseAndOfferInitializeMasterArchive()
+                    }
+                    Button("Promote Selected to Archive") {
+                        let ids = Array(catalogModel.catalogSelectedIDs)
+                        if ids.isEmpty {
+                            catalogModel.log("Promote: select one or more files in the Catalog first.")
+                        } else {
+                            catalogModel.requestPromote(recordIDs: ids)
+                        }
+                    }
+                    Divider()
+                    Button("Reveal Master Archive in Finder") {
+                        catalogModel.revealMasterArchiveInFinder()
+                    }
+                    .disabled(catalogModel.masterArchive == nil)
+                    Button("Open Manifest") {
+                        catalogModel.openMasterArchiveManifest()
+                    }
+                    .disabled(catalogModel.masterArchive == nil)
+                }
             }
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()

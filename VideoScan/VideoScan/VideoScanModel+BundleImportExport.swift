@@ -74,7 +74,8 @@ extension VideoScanModel {
         do {
             let summary = try BundleExporter.writeBundle(records: records,
                                                          scanTargets: scanTargets,
-                                                         to: url)
+                                                         to: url,
+                                                         masterArchive: masterArchive)
             // Stamp the backup-status badge — see VideoScanModel.lastBackupAt.
             // Doing this on the success path only so a thrown error doesn't
             // claim a backup that didn't complete.
@@ -316,6 +317,8 @@ extension VideoScanModel {
         if invalidPairEndpoints > 0 {
             log("Bundle import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
         }
+        // Master Archive designation rides the bundle's catalog.json (§3).
+        adoptImportedMasterArchive(payload.catalog.masterArchive)
 
         // Volumes — overwrite metadata on path match; add as offline target
         // when the path isn't present locally so the volume shows up in the

@@ -42,6 +42,9 @@ extension VideoScanModel {
         // "Update catalog" badge appears without waiting for a catalog
         // mutation. Debounced/off-main; see +VolumeRenameMigration.
         noteVolumeRenameCandidatesStale()
+        // Master Archive follows its volume UUID: a remount at a new path
+        // rehomes the designation (docs/archive_promotion_workflow.md §3).
+        reresolveMasterArchiveMount()
         notifyTargetsChanged()
     }
 

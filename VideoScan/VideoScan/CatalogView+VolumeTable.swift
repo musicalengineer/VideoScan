@@ -576,6 +576,19 @@ extension CatalogView {
                 }
                 .disabled(!first.status.isIdle)
             }
+            // Master Archive (docs/archive_promotion_workflow.md §4) —
+            // same one-gesture Initialize as the Volumes window; the
+            // model-driven sheet is bound in ContentView.
+            if single, !first.isRetired {
+                let isMaster = model.isMasterArchive(first)
+                Button(action: {
+                    model.offerInitializeMasterArchive(atPath: first.searchPath)
+                }) {
+                    Label(isMaster ? "Master Archive ✓ (re-initialize…)" : "Initialize as Master Archive…",
+                          systemImage: "archivebox")
+                }
+                .disabled(!first.isReachable)
+            }
             if targets.contains(where: { !$0.isReachable }) {
                 Button(action: {
                     for t in targets where !t.isReachable { model.wakeVolume(t) }
