@@ -20,8 +20,29 @@ let isTestHost: Bool = {
 let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
 let isRecipeCalibration = CommandLine.arguments.contains("--recipe-calibrate")
 let isFindTagDaemon = CommandLine.arguments.contains("--find-tag")
+let isHallieShell = CommandLine.arguments.contains("--hallie")
 
-if isFindTagDaemon {
+if isHallieShell {
+    // Interactive read-only Family Archivist. This branch runs before
+    // VideoScanApp.main(), so no SwiftUI scene, catalog writer, volume
+    // observer, or Dock app is started.
+    Task { @MainActor in
+        let code: Int32
+        do {
+            let options = try HallieShellCLI.parse(
+                arguments: Array(CommandLine.arguments.dropFirst()))
+            code = await HallieShellCLI.run(options: options)
+        } catch {
+            fputs("hallie: \(error.localizedDescription)\n", stderr)
+            fputs("\(HallieShellCLI.usage)\n", stderr)
+            code = 2
+        }
+        fflush(stdout)
+        fflush(stderr)
+        exit(code)
+    }
+    RunLoop.main.run()
+} else if isFindTagDaemon {
     // Detached find-and-tag daemon (FindTagCLI). Same headless-Aqua
     // arrangement as --person-eval / --recipe-calibrate: Vision/CoreML
     // need an application context; `.prohibited` keeps us out of the

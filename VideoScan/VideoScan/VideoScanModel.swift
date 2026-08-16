@@ -24,6 +24,7 @@ final class VideoScanModel: ObservableObject {
             // stale-HIT the path map and hand back an orphaned record
             // — a dossier writeback to it would be silently lost. O(1)
             // un-latch; cheap enough for per-file live-reload appends.
+            recordIndex.invalidate()
             recordPathIndex.invalidate()
             // Background preview sweep (2026-07-27): re-diff against the
             // disk cache once records settle. Debounced inside the
@@ -512,8 +513,8 @@ final class VideoScanModel: ObservableObject {
     let thumbnailPrecacher = ThumbnailPrecacher()
 
     /// O(1) id → record lookup over `records`. Lazily rebuilt when the
-    /// array's count changes; see RecordIDIndex (CatalogPerfMemo.swift)
-    /// for the staleness contract. Private — go through record(forID:).
+    /// array changes; see RecordIDIndex (CatalogPerfMemo.swift) for the
+    /// staleness contract. Private — go through record(forID:).
     private let recordIndex = RecordIDIndex()
 
     /// Fast selected-record resolution for views. Replaces the
@@ -685,6 +686,11 @@ final class VideoScanModel: ObservableObject {
     /// here; the catalog view observes it, applies it to its own
     /// search field, and clears it. One-way, last-writer.
     @Published var archivistSearchRequest: String?
+
+    /// Exactly one selected Catalog row, published for Hallie's
+    /// `currentSelection` temporal reference. Zero or multiple selections
+    /// intentionally publish nil so factual chat cannot guess a referent.
+    @Published var hallieCurrentSelectionID: UUID?
 
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>

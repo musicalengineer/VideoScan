@@ -44,9 +44,12 @@ Load-bearing invariants (each has a pinning test — break one, and a test must 
    the composer may quote. No spec value can mint a field token. Pinned by
    `composedStringsTokenizeWithoutStructureLeaks` + `fieldSyntaxInValuesIsNeutralized`
    (round-trips through the real tokenizer).
-3. **Fail closed.** Unknown mediaKind → no filter (not a guess). Insane years → dropped.
-   Empty spec → literal substring search of the raw text. Brain unreachable/thrown →
-   same literal fallback, honest status in UI.
+3. **Fail closed.** The production translator rejects unknown wire fields,
+   enum values, types, and oversized lists independently of Ollama's schema;
+   unsafe values from other in-process callers are still dropped by the
+   normalizer as defense in depth. Insane years → dropped. Empty spec →
+   literal substring search of the raw text. Brain unreachable/thrown → same
+   literal fallback, honest status in UI.
 4. **Every applied query is visible and editable** — it lands in the catalog's real
    search field ("Interpreted as" transparency).
 

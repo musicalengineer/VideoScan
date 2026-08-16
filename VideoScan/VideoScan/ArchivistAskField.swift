@@ -1,6 +1,6 @@
 // ArchivistAskField.swift
-// Family Archivist P2 — the front door (docs/family-archivist-phase1.md).
-// A plain-English ask popover on the catalog toolbar: sentence → local
+// Quick Catalog Filter — the legacy Option-click utility on the catalog
+// toolbar. A plain-English filter popover: sentence → local
 // LLM translator (NLQueryTranslating brain, ollama/qwen by default) →
 // validated NLQuerySpec → the SAME composed infix grammar the catalog
 // search field already speaks. The composed query lands IN the search
@@ -51,6 +51,8 @@ struct ArchivistAskPopover: View {
         let question: String
         let composed: String
         let matchCount: Int
+        /// Honest routing/fallback note for this turn, when applicable.
+        let note: String?
         /// "Which ones?" options — (folder name, its match count),
         /// present when the result is broad enough to want narrowing.
         let refinements: [(term: String, count: Int)]
@@ -70,7 +72,7 @@ struct ArchivistAskPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Ask the catalog")
+            Text("Quick Catalog Filter")
                 .font(.headline)
 
             // The conversation so far — question, answer-with-count,
@@ -89,6 +91,11 @@ struct ArchivistAskPopover: View {
                                 Text(exchange.composed)
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
+                                if let note = exchange.note {
+                                    Text(note)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                                 if exchange.id == transcript.last?.id,
                                    !exchange.refinements.isEmpty {
                                     Text("Which ones?")
@@ -154,7 +161,7 @@ struct ArchivistAskPopover: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    Text("Your words become a search you can see and edit — nothing is invented.")
+                    Text("Creates a visible, editable catalog filter. For factual questions, use Hallie Mae chat.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 4)
@@ -209,6 +216,11 @@ struct ArchivistAskPopover: View {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isThinking else { return }
         errorText = nil
+        if NLQueryInputPolicy.isStructuredInfix(text) {
+            deliver(question: text, composed: text,
+                    note: "Used the catalog query exactly as written.")
+            return
+        }
         isThinking = true
         // Ordered fleet — see OllamaEndpoints / OllamaFailoverTranslator.
         var template = OllamaQueryTranslator()
@@ -227,12 +239,16 @@ struct ArchivistAskPopover: View {
                 let composed = NLQueryComposer.infixString(
                     for: NLQueryNormalizer.normalize(spec))
                 guard !composed.isEmpty else {
-                    errorText = "I couldn't find anything searchable in that — try naming a person, a year, or a place."
+                    deliver(
+                        question: text, composed: text,
+                        note: "I couldn't derive a structured filter, so I searched your words literally.")
                     return
                 }
                 deliver(question: text, composed: composed)
             } catch {
-                errorText = error.localizedDescription
+                deliver(
+                    question: text, composed: text,
+                    note: "The language brain was unavailable (\(error.localizedDescription)), so I searched your words literally.")
             }
         }
     }
@@ -248,13 +264,15 @@ struct ArchivistAskPopover: View {
     /// Shared tail: count matches with the SAME index the table filters
     /// with, mine the counter-question options, append the transcript
     /// turn, and apply the search behind the popover.
-    private func deliver(question asked: String, composed: String) {
+    private func deliver(question asked: String, composed: String,
+                         note: String? = nil) {
         let matches = model.searchIndex.filter(records: model.records,
                                                query: composed)
         transcript.append(Exchange(
             question: asked,
             composed: composed,
             matchCount: matches.count,
+            note: note,
             refinements: Self.refinements(for: matches)))
         searchText = composed
         question = ""

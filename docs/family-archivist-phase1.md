@@ -19,7 +19,14 @@ catalog search) from 2 intents to the six validated query shapes:
 | graph | "who is Ellen?" | POIProfile fields + family graph |
 | cross | "where Dan opens the red bike" | transcript/caption search |
 
-## Architecture (knowledge-in-data; model is the voice)
+## Architecture (knowledge-in-data; model is the translator)
+
+**Decision — 2026-08-14, Rick:** factual prose is composed
+deterministically in Swift. The LLM translates the user's words into a
+strict QueryAST only; it never sees retrieved family evidence and never
+phrases a factual answer. This resolves the earlier draft conflict in favor
+of the original anti-hallucination contract in
+`docs/family-archivist-design.md`.
 
 ```
 chat pane ──► local LLM (qwen via ollama, existing translator path)
@@ -33,15 +40,16 @@ chat pane ──► local LLM (qwen via ollama, existing translator path)
         EvidenceSet with PROVENANCE LABELS
         (human tag > machine tier(score) > transcript mention > caption)
                  ▼
-        local LLM composes the ANSWER CONTRACT:
+        deterministic Swift composes the ANSWER CONTRACT:
         prose + playable clip citations + basis line
         "I don't have evidence for that" is a first-class answer.
 ```
 
-Rules (from #261/#263): the LLM never asserts a family fact it did not
-retrieve; every answer carries citations; human tags are authoritative;
-machine scores appear only with their tier+score label; no-evidence
-questions must decline.
+Rules (from #261/#263 and Rick's 2026-08-14 decision): the LLM never
+receives retrieved evidence or asserts a family fact; every factual answer
+is a deterministic function of a validated QueryAST and cited EvidenceSet;
+human tags are authoritative; machine scores appear only with their
+tier+score label; no-evidence questions must decline.
 
 ## The model question (Rick's qwen-ricks-family-32b)
 
@@ -63,9 +71,30 @@ polish. No family-facts fine-tune before the graph exists.
    "Tim vs Timmy" asks, doesn't assume; both exist as separate POIs).
 3. **Executors** for presence + temporal + aggregate (graph/event/cross
    land in Phase 1.5 once codex's acceptance criteria are in).
-4. **Answer composer** honoring the answer contract.
+4. **Deterministic Swift answer composer** honoring the answer contract;
+   no LLM factual-prose pass.
 5. **Gold harness hook** — codex's 25 Rick-authored gold questions run
    as the acceptance gate; "Successful Queries" becomes the metric.
+
+## Headless access and biography portraits (2026-08-14)
+
+`scripts/hallie` starts an interactive, read-only Hallie Mae shell from a
+built VideoScan executable. The `--hallie` route exits before the SwiftUI app
+entry, decodes the catalog without constructing `CatalogStore`, uses QueryAST
+v2, and opens media only after an explicit shell command. `--once` supports
+non-interactive use. Its exit status is 0 only for a factual answer (2 =
+catalog unavailable, 3 = no evidence/source, 4 = unsupported QueryAST shape,
+5 = translation failure), and the responder is labeled as the interpreter,
+not the factual answerer. Event and cross-evidence shapes decline until they have
+deterministic executors; they are never coerced into a broader search.
+
+Biography answers may attach the uniquely matched POI cover photo. The photo
+is presentation, not family-fact evidence: its path or bytes are never sent to
+the translator, and missing, ambiguous, non-image, traversal, or symlink cover
+references are omitted. The app renders the portrait inline; the shell prints
+its local path and requires `:open-photo` or `:reveal-photo` before invoking
+AppKit. App rendering uses a bounded ImageIO thumbnail decoded off-main rather
+than loading a full-resolution phone or scan image on the main actor.
 
 ## Non-goals (Phase 1)
 

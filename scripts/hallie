@@ -1,0 +1,27 @@
+#!/bin/zsh
+set -eu
+
+script_dir=${0:A:h}
+repo_dir=${script_dir:h}
+
+if [[ -n ${VIDEOSCAN_APP_BIN:-} && -x ${VIDEOSCAN_APP_BIN} ]]; then
+  exec "${VIDEOSCAN_APP_BIN}" --hallie "$@"
+fi
+
+candidates=(
+  "${repo_dir}/VideoScan/build/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+  ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan(Nom)
+  "${repo_dir}/VideoScan/build/Release/VideoScan.app/Contents/MacOS/VideoScan"
+  ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/Release/VideoScan.app/Contents/MacOS/VideoScan(Nom)
+  "/Applications/VideoScan.app/Contents/MacOS/VideoScan"
+)
+
+for candidate in "${candidates[@]}"; do
+  if [[ -x ${candidate} ]]; then
+    exec "${candidate}" --hallie "$@"
+  fi
+done
+
+print -u2 "hallie: no built VideoScan executable found"
+print -u2 "Build VideoScan once, or set VIDEOSCAN_APP_BIN to VideoScan.app/Contents/MacOS/VideoScan."
+exit 127

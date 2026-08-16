@@ -112,6 +112,34 @@ struct CatalogPerfMemoTests {
         #expect(index.record(forID: UUID(), in: records) == nil)
     }
 
+    @MainActor
+    @Test("Model invalidates ID index for same-count replacement retaining UUID")
+    func modelInvalidatesIndexForSameIDReplacement() {
+        let sharedID = UUID()
+        let old = VideoRecord(id: sharedID)
+        old.fullPath = "/isolated/old/path.mov"
+        old.filename = "path.mov"
+        old.dateCreatedRaw = Date(timeIntervalSince1970: 1_000)
+
+        let replacement = VideoRecord(id: sharedID)
+        replacement.fullPath = "/isolated/new/path.mov"
+        replacement.filename = "path.mov"
+        replacement.dateCreatedRaw = Date(timeIntervalSince1970: 2_000)
+
+        let model = VideoScanModel()
+        model.records = [old]
+        #expect(model.record(forID: sharedID) === old)
+
+        // A rescan can preserve record identity while replacing every class
+        // instance and its path/date evidence at the exact same count.
+        model.records = [replacement]
+        let found = model.record(forID: sharedID)
+        #expect(found === replacement)
+        #expect(found !== old)
+        #expect(found?.fullPath == "/isolated/new/path.mov")
+        #expect(found?.dateCreatedRaw == Date(timeIntervalSince1970: 2_000))
+    }
+
     // MARK: - CatalogStreamTypeCounts
 
     @Test("Single-pass counts match the per-type filters they replaced")

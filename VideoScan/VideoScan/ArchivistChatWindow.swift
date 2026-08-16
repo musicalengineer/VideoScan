@@ -3,22 +3,12 @@
 // search window which floats on top which carries a conversation…
 // some kind of back & forth from an agent would be VERY cool").
 //
-// A floating chat over the SAME honest pipeline the sparkle popover
-// used: sentence → local LLM translator → validated spec → the
-// catalog's infix search grammar — every answer prints the exact query
-// it ran, and every suggestion chip is MINED from real catalog data
-// (folder names, known family members), never generated. The agent's
-// "back & forth" today:
-//   - greetings + guidance
-//   - person resolution: unknown names answered honestly ("I don't
-//     know anyone called…"), shared nicknames counter-asked ("Tim or
-//     Timmy?") with one-tap corrections (PersonResolver — never guess)
-//   - count questions ANSWERED ("214 videos") with a "Show them" chip
-//     instead of silently filtering
-//   - broad matches counter-asked ("Which ones? CapeCod (14) ·
-//     Montana (5)") with instant narrowing
-//   - filters applied live to the catalog behind the window via
-//     VideoScanModel.archivistSearchRequest
+// Normal factual turns use the same honest QueryAST-v2 pipeline as the
+// headless shell: exact question → Ollama translator → validated AST →
+// HallieTurnExecutor. Translation failures fail closed. Answers carry at
+// most 25 explicitly-labeled evidence samples with Play/Reveal actions.
+// Shared-name ambiguity continues by stable profile/GEDCOM ID without a
+// second translation, and "this clip" means exactly one Catalog selection.
 //
 // The catalog stays the display surface; this window is the voice.
 
@@ -26,6 +16,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - Messages
+
+enum ArchivistFamilyFactKind: Sendable {
+    case biography
+    case birth
+    case death
+}
 
 struct ArchivistMessage: Identifiable {
     enum Role { case user, assistant }
@@ -36,9 +32,26 @@ struct ArchivistMessage: Identifiable {
             case applyQuery(String)
             /// Send this text through the full ask pipeline (used for
             /// person-disambiguation corrections).
-            case askText(String)
+            case askText(String, playAfterAnswer: Bool)
             /// Play this specific record (the "▶︎ Play …" offer).
             case playRecord(UUID)
+            /// Continue a GEDCOM ambiguity choice by stable person ID.
+            case familyFact(personID: String, kind: ArchivistFamilyFactKind)
+            /// Continue a kinship ambiguity choice by stable GEDCOM ID.
+            case kinship(personID: String,
+                         relation: GedcomFamilyGraph.Relation,
+                         relationWord: String,
+                         question: String,
+                         matchedPhrase: String,
+                         playAfterAnswer: Bool)
+            /// Continue a translator person-grouping clarification without
+            /// re-entering the same ambiguous resolver path.
+            case resolvedPeople(question: String,
+                                spec: NLQuerySpec,
+                                canonicalNames: [String],
+                                playAfterAnswer: Bool)
+            /// Continue QueryAST-v2 with the executor-issued stable identity.
+            case hallieIdentityChoice(HallieTurnExecutor.CandidateID)
         }
         let id = UUID()
         let label: String
@@ -50,7 +63,71 @@ struct ArchivistMessage: Identifiable {
     let text: String
     /// Monospaced sub-line showing the exact query (assistant only).
     var queryLine: String?
+    /// Human-readable provenance for family facts and honest declines.
+    var basisLine: String?
+    /// Optional verified POI cover photo attached to a biography. This is
+    /// presentation only; it is never part of the LLM prompt or fact basis.
+    var biographyPhoto: ArchivistBiographyPhoto? = nil
+    /// Bounded evidence samples returned by the shared factual executor.
+    /// These are explicitly samples, never represented as every match.
+    var citations: [HallieTurnExecutor.Citation] = []
     var chips: [Chip] = []
+
+    /// Production seam for person clarification.  These must be resolved
+    /// continuations, never `.askText`, because the displayed name can itself
+    /// be a reciprocal alias (Tim/Timmy) and would re-enter the same loop.
+    static func personClarificationChips(
+        for pending: ArchivistPersonClarification
+    ) -> [Chip] {
+        pending.candidates.map { candidate in
+            Chip(
+                label: candidate,
+                action: .resolvedPeople(
+                    question: pending.question,
+                    spec: pending.spec,
+                    canonicalNames: [candidate],
+                    playAfterAnswer: pending.playAfterAnswer))
+        }
+    }
+}
+
+/// Downsamples a biography portrait off-main when its bubble appears. A large
+/// phone/scan original must never be decoded at full resolution on MainActor.
+private struct ArchivistBiographyPhotoView: View {
+    let photo: ArchivistBiographyPhoto
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .scaleEffect(photo.cropScale)
+                    .offset(x: photo.cropOffsetX * 40,
+                            y: photo.cropOffsetY * 40)
+            } else {
+                Color.secondary.opacity(0.08)
+                    .overlay { ProgressView().controlSize(.small) }
+            }
+        }
+        .frame(width: 220, height: 150)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .accessibilityLabel("Photo of \(photo.profileCanonicalName)")
+        .task(id: photo.fileURL) {
+            guard image == nil else { return }
+            let worker = Task.detached(priority: .userInitiated) {
+                photo.makeThumbnail()
+            }
+            let thumbnail = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled, let thumbnail else { return }
+            image = NSImage(cgImage: thumbnail, size: .zero)
+        }
+    }
 }
 
 // MARK: - Window
@@ -69,6 +146,10 @@ struct ArchivistChatWindow: View {
     @State private var messages: [ArchivistMessage] = []
     @State private var input = ""
     @State private var isThinking = false
+    @State private var activeRequestID: UUID?
+    @State private var activeRequestTask: Task<Void, Never>?
+    @State private var pendingHallieClarification:
+        HallieAppTurnCoordinator.PendingClarification?
     @FocusState private var inputFocused: Bool
 
     /// The last filter's matches — "play the first one" needs a
@@ -77,6 +158,10 @@ struct ArchivistChatWindow: View {
     /// Set by "play <something>": after the filter answer lands, the
     /// first match auto-plays.
     @State private var playAfterAnswer = false
+    /// A person question waiting for Rick's explicit choice.  Keeping the
+    /// original validated spec here lets a reply continue deterministically;
+    /// a context-free "yes" must never be sent back through the translator.
+    @State private var pendingPersonClarification: ArchivistPersonClarification?
     /// Lazily-loaded kinship graph from the user's exported GEDCOM
     /// (App Support/family-tree/originals). Double-optional: nil =
     /// not tried; .some(nil) = tried, unavailable.
@@ -174,6 +259,12 @@ struct ArchivistChatWindow: View {
                 archivistPhotoPath = first.path
             }
             if messages.isEmpty { greet() }
+        }
+        .onDisappear {
+            activeRequestID = nil
+            activeRequestTask?.cancel()
+            activeRequestTask = nil
+            isThinking = false
         }
     }
 
@@ -292,6 +383,18 @@ struct ArchivistChatWindow: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+                if let basis = message.basisLine {
+                    Text(basis)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if let photo = message.biographyPhoto {
+                    ArchivistBiographyPhotoView(photo: photo)
+                }
+                if !message.citations.isEmpty {
+                    citationEvidence(message.citations)
+                }
                 if !message.chips.isEmpty {
                     FlowChips(chips: message.chips) { chip in
                         handle(chip: chip)
@@ -309,6 +412,99 @@ struct ArchivistChatWindow: View {
         }
     }
 
+    private func citationEvidence(
+        _ citations: [HallieTurnExecutor.Citation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Evidence samples (up to 25; not all matches)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(citations.indices, id: \.self) { index in
+                let citation = citations[index]
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(index + 1). \(citation.filename)"
+                         + citationTimestamp(citation))
+                        .font(.caption.weight(.medium))
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                    Text(citation.bases.map(citationBasis).joined(separator: "; "))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Button("Play") { playCitation(citation) }
+                            .font(.caption)
+                        Button("Reveal") { revealCitation(citation) }
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if index != citations.indices.last { Divider() }
+            }
+        }
+        .padding(.top, 3)
+    }
+
+    private func citationTimestamp(
+        _ citation: HallieTurnExecutor.Citation
+    ) -> String {
+        citation.playbackSeconds.map {
+            String(format: " @ %.1fs", $0)
+        } ?? ""
+    }
+
+    private func citationBasis(_ basis: ArchivistEvidenceBasis) -> String {
+        switch basis {
+        case .humanPersonTag(let query, let tag, _):
+            return "confirmed person tag \(tag) proves \(query)"
+        case .catalogField(let field, let query, let value):
+            return "\(field) contains \(query) (\(value))"
+        case .inferredDate(let year, let confidence):
+            let confidenceText = confidence.map {
+                String(format: "%.2f", $0)
+            } ?? "unrecorded"
+            return "inferred year \(year), confidence \(confidenceText)"
+        case .fileDate(let field, let year, _):
+            return "\(field) year \(year)"
+        case .pathYear(let year, _):
+            return "path year \(year)"
+        case .mediaKind(let requested, let stream):
+            return "media \(requested) (\(stream))"
+        case .transcriptMention(let term, let model):
+            return "transcript mentions \(term) (\(model ?? "model unrecorded"))"
+        case .caption(let term, let time, _, let model):
+            return "caption mentions \(term) at "
+                + String(format: "%.1fs", time)
+                + " (\(model ?? "model unrecorded"))"
+        }
+    }
+
+    private func playCitation(_ citation: HallieTurnExecutor.Citation) {
+        guard let record = model.record(forID: citation.recordID) else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "That evidence item is no longer in the catalog."))
+            return
+        }
+        play(record)
+    }
+
+    private func revealCitation(_ citation: HallieTurnExecutor.Citation) {
+        guard VolumeReachability.isReachable(path: citation.fullPath) else {
+            let volume = MediaVolumeGatePolicy.volumeRoot(
+                forPath: citation.fullPath)
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "“\(citation.filename)” is on an offline drive "
+                    + "(\(volume)) — mount it and I'll reveal it."))
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([
+            URL(fileURLWithPath: citation.fullPath)
+        ])
+    }
+
     // MARK: Conversation
 
     private func greet() {
@@ -317,7 +513,9 @@ struct ArchivistChatWindow: View {
             text: "Hi Rick — I'm the Family Archivist. Ask me about anyone "
                 + "or anything in the catalog, and I'll show you what we have.",
             chips: Self.starterQuestions.map {
-                ArchivistMessage.Chip(label: $0, action: .askText($0))
+                ArchivistMessage.Chip(
+                    label: $0,
+                    action: .askText($0, playAfterAnswer: false))
             }))
     }
 
@@ -329,51 +527,218 @@ struct ArchivistChatWindow: View {
     }
 
     private func handle(chip: ArchivistMessage.Chip) {
+        // One request owns the conversation state until it completes. Chips
+        // remain visible while the local model works, but cannot start a
+        // second translation that steals play intent or commits stale output.
+        guard !isThinking else { return }
+        pendingPersonClarification = nil
         switch chip.action {
-        case .askText(let text):
+        case .askText(let text, let wantsPlayAfter):
+            playAfterAnswer = wantsPlayAfter
             ask(text)
         case .applyQuery(let query):
             apply(query: query, announcedAs: chip.label)
         case .playRecord(let id):
             if let rec = model.record(forID: id) { play(rec) }
+        case .familyFact(let personID, let kind):
+            answerFamilyFact(personID: personID, kind: kind)
+        case .kinship(let personID, let relation, let relationWord,
+                      let question, let matchedPhrase, let wantsPlayAfter):
+            answerKinship(personID: personID, relation: relation,
+                          relationWord: relationWord, question: question,
+                          matchedPhrase: matchedPhrase,
+                          playAfterAnswer: wantsPlayAfter)
+        case .resolvedPeople(let question, let spec, let canonicalNames,
+                             let playAfterAnswer):
+            respond(to: question, spec: spec,
+                    resolvedPeople: canonicalNames,
+                    forcedPlayAfter: playAfterAnswer)
+        case .hallieIdentityChoice(let candidateID):
+            guard let pending = pendingHallieClarification,
+                  let candidate = pending.clarification.candidates.first(
+                    where: { $0.id == candidateID }) else { return }
+            messages.append(ArchivistMessage(
+                role: .user, text: candidate.label))
+            continueHallie(pending: pending, selecting: candidateID)
         }
     }
 
     private func ask(_ text: String) {
-        messages.append(ArchivistMessage(role: .user, text: text))
-        // Local pre-passes — no LLM round-trip needed for either.
-        if handlePlayCommand(text) { return }
-        if handleGeneralQuestion(text) { return }
-        if handleKinship(text) { return }
-        isThinking = true
-        // Ordered fleet, not one host: the M5 is a laptop and the
-        // Archivist used to hang whenever it slept (Rick 2026-08-12).
-        // `resolved` migrates a legacy single-host preference to the
-        // front of the list — see OllamaEndpoints.
-        var template = OllamaQueryTranslator()
-        template.model = ollamaModel
-        let translator = OllamaFailoverTranslator(
-            hosts: OllamaEndpoints.resolved(from: .standard),
-            template: template,
-            onResponder: { host in
-                Task { @MainActor in lastResponder = host }
+        guard !isThinking else { return }
+        if let pending = pendingHallieClarification {
+            let folded = PersonResolver.normalize(text)
+            if let number = Int(folded),
+               pending.clarification.candidates.indices.contains(number - 1) {
+                let candidate = pending.clarification.candidates[number - 1]
+                messages.append(ArchivistMessage(role: .user, text: text))
+                continueHallie(pending: pending, selecting: candidate.id)
+                return
             }
-        )
-        Task { @MainActor in
-            defer { isThinking = false }
-            do {
-                let spec = try await translator.translate(text)
-                respond(to: text, spec: spec)
-            } catch {
-                playAfterAnswer = false   // a failed 'play X' must not arm a later answer
+            let exactCandidates = pending.clarification.candidates.filter {
+                PersonResolver.normalize($0.label) == folded
+                    || PersonResolver.normalize($0.canonicalName) == folded
+            }
+            if exactCandidates.count == 1, let candidate = exactCandidates.first {
+                messages.append(ArchivistMessage(role: .user, text: text))
+                continueHallie(pending: pending, selecting: candidate.id)
+                return
+            }
+            if ["yes", "y", "yeah", "yep", "correct", "right",
+                "that's right", "thats right"]
+                .contains(folded) {
+                messages.append(ArchivistMessage(role: .user, text: text))
+                appendHallieClarification(
+                    pending,
+                    preface: "I need the name so I don't guess. ")
+                return
+            }
+            if ["cancel", "never mind", "nevermind", "no"]
+                .contains(folded) {
+                pendingHallieClarification = nil
+                messages.append(ArchivistMessage(role: .user, text: text))
                 messages.append(ArchivistMessage(
                     role: .assistant,
-                    text: "I couldn't reach my language brain (\(error.localizedDescription)). "
-                        + "I can still search your words literally:",
-                    chips: [ArchivistMessage.Chip(label: "Search “\(text)” literally",
-                                                  action: .applyQuery(text))]))
+                    text: "Okay — I won't guess which person you meant."))
+                return
             }
-            inputFocused = true
+            // A non-matching reply is a new question, not a candidate guess.
+            pendingHallieClarification = nil
+        }
+        messages.append(ArchivistMessage(role: .user, text: text))
+        // Explicit playback commands remain UI actions. Every factual
+        // question below goes through QueryAST-v2; the old v1 local/search
+        // paths must not intercept or broaden it.
+        if handlePlayCommand(text) { return }
+
+        // Capture the sole Catalog referent and its best date BEFORE any
+        // translation await. A later row change cannot alter this turn.
+        let selectedID = model.hallieCurrentSelectionID
+        let selectedDate = selectedID
+            .flatMap { model.record(forID: $0) }
+            .flatMap { ArchivistTemporalSelectionDateSnapshot.capture(record: $0) }
+        let referent = HallieAppTurnCoordinator.CapturedReferent(
+            recordID: selectedID,
+            temporalDate: selectedDate)
+        let records = model.records
+        let wantsPlayAfter = playAfterAnswer
+        playAfterAnswer = false
+        let requestID = UUID()
+        activeRequestTask?.cancel()
+        activeRequestID = requestID
+        isThinking = true
+        let hosts = OllamaEndpoints.resolved(from: .standard)
+        let modelName = ollamaModel
+        activeRequestTask = Task { @MainActor in
+            defer {
+                if activeRequestID == requestID {
+                    activeRequestID = nil
+                    activeRequestTask = nil
+                    isThinking = false
+                    inputFocused = true
+                }
+            }
+            do {
+                let response = try await HallieAppTurnCoordinator.execute(
+                    question: text,
+                    records: records,
+                    referent: referent,
+                    hosts: hosts,
+                    modelName: modelName,
+                    playAfterAnswer: wantsPlayAfter)
+                guard !Task.isCancelled,
+                      activeRequestID == requestID else { return }
+                commitHallie(response)
+            } catch {
+                guard !Task.isCancelled,
+                      activeRequestID == requestID else { return }
+                lastMatches = []
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I couldn't safely interpret that question: "
+                        + error.localizedDescription,
+                    basisLine: "No catalog query or media action was performed."))
+            }
+        }
+    }
+
+    private func appendHallieClarification(
+        _ pending: HallieAppTurnCoordinator.PendingClarification,
+        preface: String = ""
+    ) {
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: preface + "Which person do you mean?",
+            basisLine: "Basis: the name matches more than one stable identity.",
+            chips: pending.clarification.candidates.map {
+                ArchivistMessage.Chip(
+                    label: $0.label,
+                    action: .hallieIdentityChoice($0.id))
+            }))
+    }
+
+    private func continueHallie(
+        pending: HallieAppTurnCoordinator.PendingClarification,
+        selecting candidateID: HallieTurnExecutor.CandidateID
+    ) {
+        guard !isThinking else { return }
+        pendingHallieClarification = nil
+        let requestID = UUID()
+        activeRequestTask?.cancel()
+        activeRequestID = requestID
+        isThinking = true
+        activeRequestTask = Task { @MainActor in
+            defer {
+                if activeRequestID == requestID {
+                    activeRequestID = nil
+                    activeRequestTask = nil
+                    isThinking = false
+                    inputFocused = true
+                }
+            }
+            do {
+                let response = try await HallieAppTurnCoordinator.continue(
+                    pending: pending,
+                    selecting: candidateID)
+                guard !Task.isCancelled,
+                      activeRequestID == requestID else { return }
+                commitHallie(response)
+            } catch {
+                guard !Task.isCancelled,
+                      activeRequestID == requestID else { return }
+                lastMatches = []
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I couldn't continue that identity choice: "
+                        + error.localizedDescription,
+                    basisLine: "No catalog query or media action was performed."))
+            }
+        }
+    }
+
+    private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
+        lastResponder = response.responderHost
+        pendingHallieClarification = response.pendingClarification
+        let citations = response.citations
+        // Bare "play first" may refer only to evidence actually shown in
+        // this answer, never an unseen broad result set.
+        lastMatches = citations.compactMap {
+            model.record(forID: $0.recordID)
+        }
+        let clarificationChips = response.result.clarification?.candidates.map {
+            ArchivistMessage.Chip(
+                label: $0.label,
+                action: .hallieIdentityChoice($0.id))
+        } ?? []
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: response.result.prose,
+            queryLine: response.result.queryDescription,
+            basisLine: response.result.basisLine,
+            biographyPhoto: response.biographyPhoto,
+            citations: citations,
+            chips: clarificationChips))
+        if response.playAfterAnswer, !lastMatches.isEmpty {
+            play(bestOf: lastMatches)
         }
     }
 
@@ -497,11 +862,12 @@ struct ArchivistChatWindow: View {
     /// birth/death dates, and the family-ancestry view. Grounded in
     /// the GEDCOM; unknowns answered honestly.
     private func handleGeneralQuestion(_ text: String) -> Bool {
-        let lower = text.lowercased()
-
-        // "family ancestry" / "family tree" → open the rendered tree.
-        if lower.contains("family tree") || lower.contains("ancestry")
-            || lower.contains("family history") {
+        guard let question = ArchivistQuestionParser.general(text) else {
+            return false
+        }
+        switch question {
+        case .ancestry:
+            // "family ancestry" / "family tree" → open the rendered tree.
             let report = FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("VideoScan/family-tree/reports/breen-family-tree.html")
@@ -525,121 +891,136 @@ struct ArchivistChatWindow: View {
                         + "GEDCOM into the archive and I'll learn it."))
             }
             return true
-        }
-
-        // "when was X born" / "when did X die"
-        if let match = text.firstMatch(
-            of: /when (?:was|did)\s+(.+?)\s+(born|die|died)/.ignoresCase()) {
-            return answerDate(personText: String(match.1),
-                              wantsBirth: String(match.2).lowercased() == "born",
+        case .lifeDate(let personText, let birth):
+            return answerDate(personText: personText,
+                              wantsBirth: birth,
                               original: text)
-        }
-
-        // "who is X" / "who was X" / "tell me about X"
-        if let match = text.firstMatch(
-            of: /(?:who is|who was|tell me about)\s+([A-Za-z][A-Za-z .']+)/.ignoresCase()) {
-            return answerWhoIs(personText: String(match.1)
-                .trimmingCharacters(in: CharacterSet(charactersIn: " ?.!")),
+        case .biography(let personText):
+            return answerWhoIs(personText: personText,
                 original: text)
         }
-        return false
     }
 
     private func answerDate(personText: String, wantsBirth: Bool,
                             original: String) -> Bool {
-        guard let graph = loadFamilyGraph() else { return false }
-        let candidates = graph.people(matching: personText)
-        switch candidates.count {
-        case 0:
+        guard let graph = loadFamilyGraph() else {
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: "I don't find “\(personText)” in the family tree — try a fuller name."))
-        case 1:
-            let person = candidates[0]
-            let date = wantsBirth ? person.birthDate : person.deathDate
-            if let date {
-                // Rick 2026-08-07: the departed are spoken of gently.
-                let pronoun = person.sex == "M" ? "he"
-                    : person.sex == "F" ? "she" : "they"
-                let has = pronoun == "they" ? "have" : "has"
-                messages.append(ArchivistMessage(
-                    role: .assistant,
-                    text: wantsBirth
-                        ? "\(person.name) was born \(date)."
-                        : "\(person.name) is no longer with us — \(pronoun) \(has) "
-                            + "been resting in peace since \(date)."))
-            } else {
-                messages.append(ArchivistMessage(
-                    role: .assistant,
-                    text: "The family tree doesn't record "
-                        + (wantsBirth ? "a birth date" : "a death date")
-                        + " for \(person.name)."))
-            }
-        default:
-            messages.append(ArchivistMessage(
-                role: .assistant,
-                text: "Which \(personText) do you mean?",
-                chips: candidates.prefix(4).map { candidate in
-                    ArchivistMessage.Chip(
-                        label: candidate.name,
-                        action: .askText(original.replacingOccurrences(
-                            of: personText, with: candidate.name,
-                            options: .caseInsensitive)))
-                }))
+                text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
+                basisLine: "Checked: no imported family tree is available."))
+            return true
         }
+        let resolution = FamilyTreeIdentityResolver(
+            graph: graph, profiles: POIProfile.listAll()).resolve(personText)
+        guard case .people(let candidates) = resolution else {
+            appendProfileAmbiguity(resolution, typedName: personText,
+                                   original: original)
+            return true
+        }
+        let answer = ArchivistBiographyPolicy.lifeDate(
+            for: personText, birth: wantsBirth,
+            candidates: candidates, in: graph)
+        appendFamilyAnswer(answer, kind: wantsBirth ? .birth : .death)
         return true
     }
 
     private func answerWhoIs(personText: String, original: String) -> Bool {
-        guard let graph = loadFamilyGraph() else { return false }
-        let candidates = graph.people(matching: personText)
-        switch candidates.count {
-        case 0:
-            return false   // not a tree person — let the LLM try it as a search
-        case 1:
-            let person = candidates[0]
-            var facts: [String] = []
-            if let born = person.birthDate { facts.append("born \(born)") }
-            if let died = person.deathDate {
-                facts.append("resting in peace since \(died)")
-            }
-            let parents = graph.relatives(.parents, of: person).map(\.name)
-            if !parents.isEmpty {
-                facts.append("child of \(parents.joined(separator: " and "))")
-            }
-            let spouses = graph.relatives(.spouse, of: person).map(\.name)
-            if !spouses.isEmpty {
-                facts.append("married to \(spouses.joined(separator: ", "))")
-            }
-            let kids = graph.relatives(.children, of: person).map(\.name)
-            if !kids.isEmpty {
-                facts.append("parent of \(kids.joined(separator: ", "))")
-            }
-            let sentence = facts.isEmpty
-                ? "\(person.name) is in the family tree, but it records no further details."
-                : "\(person.name) — \(facts.joined(separator: "; "))."
-            // Offer the catalog angle via the given name.
-            var chips: [ArchivistMessage.Chip] = []
-            if let given = person.name.split(separator: " ").first {
-                chips.append(ArchivistMessage.Chip(
-                    label: "Videos of \(given)",
-                    action: .applyQuery("people:\(given.lowercased())")))
-            }
-            messages.append(ArchivistMessage(role: .assistant, text: sentence,
-                                             chips: chips))
-        default:
+        guard let graph = loadFamilyGraph() else {
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: "Which \(personText) do you mean?",
-                chips: candidates.prefix(4).map { candidate in
-                    ArchivistMessage.Chip(
-                        label: candidate.name,
-                        action: .askText(original.replacingOccurrences(
-                            of: personText, with: candidate.name,
-                            options: .caseInsensitive)))
-                }))
+                text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
+                basisLine: "Checked: no imported family tree is available."))
+            return true
         }
+        let resolution = FamilyTreeIdentityResolver(
+            graph: graph, profiles: POIProfile.listAll()).resolve(personText)
+        guard case .people(let candidates) = resolution else {
+            appendProfileAmbiguity(resolution, typedName: personText,
+                                   original: original)
+            return true
+        }
+        let answer = ArchivistBiographyPolicy.biography(
+            for: personText, candidates: candidates, in: graph)
+        appendFamilyAnswer(answer, kind: .biography)
         return true
+    }
+
+    private func appendProfileAmbiguity(
+        _ resolution: FamilyTreeIdentityResolution,
+        typedName: String,
+        original: String,
+        playAfterAnswer: Bool = false
+    ) {
+        guard case .profileAmbiguous(let candidates) = resolution else {
+            return
+        }
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: "Which \(typedName) do you mean?",
+            basisLine: "Checked: People profiles and imported family tree (GEDCOM).",
+            chips: candidates.prefix(4).map { candidate in
+                ArchivistMessage.Chip(
+                    label: candidate,
+                    action: .askText(original.replacingOccurrences(
+                        of: typedName, with: candidate,
+                        options: .caseInsensitive),
+                        playAfterAnswer: playAfterAnswer))
+            }))
+    }
+
+    private func answerFamilyFact(personID: String,
+                                  kind: ArchivistFamilyFactKind) {
+        guard let graph = loadFamilyGraph() else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
+                basisLine: "Checked: no imported family tree is available."))
+            return
+        }
+        let answer: ArchivistBiographyAnswer
+        switch kind {
+        case .biography:
+            answer = ArchivistBiographyPolicy.biography(
+                personID: personID, in: graph)
+        case .birth:
+            answer = ArchivistBiographyPolicy.lifeDate(
+                personID: personID, birth: true, in: graph)
+        case .death:
+            answer = ArchivistBiographyPolicy.lifeDate(
+                personID: personID, birth: false, in: graph)
+        }
+        appendFamilyAnswer(answer, kind: kind)
+    }
+
+    private func appendFamilyAnswer(_ answer: ArchivistBiographyAnswer,
+                                    kind: ArchivistFamilyFactKind) {
+        var chips = answer.candidates.prefix(4).map { candidate in
+            ArchivistMessage.Chip(
+                label: candidate.label,
+                action: .familyFact(personID: candidate.id, kind: kind))
+        }
+        if case .biography = kind,
+           let canonical = answer.catalogPersonName,
+           let given = canonical.split(separator: " ").first {
+            let personQuery = NLQueryComposer.infixString(
+                for: NLQueryNormalizer.normalize(
+                    NLQuerySpec(people: [canonical])))
+            chips.append(ArchivistMessage.Chip(
+                label: "Videos of \(given)",
+                action: .applyQuery(personQuery)))
+        }
+        let photo: ArchivistBiographyPhoto?
+        if case .biography = kind, let canonical = answer.catalogPersonName {
+            photo = ArchivistBiographyPhoto.resolve(
+                personName: canonical, profiles: POIProfile.listAll())
+        } else {
+            photo = nil
+        }
+        messages.append(ArchivistMessage(role: .assistant,
+                                         text: answer.text,
+                                         basisLine: answer.basis,
+                                         biographyPhoto: photo,
+                                         chips: chips))
     }
 
     // MARK: Kinship (Rick 2026-08-07: "show videos of rick's father")
@@ -648,21 +1029,57 @@ struct ArchivistChatWindow: View {
     /// announces the lineage fact, then re-asks with the real name.
     /// Ambiguous possessors counter-ask; unknown facts answer honestly.
     private func handleKinship(_ text: String) -> Bool {
-        guard let graph = loadFamilyGraph() else { return false }
-        let pattern = /([A-Za-z][A-Za-z .]*?)['’]s\s+([A-Za-z]+)/
-        guard let match = text.firstMatch(of: pattern),
-              let relation = GedcomFamilyGraph.relation(
-                fromWord: String(match.2)) else { return false }
-        let possessorTyped = String(match.1)
-            .trimmingCharacters(in: .whitespaces)
-
-        let candidates = graph.people(matching: possessorTyped)
+        guard let question = ArchivistQuestionParser.kinship(text) else {
+            return false
+        }
+        // Local clarification must own the pending intent. Leaving it in
+        // view state lets an unrelated later question consume it; dropping
+        // it from a chip loses the user's original "play …" request.
+        let wantsPlayAfter = ArchivistPlayIntentPolicy.take(
+            from: &playAfterAnswer)
+        guard let graph = loadFamilyGraph() else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
+                basisLine: "Checked: no imported family tree is available."))
+            return true
+        }
+        let resolver = FamilyTreeIdentityResolver(
+            graph: graph, profiles: POIProfile.listAll())
+        var chosen = question.possessors.last!
+        var resolution = resolver.resolve(chosen.personText)
+        for candidate in question.possessors {
+            let candidateResolution = resolver.resolve(candidate.personText)
+            switch candidateResolution {
+            case .people(let people) where !people.isEmpty:
+                chosen = candidate
+                resolution = candidateResolution
+                break
+            case .profileAmbiguous:
+                chosen = candidate
+                resolution = candidateResolution
+                break
+            default:
+                continue
+            }
+            break
+        }
+        let possessorTyped = chosen.personText
+        let relationWord = question.relationWord
+        let matchedPhrase = chosen.matchedPhrase
+        guard case .people(let candidates) = resolution else {
+            appendProfileAmbiguity(resolution, typedName: possessorTyped,
+                                   original: text,
+                                   playAfterAnswer: wantsPlayAfter)
+            return true
+        }
         switch candidates.count {
         case 0:
             messages.append(ArchivistMessage(
                 role: .assistant,
                 text: "I don't find “\(possessorTyped)” in the family tree — "
-                    + "try a fuller name."))
+                    + "try a fuller name.",
+                basisLine: ArchivistBiographyPolicy.gedcomCheck))
             return true
         case 1:
             break
@@ -670,37 +1087,143 @@ struct ArchivistChatWindow: View {
             messages.append(ArchivistMessage(
                 role: .assistant,
                 text: "Which \(possessorTyped) do you mean?",
+                basisLine: ArchivistBiographyPolicy.gedcomCheck,
                 chips: candidates.prefix(4).map { candidate in
-                    ArchivistMessage.Chip(
-                        label: candidate.name,
-                        action: .askText(text.replacingOccurrences(
-                            of: possessorTyped, with: candidate.name,
-                            options: .caseInsensitive)))
+                    let choice = ArchivistBiographyPolicy
+                        .disambiguationCandidate(for: candidate)
+                    return ArchivistMessage.Chip(
+                        label: choice.label,
+                        action: .kinship(
+                            personID: choice.id,
+                            relation: question.relation,
+                            relationWord: relationWord,
+                            question: text,
+                            matchedPhrase: matchedPhrase,
+                            playAfterAnswer: wantsPlayAfter))
                 }))
             return true
         }
 
-        let possessor = candidates[0]
+        answerKinship(personID: candidates[0].id, relation: question.relation,
+                      relationWord: relationWord, question: text,
+                      matchedPhrase: matchedPhrase,
+                      playAfterAnswer: wantsPlayAfter)
+        return true
+    }
+
+    private func answerKinship(personID: String,
+                               relation: GedcomFamilyGraph.Relation,
+                               relationWord: String,
+                               question: String,
+                               matchedPhrase: String,
+                               playAfterAnswer wantsPlayAfter: Bool) {
+        guard let graph = loadFamilyGraph(),
+              let possessor = graph.people[personID] else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "That family-tree person is no longer available.",
+                basisLine: ArchivistBiographyPolicy.gedcomCheck))
+            return
+        }
         let relatives = graph.relatives(relation, of: possessor)
         guard !relatives.isEmpty else {
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: "The family tree doesn't record a \(match.2) for "
-                    + "\(possessor.name)."))
-            return true
+                text: "The family tree doesn't record a \(relationWord) for "
+                    + "\(possessor.name).",
+                basisLine: ArchivistBiographyPolicy.gedcomBasis))
+            return
         }
         let names = relatives.map(\.name)
-        messages.append(ArchivistMessage(
-            role: .assistant,
-            text: "\(possessor.name)'s \(match.2): \(names.joined(separator: ", ")) "
-                + "— searching the catalog…"))
-        // Re-ask with the resolved name(s) substituted for the phrase.
-        let phrase = "\(match.1)'s \(match.2)"
-        let rewritten = text.replacingOccurrences(
-            of: phrase, with: names.joined(separator: " and "),
-            options: .caseInsensitive)
-        ask(rewritten)
-        return true
+        let factText = "\(possessor.name)'s \(relationWord): "
+            + names.joined(separator: ", ")
+        let continuation = ArchivistQueryPlanner.kinshipContinuation(
+            for: question, matchedPhrase: matchedPhrase,
+            playAfterAnswer: wantsPlayAfter)
+        switch continuation {
+        case .factOnly:
+            messages.append(ArchivistMessage(
+                role: .assistant, text: factText + ".",
+                basisLine: ArchivistBiographyPolicy.gedcomBasis))
+            for relative in relatives {
+                appendFamilyAnswer(
+                    ArchivistBiographyPolicy.biography(
+                        personID: relative.id, in: graph),
+                    kind: .biography)
+            }
+        case .birthDate, .deathDate:
+            messages.append(ArchivistMessage(
+                role: .assistant, text: factText + ".",
+                basisLine: ArchivistBiographyPolicy.gedcomBasis))
+            let wantsBirth = continuation == .birthDate
+            for relative in relatives {
+                appendFamilyAnswer(
+                    ArchivistBiographyPolicy.lifeDate(
+                        personID: relative.id, birth: wantsBirth, in: graph),
+                    kind: wantsBirth ? .birth : .death)
+            }
+        case .catalogSearch:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: factText + " — interpreting the remaining catalog constraints…",
+                basisLine: ArchivistBiographyPolicy.gedcomBasis))
+            continueKinshipCatalogSearch(
+                question: question, resolvedNames: names,
+                relationWord: relationWord,
+                playAfterAnswer: wantsPlayAfter)
+        }
+    }
+
+    /// Translate only the user's original sentence, then inject the GEDCOM-
+    /// resolved identities after the model returns. Retrieved family evidence
+    /// never crosses the translator boundary.
+    private func continueKinshipCatalogSearch(
+        question: String,
+        resolvedNames: [String],
+        relationWord: String,
+        playAfterAnswer wantsPlayAfter: Bool
+    ) {
+        isThinking = true
+        var template = OllamaQueryTranslator()
+        template.model = ollamaModel
+        let translator = OllamaFailoverTranslator(
+            hosts: OllamaEndpoints.resolved(from: .standard),
+            template: template,
+            onResponder: { host in
+                Task { @MainActor in lastResponder = host }
+            })
+        Task { @MainActor in
+            defer {
+                isThinking = false
+                inputFocused = true
+            }
+            do {
+                let translated = try await translator.translate(question)
+                guard let spec = ArchivistQueryPlanner.kinshipCatalogSpec(
+                    translated: translated,
+                    resolvedNames: resolvedNames,
+                    relationWord: relationWord) else {
+                    messages.append(ArchivistMessage(
+                        role: .assistant,
+                        text: "That relationship resolves to too many name "
+                            + "parts for one safe catalog search. Ask about "
+                            + "one relative at a time so I don't truncate or guess.",
+                        basisLine: ArchivistBiographyPolicy.gedcomBasis))
+                    return
+                }
+                respond(to: question, spec: spec,
+                        resolvedPeople: resolvedNames,
+                        forcedPlayAfter: wantsPlayAfter)
+            } catch {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I resolved the family relationship, but I couldn't "
+                        + "safely interpret the remaining catalog constraints "
+                        + "(\(error.localizedDescription)). I didn't search or play "
+                        + "a broader result because that could be the wrong clip.",
+                    basisLine: ArchivistBiographyPolicy.gedcomBasis))
+            }
+        }
     }
 
     /// Load the newest .ged from App Support/family-tree/originals.
@@ -709,92 +1232,107 @@ struct ArchivistChatWindow: View {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory,
                                            in: .userDomainMask).first?
             .appendingPathComponent("VideoScan/family-tree/originals")
-        let gedcom = dir.flatMap {
-            try? FileManager.default.contentsOfDirectory(
-                at: $0, includingPropertiesForKeys: nil)
-        }?
-        .filter { $0.pathExtension.lowercased() == "ged" }
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .last
-        let graph = gedcom.flatMap { GedcomFamilyGraph(fileURL: $0) }
+        let graph = dir.flatMap {
+            FamilyGraphFileLoader(originalsDirectory: $0).loadNewest()
+        }
         familyGraph = .some(graph)
         return graph
     }
 
     /// The archivist's reply policy — resolution first, then intent.
-    private func respond(to question: String, spec: NLQuerySpec) {
+    private func respond(to question: String, spec: NLQuerySpec,
+                         resolvedPeople: [String]? = nil,
+                         forcedPlayAfter: Bool? = nil) {
         // Disarm the play-after flag FIRST (codex #300: count/ambiguity/
         // empty-compose returns left it armed, and a failed 'play X'
         // would fire on a later unrelated answer). The local carries
         // this answer's intent to the filter branch.
-        let wantPlayAfter = playAfterAnswer
+        let wantPlayAfter = forcedPlayAfter ?? playAfterAnswer
         playAfterAnswer = false
-        // 1. PERSON RESOLUTION (never guess — Phase 1 contract). An
-        // unknown or ambiguous name becomes a counter-question with
-        // one-tap corrections.
-        let known = POIProfile.listAll().map {
-            ResolvablePerson(canonicalName: $0.name, aliases: [])
-        }
-        if !known.isEmpty {
-            let resolver = PersonResolver(people: known)
-            for asked in spec.people ?? [] {
-                switch resolver.resolve(asked) {
-                case .resolved:
-                    continue
-                case .ambiguous(let candidates):
-                    messages.append(ArchivistMessage(
-                        role: .assistant,
-                        text: "Did you mean \(candidates.joined(separator: " or "))?",
-                        chips: candidates.map { candidate in
-                            ArchivistMessage.Chip(
-                                label: candidate,
-                                action: .askText(question.replacingOccurrences(
-                                    of: asked, with: candidate,
-                                    options: .caseInsensitive)))
-                        }))
-                    return
-                case .unknown:
-                    let names = known.map(\.canonicalName).sorted()
-                    messages.append(ArchivistMessage(
-                        role: .assistant,
-                        text: "I don't know anyone called “\(asked)” yet. "
-                            + "The family members I know are: \(names.joined(separator: ", ")).",
-                        chips: names.prefix(4).map { name in
-                            ArchivistMessage.Chip(
-                                label: name,
-                                action: .askText(question.replacingOccurrences(
-                                    of: asked, with: name,
-                                    options: .caseInsensitive)))
-                        }))
-                    return
-                }
-            }
-        }
-
-        let composed = NLQueryComposer.infixString(
-            for: NLQueryNormalizer.normalize(spec))
-        guard !composed.isEmpty else {
+        switch ArchivistQueryPlanner.plan(
+            question: question,
+            spec: spec,
+            profiles: POIProfile.listAll(),
+            resolvedPeople: resolvedPeople,
+            playAfterAnswer: wantPlayAfter) {
+        case .search(let query, let isCount, let preface, let wantsPlay):
+            finishSearch(
+                query: query, isCount: isCount,
+                wantPlayAfter: wantsPlay, preface: preface)
+        case .personAmbiguity(_, let candidates, let wantsPlay):
+            let pending = ArchivistPersonClarification(
+                question: question, spec: spec, candidates: candidates,
+                playAfterAnswer: wantsPlay)
+            pendingPersonClarification = pending
+            appLog.write("Archivist clarification: presented person choices count=\(candidates.count)")
+            appendPersonClarification(pending)
+        case .segmentationAmbiguity(let options, let wantsPlay):
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: "I couldn't find anything searchable in that — try naming "
-                    + "a person, a year, or a place."))
-            return
+                text: "Do you mean one person or several people?",
+                chips: options.map { option in
+                    ArchivistMessage.Chip(
+                        label: option.joined(separator: " + "),
+                        action: .resolvedPeople(
+                            question: question,
+                            spec: spec,
+                            canonicalNames: option,
+                            playAfterAnswer: wantsPlay))
+                }))
+        case .tooManyPeople(let limit):
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "That names more than \(limit) people at once. "
+                    + "Please ask about a smaller group so I don't guess."))
+        case .unknownPerson(let asked, let names, let wantsPlay):
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't know anyone called “\(asked)” yet. "
+                    + "The family members I know are: \(names.joined(separator: ", ")).",
+                chips: names.prefix(4).map { name in
+                    ArchivistMessage.Chip(
+                        label: name,
+                        action: .askText(
+                            question.replacingOccurrences(
+                                of: asked, with: name,
+                                options: .caseInsensitive),
+                            playAfterAnswer: wantsPlay))
+                }))
         }
+    }
 
+    private func appendPersonClarification(
+        _ pending: ArchivistPersonClarification,
+        requiresExplicitChoice: Bool = false
+    ) {
+        let names = pending.candidates.joined(separator: " or ")
+        let prompt = pending.candidates.count == 1
+            ? "Did you mean \(names)?"
+            : "Which person do you mean: \(names)?"
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: requiresExplicitChoice
+                ? "I need the name so I don't guess. \(prompt)"
+                : prompt,
+            chips: ArchivistMessage.personClarificationChips(for: pending)))
+    }
+
+    private func finishSearch(query composed: String,
+                              isCount: Bool,
+                              wantPlayAfter: Bool,
+                              preface: String? = nil) {
         let matches = model.searchIndex.filter(records: model.records,
                                                query: composed)
         lastMatches = matches   // "play the first one" referent
 
         // 2. COUNT questions get an ANSWER, not a filter.
-        if spec.intent?.lowercased() == "count" {
+        if isCount {
+            apply(composed: composed, matches: matches.count)
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: countSentence(matches.count),
-                queryLine: composed,
-                chips: matches.isEmpty ? [] : [
-                    ArchivistMessage.Chip(label: "Show them",
-                                          action: .applyQuery(composed)),
-                ]))
+                text: [preface, countSentence(matches.count)]
+                    .compactMap { $0 }.joined(separator: " "),
+                queryLine: composed))
             return
         }
 
@@ -807,7 +1345,8 @@ struct ArchivistChatWindow: View {
                 label: "\(refinement.term) (\(refinement.count))",
                 action: .applyQuery("\(composed) \(refinement.term)"))
         }
-        var text = matchSentence(matches.count)
+        var text = [preface, matchSentence(matches.count)]
+            .compactMap { $0 }.joined(separator: " ")
         if !chips.isEmpty { text += " Which ones interest you?" }
         if matches.isEmpty { chips = [] }
         // The occasional OFFER (Rick 2026-08-07: "ask, do you want me
