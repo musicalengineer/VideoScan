@@ -12,10 +12,20 @@ import SwiftUI
 /// Compact role + trust cluster: a colored dot, the role short label,
 /// and a trust glyph (suppressed when trust is Unknown). Sized to fit
 /// inline in table rows.
+///
+/// Retirement (taxonomy 2026-08-16) is a lifecycle badge on ANY role,
+/// never a role: when `isRetired` the cluster gains a small brown
+/// "RTD" tag after the role label. Callers pass
+/// `CatalogScanTarget.isRetired` (`retiredAt != nil`).
 struct VolumeBadge: View {
     let role: VolumeRole
     let trust: VolumeTrust
     let isReachable: Bool
+    var isRetired: Bool = false
+
+    /// The retired tag text — kept as a static so tests and the sidebar
+    /// agree on the glyph.
+    static let retiredTag = "RTD"
 
     var body: some View {
         HStack(spacing: 4) {
@@ -25,6 +35,15 @@ struct VolumeBadge: View {
             Text(role.shortLabel)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundColor(role.color)
+            if isRetired {
+                Text(Self.retiredTag)
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(.brown)
+                    .padding(.horizontal, 2)
+                    .background(Color.brown.opacity(0.15))
+                    .cornerRadius(2)
+                    .accessibilityIdentifier("volumeBadge.retired")
+            }
             if trust != .unknown {
                 Image(systemName: trust.icon)
                     .font(.system(size: 8))
@@ -43,7 +62,8 @@ struct ObservedVolumeBadge: View {
     var body: some View {
         VolumeBadge(role: target.role,
                     trust: target.trust,
-                    isReachable: target.isReachable)
+                    isReachable: target.isReachable,
+                    isRetired: target.isRetired)
     }
 }
 

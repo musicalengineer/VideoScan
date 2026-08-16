@@ -306,7 +306,8 @@ struct ArchiveView: View {
         return HStack(spacing: 6) {
             VolumeBadge(role: target.role,
                         trust: target.trust,
-                        isReachable: target.isReachable)
+                        isReachable: target.isReachable,
+                        isRetired: target.isRetired)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name)
@@ -342,8 +343,10 @@ struct ArchiveView: View {
                 openWindow(id: "volumes")
             }
             Divider()
+            // User-selectable roles only (Archive = Master Archive via
+            // Initialize; System = boot volume, auto). Never `allCases`.
             Menu("Role") {
-                ForEach(VolumeRole.allCases, id: \.self) { role in
+                ForEach(VolumeRole.pickerCases, id: \.self) { role in
                     Button {
                         model.setRole(role, for: target)
                     } label: {
@@ -357,6 +360,9 @@ struct ArchiveView: View {
                     }
                 }
             }
+            // The Master Archive and the boot volume keep their display-
+            // only role; the menu is inert for them.
+            .disabled(model.isMasterArchive(target) || target.isBootVolumeRoot)
             Menu("Reliability") {
                 ForEach(VolumeTrust.allCases, id: \.self) { trust in
                     Button {

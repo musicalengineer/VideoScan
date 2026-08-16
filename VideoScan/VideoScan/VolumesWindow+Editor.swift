@@ -203,16 +203,40 @@ struct VolumeEditor: View {
             Text("Workflow").font(.title3.bold())
             HStack(alignment: .top, spacing: 24) {
                 pickerColumn(title: "Role") {
-                    Picker("", selection: Binding(
-                        get: { target.role },
-                        set: { model.setRole($0, for: target) }
-                    )) {
-                        ForEach(VolumeRole.allCases, id: \.self) { r in
-                            Label(r.rawValue, systemImage: r.icon).tag(r)
+                    // Display-only roles: the Master Archive (Archive is set
+                    // by Initialize, never picked) and the boot volume
+                    // (System is auto-assigned). Everything else gets the
+                    // user-selectable list — never `allCases`.
+                    if model.isMasterArchive(target) || target.isBootVolumeRoot {
+                        HStack(spacing: 6) {
+                            Image(systemName: target.role.icon)
+                                .foregroundColor(target.role.color)
+                            Text(target.role.rawValue)
+                            Text(model.isMasterArchive(target)
+                                 ? "(Master Archive — set by Initialize)"
+                                 : "(boot volume)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
+                        .frame(maxWidth: 220, alignment: .leading)
+                        .accessibilityIdentifier("volumeEditor.roleDisplayOnly")
+                    } else {
+                        Picker("", selection: Binding(
+                            get: { target.role },
+                            set: { model.setRole($0, for: target) }
+                        )) {
+                            ForEach(VolumeRole.pickerChoices(including: target.role), id: \.self) { r in
+                                Label(r.rawValue, systemImage: r.icon).tag(r)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 220)
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: 220)
+                    if target.isRetired {
+                        Text("Retired — retirement is a badge on any role, not a role itself.")
+                            .font(.caption)
+                            .foregroundColor(.brown)
+                    }
                 }
                 pickerColumn(title: "Reliability") {
                     Picker("", selection: Binding(

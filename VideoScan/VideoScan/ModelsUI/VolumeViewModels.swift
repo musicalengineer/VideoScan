@@ -39,6 +39,9 @@ struct VolumeRow: Identifiable {
     /// column shows "Original · Aging" with the trust word colored;
     /// when reliable/unknown only the role is shown to keep it quiet.
     let trust: VolumeTrust
+    /// `CatalogScanTarget.isRetired` — retirement is a lifecycle badge on
+    /// any role (taxonomy 2026-08-16); the Role column appends "· Retired".
+    var isRetired: Bool = false
 }
 
 /// Per-volume aggregate derived from the catalog. Cached once per

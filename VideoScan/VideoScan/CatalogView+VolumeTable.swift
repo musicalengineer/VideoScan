@@ -266,7 +266,7 @@ extension CatalogView {
             // yellow and .unreliable is red. Sortable on the role's
             // raw value.
             TableColumn("Role", value: \VolumeRow.role.rawValue) { row in
-                roleTrustCell(role: row.role, trust: row.trust)
+                roleTrustCell(role: row.role, trust: row.trust, isRetired: row.isRetired)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .width(min: 90, ideal: 130)
@@ -896,8 +896,8 @@ extension CatalogView {
     /// Unassigned + unknown trust renders as the universal "—" so empty
     /// rows don't shout for attention.
     @ViewBuilder
-    private func roleTrustCell(role: VolumeRole, trust: VolumeTrust) -> some View {
-        if role == .unassigned && (trust == .unknown || trust == .reliable) {
+    private func roleTrustCell(role: VolumeRole, trust: VolumeTrust, isRetired: Bool = false) -> some View {
+        if role == .unassigned && (trust == .unknown || trust == .reliable) && !isRetired {
             Text("—")
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.secondary)
@@ -914,6 +914,17 @@ extension CatalogView {
                     Text(trust.rawValue)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(trust.color)
+                        .lineLimit(1)
+                }
+                // Retirement is a badge on any role, never a role
+                // (taxonomy 2026-08-16) — "Backup · Retired".
+                if isRetired {
+                    Text("·")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                    Text("Retired")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.brown)
                         .lineLimit(1)
                 }
             }

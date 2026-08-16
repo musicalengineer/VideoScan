@@ -70,6 +70,13 @@ struct VolumesWindow: View {
     /// window rather than the main window behind it.
     @State private var masterArchiveInitOffer: MasterArchiveInitOffer?
 
+    /// Volume-role taxonomy migration (2026-08-16): one-time "these were
+    /// Archive; pick Original / Backup / Working" sheet. Presented when
+    /// the window opens with a non-empty `model.pendingRoleReclassifications`
+    /// and again whenever the queue refills (bundle import). "Decide
+    /// later" simply dismisses; the queue persists in-memory until answered.
+    @State private var showRoleReclassification = false
+
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
@@ -154,8 +161,19 @@ struct VolumesWindow: View {
             }
         }
         .frame(minWidth: 820, minHeight: 540)
-        .onAppear { honorPendingSelection() }
+        .onAppear {
+            honorPendingSelection()
+            showRoleReclassification = !model.pendingRoleReclassifications.isEmpty
+        }
         .onChange(of: model.pendingVolumesSelectionID) { honorPendingSelection() }
+        .onChange(of: model.pendingRoleReclassifications.count) { _, count in
+            if count > 0 { showRoleReclassification = true }
+        }
+        // Role taxonomy migration — legacy non-master "Archive" targets.
+        .sheet(isPresented: $showRoleReclassification) {
+            RoleReclassificationSheet()
+                .environmentObject(model)
+        }
         // Retire confirmation — driven by the context-menu Mark Retired
         // action. Reuses the existing RelocateRetireSheet so the copy +
         // editable reason field stay in one place.
@@ -530,7 +548,8 @@ private struct VolumeListRow: View {
         HStack(spacing: 8) {
             VolumeBadge(role: target.role,
                         trust: target.trust,
-                        isReachable: target.isReachable)
+                        isReachable: target.isReachable,
+                        isRetired: target.isRetired)
                 .scaleEffect(scale, anchor: .leading)
                 .frame(width: 38 * scale, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
@@ -548,7 +567,9 @@ private struct VolumeListRow: View {
                     // §1B retired badge. "Retired YYYY-MM-DD" — replaces
                     // the policy badge visually because a retired volume
                     // isn't a viable destination.
-                    if target.isRetired, let r = target.retiredAt {
+                    // Retirement is a badge on ANY role (taxonomy
+                    // 2026-08-16) — rendered from `retiredAt`, the one owner.
+                    if let r = target.retiredAt {
                         Text("Retired \(Self.shortStamp(r))")
                             .font(.system(size: 11 * scale, weight: .medium))
                             .padding(.horizontal, 5)

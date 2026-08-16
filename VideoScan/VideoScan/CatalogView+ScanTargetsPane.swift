@@ -62,7 +62,8 @@ extension CatalogView {
                 isNetwork: isNet,
                 catalogStatusText: agg?.catalogStatusText ?? "Loading catalog data…",
                 role: target.role,
-                trust: target.trust
+                trust: target.trust,
+                isRetired: target.isRetired
             )
         }
         // Apply the user-controlled sort. KeyPathComparator is cheap for
