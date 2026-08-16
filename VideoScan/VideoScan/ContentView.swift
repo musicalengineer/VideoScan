@@ -95,6 +95,39 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 900, minHeight: 600)
+        // Master Archive (docs/archive_promotion_workflow.md). All three
+        // are MODEL-driven so the Volumes-window right-click, the catalog
+        // right-click, the Archive tab and the File ▸ Archive menu share ONE
+        // sheet each (.sheet(item:) per the chained-sheet antipattern memo).
+        // Attached at the ROOT, not CatalogView: Rick 2026-08-16 pressed
+        // Initialize from the Archive tab and nothing appeared — CatalogView
+        // is not in the hierarchy on other tabs, so its sheets can't present.
+        .sheet(item: $model.pendingMasterArchiveInitOffer) { offer in
+            MasterArchiveInitSheet(offer: offer)
+                .environmentObject(model)
+        }
+        .sheet(item: $model.pendingPromoteRequest) { request in
+            // fileOpsCenter reaches the sheet through the environment the
+            // app injects at the window (VideoScanApp) — no re-injection,
+            // and no root subscription to MFO progress churn.
+            PromoteToArchiveSheet(request: request)
+                .environmentObject(model)
+        }
+        .alert(item: $model.pendingPromoteWithoutMaster) { pending in
+            Alert(
+                title: Text("You need to designate a volume as the master archive."),
+                message: Text("Promote copies files into one Master Archive tree. Pick the volume that will hold it (the RAID, for example) — Initialize creates the folders and index files, then the promotion continues."),
+                primaryButton: .default(Text("Initialize Master Archive…")) {
+                    // Hop a turn: never present the next sheet from inside
+                    // an alert's dismissal (chained-sheet antipattern).
+                    let ids = pending.recordIDs
+                    Task { @MainActor in
+                        model.chooseAndOfferInitializeMasterArchive(promoteAfterwards: ids)
+                    }
+                },
+                secondaryButton: .cancel()
+            )
+        }
         .onAppear {
             // Wire PersonFinder scan code to the shared DashboardState
             // (visionFPS / msPerFrame / workers updates flow through here).
@@ -802,34 +835,6 @@ struct CatalogView: View {
         .sheet(isPresented: $model.showNonVideoMediaPurgeSheet) {
             NonVideoMediaPurgeSheet(preselectedVolumeKey: nil)
                 .environmentObject(model)
-        }
-        // Master Archive (docs/archive_promotion_workflow.md). All three
-        // are MODEL-driven so the Volumes-window right-click, the catalog
-        // right-click, and the File ▸ Archive menu share ONE sheet each
-        // (.sheet(item:) per the chained-sheet antipattern memo).
-        .sheet(item: $model.pendingMasterArchiveInitOffer) { offer in
-            MasterArchiveInitSheet(offer: offer)
-                .environmentObject(model)
-        }
-        .sheet(item: $model.pendingPromoteRequest) { request in
-            PromoteToArchiveSheet(request: request)
-                .environmentObject(model)
-                .environmentObject(fileOpsCenter)
-        }
-        .alert(item: $model.pendingPromoteWithoutMaster) { pending in
-            Alert(
-                title: Text("You need to designate a volume as the master archive."),
-                message: Text("Promote copies files into one Master Archive tree. Pick the volume that will hold it (the RAID, for example) — Initialize creates the folders and index files, then the promotion continues."),
-                primaryButton: .default(Text("Initialize Master Archive…")) {
-                    // Hop a turn: never present the next sheet from inside
-                    // an alert's dismissal (chained-sheet antipattern).
-                    let ids = pending.recordIDs
-                    Task { @MainActor in
-                        model.chooseAndOfferInitializeMasterArchive(promoteAfterwards: ids)
-                    }
-                },
-                secondaryButton: .cancel()
-            )
         }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
         // Window scene (defined in VideoScanApp.swift, id: "compare").
