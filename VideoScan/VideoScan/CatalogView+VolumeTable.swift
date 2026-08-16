@@ -587,7 +587,7 @@ extension CatalogView {
                     Label(isMaster ? "Master Archive ✓ (re-initialize…)" : "Initialize as Master Archive…",
                           systemImage: "archivebox")
                 }
-                .disabled(!first.isReachable)
+                .disabled(!first.isReachable || model.isReadOnly)
             }
             if targets.contains(where: { !$0.isReachable }) {
                 Button(action: {

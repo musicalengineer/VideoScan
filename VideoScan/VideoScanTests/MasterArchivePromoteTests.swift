@@ -54,7 +54,7 @@ struct MasterArchivePromoteMediaMatrixTests {
                                                 videoCodec: testCase.videoCodec,
                                                 extraVideoArgs: testCase.extraVideoArgs,
                                                 audioCodec: testCase.audioCodec)
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src, userDate: "1992-07-15", starRating: 1)
         rec.detectedPeople = ["Donna"]
@@ -127,7 +127,7 @@ struct MasterArchivePromoteSensorTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("sensor")
         defer { sb.cleanup() }
         let files = try seed(sb, count: 6)
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let recs = files.enumerated().map { i, u in
             MasterArchiveTestSupport.makeRecord(path: u.path,
@@ -172,7 +172,7 @@ struct MasterArchivePromoteSensorTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("crash1")
         defer { sb.cleanup() }
         let src = try seed(sb, count: 1)[0]
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1999")
         model.records = [rec]
@@ -184,7 +184,7 @@ struct MasterArchivePromoteSensorTests {
         try FileManager.default.copyItem(at: src, to: dest)
         try ArchivePromoteJournal.append(.init(sourceRecordID: rec.id, sourcePath: src.path, destRelPath: rel,
                                                state: .intent, sha256: nil, copyRecordID: nil, at: Date()),
-                                         to: sb.journalURL)
+                                         rootPath: sb.archiveRoot.path)
 
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
@@ -201,7 +201,7 @@ struct MasterArchivePromoteSensorTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("crash2")
         defer { sb.cleanup() }
         let src = try seed(sb, count: 1)[0]
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src.path)
         model.records = [rec]
@@ -213,7 +213,7 @@ struct MasterArchivePromoteSensorTests {
         try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: rel, sha256: sha, sizeBytes: 1,
                                             originalPath: src.path, originalVolume: "v", recordID: UUID(),
                                             sourceRecordID: rec.id, recordDate: "", dateConfidence: "",
-                                            people: [], starRating: 3), to: sb.manifestURL)
+                                            people: [], starRating: 3), rootPath: sb.archiveRoot.path)
 
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
         guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
@@ -228,7 +228,7 @@ struct MasterArchivePromoteSensorTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("adopt")
         defer { sb.cleanup() }
         let files = try seed(sb, count: 2)
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let a = MasterArchiveTestSupport.makeRecord(path: files[0].path)   // identical copy pre-placed
         let b = MasterArchiveTestSupport.makeRecord(path: files[1].path)   // different bytes, same name
@@ -262,7 +262,7 @@ struct MasterArchivePromoteSensorTests {
         let real = try seed(sb, count: 1)[0]
         let link = sb.sources.appendingPathComponent("test_link.mov")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: link.path)
         model.records = [rec]
@@ -360,7 +360,7 @@ struct MasterArchivePromoteSensorTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("cancel")
         defer { sb.cleanup() }
         let files = try seed(sb, count: 3, bytes: 8 * (1 << 20))
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let recs = files.map { MasterArchiveTestSupport.makeRecord(path: $0.path) }
         model.records = recs
@@ -391,7 +391,7 @@ struct MasterArchivePromoteSensorTests {
         let keysBefore = Set(UserDefaults.standard.dictionaryRepresentation().keys)
 
         let src = try seed(sb, count: 1)[0]
-        let model = VideoScanModel()
+        let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src.path)
         model.records = [rec]

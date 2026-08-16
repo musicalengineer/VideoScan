@@ -246,8 +246,8 @@ struct ArchiveManifestCSVTests {
         _ = try VideoScanModel.scaffoldMasterArchive(rootURL: sb.archiveRoot)
         let r1 = row("30_Video/Undated/xxxx-xx-xx_a.mov")
         let r2 = row("20_Audio/Undated/xxxx-xx-xx_b.wav")
-        try ArchiveManifestCSV.append(r1, to: sb.manifestURL)
-        try ArchiveManifestCSV.append(r2, to: sb.manifestURL)
+        try ArchiveManifestCSV.append(r1, rootPath: sb.archiveRoot.path)
+        try ArchiveManifestCSV.append(r2, rootPath: sb.archiveRoot.path)
         let text = try String(contentsOf: sb.manifestURL, encoding: .utf8)
         #expect(text.hasPrefix(MasterArchiveLayout.manifestHeader + "\n"))
         #expect(text.split(separator: "\n").count == 3)
@@ -363,7 +363,7 @@ struct MasterArchiveInitializeTests {
         let row = ArchiveManifestCSV.Row(promotedAt: Date(), archiveRelPath: "30_Video/Undated/x.mov", sha256: "s",
                                          sizeBytes: 1, originalPath: "/p", originalVolume: "v", recordID: UUID(),
                                          sourceRecordID: UUID(), recordDate: "", dateConfidence: "", people: [], starRating: 3)
-        try ArchiveManifestCSV.append(row, to: sb.manifestURL)
+        try ArchiveManifestCSV.append(row, rootPath: sb.archiveRoot.path)
         try "hand edited".write(to: MasterArchiveLayout.readmeURL(rootPath: sb.archiveRoot.path), atomically: true, encoding: .utf8)
 
         let r2 = try MasterArchiveTestSupport.initialize(model, in: sb)

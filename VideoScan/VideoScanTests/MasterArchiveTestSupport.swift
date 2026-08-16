@@ -73,6 +73,16 @@ enum MasterArchiveTestSupport {
         return r
     }
 
+    /// A model whose catalog store is ISOLATED in the sandbox (so
+    /// `saveCatalogNow()` really writes and returns true — the journal can
+    /// reach `done`) — never the shared App Support store.
+    @MainActor
+    static func makeModel(_ sandbox: Sandbox) -> VideoScanModel {
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: sandbox.root.appendingPathComponent("catalog", isDirectory: true))
+        return model
+    }
+
     /// Initialize the sandbox's archive volume as the model's master and
     /// return the result.
     @MainActor

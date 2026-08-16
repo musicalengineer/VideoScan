@@ -174,19 +174,42 @@ extension VideoScanModel {
             == PathScope.normalize(URL(fileURLWithPath: b).standardizedFileURL.path)
     }
 
-    /// Volume-UUID-first re-resolution (codex QA blocker 1). If the
-    /// designated path is not reachable but a mounted volume under
-    /// /Volumes carries the designation's volume UUID, the designation
-    /// follows the volume to its new mount point. Called at load and on
-    /// every mount notification. No-op when the path is fine, the UUID is
-    /// unknown, or no mounted volume matches.
+    /// Volume-identity refusal (codex R3 blocker 1): when the designation
+    /// carries a volume UUID and its root path is reachable, the volume
+    /// mounted there NOW must carry the SAME UUID. A different disk mounted
+    /// at the same path (or a volume that no longer reports a UUID) is a
+    /// hard refusal for every write path — Initialize on that path is fine
+    /// (it re-designates), promotion is not. nil = identity OK / not
+    /// checkable (no UUID recorded, or root offline).
+    func masterArchiveIdentityRefusal() -> String? {
+        guard let d = masterArchive, let expected = d.volumeUUID,
+              FileManager.default.fileExists(atPath: d.rootPath) else { return nil }
+        let current = MasterArchiveDesignation.volumeUUID(forPath: d.targetPath)
+        guard current != expected else { return nil }
+        let label = VolumeReachability.displayLabel(forPath: d.targetPath)
+        let seen = current.map { "volume UUID \($0)" } ?? "a volume that reports no UUID"
+        return "The volume mounted at \(label) (\(d.targetPath)) is NOT the Master Archive volume — it has \(seen), but the archive was initialized on volume UUID \(expected). Nothing will be written there. Connect the real archive volume, or re-run Initialize on this one to make it the master."
+    }
+
+    /// Volume-UUID-first re-resolution (codex QA R1 blocker 1 + R3
+    /// blocker 1). Called at load, on every mount notification, and after
+    /// an import. Outcomes:
+    ///   - root reachable AND UUID matches (or no UUID recorded) → fine;
+    ///   - root reachable but UUID differs → look for the REAL volume by
+    ///     UUID under /Volumes and rehome to it; if it is not mounted, the
+    ///     designation stays but `masterArchiveIdentityMismatch` is set
+    ///     (the UI shows it; every write path refuses via
+    ///     `masterArchiveIdentityRefusal`);
+    ///   - root unreachable → look for the volume by UUID and rehome.
     func reresolveMasterArchiveMount() {
+        masterArchiveIdentityMismatch = nil
         guard let current = masterArchive, let uuid = current.volumeUUID else { return }
         let fm = FileManager.default
-        if fm.fileExists(atPath: current.rootPath) { return }
+        let rootExists = fm.fileExists(atPath: current.rootPath)
+        if rootExists, MasterArchiveDesignation.volumeUUID(forPath: current.targetPath) == uuid { return }
         // The stored target may be a folder inside a volume — recover the
         // volume-relative tail so a rename keeps the sub-folder.
-        guard let mounts = try? fm.contentsOfDirectory(atPath: "/Volumes") else { return }
+        let mounts = (try? fm.contentsOfDirectory(atPath: "/Volumes")) ?? []
         for name in mounts {
             let mountPath = "/Volumes/\(name)"
             guard MasterArchiveDesignation.volumeUUID(forPath: mountPath) == uuid else { continue }
@@ -196,7 +219,8 @@ extension VideoScanModel {
             var newURL = URL(fileURLWithPath: mountPath, isDirectory: true)
             for comp in tail { newURL.appendPathComponent(comp) }
             let rehomed = current.rehomed(to: newURL.path)
-            guard fm.fileExists(atPath: rehomed.rootPath) else { continue }
+            guard fm.fileExists(atPath: rehomed.rootPath),
+                  !Self.samePath(rehomed.targetPath, current.targetPath) else { continue }
             masterArchive = rehomed
             noteCatalogRecordsMutated()
             saveCatalogDebounced()
@@ -204,10 +228,29 @@ extension VideoScanModel {
             masterArchiveLog.notice("rehomed master archive \(current.targetPath, privacy: .public) → \(rehomed.targetPath, privacy: .public)")
             return
         }
+        if rootExists, let refusal = masterArchiveIdentityRefusal() {
+            masterArchiveIdentityMismatch = refusal
+            log("Master Archive: \(refusal)")
+            masterArchiveLog.error("master archive identity mismatch at \(current.targetPath, privacy: .public)")
+        }
     }
 
     /// The designated CatalogScanTarget's id, or nil.
     var masterArchiveTargetID: UUID? { masterArchiveTarget?.id }
+
+    /// The master's scan target resolved by STABLE identity (codex R3
+    /// major 8): canonical path first, then any target whose mounted
+    /// volume carries the designation's UUID. nil = cannot be resolved —
+    /// callers that need the retired/role state must REFUSE, not proceed
+    /// (unknown state is not "not retired").
+    func resolvedMasterArchiveTarget() -> CatalogScanTarget? {
+        if let byPath = masterArchiveTarget { return byPath }
+        guard let uuid = masterArchive?.volumeUUID else { return nil }
+        return scanTargets.first { t in
+            !t.searchPath.isEmpty && t.isReachable
+                && MasterArchiveDesignation.volumeUUID(forPath: t.searchPath) == uuid
+        }
+    }
 
     /// `<target>/Breen_Family_Archive`, or nil when no master is set.
     var masterArchiveRootPath: String? { masterArchive?.rootPath }
@@ -256,6 +299,12 @@ extension VideoScanModel {
     @discardableResult
     func initializeMasterArchive(at volumeOrFolderURL: URL) throws -> MasterArchiveInitResult {
         let targetPath = PathScope.normalize(volumeOrFolderURL.standardizedFileURL.path)
+        // Read-only viewer (codex R3 blocker 2): no scaffold, no designation
+        // — same refusal every other write path makes.
+        if isReadOnly {
+            log("Initialize Master Archive refused — this Mac is a read-only viewer of the catalog.")
+            throw MasterArchiveError.refused("This Mac is a read-only viewer of the catalog — the Master Archive can only be initialized on the master Mac.")
+        }
         if let refusal = masterArchiveRefusal(forTargetPath: targetPath) {
             throw MasterArchiveError.refused(refusal)
         }
@@ -286,6 +335,7 @@ extension VideoScanModel {
             targetPath: targetPath,
             rootPath: rootURL.path,
             volumeUUID: MasterArchiveDesignation.volumeUUID(forPath: targetPath))
+        masterArchiveIdentityMismatch = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
 
@@ -323,44 +373,54 @@ extension VideoScanModel {
     /// Filesystem-only scaffold — the tree + both index files. Pure
     /// function of `rootURL`; returns the paths it CREATED (empty on a
     /// second run). Never truncates or rewrites an existing file.
+    /// Descriptor-relative (codex R3 blocker 3): the target directory is
+    /// opened O_DIRECTORY|O_NOFOLLOW and everything below it is
+    /// mkdirat/openat from that descriptor — a symlink standing in for
+    /// the root, `00_Index`, a bucket, or an index file is REFUSED, never
+    /// followed. Index files are created O_EXCL|O_NOFOLLOW, F_FULLFSYNC'd,
+    /// and the index directory fsynced (failures throw).
     /// `nonisolated` so tests can drive it against a temp dir without a
     /// model. (≈ a free function; no shared state.)
     nonisolated static func scaffoldMasterArchive(rootURL: URL) throws -> [String] {
-        let fm = FileManager.default
         var created: [String] = []
-        func ensureDir(_ url: URL) throws {
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
-                if !isDir.boolValue {
-                    throw CocoaError(.fileWriteFileExists,
-                                     userInfo: [NSFilePathErrorKey: url.path])
-                }
-                return
+        let root = PathScope.normalize(rootURL.standardizedFileURL.path)
+        let parent = (root as NSString).deletingLastPathComponent
+        let rootName = (root as NSString).lastPathComponent
+        let parentFD = try ArchivePromoteEngine.openDirectory(parent)
+        defer { close(parentFD) }
+        // Root folder: create-if-missing, then open through the parent fd.
+        if ArchivePromoteEngine.FileIdentity.at(dirfd: parentFD, name: rootName) == nil {
+            guard mkdirat(parentFD, rootName, 0o755) == 0 || errno == EEXIST else {
+                throw ArchivePromoteEngine.Failure.createFailed(root, errno: errno)
             }
-            try fm.createDirectory(at: url, withIntermediateDirectories: true)
-            created.append(url.path)
+            created.append(root)
         }
-        try ensureDir(rootURL)
-        let index = rootURL.appendingPathComponent(MasterArchiveLayout.indexFolder, isDirectory: true)
-        try ensureDir(index)
-        for bucket in MasterArchiveLayout.buckets {
-            try ensureDir(rootURL.appendingPathComponent(bucket, isDirectory: true))
+        let rootFD = try ArchivePromoteEngine.descend(from: parentFD, components: [rootName],
+                                                      create: false, displayRoot: parent)
+        defer { close(rootFD) }
+        // Buckets + index folder: mkdirat + openat(O_NOFOLLOW) each.
+        for folder in [MasterArchiveLayout.indexFolder] + MasterArchiveLayout.buckets {
+            let existed = ArchivePromoteEngine.FileIdentity.at(dirfd: rootFD, name: folder) != nil
+            let fd = try ArchivePromoteEngine.descend(from: rootFD, components: [folder],
+                                                      create: true, displayRoot: root)
+            close(fd)
+            if !existed { created.append(root + "/" + folder) }
         }
-        let manifest = MasterArchiveLayout.manifestURL(rootPath: rootURL.path)
-        if !fm.fileExists(atPath: manifest.path) {
-            // Header row only — O_EXCL-equivalent via the exists check
-            // above plus `withoutOverwriting`, so a race with another
-            // writer cannot truncate a manifest that already has rows.
-            try Data((MasterArchiveLayout.manifestHeader + "\n").utf8)
-                .write(to: manifest, options: [.withoutOverwriting])
-            CatalogStore.fullFsync(fileURL: manifest)
-            created.append(manifest.path)
+        guard ArchivePromoteEngine.barriers.fsync(rootFD) == 0 else {
+            throw ArchivePromoteEngine.Failure.durabilityBarrierFailed("fsync on \(root)")
         }
-        let readme = MasterArchiveLayout.readmeURL(rootPath: rootURL.path)
-        if !fm.fileExists(atPath: readme.path) {
-            try Data(MasterArchiveLayout.readmeText.utf8)
-                .write(to: readme, options: [.withoutOverwriting])
-            created.append(readme.path)
+        let indexFD = try ArchivePromoteEngine.descend(from: rootFD, components: [MasterArchiveLayout.indexFolder],
+                                                       create: false, displayRoot: root)
+        defer { close(indexFD) }
+        if try ArchivePromoteEngine.createIndexFileIfMissing(
+            indexFD: indexFD, name: MasterArchiveLayout.manifestFilename,
+            contents: Data((MasterArchiveLayout.manifestHeader + "\n").utf8)) {
+            created.append(MasterArchiveLayout.manifestURL(rootPath: root).path)
+        }
+        if try ArchivePromoteEngine.createIndexFileIfMissing(
+            indexFD: indexFD, name: MasterArchiveLayout.readmeFilename,
+            contents: Data(MasterArchiveLayout.readmeText.utf8)) {
+            created.append(MasterArchiveLayout.readmeURL(rootPath: root).path)
         }
         return created
     }
@@ -442,8 +502,17 @@ extension VideoScanModel {
     /// the alert with the fix-it button; master → the confirmation sheet.
     func requestPromote(recordIDs ids: [UUID]) {
         guard !ids.isEmpty else { return }
+        if isReadOnly {
+            log("Promote refused — this Mac is a read-only viewer of the catalog.")
+            return
+        }
         guard masterArchive != nil else {
             pendingPromoteWithoutMaster = ArchivePromoteWithoutMaster(recordIDs: ids)
+            return
+        }
+        if let refusal = masterArchiveIdentityRefusal() {
+            masterArchiveIdentityMismatch = refusal
+            log("Promote refused — \(refusal)")
             return
         }
         guard let plan = buildPromotePlan(recordIDs: ids) else { return }
@@ -548,6 +617,67 @@ extension VideoScanModel {
         saveCatalogDebounced()
 
         masterArchiveLog.info("promote: \(source.filename, privacy: .public) → \(relativePath, privacy: .public) (copy \(copy.id.uuidString.prefix(8), privacy: .public))")
+        return copy
+    }
+
+    /// Source-gone registration (codex R3 major 7): the archive copy is
+    /// verified, in the manifest and on disk, but its SOURCE record has
+    /// left the catalog (retired-volume cleanup, purge). The copy must
+    /// STILL become a self-contained catalog record from journal/manifest
+    /// provenance: `derivedFrom` keeps the (now unresolvable) source id,
+    /// `originalFullPath` / `originVolume` come from the journal, fixity is
+    /// the verified digest, dates/people/rating come from the manifest row
+    /// when it has them. Returns the new record.
+    @discardableResult
+    func registerOrphanPromotedCopy(sourceID: UUID,
+                                    sourcePath: String,
+                                    destinationURL: URL,
+                                    relativePath: String,
+                                    sha256: String,
+                                    probed copy: VideoRecord,
+                                    manifestRow: [String]? = nil,
+                                    promotedAt: Date = Date()) -> VideoRecord {
+        copy.derivedFrom = sourceID
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.originalFullPath = sourcePath
+        copy.originVolume = VolumeReachability.volumeName(forPath: sourcePath)
+        copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt, sizeBytes: copy.sizeBytes)
+        copy.starRating = 3
+        copy.archiveStage = .masterAssigned
+        copy.lifecycleStage = .archived
+        copy.mediaDisposition = .important
+        copy.masterLocation = masterArchive?.targetPath ?? ""
+        if let row = manifestRow, row.count >= 12 {
+            // record_date "1992-07-15" / "1992-07-xx" / "1992-xx-xx" → user date at that precision.
+            let date = row[8]
+            let parts = date.split(separator: "-").map(String.init)
+            if let y = parts.first, y.count == 4, Int(y) != nil {
+                var canonical = y
+                if parts.count > 1, parts[1] != "xx" { canonical += "-" + parts[1] }
+                if parts.count > 2, parts[2] != "xx", canonical.count == 7 { canonical += "-" + parts[2] }
+                if let c = UserDateEntry.canonicalize(canonical) {
+                    copy.userDate = c
+                    copy.userDateConfidence = row[9] == "user-known" ? UserDateConfidence.known.rawValue
+                                                                     : UserDateConfidence.estimated.rawValue
+                }
+            }
+            let people = row[10].split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if !people.isEmpty { copy.detectedPeople = people }
+            if let stars = Int(row[11]) { copy.starRating = max(3, stars) }
+        }
+        let stamp = ISO8601DateFormatter().string(from: promotedAt)
+        let note = "Promote \(stamp): promoted from \(sourcePath) (source record \(sourceID.uuidString) no longer in the catalog) · sha256 \(sha256)"
+        copy.notes = copy.notes.isEmpty ? note : "\(copy.notes)\n\(note)"
+
+        if let existing = records.firstIndex(where: { $0.fullPath == destinationURL.path }) {
+            records[existing] = copy
+        } else {
+            records.append(copy)
+        }
+        searchIndex.update(copy)
+        noteCatalogRecordsMutated()
+        saveCatalogDebounced()
+        masterArchiveLog.notice("promote: cataloged orphan archive copy \(relativePath, privacy: .public) (source \(sourceID.uuidString.prefix(8), privacy: .public) gone)")
         return copy
     }
 }

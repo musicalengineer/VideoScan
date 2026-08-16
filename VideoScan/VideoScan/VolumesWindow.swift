@@ -373,7 +373,7 @@ struct VolumesWindow: View {
                 masterArchiveInitOffer = MasterArchiveInitOffer(
                     targetPath: target.searchPath, isNewTarget: false)
             }
-            .disabled(!target.isReachable)
+            .disabled(!target.isReachable || model.isReadOnly)
             .help(target.isReachable
                   ? (isMaster
                      ? "This is the Master Archive. Re-running Initialize repairs missing folders/index files without touching existing ones."

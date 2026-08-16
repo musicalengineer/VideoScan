@@ -73,6 +73,11 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// check so two files in one batch can never pick the same name.
     var claimedNames = Set<String>()
 
+    /// Journal entries this run brought to `published` (file + manifest
+    /// durable, catalog link in memory). Advanced to `done` ONLY after
+    /// the batch-end `saveCatalogNow()` returns true (codex R3 blocker 5).
+    var publishedThisBatch: [ArchivePromoteJournal.Entry] = []
+
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
             if !state.isActive, finishedAt == nil { finishedAt = Date() }
@@ -232,6 +237,10 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             if case .cancelled = outcome { break }
         }
 
+        // Batch end: ONE durable catalog save; only then are the batch's
+        // journal entries marked done. Runs on cancel too — whatever was
+        // published stays published and must be persisted.
+        let saved = finalizeBatch(model: model, ctx: ctx)
         if Task.isCancelled || state == .cancelling {
             let kept = tally.promoted + tally.adopted
             let done = kept > 0 ? " (\(kept) already promoted stay in the archive)" : ""
@@ -243,6 +252,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         if tally.adopted > 0 { parts.append("adopted \(tally.adopted)") }
         parts.append("skipped \(tally.skipped)")
         parts.append("failed \(tally.failed)")
+        if !saved && (tally.promoted + tally.adopted) > 0 {
+            parts.append("catalog save deferred (links re-established next run)")
+        }
         let summary = parts.joined(separator: " · ")
         model.log("Promote: \(summary).")
         if tally.promoted + tally.adopted == 0 && tally.failed > 0 {

@@ -1218,6 +1218,13 @@ final class VideoScanModel: ObservableObject {
     /// button can re-offer the promotion after Initialize.
     @Published var pendingPromoteWithoutMaster: ArchivePromoteWithoutMaster?
 
+    /// Non-nil when the volume mounted at the designation's path is NOT
+    /// the archive volume (UUID mismatch — codex R3 blocker 1). Set by
+    /// `reresolveMasterArchiveMount`; every write path refuses while set;
+    /// the UI surfaces it. Cleared by a successful re-resolution or a
+    /// fresh Initialize.
+    @Published var masterArchiveIdentityMismatch: String?
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }

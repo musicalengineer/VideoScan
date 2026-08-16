@@ -27,7 +27,7 @@ extension CatalogContent {
         Button(label) {
             model.requestPromote(recordIDs: activeRecs.map(\.id))
         }
-        .disabled(!pureActive || !promotable)
+        .disabled(!pureActive || !promotable || model.isReadOnly)
         .help(promotable
               ? "Copy the selected file(s) into the Master Archive tree — verified byte-for-byte, logged in the manifest, linked in the catalog. The originals are never moved or changed."
               : "Nothing here can be promoted right now (already in the archive, or the volume is offline).")

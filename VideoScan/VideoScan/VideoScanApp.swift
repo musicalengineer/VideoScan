@@ -551,6 +551,7 @@ struct VideoScanApp: App {
                     Button("Initialize Master Archive…") {
                         catalogModel.chooseAndOfferInitializeMasterArchive()
                     }
+                    .disabled(catalogModel.isReadOnly)
                     Button("Promote Selected to Archive") {
                         let ids = Array(catalogModel.catalogSelectedIDs)
                         if ids.isEmpty {
@@ -559,6 +560,7 @@ struct VideoScanApp: App {
                             catalogModel.requestPromote(recordIDs: ids)
                         }
                     }
+                    .disabled(catalogModel.isReadOnly)
                     Divider()
                     Button("Reveal Master Archive in Finder") {
                         catalogModel.revealMasterArchiveInFinder()

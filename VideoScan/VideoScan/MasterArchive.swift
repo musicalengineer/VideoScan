@@ -70,8 +70,15 @@ struct MasterArchiveDesignation: Codable, Equatable, Sendable {
     }
 
     /// `volumeUUIDString` for the filesystem holding `path`, or nil.
-    /// (Pure I/O read of a resource value — no side effects.)
+    /// Routed through `volumeUUIDProbe` so tests can present "a different
+    /// disk at the same path" (codex R3 blocker 1) without a real mount.
     static func volumeUUID(forPath path: String) -> String? {
+        volumeUUIDProbe(path)
+    }
+
+    /// Test seam for the volume-UUID probe. Production = the real
+    /// resource-value read; tests that swap it run serialized.
+    nonisolated(unsafe) static var volumeUUIDProbe: @Sendable (String) -> String? = { path in
         let url = URL(fileURLWithPath: path)
         return (try? url.resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
     }
@@ -510,31 +517,32 @@ enum ArchiveManifestCSV {
         return fields.map(escape).joined(separator: ",") + "\n"
     }
 
-    /// Append one row with a single O_APPEND write. Never truncates;
-    /// creates the file if missing (with NO header — Initialize owns the
-    /// header; a missing manifest at promote time is a job-level failure,
-    /// checked before this is called). Throws on any short/failed write
-    /// so the caller can fail the file loudly rather than promote a copy
-    /// the index does not know about.
+    /// Append one row with a single O_APPEND write + F_FULLFSYNC (codex R3
+    /// blockers 3+4). The manifest is opened DESCRIPTOR-RELATIVE from the
+    /// archive root (`00_Index/` via openat, O_NOFOLLOW) with NO O_CREAT: it
+    /// must already exist as a regular file that starts with the header —
+    /// Initialize owns creation; a missing or replaced manifest is a
+    /// refusal, never a create-and-append. A short write or a failed
+    /// barrier throws (the row is not durable ⇒ not claimed).
     /// (`nonisolated` ≈ a free function: safe to call from the job's
     /// background work.)
-    nonisolated static func append(_ row: Row, to url: URL) throws {
+    nonisolated static func append(_ row: Row, rootPath: String) throws {
         let data = Data(line(for: row).utf8)
-        let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
-        guard fd >= 0 else {
-            throw ManifestError.openFailed(path: url.path, errno: errno)
-        }
+        let fd = try ArchivePromoteEngine.openIndexFile(
+            root: rootPath, name: MasterArchiveLayout.manifestFilename,
+            mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
         defer { close(fd) }
-        let written = data.withUnsafeBytes { buf -> Int in
-            guard let base = buf.baseAddress else { return 0 }
-            return write(fd, base, buf.count)
-        }
-        guard written == data.count else {
-            throw ManifestError.shortWrite(path: url.path, expected: data.count, wrote: written)
-        }
-        // Durability barrier on the index too — a manifest row that
-        // survives only in the drive cache is not an inventory.
-        if fcntl(fd, F_FULLFSYNC) != 0 { fsync(fd) }
+        try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: true, label: "manifest append")
+    }
+
+    /// Preflight: the manifest under `rootPath` is reachable descriptor-
+    /// relative, is a regular file (not a symlink) and carries the header.
+    /// Throws the same refusals `append` would.
+    nonisolated static func validate(rootPath: String) throws {
+        let fd = try ArchivePromoteEngine.openIndexFile(
+            root: rootPath, name: MasterArchiveLayout.manifestFilename,
+            mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
+        close(fd)
     }
 
     /// Minimal parser for tests + the "already in manifest" sensor: splits
@@ -595,13 +603,19 @@ enum ArchiveManifestCSV {
     /// What the manifest already says about each source: its archive
     /// relpath and digest, keyed by source record id (latest row wins).
     nonisolated static func rowsBySource(in url: URL) -> [UUID: (relPath: String, sha256: String)] {
+        fieldRowsBySource(in: url).mapValues { ($0[relPathColumn], $0[sha256Column]) }
+    }
+
+    /// Every field of the latest manifest row per source id (for
+    /// self-contained orphan registration — codex R3 major 7).
+    nonisolated static func fieldRowsBySource(in url: URL) -> [UUID: [String]] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
-        var out: [UUID: (relPath: String, sha256: String)] = [:]
+        var out: [UUID: [String]] = [:]
         for line in text.split(separator: "\n").dropFirst() {   // header
             let fields = fields(ofLine: String(line))
-            guard fields.count > sourceRecordIDColumn,
+            guard fields.count >= 12,
                   let id = UUID(uuidString: fields[sourceRecordIDColumn]) else { continue }
-            out[id] = (fields[relPathColumn], fields[sha256Column])
+            out[id] = fields
         }
         return out
     }

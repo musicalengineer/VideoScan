@@ -9,9 +9,6 @@
 import SwiftUI
 
 struct PromoteToArchiveSheet: View {
-    // Forwarded to MediaFileOperationsCenter.startPromote (same intentional
-    // forwarding as TrimSheet / TranscodeSheet).
-    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject private var model: VideoScanModel
     @EnvironmentObject private var fileOpsCenter: MediaFileOperationsCenter
     @Environment(\.dismiss) private var dismiss
@@ -70,7 +67,7 @@ struct PromoteToArchiveSheet: View {
                     confirm()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(plan.entries.isEmpty || !plan.hasEnoughFreeSpace)
+                .disabled(plan.entries.isEmpty || !plan.hasEnoughFreeSpace || model.isReadOnly || model.masterArchiveIdentityMismatch != nil)
                 .accessibilityIdentifier("promote.confirm")
             }
         }
@@ -121,6 +118,12 @@ struct PromoteToArchiveSheet: View {
                          color: ok ? .green : .red)
             } else {
                 warnLine("Could not read free space on the archive volume — is it connected?", color: .orange)
+            }
+            if let mismatch = model.masterArchiveIdentityMismatch {
+                warnLine(mismatch, color: .red)
+            }
+            if model.isReadOnly {
+                warnLine("This Mac is a read-only viewer of the catalog — promotion runs on the master Mac.", color: .red)
             }
             warnLine("Every copy is verified byte-for-byte (SHA-256) and logged in the manifest. Promoted files become ★★★.",
                      color: .secondary)

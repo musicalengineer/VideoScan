@@ -1,7 +1,8 @@
 // PromoteToArchiveJob+Steps.swift
 // The per-file steps of Promote to Archive: preflight, journal
 // reconciliation (convergence), destination choice with adopt-if-identical,
-// the off-main copy hop, and the manifest + catalog tail. Split from
+// the off-main copy hop, the manifest tail, and the batch-end durable
+// catalog save that alone advances journal entries to DONE. Split from
 // PromoteToArchiveJob.swift to keep each file readable; see that file's
 // header for the overall contract.
 
@@ -16,6 +17,8 @@ extension PromoteToArchiveJob {
         let journalURL: URL
         /// What the manifest already says per source (idempotency leg 2).
         let manifestRows: [UUID: (relPath: String, sha256: String)]
+        /// Full manifest fields per source (orphan registration).
+        let manifestFields: [UUID: [String]]
     }
 
     enum FileResult {
@@ -30,20 +33,36 @@ extension PromoteToArchiveJob {
 
     // MARK: Preflight
 
-    /// The plan's root must still be the designated master; the master
-    /// volume must not be retired (`isRetired`, never `role == .retired`);
-    /// root reachable; manifest present; batch free space (§5.2, re-read
-    /// now — the sheet's number may be minutes old). nil ⇒ job finished
-    /// failed with the reason.
+    /// Refuse before ANY I/O when: the catalog is read-only on this Mac
+    /// (codex R3 blocker 2); the plan's root is no longer the designated
+    /// master; the volume mounted at the root is not the archive volume
+    /// (UUID mismatch — R3 blocker 1); the master's scan target cannot be
+    /// resolved by identity or is retired (`isRetired`, never `role`; nil
+    /// target = unknown state = refuse — R3 major 8); the root is offline;
+    /// the manifest is missing / a symlink / header-less (R3 blocker 3);
+    /// or the batch would not fit (§5.2, re-read now).
     func preflight(model: VideoScanModel) -> RunContext? {
         let root = plan.rootPath
         let fm = FileManager.default
+        if model.isReadOnly {
+            finish(failed: "This Mac is a read-only viewer of the catalog — promotion runs on the master Mac only. Nothing was copied.")
+            return nil
+        }
         guard let designated = model.masterArchiveRootPath,
               VideoScanModel.samePath(designated, root) else {
             finish(failed: "The Master Archive designation changed since this promotion was planned. Nothing was copied — try again.")
             return nil
         }
-        if let target = model.masterArchiveTarget, target.isRetired {
+        if let refusal = model.masterArchiveIdentityRefusal() {
+            model.masterArchiveIdentityMismatch = refusal
+            finish(failed: refusal)
+            return nil
+        }
+        guard let target = model.resolvedMasterArchiveTarget() else {
+            finish(failed: "The Master Archive's volume could not be matched to a scan target (by path or volume UUID) — its retired/role state is unknown, so nothing was copied. Re-run Initialize Master Archive on the archive volume.")
+            return nil
+        }
+        if target.isRetired {
             finish(failed: "The Master Archive volume is marked retired — reinstate it in the Volumes window before promoting. Nothing was copied.")
             return nil
         }
@@ -52,29 +71,38 @@ extension PromoteToArchiveJob {
             finish(failed: "The Master Archive folder is not reachable (\(root)). Connect the archive volume and try again.")
             return nil
         }
-        let manifestURL = MasterArchiveLayout.manifestURL(rootPath: root)
-        guard fm.fileExists(atPath: manifestURL.path) else {
-            finish(failed: ArchiveManifestCSV.ManifestError.missingHeader(path: manifestURL.path).description)
+        do {
+            try ArchiveManifestCSV.validate(rootPath: root)
+        } catch {
+            finish(failed: Self.describe(error))
             return nil
         }
         if let free = VideoScanModel.freeBytes(atPath: root), free < plan.requiredBytes {
             finish(failed: "Not enough free space on the archive volume — need about \(Self.humanBytes(plan.requiredBytes)), only \(Self.humanBytes(free)) available. Nothing was copied.")
             return nil
         }
+        let manifestURL = MasterArchiveLayout.manifestURL(rootPath: root)
         return RunContext(root: root,
                           manifestURL: manifestURL,
                           journalURL: ArchivePromoteJournal.url(rootPath: root),
-                          manifestRows: ArchiveManifestCSV.rowsBySource(in: manifestURL))
+                          manifestRows: ArchiveManifestCSV.rowsBySource(in: manifestURL),
+                          manifestFields: ArchiveManifestCSV.fieldRowsBySource(in: manifestURL))
     }
 
     // MARK: Reconcile (convergence)
 
     /// Finish whatever an earlier run left half-done, per the journal:
-    ///   intent   + no file        → drop the stale partial, mark abandoned
-    ///   any      + file, no row   → verify the file's digest against the
-    ///                               journaled sha (or the source's bytes),
-    ///                               then append the row + link the record
-    ///   manifest + no record      → link the record
+    ///   intent    + no file        → drop the stale partial, mark abandoned
+    ///   any       + file, no row   → verify the file's digest against the
+    ///                                journaled sha (or the source's bytes),
+    ///                                then append the row + link the record
+    ///   published + no catalog link → link the record from manifest/journal
+    ///                                provenance (self-contained when the
+    ///                                source is gone) — DONE was never
+    ///                                written, so the catalog save that
+    ///                                should have carried the link may not
+    ///                                have landed (codex R3 blocker 5)
+    ///   done                       → trusted (a durable catalog save wrote it)
     /// Returns how many promotions were completed here.
     func reconcileJournal(model: VideoScanModel, ctx: RunContext) async -> Int {
         let latest = ArchivePromoteJournal.latestBySource(in: ctx.journalURL)
@@ -84,15 +112,16 @@ extension PromoteToArchiveJob {
             let dest = URL(fileURLWithPath: ctx.root, isDirectory: true)
                 .appendingPathComponent(entry.destRelPath).standardizedFileURL
             let fm = FileManager.default
-            // Already linked (a crash between catalog save and 'done')?
+            // Already linked (a crash between catalog save and 'done')? The
+            // link is in memory now; the batch-end durable save re-marks it.
             if let src = model.record(forID: sourceID), model.masterArchiveCopy(of: src) != nil {
-                try? ArchivePromoteJournal.append(entry.with(state: .done), to: ctx.journalURL)
+                publishedThisBatch.append(entry.with(state: .published))
                 continue
             }
             guard fm.fileExists(atPath: dest.path) else {
                 // Never published: clean the partial, close the intent.
                 try? fm.removeItem(atPath: dest.path + ".partial")
-                try? ArchivePromoteJournal.append(entry.with(state: .abandoned), to: ctx.journalURL)
+                try? ArchivePromoteJournal.append(entry.with(state: .abandoned), rootPath: ctx.root)
                 continue
             }
             // Published. Establish the digest we can trust.
@@ -111,10 +140,9 @@ extension PromoteToArchiveJob {
                 appLog.write("promote reconcile: \(entry.destRelPath) could not be verified against its source — left in place, not indexed")
                 continue
             }
-            let source = model.record(forID: sourceID)
             do {
                 try await finishPublished(sourceID: sourceID,
-                                          source: source,
+                                          source: model.record(forID: sourceID),
                                           sourcePath: entry.sourcePath,
                                           relPath: entry.destRelPath,
                                           destURL: dest,
@@ -220,8 +248,9 @@ extension PromoteToArchiveJob {
             state: choice.identicalExistingSHA == nil ? .intent : .renamed,
             sha256: choice.identicalExistingSHA, copyRecordID: nil, at: Date())
         // Intent (or, for an adoption, "already published") BEFORE any
-        // byte moves — the convergence contract.
-        try ArchivePromoteJournal.append(journalEntry, to: ctx.journalURL)
+        // byte moves — the convergence contract. A journal that cannot be
+        // written durably stops the file here.
+        try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
 
         if let existingSHA = choice.identicalExistingSHA {
             sha = existingSHA
@@ -238,7 +267,7 @@ extension PromoteToArchiveJob {
                                                        progress: progress)
             sha = published.sha256
             journalEntry = journalEntry.with(state: .renamed, sha256: sha)
-            try ArchivePromoteJournal.append(journalEntry, to: ctx.journalURL)
+            try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
         }
         if Task.isCancelled { return .cancelled }
 
@@ -254,9 +283,13 @@ extension PromoteToArchiveJob {
     // MARK: Manifest + catalog tail (shared by promote / adopt / reconcile)
 
     /// After the file is verified and in place: probe it, append the
-    /// manifest row (unless the manifest already has one for this source),
-    /// create the linked catalog record + stamp the source (when the
-    /// source record still exists), journal `manifest` then `done`.
+    /// manifest row (unless the manifest already has one for this source)
+    /// + F_FULLFSYNC, journal `published`, then create the catalog link —
+    /// linked to the source when it still exists, SELF-CONTAINED from
+    /// journal/manifest provenance when it does not (codex R3 major 7).
+    /// The link is only in memory + a debounced save at this point: the
+    /// journal advances to `done` at batch end, after `saveCatalogNow()`
+    /// returns true (codex R3 blocker 5).
     func finishPublished(sourceID: UUID,
                          source: VideoRecord?,
                          sourcePath: String,
@@ -293,22 +326,48 @@ extension PromoteToArchiveJob {
                 dateConfidence: dateConfidence,
                 people: people,
                 starRating: max(source?.starRating ?? 0, 3))
-            try ArchiveManifestCSV.append(row, to: ctx.manifestURL)
-            journal = journal.with(state: .manifest, sha256: sha, copyRecordID: copyProbe.id)
-            try? ArchivePromoteJournal.append(journal, to: ctx.journalURL)
+            // Manifest row + F_FULLFSYNC — a barrier failure throws and the
+            // file is reported failed (it stays in place; the journal's
+            // `renamed` entry converges it next run).
+            try ArchiveManifestCSV.append(row, rootPath: ctx.root)
         }
+        journal = journal.with(state: .published, sha256: sha, copyRecordID: copyProbe.id)
+        try ArchivePromoteJournal.append(journal, rootPath: ctx.root)
 
-        guard let source else {
-            // Source record gone (retired-volume cleanup) — the copy is in
-            // the manifest and on disk; the catalog link cannot be made.
-            appLog.write("promote: \(relPath) is verified and in the manifest, but its source record is no longer in the catalog — no catalog link created (re-scan the archive volume to catalog the copy)")
-            return
+        if let source {
+            model.registerPromotedCopy(source: source, destinationURL: destURL,
+                                       relativePath: relPath, sha256: sha,
+                                       probed: copyProbe, promotedAt: now)
+        } else {
+            model.registerOrphanPromotedCopy(sourceID: sourceID, sourcePath: sourcePath,
+                                             destinationURL: destURL, relativePath: relPath,
+                                             sha256: sha, probed: copyProbe,
+                                             manifestRow: ctx.manifestFields[sourceID],
+                                             promotedAt: now)
+            appLog.write("promote: \(relPath) cataloged as a self-contained archive copy — its source record (\(sourceID.uuidString.prefix(8))…) is no longer in the catalog")
         }
-        model.registerPromotedCopy(source: source, destinationURL: destURL,
-                                   relativePath: relPath, sha256: sha,
-                                   probed: copyProbe, promotedAt: now)
-        journal = journal.with(state: .done, sha256: sha, copyRecordID: copyProbe.id)
-        try? ArchivePromoteJournal.append(journal, to: ctx.journalURL)
+        publishedThisBatch.append(journal)
+    }
+
+    /// Batch end (codex R3 blocker 5): ONE synchronous, durable catalog
+    /// save; only if it lands do the batch's `published` entries advance
+    /// to `done`. A refused/failed save leaves them `published` — the next
+    /// run's reconcile re-links from manifest/journal provenance, never
+    /// trusting an in-memory link that may not have been persisted.
+    func finalizeBatch(model: VideoScanModel, ctx: RunContext) -> Bool {
+        guard !publishedThisBatch.isEmpty else { return true }
+        let saved = model.saveCatalogNow()
+        if saved {
+            for entry in publishedThisBatch {
+                try? ArchivePromoteJournal.append(entry.with(state: .done), rootPath: ctx.root)
+            }
+            promoteLog.info("promote: catalog saved durably — \(self.publishedThisBatch.count) journal entr(ies) marked done")
+        } else {
+            promoteLog.error("promote: catalog save did not land — \(self.publishedThisBatch.count) entr(ies) stay 'published' for reconcile")
+            appLog.write("promote: the catalog could not be saved right now — \(publishedThisBatch.count) promotion(s) are on disk and in the manifest; the catalog links will be re-established on the next promotion run")
+        }
+        publishedThisBatch.removeAll()
+        return saved
     }
 
     // MARK: Off-main hops
