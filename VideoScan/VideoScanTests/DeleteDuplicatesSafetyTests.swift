@@ -39,9 +39,9 @@ private func write(_ url: URL, _ bytes: [UInt8]) {
 /// A record shaped like something the scorer would call a high-confidence
 /// extra copy.
 @MainActor
-private func dupRecord(path: String, size: Int64, md5: String,
+private func dupRecord(id: UUID = UUID(), path: String, size: Int64, md5: String,
                        group: UUID, disposition: DuplicateDisposition) -> VideoRecord {
-    let r = VideoRecord()
+    let r = VideoRecord(id: id)
     r.fullPath = path
     r.filename = (path as NSString).lastPathComponent
     r.sizeBytes = size
@@ -68,7 +68,7 @@ struct DeleteDuplicatesSafetyTests {
     /// tell apart — identical first and last 64 KB, identical size —
     /// but whose middles differ. The scorer calls them duplicates. The
     /// deletion API must NOT remove either one.
-    @Test func partialMD5CollisionSurvivesDeletion() throws {
+    @Test func partialMD5CollisionSurvivesDeletion() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -97,7 +97,7 @@ struct DeleteDuplicatesSafetyTests {
                              md5: "same", group: group, disposition: .extraCopy)
         model.records = [keeper, copy]
 
-        let result = model.deleteDuplicates(onVolume: dir.path)
+        let result = await model.deleteDuplicates(onVolume: dir.path)
 
         #expect(result.deleted == 0, "a non-identical file was DELETED")
         #expect(FileManager.default.fileExists(atPath: copyURL.path),
@@ -110,7 +110,7 @@ struct DeleteDuplicatesSafetyTests {
 
     /// Genuinely identical files still delete — verification must not
     /// break the feature it protects.
-    @Test func trulyIdenticalCopyIsStillDeleted() throws {
+    @Test func trulyIdenticalCopyIsStillDeleted() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -129,7 +129,7 @@ struct DeleteDuplicatesSafetyTests {
                       group: group, disposition: .extraCopy),
         ]
 
-        let result = model.deleteDuplicates(onVolume: dir.path)
+        let result = await model.deleteDuplicates(onVolume: dir.path)
 
         #expect(result.deleted == 1)
         #expect(!FileManager.default.fileExists(atPath: copyURL.path))
@@ -140,7 +140,7 @@ struct DeleteDuplicatesSafetyTests {
     /// A same-size, same-hash file whose content differs everywhere is
     /// the easy case — but it must also be refused, not merely the
     /// subtle middle-byte case.
-    @Test func whollyDifferentContentIsRefused() throws {
+    @Test func whollyDifferentContentIsRefused() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -158,13 +158,14 @@ struct DeleteDuplicatesSafetyTests {
                       group: group, disposition: .extraCopy),
         ]
 
-        #expect(model.deleteDuplicates(onVolume: dir.path).deleted == 0)
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+        #expect(result.deleted == 0)
         #expect(FileManager.default.fileExists(atPath: copyURL.path))
     }
 
     /// An unreadable or vanished keeper means we cannot verify, and
     /// "cannot verify" must never fall through to "delete anyway".
-    @Test func unverifiableKeeperRefusesDeletion() throws {
+    @Test func unverifiableKeeperRefusesDeletion() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -180,8 +181,304 @@ struct DeleteDuplicatesSafetyTests {
                       group: group, disposition: .extraCopy),
         ]
 
-        #expect(model.deleteDuplicates(onVolume: dir.path).deleted == 0)
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+        #expect(result.deleted == 0)
         #expect(FileManager.default.fileExists(atPath: copyURL.path),
                 "an unverifiable pair must leave the file on disk")
     }
+
+    /// A target that was already absent was not deleted by this operation,
+    /// so it must not be silently removed from the catalog as a success.
+    @Test func alreadyMissingTargetIsNotCountedOrRemoved() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        write(keeperURL, [UInt8](repeating: 7, count: 1_000))
+        let missingURL = dir.appendingPathComponent("already-gone.mov")
+        let group = UUID()
+        let keeper = dupRecord(path: keeperURL.path, size: 1_000, md5: "z",
+                               group: group, disposition: .keep)
+        let missing = dupRecord(path: missingURL.path, size: 1_000, md5: "z",
+                                group: group, disposition: .extraCopy)
+        let model = makeModel(dir)
+        model.records = [keeper, missing]
+
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+
+        #expect(result.deleted == 0)
+        #expect(model.records.contains { $0.id == missing.id },
+                "catalog removal must be driven by successful deletion IDs")
+        #expect(missing.duplicateDisposition == .review)
+    }
+
+    /// Isolation/read-only sensor: a viewer shares the real catalog but must
+    /// never mutate archive media, even if a stale confirmation sheet or a
+    /// direct caller reaches the model API after the UI changed modes.
+    @Test func readOnlyViewerCannotDeleteDuplicate() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        let copyURL = dir.appendingPathComponent("copy.mov")
+        write(keeperURL, [1, 2, 3, 4])
+        write(copyURL, [1, 2, 3, 4])
+        let group = UUID()
+        let model = makeModel(dir)
+        model.records = [
+            dupRecord(path: keeperURL.path, size: 4, md5: "same",
+                      group: group, disposition: .keep),
+            dupRecord(path: copyURL.path, size: 4, md5: "same",
+                      group: group, disposition: .extraCopy),
+        ]
+        model.applyReadOnlyMode(true)
+
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+
+        #expect(result.deleted == 0)
+        #expect(FileManager.default.fileExists(atPath: copyURL.path))
+        #expect(model.records.count == 2)
+        #expect(model.duplicateStatus.contains("viewer mode"))
+    }
+
+    /// Reentry sensor: the model guard is authoritative because a second
+    /// Task can outlive or bypass SwiftUI's disabled menu state.
+    @Test func activeDeletionRefusesReentry() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        let copyURL = dir.appendingPathComponent("copy.mov")
+        write(keeperURL, [5, 6, 7, 8])
+        write(copyURL, [5, 6, 7, 8])
+        let group = UUID()
+        let model = makeModel(dir)
+        model.records = [
+            dupRecord(path: keeperURL.path, size: 4, md5: "same",
+                      group: group, disposition: .keep),
+            dupRecord(path: copyURL.path, size: 4, md5: "same",
+                      group: group, disposition: .extraCopy),
+        ]
+        model.isDeletingDuplicates = true
+
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+
+        #expect(result.deleted == 0)
+        #expect(model.isDeletingDuplicates)
+        #expect(FileManager.default.fileExists(atPath: copyURL.path))
+        #expect(model.records.count == 2)
+    }
+
+    /// The disk worker awaits off-main. If live reload replaces a row while
+    /// that await is suspended, success for the old snapshot must not remove
+    /// the replacement row merely because its UUID still matches.
+    @Test func catalogReplacementDuringAwaitIsRetained() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        let copyURL = dir.appendingPathComponent("copy.mov")
+        write(keeperURL, [UInt8](repeating: 4, count: FileHasher.segmentSize * 2))
+        write(copyURL, [UInt8](repeating: 4, count: FileHasher.segmentSize * 2))
+        let group = UUID()
+        let targetID = UUID()
+        let model = makeModel(dir)
+        model.records = [
+            dupRecord(path: keeperURL.path, size: 2_097_152, md5: "same",
+                      group: group, disposition: .keep),
+            dupRecord(id: targetID, path: copyURL.path, size: 2_097_152, md5: "same",
+                      group: group, disposition: .extraCopy),
+        ]
+        let allowHashing = DispatchSemaphore(value: 0)
+        let gate = NSLock()
+        var paused = false
+        var hashingStarted = false
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { Task.isCancelled },
+            didReadBlock: { _ in
+                let shouldPause = gate.withLock {
+                    let firstBlock = !paused
+                    paused = true
+                    hashingStarted = true
+                    return firstBlock
+                }
+                if shouldPause {
+                    allowHashing.wait()
+                }
+            })
+
+        let deletion = Task {
+            await model.deleteDuplicates(onVolume: dir.path,
+                                         verificationHooks: hooks)
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            let started = gate.withLock { hashingStarted }
+            if started { break }
+            await Task.yield()
+        }
+        let didStart = gate.withLock { hashingStarted }
+        #expect(didStart)
+        let replacementPath = dir.appendingPathComponent("replacement.mov").path
+        model.records = [VideoRecord(id: targetID)]
+        model.records[0].fullPath = replacementPath
+        model.records[0].filename = "replacement.mov"
+        allowHashing.signal()
+        let result = await deletion.value
+
+        #expect(result.deleted == 1)
+        #expect(model.records.count == 1)
+        #expect(model.records[0].id == targetID)
+        #expect(model.records[0].fullPath == replacementPath)
+    }
+
+    /// Cancelling the main-actor operation must cancel its unstructured disk
+    /// worker too; otherwise the detached hash could continue into deletion.
+    @Test func cancellationPropagatesIntoHashWorker() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        let copyURL = dir.appendingPathComponent("copy.mov")
+        let bytes = [UInt8](repeating: 8, count: FileHasher.segmentSize * 2)
+        write(keeperURL, bytes)
+        write(copyURL, bytes)
+        let group = UUID()
+        let model = makeModel(dir)
+        model.records = [
+            dupRecord(path: keeperURL.path, size: Int64(bytes.count), md5: "same",
+                      group: group, disposition: .keep),
+            dupRecord(path: copyURL.path, size: Int64(bytes.count), md5: "same",
+                      group: group, disposition: .extraCopy),
+        ]
+        let release = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var started = false
+        var paused = false
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { Task.isCancelled },
+            didReadBlock: { _ in
+                let shouldPause = lock.withLock {
+                    let first = !paused
+                    paused = true
+                    started = true
+                    return first
+                }
+                if shouldPause { release.wait() }
+            })
+        let deletion = Task {
+            await model.deleteDuplicates(onVolume: dir.path,
+                                         verificationHooks: hooks)
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline,
+              !lock.withLock({ started }) {
+            await Task.yield()
+        }
+        #expect(lock.withLock { started })
+        deletion.cancel()
+        release.signal()
+        let result = await deletion.value
+
+        #expect(result.deleted == 0)
+        #expect(FileManager.default.fileExists(atPath: copyURL.path))
+        #expect(model.records.count == 2)
+    }
+
+    @Test("100k deletion planning stays linear and under budget",
+          .timeLimit(.minutes(1)))
+    func planningScale100k() {
+        let model = makeModel(URL(fileURLWithPath: "/tmp"))
+        let volume = "/Volumes/ScaleDelete"
+        let group = UUID()
+        var catalog: [VideoRecord] = []
+        catalog.reserveCapacity(100_000)
+        catalog.append(dupRecord(
+            path: "\(volume)/keeper.mov", size: 1, md5: "same",
+            group: group, disposition: .keep))
+        for index in 1..<100_000 {
+            catalog.append(dupRecord(
+                path: "\(volume)/copy-\(index).mov", size: 1, md5: "same",
+                group: group, disposition: .extraCopy))
+        }
+        model.records = catalog
+
+        let start = ContinuousClock.now
+        let selection = model.duplicateDeletionSelection(onVolume: volume)
+        let elapsed = start.duration(to: .now)
+
+        #expect(selection.targets.count == 99_999)
+        #expect(selection.skippedCount == 0)
+        #expect(elapsed < .seconds(2),
+                "100k duplicate planning exceeded 2 seconds: \(elapsed)")
+    }
+
+    @Test("full verification deletes identical files across the media matrix",
+          .timeLimit(.minutes(3)),
+          arguments: duplicateDeletionMediaCases)
+    func mediaMatrix(testCase: DuplicateDeletionMediaCase) async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable,
+                     "ffmpeg is a required project dependency")
+        let dir = try VerifyAudioTestMedia.makeScratchDir("duplicate-matrix")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try VerifyAudioTestMedia.generate(
+            into: dir,
+            name: testCase.filename,
+            videoCodec: testCase.videoCodec,
+            extraVideoArgs: testCase.extraVideoArgs,
+            audioCodec: testCase.audioCodec,
+            size: testCase.size,
+            rate: testCase.rate)
+        let sourceURL = URL(fileURLWithPath: source)
+        let copyURL = dir.appendingPathComponent(
+            "test_copy_" + sourceURL.lastPathComponent)
+        try FileManager.default.copyItem(at: sourceURL, to: copyURL)
+        let attributes = try FileManager.default.attributesOfItem(atPath: source)
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let group = UUID()
+        let model = makeModel(dir)
+        model.records = [
+            dupRecord(path: source, size: size, md5: "matrix",
+                      group: group, disposition: .keep),
+            dupRecord(path: copyURL.path, size: size, md5: "matrix",
+                      group: group, disposition: .extraCopy),
+        ]
+
+        let result = await model.deleteDuplicates(onVolume: dir.path)
+
+        #expect(result.deleted == 1, "\(testCase.label): identical copy survived")
+        #expect(FileManager.default.fileExists(atPath: source))
+        #expect(!FileManager.default.fileExists(atPath: copyURL.path))
+    }
 }
+
+struct DuplicateDeletionMediaCase: Sendable, CustomStringConvertible {
+    let label: String
+    let filename: String
+    let videoCodec: String
+    let extraVideoArgs: [String]
+    let audioCodec: String
+    let size: String
+    let rate: String
+
+    var description: String { label }
+}
+
+private let duplicateDeletionMediaCases = [
+    DuplicateDeletionMediaCase(
+        label: "mp4/h264+aac", filename: "test_dup_matrix.mp4",
+        videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+        audioCodec: "aac", size: "320x240", rate: "25"),
+    DuplicateDeletionMediaCase(
+        label: "mov/prores+pcm", filename: "test_dup_matrix.mov",
+        videoCodec: "prores", extraVideoArgs: [],
+        audioCodec: "pcm_s16le", size: "320x240", rate: "25"),
+    DuplicateDeletionMediaCase(
+        label: "mkv/ffv1+pcm", filename: "test_dup_matrix.mkv",
+        videoCodec: "ffv1", extraVideoArgs: [],
+        audioCodec: "pcm_s16le", size: "320x240", rate: "25"),
+    DuplicateDeletionMediaCase(
+        label: "mxf/mpeg2+pcm", filename: "test_dup_matrix.mxf",
+        videoCodec: "mpeg2video", extraVideoArgs: ["-g", "15"],
+        audioCodec: "pcm_s16le", size: "720x576", rate: "25"),
+    DuplicateDeletionMediaCase(
+        label: "avi/dv+pcm", filename: "test_dup_matrix.avi",
+        videoCodec: "dvvideo", extraVideoArgs: ["-pix_fmt", "yuv411p"],
+        audioCodec: "pcm_s16le", size: "720x480", rate: "30000/1001"),
+]

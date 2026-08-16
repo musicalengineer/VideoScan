@@ -199,4 +199,114 @@ struct SignatureVerificationTests {
             keeperPath: p, duplicatePath: "/nonexistent/gone.mov")
         #expect(verdict == .failure(.unreadable("/nonexistent/gone.mov")))
     }
+
+    /// Regression sensor for the destructive race: equal bytes are not a
+    /// lifetime guarantee. Replacing either path invalidates the proof even
+    /// if the replacement happens to contain the same bytes.
+    @Test func replacingKeeperInvalidatesVerifiedProof() throws {
+        let bytes: [UInt8] = [9, 8, 7, 6]
+        let keeper = tempFile("keeper.mov", bytes)
+        let duplicate = tempFile("duplicate.mov", bytes)
+        let proof = try #require(
+            SignatureVerification.verify(
+                keeperPath: keeper, duplicatePath: duplicate).successValue)
+
+        let replacement = URL(fileURLWithPath: keeper)
+            .deletingLastPathComponent().appendingPathComponent("replacement.mov")
+        FileManager.default.createFile(
+            atPath: replacement.path, contents: Data(bytes))
+        _ = try FileManager.default.replaceItemAt(
+            URL(fileURLWithPath: keeper), withItemAt: replacement)
+
+        guard case .failure(.changedSinceVerification(let changedPath)) =
+                SignatureVerification.revalidate(proof) else {
+            Issue.record("replaced keeper must invalidate proof"); return
+        }
+        #expect(changedPath == keeper)
+        #expect(FileManager.default.fileExists(atPath: duplicate))
+    }
+
+    @Test func replacingSymlinkTargetInvalidatesVerifiedProof() throws {
+        let bytes: [UInt8] = [4, 3, 2, 1]
+        let keeperTarget = tempFile("keeper-target.mov", bytes)
+        let duplicate = tempFile("duplicate.mov", bytes)
+        let keeperLink = URL(fileURLWithPath: keeperTarget)
+            .deletingLastPathComponent().appendingPathComponent("keeper-link.mov")
+        try FileManager.default.createSymbolicLink(
+            atPath: keeperLink.path, withDestinationPath: keeperTarget)
+        let proof = try #require(
+            SignatureVerification.verify(
+                keeperPath: keeperLink.path,
+                duplicatePath: duplicate).successValue)
+
+        let replacement = URL(fileURLWithPath: keeperTarget)
+            .deletingLastPathComponent().appendingPathComponent("new-target.mov")
+        FileManager.default.createFile(
+            atPath: replacement.path, contents: Data(bytes))
+        _ = try FileManager.default.replaceItemAt(
+            URL(fileURLWithPath: keeperTarget), withItemAt: replacement)
+
+        guard case .failure(.changedSinceVerification(let changedPath)) =
+                SignatureVerification.revalidate(proof) else {
+            Issue.record("replaced symlink target must invalidate proof"); return
+        }
+        #expect(changedPath == keeperLink.path)
+        #expect(FileManager.default.fileExists(atPath: duplicate))
+    }
+
+    /// Cancellation must be observed between bounded reads, before any
+    /// destructive action can be reached.
+    @Test func cancellationDuringFullHashRefusesVerification() {
+        let bytes = [UInt8](repeating: 0x5a, count: FileHasher.segmentSize * 3)
+        let keeper = tempFile("cancel-keeper.mov", bytes)
+        let duplicate = tempFile("cancel-copy.mov", bytes)
+        var blocksRead = 0
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { blocksRead >= 1 },
+            didReadBlock: { _ in blocksRead += 1 })
+
+        let result = SignatureVerification.verify(
+            keeperPath: keeper, duplicatePath: duplicate, hooks: hooks)
+
+        #expect(result == .failure(.cancelled))
+        #expect(FileManager.default.fileExists(atPath: duplicate))
+    }
+
+    /// Sensor for the old stat→unlink pathname race. Once the verified inode
+    /// is quarantined, a new file at the public name must survive, while the
+    /// old inode remains recoverable rather than being mistaken for it.
+    @Test func replacementAtDeletionWindowIsNeverRemoved() throws {
+        let bytes: [UInt8] = [1, 3, 3, 7]
+        let replacementBytes: [UInt8] = [9, 9, 9, 9]
+        let keeper = tempFile("window-keeper.mov", bytes)
+        let duplicate = tempFile("window-copy.mov", bytes)
+        let proof = try #require(SignatureVerification.verify(
+            keeperPath: keeper, duplicatePath: duplicate).successValue)
+        var retainedPath = ""
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { false },
+            didQuarantine: { path in
+                retainedPath = path
+                FileManager.default.createFile(
+                    atPath: duplicate, contents: Data(replacementBytes))
+            })
+
+        let result = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+
+        guard case .retainedQuarantine(let path, _) = result else {
+            Issue.record("occupied original path must retain the quarantined inode")
+            return
+        }
+        #expect(path == retainedPath)
+        #expect((try? Data(contentsOf: URL(fileURLWithPath: duplicate)))
+                == Data(replacementBytes))
+        #expect((try? Data(contentsOf: URL(fileURLWithPath: path))) == Data(bytes))
+    }
+}
+
+private extension Result {
+    var successValue: Success? {
+        guard case .success(let value) = self else { return nil }
+        return value
+    }
 }

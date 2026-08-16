@@ -1,5 +1,60 @@
 import Foundation
 
+private struct DuplicateDeletionWorkItem: Sendable {
+    let path: String
+    let keeperPath: String
+    let keeperFilename: String
+}
+
+private enum DuplicateDeletionDiskOutcome: Sendable {
+    case deleted(bytes: Int64)
+    case refused(reason: String)
+    case failed(reason: String)
+    case retained(path: String, reason: String)
+}
+
+private enum DuplicateDeletionDiskWorker {
+    /// Full verification and removal run outside the main actor. The worker
+    /// carries only immutable value snapshots — never VideoRecord instances.
+    static func run(_ item: DuplicateDeletionWorkItem,
+                    hooks: SignatureVerification.Hooks)
+        -> DuplicateDeletionDiskOutcome {
+        switch SignatureVerification.verify(keeperPath: item.keeperPath,
+                                             duplicatePath: item.path,
+                                             hooks: hooks) {
+        case .failure(let failure):
+            return .refused(reason: duplicateRefusalNote(
+                failure, keeper: item.keeperFilename))
+        case .success(let proof):
+            switch SignatureVerification.quarantineAndDelete(proof, hooks: hooks) {
+            case .deleted(let bytes): return .deleted(bytes: bytes)
+            case .refused(let failure):
+                return .refused(reason: duplicateRefusalNote(
+                    failure, keeper: item.keeperFilename))
+            case .failed(let reason): return .failed(reason: reason)
+            case .retainedQuarantine(let path, let reason):
+                return .retained(path: path, reason: reason)
+            }
+        }
+    }
+}
+
+private func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
+                                  keeper: String) -> String {
+    switch failure {
+    case .contentDiffers:
+        return "content differs from keeper \(keeper) — NOT a duplicate"
+    case .unreadable(let path):
+        return "could not read \(URL(fileURLWithPath: path).lastPathComponent) to verify"
+    case .samePath:
+        return "keeper and copy are the same file"
+    case .changedSinceVerification(let path):
+        return "\(URL(fileURLWithPath: path).lastPathComponent) changed during verification"
+    case .cancelled:
+        return "verification was cancelled"
+    }
+}
+
 // MARK: - Duplicate Analysis + Same-Volume Deletion
 //
 // analyzeDuplicates feeds DuplicateDetector, then UI uses the result to
@@ -10,6 +65,12 @@ import Foundation
 // the policy that makes the deletion safe.
 
 extension VideoScanModel {
+
+    struct DuplicateDeletionSelection {
+        let targets: [VideoRecord]
+        let keepers: [UUID: VideoRecord]
+        let skippedCount: Int
+    }
 
     /// Duplicate analysis under the analysis-ledger contract
     /// (docs/analysis_ledger_design.md, 2026-07-05):
@@ -110,29 +171,25 @@ extension VideoScanModel {
     /// same volume.  This prevents deleting a file whose only surviving copy
     /// lives on a different (e.g. backup) volume.
     @discardableResult
-    func deleteDuplicates(onVolume volumePath: String) -> (deleted: Int, failed: Int, skipped: Int, bytesFreed: Int64) {
+    func deleteDuplicates(onVolume volumePath: String,
+                          verificationHooks: SignatureVerification.Hooks = .live) async
+        -> (deleted: Int, failed: Int, skipped: Int, bytesFreed: Int64) {
+        guard !isReadOnly else {
+            duplicateStatus = "Deletion unavailable in viewer mode"
+            log("\nREFUSED duplicate deletion on \(volumePath): this Mac is in read-only viewer mode.")
+            return (0, 0, 0, 0)
+        }
+        guard !isDeletingDuplicates else {
+            log("\nREFUSED duplicate deletion on \(volumePath): another duplicate deletion is already running.")
+            return (0, 0, 0, 0)
+        }
         isDeletingDuplicates = true
         defer { isDeletingDuplicates = false }
 
-        // Build keeper lookup: groupID → keeper record
-        let keepers = keepersByGroupID()
-
-        // Only target extra copies whose keeper is on the same volume.
-        // Component-boundary scoping (PathScope) so a sibling volume can
-        // never be swept into a destructive file deletion. // regression: codex C2
-        let targets = records.filter { rec in
-            guard rec.duplicateDisposition == .extraCopy,
-                  PathScope.contains(rec.fullPath, within: volumePath),
-                  let groupID = rec.duplicateGroupID,
-                  let keeper = keepers[groupID] else { return false }
-            return PathScope.contains(keeper.fullPath, within: volumePath)
-        }
-
-        let skippedCount = records.filter { rec in
-            rec.duplicateDisposition == .extraCopy &&
-            PathScope.contains(rec.fullPath, within: volumePath) &&
-            !targets.contains(where: { $0.id == rec.id })
-        }.count
+        let selection = duplicateDeletionSelection(onVolume: volumePath)
+        let targets = selection.targets
+        let keepers = selection.keepers
+        let skippedCount = selection.skippedCount
 
         guard !targets.isEmpty else {
             if skippedCount > 0 {
@@ -152,7 +209,7 @@ extension VideoScanModel {
         var failed = 0
         var refused = 0
         var bytesFreed: Int64 = 0
-        let fm = FileManager.default
+        var catalogMutated = false
 
         // EVERY deletion is gated on a full byte-for-byte comparison,
         // performed HERE, immediately before the remove.
@@ -172,11 +229,16 @@ extension VideoScanModel {
         // about the bytes on disk now, and the gap between "decided to
         // delete" and "deleted" is exactly the window that matters.
         //
-        // This is slow — it reads both files in full — and that is
-        // correct. Deletion is the one operation that can never be
-        // undone, so it is the one that earns the I/O.
-        for record in targets {
-            let path = record.fullPath
+        // This is slow — it reads both files in full — and that is correct.
+        // The disk work is not allowed to freeze SwiftUI, however. Each pair
+        // is verified and removed in a detached task; the main actor awaits
+        // it and remains responsive, updating progress between pairs.
+        for (offset, record) in targets.enumerated() {
+            guard !Task.isCancelled else {
+                failed += targets.count - offset
+                log("  Duplicate deletion cancelled before verification completed")
+                break
+            }
             guard let groupID = record.duplicateGroupID,
                   let keeper = keepers[groupID] else {
                 refused += 1
@@ -184,36 +246,56 @@ extension VideoScanModel {
                 continue
             }
 
-            switch SignatureVerification.verify(keeperPath: keeper.fullPath,
-                                                duplicatePath: path) {
-            case .failure(let why):
-                refused += 1
-                // A refusal is INFORMATION, not an error: the scorer
-                // proposed a pair the bytes disagree with, which is the
-                // whole reason for verifying. Record it so the pair is
-                // not proposed again as if nothing happened.
-                record.duplicateDisposition = .review
-                record.duplicateReasons = Self.refusalNote(why, keeper: keeper.filename)
-                log("  REFUSED \(record.filename): \(Self.refusalNote(why, keeper: keeper.filename))")
+            duplicateStatus = "Verifying duplicate \(offset + 1) of \(targets.count)…"
+            let item = DuplicateDeletionWorkItem(
+                path: record.fullPath,
+                keeperPath: keeper.fullPath,
+                keeperFilename: keeper.filename)
+            let expectedID = record.id
+            let expectedPath = record.fullPath
+            let worker = Task.detached(priority: .userInitiated) {
+                DuplicateDeletionDiskWorker.run(item, hooks: verificationHooks)
+            }
+            let outcome = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            let currentRecord = records.first {
+                $0.id == expectedID && $0.fullPath == expectedPath
+            }
 
-            case .success:
-                do {
-                    let attrs = try fm.attributesOfItem(atPath: path)
-                    let size = (attrs[.size] as? Int64) ?? 0
-                    try fm.removeItem(atPath: path)
-                    bytesFreed += size
-                    deleted += 1
-                    log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
-                } catch {
-                    failed += 1
-                    log("  FAILED to delete \(record.filename): \(error.localizedDescription)")
+            switch outcome {
+            case .refused(let reason):
+                refused += 1
+                currentRecord?.duplicateDisposition = .review
+                currentRecord?.duplicateReasons = reason
+                catalogMutated = catalogMutated || currentRecord != nil
+                log("  REFUSED \(record.filename): \(reason)")
+            case .failed(let reason):
+                failed += 1
+                log("  FAILED to delete \(record.filename): \(reason)")
+            case .deleted(let bytes):
+                bytesFreed += bytes
+                deleted += 1
+                if let index = records.firstIndex(where: {
+                    $0.id == expectedID && $0.fullPath == expectedPath
+                }) {
+                    records.remove(at: index)
+                    catalogMutated = true
+                } else {
+                    log("  Catalog changed while deleting \(record.filename); current row retained")
                 }
+                log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
+            case .retained(let path, let reason):
+                failed += 1
+                log("  RETAINED safely at \(path): \(reason)")
             }
         }
 
-        // Remove deleted records from the catalog
-        let deletedPaths = Set(targets.filter { !FileManager.default.fileExists(atPath: $0.fullPath) }.map { $0.fullPath })
-        records.removeAll { deletedPaths.contains($0.fullPath) }
+        if catalogMutated {
+            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        }
 
         let freed = ByteCountFormatter.string(fromByteCount: bytesFreed, countStyle: .file)
         log("\nDuplicate deletion complete: \(deleted) deleted, \(failed) failed, "
@@ -230,14 +312,30 @@ extension VideoScanModel {
     /// Human-readable reason a verified deletion was refused.
     static func refusalNote(_ failure: SignatureVerification.Failure,
                             keeper: String) -> String {
-        switch failure {
-        case .contentDiffers:
-            return "content differs from keeper \(keeper) — NOT a duplicate"
-        case .unreadable(let path):
-            return "could not read \(URL(fileURLWithPath: path).lastPathComponent) to verify"
-        case .samePath:
-            return "keeper and copy are the same file"
+        duplicateRefusalNote(failure, keeper: keeper)
+    }
+
+    /// O(N) candidate planning, isolated from disk I/O so the adopted 100k
+    /// scale gate can pin it independently of media size.
+    func duplicateDeletionSelection(onVolume volumePath: String)
+        -> DuplicateDeletionSelection {
+        let keepers = keepersByGroupID()
+        let targets = records.filter { rec in
+            guard rec.duplicateDisposition == .extraCopy,
+                  PathScope.contains(rec.fullPath, within: volumePath),
+                  let groupID = rec.duplicateGroupID,
+                  let keeper = keepers[groupID] else { return false }
+            return PathScope.contains(keeper.fullPath, within: volumePath)
         }
+        let targetIDs = Set(targets.map(\.id))
+        let skippedCount = records.lazy.filter { rec in
+            rec.duplicateDisposition == .extraCopy
+                && PathScope.contains(rec.fullPath, within: volumePath)
+                && !targetIDs.contains(rec.id)
+        }.count
+        return DuplicateDeletionSelection(targets: targets,
+                                          keepers: keepers,
+                                          skippedCount: skippedCount)
     }
 
     /// Returns the distinct volume root paths that have high-confidence duplicate
