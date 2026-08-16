@@ -620,46 +620,17 @@ struct CatalogToolbar<Dashboard: View>: View {
             // regardless of what we ask for. Close enough to the search
             // that the pair reads as one idea: "Search, or Chat with the
             // Family Archivist."
+            // Family Archivist front door MOVED to the tab bar (Rick
+            // 2026-08-16: "move the Pink AI Archivist to be after the
+            // Family Tree tab, prominently displayed"). The ⌥ quick
+            // popover stays reachable here so the old muscle memory
+            // (⌥-click near the search) still works.
             Spacer().frame(width: Self.archivistGap)
-
-            // Family Archivist — opens the floating chat window
-            // (2026-08-07: outgrew the popover; the conversation lives
-            // in its own always-on-top window, the catalog stays the
-            // display surface). ⌥-click keeps the old quick popover.
-            Button {
-                if NSEvent.modifierFlags.contains(.option) {
-                    showAskPopover.toggle()
-                } else {
-                    openWindow(id: "archivist")
+            Color.clear.frame(width: 1, height: 1)
+                .popover(isPresented: $showAskPopover, arrowEdge: .bottom) {
+                    ArchivistAskPopover(searchText: $searchText,
+                                        isPresented: $showAskPopover)
                 }
-            } label: {
-                // Rick 2026-08-07: "can you make the sparkly ai icon
-                // bigger, it is tiny" — the archivist's front door
-                // deserves door-sized signage.
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.purple)
-                    .padding(.horizontal, 2)
-            }
-            .buttonStyle(.plain)
-            .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for Quick Catalog Filter)")
-            .accessibilityIdentifier("archivist.askButton")
-
-            // The sparkle alone never said what it did. Labelling it is
-            // the difference between a decoration and a door (Rick
-            // 2026-08-11). Truncates before the search field does.
-            Text("Chat with Family Archivist")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.purple)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(-1)
-                .allowsHitTesting(false)
-            .popover(isPresented: $showAskPopover, arrowEdge: .bottom) {
-                ArchivistAskPopover(searchText: $searchText,
-                                    isPresented: $showAskPopover)
-            }
-
 
             // The row's ONE flexible Spacer, and it lives here — after the
             // Archivist — so everything to its left keeps the fixed column

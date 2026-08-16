@@ -18,6 +18,7 @@ struct ContentView: View {
         ("Archive", "archivebox.fill", 4),
         ("Family Tree", "person.3.fill", 5)
     ]
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +62,14 @@ struct ContentView: View {
                                     .frame(height: 2.5)
                             }
                         }
+                    }
+                    // Family Archivist — the door to Hallie Mae's window,
+                    // after Family Tree, twinkling (Rick 2026-08-16). Not
+                    // a content tab: the conversation stays in its own
+                    // always-on-top window so the catalog remains the
+                    // display surface.
+                    ArchivistTabButton(fontSize: tabFontSize) {
+                        openWindow(id: "archivist")
                     }
                 }
                 Spacer()
