@@ -102,9 +102,15 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// without re-querying every record. Deduped at retire time.
     @Published var retiredWitnesses: [String]?
 
-    /// Convenience predicate. `// guard let` ≈ C++ early-return after a
-    /// null check.
-    var isRetired: Bool { retiredAt != nil }
+    /// ONE definition of "retired" (codex #385 / docs/volume_taxonomy_proposal.md
+    /// — retirement had two owners). The retire FLOW stamps `retiredAt`;
+    /// the role chip can be set to Retired by hand and never gets a stamp.
+    /// Rick 2026-08-16: RicksBackups + 500USB were role=Retired, stamp
+    /// nil — the cleanup nag skipped them AND the scan/resume gates would
+    /// have let a plugged-in retired drive be rescanned. Every consumer
+    /// (scan gates, nag, Volumes window, master-archive refusals) goes
+    /// through this predicate; `reinstateVolume` clears BOTH owners.
+    var isRetired: Bool { retiredAt != nil || role == .retired }
 
     /// Computed archival-destination suitability. Rules (first match wins):
     ///   1. RAID-0 or trust=Unreliable → Forbidden

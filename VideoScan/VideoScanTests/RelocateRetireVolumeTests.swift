@@ -240,6 +240,30 @@ struct RelocateRetireVolumeTests {
         #expect(target.retiredWitnesses == nil)
     }
 
+    /// Rick 2026-08-16: RicksBackups + 500USB were role=Retired (chip set
+    /// by hand) with no retiredAt stamp. `isRetired` must be the ONE
+    /// predicate every gate uses, so a role-only retirement refuses
+    /// scans and is nagged about; reinstate must clear both owners.
+    @Test
+    func roleRetiredWithoutStamp_isRetired_andReinstateClearsBothOwners() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
+        target.role = .retired
+        target.retiredAt = nil
+        model.scanTargets = [target]
+
+        #expect(target.isRetired, "role chip alone must count as retired")
+        // Scan gate honors it: startTarget refuses without touching status.
+        target.isReachable = true
+        model.startTarget(target)
+        #expect(target.status == .idle || target.status == .stopped,
+                "a retired-by-role volume must not start scanning")
+
+        #expect(model.reinstateVolume(at: "/Volumes/RicksBackups"))
+        #expect(target.isRetired == false)
+        #expect(target.role != .retired, "reinstate must clear the role owner too")
+    }
+
     @Test
     func reinstate_returnsFalseWhenNoMatchingTarget() {
         let model = VideoScanModel()

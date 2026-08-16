@@ -229,7 +229,11 @@ extension VideoScanModel {
         target.retiredAt = nil
         target.retiredReason = nil
         target.retiredWitnesses = nil
+        // The role chip is the second owner of "retired" — clear it too,
+        // or isRetired stays true and the scan gates keep refusing.
+        if target.role == .retired { target.role = .unassigned }
         persistScanDates()
+        persistScanTargets()
         notifyTargetsChanged()
         log("Reinstated volume \(volumeRootPath).")
         return true

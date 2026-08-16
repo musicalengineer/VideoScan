@@ -301,7 +301,7 @@ extension VideoScanModel {
         // stamp. Rick 2026-08-16: RicksBackups + 500USB were role=Retired
         // with retiredAt=nil, so this nag never fired for them. Honor
         // both until retirement is centralized on retiredAt.
-        let retired = scanTargets.filter { ($0.isRetired || $0.role == .retired)
+        let retired = scanTargets.filter { $0.isRetired      // covers stamp OR role chip
                                            && $0.phase != .noCatalog
                                            && !$0.searchPath.isEmpty }
         guard !retired.isEmpty else { return [] }
