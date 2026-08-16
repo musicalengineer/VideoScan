@@ -807,17 +807,22 @@ struct InspectorPanel: View {
     /// Master Archive link row: filename link (selects the other record)
     /// plus a small Reveal button that opens Finder on that file.
     private func promotionLinkRow(label: String, target: VideoRecord, revealTitle: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
+        // Green = "this file is safely in the Master Archive" (Rick
+        // 2026-08-16); the filename stays accent-colored because it is a
+        // link that jumps to the other record.
+        let verified = label.hasPrefix("Master copy")
+        return HStack(alignment: .top, spacing: 6) {
             Text(label)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+                .font(.system(size: 11, weight: verified ? .semibold : .regular))
+                .foregroundColor(verified ? .green : .secondary)
                 .frame(width: 80, alignment: .trailing)
             Button {
                 onSelectRecord?(target.id)
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "star.circle")
+                    Image(systemName: verified ? "checkmark.seal.fill" : "star.circle")
                         .font(.system(size: 9))
+                        .foregroundColor(verified ? .green : .accentColor)
                     Text(target.filename)
                         .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
