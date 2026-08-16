@@ -16,7 +16,7 @@ import AppKit
 
 /// Source location of the dossier JSONL deltas that workers append to.
 /// Wrapped in a namespace so tests can stub the directory; production
-/// always reads from `/Volumes/Crucial2TB/dossier-deltas/`.
+/// always reads from `/Volumes/CrucialX9/dossier-deltas/` (legacy name Crucial2TB accepted).
 ///
 /// The deltas are the write-ahead log behind catalog.json's dossier
 /// fields — see docs/database_design.md. Bundling them belt-and-suspenders
@@ -24,8 +24,24 @@ import AppKit
 enum DossierDeltaPaths {
     /// Live source directory in production. Tests override via
     /// `BundleExporter.writeBundle(..., dossierDeltaDirOverride:)`.
-    static let liveDir = URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas",
-                             isDirectory: true)
+    /// The delta dir has lived on the same physical drive under two names
+    /// (Crucial2TB → renamed CrucialX9, 2026-07). Prefer whichever exists;
+    /// fall back to the current name so the warning text names a real
+    /// place. Rick 2026-08-16: backup warned "not available at
+    /// /Volumes/Crucial2TB/dossier-deltas" while the dir was mounted at
+    /// /Volumes/CrucialX9/dossier-deltas.
+    static let candidateDirs: [URL] = [
+        URL(fileURLWithPath: "/Volumes/CrucialX9/dossier-deltas", isDirectory: true),
+        URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas", isDirectory: true),
+    ]
+    static var liveDir: URL {
+        var isDir: ObjCBool = false
+        for url in candidateDirs
+        where FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue {
+            return url
+        }
+        return candidateDirs[0]
+    }
 
     /// On-disk path of the integrity manifest the merger keeps in lock-step
     /// with catalog.json. Optional: a missing file is skipped quietly

@@ -28,6 +28,24 @@ import Foundation
 
 @Suite("Bundle dossier-delta inclusion")
 struct BundleDossierDeltaTests {
+    /// Rick 2026-08-16: backup warned the delta dir was "not available at
+    /// /Volumes/Crucial2TB/dossier-deltas" while it was mounted under the
+    /// drive's current name CrucialX9. liveDir must resolve to whichever
+    /// candidate exists and prefer the current name.
+    @Test func liveDirPrefersAnExistingCandidateAndCurrentDriveNameFirst() {
+        #expect(DossierDeltaPaths.candidateDirs.first?.path == "/Volumes/CrucialX9/dossier-deltas")
+        #expect(DossierDeltaPaths.candidateDirs.contains { $0.path == "/Volumes/Crucial2TB/dossier-deltas" })
+        let live = DossierDeltaPaths.liveDir
+        #expect(DossierDeltaPaths.candidateDirs.contains(live))
+        var isDir: ObjCBool = false
+        let anyExists = DossierDeltaPaths.candidateDirs.contains {
+            FileManager.default.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
+        }
+        if anyExists {
+            #expect(FileManager.default.fileExists(atPath: live.path), "must pick an existing dir when one exists")
+        }
+    }
+
 
     // MARK: - Sandbox helpers
 
