@@ -216,7 +216,7 @@ struct ArchiveManifestCSVTests {
         #expect(line.hasSuffix("\n"))
         #expect(line.filter { $0 == "\n" }.count == 1, "one physical line")
         let fields = ArchiveManifestCSV.fields(ofLine: line)
-        #expect(fields.count == 13, "12 spec columns + readiness")
+        #expect(fields.count == 12)
         #expect(fields[ArchiveManifestCSV.relPathColumn] == r.archiveRelPath)
         #expect(fields[4] == r.originalPath)
         #expect(fields[10] == "Donna; Rick")
@@ -387,14 +387,9 @@ struct MasterArchiveInitializeTests {
         }
         #expect(model.masterArchive == nil)
         #expect(!FileManager.default.fileExists(atPath: sb.archiveRoot.path), "nothing scaffolded on refusal")
-        // ONE definition of retired (main 06d0d809): the role chip counts too,
-        // so `role == .retired` alone is ALSO refused; reinstating (both
-        // owners cleared) allows Initialize.
+        // Clearing the stamp reinstates it — `retiredAt` is the ONE owner
+        // of retirement (taxonomy 2026-08-16; the `.retired` role is gone).
         t.retiredAt = nil
-        t.role = .retired
-        #expect(throws: MasterArchiveError.self) { try model.initializeMasterArchive(at: sb.archiveVolume) }
-        #expect(model.masterArchive == nil)
-        t.role = .unassigned
         #expect(throws: Never.self) { try model.initializeMasterArchive(at: sb.archiveVolume) }
         #expect(model.masterArchive != nil)
     }

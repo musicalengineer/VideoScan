@@ -413,9 +413,11 @@ struct RelocateSummarySheetTests {
 
         // Resolver marks both hosts degraded.
         let resolver: VolumeSafetyResolver = { p in
-            if p.hasPrefix("/Volumes/OldMaxtor/") { return (.retired, .reliable) }
-            if p.hasPrefix("/Volumes/FlakyDrive/") { return (.backup, .unreliable) }
-            return (.unassigned, .unknown)
+            // Retired host: role stays whatever it was (Backup here); the
+            // retirement rides on `isRetired` (taxonomy 2026-08-16).
+            if p.hasPrefix("/Volumes/OldMaxtor/") { return VolumeSafety(role: .backup, trust: .reliable, isRetired: true) }
+            if p.hasPrefix("/Volumes/FlakyDrive/") { return VolumeSafety(role: .backup, trust: .unreliable) }
+            return VolumeSafety.unknown
         }
 
         let result = RelocateReconcile.reconcile(
@@ -443,10 +445,10 @@ struct RelocateSummarySheetTests {
         safeWitness.sizeBytes = 1024
         safeWitness.partialMD5 = src.partialMD5
         let resolverWithSafe: VolumeSafetyResolver = { p in
-            if p.hasPrefix("/Volumes/OldMaxtor/") { return (.retired, .reliable) }
-            if p.hasPrefix("/Volumes/FlakyDrive/") { return (.backup, .unreliable) }
-            if p.hasPrefix("/Volumes/LaCieWorkspace/") { return (.lta, .reliable) }
-            return (.unassigned, .unknown)
+            if p.hasPrefix("/Volumes/OldMaxtor/") { return VolumeSafety(role: .backup, trust: .reliable, isRetired: true) }
+            if p.hasPrefix("/Volumes/FlakyDrive/") { return VolumeSafety(role: .backup, trust: .unreliable) }
+            if p.hasPrefix("/Volumes/LaCieWorkspace/") { return VolumeSafety(role: .offsite, trust: .reliable) }
+            return VolumeSafety.unknown
         }
         let result2 = RelocateReconcile.reconcile(
             records: [src],
@@ -482,15 +484,15 @@ struct RelocateSummarySheetTests {
 
         let witnesses = [
             ("/Volumes/A/x.bin", VolumeRole.backup, VolumeTrust.reliable),
-            ("/Volumes/B/x.bin", VolumeRole.lta, VolumeTrust.aging),
+            ("/Volumes/B/x.bin", VolumeRole.offsite, VolumeTrust.aging),
             ("/Volumes/C/x.bin", VolumeRole.archive, VolumeTrust.unknown),
             ("/Volumes/D/x.bin", VolumeRole.original, VolumeTrust.reliable)
         ]
         let resolver: VolumeSafetyResolver = { p in
             for (path, role, trust) in witnesses where p.hasPrefix(path) {
-                return (role, trust)
+                return VolumeSafety(role: role, trust: trust)
             }
-            return (.unassigned, .unknown)
+            return VolumeSafety.unknown
         }
         let witnessRecords = witnesses.map { (path, _, _) -> VideoRecord in
             let r = VideoRecord()
@@ -513,7 +515,7 @@ struct RelocateSummarySheetTests {
         )
         let entry = try? #require(result.safelyRedundant.first)
         // Expected order (highest safetyScore first):
-        //   LTA + Aging      → 6*10 + 2 = 62
+        //   Offsite + Aging  → 6*10 + 2 = 62
         //   Archive + Unknown→ 5*10 + 1 = 51
         //   Backup + Reliable→ 4*10 + 3 = 43
         //   Original + Reliable → 3*10 + 3 = 33
@@ -554,10 +556,10 @@ struct RelocateSummarySheetTests {
         flaky.partialMD5 = "bb"
 
         let resolver: VolumeSafetyResolver = { p in
-            if p.hasPrefix("/Volumes/MyBook/") { return (.backup, .reliable) }
-            if p.hasPrefix("/Volumes/Mini2TB/") { return (.retired, .reliable) }
-            if p.hasPrefix("/Volumes/Flaky/") { return (.backup, .unreliable) }
-            return (.unassigned, .unknown)
+            if p.hasPrefix("/Volumes/MyBook/") { return VolumeSafety(role: .backup, trust: .reliable) }
+            if p.hasPrefix("/Volumes/Mini2TB/") { return VolumeSafety(role: .backup, trust: .reliable, isRetired: true) }
+            if p.hasPrefix("/Volumes/Flaky/") { return VolumeSafety(role: .backup, trust: .unreliable) }
+            return VolumeSafety.unknown
         }
 
         let result = RelocateReconcile.reconcile(
@@ -604,7 +606,7 @@ struct RelocateSummarySheetTests {
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
-        safeWitness.role = .lta
+        safeWitness.role = .offsite
         safeWitness.trust = .reliable
         model.scanTargets = [
             CatalogScanTarget(searchPath: ws.source.path),
@@ -628,7 +630,7 @@ struct RelocateSummarySheetTests {
         #expect(summary.degradedOnlyCount == 0)
         // Sample carries the safe host's role/trust.
         let sample = try #require(summary.witnessSamples.first)
-        #expect(sample.witnessRole == .lta)
+        #expect(sample.witnessRole == .offsite)
         #expect(sample.witnessTrust == .reliable)
         #expect(sample.isSafe)
     }

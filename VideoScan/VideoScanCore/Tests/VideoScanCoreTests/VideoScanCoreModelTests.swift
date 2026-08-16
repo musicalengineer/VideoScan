@@ -388,8 +388,10 @@ struct VideoScanCoreModelTests {
         #expect(VolumeRole.original.rawValue == "Original")
         #expect(VolumeRole.backup.rawValue == "Backup")
         #expect(VolumeRole.archive.rawValue == "Archive")
-        #expect(VolumeRole.lta.rawValue == "Long-Term Archive")
-        #expect(VolumeRole.retired.rawValue == "Retired")
+        #expect(VolumeRole.working.rawValue == "Working")
+        #expect(VolumeRole.offsite.rawValue == "Offsite")
+        // Taxonomy 2026-08-16: `.retired` removed (retirement = retiredAt),
+        // `.lta` renamed `.offsite`, `.working` added.
         #expect(VolumeRole.allCases.count == 7)
     }
 

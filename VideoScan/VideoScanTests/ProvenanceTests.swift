@@ -45,13 +45,13 @@ struct ProvenanceTests {
     /// fallback the real resolver uses.
     private func resolver(_ table: [String: (VolumeRole, VolumeTrust)]) -> VolumeSafetyResolver {
         let sorted = table
-            .map { (path: $0.key, role: $0.value.0, trust: $0.value.1) }
+            .map { (path: $0.key, safety: VolumeSafety(role: $0.value.0, trust: $0.value.1)) }
             .sorted { $0.path.count > $1.path.count }
         return { path in
             for entry in sorted where path.hasPrefix(entry.path + "/") || path == entry.path {
-                return (entry.role, entry.trust)
+                return entry.safety
             }
-            return (.unassigned, .unknown)
+            return VolumeSafety.unknown
         }
     }
 
@@ -82,7 +82,7 @@ struct ProvenanceTests {
         let res = resolver([
             "/Volumes/Mini2TB":           (.original, .unreliable),
             "/Volumes/MyBook3Terabytes":  (.backup,   .reliable),
-            "/Volumes/LaCieWorkspace":    (.lta,      .reliable)
+            "/Volumes/LaCieWorkspace":    (.offsite,  .reliable)
         ])
         let prov = VideoScanModel.buildVolumeProvenance(
             sourceVolumeRootPath: "/Volumes/Mini2TB",
@@ -325,7 +325,7 @@ struct ProvenanceTests {
                             combinedFromPairID: nil)
         let res = resolver([
             "/Volumes/Backup": (.backup, .reliable),
-            "/Volumes/LTA":    (.lta,    .reliable)
+            "/Volumes/LTA":    (.offsite, .reliable)
         ])
         let mo = VideoScanModel.buildMigrationOverview(
             allRecords: [r1, r2, r3, r4],

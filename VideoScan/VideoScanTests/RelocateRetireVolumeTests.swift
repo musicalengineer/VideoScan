@@ -241,27 +241,34 @@ struct RelocateRetireVolumeTests {
     }
 
     /// Rick 2026-08-16: RicksBackups + 500USB were role=Retired (chip set
-    /// by hand) with no retiredAt stamp. `isRetired` must be the ONE
-    /// predicate every gate uses, so a role-only retirement refuses
-    /// scans and is nagged about; reinstate must clear both owners.
+    /// by hand) with no retiredAt stamp. The taxonomy cleanup removed the
+    /// `.retired` role: a legacy persisted "Retired" string decodes to a
+    /// target with `retiredAt` STAMPED (retirement's one owner), so
+    /// `isRetired` is true, the scan gate refuses, and reinstate clears
+    /// the stamp — the role (Unassigned) needs no touching.
     @Test
-    func roleRetiredWithoutStamp_isRetired_andReinstateClearsBothOwners() {
+    func legacyRetiredRoleString_stampsRetiredAt_gatesScan_andReinstateClears() {
         let model = VideoScanModel()
         let target = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
-        target.role = .retired
         target.retiredAt = nil
+        let decode = ScanTargetPersistence.applyPersistedRole("Retired", to: target)
         model.scanTargets = [target]
 
-        #expect(target.isRetired, "role chip alone must count as retired")
+        #expect(decode.wasRetired)
+        #expect(target.role == .unassigned, "legacy Retired role has no intent left → Unassigned")
+        #expect(target.retiredAt != nil, "legacy Retired role must become a retiredAt stamp")
+        #expect(target.retiredReason == ScanTargetPersistence.legacyRetiredMigrationReason)
+        #expect(target.isRetired, "isRetired is retiredAt != nil — nothing else")
         // Scan gate honors it: startTarget refuses without touching status.
         target.isReachable = true
         model.startTarget(target)
         #expect(target.status == .idle || target.status == .stopped,
-                "a retired-by-role volume must not start scanning")
+                "a retired volume must not start scanning")
 
         #expect(model.reinstateVolume(at: "/Volumes/RicksBackups"))
         #expect(target.isRetired == false)
-        #expect(target.role != .retired, "reinstate must clear the role owner too")
+        #expect(target.retiredAt == nil)
+        #expect(target.role == .unassigned, "reinstate leaves the role alone")
     }
 
     @Test

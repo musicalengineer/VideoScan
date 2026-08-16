@@ -132,8 +132,8 @@ struct ModelPresentationTests {
         #expect(VolumeRole.original.icon   == "film.stack")
         #expect(VolumeRole.backup.icon     == "doc.on.doc")
         #expect(VolumeRole.archive.icon    == "archivebox.fill")
-        #expect(VolumeRole.lta.icon        == "icloud.fill")
-        #expect(VolumeRole.retired.icon    == "archivebox")
+        #expect(VolumeRole.offsite.icon    == "icloud.fill")
+        #expect(VolumeRole.working.icon    == "hammer")
         #expect(VolumeRole.allCases.count == 7)
     }
 
@@ -145,8 +145,8 @@ struct ModelPresentationTests {
         #expect(VolumeRole.original.shortLabel   == "ORIG")
         #expect(VolumeRole.backup.shortLabel     == "BKUP")
         #expect(VolumeRole.archive.shortLabel    == "ARCH")
-        #expect(VolumeRole.lta.shortLabel        == "LTA")
-        #expect(VolumeRole.retired.shortLabel    == "RTD")
+        #expect(VolumeRole.offsite.shortLabel    == "OFFS")
+        #expect(VolumeRole.working.shortLabel    == "WORK")
         #expect(VolumeRole.allCases.count == 7)
     }
 

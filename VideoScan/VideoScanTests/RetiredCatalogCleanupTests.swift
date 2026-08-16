@@ -63,18 +63,25 @@ final class RetiredCatalogCleanupTests: XCTestCase {
     }
 
     /// Rick 2026-08-16: RicksBackups + 500USB carried role=Retired set by
-    /// hand, retiredAt=nil, and the backup-time nag never fired. Both
-    /// owners of "retired" must count until retirement is centralized.
-    func testRoleRetiredWithoutRetiredAtStampIsACandidate() {
+    /// hand, retiredAt=nil, and the backup-time nag never fired. The
+    /// taxonomy cleanup removed the `.retired` role; a legacy persisted
+    /// "Retired" string is converted to a `retiredAt` stamp at decode time
+    /// (`ScanTargetPersistence.applyPersistedRole`), and THAT is what the
+    /// nag keys on. This pins the whole chain: legacy string → stamp →
+    /// candidate.
+    func testLegacyRetiredRoleStringBecomesStampAndIsACandidate() {
         let m = makeModel()
-        let byRole = makeTarget("/Volumes/RicksBackups", retired: false)
-        byRole.role = .retired
-        XCTAssertNil(byRole.retiredAt, "precondition: no stamp")
-        m.scanTargets = [byRole]
+        let legacy = makeTarget("/Volumes/RicksBackups", retired: false)
+        XCTAssertNil(legacy.retiredAt, "precondition: no stamp")
+        ScanTargetPersistence.applyPersistedRole("Retired", to: legacy)
+        XCTAssertNotNil(legacy.retiredAt, "legacy Retired role must stamp retiredAt")
+        XCTAssertEqual(legacy.role, .unassigned)
+        XCTAssertTrue(legacy.isRetired)
+        m.scanTargets = [legacy]
         m.records = makeRecords(under: "/Volumes/RicksBackups", count: 2)
 
         let c = m.retiredCatalogCleanupCandidates()
-        XCTAssertEqual(c.count, 1, "role-only retirement must still be nagged about")
+        XCTAssertEqual(c.count, 1, "migrated legacy retirement must still be nagged about")
         XCTAssertEqual(c.first?.recordCount, 2)
     }
 

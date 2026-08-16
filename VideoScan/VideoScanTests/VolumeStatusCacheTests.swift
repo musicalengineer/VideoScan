@@ -61,12 +61,10 @@ struct VolumeStatusCacheTests {
             let originatedHere = (r.originVolume == name)
                 || (r.originalFullPath?.hasPrefix(pathPrefix) ?? false)
             guard originatedHere, !r.fullPath.hasPrefix(pathPrefix) else { return false }
-            let (role, trust) = resolver(r.fullPath)
-            return role != .retired && trust != .unreliable
+            return resolver(r.fullPath).isSafe
         }
         let hasSafeWitness = witnesses.contains { path in
-            let (role, trust) = resolver(path)
-            return role != .retired && trust != .unreliable
+            resolver(path).isSafe
         } || safeMigrated
         return VolumeRetireStatus(totalRecords: total,
                                   disposedRecords: disposed,

@@ -51,8 +51,7 @@ struct VolumesWindowRetireTests {
         )
         let resolver = model.makeVolumeSafetyResolver()
         let hasSafeWitness = witnesses.contains { path in
-            let (role, trust) = resolver(path)
-            return role != .retired && trust != .unreliable
+            resolver(path).isSafe
         }
         return VolumeRetireStatus(
             totalRecords: total,
