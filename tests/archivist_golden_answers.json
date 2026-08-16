@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "comment": "Five executable golden questions for the Family Archivist. The oracle is a deterministic synthetic catalog: expectedSpec must compose to infix, and that infix must return exactly expectedPaths. With NL_GOLDEN_EVAL=1 the real translator is graded by the same final-answer contract.",
+  "cases": [
+    {
+      "id": "donna-cape-1990-1995-count",
+      "input": "How many videos do we have of Donna from 1990 through 1995 down the Cape?",
+      "expectedSpec": {
+        "people": ["donna"],
+        "yearStart": 1990,
+        "yearEnd": 1995,
+        "mediaKind": "video",
+        "keywords": ["cape"],
+        "intent": "count"
+      },
+      "expectedInfix": "people:donna year:1990..1995 type:video cape",
+      "expectedPaths": [
+        "/Golden/1992/Cape/donna_timmy_beach.mov",
+        "/Golden/1994/Cape/donna_family_cottage.mov"
+      ],
+      "expectedCount": 2,
+      "answerState": "answered",
+      "evidence": ["confirmed person tag", "path year", "place text"]
+    },
+    {
+      "id": "dad-breen-by-relationship",
+      "input": "Show videos containing Dad Breen, Rick's father.",
+      "expectedSpec": {
+        "people": ["dad", "breen"],
+        "mediaKind": "video",
+        "intent": "filter"
+      },
+      "expectedInfix": "people:dad people:breen type:video",
+      "expectedPaths": [
+        "/Golden/1991/Home/dad_breen_workshop.mov"
+      ],
+      "expectedCount": 1,
+      "answerState": "answered",
+      "evidence": ["confirmed person tag"]
+    },
+    {
+      "id": "donna-and-timmy-together-count",
+      "input": "How many videos have Donna and Timmy together?",
+      "expectedSpec": {
+        "people": ["donna", "timmy"],
+        "mediaKind": "video",
+        "intent": "count"
+      },
+      "expectedInfix": "people:donna people:timmy type:video",
+      "expectedPaths": [
+        "/Golden/1992/Cape/donna_timmy_beach.mov"
+      ],
+      "expectedCount": 1,
+      "answerState": "answered",
+      "evidence": ["two confirmed person tags on one record"]
+    },
+    {
+      "id": "christmas-morning-1988-1995",
+      "input": "Show Christmas morning videos from 1988 through 1995.",
+      "expectedSpec": {
+        "yearStart": 1988,
+        "yearEnd": 1995,
+        "mediaKind": "video",
+        "keywords": ["christmas morning"],
+        "intent": "filter"
+      },
+      "expectedInfix": "year:1988..1995 type:video \"christmas morning\"",
+      "expectedPaths": [
+        "/Golden/1990/Home/christmas_morning.mov"
+      ],
+      "expectedCount": 1,
+      "answerState": "answered",
+      "evidence": ["path year", "scene caption phrase"]
+    },
+    {
+      "id": "dan-opens-red-bicycle",
+      "input": "Find the clip where Dan opens a red bicycle.",
+      "expectedSpec": {
+        "people": ["dan"],
+        "mediaKind": "video",
+        "keywords": ["red bicycle"],
+        "intent": "filter"
+      },
+      "expectedInfix": "people:dan type:video \"red bicycle\"",
+      "expectedPaths": [
+        "/Golden/1993/Home/dan_red_bicycle.mov"
+      ],
+      "expectedCount": 1,
+      "answerState": "answered",
+      "evidence": ["confirmed person tag", "scene caption phrase"]
+    }
+  ]
+}

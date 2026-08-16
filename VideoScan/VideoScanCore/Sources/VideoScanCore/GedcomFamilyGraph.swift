@@ -133,16 +133,30 @@ public struct GedcomFamilyGraph: Sendable {
     /// name (case/diacritic-insensitive). "rick" won't match (nickname),
     /// but "richard" and "richard breen" will; ambiguity returns all.
     public func people(matching typed: String) -> [Person] {
-        let tokens = typed.lowercased()
-            .folding(options: .diacriticInsensitive, locale: nil)
-            .split(separator: " ").map(String.init)
-        guard !tokens.isEmpty else { return [] }
-        return people.values.filter { person in
-            let haystack = person.name.lowercased()
+        func normalizedTokens(_ value: String) -> [String] {
+            value.lowercased()
                 .folding(options: .diacriticInsensitive, locale: nil)
-            return tokens.allSatisfy { haystack.contains($0) }
+                .split(whereSeparator: \.isWhitespace).map(String.init)
         }
-        .sorted { $0.name < $1.name }
+
+        let tokens = normalizedTokens(typed)
+        guard !tokens.isEmpty else { return [] }
+        let matches = people.values.filter { person in
+            let nameTokens = Set(normalizedTokens(person.name))
+            // Identity lookup is token-exact, never substring based:
+            // "Ann" must not silently resolve to "Joanne". Nicknames
+            // belong in the explicit alias resolver, not in fuzzy GEDCOM
+            // matching.
+            return tokens.allSatisfy { nameTokens.contains($0) }
+        }
+        .sorted {
+            $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
+        }
+
+        // A complete canonical name is more specific than a token-subset
+        // match ("Zoe River" must not become ambiguous with "Zoe River Jr").
+        let exact = matches.filter { normalizedTokens($0.name) == tokens }
+        return exact.isEmpty ? matches : exact
     }
 
     // MARK: Kinship

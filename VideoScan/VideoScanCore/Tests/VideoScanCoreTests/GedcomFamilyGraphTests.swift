@@ -69,6 +69,34 @@ struct GedcomFamilyGraphTests {
         #expect(g.people(matching: "zelda").isEmpty)
     }
 
+    @Test func nameMatchingNeverTreatsSubstringAsIdentity() {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Joanne /River/
+        0 @I2@ INDI
+        1 NAME Ann /River/
+        0 TRLR
+        """)
+
+        #expect(g.people(matching: "Ann").map(\.name) == ["Ann River"])
+        #expect(g.people(matching: "Jo").isEmpty)
+    }
+
+    @Test func completeCanonicalNameWinsOverLongerTokenSubsetMatch() {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Zoe /River/
+        0 @I2@ INDI
+        1 NAME Zoe /River/ Jr
+        0 TRLR
+        """)
+
+        let exactIDs = g.people(matching: "Zoe River").map(\.id)
+        let broadIDs = g.people(matching: "Zoe").map(\.id)
+        #expect(exactIDs == ["@I1@"]) // Exact name wins.
+        #expect(broadIDs == ["@I1@", "@I2@"]) // Short name remains broad.
+    }
+
     @Test func kinshipResolvesAcrossGenerations() throws {
         let g = graph
         let junior = try #require(g.people(matching: "arthur jr").first)
@@ -99,5 +127,28 @@ struct GedcomFamilyGraphTests {
         #expect(GedcomFamilyGraph.relation(fromWord: "Mom") == .mother)
         #expect(GedcomFamilyGraph.relation(fromWord: "kids") == .children)
         #expect(GedcomFamilyGraph.relation(fromWord: "cousin") == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func nameLookupHasExplicitHundredThousandPersonBudget() {
+        var lines = ["0 HEAD"]
+        lines.reserveCapacity(200_002)
+        for index in 0..<100_000 {
+            lines.append("0 @I\(index)@ INDI")
+            lines.append(index == 99_999
+                         ? "1 NAME Needle /Archivist/"
+                         : "1 NAME Person\(index) /Synthetic/")
+        }
+        lines.append("0 TRLR")
+        let largeGraph = GedcomFamilyGraph(
+            gedcomText: lines.joined(separator: "\n"))
+
+        let started = ContinuousClock.now
+        let matches = largeGraph.people(matching: "Needle Archivist")
+        let elapsed = started.duration(to: .now)
+
+        #expect(matches.map(\.name) == ["Needle Archivist"])
+        #expect(elapsed < .seconds(2),
+                "100k GEDCOM lookup exceeded 2 seconds: \(elapsed)")
     }
 }

@@ -1,0 +1,744 @@
+import Foundation
+
+/// Immutable People-gallery identity used only to bridge a typed nickname to
+/// a GEDCOM person. Profile notes, photos, and recognition settings never enter
+/// graph execution, so they cannot leak into factual answers or an LLM prompt.
+struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
+    let stableID: String
+    let canonicalName: String
+    let aliases: [String]
+
+    init(stableID: String, canonicalName: String, aliases: [String] = []) {
+        self.stableID = stableID
+        self.canonicalName = canonicalName
+        self.aliases = aliases
+    }
+
+    // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
+    // resulting value has no actor affinity and contains no private POI media.
+    @MainActor
+    init(profile: POIProfile) {
+        self.init(
+            stableID: profile.id,
+            canonicalName: profile.name,
+            aliases: profile.aliases)
+    }
+}
+
+/// Complete immutable input to deterministic graph execution. Callers create
+/// this value before detached work; the executor performs no I/O or mutation.
+struct ArchivistGraphInputs: Sendable {
+    let graph: GedcomFamilyGraph
+    let profiles: [ArchivistGraphProfileSnapshot]
+
+    init(
+        graph: GedcomFamilyGraph,
+        profiles: [ArchivistGraphProfileSnapshot] = []
+    ) {
+        self.graph = graph
+        self.profiles = profiles
+    }
+
+    @MainActor
+    init(graph: GedcomFamilyGraph, profiles: [POIProfile]) {
+        self.init(
+            graph: graph,
+            profiles: profiles.map {
+                ArchivistGraphProfileSnapshot(profile: $0)
+            })
+    }
+}
+
+/// A continuation selects identity by an opaque stable ID, never by feeding a
+/// displayed name back through the alias resolver.
+enum ArchivistGraphSubjectSelection: Sendable, Equatable {
+    case unresolved
+    case profileStableID(String)
+    case gedcomPersonID(String)
+}
+
+struct ArchivistGraphAmbiguityCandidate: Sendable, Equatable {
+    enum ID: Sendable, Equatable {
+        case profileStableID(String)
+        case gedcomPersonID(String)
+    }
+
+    let id: ID
+    let canonicalName: String
+    let label: String
+}
+
+/// Immutable projection copied from the decoded wire AST before execution.
+/// The executor deliberately cannot receive the translator-owned AST itself;
+/// only these bounded value fields cross into the factual graph layer.
+struct ArchivistGraphQuery: Sendable, Equatable {
+    enum Operation: String, Sendable, Equatable {
+        case biography, birth, death, kinship
+    }
+
+    enum Relation: String, Sendable, Equatable {
+        case father, mother, parents
+        case brother, sister, siblings
+        case son, daughter, children
+        case husband, wife, spouse
+    }
+
+    let people: [String]
+    let operation: Operation
+    let relation: Relation?
+
+    init(
+        people: [String],
+        operation: Operation,
+        relation: Relation? = nil
+    ) {
+        self.people = people
+        self.operation = operation
+        self.relation = relation
+    }
+
+    init(_ payload: ArchivistQueryAST.Graph) {
+        people = payload.people
+        switch payload.operation {
+        case .biography: operation = .biography
+        case .birth: operation = .birth
+        case .death: operation = .death
+        case .kinship: operation = .kinship
+        }
+        switch payload.relation {
+        case .some(.father): relation = .father
+        case .some(.mother): relation = .mother
+        case .some(.parents): relation = .parents
+        case .some(.brother): relation = .brother
+        case .some(.sister): relation = .sister
+        case .some(.siblings): relation = .siblings
+        case .some(.son): relation = .son
+        case .some(.daughter): relation = .daughter
+        case .some(.children): relation = .children
+        case .some(.husband): relation = .husband
+        case .some(.wife): relation = .wife
+        case .some(.spouse): relation = .spouse
+        case nil: relation = nil
+        }
+    }
+}
+
+enum ArchivistGraphConclusion: Sendable, Equatable {
+    case answered
+    case missingFact
+    case personNotFound
+    case personAmbiguous
+    case profileAmbiguous
+    case conflictingProfileStableID(String)
+    case invalidPerson
+    case unsupportedPeopleCount(Int)
+    case missingRelation
+    case unexpectedRelation
+}
+
+/// Exact GEDCOM values used to compose an answer. This value stays on the
+/// deterministic side of the translator boundary and must never be sent to an
+/// LLM. IDs make each displayed fact auditable even when names are repeated.
+struct ArchivistGraphEvidence: Sendable, Equatable {
+    struct IdentityBridge: Sendable, Equatable {
+        let requestedName: String
+        let profileCanonicalName: String
+        let effectiveGEDCOMPersonID: String
+        let effectiveGEDCOMName: String
+    }
+
+    struct RelatedPerson: Sendable, Equatable {
+        let id: String
+        let name: String
+    }
+
+    struct Relationship: Sendable, Equatable {
+        let relation: GedcomFamilyGraph.Relation
+        let people: [RelatedPerson]
+    }
+
+    let subjectID: String
+    let subjectName: String
+    let birthDate: String?
+    let deathDate: String?
+    let relationships: [Relationship]
+    let identityBridge: IdentityBridge?
+}
+
+struct ArchivistGraphResult: Sendable, Equatable {
+    let conclusion: ArchivistGraphConclusion
+    let prose: String
+    let basisLine: String
+    let evidence: ArchivistGraphEvidence?
+    let candidates: [ArchivistBiographyAnswer.Candidate]
+    let profileCandidates: [String]
+    let ambiguityCandidates: [ArchivistGraphAmbiguityCandidate]
+    let catalogPersonName: String?
+}
+
+/// Pure executor for QueryAST's family-graph shape. The LLM supplies only the
+/// validated AST; family evidence and factual prose never cross back through
+/// the model. Multi-subject semantics are intentionally not invented: the
+/// current wire format permits a list but does not define conjunction or
+/// per-person output, so anything except one subject fails closed.
+enum ArchivistGraphExecutor {
+    private static let queryValidationBasis =
+        "Checked: graph-query validation only; no family source was consulted."
+
+    static func execute(
+        _ query: ArchivistGraphQuery,
+        inputs: ArchivistGraphInputs
+    ) -> ArchivistGraphResult {
+        execute(query, inputs: inputs, subject: .unresolved)
+    }
+
+    static func execute(
+        _ query: ArchivistGraphQuery,
+        inputs: ArchivistGraphInputs,
+        subject selection: ArchivistGraphSubjectSelection
+    ) -> ArchivistGraphResult {
+        guard query.people.count == 1 else {
+            return decline(
+                .unsupportedPeopleCount(query.people.count),
+                prose: "A family-tree question must identify exactly one person.",
+                basis: queryValidationBasis)
+        }
+
+        let typedName = query.people[0].trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        guard !typedName.isEmpty else {
+            return decline(
+                .invalidPerson,
+                prose: "A family-tree question needs a person's name.",
+                basis: queryValidationBasis)
+        }
+
+        if query.operation == .kinship, query.relation == nil {
+            return decline(
+                .missingRelation,
+                prose: "A kinship question must specify a relationship.",
+                basis: queryValidationBasis)
+        }
+        if query.operation != .kinship, query.relation != nil {
+            return declineUnexpectedRelation()
+        }
+
+        switch resolve(typedName, selection: selection, inputs: inputs) {
+        case .profileAmbiguous(let profiles):
+            let nameCounts = Dictionary(grouping: profiles) {
+                normalize($0.canonicalName)
+            }.mapValues { $0.count }
+            return ArchivistGraphResult(
+                conclusion: .profileAmbiguous,
+                prose: "Which \(typedName) do you mean?",
+                basisLine: "Checked: People profiles.",
+                evidence: nil,
+                candidates: [],
+                profileCandidates: Array(Set(profiles.map(\.canonicalName)))
+                    .sorted(by: nameOrder),
+                ambiguityCandidates: profiles.map { profile in
+                    let duplicate = nameCounts[
+                        normalize(profile.canonicalName), default: 0] > 1
+                    return ArchivistGraphAmbiguityCandidate(
+                        id: .profileStableID(profile.stableID),
+                        canonicalName: profile.canonicalName,
+                        label: duplicate
+                            ? "\(profile.canonicalName) (\(profile.stableID))"
+                            : profile.canonicalName)
+                },
+                catalogPersonName: nil)
+
+        case .profileConflict(let stableID):
+            return decline(
+                .conflictingProfileStableID(stableID),
+                prose: "The People profiles contain conflicting definitions for one identity.",
+                basis: "Checked: People profiles; the family tree was not consulted.")
+
+        case .people(let people, let profileRoute):
+            guard people.count == 1 else {
+                let answer = policyUnresolved(
+                    typedName: typedName, candidates: people,
+                    query: query, graph: inputs.graph)
+                return fromPolicy(
+                    answer, evidence: nil, identityBridge: nil,
+                    unresolvedProfileRoute: profileRoute)
+            }
+            let bridge = identityBridge(
+                profileRoute, effectivePerson: people[0])
+            return executeResolved(
+                query, person: people[0], graph: inputs.graph,
+                identityBridge: bridge)
+        }
+    }
+
+    private enum Resolution {
+        case people(
+            [GedcomFamilyGraph.Person],
+            profileRoute: ProfileRoute?)
+        case profileAmbiguous([ArchivistGraphProfileSnapshot])
+        case profileConflict(stableID: String)
+    }
+
+    private struct ProfileMeaning: Equatable {
+        let canonicalName: String
+        let aliases: [String]
+    }
+
+    private struct ProfileRoute {
+        let requestedName: String
+        let profileCanonicalName: String
+    }
+
+    /// Same specificity rule as FamilyTreeIdentityResolver, expressed over a
+    /// Sendable profile projection so detached execution cannot retain POIs.
+    private static func resolve(
+        _ typedName: String,
+        selection: ArchivistGraphSubjectSelection,
+        inputs: ArchivistGraphInputs
+    ) -> Resolution {
+        switch selection {
+        case .unresolved:
+            return resolveUnselected(typedName, inputs: inputs)
+        case .gedcomPersonID(let rawID):
+            guard !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let person = inputs.graph.people[rawID] else {
+                return .people([], profileRoute: nil)
+            }
+            return .people([person], profileRoute: nil)
+        case .profileStableID(let rawID):
+            guard !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return .people([], profileRoute: nil)
+            }
+            let definitions = inputs.profiles.filter { $0.stableID == rawID }
+            guard let first = definitions.first else {
+                return .people([], profileRoute: nil)
+            }
+            let meaning = profileMeaning(first)
+            guard definitions.allSatisfy({ profileMeaning($0) == meaning }) else {
+                return .profileConflict(stableID: rawID)
+            }
+            let profile = deterministicProfileSnapshot(
+                stableID: rawID, definitions: definitions)
+            return resolveSelectedProfile(
+                profile, requestedName: typedName, graph: inputs.graph)
+        }
+    }
+
+    private static func resolveUnselected(
+        _ typedName: String,
+        inputs: ArchivistGraphInputs
+    ) -> Resolution {
+        let key = normalize(typedName)
+        let groupedProfiles = Dictionary(
+            grouping: inputs.profiles, by: \.stableID)
+        var matchingProfiles: [ArchivistGraphProfileSnapshot] = []
+        for stableID in groupedProfiles.keys.sorted() {
+            guard let definitions = groupedProfiles[stableID],
+                  let first = definitions.first else { continue }
+
+            // A poisoned profile elsewhere in the gallery must not prevent a
+            // direct GEDCOM lookup or a query for another person. A stable-ID
+            // group participates only when one of its definitions claims the
+            // requested spelling.
+            guard definitions.contains(where: { profile in
+                ([profile.canonicalName] + profile.aliases).contains {
+                    normalize($0) == key
+                }
+            }) else { continue }
+
+            let meaning = profileMeaning(first)
+            guard definitions.allSatisfy({ profileMeaning($0) == meaning }) else {
+                return .profileConflict(stableID: stableID)
+            }
+            matchingProfiles.append(deterministicProfileSnapshot(
+                stableID: stableID, definitions: definitions))
+        }
+
+        let identities = matchingProfiles.sorted(by: profileOrder)
+        guard identities.count <= 1 else {
+            return .profileAmbiguous(identities)
+        }
+
+        guard let profile = identities.first else {
+            return .people(
+                inputs.graph.people(matching: typedName), profileRoute: nil)
+        }
+
+        return resolveSelectedProfile(
+            profile, requestedName: typedName, graph: inputs.graph)
+    }
+
+    /// The profile is already selected by stable ID. Only that profile's
+    /// canonical name and aliases may bridge to GEDCOM; no other profile can
+    /// capture the continuation through a reciprocal/shared alias.
+    private static func resolveSelectedProfile(
+        _ profile: ArchivistGraphProfileSnapshot,
+        requestedName: String,
+        graph: GedcomFamilyGraph
+    ) -> Resolution {
+        let profileRoute = ProfileRoute(
+            requestedName: requestedName,
+            profileCanonicalName: profile.canonicalName)
+
+        let canonicalMatches = graph.people(
+            matching: profile.canonicalName)
+        if !canonicalMatches.isEmpty {
+            return .people(
+                canonicalMatches, profileRoute: profileRoute)
+        }
+
+        let fallbackTerms = ([requestedName] + profile.aliases).filter {
+            normalize($0) != normalize(profile.canonicalName)
+        }
+        let tiers = Dictionary(grouping: fallbackTerms) {
+            $0.split(whereSeparator: \.isWhitespace).count
+        }
+        for wordCount in tiers.keys.sorted(by: >) {
+            var matchesByID: [String: GedcomFamilyGraph.Person] = [:]
+            for term in (tiers[wordCount] ?? []).sorted(by: nameOrder) {
+                for person in graph.people(matching: term) {
+                    matchesByID[person.id] = person
+                }
+            }
+            if !matchesByID.isEmpty {
+                return .people(
+                    matchesByID.values.sorted(by: personOrder),
+                    profileRoute: profileRoute)
+            }
+        }
+        return .people([], profileRoute: profileRoute)
+    }
+
+    private static func executeResolved(
+        _ query: ArchivistGraphQuery,
+        person: GedcomFamilyGraph.Person,
+        graph: GedcomFamilyGraph,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+    ) -> ArchivistGraphResult {
+        switch query.operation {
+        case .biography:
+            guard query.relation == nil else {
+                return declineUnexpectedRelation()
+            }
+            let answer = ArchivistBiographyPolicy.biography(
+                personID: person.id, in: graph)
+            return fromPolicy(
+                answer,
+                evidence: biographyEvidence(
+                    for: person, in: graph, identityBridge: identityBridge),
+                identityBridge: identityBridge,
+                unresolvedProfileRoute: nil)
+
+        case .birth, .death:
+            guard query.relation == nil else {
+                return declineUnexpectedRelation()
+            }
+            let answer = ArchivistBiographyPolicy.lifeDate(
+                personID: person.id,
+                birth: query.operation == .birth,
+                in: graph)
+            return fromPolicy(
+                answer,
+                evidence: lifeDateEvidence(
+                    for: person, birth: query.operation == .birth,
+                    identityBridge: identityBridge),
+                identityBridge: identityBridge,
+                unresolvedProfileRoute: nil)
+
+        case .kinship:
+            guard let relation = query.relation,
+                  let graphRelation = GedcomFamilyGraph.Relation(
+                    rawValue: relation.rawValue) else {
+                return decline(
+                    .missingRelation,
+                    prose: "A kinship question must specify a relationship.",
+                    basis: queryValidationBasis)
+            }
+            let relatives = graph.relatives(graphRelation, of: person)
+                .sorted(by: personOrder)
+            let evidence = kinshipEvidence(
+                for: person, relation: graphRelation, relatives: relatives,
+                identityBridge: identityBridge)
+            guard !relatives.isEmpty else {
+                return ArchivistGraphResult(
+                    conclusion: .missingFact,
+                    prose: "The family tree doesn't record a \(relation.rawValue) for \(person.name).",
+                    basisLine: factualBasis(identityBridge),
+                    evidence: evidence,
+                    candidates: [],
+                    profileCandidates: [],
+                    ambiguityCandidates: [],
+                    catalogPersonName: nil)
+            }
+            return ArchivistGraphResult(
+                conclusion: .answered,
+                prose: "\(person.name)'s \(relation.rawValue): "
+                    + relatives.map(\.name).joined(separator: ", ") + ".",
+                basisLine: factualBasis(identityBridge),
+                evidence: evidence,
+                candidates: [],
+                profileCandidates: [],
+                ambiguityCandidates: [],
+                catalogPersonName: nil)
+        }
+    }
+
+    private static func policyUnresolved(
+        typedName: String,
+        candidates: [GedcomFamilyGraph.Person],
+        query: ArchivistGraphQuery,
+        graph: GedcomFamilyGraph
+    ) -> ArchivistBiographyAnswer {
+        switch query.operation {
+        case .birth:
+            return ArchivistBiographyPolicy.lifeDate(
+                for: typedName, birth: true,
+                candidates: candidates, in: graph)
+        case .death:
+            return ArchivistBiographyPolicy.lifeDate(
+                for: typedName, birth: false,
+                candidates: candidates, in: graph)
+        case .biography, .kinship:
+            // BiographyPolicy owns the canonical fail-closed not-found and
+            // ambiguity wording; no relationship is evaluated until unique.
+            return ArchivistBiographyPolicy.biography(
+                for: typedName, candidates: candidates, in: graph)
+        }
+    }
+
+    private static func fromPolicy(
+        _ answer: ArchivistBiographyAnswer,
+        evidence: ArchivistGraphEvidence?,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?,
+        unresolvedProfileRoute: ProfileRoute?
+    ) -> ArchivistGraphResult {
+        let conclusion: ArchivistGraphConclusion
+        switch answer.state {
+        case .answered: conclusion = .answered
+        case .missingFact: conclusion = .missingFact
+        case .notFound: conclusion = .personNotFound
+        case .ambiguous: conclusion = .personAmbiguous
+        }
+        return ArchivistGraphResult(
+            conclusion: conclusion,
+            prose: answer.text,
+            basisLine: identityBridgeBasis(
+                identityBridge, answered: answer.state == .answered
+                    || answer.state == .missingFact)
+                ?? unresolvedProfileRouteBasis(unresolvedProfileRoute)
+                ?? answer.basis,
+            evidence: answer.state == .answered || answer.state == .missingFact
+                ? evidence : nil,
+            candidates: answer.candidates,
+            profileCandidates: [],
+            ambiguityCandidates: answer.candidates.map {
+                ArchivistGraphAmbiguityCandidate(
+                    id: .gedcomPersonID($0.id),
+                    canonicalName: $0.name,
+                    label: $0.label)
+            },
+            catalogPersonName: answer.catalogPersonName)
+    }
+
+    private static func biographyEvidence(
+        for person: GedcomFamilyGraph.Person,
+        in graph: GedcomFamilyGraph,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+    ) -> ArchivistGraphEvidence {
+        // Relation groups and their members use the policy's exact order so
+        // evidence stays aligned with its deterministic biography prose.
+        let relationships: [ArchivistGraphEvidence.Relationship] = [
+            relationship(
+                .parents,
+                people: ArchivistBiographyPolicy.orderedPeople(
+                    graph.relatives(.parents, of: person))),
+            relationship(
+                .spouse,
+                people: ArchivistBiographyPolicy.orderedPeople(
+                    graph.relatives(.spouse, of: person))),
+            relationship(
+                .children,
+                people: ArchivistBiographyPolicy.orderedPeople(
+                    graph.relatives(.children, of: person))),
+        ].filter { !$0.people.isEmpty }
+        return ArchivistGraphEvidence(
+            subjectID: person.id,
+            subjectName: person.name,
+            birthDate: person.birthDate,
+            deathDate: person.deathDate,
+            relationships: relationships,
+            identityBridge: identityBridge)
+    }
+
+    private static func lifeDateEvidence(
+        for person: GedcomFamilyGraph.Person,
+        birth: Bool,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+    ) -> ArchivistGraphEvidence {
+        ArchivistGraphEvidence(
+            subjectID: person.id,
+            subjectName: person.name,
+            birthDate: birth ? person.birthDate : nil,
+            deathDate: birth ? nil : person.deathDate,
+            relationships: [],
+            identityBridge: identityBridge)
+    }
+
+    private static func kinshipEvidence(
+        for person: GedcomFamilyGraph.Person,
+        relation: GedcomFamilyGraph.Relation,
+        relatives: [GedcomFamilyGraph.Person],
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+    ) -> ArchivistGraphEvidence {
+        ArchivistGraphEvidence(
+            subjectID: person.id,
+            subjectName: person.name,
+            birthDate: nil,
+            deathDate: nil,
+            relationships: [relationship(relation, people: relatives)],
+            identityBridge: identityBridge)
+    }
+
+    private static func relationship(
+        _ relation: GedcomFamilyGraph.Relation,
+        people: [GedcomFamilyGraph.Person]
+    ) -> ArchivistGraphEvidence.Relationship {
+        ArchivistGraphEvidence.Relationship(
+            relation: relation,
+            people: people.map {
+                .init(id: $0.id, name: $0.name)
+            })
+    }
+
+    private static func declineUnexpectedRelation() -> ArchivistGraphResult {
+        decline(
+            .unexpectedRelation,
+            prose: "That family-tree operation does not accept a relationship.",
+            basis: queryValidationBasis)
+    }
+
+    private static func factualBasis(
+        _ bridge: ArchivistGraphEvidence.IdentityBridge?
+    ) -> String {
+        identityBridgeBasis(bridge, answered: true)
+            ?? ArchivistBiographyPolicy.gedcomBasis
+    }
+
+    private static func identityBridgeBasis(
+        _ bridge: ArchivistGraphEvidence.IdentityBridge?,
+        answered: Bool
+    ) -> String? {
+        guard let bridge else { return nil }
+        let prefix = answered ? "Basis" : "Checked"
+        return "\(prefix): People profile identity bridge “"
+            + bridge.requestedName + "” → “"
+            + bridge.profileCanonicalName
+            + "” → GEDCOM “" + bridge.effectiveGEDCOMName
+            + "”; family facts from imported family tree (GEDCOM)."
+    }
+
+    private static func unresolvedProfileRouteBasis(
+        _ route: ProfileRoute?
+    ) -> String? {
+        guard let route else { return nil }
+        return "Checked: People profile identity route “"
+            + route.requestedName + "” → “"
+            + route.profileCanonicalName
+            + "”; imported family tree (GEDCOM), but no unique GEDCOM "
+            + "identity was resolved."
+    }
+
+    private static func identityBridge(
+        _ route: ProfileRoute?,
+        effectivePerson: GedcomFamilyGraph.Person
+    ) -> ArchivistGraphEvidence.IdentityBridge? {
+        guard let route else { return nil }
+        let requested = normalize(route.requestedName)
+        let profile = normalize(route.profileCanonicalName)
+        let effective = normalize(effectivePerson.name)
+        guard requested != profile || profile != effective else { return nil }
+        return ArchivistGraphEvidence.IdentityBridge(
+            requestedName: route.requestedName,
+            profileCanonicalName: route.profileCanonicalName,
+            effectiveGEDCOMPersonID: effectivePerson.id,
+            effectiveGEDCOMName: effectivePerson.name)
+    }
+
+    private static func decline(
+        _ conclusion: ArchivistGraphConclusion,
+        prose: String,
+        basis: String
+    ) -> ArchivistGraphResult {
+        ArchivistGraphResult(
+            conclusion: conclusion,
+            prose: prose,
+            basisLine: basis,
+            evidence: nil,
+            candidates: [],
+            profileCandidates: [],
+            ambiguityCandidates: [],
+            catalogPersonName: nil)
+    }
+
+    private static func normalize(_ value: String) -> String {
+        PersonResolver.normalize(value)
+    }
+
+    private static func profileOrder(
+        _ lhs: ArchivistGraphProfileSnapshot,
+        _ rhs: ArchivistGraphProfileSnapshot
+    ) -> Bool {
+        if nameOrder(lhs.canonicalName, rhs.canonicalName) { return true }
+        if nameOrder(rhs.canonicalName, lhs.canonicalName) { return false }
+        return lhs.stableID < rhs.stableID
+    }
+
+    private static func profileMeaning(
+        _ profile: ArchivistGraphProfileSnapshot
+    ) -> ProfileMeaning {
+        let canonicalName = normalize(profile.canonicalName)
+        return ProfileMeaning(
+            canonicalName: canonicalName,
+            aliases: Array(Set(profile.aliases.map { normalize($0) }))
+                .filter { !$0.isEmpty && $0 != canonicalName }
+                .sorted())
+    }
+
+    private static func deterministicProfileSnapshot(
+        stableID: String,
+        definitions: [ArchivistGraphProfileSnapshot]
+    ) -> ArchivistGraphProfileSnapshot {
+        let canonicalName = definitions.map(\.canonicalName)
+            .sorted(by: nameOrder)[0]
+        let canonicalMeaning = normalize(canonicalName)
+        let aliasesByMeaning = Dictionary(
+            grouping: definitions.flatMap(\.aliases),
+            by: { normalize($0) })
+        let aliases = aliasesByMeaning.keys.filter {
+            !$0.isEmpty && $0 != canonicalMeaning
+        }.sorted()
+            .compactMap { aliasesByMeaning[$0]?.sorted(by: nameOrder).first }
+        return ArchivistGraphProfileSnapshot(
+            stableID: stableID,
+            canonicalName: canonicalName,
+            aliases: aliases)
+    }
+
+    private static func personOrder(
+        _ lhs: GedcomFamilyGraph.Person,
+        _ rhs: GedcomFamilyGraph.Person
+    ) -> Bool {
+        if nameOrder(lhs.name, rhs.name) { return true }
+        if nameOrder(rhs.name, lhs.name) { return false }
+        return lhs.id < rhs.id
+    }
+
+    private static func nameOrder(_ lhs: String, _ rhs: String) -> Bool {
+        let left = normalize(lhs)
+        let right = normalize(rhs)
+        if left != right { return left < right }
+        return lhs < rhs
+    }
+
+}
