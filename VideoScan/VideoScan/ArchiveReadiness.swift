@@ -57,6 +57,14 @@ struct ArchiveReadiness: Equatable, Sendable {
         var inferredRecordDate: Date?
         var inferredDateConfidence: Float?
         var userDate: String?
+        var userDateConfidence: String?
+        // Embedded creation date + origin (2026-08-16) and the filename,
+        // so the readiness date state reads the SAME resolver as placement.
+        var embeddedCreationDate: Date?
+        var originMake: String?
+        var originModel: String?
+        var originEncoder: String?
+        var filename: String = ""
         init() {}
     }
 
@@ -132,21 +140,46 @@ struct ArchiveReadiness: Equatable, Sendable {
         // ---- Format
         let format = formatRisk(videoCodec: i.videoCodec, audioCodec: i.audioCodec, stream: stream)
 
-        // ---- Date
-        let (hint, low) = ArchivePathResolver.dateHint(userDate: i.userDate,
-                                                       inferredRecordDate: i.inferredRecordDate,
-                                                       inferredDateConfidence: i.inferredDateConfidence)
-        let date: DateState = hint == .unknown ? (low ? .lowConfidence : .undated) : .known
+        // ---- Date — the ONE shared ranking (RecordDateResolver), same as
+        // ArchivePathResolver.facts(for:) uses for placement.
+        let resolution = RecordDateResolver.resolve(userDate: i.userDate,
+                                                    userDateConfidence: i.userDateConfidence,
+                                                    embeddedCreationDate: i.embeddedCreationDate,
+                                                    originMake: i.originMake,
+                                                    originModel: i.originModel,
+                                                    originEncoder: i.originEncoder,
+                                                    inferredRecordDate: i.inferredRecordDate,
+                                                    inferredDateConfidence: i.inferredDateConfidence,
+                                                    filename: i.filename.isEmpty ? nil : i.filename)
+        let date = dateState(resolution)
 
         let warnings = composeWarnings(i, stream: stream, hasMedia: hasMedia, hasAudio: hasAudio,
-                                       blocking: blocking, audio: audio, format: format, date: date)
+                                       blocking: blocking, audio: audio, format: format, date: date,
+                                       resolution: resolution)
         return ArchiveReadiness(playable: playable, audio: audio, format: format, date: date,
                                 warnings: warnings, blocking: blocking)
     }
 
+    /// Date state from a resolution:
+    ///   • `.known` — Rick's own date (any precision: "1992" + I'm-sure means
+    ///     the YEAR is certain, and nagging him about his own entry helps
+    ///     nobody), or a machine date at day/month precision with
+    ///     confidence ≥ 0.6 (embedded camera stamp, trusted dossier date).
+    ///   • `.lowConfidence` — placed on a weak signal (filename pattern at
+    ///     0.5), or undated because the only signal was a rejected
+    ///     inferred date.
+    ///   • `.undated` — nothing at all.
+    static func dateState(_ r: RecordDateResolution) -> DateState {
+        if r.precision == .unknown { return r.hadRejectedSignal ? .lowConfidence : .undated }
+        if r.source == .userDate { return .known }
+        if r.precision <= .month && r.confidence >= RecordDateResolver.inferredConfidenceFloor { return .known }
+        return .lowConfidence
+    }
+
     /// Warning sentences — AUDIO FIRST, then format, then date, then other.
     private static func composeWarnings(_ i: Inputs, stream: StreamType, hasMedia: Bool, hasAudio: Bool,
-                                        blocking: Bool, audio: Audio, format: Format, date: DateState) -> [String] {
+                                        blocking: Bool, audio: Audio, format: Format, date: DateState,
+                                        resolution: RecordDateResolution) -> [String] {
         var warnings: [String] = []
         if blocking {
             warnings.append(stream == .ffprobeFailed
@@ -172,7 +205,13 @@ struct ArchiveReadiness: Equatable, Sendable {
             warnings.append("Playable elsewhere but this Mac's decoders don't support it — archived as-is")
         }
         switch date {
-        case .lowConfidence: warnings.append("Date is a low-confidence guess — filed as undated until you confirm it")
+        case .lowConfidence where resolution.precision != .unknown:
+            // Placed on a weak signal (a year in the filename): say WHERE
+            // it will land so a wrong guess is a visible refile, not a surprise.
+            let from = resolution.source == .filename ? "from the filename" : "from a weak signal"
+            warnings.append("Date \(resolution.isoString) is a low-confidence guess \(from) — filed under it; confirm or correct it in the inspector")
+        case .lowConfidence:
+            warnings.append("Date is a low-confidence guess — filed as undated until you confirm it")
         case .undated: warnings.append("Undated — will land in Undated/ (refile later once the date is known)")
         case .known: break
         }
@@ -291,6 +330,12 @@ extension ArchiveReadiness {
         i.inferredRecordDate = r.inferredRecordDate
         i.inferredDateConfidence = r.inferredDateConfidence
         i.userDate = r.userDate
+        i.userDateConfidence = r.userDateConfidence
+        i.embeddedCreationDate = r.embeddedCreationDate
+        i.originMake = r.originMake
+        i.originModel = r.originModel
+        i.originEncoder = r.originEncoder
+        i.filename = r.filename
         return assess(i)
     }
 }
