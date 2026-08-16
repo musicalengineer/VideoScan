@@ -363,6 +363,10 @@ extension VideoScanModel {
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
 
+        // Finder marker (best-effort; never fails Initialize).
+        let badged = MasterArchiveIcon.apply(volumeOrFolderPath: targetPath, archiveRootPath: rootURL.path)
+        if !badged.isEmpty { masterArchiveLog.info("initialize: Finder icon set on \(badged.count) path(s)") }
+
         let created = result.createdPaths.isEmpty
             ? "already initialized — nothing new created"
             : "created \(result.createdPaths.count) item(s)"
@@ -387,7 +391,8 @@ extension VideoScanModel {
     /// forgets which volume it is). Records already promoted keep their
     /// links.
     func clearMasterArchive() {
-        guard masterArchive != nil else { return }
+        guard let current = masterArchive else { return }
+        MasterArchiveIcon.remove(volumeOrFolderPath: current.targetPath, archiveRootPath: current.rootPath)
         masterArchive = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
