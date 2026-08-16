@@ -768,6 +768,9 @@ extension CaptionOrchestrator {
                             captioned, skipped,
                             liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
                             failed, elapsed, stackID))
+        // #160: auto-purged missing-on-disk rows flipped purgedAt in place;
+        // announce once per batch so cached table/aggregates recompute.
+        if liveSkipMissing > 0 { model.noteCatalogRecordsMutated() }
         if Task.isCancelled {
             appLog.write("Dossier: cancelled (done \(captioned), skipped \(skipped), failed \(failed))")
         }
@@ -1045,6 +1048,7 @@ extension CaptionOrchestrator {
                             c, s,
                             liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
                             f, elapsed, stackID))
+        if liveSkipMissing > 0 { model.noteCatalogRecordsMutated() }   // #160
         currentStatus = .finished(captioned: c, skipped: s, failed: f)
     }
 

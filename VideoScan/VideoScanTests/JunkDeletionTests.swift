@@ -141,6 +141,46 @@ struct JunkDeletionTests {
         }
     }
 
+    // MARK: - #160 sensor: in-place purge must announce itself
+
+    // regression: GH #160 — permanent delete stamped purgedAt in place with
+    // no count change and no undo banner, so the Catalog table's cache
+    // (keyed on records.count + lastPurgedBatch) never recomputed and the
+    // deleted rows stayed visible with Show Removed off. Every purge-class
+    // mutation must bump volumeAggregatesRevision, which the table, the
+    // volume aggregates, and the CatalogHelpers memo keys all observe.
+    @Test func deletePermanent_bumpsMutationRevisionSoCachedSurfacesRecompute() async throws {
+        let tmp = try Self.makeTmpDir(label: "perm-revision")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let url = tmp.appendingPathComponent("gone.mov")
+        try Self.writeFixture(at: url)
+        let rec = Self.record(at: url)
+
+        let model = VideoScanModel()
+        model.records = [rec]
+        let before = model.volumeAggregatesRevision
+        let countBefore = model.records.count
+
+        _ = await model.deleteConfirmedJunk([rec], mode: .permanent)
+
+        #expect(model.records.count == countBefore, "tombstone row is kept by design")
+        #expect(model.volumeAggregatesRevision > before,
+                "in-place purge published nothing the table observes (#160)")
+        #expect(pfActiveRecords(model.records).isEmpty,
+                "the shared active predicate must exclude the tombstone")
+    }
+
+    @Test func deleteToTrash_alreadyMissing_stillBumpsMutationRevision() async throws {
+        let tmp = try Self.makeTmpDir(label: "missing-revision")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let rec = Self.record(at: tmp.appendingPathComponent("never-existed.mov"))
+        let model = VideoScanModel()
+        model.records = [rec]
+        let before = model.volumeAggregatesRevision
+        _ = await model.deleteConfirmedJunk([rec], mode: .toTrash)
+        #expect(model.volumeAggregatesRevision > before)
+    }
+
     // MARK: - 3. Codable round-trip: new lifecycle stages
 
     // regression: feature spec — the two new LifecycleStage cases must

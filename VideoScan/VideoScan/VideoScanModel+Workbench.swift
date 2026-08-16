@@ -54,7 +54,10 @@ extension VideoScanModel {
             rec.lifecycleStage = .trashed
             count += 1
         }
-        if count > 0 { saveCatalogNow() }
+        if count > 0 {
+            saveCatalogNow()
+            noteCatalogRecordsMutated()   // #160: in-place purge, no banner
+        }
         return count
     }
 }

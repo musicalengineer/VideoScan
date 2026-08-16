@@ -351,6 +351,10 @@ extension VideoScanModel {
         // state if the app crashes mid-loop. One write at the end matches
         // the pattern used by purgeRecords() above.
         saveCatalogDebounced()
+        // #160: purgedAt/lifecycleStage flipped in place — no count change,
+        // no undo banner — so the table's cache would never recompute and
+        // the deleted rows stayed visible with Show Removed off.
+        noteCatalogRecordsMutated()
 
         log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count) mode=\(mode == .toTrash ? "trash" : "permanent")")
 

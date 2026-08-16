@@ -127,8 +127,11 @@ struct WorkbenchActionsTests {
         let rec = makeWorkbenchRecord("test_artifact.mov")
         model.records = [rec]
 
+        let revisionBefore = model.volumeAggregatesRevision
         let n = model.discardWorkbench([rec])
         #expect(n == 1)
+        #expect(model.volumeAggregatesRevision > revisionBefore,
+                "in-place purge must announce itself so cached table/aggregates recompute (#160)")
         #expect(rec.purgedAt != nil, "purgedAt must be stamped so soft-delete takes effect")
         #expect(rec.lifecycleStage == .trashed)
 

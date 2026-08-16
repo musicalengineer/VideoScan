@@ -166,6 +166,9 @@ extension CatalogContent {
         // Re-compute when purge state flips on any record (purge, undo, restore).
         // We key off lastPurgedBatch so mutations from the model are observed.
         .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
+        // In-place purge/lifecycle mutations that arm no banner (Delete
+        // Confirmed Junk, workbench discard, dossier auto-purge) — #160.
+        .onChange(of: model.volumeAggregatesRevision) { tableData = computeFiltered() }
         // Confirm Repair supersedes originals (and undo restores them) —
         // same observation pattern as the purge batch (GH #132).
         .onChange(of: model.lastConfirmBatch) { tableData = computeFiltered() }

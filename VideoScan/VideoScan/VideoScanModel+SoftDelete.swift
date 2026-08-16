@@ -37,6 +37,19 @@ extension VideoScanModel {
     /// match, persists, and arms the undo banner with the affected IDs.
     /// Returns the count actually mutated (records already purged are not
     /// double-stamped, and bogus IDs are silently ignored).
+    /// Announce an in-place mutation of purge/lifecycle state that changes
+    /// NO array count and arms NO undo banner (#160). The Catalog table,
+    /// volume aggregates, and the memo keys in CatalogHelpers all observe
+    /// `volumeAggregatesRevision`; before this, `deleteConfirmedJunk` and
+    /// `discardWorkbench` stamped `purgedAt` and published nothing, so the
+    /// cached table kept showing rows for files that were already gone.
+    /// Every path that flips purgedAt / lifecycleStage / setAsideReason /
+    /// supersededByID outside the banner-armed purge/tidy/confirm flows
+    /// must call this after its batch.
+    func noteCatalogRecordsMutated() {
+        notifyVolumeAggregatesStale()
+    }
+
     @discardableResult
     func purgeRecords(ids: Set<UUID>) -> Int {
         guard !ids.isEmpty else { return 0 }
