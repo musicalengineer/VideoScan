@@ -92,6 +92,21 @@ def app_running():
         return True   # fail closed: if we cannot tell, do not write
 
 
+def header_generation(path, head_bytes=8192):
+    """Cheap OCC probe mirroring CatalogSnapshot.headerProbe: the app writes
+    savedAt then generation at the head of the object, so the number lands in
+    the first few KB. Returns None if the key isn't in the head (pre-generation
+    catalog) -- callers treat None as 'cannot tell', not as 0."""
+    import re
+    try:
+        with open(path, "rb") as f:
+            head = f.read(head_bytes).decode("utf-8", "ignore")
+    except OSError:
+        return None
+    m = re.search(r'"generation"\s*:\s*(\d+)', head)
+    return int(m.group(1)) if m else None
+
+
 def main():
     if app_running():
         print("VideoScan is running -- quit it before reducing the catalog.\n"
@@ -200,12 +215,6 @@ def main():
               "with its in-memory copy. Quit the app and re-run.")
         return
 
-    # Guard against the file changing under us between read and write.
-    if os.path.getmtime(CATALOG) != mtime_at_read:
-        print("\nABORTED: catalog.json changed on disk while we were working. "
-              "Nothing written.")
-        return
-
     # --- external-writer contract (docs/catalog_write_safety_design.md §5) ---
     # This script is the REFERENCE IMPLEMENTATION for scripts that write
     # catalog.json:
@@ -230,7 +239,22 @@ def main():
                   "Quit VideoScan (or wait for the other writer) and re-run.")
             return
 
-        doc["generation"] = int(doc.get("generation", 0)) + 1
+        # Re-validate UNDER the lock (codex #385 TOCTOU: the old check ran
+        # before flock, leaving a window in which the app could write and
+        # we would then replace its newer file with our stale derivation).
+        # Two independent signals: mtime, and the on-disk generation header.
+        if os.path.getmtime(CATALOG) != mtime_at_read:
+            print("\nABORTED: catalog.json changed on disk while we were working. "
+                  "Nothing written.")
+            return
+        gen_read = int(doc.get("generation", 0))
+        gen_disk = header_generation(CATALOG)
+        if gen_disk is not None and gen_disk != gen_read:
+            print(f"\nABORTED: catalog.json generation on disk is {gen_disk}, "
+                  f"we derived from {gen_read}. Someone wrote in between. Nothing written.")
+            return
+
+        doc["generation"] = gen_read + 1
         shutil.copy2(CATALOG, CATALOG + ".prev")
         doc["records"] = keep
         tmp = CATALOG + ".tmp"
