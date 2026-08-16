@@ -53,6 +53,11 @@ tier+score label; no-evidence questions must decline.
 
 ## The model question (Rick's qwen-ricks-family-32b)
 
+The post-Phase-1 family knowledge layer is now specified in
+[`cyberbrain_design.md`](cyberbrain_design.md). **CyberBrain** is the durable,
+source-aware Breen family memory; the model remains its replaceable language
+interface.
+
 Facts live in DATA (graph + catalog + dossiers) — updatable, citable,
 and portable to 2060; the LLM is a swappable voice. A literal
 `qwen-ricks-family-32b` artifact stays on the roadmap as a DISTILLATION
