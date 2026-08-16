@@ -860,7 +860,13 @@ final class VideoScanModel: ObservableObject {
         let restored = catalogStore.load()
         // Master Archive designation rides the same snapshot (additive
         // key) — adopt it before anything else reads `masterArchive`.
-        masterArchive = catalogStore.masterArchive
+        // Test hosts: the shared store never loads, and its `masterArchive`
+        // slot is a process-wide mirror that an earlier test's model may
+        // have written — a fresh model must not inherit it (same narrow
+        // gate as CatalogStore.load()).
+        if !(Self.isRunningTests && catalogStore === CatalogStore.shared) {
+            masterArchive = catalogStore.masterArchive
+        }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         if !restored.isEmpty {
             records = restored
