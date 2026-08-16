@@ -34,11 +34,12 @@ struct ArchivistEndpointSettings: View {
     @State private var checking = false
 
     enum Liveness: Equatable {
-        case unknown, online, offline(String)
+        case unknown, online, idle(String), offline(String)
 
         var color: Color {
             switch self {
             case .online:  return .green
+            case .idle:    return .secondary
             case .offline: return .yellow   // Rick: yellow, not red — a
                                             // sleeping laptop is normal,
                                             // not an error state.
@@ -48,11 +49,13 @@ struct ArchivistEndpointSettings: View {
         var label: String {
             switch self {
             case .online:  return "online"
+            case .idle:    return "idle"
             case .offline: return "offline"
             case .unknown: return "—"
             }
         }
         var detail: String {
+            if case .idle(let why) = self { return why }
             if case .offline(let why) = self { return why }
             return ""
         }
@@ -64,6 +67,10 @@ struct ArchivistEndpointSettings: View {
                 .font(.headline)
             Text("Tried in order, top first. Use a name for a machine on "
                  + "your network, or a full https:// address for a cloud server.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("A local Ollama server starts automatically when you send Hallie her first question.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -212,6 +219,10 @@ struct ArchivistEndpointSettings: View {
                     var probe = OllamaQueryTranslator()
                     probe.host = host
                     if let down = await probe.probeLiveness() {
+                        if OllamaLocalServerBootstrap.isLocalEndpoint(host) {
+                            return (host, .idle(
+                                "Starts automatically when you ask Hallie"))
+                        }
                         return (host, .offline(down.errorDescription ?? "offline"))
                     }
                     return (host, .online)

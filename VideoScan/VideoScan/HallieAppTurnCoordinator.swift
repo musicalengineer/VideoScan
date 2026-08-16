@@ -37,6 +37,7 @@ enum HallieAppTurnCoordinator {
     }
 
     struct Dependencies: Sendable {
+        let startLocalBrain: @Sendable ([String]) async throws -> Void
         let translateAST: @Sendable (
             String, [String], String
         ) async throws -> Translation
@@ -53,6 +54,10 @@ enum HallieAppTurnCoordinator {
         let resolveBiographyPhoto: @Sendable (String) -> ArchivistBiographyPhoto?
 
         static let live = Dependencies(
+            startLocalBrain: { hosts in
+                _ = try await OllamaLocalServerBootstrap.shared
+                    .ensureRunning(for: hosts)
+            },
             translateAST: { question, hosts, modelName in
                 let responder = ResponderBox()
                 var template = OllamaQueryTranslator()
@@ -137,6 +142,8 @@ enum HallieAppTurnCoordinator {
         playAfterAnswer: Bool = false,
         dependencies: Dependencies = .live
     ) async throws -> Response {
+        try Task.checkCancellation()
+        try await dependencies.startLocalBrain(hosts)
         try Task.checkCancellation()
         let translation = try await dependencies.translateAST(
             question, hosts, modelName)
