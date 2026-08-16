@@ -112,6 +112,9 @@ public enum UserNotesMigration {
     ///                    migrate stamps)
     ///   "Confirm"        VideoScanModel+RepairLifecycle.swift (repair
     ///                    confirmed / superseded stamps, GH #132)
+    ///   "Promote"        PromoteToArchiveJob.swift / VideoScanModel+
+    ///                    MasterArchive.swift (Master Archive promotion
+    ///                    stamps on source + copy, 2026-08-15)
     public static let journeyStampVerbs: [String] = [
         "Transcode",
         "Balance Audio",
@@ -122,6 +125,7 @@ public enum UserNotesMigration {
         "Reconcile",
         "Migrate",
         "Confirm",
+        "Promote",
     ]
 
     /// True if `line` is a File Journey stamp: a known verb, a space,

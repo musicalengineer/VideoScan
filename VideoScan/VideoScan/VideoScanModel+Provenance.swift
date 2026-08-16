@@ -74,6 +74,10 @@ extension VideoScanModel {
                 out.append(evt)
                 continue
             }
+            if let evt = parsePromoteLine(line) {
+                out.append(evt)
+                continue
+            }
             // Free-form user note — keep it on the timeline so the user
             // can see their own notes in context. No timestamp.
             out.append(ParsedNoteEvent(
@@ -185,6 +189,25 @@ extension VideoScanModel {
             timestamp: parseISO8601(stamp),
             kind: .reformat,
             icon: JourneyEventKind.reformat.defaultIcon,
+            sentence: body
+        )
+    }
+
+    /// `Promote <ISO8601>: <body>` — Master Archive promotion stamps
+    /// (PromoteToArchiveJob writes one onto the source and one onto the
+    /// archive copy). Same shape as the Reformat line.
+    nonisolated private static func parsePromoteLine(_ line: String) -> ParsedNoteEvent? {
+        guard line.hasPrefix("Promote ") else { return nil }
+        let afterPrefix = line.dropFirst("Promote ".count)
+        guard let sepRange = afterPrefix.range(of: ": ") else { return nil }
+        let stamp = String(afterPrefix[..<sepRange.lowerBound])
+            .trimmingCharacters(in: .whitespaces)
+        let body = String(afterPrefix[sepRange.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+        return ParsedNoteEvent(
+            timestamp: parseISO8601(stamp),
+            kind: .promote,
+            icon: JourneyEventKind.promote.defaultIcon,
             sentence: body
         )
     }

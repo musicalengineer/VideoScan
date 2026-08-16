@@ -88,21 +88,30 @@ struct CatalogSnapshot: Decodable {
     var savedAt: Date = Date()
     var records: [VideoRecord] = []
     var savedFromHost: String = ""
+    /// Master Archive designation (docs/archive_promotion_workflow.md §3).
+    /// ADDITIVE + optional: absent in every pre-8/15 catalog and decodes
+    /// as nil; encoded only when set (encodeIfPresent), so a catalog with
+    /// no master archive is byte-identical to before. No version bump.
+    /// Placed AFTER `records` in key order so the 4 KB header probe
+    /// (version/generation) is unaffected.
+    var masterArchive: MasterArchiveDesignation?
 
     private enum CodingKeys: String, CodingKey {
-        case version, generation, savedAt, records, savedFromHost
+        case version, generation, savedAt, records, savedFromHost, masterArchive
     }
 
     init(version: Int = Self.currentVersion,
          generation: Int = 0,
          savedAt: Date = Date(),
          records: [VideoRecord] = [],
-         savedFromHost: String = "") {
+         savedFromHost: String = "",
+         masterArchive: MasterArchiveDesignation? = nil) {
         self.version = version
         self.generation = generation
         self.savedAt = savedAt
         self.records = records
         self.savedFromHost = savedFromHost
+        self.masterArchive = masterArchive
     }
 
     init(from decoder: Decoder) throws {
@@ -112,6 +121,7 @@ struct CatalogSnapshot: Decodable {
         savedAt       = try c.decodeIfPresent(Date.self, forKey: .savedAt)       ?? Date()
         records       = try c.decodeIfPresent([VideoRecord].self, forKey: .records) ?? []
         savedFromHost = try c.decodeIfPresent(String.self, forKey: .savedFromHost) ?? ""
+        masterArchive = try c.decodeIfPresent(MasterArchiveDesignation.self, forKey: .masterArchive)
     }
 
     /// Cheap header read: extract version + generation from the first few
@@ -222,6 +232,15 @@ final class CatalogStore {
     /// "fell back to .prev" without changing the legacy `load() -> [VideoRecord]`
     /// signature.
     private(set) var lastLoadOutcome: CatalogLoadOutcome = .missing
+
+    /// Catalog-level Master Archive designation (design v2 §3). Loaded
+    /// from the snapshot's additive `masterArchive` key by `load()` and
+    /// stamped into every subsequent payload by `makePayload`. The model
+    /// owns the user-facing value (`VideoScanModel.masterArchive`) and
+    /// mirrors it here on every change — this is the persistence slot,
+    /// not the source of truth for the UI.
+    /// (For Rick: ≈ a member the serializer reads; the model writes it.)
+    var masterArchive: MasterArchiveDesignation?
 
     // MARK: - Cross-process write safety
     //
@@ -435,7 +454,7 @@ final class CatalogStore {
         loadedGeneration = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
 
         // Try primary first.
-        if let (records, version) = decode(url: fileURL) {
+        if let (records, version, master) = decode(url: fileURL) {
             if version > CatalogSnapshot.currentVersion {
                 NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — refusing to load; not overwriting on next save",
                       version, CatalogSnapshot.currentVersion)
@@ -451,15 +470,17 @@ final class CatalogStore {
             // Rotate primary → .prev on every successful load. Copy (not move)
             // so primary stays in place; replace any stale .prev.
             rotateBackup()
+            masterArchive = master
             lastLoadOutcome = .loaded(fromBackup: false)
             return records
         }
         // Primary unreadable — try .prev.
         NSLog("VideoScan: primary catalog.json unreadable; trying %@", backupURL.path)
         if FileManager.default.fileExists(atPath: backupURL.path),
-           let (records, version) = decode(url: backupURL),
+           let (records, version, master) = decode(url: backupURL),
            version <= CatalogSnapshot.currentVersion {
             NSLog("VideoScan: recovered catalog from %@ (%d records)", backupURL.path, records.count)
+            masterArchive = master
             lastLoadOutcome = .loaded(fromBackup: true)
             return records
         }
@@ -468,10 +489,11 @@ final class CatalogStore {
         return []
     }
 
-    /// Decode helper — returns (records, version) on success, nil on any
-    /// failure (missing file, malformed JSON, malformed snapshot). Resolves
-    /// `pairedWith` references against the decoded array.
-    private func decode(url: URL) -> ([VideoRecord], Int)? {
+    /// Decode helper — returns (records, version, masterArchive) on
+    /// success, nil on any failure (missing file, malformed JSON, malformed
+    /// snapshot). Resolves `pairedWith` references against the decoded
+    /// array.
+    private func decode(url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?)? {
         do {
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
@@ -494,7 +516,7 @@ final class CatalogStore {
                 NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
                       cleared, url.lastPathComponent)
             }
-            return (snapshot.records, snapshot.version)
+            return (snapshot.records, snapshot.version, snapshot.masterArchive)
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
             return nil
@@ -510,7 +532,7 @@ final class CatalogStore {
     /// protect). Returns nil on any failure or a newer-version snapshot.
     /// Used by the volume-rename Undo to restore the pre-migration catalog.
     func loadRecords(fromSnapshotAtPath path: String) -> [VideoRecord]? {
-        guard let (records, version) = decode(url: URL(fileURLWithPath: path)),
+        guard let (records, version, _) = decode(url: URL(fileURLWithPath: path)),
               version <= CatalogSnapshot.currentVersion else { return nil }
         return records
     }
@@ -567,7 +589,8 @@ final class CatalogStore {
         // VideoRecord is read), then encode it off-thread on the write queue.
         // CAS stamp: this write claims the next generation (design doc §4.1).
         let nextGeneration = allocateGeneration()
-        let payload = Self.makePayload(records: records, generation: nextGeneration)
+        let payload = Self.makePayload(records: records, generation: nextGeneration,
+                                       masterArchive: masterArchive)
         var ok = false
         writeQueue.sync {
             ok = Self.encodeAndWrite(payload: payload, to: fileURL)
@@ -633,7 +656,8 @@ final class CatalogStore {
         let t0 = CFAbsoluteTimeGetCurrent()
         // CAS stamp: this write claims the next generation (design doc §4.1).
         let nextGeneration = allocateGeneration()
-        let payload = Self.makePayload(records: records, generation: nextGeneration)
+        let payload = Self.makePayload(records: records, generation: nextGeneration,
+                                       masterArchive: masterArchive)
         let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
 
@@ -688,7 +712,8 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshot refused — read-only viewer mode")
             return false
         }
-        return Self.encodeAndWrite(payload: Self.makePayload(records: records),
+        return Self.encodeAndWrite(payload: Self.makePayload(records: records,
+                                                             masterArchive: masterArchive),
                                    to: URL(fileURLWithPath: path))
     }
 
@@ -701,13 +726,15 @@ final class CatalogStore {
     /// the DTO construction IS the race-free copy, and ships across the actor
     /// boundary as a true value type (no @unchecked Sendable box).
     private static func makePayload(records: [VideoRecord],
-                                    generation: Int = 0) -> CatalogSnapshotDTO {
+                                    generation: Int = 0,
+                                    masterArchive: MasterArchiveDesignation? = nil) -> CatalogSnapshotDTO {
         CatalogSnapshotDTO(
             version: CatalogSnapshot.currentVersion,
             generation: generation,
             savedAt: Date(),
             records: records.map(VideoRecordDTO.init),
-            savedFromHost: CatalogHost.currentName
+            savedFromHost: CatalogHost.currentName,
+            masterArchive: masterArchive
         )
     }
 
@@ -867,9 +894,14 @@ struct CatalogSnapshotDTO: Sendable, Encodable {
     var savedAt: Date = Date()
     var records: [VideoRecordDTO] = []
     var savedFromHost: String = ""
+    /// Master Archive designation — additive optional. Synthesized
+    /// Encodable uses encodeIfPresent for optionals, so a nil value emits
+    /// NO key and the on-disk bytes are unchanged for every catalog that
+    /// has no master archive (byte-identity test still holds).
+    var masterArchive: MasterArchiveDesignation? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case version, generation, savedAt, records, savedFromHost
+        case version, generation, savedAt, records, savedFromHost, masterArchive
     }
 }
 
@@ -890,6 +922,7 @@ extension CatalogSnapshotDTO {
                   generation: snapshot.generation,
                   savedAt: snapshot.savedAt,
                   records: snapshot.records.map(VideoRecordDTO.init),
-                  savedFromHost: snapshot.savedFromHost)
+                  savedFromHost: snapshot.savedFromHost,
+                  masterArchive: snapshot.masterArchive)
     }
 }

@@ -156,6 +156,10 @@ enum JourneyEventKind: String, Equatable {
     /// ("Derived from <source> via Reformat"). Lets the timeline tell
     /// the full rescue story.
     case reformat
+    /// Master Archive promotion (2026-08-15): the SOURCE record's journey
+    /// gets "Promoted to Master Archive as …"; the archive COPY's journey
+    /// gets "Promoted from …". Verified copy, never a move.
+    case promote
 
     var color: Color {
         switch self {
@@ -167,6 +171,7 @@ enum JourneyEventKind: String, Equatable {
         case .currentState: return .green
         case .freeForm:     return .secondary
         case .reformat:     return .red
+        case .promote:      return .yellow
         }
     }
 
@@ -180,6 +185,7 @@ enum JourneyEventKind: String, Equatable {
         case .currentState: return "mappin.and.ellipse"
         case .freeForm:     return "text.bubble"
         case .reformat:     return "wand.and.stars"
+        case .promote:      return "star.circle"
         }
     }
 }

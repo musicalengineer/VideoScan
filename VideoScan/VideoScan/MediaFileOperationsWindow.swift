@@ -645,6 +645,10 @@ extension MediaFileOperationKind {
         // white-text contrast sensor like the rest of the 2026-07-31
         // legibility palette.
         case .findPerson: return Color(red: 0.28, green: 0.24, blue: 0.50)
+        // Promote to Archive (2026-08-15) — deep archival bronze: warm
+        // like the retire/archivebox family, darker than rebuild's brown,
+        // and clearly apart from extract's burnt orange.
+        case .promote: return Color(red: 0.55, green: 0.36, blue: 0.10)
         }
     }
 }

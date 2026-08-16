@@ -99,6 +99,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// recipe engine via ProcessRunner; Swift-native engine to follow
     /// behind the same job. Rick 2026-08-02.
     case findPerson
+    /// "Promote to Archive" — verified byte-for-byte copy of one or more
+    /// records into the Master Archive tree (spec §5): copy → streamed
+    /// sha256 of source and destination → rename into place → manifest
+    /// row → linked catalog record. Never a move; never a re-encode.
+    /// docs/archive_promotion_workflow.md, Rick 2026-08-15.
+    case promote
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -119,6 +125,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .rebuildAudio: return "Rebuild"
         case .verifyAudio: return "Verify"
         case .findPerson: return "Find"
+        case .promote: return "Promote"
         }
     }
 
@@ -142,6 +149,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .rebuildAudio: return "rebuild audio"
         case .verifyAudio: return "verify audio"
         case .findPerson: return "find person"
+        case .promote: return "promote"
         }
     }
 }
@@ -1043,7 +1051,9 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// reads. Deduped per volume root; sorted by root so every job
     /// acquires in the same order (≈ the classic lock-ordering rule —
     /// no deadlocks). Volumes whose policy is unrestricted get no gate.
-    private func gatePlan(forPaths paths: [String]) -> [MediaVolumeGate] {
+    /// Internal (was private) so verb extensions in sibling files
+    /// (MediaFileOperations+Promote.swift) can build the same plan.
+    func gatePlan(forPaths paths: [String]) -> [MediaVolumeGate] {
         var plan: [MediaVolumeGate] = []
         var seenRoots = Set<String>()
         for path in paths {

@@ -858,6 +858,9 @@ final class VideoScanModel: ObservableObject {
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()
+        // Master Archive designation rides the same snapshot (additive
+        // key) — adopt it before anything else reads `masterArchive`.
+        masterArchive = catalogStore.masterArchive
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
@@ -1165,6 +1168,48 @@ final class VideoScanModel: ObservableObject {
     /// pre-select that one volume. Replaces showCoverArtMusicPurgeSheet /
     /// showUnrelatedAudioPurgeSheet as the live purge surface.
     @Published var showNonVideoMediaPurgeSheet: Bool = false
+
+    // MARK: - Master Archive (docs/archive_promotion_workflow.md)
+    //
+    // Stored here (not in VideoScanModel+MasterArchive.swift) because
+    // Swift extensions cannot add stored properties. All the LOGIC —
+    // initialize / clear / promote plan / linked-copy index — lives in
+    // the extension file.
+
+    /// The one designated Master Archive, or nil when none. Mirrored into
+    /// `catalogStore.masterArchive` on every change so the next catalog
+    /// save persists it (additive snapshot key). Loaded from the store
+    /// in `init` right after `load()`.
+    @Published var masterArchive: MasterArchiveDesignation? {
+        didSet { catalogStore.masterArchive = masterArchive }
+    }
+
+    /// Reverse index source-id → promoted-copy record (and copy-id →
+    /// source-id), memoized on `RecordsVersion` like the CatalogHelpers
+    /// memos. Reads are O(1); the O(records) rebuild runs once per
+    /// catalog mutation, never in a view body.
+    let archivePromotionIndex = ArchivePromotionIndex()
+
+    /// Live catalog-table selection, mirrored from CatalogView so the
+    /// menu-bar command "Promote Selected to Archive" knows what is
+    /// selected. Plain `var` (not @Published) — the menu reads it at
+    /// click time; nothing renders from it.
+    var catalogSelectedIDs: Set<UUID> = []
+
+    /// Sheet driver for "Initialize as Master Archive…" — set by the
+    /// Volumes window right-click, the File ▸ Archive menu (after the
+    /// open panel), and the no-master alert's fix-it button. Bound in
+    /// ContentView. Model-level so every entry point shares ONE sheet.
+    @Published var pendingMasterArchiveInitOffer: MasterArchiveInitOffer?
+
+    /// Sheet driver for the Promote confirmation (N files, GB, folders,
+    /// warnings). Set by the catalog right-click and the File menu.
+    @Published var pendingPromoteRequest: ArchivePromoteRequest?
+
+    /// Alert driver: "You need to designate a volume as the master
+    /// archive." Carries the ids the user tried to promote so the fix-it
+    /// button can re-offer the promotion after Initialize.
+    @Published var pendingPromoteWithoutMaster: ArchivePromoteWithoutMaster?
 
     // MARK: - Logging (delegates to DashboardState)
 
