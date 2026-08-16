@@ -295,7 +295,14 @@ extension VideoScanModel {
     /// `records` regardless of target count (checklist: no O(records ×
     /// targets) scans).
     func retiredCatalogCleanupCandidates() -> [(target: CatalogScanTarget, recordCount: Int)] {
-        let retired = scanTargets.filter { $0.isRetired && $0.phase != .noCatalog
+        // Retirement currently has two owners (codex #385 / taxonomy
+        // proposal): the retire FLOW stamps `retiredAt`, but a user can
+        // also set the role chip to Retired by hand and never get a
+        // stamp. Rick 2026-08-16: RicksBackups + 500USB were role=Retired
+        // with retiredAt=nil, so this nag never fired for them. Honor
+        // both until retirement is centralized on retiredAt.
+        let retired = scanTargets.filter { ($0.isRetired || $0.role == .retired)
+                                           && $0.phase != .noCatalog
                                            && !$0.searchPath.isEmpty }
         guard !retired.isEmpty else { return [] }
         var counts: [ObjectIdentifier: Int] = [:]
@@ -315,8 +322,24 @@ extension VideoScanModel {
     /// offer to delete their catalogs right here. Recurs at every backup
     /// until the list is empty — deliberate; see header comment.
     func promptRetiredCatalogCleanup() {
+        promptRetiredCatalogCleanup(explicit: false)
+    }
+
+    /// `explicit: true` = the user chose the menu command, so an empty
+    /// candidate list gets a reassuring "nothing to clean up" instead of
+    /// silence (silence is right for the backup-time nag).
+    func promptRetiredCatalogCleanup(explicit: Bool) {
         let candidates = retiredCatalogCleanupCandidates()
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty else {
+            if explicit {
+                let a = NSAlert()
+                a.messageText = "No retired-volume catalogs to clean up"
+                a.informativeText = "Every retired volume's catalog entries are already gone. Nothing to do."
+                a.addButton(withTitle: "OK")
+                a.runModal()
+            }
+            return
+        }
 
         let lines = candidates.map { c -> String in
             let name = VolumeReachability.volumeName(forPath: c.target.searchPath)

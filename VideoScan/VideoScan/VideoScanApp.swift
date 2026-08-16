@@ -542,6 +542,14 @@ struct VideoScanApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command])
 
+                // Same prompt the backup-time nag shows, on demand — so the
+                // user never has to run a backup just to reach it
+                // (Rick 2026-08-16).
+                Button("Clean Up Retired Volume Catalogs…") {
+                    catalogModel.promptRetiredCatalogCleanup(explicit: true)
+                }
+                .disabled(catalogModel.isReadOnly)
+
                 Divider()
                 // Master Archive (docs/archive_promotion_workflow.md §4).
                 // Every item routes through the model so the same sheets

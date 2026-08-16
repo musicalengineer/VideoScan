@@ -62,6 +62,22 @@ final class RetiredCatalogCleanupTests: XCTestCase {
         XCTAssertEqual(c.first?.recordCount, 3)
     }
 
+    /// Rick 2026-08-16: RicksBackups + 500USB carried role=Retired set by
+    /// hand, retiredAt=nil, and the backup-time nag never fired. Both
+    /// owners of "retired" must count until retirement is centralized.
+    func testRoleRetiredWithoutRetiredAtStampIsACandidate() {
+        let m = makeModel()
+        let byRole = makeTarget("/Volumes/RicksBackups", retired: false)
+        byRole.role = .retired
+        XCTAssertNil(byRole.retiredAt, "precondition: no stamp")
+        m.scanTargets = [byRole]
+        m.records = makeRecords(under: "/Volumes/RicksBackups", count: 2)
+
+        let c = m.retiredCatalogCleanupCandidates()
+        XCTAssertEqual(c.count, 1, "role-only retirement must still be nagged about")
+        XCTAssertEqual(c.first?.recordCount, 2)
+    }
+
     /// The incident pin: a retired target whose catalog was ALREADY
     /// deleted (phase .noCatalog, like MyBook) must never be nagged
     /// about — it is the desired end state.
