@@ -201,6 +201,14 @@ struct InspectorPanel: View {
                     }
 
                     inspectorSection("Timestamps", systemImage: "calendar") {
+                        // Filesystem dates stay (Finder parity) but are never
+                        // used for archive placement; the embedded stamp is.
+                        if let embedded = rec.embeddedCreationDate {
+                            inspectorRow("Embedded", InspectorDateView.embeddedFormatter.string(from: embedded) + " UTC")
+                        }
+                        if let origin = rec.originDescription {
+                            inspectorRow("Origin", origin)
+                        }
                         inspectorRow("Created", rec.dateCreated)
                         inspectorRow("Modified", rec.dateModified)
                         inspectorRow("Timecode", rec.timecode)
@@ -554,6 +562,13 @@ struct InspectorPanel: View {
         if let userDate = rec.userDate {
             add("Your Date", rec.userDateStatus == .known
                 ? "\(userDate) (known)" : "\(userDate) (best guess)")
+        }
+        if let embedded = rec.embeddedCreationDate {
+            add("Embedded", InspectorDateView.embeddedFormatter.string(from: embedded) + " UTC"
+                + (rec.embeddedCreationSource.map { " (\($0))" } ?? ""))
+        }
+        if let origin = rec.originDescription {
+            add("Origin", origin)
         }
         add("Created", rec.dateCreated)
         add("Modified", rec.dateModified)
