@@ -160,13 +160,43 @@ public enum CyberBrainBiographyPlanner {
                 permittedActions: [.narrow],
                 constraints: [.doNotChooseAmbiguousIdentity],
                 ambiguityCandidates: people.map {
-                    .init(id: $0.id, canonicalName: $0.canonicalName)
+                    .init(
+                        id: $0.id,
+                        canonicalName: $0.canonicalName,
+                        source: .cyberBrain)
                 })
         case .resolved(let person):
             return resolvedPlan(person: person, index: index, graph: graph,
                                 privacyCeiling: privacyCeiling,
                                 itemLimit: itemLimit)
         }
+    }
+
+    /// Continues a previously offered CyberBrain identity without resolving
+    /// display text a second time. A missing ID fails closed instead of
+    /// silently selecting a similarly named person.
+    public static func plan(
+        personID: String,
+        index: CyberBrainIndex,
+        graph: GedcomFamilyGraph? = nil,
+        privacyCeiling: CyberBrainItem.Privacy = .private,
+        itemLimit: Int = 8
+    ) -> CyberBrainAnswerPlan {
+        guard let person = index.person(id: personID) else {
+            return CyberBrainAnswerPlan(
+                subject: personID,
+                answerState: .noEvidence,
+                uncertaintyStatements: [
+                    "That CyberBrain identity is no longer available."
+                ],
+                constraints: [.doNotInferIdentity])
+        }
+        return resolvedPlan(
+            person: person,
+            index: index,
+            graph: graph,
+            privacyCeiling: privacyCeiling,
+            itemLimit: itemLimit)
     }
 
     private static func resolvedPlan(
@@ -311,7 +341,10 @@ public enum CyberBrainBiographyPlanner {
                 permittedActions: [.narrow],
                 constraints: [.doNotChooseAmbiguousIdentity],
                 ambiguityCandidates: matches.map {
-                    .init(id: "gedcom:\($0.id)", canonicalName: $0.name)
+                    .init(
+                        id: $0.id,
+                        canonicalName: $0.name,
+                        source: .gedcom)
                 })
         }
         guard gedcomFactPrivacy.isVisible(at: privacyCeiling) else {
@@ -397,13 +430,19 @@ public enum CyberBrainDeterministicComposer {
             return plan.uncertaintyStatements.first
                 ?? "I don't have sourced biographical evidence for \(plan.subject)."
         case .answered, .disputed:
-            var paragraphs = plan.claims.map(\.text)
+            let opening = plan.answerState == .disputed
+                ? "The family archive preserves more than one account of \(plan.subject), so I won't collapse them into a single version."
+                : "Here is what the family archive currently supports about \(plan.subject)."
+            var paragraphs = [opening]
+            paragraphs.append(contentsOf: plan.claims.map(\.text))
             paragraphs.append(contentsOf: plan.uncertaintyStatements)
             if !plan.sourceCitations.isEmpty {
                 let count = plan.sourceCitations.count
-                paragraphs.append("I can show \(count) supporting source\(count == 1 ? "" : "s").")
+                paragraphs.append(
+                    "This account is supported by \(count) source\(count == 1 ? "" : "s"), which I can show you.")
+            } else if let followup = plan.suggestedFollowups.first {
+                paragraphs.append(followup)
             }
-            if let followup = plan.suggestedFollowups.first { paragraphs.append(followup) }
             return paragraphs.joined(separator: " ")
         }
     }

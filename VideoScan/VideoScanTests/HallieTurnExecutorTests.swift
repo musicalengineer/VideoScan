@@ -587,6 +587,89 @@ struct HallieTurnExecutorTests {
         #expect(!result.basisLine.contains("poison.invalid"))
     }
 
+    @Test func cyberBrainBiographyCarriesCuratedClaimsAndSources() async throws {
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        let source = CyberBrainSource(
+            id: "source.donna-interview",
+            type: .firstPerson,
+            title: "Donna's Cape memories",
+            attribution: "Donna Breen",
+            locator: "sources/interviews/donna-cape.txt")
+        let passage = CyberBrainItem(
+            id: "bio.donna.cape",
+            kind: .biography,
+            text: "Donna remembers summers down the Cape as a defining family tradition.",
+            subjectPersonIDs: ["person.donna"],
+            sourceIDs: [source.id],
+            confidence: .confirmed,
+            privacy: .family,
+            createdAt: instant,
+            updatedAt: instant)
+        let index = try CyberBrainIndex(archive: .init(
+            archiveID: "breen-family",
+            displayName: "Breen Family CyberBrain",
+            people: [.init(
+                id: "person.donna",
+                canonicalName: "Donna Breen",
+                aliases: ["Donna"],
+                biographyPassages: [passage])],
+            sources: [source]))
+        let ast = ArchivistQueryAST.graph(.init(
+            people: ["Donna"], operation: .biography))
+
+        let result = try await HallieTurnExecutor.execute(
+            ast,
+            context: .init(graph: nil, cyberBrain: index))
+
+        #expect(result.outcome == .answered)
+        #expect(result.prose.contains("summers down the Cape"))
+        #expect(result.catalogPersonName == "Donna Breen")
+        #expect(result.citations.isEmpty)
+        #expect(result.knowledgeCitations == [.init(
+            id: source.id,
+            title: source.title,
+            attribution: source.attribution,
+            locator: source.locator)])
+    }
+
+    @Test func cyberBrainAmbiguityContinuesByStableIDWithoutGuessing() async throws {
+        let people = [
+            CyberBrainPerson(
+                id: "person.donna-a",
+                canonicalName: "Donna A. Breen",
+                aliases: ["Donna"]),
+            CyberBrainPerson(
+                id: "person.donna-b",
+                canonicalName: "Donna B. Breen",
+                aliases: ["Donna"]),
+        ]
+        let index = try CyberBrainIndex(archive: .init(
+            archiveID: "ambiguity",
+            displayName: "Ambiguity fixture",
+            people: people,
+            sources: []))
+        let context = HallieTurnExecutor.Context(cyberBrain: index)
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "Tell me about Donna",
+            ast: .graph(.init(people: ["Donna"], operation: .biography)))
+        let first = try await HallieTurnExecutor.execute(
+            .init(intent: intent), context: context)
+        let pending = try #require(first.clarification)
+
+        #expect(first.outcome == .needsClarification)
+        #expect(pending.candidates.map(\.id) == [
+            .cyberBrainPersonID("person.donna-a"),
+            .cyberBrainPersonID("person.donna-b"),
+        ])
+        let continued = try await HallieTurnExecutor.continue(
+            pending: pending,
+            selecting: .cyberBrainPersonID("person.donna-b"),
+            context: context)
+        #expect(continued.outcome == .declined)
+        #expect(continued.prose.contains("Donna B. Breen"))
+        #expect(continued.clarification == nil)
+    }
+
     /// Media-matrix execution is N/A: this seam consumes catalog metadata
     /// only. These source sensors keep media opening and UI frameworks in the
     /// terminal adapter, and keep the terminal adapter delegated to one core.

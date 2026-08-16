@@ -110,10 +110,14 @@ public enum CyberBrainValidator {
         }
         try requireText(item.id, "item.id")
         try requireText(item.text, "item.text")
-        guard !item.subjectPersonIDs.isEmpty else {
+        guard (1...8).contains(item.subjectPersonIDs.count),
+              Set(item.subjectPersonIDs).count == item.subjectPersonIDs.count else {
             throw CyberBrainError.invalidField("item.subjectPersonIDs")
         }
-        guard !item.sourceIDs.isEmpty else {
+        // Eight selected items × three sources, plus one GEDCOM citation,
+        // keeps the answer boundary at a hard maximum of 25 citations.
+        guard (1...3).contains(item.sourceIDs.count),
+              Set(item.sourceIDs).count == item.sourceIDs.count else {
             throw CyberBrainError.invalidField("item.sourceIDs")
         }
         guard item.updatedAt >= item.createdAt else {

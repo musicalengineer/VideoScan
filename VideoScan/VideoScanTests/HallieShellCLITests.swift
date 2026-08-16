@@ -18,6 +18,7 @@ struct HallieShellCLITests {
         var profiles: [POIProfile]
         var profileLoadResult: HallieShellCLI.ProfileLoadResult?
         var graph: GedcomFamilyGraph?
+        var cyberBrain: CyberBrainIndex?
         var translations: [ArchivistQueryAST]
         var translationError: Error?
         var unavailableMediaPaths: Set<String> = []
@@ -58,6 +59,7 @@ struct HallieShellCLITests {
                     profileLoadResult ?? .loaded(profiles)
                 },
                 loadGraph: { [self] _ in graph },
+                loadCyberBrain: { [self] in cyberBrain },
                 translateAST: { [self] question, options in
                     translatedQuestions.append(question)
                     translationOptions.append(options)
@@ -655,6 +657,50 @@ struct HallieShellCLITests {
             #expect(harness.mediaActions == [expectedAction])
             #expect(harness.output.contains(successLine))
         }
+    }
+
+    @Test func biographyPrintsCyberBrainClaimAndRelativeSource() async throws {
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        let source = CyberBrainSource(
+            id: "source.cape",
+            type: .firstPerson,
+            title: "Cape memories",
+            attribution: "Donna Breen",
+            locator: "sources/donna-cape.txt")
+        let item = CyberBrainItem(
+            id: "bio.cape",
+            kind: .biography,
+            text: "Donna remembers the Cape as a central family gathering place.",
+            subjectPersonIDs: ["person.donna"],
+            sourceIDs: [source.id],
+            confidence: .confirmed,
+            privacy: .family,
+            createdAt: instant,
+            updatedAt: instant)
+        let harness = Harness(translations: [.graph(.init(
+            people: ["Donna"], operation: .biography))])
+        harness.cyberBrain = try CyberBrainIndex(archive: .init(
+            archiveID: "breen",
+            displayName: "Breen Family CyberBrain",
+            people: [.init(
+                id: "person.donna",
+                canonicalName: "Donna Breen",
+                aliases: ["Donna"],
+                biographyPassages: [item])],
+            sources: [source]))
+
+        let code = await HallieShellCLI.run(
+            options: .init(once: "Tell me about Donna"),
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.output.contains(where: {
+            $0.contains("central family gathering place")
+        }))
+        #expect(harness.output.contains("knowledge sources:"))
+        #expect(harness.output.contains(
+            "  1. Cape memories — Donna Breen [sources/donna-cape.txt]"))
     }
 
     @Test func biographyPrintsVerifiedPhotoButOpensOnlyOnExplicitCommand() async throws {

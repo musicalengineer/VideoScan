@@ -90,7 +90,26 @@ struct CyberBrainTests {
                 == Set(plan.sourceCitations.map(\.id)))
         #expect(prose.contains("ABT 1944"))
         #expect(prose.contains("restored radios"))
+        #expect(prose.hasPrefix(
+            "Here is what the family archive currently supports about Jordan River."))
+        #expect(prose.contains(
+            "supported by 2 sources, which I can show you"))
+        #expect(!prose.contains("Would you like to see the supporting sources?"))
         #expect(!prose.lowercased().contains("born in 1944"))
+    }
+
+    @Test func stablePersonIDContinuationFailsClosedWhenIdentityDisappears() throws {
+        let index = try CyberBrainIndex(archive: archive())
+        let resolved = CyberBrainBiographyPlanner.plan(
+            personID: "person.jordan", index: index)
+        let stale = CyberBrainBiographyPlanner.plan(
+            personID: "person.removed", index: index)
+
+        #expect(resolved.answerState == .answered)
+        #expect(resolved.subject == "Jordan River")
+        #expect(stale.answerState == .noEvidence)
+        #expect(stale.constraints == [.doNotInferIdentity])
+        #expect(stale.claims.isEmpty)
     }
 
     @Test func privacyRetractionAndSupersessionFailClosed() throws {
@@ -245,6 +264,38 @@ struct CyberBrainTests {
             title: "Unsafe", locator: "../outside.txt")])
         #expect(throws: CyberBrainError.unsafePath("../outside.txt")) {
             try CyberBrainValidator.validate(unsafe)
+        }
+    }
+
+    @Test func validatorBoundsUniqueSubjectsAndSourcesForAnswerRendering() {
+        let tooManySources = CyberBrainItem(
+            id: "item.too-many-sources",
+            kind: .biography,
+            text: "A bounded fixture.",
+            subjectPersonIDs: ["person.jordan"],
+            sourceIDs: ["s1", "s2", "s3", "s4"],
+            confidence: .confirmed,
+            privacy: .family,
+            createdAt: Self.instant,
+            updatedAt: Self.instant)
+        #expect(throws: CyberBrainError.self) {
+            try CyberBrainValidator.validate(archive(
+                items: [tooManySources],
+                sources: ["s1", "s2", "s3", "s4"].map { source(id: $0) }))
+        }
+
+        let duplicateSubject = CyberBrainItem(
+            id: "item.duplicate-subject",
+            kind: .biography,
+            text: "A bounded fixture.",
+            subjectPersonIDs: ["person.jordan", "person.jordan"],
+            sourceIDs: ["source.interview"],
+            confidence: .confirmed,
+            privacy: .family,
+            createdAt: Self.instant,
+            updatedAt: Self.instant)
+        #expect(throws: CyberBrainError.self) {
+            try CyberBrainValidator.validate(archive(items: [duplicateSubject]))
         }
     }
 

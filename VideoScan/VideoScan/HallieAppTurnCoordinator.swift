@@ -46,6 +46,7 @@ enum HallieAppTurnCoordinator {
         ) async throws -> Translation
         let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
+        let loadCyberBrain: @Sendable () -> CyberBrainIndex?
         let executeRequest: @Sendable (
             HallieTurnExecutor.Request, HallieTurnExecutor.Context
         ) async throws -> HallieTurnExecutor.Result
@@ -55,6 +56,32 @@ enum HallieAppTurnCoordinator {
             HallieTurnExecutor.Context
         ) async throws -> HallieTurnExecutor.Result
         let resolveBiographyPhoto: @Sendable (String) -> ArchivistBiographyPhoto?
+
+        init(
+            startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
+            translateAST: @escaping @Sendable (String, [String], String) async throws -> Translation,
+            loadProfiles: @escaping @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?,
+            loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
+            loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
+            executeRequest: @escaping @Sendable (
+                HallieTurnExecutor.Request, HallieTurnExecutor.Context
+            ) async throws -> HallieTurnExecutor.Result,
+            continueTurn: @escaping @Sendable (
+                HallieTurnExecutor.Clarification,
+                HallieTurnExecutor.CandidateID,
+                HallieTurnExecutor.Context
+            ) async throws -> HallieTurnExecutor.Result,
+            resolveBiographyPhoto: @escaping @Sendable (String) -> ArchivistBiographyPhoto?
+        ) {
+            self.startLocalBrain = startLocalBrain
+            self.translateAST = translateAST
+            self.loadProfiles = loadProfiles
+            self.loadGraph = loadGraph
+            self.loadCyberBrain = loadCyberBrain
+            self.executeRequest = executeRequest
+            self.continueTurn = continueTurn
+            self.resolveBiographyPhoto = resolveBiographyPhoto
+        }
 
         static let live = Dependencies(
             startLocalBrain: { hosts in
@@ -99,6 +126,23 @@ enum HallieAppTurnCoordinator {
                 return directory.flatMap {
                     FamilyGraphFileLoader(
                         originalsDirectory: $0).loadNewest()
+                }
+            },
+            loadCyberBrain: {
+                guard let root = FileManager.default.urls(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask).first?.appendingPathComponent(
+                        "VideoScan/cyberbrain", isDirectory: true) else {
+                    return nil
+                }
+                do {
+                    return try CyberBrainIndex(
+                        archive: CyberBrainLoader(rootURL: root).load())
+                } catch CyberBrainError.missingArchive {
+                    return nil
+                } catch {
+                    appLog.write("Hallie: CyberBrain unavailable — \(error.localizedDescription)")
+                    return nil
                 }
             },
             executeRequest: { request, context in
@@ -236,22 +280,27 @@ enum HallieAppTurnCoordinator {
             try Task.checkCancellation()
             let profiles: [HallieTurnExecutor.ProfileSnapshot]?
             let graph: GedcomFamilyGraph?
+            let cyberBrain: CyberBrainIndex?
             switch route {
             case .temporal, .aggregate:
                 profiles = dependencies.loadProfiles()
                 graph = nil
+                cyberBrain = nil
             case .graph:
                 profiles = dependencies.loadProfiles()
                 graph = dependencies.loadGraph()
+                cyberBrain = dependencies.loadCyberBrain()
             case .presence, .unsupportedEvent, .unsupportedCross:
                 profiles = []
                 graph = nil
+                cyberBrain = nil
             }
             let context = HallieTurnExecutor.Context(
                 presenceRecords: presenceRecords,
                 aggregateRecords: aggregateRecords,
                 profiles: profiles,
                 graph: graph,
+                cyberBrain: cyberBrain,
                 selectedTemporalDate: selectedDate)
             try Task.checkCancellation()
             return context

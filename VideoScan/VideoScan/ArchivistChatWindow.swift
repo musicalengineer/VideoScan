@@ -71,6 +71,9 @@ struct ArchivistMessage: Identifiable {
     /// Bounded evidence samples returned by the shared factual executor.
     /// These are explicitly samples, never represented as every match.
     var citations: [HallieTurnExecutor.Citation] = []
+    /// Curated biography / GEDCOM sources. Locators remain relative and are
+    /// display-only until a separately verified source-opening action exists.
+    var knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = []
     var chips: [Chip] = []
 
     /// Production seam for person clarification.  These must be resolved
@@ -395,6 +398,9 @@ struct ArchivistChatWindow: View {
                 if !message.citations.isEmpty {
                     citationEvidence(message.citations)
                 }
+                if !message.knowledgeCitations.isEmpty {
+                    knowledgeEvidence(message.knowledgeCitations)
+                }
                 if !message.chips.isEmpty {
                     FlowChips(chips: message.chips) { chip in
                         handle(chip: chip)
@@ -441,6 +447,32 @@ struct ArchivistChatWindow: View {
                     .buttonStyle(.borderless)
                 }
                 if index != citations.indices.last { Divider() }
+            }
+        }
+        .padding(.top, 3)
+    }
+
+    private func knowledgeEvidence(
+        _ citations: [HallieTurnExecutor.KnowledgeCitation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Family archive sources")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(citations) { citation in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(citation.title)
+                        .font(.caption.weight(.medium))
+                        .textSelection(.enabled)
+                    let details = [citation.attribution, citation.locator]
+                        .compactMap { $0 }
+                    if !details.isEmpty {
+                        Text(details.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
             }
         }
         .padding(.top, 3)
@@ -736,6 +768,7 @@ struct ArchivistChatWindow: View {
             basisLine: response.result.basisLine,
             biographyPhoto: response.biographyPhoto,
             citations: citations,
+            knowledgeCitations: response.result.knowledgeCitations,
             chips: clarificationChips))
         if response.playAfterAnswer, !lastMatches.isEmpty {
             play(bestOf: lastMatches)

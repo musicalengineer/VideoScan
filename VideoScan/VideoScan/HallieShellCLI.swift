@@ -100,6 +100,7 @@ enum HallieShellCLI {
         var loadCatalog: (URL) -> [VideoRecord]?
         var loadProfiles: () -> ProfileLoadResult
         var loadGraph: (URL?) -> GedcomFamilyGraph?
+        var loadCyberBrain: () -> CyberBrainIndex?
         var translateAST: (String, Options) async throws -> Translation
         var executeTurn: @Sendable (
             ArchivistQueryAST,
@@ -122,6 +123,7 @@ enum HallieShellCLI {
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
             loadProfiles: @escaping () -> ProfileLoadResult,
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
+            loadCyberBrain: @escaping () -> CyberBrainIndex? = { nil },
             translateAST: @escaping (String, Options) async throws -> Translation,
             executeTurn: @escaping @Sendable (
                 ArchivistQueryAST,
@@ -143,6 +145,7 @@ enum HallieShellCLI {
             self.loadCatalog = loadCatalog
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
+            self.loadCyberBrain = loadCyberBrain
             self.translateAST = translateAST
             self.executeTurn = executeTurn
             self.executeRequest = executeRequest ?? { request, context in
@@ -180,6 +183,16 @@ enum HallieShellCLI {
                     return directory.flatMap {
                         FamilyGraphFileLoader(originalsDirectory: $0).loadNewest()
                     }
+                },
+                loadCyberBrain: {
+                    guard let root = FileManager.default.urls(
+                        for: .applicationSupportDirectory,
+                        in: .userDomainMask).first?.appendingPathComponent(
+                            "VideoScan/cyberbrain", isDirectory: true) else {
+                        return nil
+                    }
+                    return try? CyberBrainIndex(
+                        archive: CyberBrainLoader(rootURL: root).load())
                 },
                 translateAST: { question, options in
                     let responder = LockedString()
@@ -307,7 +320,12 @@ enum HallieShellCLI {
         case .unavailable: profiles = nil
         }
         let graph = dependencies.loadGraph(options.gedcomURL)
-        var state = Session(records: records, profiles: profiles, graph: graph)
+        let cyberBrain = dependencies.loadCyberBrain()
+        var state = Session(
+            records: records,
+            profiles: profiles,
+            graph: graph,
+            cyberBrain: cyberBrain)
 
         output("Hallie Mae — headless read-only shell")
         output("catalog: \(records.count) records · \(options.catalogURL.path)")
@@ -347,9 +365,11 @@ enum HallieShellCLI {
         let records: [VideoRecord]
         let profiles: [POIProfile]?
         let graph: GedcomFamilyGraph?
+        let cyberBrain: CyberBrainIndex?
         var presenceSnapshots: [ArchivistPresenceRecordSnapshot]?
         var aggregateSnapshots: [ArchivistAggregateRecordSnapshot]?
         var citations: [HallieTurnExecutor.Citation] = []
+        var knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = []
         var selectedRecordID: UUID?
         var biographyPhoto: ArchivistBiographyPhoto?
         var lastResponder = "none"
@@ -411,6 +431,7 @@ enum HallieShellCLI {
                 aggregateRecords: state.aggregateSnapshots ?? [],
                 profiles: profiles,
                 graph: state.graph,
+                cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate)
             let request = HallieTurnExecutor.Request(intent: .init(
                 originalQuestion: question,
@@ -499,6 +520,7 @@ enum HallieShellCLI {
         output: (String) -> Void
     ) {
         state.citations = result.citations
+        state.knowledgeCitations = result.knowledgeCitations
         state.pendingClarification = result.clarification.map {
             Session.PendingClarification(value: $0, context: context)
         }
@@ -519,6 +541,7 @@ enum HallieShellCLI {
             output("query: \(queryDescription)")
         }
         printCitations(state.citations, output: output)
+        printKnowledgeCitations(state.knowledgeCitations, output: output)
         if let clarification = result.clarification {
             printClarification(clarification, output: output)
         }
@@ -626,6 +649,19 @@ enum HallieShellCLI {
             let at = citation.playbackSeconds.map { String(format: " @ %.1fs", $0) } ?? ""
             output("  \(index + 1). \(citation.filename)\(at) — \(citation.fullPath)")
             output("     \(citation.bases.map(evidenceDescription).joined(separator: "; "))")
+        }
+    }
+
+    private static func printKnowledgeCitations(
+        _ citations: [HallieTurnExecutor.KnowledgeCitation],
+        output: (String) -> Void
+    ) {
+        guard !citations.isEmpty else { return }
+        output("knowledge sources:")
+        for (index, citation) in citations.enumerated() {
+            let attribution = citation.attribution.map { " — \($0)" } ?? ""
+            let locator = citation.locator.map { " [\($0)]" } ?? ""
+            output("  \(index + 1). \(citation.title)\(attribution)\(locator)")
         }
     }
 

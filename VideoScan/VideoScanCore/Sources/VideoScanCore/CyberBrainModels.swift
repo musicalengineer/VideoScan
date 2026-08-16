@@ -224,12 +224,18 @@ public struct CyberBrainAnswerPlan: Codable, Sendable, Equatable {
     }
 
     public struct Candidate: Codable, Sendable, Equatable, Identifiable {
+        public enum Source: String, Codable, Sendable, Equatable {
+            case cyberBrain, gedcom
+        }
+
         public let id: String
         public let canonicalName: String
+        public let source: Source
 
-        public init(id: String, canonicalName: String) {
+        public init(id: String, canonicalName: String, source: Source) {
             self.id = id
             self.canonicalName = canonicalName
+            self.source = source
         }
     }
 

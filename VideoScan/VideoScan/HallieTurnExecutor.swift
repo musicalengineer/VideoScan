@@ -24,16 +24,19 @@ enum HallieTurnExecutor {
     enum IdentitySource: Sendable, Equatable {
         case peopleProfile
         case gedcom
+        case cyberBrain
     }
 
     enum CandidateID: Sendable, Equatable {
         case profileStableID(String)
         case gedcomPersonID(String)
+        case cyberBrainPersonID(String)
 
         var source: IdentitySource {
             switch self {
             case .profileStableID: return .peopleProfile
             case .gedcomPersonID: return .gedcom
+            case .cyberBrainPersonID: return .cyberBrain
             }
         }
     }
@@ -55,10 +58,12 @@ enum HallieTurnExecutor {
     enum ClarificationStage: Sendable, Equatable {
         case profileIdentity
         case gedcomPerson
+        case cyberBrainPerson
 
         fileprivate func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
-            case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom):
+            case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
+                 (.cyberBrainPerson, .cyberBrain):
                 return true
             default:
                 return false
@@ -148,6 +153,7 @@ enum HallieTurnExecutor {
         /// a successful read proving that no profiles currently exist.
         let profiles: [ProfileSnapshot]?
         let graph: GedcomFamilyGraph?
+        let cyberBrain: CyberBrainIndex?
         let selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot?
         /// An opaque capture identity. Copying Context preserves it; invoking
         /// the initializer creates a new capture that cannot continue an old
@@ -159,12 +165,14 @@ enum HallieTurnExecutor {
             aggregateRecords: [ArchivistAggregateRecordSnapshot] = [],
             profiles: [ProfileSnapshot]? = [],
             graph: GedcomFamilyGraph? = nil,
+            cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil
         ) {
             self.presenceRecords = presenceRecords
             self.aggregateRecords = aggregateRecords
             self.profiles = profiles
             self.graph = graph
+            self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
             self.continuationToken = UUID()
         }
@@ -178,6 +186,13 @@ enum HallieTurnExecutor {
         let bases: [ArchivistEvidenceBasis]
     }
 
+    struct KnowledgeCitation: Sendable, Equatable, Identifiable {
+        let id: String
+        let title: String
+        let attribution: String?
+        let locator: String?
+    }
+
     struct Result: Sendable, Equatable {
         let route: Route
         let outcome: Outcome
@@ -185,6 +200,7 @@ enum HallieTurnExecutor {
         let basisLine: String
         let queryDescription: String?
         let citations: [Citation]
+        let knowledgeCitations: [KnowledgeCitation]
         let catalogPersonName: String?
         let clarification: Clarification?
 
@@ -195,6 +211,7 @@ enum HallieTurnExecutor {
             basisLine: String,
             queryDescription: String?,
             citations: [Citation],
+            knowledgeCitations: [KnowledgeCitation] = [],
             catalogPersonName: String?,
             clarification: Clarification? = nil
         ) {
@@ -204,6 +221,7 @@ enum HallieTurnExecutor {
             self.basisLine = basisLine
             self.queryDescription = queryDescription
             self.citations = citations
+            self.knowledgeCitations = knowledgeCitations
             self.catalogPersonName = catalogPersonName
             self.clarification = clarification
         }
@@ -432,6 +450,14 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let payload):
+            if payload.operation == .biography,
+               let cyberBrain = context.cyberBrain {
+                return try await executeCyberBrainBiography(
+                    payload: payload,
+                    request: request,
+                    context: context,
+                    index: cyberBrain)
+            }
             guard let graph = context.graph else {
                 return Result(
                     route: .graph,
@@ -459,6 +485,8 @@ enum HallieTurnExecutor {
             case nil: selection = .unresolved
             case .profileStableID(let id): selection = .profileStableID(id)
             case .gedcomPersonID(let id): selection = .gedcomPersonID(id)
+            case .cyberBrainPersonID:
+                return invalidContinuationResult(for: ast)
             }
             let execute = dependencies.executeGraph
             let result = try await detached {
@@ -533,6 +561,106 @@ enum HallieTurnExecutor {
         }
     }
 
+    private static func executeCyberBrainBiography(
+        payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        index: CyberBrainIndex
+    ) async throws -> Result {
+        guard let requestedName = payload.people.first else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I need a person's name before I can build a biography.",
+                basisLine: "Basis: no biography subject was supplied.",
+                queryDescription: "shape=graph operation=biography",
+                citations: [],
+                catalogPersonName: nil)
+        }
+        let graph = context.graph
+        let plan: CyberBrainAnswerPlan
+        switch request.selectedIdentity {
+        case nil:
+            plan = try await detached {
+                CyberBrainBiographyPlanner.plan(
+                    personName: requestedName,
+                    index: index,
+                    graph: graph)
+            }
+        case .cyberBrainPersonID(let personID):
+            plan = try await detached {
+                CyberBrainBiographyPlanner.plan(
+                    personID: personID,
+                    index: index,
+                    graph: graph)
+            }
+        case .gedcomPersonID(let personID):
+            guard let person = graph?.people[personID] else {
+                return invalidContinuationResult(for: request.intent.ast)
+            }
+            plan = CyberBrainBiographyPlanner.plan(
+                personName: person.name,
+                index: index,
+                graph: graph)
+        case .profileStableID:
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+
+        let queryDescription =
+            "shape=graph operation=biography person=\(requestedName)"
+        let knowledgeCitations = plan.sourceCitations.map {
+            KnowledgeCitation(
+                id: $0.id,
+                title: $0.title,
+                attribution: $0.attribution,
+                locator: $0.locator)
+        }
+        if plan.answerState == .ambiguous {
+            let choices = plan.ambiguityCandidates.map { candidate -> Candidate in
+                if candidate.source == .gedcom {
+                    return Candidate(
+                        id: .gedcomPersonID(candidate.id),
+                        canonicalName: candidate.canonicalName,
+                        label: candidate.canonicalName)
+                }
+                return Candidate(
+                    id: .cyberBrainPersonID(candidate.id),
+                    canonicalName: candidate.canonicalName,
+                    label: candidate.canonicalName)
+            }
+            let stage: ClarificationStage = choices.first?.source == .gedcom
+                ? .gedcomPerson : .cyberBrainPerson
+            return Result(
+                route: .graph,
+                outcome: .needsClarification,
+                prose: CyberBrainDeterministicComposer.compose(plan),
+                basisLine: "Basis: identity was not resolved; no biography claims were selected.",
+                queryDescription: queryDescription,
+                citations: [],
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: nil,
+                clarification: Clarification(
+                    intent: request.intent,
+                    stage: stage,
+                    candidates: choices,
+                    continuationToken: context.continuationToken))
+        }
+
+        let answered = plan.answerState == .answered
+            || plan.answerState == .disputed
+        return Result(
+            route: .graph,
+            outcome: answered ? .answered : .declined,
+            prose: CyberBrainDeterministicComposer.compose(plan),
+            basisLine: knowledgeCitations.isEmpty
+                ? "Basis: Breen Family CyberBrain; no supporting source was selected."
+                : "Basis: Breen Family CyberBrain; \(knowledgeCitations.count) supporting source\(knowledgeCitations.count == 1 ? "" : "s").",
+            queryDescription: queryDescription,
+            citations: [],
+            knowledgeCitations: knowledgeCitations,
+            catalogPersonName: answered ? plan.subject : nil)
+    }
+
     private static func unavailableProfilesResult(route: Route) -> Result {
         let shape = route == .temporal ? "temporal" : "aggregate"
         return Result(
@@ -581,6 +709,13 @@ enum HallieTurnExecutor {
                 return false
             }
             return PersonResolver.normalize(person.name)
+                == PersonResolver.normalize(candidate.canonicalName)
+
+        case .cyberBrainPersonID(let personID):
+            guard let person = context.cyberBrain?.person(id: personID) else {
+                return false
+            }
+            return PersonResolver.normalize(person.canonicalName)
                 == PersonResolver.normalize(candidate.canonicalName)
         }
     }

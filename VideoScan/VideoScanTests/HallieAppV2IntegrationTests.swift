@@ -15,6 +15,7 @@ struct HallieAppV2IntegrationTests {
         let aggregateCount: Int
         let profiles: [HallieTurnExecutor.ProfileSnapshot]?
         let graphWasInjected: Bool
+        let cyberBrainWasInjected: Bool
         let selectedDate: ArchivistTemporalSelectionDateSnapshot?
     }
 
@@ -99,7 +100,8 @@ struct HallieAppV2IntegrationTests {
         profiles: [HallieTurnExecutor.ProfileSnapshot]? = [
             .init(stableID: "donna", canonicalName: "Donna"),
         ],
-        graph: GedcomFamilyGraph? = nil
+        graph: GedcomFamilyGraph? = nil,
+        cyberBrain: CyberBrainIndex? = nil
     ) -> HallieAppTurnCoordinator.Dependencies {
         HallieAppTurnCoordinator.Dependencies(
             startLocalBrain: { hosts in hosts },
@@ -111,6 +113,7 @@ struct HallieAppV2IntegrationTests {
             },
             loadProfiles: { profiles },
             loadGraph: { graph },
+            loadCyberBrain: { cyberBrain },
             executeRequest: { request, context in
                 let receivedAST = request.intent.ast
                 recorder.append(Invocation(
@@ -119,6 +122,7 @@ struct HallieAppV2IntegrationTests {
                     aggregateCount: context.aggregateRecords.count,
                     profiles: context.profiles,
                     graphWasInjected: context.graph != nil,
+                    cyberBrainWasInjected: context.cyberBrain != nil,
                     selectedDate: context.selectedTemporalDate))
                 return result ?? Self.fixtureResult(for: receivedAST)
             },
@@ -207,6 +211,34 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.profiles?.isEmpty == true)
                 #expect(!invocation.graphWasInjected)
             }
+        }
+    }
+
+    @Test func graphRouteCapturesCyberBrainButOtherRoutesDoNot() async throws {
+        let index = try CyberBrainIndex(archive: .init(
+            archiveID: "fixture",
+            displayName: "Fixture CyberBrain",
+            people: [],
+            sources: []))
+        for ast in [
+            ArchivistQueryAST.graph(.init(
+                people: ["Donna"], operation: .biography)),
+            ArchivistQueryAST.presence(.init(people: ["Donna"])),
+        ] {
+            let recorder = Recorder<Invocation>()
+            _ = try await HallieAppTurnCoordinator.execute(
+                question: "fixture question",
+                records: [],
+                referent: .init(recordID: nil, temporalDate: nil),
+                hosts: ["fixture.invalid"],
+                modelName: "fixture-model",
+                dependencies: dependencies(
+                    ast: ast,
+                    recorder: recorder,
+                    cyberBrain: index))
+            let invocation = try #require(recorder.values.first)
+            #expect(invocation.cyberBrainWasInjected
+                    == (HallieTurnExecutor.route(ast) == .graph))
         }
     }
 
@@ -399,6 +431,7 @@ struct HallieAppV2IntegrationTests {
                     aggregateCount: context.aggregateRecords.count,
                     profiles: context.profiles,
                     graphWasInjected: context.graph != nil,
+                    cyberBrainWasInjected: context.cyberBrain != nil,
                     selectedDate: context.selectedTemporalDate))
                 return Self.fixtureResult(for: receivedAST)
             },
