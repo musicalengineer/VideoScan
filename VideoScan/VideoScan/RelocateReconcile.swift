@@ -30,7 +30,7 @@ import Foundation
 // **Safety filter (added 2026-05-30):** Rick flagged that "backup on
 // Mini2TB" isn't reassuring when Mini2TB itself is mid-retirement. A
 // witness now must live on a *safe* host volume to count toward Bucket
-// E classification — safe = role != .retired AND trust != .unreliable.
+// E classification — safe = host not retired AND trust != .unreliable.
 // Witnesses on degraded volumes are still RECORDED (for the "see all
 // matches" disclosure) but cannot by themselves justify classifying the
 // record as safelyRedundant. If every witness is degraded, the record
@@ -134,32 +134,40 @@ struct SafeWitnessInfo: Equatable, Hashable, Sendable {
     /// crash on unknown paths — just hand back unassigned/unknown).
     let role: VolumeRole
     let trust: VolumeTrust
+    /// Host volume retired (`CatalogScanTarget.isRetired`, i.e. `retiredAt`
+    /// stamped). Retirement is a lifecycle event, not a role (taxonomy
+    /// cleanup 2026-08-16) — so it rides alongside role/trust here.
+    /// Defaulted so the memberwise init keeps its historical shape.
+    var isRetired: Bool = false
 
     /// Single combined safety score, used by the summary sheet to rank
     /// witnesses. Role dominates trust at the 10x weighting documented
     /// below. C++ analogue: a struct with a `<` operator that lexicographic-
     /// sorts on (role, trust). We pre-compute the int here so SwiftUI's
     /// sorted(by:) can compare ints, not run the switch each comparison.
-    var safetyScore: Int { roleScore * 10 + trustScore }
+    /// A retired host scores 0 on the role axis — same rank the old
+    /// `.retired` role occupied.
+    var safetyScore: Int { (isRetired ? 0 : roleScore) * 10 + trustScore }
 
     /// "Safe enough to count toward Bucket E classification." Conservative:
-    /// a Long-Term-Archive volume marked Unreliable is NOT safe, and an
-    /// Unassigned/Unknown volume IS safe by default (we don't punish a
-    /// witness for never being categorized — fix-with-data, not rule-out).
-    /// `// `let safe = ...` ≈ a const bool in C++.
+    /// an Offsite volume marked Unreliable is NOT safe, a RETIRED host is
+    /// never safe (a shelved disk must never authorize a destructive
+    /// disposition), and an Unassigned/Unknown volume IS safe by default
+    /// (we don't punish a witness for never being categorized —
+    /// fix-with-data, not rule-out). ONE definition: `VolumeSafety.isSafe`.
     var isSafe: Bool {
-        role != .retired && trust != .unreliable
+        VolumeSafety(role: role, trust: trust, isRetired: isRetired).isSafe
     }
 
     var roleScore: Int {
         switch role {
-        case .lta:        return 6
+        case .offsite:    return 6
         case .archive:    return 5
         case .backup:     return 4
         case .original:   return 3
+        case .working:    return 2
         case .system:     return 2
         case .unassigned: return 1
-        case .retired:    return 0
         }
     }
 
@@ -215,13 +223,42 @@ struct ReconcileFileEntry: Equatable, Sendable {
     let size: Int64
 }
 
+/// A host volume's safety attestation for one witness path: role
+/// (intent), trust (condition), retired (lifecycle). The three concerns
+/// have three owners on `CatalogScanTarget`; this value snapshots them
+/// together so the reconcile pass and every provenance view agree on ONE
+/// `isSafe`. Swift `struct` ≈ C++ POD passed by value.
+struct VolumeSafety: Equatable, Hashable, Sendable {
+    let role: VolumeRole
+    let trust: VolumeTrust
+    /// `CatalogScanTarget.isRetired` of the host (retiredAt stamped).
+    let isRetired: Bool
+
+    init(role: VolumeRole, trust: VolumeTrust, isRetired: Bool = false) {
+        self.role = role
+        self.trust = trust
+        self.isRetired = isRetired
+    }
+
+    /// Neutral answer for a path that resolves to no known scan target:
+    /// unassigned/unknown/not-retired — counts as *safe* by default.
+    static let unknown = VolumeSafety(role: .unassigned, trust: .unknown)
+
+    /// THE definition of a safe host (codex R1-B2): not retired AND not
+    /// unreliable. Role no longer participates — `.retired` is gone from
+    /// `VolumeRole` (2026-08-16); a shelved disk is identified only by
+    /// its `retiredAt` stamp and must never authorize a destructive
+    /// disposition.
+    var isSafe: Bool { !isRetired && trust != .unreliable }
+}
+
 /// Caller-supplied resolver from a witness `fullPath` to its host volume's
-/// role + trust. The real model implementation walks `scanTargets` to find
-/// the prefix match; tests inject a synthetic dictionary. Returns
-/// `(.unassigned, .unknown)` when the path doesn't resolve to a known
+/// safety attestation. The real model implementation walks `scanTargets`
+/// to find the prefix match; tests inject a synthetic dictionary. Returns
+/// `VolumeSafety.unknown` when the path doesn't resolve to a known
 /// volume — neutral default that keeps the witness *safe* (the role/trust
 /// scoring counts unassigned/unknown as low-but-not-zero).
-typealias VolumeSafetyResolver = @Sendable (String) -> (role: VolumeRole, trust: VolumeTrust)
+typealias VolumeSafetyResolver = @Sendable (String) -> VolumeSafety
 
 // MARK: - Sendable boundary types (Seam D)
 
@@ -306,7 +343,7 @@ enum RelocateReconcile {
     /// the model when it falls back to legacy behavior. Treats every
     /// witness as safe-by-default (Bucket E permissive).
     static let permissiveResolver: VolumeSafetyResolver = { _ in
-        (.unassigned, .unknown)
+        VolumeSafety.unknown
     }
 
     // MARK: - Main-actor adapter (preserves the historical signature)
@@ -343,8 +380,8 @@ enum RelocateReconcile {
     ///   adopted rather than being re-copied. (QA fix 2026-07-01 — the
     ///   option used to be consumed nowhere, making it a silent no-op.)
     /// - Parameter resolveVolumeSafety: maps a witness path to its host
-    ///   volume's `(role, trust)`. Bucket E now requires at least one
-    ///   witness on a *safe* host (role != .retired AND trust != .unreliable).
+    ///   volume's `VolumeSafety`. Bucket E now requires at least one
+    ///   witness on a *safe* host (not retired AND trust != .unreliable).
     ///   Pass `permissiveResolver` for the legacy permissive behavior.
     /// - Parameter hash: returns partial-MD5 of a file at the given path.
     ///   Real caller injects `FileHasher.partialMD5(path:)`. Empty string
@@ -559,8 +596,8 @@ enum RelocateReconcile {
                     // bound to its path here so the sort below has the
                     // host attestation in hand.
                     let attested = allWitnesses.map { p -> SafeWitnessInfo in
-                        let (role, trust) = resolveVolumeSafety(p)
-                        return SafeWitnessInfo(path: p, role: role, trust: trust)
+                        let s = resolveVolumeSafety(p)
+                        return SafeWitnessInfo(path: p, role: s.role, trust: s.trust, isRetired: s.isRetired)
                     }
                     // Sorted highest-safety-first. Stable on equal scores
                     // (Swift's sorted is stable in practice on small N).

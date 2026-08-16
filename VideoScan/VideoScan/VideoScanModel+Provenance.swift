@@ -301,13 +301,14 @@ extension VideoScanModel {
             var hasSafeCopy = false
             for (path, vp) in destinations {
                 if !seen.insert(path).inserted { continue }
-                let (role, trust) = resolveVolumeSafety(path)
-                let safe = role != .retired && trust != .unreliable
+                let host = resolveVolumeSafety(path)
+                let safe = host.isSafe
                 if safe { hasSafeCopy = true }
                 let key = vp.isEmpty ? "<unknown>" : vp
                 byVolume[key, default: VolumeAggregator(volumeRootPath: vp,
-                                                         role: role,
-                                                         trust: trust)]
+                                                         role: host.role,
+                                                         trust: host.trust,
+                                                         isRetired: host.isRetired)]
                     .add(path: path, bytes: rec.sizeBytes)
             }
 
@@ -322,8 +323,8 @@ extension VideoScanModel {
             } else {
                 // Still resident on source-only. If the source itself is
                 // safe, count it as backed up; otherwise it's at-risk.
-                let (role, trust) = resolveVolumeSafety(rec.fullPath)
-                if role != .retired && trust != .unreliable {
+                let host = resolveVolumeSafety(rec.fullPath)
+                if host.isSafe {
                     recordsWithSafe += 1
                 } else {
                     atRisk.append(rec.filename.isEmpty
@@ -362,6 +363,7 @@ extension VideoScanModel {
         let volumeRootPath: String
         var role: VolumeRole
         var trust: VolumeTrust
+        var isRetired: Bool = false
         var fileCount: Int = 0
         var totalBytes: Int64 = 0
         var paths: [String] = []
@@ -386,7 +388,8 @@ extension VideoScanModel {
                 fileCount: fileCount,
                 totalBytes: totalBytes,
                 samplePaths: sample,
-                totalSampleAvailable: sorted.count
+                totalSampleAvailable: sorted.count,
+                isRetired: isRetired
             )
         }
     }
@@ -500,23 +503,25 @@ extension VideoScanModel {
             for other in allRecords where other.duplicateGroupID == dupID
                                        && other.id != rec.id {
                 guard seenPaths.insert(other.fullPath).inserted else { continue }
-                let (role, trust) = resolveVolumeSafety(other.fullPath)
+                let host = resolveVolumeSafety(other.fullPath)
                 copies.append(KnownCopy(
                     path: other.fullPath,
                     volumeName: volumeNameForPath(other.fullPath),
-                    role: role,
-                    trust: trust
+                    role: host.role,
+                    trust: host.trust,
+                    isRetired: host.isRetired
                 ))
             }
         }
         for w in parseWitnessesFromNote(rec.notes) {
             guard seenPaths.insert(w).inserted else { continue }
-            let (role, trust) = resolveVolumeSafety(w)
+            let host = resolveVolumeSafety(w)
             copies.append(KnownCopy(
                 path: w,
                 volumeName: volumeNameForPath(w),
-                role: role,
-                trust: trust
+                role: host.role,
+                trust: host.trust,
+                isRetired: host.isRetired
             ))
         }
         copies.sort { lhs, rhs in
@@ -585,7 +590,7 @@ extension VideoScanModel {
         // 1. Fleet snapshot — count records by current host volume's role.
         var roleCounts: [VolumeRole: Int] = [:]
         for rec in allRecords {
-            let (role, _) = resolveVolumeSafety(rec.fullPath)
+            let role = resolveVolumeSafety(rec.fullPath).role
             roleCounts[role, default: 0] += 1
         }
         let slices = roleCounts
@@ -599,8 +604,8 @@ extension VideoScanModel {
         var flow: [VolumeRole: [VolumeRole: Int]] = [:]
         for rec in allRecords {
             let originPath = rec.originalFullPath ?? rec.fullPath
-            let (originRole, _) = resolveVolumeSafety(originPath)
-            let (currentRole, _) = resolveVolumeSafety(rec.fullPath)
+            let originRole = resolveVolumeSafety(originPath).role
+            let currentRole = resolveVolumeSafety(rec.fullPath).role
             flow[originRole, default: [:]][currentRole, default: 0] += 1
         }
         let flowBars: [MigrationFlowBar] = flow
@@ -638,8 +643,8 @@ extension VideoScanModel {
         let repairedCount = allRecords.filter { $0.combinedFromPairID != nil }.count
         let archivedCount = allRecords.filter { rec in
             if rec.archiveStage == .archived { return true }
-            let (role, _) = resolveVolumeSafety(rec.fullPath)
-            return role == .lta || role == .archive
+            let role = resolveVolumeSafety(rec.fullPath).role
+            return role == .offsite || role == .archive
         }.count
         let funnel: [TriageFunnelStage] = [
             TriageFunnelStage(label: "Scanned",
@@ -661,8 +666,8 @@ extension VideoScanModel {
         var bestStuffBytes: Int64 = 0
         for rec in allRecords where rec.combinedFromPairID != nil {
             let isArchived = rec.archiveStage == .archived
-            let (role, _) = resolveVolumeSafety(rec.fullPath)
-            let onSafeHome = role == .lta || role == .archive
+            let role = resolveVolumeSafety(rec.fullPath).role
+            let onSafeHome = role == .offsite || role == .archive
             if isArchived || onSafeHome {
                 bestStuffCount += 1
                 bestStuffBytes += rec.sizeBytes

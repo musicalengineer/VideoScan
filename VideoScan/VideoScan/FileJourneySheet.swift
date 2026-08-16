@@ -174,7 +174,7 @@ struct FileJourneySheet: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
             if !copy.isSafe {
-                Text(copy.role == .retired ? "(retired)" : "(unreliable)")
+                Text(copy.isRetired ? "(retired)" : "(unreliable)")
                     .font(.caption2)
                     .foregroundColor(.orange)
             }

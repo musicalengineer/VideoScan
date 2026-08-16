@@ -47,7 +47,7 @@ struct RelocateSummary: Identifiable, Equatable {
     let skippedCount: Int
 
     /// Subset of `safelyRedundantCount` whose top-ranked witness lives
-    /// on a safe host volume (role != .retired AND trust != .unreliable).
+    /// on a safe host volume (not retired AND trust != .unreliable).
     /// Drives the section header "<safelyBacked> · <degradedOnly>".
     /// Always ≤ `safelyRedundantCount`.
     let safelyBackedUpCount: Int
@@ -86,6 +86,10 @@ struct RelocateSummary: Identifiable, Equatable {
         let witnessPath: String
         let witnessRole: VolumeRole
         let witnessTrust: VolumeTrust
+        /// Host volume retired (`retiredAt` stamped) — a shelved disk
+        /// renders demoted no matter its role. Defaulted so the memberwise
+        /// init keeps its historical shape.
+        var witnessIsRetired: Bool = false
 
         /// "MyBook3Terabytes" — leading path component of the witness for
         /// display. Mirrors `VolumeReachability.volumeName(forPath:)` but
@@ -103,7 +107,7 @@ struct RelocateSummary: Identifiable, Equatable {
         /// `SafeWitnessInfo.isSafe` so the summary sheet doesn't pull in
         /// the reconcile module just to compute the same predicate.
         var isSafe: Bool {
-            witnessRole != .retired && witnessTrust != .unreliable
+            VolumeSafety(role: witnessRole, trust: witnessTrust, isRetired: witnessIsRetired).isSafe
         }
     }
 }

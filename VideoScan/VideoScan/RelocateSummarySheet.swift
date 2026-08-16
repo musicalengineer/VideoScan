@@ -321,7 +321,7 @@ struct RelocateSummarySheet: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
             if demoted {
-                Text(sample.witnessRole == .retired ? "(retired)" : "(unreliable)")
+                Text(sample.witnessIsRetired ? "(retired)" : "(unreliable)")
                     .font(.caption2)
                     .foregroundColor(.orange)
             }

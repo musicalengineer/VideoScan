@@ -231,7 +231,7 @@ private struct DestinationCard: View {
                 roleBadge
                 trustBadge
                 if demoted {
-                    Text(destination.role == .retired ? "(retired)" : "(unreliable)")
+                    Text(destination.isRetired ? "(retired)" : "(unreliable)")
                         .font(.caption2)
                         .foregroundColor(.orange)
                 }

@@ -95,6 +95,9 @@ struct VolumeStatusTargetSnap: Sendable {
     let searchPath: String
     let role: VolumeRole
     let trust: VolumeTrust
+    /// `CatalogScanTarget.isRetired` — retirement is a lifecycle event,
+    /// not a role, so it is snapshotted separately (taxonomy 2026-08-16).
+    var isRetired: Bool = false
 }
 
 extension VideoScanModel {
@@ -139,7 +142,8 @@ extension VideoScanModel {
             .filter { !$0.searchPath.isEmpty }
             .map { VolumeStatusTargetSnap(searchPath: $0.searchPath,
                                           role: $0.role,
-                                          trust: $0.trust) }
+                                          trust: $0.trust,
+                                          isRetired: $0.isRetired) }
         // Heavy string work happens OFF the main actor.
         let fresh = await Self.computeVolumeStatuses(records: recordSnaps,
                                                      targets: targetSnaps)
@@ -195,18 +199,17 @@ extension VideoScanModel {
         // Safe-witness resolver over the target snapshots — same
         // longest-prefix-wins contract as makeVolumeSafetyResolver().
         let sortedForResolve = targets
-            .map { (path: $0.searchPath, role: $0.role, trust: $0.trust) }
+            .map { (path: $0.searchPath, safety: VolumeSafety(role: $0.role, trust: $0.trust, isRetired: $0.isRetired)) }
             .sorted { $0.path.count > $1.path.count }
-        func resolve(_ path: String) -> (VolumeRole, VolumeTrust) {
+        func resolve(_ path: String) -> VolumeSafety {
             for e in sortedForResolve where path.hasPrefix(e.path + "/")
                                          || path == e.path {
-                return (e.role, e.trust)
+                return e.safety
             }
-            return (.unassigned, .unknown)
+            return VolumeSafety.unknown
         }
         func isSafe(_ path: String) -> Bool {
-            let (role, trust) = resolve(path)
-            return role != .retired && trust != .unreliable
+            resolve(path).isSafe
         }
 
         // Per-root accumulators, index-aligned with `roots`.

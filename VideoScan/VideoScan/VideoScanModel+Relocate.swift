@@ -163,7 +163,7 @@ extension VideoScanModel {
     /// remains in the catalog notes and relocate.log.
     ///
     /// Each sample carries the host volume's role + trust so the sheet
-    /// can render the `✅ LaCieWorkspace · Long-Term Archive · Reliable`
+    /// can render the `✅ LaCieWorkspace · Offsite · Reliable`
     /// badge line. Pure / nonisolated for tests.
     nonisolated static func witnessSamples(
         from entries: [SafelyRedundantEntry],
@@ -182,7 +182,8 @@ extension VideoScanModel {
                     sourcePath: entry.rec.fullPath,
                     witnessPath: top.path,
                     witnessRole: top.role,
-                    witnessTrust: top.trust
+                    witnessTrust: top.trust,
+                    witnessIsRetired: top.isRetired
                 )
             }
             guard let first = entry.witnesses.first else { return nil }
@@ -817,7 +818,7 @@ extension VideoScanModel {
         }
     }
 
-    /// Build the witness-path → host-volume `(role, trust)` resolver from
+    /// Build the witness-path → host-volume `VolumeSafety` resolver from
     /// the current `scanTargets`. Matches by longest prefix so a target
     /// at `/Volumes/MyBook` resolves a witness `/Volumes/MyBook/clip.mxf`
     /// correctly even when an unrelated target at `/Volumes/MyBook-extra`
@@ -827,22 +828,22 @@ extension VideoScanModel {
     /// resolution is O(n_targets) (n_targets is ~10s, n_witnesses is the
     /// catalog size — keep this lookup tight).
     ///
-    /// Worst-case footprint: one immutable `[(String, VolumeRole, VolumeTrust)]`
+    /// Worst-case footprint: one immutable `[(String, VolumeSafety)]`
     /// array sized to the active scan-target list. Fixed sub-KB allocation.
     func makeVolumeSafetyResolver() -> VolumeSafetyResolver {
-        // Snapshot each target's path + role + trust. Sorted descending by
+        // Snapshot each target's path + role/trust/retired. Sorted descending by
         // path length so the longest-matching prefix wins on the first
         // hit. Empty paths excluded — they'd match every witness.
         let sorted = scanTargets
             .filter { !$0.searchPath.isEmpty }
-            .map { (path: $0.searchPath, role: $0.role, trust: $0.trust) }
+            .map { (path: $0.searchPath, safety: VolumeSafety(role: $0.role, trust: $0.trust, isRetired: $0.isRetired)) }
             .sorted { $0.path.count > $1.path.count }
         return { witnessPath in
             for entry in sorted where witnessPath.hasPrefix(entry.path + "/")
                                    || witnessPath == entry.path {
-                return (entry.role, entry.trust)
+                return entry.safety
             }
-            return (.unassigned, .unknown)
+            return VolumeSafety.unknown
         }
     }
 

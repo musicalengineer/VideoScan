@@ -36,11 +36,11 @@ extension VolumeRole {
         switch self {
         case .unassigned: return "questionmark.circle"
         case .system:     return "internaldrive.fill"
+        case .working:    return "hammer"
         case .original:   return "film.stack"
         case .backup:     return "doc.on.doc"
         case .archive:    return "archivebox.fill"
-        case .lta:        return "icloud.fill"
-        case .retired:    return "archivebox"
+        case .offsite:    return "icloud.fill"
         }
     }
 
@@ -48,11 +48,11 @@ extension VolumeRole {
         switch self {
         case .unassigned: return .secondary
         case .system:     return .purple
+        case .working:    return .teal
         case .original:   return .orange
         case .backup:     return .blue
         case .archive:    return .green
-        case .lta:        return .mint
-        case .retired:    return .brown
+        case .offsite:    return .mint
         }
     }
 
@@ -60,11 +60,11 @@ extension VolumeRole {
         switch self {
         case .unassigned: return "—"
         case .system:     return "SYS"
+        case .working:    return "WORK"
         case .original:   return "ORIG"
         case .backup:     return "BKUP"
         case .archive:    return "ARCH"
-        case .lta:        return "LTA"
-        case .retired:    return "RTD"
+        case .offsite:    return "OFFS"
         }
     }
 }

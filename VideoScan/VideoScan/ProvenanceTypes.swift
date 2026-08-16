@@ -48,17 +48,22 @@ struct DestinationVolumeGroup: Identifiable, Equatable {
     /// Total files on this destination (so the UI can say "and N more"
     /// when `samplePaths.count < totalSampleAvailable`).
     let totalSampleAvailable: Int
+    /// Host volume retired (`CatalogScanTarget.isRetired`). Lifecycle, not
+    /// a role — rides alongside role/trust (taxonomy cleanup 2026-08-16).
+    /// Defaulted so the memberwise init keeps its historical shape.
+    var isRetired: Bool = false
 
-    /// `safe == true` iff host volume role is not `.retired` AND trust is
-    /// not `.unreliable`. Mirrors `SafeWitnessInfo.isSafe` so a destination
-    /// derived from the same machinery agrees on what "safe" means.
-    var isSafe: Bool { role != .retired && trust != .unreliable }
+    /// `safe == true` iff host volume is not retired AND trust is not
+    /// `.unreliable`. ONE definition — `VolumeSafety.isSafe` — so a
+    /// destination derived from the same machinery agrees on what "safe"
+    /// means with the reconcile pass.
+    var isSafe: Bool { VolumeSafety(role: role, trust: trust, isRetired: isRetired).isSafe }
 
     /// Single composite score used for card ordering. Same weighting as
     /// `SafeWitnessInfo.safetyScore` (role dominates trust at 10x) so the
     /// destination ordering matches the §1A.2 witness ranking.
     var safetyScore: Int {
-        SafeWitnessInfo(path: "", role: role, trust: trust).safetyScore
+        SafeWitnessInfo(path: "", role: role, trust: trust, isRetired: isRetired).safetyScore
     }
 }
 
@@ -198,8 +203,10 @@ struct KnownCopy: Identifiable, Equatable {
     let volumeName: String
     let role: VolumeRole
     let trust: VolumeTrust
+    /// Host volume retired (`CatalogScanTarget.isRetired`).
+    var isRetired: Bool = false
 
-    var isSafe: Bool { role != .retired && trust != .unreliable }
+    var isSafe: Bool { VolumeSafety(role: role, trust: trust, isRetired: isRetired).isSafe }
 }
 
 /// Full payload for the File Journey sheet.
@@ -291,7 +298,7 @@ struct MigrationOverview: Identifiable, Equatable {
 
     // 4. Best stuff highlight
     /// Records that went through Combine AND reached `.archived` OR live
-    /// on an `.lta`/`.archive` role volume. The friendly count.
+    /// on an `.offsite`/`.archive` role volume. The friendly count.
     let bestStuffCount: Int
     /// Total bytes the best-stuff cohort represents — for the friendly
     /// subhead, since users think in GB more than file counts.
