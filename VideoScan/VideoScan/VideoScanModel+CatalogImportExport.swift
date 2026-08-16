@@ -88,9 +88,9 @@ extension VideoScanModel {
         // Seed identity set from existing records so an import can't create
         // a duplicate of something we already have locally.
         var seen = Set<String>()
-        var localByKey: [String: VideoRecord] = [:]
+        var localsByKey: [String: [VideoRecord]] = [:]
         for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
         }
 
         // Fall back to filename-without-extension if the file forgot to stamp
@@ -110,7 +110,8 @@ extension VideoScanModel {
                 // Remember which LOCAL record stands in for this skipped one so
                 // imported provenance links (archive copies' derivedFrom) can
                 // be re-pointed instead of dangling (codex R4-D).
-                if let local = localByKey[key], local.id != rec.id { idRemap[rec.id] = local.id }
+                if let local = Self.localStandIn(for: rec, candidates: localsByKey[key] ?? []),
+                   local.id != rec.id { idRemap[rec.id] = local.id }
                 continue
             }
             if rec.sourceHost.isEmpty {
@@ -118,7 +119,7 @@ extension VideoScanModel {
             }
             records.append(rec)
             addedRecords.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
             added += 1
         }
         Self.relinkImportedProvenance(addedRecords, idRemap: idRemap)
@@ -162,6 +163,16 @@ extension VideoScanModel {
     }
 
     static func identityKey(for rec: VideoRecord) -> String? {
+        // Master Archive copies are BYTE-IDENTICAL to their sources by
+        // construction (same partialMD5 + size), so content identity alone
+        // would dedup a copy against its own source (codex R5 blocker 1).
+        // An archive copy's identity is its archive LOCATION: the same copy
+        // seen from another catalog (same canonical path) still dedups; a
+        // copy never collides with its source or with a copy elsewhere.
+        if rec.derivationKind == ArchivePromotion.derivationKind {
+            let canonical = PathScope.normalize(URL(fileURLWithPath: rec.fullPath).standardizedFileURL.path)
+            return "arc:\(canonical)"
+        }
         if !rec.partialMD5.isEmpty && rec.sizeBytes > 0 {
             return "md5:\(rec.partialMD5):\(rec.sizeBytes)"
         }
@@ -169,6 +180,16 @@ extension VideoScanModel {
             return "fn:\(rec.filename):\(rec.sizeBytes):\(Int(rec.durationSeconds))"
         }
         return nil
+    }
+
+    /// Which LOCAL record stands in for a deduped import: same id first,
+    /// then same canonical path, then any local with that identity key —
+    /// never an arbitrary duplicate when a better match exists (codex R5
+    /// blocker 1).
+    static func localStandIn(for imported: VideoRecord, candidates: [VideoRecord]) -> VideoRecord? {
+        if let same = candidates.first(where: { $0.id == imported.id }) { return same }
+        if let samePath = candidates.first(where: { samePath($0.fullPath, imported.fullPath) }) { return samePath }
+        return candidates.first
     }
 
     /// Show a save panel, then export. UI entry point.

@@ -293,9 +293,9 @@ extension VideoScanModel {
                             bundleURL: URL) async -> BundleImportResult {
         // Catalog — seed identity set from existing records, dedup on insert.
         var seen = Set<String>()
-        var localByKey: [String: VideoRecord] = [:]
+        var localsByKey: [String: [VideoRecord]] = [:]
         for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
         }
         let effectiveHost = payload.catalog.savedFromHost.isEmpty
             ? payload.manifest.exportedFromHost
@@ -307,7 +307,8 @@ extension VideoScanModel {
         for rec in payload.catalog.records {
             if let key = Self.identityKey(for: rec), seen.contains(key) {
                 skipped += 1
-                if let local = localByKey[key], local.id != rec.id { idRemap[rec.id] = local.id }
+                if let local = Self.localStandIn(for: rec, candidates: localsByKey[key] ?? []),
+                   local.id != rec.id { idRemap[rec.id] = local.id }
                 continue
             }
             if rec.sourceHost.isEmpty {
@@ -315,7 +316,7 @@ extension VideoScanModel {
             }
             records.append(rec)
             addedRecords.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localByKey[key] = rec }
+            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
             added += 1
         }
         // Archive copies whose source was deduped keep a resolvable

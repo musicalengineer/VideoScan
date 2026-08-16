@@ -76,9 +76,11 @@ struct MasterArchiveDesignation: Codable, Equatable, Sendable {
         volumeUUIDProbe(path)
     }
 
-    /// Test seam for the volume-UUID probe. Production = the real
-    /// resource-value read; tests that swap it run serialized.
-    nonisolated(unsafe) static var volumeUUIDProbe: @Sendable (String) -> String? = { path in
+    /// Test seam for the volume-UUID probe — TASK-LOCAL (codex R5 major 4):
+    /// `MasterArchiveDesignation.$volumeUUIDProbe.withValue(...) { … }` is
+    /// visible only inside that task tree, never process-global.
+    /// Production = the real resource-value read.
+    @TaskLocal static var volumeUUIDProbe: @Sendable (String) -> String? = { path in
         let url = URL(fileURLWithPath: path)
         return (try? url.resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
     }
@@ -607,20 +609,33 @@ enum ArchiveManifestCSV {
     /// is ~200 bytes/row, so even 100k promotions is ~20 MB, once per
     /// job. Missing/unreadable file ⇒ empty set (the job's preflight
     /// already refused a missing manifest).
-    nonisolated static func sourceRecordIDs(in url: URL) -> Set<UUID> {
-        Set(rowsBySource(in: url).keys)
+    nonisolated static func sourceRecordIDs(rootPath: String) -> Set<UUID> {
+        Set(rowsBySource(rootPath: rootPath).keys)
     }
 
     /// What the manifest already says about each source: its archive
     /// relpath and digest, keyed by source record id (latest row wins).
-    nonisolated static func rowsBySource(in url: URL) -> [UUID: (relPath: String, sha256: String)] {
-        fieldRowsBySource(in: url).mapValues { ($0[relPathColumn], $0[sha256Column]) }
+    nonisolated static func rowsBySource(rootPath: String) -> [UUID: (relPath: String, sha256: String)] {
+        fieldRowsBySource(rootPath: rootPath).mapValues { ($0[relPathColumn], $0[sha256Column]) }
     }
 
     /// Every field of the latest manifest row per source id (for
-    /// self-contained orphan registration — codex R3 major 7).
-    nonisolated static func fieldRowsBySource(in url: URL) -> [UUID: [String]] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+    /// self-contained orphan registration — codex R3 major 7). Read
+    /// THROUGH the validated descriptor (dirfd chain, O_NOFOLLOW, regular
+    /// file, header checked) — never re-opened by path (codex R5 major 3).
+    /// Missing / invalid manifest ⇒ empty (preflight already refused).
+    nonisolated static func fieldRowsBySource(rootPath: String) -> [UUID: [String]] {
+        let fd: Int32
+        do {
+            fd = try ArchivePromoteEngine.openIndexFile(
+                root: rootPath, name: MasterArchiveLayout.manifestFilename,
+                mustExist: true, expectedHeader: MasterArchiveLayout.manifestHeader)
+        } catch {
+            return [:]
+        }
+        defer { close(fd) }
+        guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
+              let text = String(data: data, encoding: .utf8) else { return [:] }
         var out: [UUID: [String]] = [:]
         for line in text.split(separator: "\n").dropFirst() {   // header
             let fields = fields(ofLine: String(line))

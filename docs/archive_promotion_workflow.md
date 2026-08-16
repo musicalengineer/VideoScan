@@ -21,7 +21,7 @@ prerequisite), `catalog_write_safety_design.md`, memory
 | **Initialize** | Designate a volume as Master Archive AND scaffold the tree + index files. One gesture. |
 | **Promote** | Verified copy of a record's file into the Master Archive tree + linked catalog record. Never a move. |
 | **Refile** | Move an already-promoted file to a better place in the tree (date learned later). Later phase. |
-| **Safe Archive ✓** | Derived chip: role Archive + redundant media + trust ok + reachable (`archivalSuitability`). Not hand-set. |
+| **Master Archive** chip | The ONE designated volume, shown on its Volumes row. (A derived "Safe Archive" chip was considered and DEFERRED — nothing in the app claims a volume is safe; the Initialize sheet shows only what the catalog knows about the destination: role, media type, trust, reachability — explicitly "not a health check".) |
 
 ## 2. Layout (v2, tailored LoC)
 
@@ -58,8 +58,8 @@ Rules
 
 ## 4. UI
 
-- **Volumes window** → right-click volume → **Initialize as Master Archive…** Sheet: shows the volume, Safe Archive assessment (RAID? trust? reachable?), the folder tree it will create, an "Also add as scan target" line (always on for a never-seen volume), and a Confirm button. Also reachable via File ▸ Archive ▸ Initialize Master Archive… with an open-panel for a never-seen volume.
-- Volumes window chip: **Master Archive** badge on the designated volume; **Safe Archive ✓** derived chip.
+- **Volumes window** → right-click volume → **Initialize as Master Archive…** Sheet: shows the volume, a destination assessment (role, media type, trust, reachability — from your volume settings, not a health check), the folder tree it will create, an "Also add as scan target" line (always on for a never-seen volume), and a Confirm button. Also reachable via File ▸ Archive ▸ Initialize Master Archive… with an open-panel for a never-seen volume.
+- Volumes window chip: **Master Archive** badge on the designated volume. No safety chip (deferred — see vocabulary).
 - **Catalog table** right-click (single/multi) → **Promote to Archive**. No master → alert: *"You need to designate a volume as the master archive."* with button **Initialize Master Archive…** (performs the fix). With master → confirmation sheet listing N files, total GB, destination folders (grouped), warnings (undated: n, low-confidence: n, already promoted: n — skipped), free space check. Confirm → one MFO **Promote** job.
 - **Inspector**: "Master copy ✓ · Reveal" on sources; "Promoted from … · Reveal source" on archive copies. Show menu: **Not Yet Archived** / **Has Master Copy** filters.
 - Menu bar: File ▸ Archive ▸ {Initialize Master Archive…, Promote Selected to Archive, Reveal Master Archive in Finder, Open Manifest}.
@@ -119,3 +119,10 @@ Where the code deviates from or refines §2–§5 above, the code wins; this sec
 - **CSV formula neutralization.** In addition to quoting, a manifest field whose first non-space character is `=` `+` `-` `@` (or a control char) is prefixed with a single quote (OWASP CSV-injection guidance).
 - **Import relink.** `importCatalog` and the bundle import remember which LOCAL record deduped a skipped imported source and re-point `derivedFrom` / `supersededByID` of the imported records to it (`relinkImportedProvenance`) — an imported archive copy always resolves via `promotionSource(of:)`.
 - **Isolation test** now compares full UserDefaults VALUES and an App Support tree snapshot before/after, with a poisoned shared-store designation that must not be inherited.
+
+### 9c. Codex round-5 deltas (8/16)
+- **Import identity.** `identityKey` gives archive copies (`derivationKind == archivePromotion`) a LOCATION identity (`arc:<canonical path>`) — a copy is byte-identical to its source, so content identity would dedup the copy against its own source. Sources keep content identity; the same copy seen from another catalog still dedups. The local stand-in for a skipped import is chosen same-id → same-path → any (`localStandIn`), never an arbitrary duplicate.
+- **Adopt-identical via the dirfd chain.** `chooseDestinationOffMain` checks existence/partials and hashes an existing candidate ONLY through `openContainedFile` + `identicalDigest(fd:)`; a symlinked intermediate refuses the file instead of adopting an outside twin.
+- **Manifest/journal parsed from the validated descriptor.** `fieldRowsBySource(rootPath:)` / `rowsBySource(rootPath:)` / `sourceRecordIDs(rootPath:)` / `ArchivePromoteJournal.latestBySource(rootPath:)` open through `openIndexFile` (dirfd chain, O_NOFOLLOW, header check) and `pread` from that fd — never re-open by path.
+- **Seams are task-local.** `ArchivePromoteEngine.barriers` and `MasterArchiveDesignation.volumeUUIDProbe` are `@TaskLocal`; tests inject with `$seam.withValue { … }` — never process-global.
+- **Manifest record_id reused.** Adoption/reconciliation creates the catalog record with the manifest row's `record_id` (well-formed and unused), so manifest ↔ catalog join on one id.

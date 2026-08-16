@@ -85,8 +85,8 @@ extension PromoteToArchiveJob {
         return RunContext(root: root,
                           manifestURL: manifestURL,
                           journalURL: ArchivePromoteJournal.url(rootPath: root),
-                          manifestRows: ArchiveManifestCSV.rowsBySource(in: manifestURL),
-                          manifestFields: ArchiveManifestCSV.fieldRowsBySource(in: manifestURL))
+                          manifestRows: ArchiveManifestCSV.rowsBySource(rootPath: root),
+                          manifestFields: ArchiveManifestCSV.fieldRowsBySource(rootPath: root))
     }
 
     // MARK: Reconcile (convergence)
@@ -105,7 +105,7 @@ extension PromoteToArchiveJob {
     ///   done                       → trusted (a durable catalog save wrote it)
     /// Returns how many promotions were completed here.
     func reconcileJournal(model: VideoScanModel, ctx: RunContext) async -> Int {
-        let latest = ArchivePromoteJournal.latestBySource(in: ctx.journalURL)
+        let latest = ArchivePromoteJournal.latestBySource(rootPath: ctx.root)
         var completed = 0
         for (sourceID, entry) in latest where entry.state != .done && entry.state != .abandoned {
             if Task.isCancelled { break }
@@ -322,7 +322,15 @@ extension PromoteToArchiveJob {
                          model: VideoScanModel,
                          ctx: RunContext,
                          journalBase: ArchivePromoteJournal.Entry?) async throws {
-        let copyProbe = await model.probeFile(url: destURL)
+        // The catalog record's id: when the manifest already names this
+        // copy, REUSE its record_id so manifest ↔ catalog join on one id
+        // (codex R5 major 5); a fresh id only for a brand-new row. A
+        // manifest id already present in the catalog (or malformed) falls
+        // back to fresh — never a duplicate id.
+        let copyID = Self.recordID(fromManifestFields: ctx.manifestFields[sourceID], model: model)
+        let outcome = await model.probeFileOutcome(url: destURL)
+        let copyProbe = VideoRecord(id: copyID)
+        copyProbe.apply(outcome)
         let now = Date()
         var journal = journalBase ?? ArchivePromoteJournal.Entry(
             sourceRecordID: sourceID, sourcePath: sourcePath, destRelPath: relPath,
@@ -419,7 +427,6 @@ extension PromoteToArchiveJob {
                                          sourcePath: String,
                                          sourceSize: Int64,
                                          claimed: Set<String>) async throws -> DestinationChoice {
-        let fm = FileManager.default
         let rootURL = URL(fileURLWithPath: root, isDirectory: true)
         let base = ArchivePathResolver.baseRelativePath(facts: facts)
         let ext = (base as NSString).pathExtension
@@ -444,10 +451,18 @@ extension PromoteToArchiveJob {
             n += 1
             let path = rootURL.appendingPathComponent(candidate).standardizedFileURL.path
             if Task.isCancelled { throw CancellationError() }
-            if claimed.contains(path) || fm.fileExists(atPath: path + ".partial") { continue }
-            if fm.fileExists(atPath: path) {
+            if claimed.contains(path) { continue }
+            // Existence + identity THROUGH the dirfd O_NOFOLLOW chain (codex
+            // R5 blocker 2): a symlinked intermediate throws here (refused,
+            // never adopted); an in-flight partial counts as taken.
+            if let pfd = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: candidate + ".partial") {
+                Darwin.close(pfd)
+                continue
+            }
+            if let fd = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: candidate) {
+                defer { Darwin.close(fd) }
                 if let sha = try ArchivePromoteEngine.identicalDigest(
-                    existingPath: path, sourceSize: sourceSize,
+                    fd: fd, sourceSize: sourceSize,
                     sourceSHA: sourceSHA, shouldCancel: { Task.isCancelled }) {
                     return DestinationChoice(relPath: candidate, identicalExistingSHA: sha)
                 }
@@ -456,6 +471,14 @@ extension PromoteToArchiveJob {
             return DestinationChoice(relPath: candidate, identicalExistingSHA: nil)
         }
         throw PromoteError(message: "could not find a free archive name for \(base) after 9,999 tries")
+    }
+
+    /// The manifest's `record_id` for this source when it is a well-formed
+    /// UUID not already used by any catalog record; otherwise a fresh id.
+    static func recordID(fromManifestFields fields: [String]?, model: VideoScanModel) -> UUID {
+        guard let fields, fields.count >= 12, let id = UUID(uuidString: fields[6]),
+              model.record(forID: id) == nil else { return UUID() }
+        return id
     }
 
     #if compiler(>=6.2)

@@ -43,8 +43,12 @@ enum ArchivePromoteEngine {
 
     /// The durability primitives, injectable so a test can make a barrier
     /// fail and prove the step is NOT claimed. Production = the real
-    /// syscalls. (`nonisolated(unsafe)` static: tests that swap it are
-    /// serialized; production never writes it.)
+    /// syscalls. TASK-LOCAL (codex R5 major 4): a test injects with
+    /// `ArchivePromoteEngine.$barriers.withValue(...) { … }`, which is
+    /// visible only inside that task tree (the job's `Task {}` and the
+    /// `@concurrent` hops inherit it) — never process-global, so parallel
+    /// suites cannot be poisoned. (For Rick: ≈ thread-local storage that
+    /// follows structured concurrency instead of OS threads.)
     struct Barriers: Sendable {
         var fullFsync: @Sendable (Int32) -> Int32
         var fsync: @Sendable (Int32) -> Int32
@@ -52,7 +56,7 @@ enum ArchivePromoteEngine {
             fullFsync: { fd in fcntl(fd, F_FULLFSYNC) == 0 ? 0 : Darwin.fsync(fd) },
             fsync: { fd in Darwin.fsync(fd) })
     }
-    nonisolated(unsafe) static var barriers = Barriers.live
+    @TaskLocal static var barriers = Barriers.live
 
     // MARK: Errors
 
@@ -538,19 +542,45 @@ enum ArchivePromoteEngine {
 
     // MARK: Adopt-if-identical
 
-    /// Does the file at `existingPath` hold exactly the source's bytes?
-    /// Cheap size gate first, then a full hash of the existing file
+    /// Does the already-open, contained file `fd` hold exactly the
+    /// source's bytes? Cheap size gate first (fstat), then a full hash
     /// against `sourceSHA()` (lazily computed by the caller — one extra
-    /// source read, only on a name collision). nil ⇒ "not identical or
-    /// unreadable"; the digest ⇒ identical.
-    static func identicalDigest(existingPath: String,
+    /// source read, only on a same-size collision). nil ⇒ not identical.
+    /// Descriptor-based on purpose (codex R5 blocker 2): the caller
+    /// obtained `fd` through the dirfd O_NOFOLLOW chain, so a symlinked
+    /// intermediate can never make an outside file look adoptable.
+    static func identicalDigest(fd: Int32,
                                 sourceSize: Int64,
                                 sourceSHA: () throws -> String?,
                                 shouldCancel: () -> Bool = { false }) throws -> String? {
-        guard let existing = FileIdentity.of(path: existingPath), existing.size == sourceSize else { return nil }
-        guard let theirs = try sha256(path: existingPath, shouldCancel: shouldCancel),
+        guard let (existing, _) = FileIdentity.of(fd: fd), existing.size == sourceSize else { return nil }
+        guard let theirs = try sha256(fd: fd, shouldCancel: shouldCancel),
               let ours = try sourceSHA(), theirs == ours else { return nil }
         return ours
+    }
+
+    /// Whole contents of an already-open (validated) descriptor via pread
+    /// from offset 0 — the manifest/journal are parsed from the SAME fd
+    /// that was validated (codex R5 major 3), never re-opened by path.
+    /// Bounded by `limit` (default 256 MB) so a runaway file cannot
+    /// exhaust memory.
+    static func readAll(fd: Int32, limit: Int = 256 << 20) throws -> Data {
+        var out = Data()
+        var offset: off_t = 0
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
+        defer { buffer.deallocate() }
+        while out.count < limit {
+            let n = pread(fd, buffer, chunkSize, offset)
+            if n > 0 {
+                out.append(UnsafeRawBufferPointer(start: buffer, count: n).bindMemory(to: UInt8.self))
+                offset += off_t(n)
+            } else if n == 0 {
+                break
+            } else if errno != EINTR {
+                throw Failure.writeFailed("pread errno \(errno)")
+            }
+        }
+        return out
     }
 }
 
@@ -608,8 +638,19 @@ enum ArchivePromoteJournal {
 
     /// Latest entry per source id (a source can be journaled several
     /// times — retries, later Refile). Unparseable lines are skipped.
-    nonisolated static func latestBySource(in url: URL) -> [UUID: Entry] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+    /// Read THROUGH the validated index descriptor (openat O_NOFOLLOW,
+    /// regular file) — never re-opened by path (codex R5 major 3). A
+    /// missing journal is simply empty.
+    nonisolated static func latestBySource(rootPath: String) -> [UUID: Entry] {
+        let fd: Int32
+        do {
+            fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: true)
+        } catch {
+            return [:]
+        }
+        defer { close(fd) }
+        guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
+              let text = String(data: data, encoding: .utf8) else { return [:] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         var out: [UUID: Entry] = [:]

@@ -251,10 +251,10 @@ struct ArchiveManifestCSVTests {
         let text = try String(contentsOf: sb.manifestURL, encoding: .utf8)
         #expect(text.hasPrefix(MasterArchiveLayout.manifestHeader + "\n"))
         #expect(text.split(separator: "\n").count == 3)
-        let rows = ArchiveManifestCSV.rowsBySource(in: sb.manifestURL)
+        let rows = ArchiveManifestCSV.rowsBySource(rootPath: sb.archiveRoot.path)
         #expect(rows[r1.sourceRecordID]?.relPath == r1.archiveRelPath)
         #expect(rows[r2.sourceRecordID]?.sha256 == "abc")
-        #expect(ArchiveManifestCSV.sourceRecordIDs(in: sb.manifestURL) == [r1.sourceRecordID, r2.sourceRecordID])
+        #expect(ArchiveManifestCSV.sourceRecordIDs(rootPath: sb.archiveRoot.path) == [r1.sourceRecordID, r2.sourceRecordID])
     }
 }
 

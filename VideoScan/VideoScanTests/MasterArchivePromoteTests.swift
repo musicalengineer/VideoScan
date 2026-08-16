@@ -103,7 +103,7 @@ struct MasterArchivePromoteMediaMatrixTests {
         #expect(rec.notes.contains("promoted to Master Archive as \(rel)"))
         #expect(FileManager.default.fileExists(atPath: src), "source never moved")
         // Journal converged to done.
-        let latest = ArchivePromoteJournal.latestBySource(in: sb.journalURL)
+        let latest = ArchivePromoteJournal.latestBySource(rootPath: sb.archiveRoot.path)
         #expect(latest[rec.id]?.state == .done)
         #expect(!FileManager.default.fileExists(atPath: destPath + ".partial"))
     }
@@ -193,7 +193,7 @@ struct MasterArchivePromoteSensorTests {
         #expect(rows.count == 1)
         #expect(rows.first?[ArchiveManifestCSV.relPathColumn] == rel)
         #expect(model.masterArchiveCopy(of: rec)?.fullPath == dest.path)
-        #expect(ArchivePromoteJournal.latestBySource(in: sb.journalURL)[rec.id]?.state == .done)
+        #expect(ArchivePromoteJournal.latestBySource(rootPath: sb.archiveRoot.path)[rec.id]?.state == .done)
     }
 
     @Test("crash after manifest append (row, no record) is adopted, not re-copied")
@@ -210,8 +210,9 @@ struct MasterArchivePromoteSensorTests {
         try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: src, to: dest)
         let sha = try #require(MasterArchiveTestSupport.sha256(ofFile: src.path))
+        let manifestRecordID = UUID()
         try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: rel, sha256: sha, sizeBytes: 1,
-                                            originalPath: src.path, originalVolume: "v", recordID: UUID(),
+                                            originalPath: src.path, originalVolume: "v", recordID: manifestRecordID,
                                             sourceRecordID: rec.id, recordDate: "", dateConfidence: "",
                                             people: [], starRating: 3), rootPath: sb.archiveRoot.path)
 
@@ -221,6 +222,8 @@ struct MasterArchivePromoteSensorTests {
         #expect(MasterArchiveTestSupport.archivedFiles(sb) == [rel])
         #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1, "no second row")
         #expect(model.masterArchiveCopy(of: rec)?.fullPath == dest.path)
+        #expect(model.masterArchiveCopy(of: rec)?.id == manifestRecordID,
+                "the adopted record REUSES the manifest's record_id (codex R5 major 5)")
     }
 
     @Test("an identical file already at the destination name is ADOPTED; a different one gets _02")
