@@ -21,9 +21,11 @@ import Foundation
 // Security stance: spec values are DATA. Colons are stripped so a value
 // can never mint a field token ("type:junk" as a keyword must not become
 // a structural filter), quotes are stripped and multi-word values are
-// re-quoted by the composer alone. Unknown media kinds, insane years,
-// and over-long lists are dropped, not guessed at. An all-empty result
-// means "fall back to literal substring search" — never an error dialog.
+// re-quoted by the composer alone. The production translator strictly
+// rejects unknown wire fields/enum values and oversized lists; the
+// normalizer still drops unsafe values as defense in depth for specs built
+// by other callers. An all-empty result means "fall back to literal
+// substring search" — never an error dialog.
 
 // MARK: Untrusted wire format
 
@@ -38,6 +40,78 @@ struct NLQuerySpec: Codable, Equatable {
     var keywords: [String]?
     var transcript: [String]?
     var intent: String?
+
+    static let wireKeys: Set<String> = [
+        "people", "yearStart", "yearEnd", "mediaKind", "keywords",
+        "transcript", "intent",
+    ]
+    static let wireMediaKinds: Set<String> = [
+        "video", "video-only", "audio", "both",
+    ]
+
+    /// Decode model output under the actual QueryAST wire contract. Swift's
+    /// synthesized Decodable silently ignores unknown keys and accepts null
+    /// for optional arrays/intent, even though the Ollama schema forbids both.
+    /// The model endpoint is not trusted to enforce its requested schema, so
+    /// production validates independently before decoding.
+    static func decodeStrictWire(_ data: Data) throws -> NLQuerySpec {
+        let raw: Any
+        do {
+            raw = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw NLQuerySpecWireError.invalid("not a JSON object")
+        }
+        guard let object = raw as? [String: Any] else {
+            throw NLQuerySpecWireError.invalid("top level is not an object")
+        }
+
+        let unknown = Set(object.keys).subtracting(wireKeys).sorted()
+        guard unknown.isEmpty else {
+            throw NLQuerySpecWireError.invalid(
+                "unknown field(s): \(unknown.joined(separator: ", "))")
+        }
+
+        for key in ["people", "keywords", "transcript"] {
+            guard let value = object[key] else { continue } // sparse v1
+            guard let items = value as? [Any] else {
+                throw NLQuerySpecWireError.invalid("\(key) is not an array")
+            }
+            guard items.count <= NLQueryNormalizer.maxListItems else {
+                throw NLQuerySpecWireError.invalid(
+                    "\(key) exceeds \(NLQueryNormalizer.maxListItems) items")
+            }
+        }
+
+        if let value = object["intent"] {
+            guard let intent = value as? String,
+                  intent == "filter" || intent == "count" else {
+                throw NLQuerySpecWireError.invalid(
+                    "intent must be filter or count")
+            }
+        }
+        if let value = object["mediaKind"], !(value is NSNull) {
+            guard let mediaKind = value as? String,
+                  wireMediaKinds.contains(mediaKind) else {
+                throw NLQuerySpecWireError.invalid("unknown mediaKind")
+            }
+        }
+
+        do {
+            return try JSONDecoder().decode(NLQuerySpec.self, from: data)
+        } catch {
+            throw NLQuerySpecWireError.invalid(
+                "field type does not match the schema")
+        }
+    }
+}
+
+enum NLQuerySpecWireError: LocalizedError {
+    case invalid(String)
+
+    var errorDescription: String? {
+        guard case .invalid(let detail) = self else { return nil }
+        return "invalid query specification: \(detail)"
+    }
 }
 
 // MARK: Trusted, normalized query
@@ -189,5 +263,40 @@ enum NLQueryComposer {
             keyword.contains(" ") ? "\"\(keyword)\"" : keyword
         })
         return parts.joined(separator: " ")
+    }
+}
+
+enum NLQueryInputPolicy {
+    /// True when the user already supplied recognized catalog grammar.
+    /// Such input is executable as-is and must not make an unnecessary LLM
+    /// round trip. Quoted `"people:donna"` remains a literal phrase because
+    /// the production tokenizer reports it as `.substring`, not `.field`.
+    static func isStructuredInfix(_ text: String) -> Bool {
+        if pfTokenizeSearchQuery(text).contains(where: { token in
+            if case .field = token { return true }
+            return false
+        }) {
+            return true
+        }
+
+        // `year:` and `decade:` tokenize to `.yearRange`, the same case as
+        // natural shorthand like `1990s`; inspect only unquoted raw tokens
+        // so shorthand still goes through natural-language translation.
+        for raw in text.split(whereSeparator: {
+            $0.isWhitespace || $0 == "," || $0 == ";"
+        }) {
+            let token = String(raw)
+            guard !token.hasPrefix("\"") && !token.hasPrefix("'"),
+                  let colon = token.firstIndex(of: ":") else { continue }
+            let key = token[..<colon].lowercased()
+            let value = String(token[token.index(after: colon)...])
+            if key == "year", pfParseYearRangeValue(value) != nil {
+                return true
+            }
+            if key == "decade", pfParseDecadeValue(value) != nil {
+                return true
+            }
+        }
+        return false
     }
 }

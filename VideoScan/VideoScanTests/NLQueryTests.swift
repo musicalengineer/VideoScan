@@ -154,6 +154,21 @@ struct NLQueryTests {
     }
 }
 
+struct NLQueryInputPolicyTests {
+    @Test func recognizedGrammarSkipsTheBrain() {
+        #expect(NLQueryInputPolicy.isStructuredInfix(
+            "people:donna year:1990..1995 type:video"))
+        #expect(NLQueryInputPolicy.isStructuredInfix("decade:1990 cape"))
+    }
+
+    @Test func naturalLanguageAndQuotedSyntaxStillUseNaturalPath() {
+        #expect(!NLQueryInputPolicy.isStructuredInfix(
+            "show me Donna in the 1990s"))
+        #expect(!NLQueryInputPolicy.isStructuredInfix("\"people:donna\""))
+        #expect(!NLQueryInputPolicy.isStructuredInfix("unknown:value"))
+    }
+}
+
 // MARK: - Live eval tier (audition record; NL_EVAL=1 only)
 
 @Suite("NL translator live eval",

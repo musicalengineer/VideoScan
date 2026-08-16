@@ -182,6 +182,39 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     }
 
     func translate(_ text: String) async throws -> NLQuerySpec {
+        let (content, specData) = try await requestContent(
+            text, schema: Self.responseSchema, systemPrompt: Self.systemPrompt)
+        do {
+            return try NLQuerySpec.decodeStrictWire(specData)
+        } catch {
+            throw NLTranslatorError.badResponse(
+                "content is not a strict NLQuerySpec (\(error.localizedDescription)): "
+                    + String(content.prefix(120)))
+        }
+    }
+
+    /// Parallel QueryAST-v2 entry point. The established v1 protocol and
+    /// `translate(_:)` remain unchanged while the v2 executor stack lands.
+    func translateAST(_ text: String) async throws -> ArchivistQueryAST {
+        let (content, astData) = try await requestContent(
+            text, schema: Self.astResponseSchema,
+            systemPrompt: Self.astSystemPrompt)
+        do {
+            return try JSONDecoder().decode(ArchivistQueryAST.self, from: astData)
+        } catch {
+            throw NLTranslatorError.badResponse(
+                "content is not a strict ArchivistQueryAST "
+                    + "(\(error.localizedDescription)): \(content.prefix(120))")
+        }
+    }
+
+    /// Shared transport and ollama-envelope machinery. The only caller-
+    /// selected inputs are the output schema and translator-only prompt.
+    private func requestContent(
+        _ text: String,
+        schema: [String: Any],
+        systemPrompt: String
+    ) async throws -> (content: String, data: Data) {
         // `host` may be a bare name ("RicksM4.local"), a name with a
         // port, or a full URL ("https://ollama.example.com") now that
         // Rick wants cloud endpoints alongside the local fleet.
@@ -193,10 +226,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "model": model,
             "stream": false,
             "think": false,
-            "format": Self.responseSchema,
+            "format": schema,
             "options": ["temperature": 0, "num_predict": 512],
             "messages": [
-                ["role": "system", "content": Self.systemPrompt],
+                ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text],
             ],
         ] as [String: Any])
@@ -282,28 +315,220 @@ struct OllamaQueryTranslator: NLQueryTranslating {
               let specData = content.data(using: .utf8) else {
             throw NLTranslatorError.badResponse("empty message content")
         }
-        do {
-            return try JSONDecoder().decode(NLQuerySpec.self, from: specData)
-        } catch {
-            throw NLTranslatorError.badResponse(
-                "content is not an NLQuerySpec: \(String(content.prefix(120)))")
-        }
+        return (content, specData)
     }
 
     /// JSON schema for ollama structured output — MUST mirror NLQuerySpec.
     static let responseSchema: [String: Any] = [
         "type": "object",
+        "additionalProperties": false,
         "properties": [
-            "people": ["type": "array", "items": ["type": "string"]],
+            "people": ["type": "array", "maxItems": 6,
+                       "items": ["type": "string"]],
             "yearStart": ["type": ["integer", "null"]],
             "yearEnd": ["type": ["integer", "null"]],
-            "mediaKind": ["type": ["string", "null"]],
-            "keywords": ["type": "array", "items": ["type": "string"]],
-            "transcript": ["type": "array", "items": ["type": "string"]],
+            "mediaKind": [
+                "anyOf": [
+                    ["type": "string",
+                     "enum": NLQuerySpec.wireMediaKinds.sorted()],
+                    ["type": "null"],
+                ],
+            ],
+            "keywords": ["type": "array", "maxItems": 6,
+                         "items": ["type": "string"]],
+            "transcript": ["type": "array", "maxItems": 6,
+                           "items": ["type": "string"]],
             "intent": ["type": "string", "enum": ["filter", "count"]],
         ],
         "required": ["people", "keywords", "transcript", "intent"],
     ]
+
+    /// QueryAST-v2 structured-output schema. Each discriminator branch owns
+    /// a nested payload schema, so the model cannot place fields from one
+    /// query shape into another.
+    static let astResponseSchema: [String: Any] = [
+        "oneOf": [
+            astBranch("presence", payload: astCatalogPayload),
+            astBranch("temporal", payload: astTemporalPayload),
+            astBranch("aggregate", payload: astAggregatePayload),
+            astBranch("event", payload: astTextPayload),
+            astBranch("graph", payload: astGraphPayload),
+            astBranch("cross", payload: astTextPayload),
+        ],
+    ]
+
+    private static let astStringList: [String: Any] = [
+        "type": "array",
+        "maxItems": ArchivistQueryAST.maxListItems,
+        "items": ["type": "string", "minLength": 1],
+    ]
+
+    private static let astYear: [String: Any] = [
+        "type": "integer",
+        "minimum": ArchivistQueryAST.yearRange.lowerBound,
+        "maximum": ArchivistQueryAST.yearRange.upperBound,
+    ]
+
+    private static let astMediaKind: [String: Any] = [
+        "type": "string",
+        "enum": ["video", "video-only", "audio", "both"],
+    ]
+
+    private static let astCatalogProperties: [String: Any] = [
+        "people": astStringList,
+        "yearStart": astYear,
+        "yearEnd": astYear,
+        "mediaKind": astMediaKind,
+        "keywords": astStringList,
+    ]
+
+    private static let astCatalogPayload: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "properties": astCatalogProperties,
+    ]
+
+    private static let astTextPayload: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "properties": astCatalogProperties.merging(
+            ["transcript": astStringList]) { current, _ in current },
+    ]
+
+    private static let astTemporalPayload: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "properties": [
+            "subject": ["type": "string", "minLength": 1],
+            "operation": ["type": "string", "enum": ["age"]],
+            "reference": [
+                "oneOf": [
+                    [
+                        "type": "object", "additionalProperties": false,
+                        "properties": [
+                            "kind": ["type": "string",
+                                     "enum": ["currentSelection"]],
+                        ],
+                        "required": ["kind"],
+                    ],
+                    [
+                        "type": "object", "additionalProperties": false,
+                        "properties": [
+                            "kind": ["type": "string",
+                                     "enum": ["explicitYear"]],
+                            "year": astYear,
+                        ],
+                        "required": ["kind", "year"],
+                    ],
+                ],
+            ],
+        ],
+        "required": ["subject", "operation", "reference"],
+    ]
+
+    private static let astAggregatePayload: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "properties": [
+            "operation": ["type": "string", "enum": ["coOccurrence"]],
+            "anchorPeople": [
+                "type": "array", "minItems": 1,
+                "maxItems": ArchivistQueryAST.maxListItems,
+                "items": ["type": "string", "minLength": 1],
+            ],
+            "limit": [
+                "type": "integer",
+                "minimum": ArchivistQueryAST.resultLimitRange.lowerBound,
+                "maximum": ArchivistQueryAST.resultLimitRange.upperBound,
+            ],
+        ],
+        "required": ["operation", "anchorPeople"],
+    ]
+
+    private static let astGraphPayload: [String: Any] = [
+        "oneOf": [
+            astGraphOperation("biography"),
+            astGraphOperation("birth"),
+            astGraphOperation("death"),
+            astGraphOperation("kinship", includeRelation: true),
+        ],
+    ]
+
+    private static func astBranch(
+        _ shape: String,
+        payload: [String: Any]
+    ) -> [String: Any] {
+        [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "shape": ["type": "string", "enum": [shape]],
+                "payload": payload,
+            ],
+            "required": ["shape", "payload"],
+        ]
+    }
+
+    private static func astGraphOperation(
+        _ operation: String,
+        includeRelation: Bool = false
+    ) -> [String: Any] {
+        var properties: [String: Any] = [
+            "people": [
+                "type": "array", "minItems": 1,
+                "maxItems": ArchivistQueryAST.maxListItems,
+                "items": ["type": "string", "minLength": 1],
+            ],
+            "operation": ["type": "string", "enum": [operation]],
+        ]
+        var required = ["people", "operation"]
+        if includeRelation {
+            properties["relation"] = [
+                "type": "string",
+                "enum": [
+                    "father", "mother", "parents", "brother", "sister",
+                    "siblings", "son", "daughter", "children", "husband",
+                    "wife", "spouse",
+                ],
+            ]
+            required.append("relation")
+        }
+        return [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": properties,
+            "required": required,
+        ]
+    }
+
+    /// Deterministic translation only. The model never receives catalog or
+    /// family evidence and never writes factual answer prose.
+    static let astSystemPrompt = """
+    Convert ONE natural-language family-archive question into exactly one \
+    QueryAST-v2 JSON object matching the supplied schema. You translate the \
+    request only. You never answer it, state a family fact, emit prose, SQL, \
+    or use knowledge outside the user's words. Never invent a person, year, \
+    event, object, relationship, or transcript term. Preserve uncertainty by \
+    leaving optional catalog/text fields absent.
+
+    Choose exactly one shape:
+    - presence: whether catalog media exists for people, years, media kind, \
+    or keywords.
+    - temporal: an age question about exactly one subject. operation is age. \
+    Use currentSelection for "here/this clip"; use explicitYear only when the \
+    user states the year.
+    - aggregate: who appears with named anchorPeople. operation is \
+    coOccurrence. Include limit only when the user explicitly states a count; \
+    otherwise omit it.
+    - event: what happened at an event; put visible/event terms in keywords \
+    and explicitly spoken terms in transcript.
+    - graph: biography, birth, death, or kinship about named people. relation \
+    is required only for kinship and must use a schema value.
+    - cross: a combined person plus visible/action/object or spoken-text search.
+
+    Use lowercase extracted terms. The payload belongs only to its selected \
+    shape. Output JSON only.
+    """
 
     /// The whole job description. Extraction only — the sin is inventing.
     static let systemPrompt = """

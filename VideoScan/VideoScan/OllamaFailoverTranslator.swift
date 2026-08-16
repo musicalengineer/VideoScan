@@ -74,6 +74,22 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
     }
 
     func translate(_ text: String) async throws -> NLQuerySpec {
+        try await walkHosts { attempt in
+            try await attempt.translate(text)
+        }
+    }
+
+    /// QueryAST-v2 uses the identical host order, probe, retry classifier,
+    /// attempt reporting, and responder callback as the established v1 path.
+    func translateAST(_ text: String) async throws -> ArchivistQueryAST {
+        try await walkHosts { attempt in
+            try await attempt.translateAST(text)
+        }
+    }
+
+    private func walkHosts<Result>(
+        _ request: (OllamaQueryTranslator) async throws -> Result
+    ) async throws -> Result {
         let order = hosts.isEmpty ? [template.host] : hosts
         var attempts: [String] = []
         var lastError: Error = NLTranslatorError.unreachable("no hosts configured")
@@ -97,7 +113,7 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
             }
 
             do {
-                let spec = try await attempt.translate(text)
+                let spec = try await request(attempt)
                 onResponder?(host)
                 return spec
             } catch {
