@@ -54,6 +54,14 @@ public struct ProbeResult: Sendable {
     public var audioSampleRate: String = ""
     public var streamTypeRaw: String = ""
     public var isPlayable: String = ""
+    // Embedded creation date + origin (2026-08-16). Read from the SAME
+    // ffprobe JSON the 19 fields above come from (format/stream tags),
+    // so no extra subprocess. nil defaults match VideoRecord.
+    public var embeddedCreationDate: Date?
+    public var embeddedCreationSource: String?
+    public var originMake: String?
+    public var originModel: String?
+    public var originEncoder: String?
 
     public init() {}
 }
@@ -94,6 +102,11 @@ extension ProbeResult {
         audioSampleRate     = rec.audioSampleRate
         streamTypeRaw       = rec.streamTypeRaw
         isPlayable          = rec.isPlayable
+        embeddedCreationDate   = rec.embeddedCreationDate
+        embeddedCreationSource = rec.embeddedCreationSource
+        originMake             = rec.originMake
+        originModel            = rec.originModel
+        originEncoder          = rec.originEncoder
     }
 }
 
@@ -122,5 +135,10 @@ extension VideoRecord {
         audioSampleRate     = r.audioSampleRate
         streamTypeRaw       = r.streamTypeRaw
         isPlayable          = r.isPlayable
+        embeddedCreationDate   = r.embeddedCreationDate
+        embeddedCreationSource = r.embeddedCreationSource
+        originMake             = r.originMake
+        originModel            = r.originModel
+        originEncoder          = r.originEncoder
     }
 }

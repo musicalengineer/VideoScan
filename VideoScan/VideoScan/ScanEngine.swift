@@ -109,6 +109,21 @@ enum ScanEngine {
         // exact string, no normalization needed.
         r.materialPackageUMID = fmtTags["material_package_umid"] ?? ""
 
+        // Embedded creation date + origin (2026-08-16): the container's own
+        // creation stamp (survives copies, unlike filesystem dates) and the
+        // device / program that wrote the file. Both come from tags already
+        // in this JSON — no second ffprobe run. Sanity-filtered here so a
+        // stored value is always believable (EmbeddedDateSanity).
+        let allStreamTags = streams.map { $0.tags ?? [:] }
+        if let cap = EmbeddedCreationDate.extract(formatTags: fmtTags, streamTags: allStreamTags) {
+            r.embeddedCreationDate   = cap.date
+            r.embeddedCreationSource = cap.source
+        }
+        let origin = EmbeddedOriginTags.extract(formatTags: fmtTags, streamTags: allStreamTags)
+        r.originMake    = origin.make
+        r.originModel   = origin.model
+        r.originEncoder = origin.encoder
+
         var hasVideo = false
         var hasAudio = false
 

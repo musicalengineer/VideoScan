@@ -254,7 +254,7 @@ public enum EmbeddedOriginTags {
             if o.encoder == nil { o.encoder = clean(st["encoder"]) }
             // A handler that names a device maker ("GoPro AVC", "DJI…").
             if o.make == nil, let handler = clean(st["handler_name"]),
-               let maker = knownMakers.first(where: { handler.range(of: $0, options: .caseInsensitive) != nil }) {
+               let maker = makerNamed(in: handler) {
                 o.make = maker
             }
         }
@@ -289,11 +289,14 @@ public enum EmbeddedOriginTags {
         let lower = e.lowercased()
         if lower.hasPrefix("lavf") || lower.hasPrefix("lavc") { return "ffmpeg" }
         if lower.hasPrefix("handbrake") { return "HandBrake" }
-        // First whitespace-delimited token that is not a bare version.
-        for token in e.split(separator: " ") where !token.allSatisfy({ $0.isNumber || $0 == "." }) {
-            return String(token)
+        // The leading words up to the first version-like token:
+        // "Final Cut Pro 10.7" → "Final Cut Pro".
+        var words: [String] = []
+        for token in e.split(separator: " ") {
+            if let first = token.first, first.isNumber { break }
+            words.append(String(token))
         }
-        return e
+        return words.isEmpty ? e : words.joined(separator: " ")
     }
 
     /// "HandBrake 1.7.3 2023121300" → "HandBrake 1.7.3": drop a trailing
@@ -304,6 +307,19 @@ public enum EmbeddedOriginTags {
             parts.removeLast()
         }
         return parts.joined(separator: " ")
+    }
+
+    /// A known maker appearing as a whole WORD in `text` ("GoPro AVC" →
+    /// "GoPro"; "Rendered" does NOT match "RED"). Case-insensitive.
+    static func makerNamed(in text: String) -> String? {
+        let words = Set(text.lowercased()
+            .split(whereSeparator: { !($0.isLetter || $0.isNumber) })
+            .map(String.init))
+        for maker in knownMakers {
+            let parts = maker.lowercased().split(separator: " ").map(String.init)
+            if parts.allSatisfy({ words.contains($0) }) { return maker }
+        }
+        return nil
     }
 
     private static func lowered(_ tags: [String: String]) -> [String: String] {

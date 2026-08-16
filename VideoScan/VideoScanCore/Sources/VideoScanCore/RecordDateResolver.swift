@@ -215,105 +215,149 @@ public enum FilenameDatePattern {
         ("sep", 9), ("sept", 9), ("oct", 10), ("nov", 11), ("dec", 12),
     ]
 
-    public static func match(_ filename: String, now: Date = Date()) -> Match? {
-        let stem = (filename as NSString).deletingPathExtension
-        let maxYear = (RecordDateResolver.utcGregorian.component(.year, from: now)) + 1
-        let minYear = 1900
-        func plausible(_ y: Int) -> Bool { y >= minYear && y <= maxYear }
+    /// A run of ASCII digits in the stem: where it sits, its value, and
+    /// how many digits (leading zeros matter: "06" is a month, "6" too,
+    /// but "1994" is not a day).
+    struct DigitRun: Equatable {
+        let start: Int
+        let end: Int
+        let value: Int
+        let count: Int
+    }
 
-        // Tokenize into runs of digits with their separators kept, so the
-        // patterns can be matched positionally without regex (NSRegular-
-        // Expression is fine but this runs 100k× in the scale test).
-        let chars = Array(stem)
-        // Digit runs: (start index, text)
-        var runs: [(start: Int, end: Int, value: Int, count: Int)] = []
-        var i = 0
-        while i < chars.count {
-            if chars[i].isASCII && chars[i].isNumber {
-                var j = i; var v = 0; var n = 0
+    /// The tokenized stem the pattern steps share.
+    struct Scan {
+        let chars: [Character]
+        let runs: [DigitRun]
+        let minYear = 1900
+        let maxYear: Int
+
+        init(stem: String, now: Date) {
+            chars = Array(stem)
+            maxYear = RecordDateResolver.utcGregorian.component(.year, from: now) + 1
+            var runs: [DigitRun] = []
+            var i = 0
+            while i < chars.count {
+                guard chars[i].isASCII, chars[i].isNumber else { i += 1; continue }
+                var j = i, v = 0, n = 0
                 while j < chars.count, chars[j].isASCII, chars[j].isNumber {
-                    if n < 9 { v = v * 10 + Int(String(chars[j]))! }
+                    if n < 9, let d = chars[j].wholeNumberValue { v = v * 10 + d }
                     n += 1; j += 1
                 }
-                runs.append((i, j, v, n))
+                runs.append(DigitRun(start: i, end: j, value: v, count: n))
                 i = j
-            } else { i += 1 }
+            }
+            self.runs = runs
         }
-        func sepBetween(_ a: (start: Int, end: Int, value: Int, count: Int),
-                        _ b: (start: Int, end: Int, value: Int, count: Int)) -> Character? {
+
+        func plausibleYear(_ y: Int) -> Bool { y >= minYear && y <= maxYear }
+
+        /// The single separator character between two ADJACENT runs, or nil.
+        func separator(_ a: DigitRun, _ b: DigitRun) -> Character? {
             guard b.start == a.end + 1 else { return nil }
             let c = chars[a.end]
             return (c == "-" || c == "_" || c == "." || c == " ") ? c : nil
         }
+
         func validDay(_ d: Int, _ m: Int, _ y: Int) -> Bool {
             EmbeddedDateParser.julianDayNumber(year: y, month: m, day: d) != nil
         }
+    }
 
-        // ---- 1. YYYY-MM-DD / YYYY_MM_DD / YYYY.MM.DD (3 runs, same separator)
-        if runs.count >= 3 {
-            for k in 0..<(runs.count - 2) {
-                let a = runs[k], b = runs[k + 1], c = runs[k + 2]
-                guard a.count == 4, b.count == 2, c.count == 2,
-                      let s1 = sepBetween(a, b), let s2 = sepBetween(b, c), s1 == s2 else { continue }
-                if plausible(a.value), (1...12).contains(b.value), validDay(c.value, b.value, a.value) {
-                    return Match(year: a.value, month: b.value, day: c.value, precision: .day)
-                }
-            }
-            // ---- 2. MM-DD-YYYY (US) or DD-MM-YYYY when the first cannot be a month
-            for k in 0..<(runs.count - 2) {
-                let a = runs[k], b = runs[k + 1], c = runs[k + 2]
-                guard (1...2).contains(a.count), (1...2).contains(b.count), c.count == 4,
-                      let s1 = sepBetween(a, b), let s2 = sepBetween(b, c), s1 == s2,
-                      plausible(c.value) else { continue }
-                if (1...12).contains(a.value), validDay(b.value, a.value, c.value) {
-                    return Match(year: c.value, month: a.value, day: b.value, precision: .day)
-                }
-                if (1...12).contains(b.value), validDay(a.value, b.value, c.value) {
-                    return Match(year: c.value, month: b.value, day: a.value, precision: .day)
-                }
+    /// First, most specific match in the file NAME (never the directory).
+    /// `now` bounds the year search: a bare "2031" is a serial number.
+    public static func match(_ filename: String, now: Date = Date()) -> Match? {
+        let stem = (filename as NSString).deletingPathExtension
+        let scan = Scan(stem: stem, now: now)
+        guard !scan.runs.isEmpty else { return nil }
+        return matchISO(scan) ?? matchUS(scan) ?? matchCompact(scan)
+            ?? matchMonthName(scan) ?? matchYearMonth(scan) ?? matchBareYear(scan)
+    }
+
+    // ---- 1. YYYY-MM-DD / YYYY_MM_DD / YYYY.MM.DD (same separator twice)
+    static func matchISO(_ s: Scan) -> Match? {
+        guard s.runs.count >= 3 else { return nil }
+        for k in 0..<(s.runs.count - 2) {
+            let a = s.runs[k], b = s.runs[k + 1], c = s.runs[k + 2]
+            guard a.count == 4, b.count == 2, c.count == 2,
+                  let s1 = s.separator(a, b), let s2 = s.separator(b, c), s1 == s2 else { continue }
+            if s.plausibleYear(a.value), (1...12).contains(b.value), s.validDay(c.value, b.value, a.value) {
+                return Match(year: a.value, month: b.value, day: c.value, precision: .day)
             }
         }
-        // ---- 3. YYYYMMDD (one 8-digit run)
-        for r in runs where r.count == 8 {
+        return nil
+    }
+
+    // ---- 2. MM-DD-YYYY (US), or DD-MM-YYYY when the first number cannot be a month
+    static func matchUS(_ s: Scan) -> Match? {
+        guard s.runs.count >= 3 else { return nil }
+        for k in 0..<(s.runs.count - 2) {
+            let a = s.runs[k], b = s.runs[k + 1], c = s.runs[k + 2]
+            guard (1...2).contains(a.count), (1...2).contains(b.count), c.count == 4,
+                  let s1 = s.separator(a, b), let s2 = s.separator(b, c), s1 == s2,
+                  s.plausibleYear(c.value) else { continue }
+            if (1...12).contains(a.value), s.validDay(b.value, a.value, c.value) {
+                return Match(year: c.value, month: a.value, day: b.value, precision: .day)
+            }
+            if (1...12).contains(b.value), s.validDay(a.value, b.value, c.value) {
+                return Match(year: c.value, month: b.value, day: a.value, precision: .day)
+            }
+        }
+        return nil
+    }
+
+    // ---- 3. YYYYMMDD (one 8-digit run)
+    static func matchCompact(_ s: Scan) -> Match? {
+        for r in s.runs where r.count == 8 {
             let y = r.value / 10_000, m = (r.value / 100) % 100, d = r.value % 100
-            if plausible(y), (1...12).contains(m), validDay(d, m, y) {
+            if s.plausibleYear(y), (1...12).contains(m), s.validDay(d, m, y) {
                 return Match(year: y, month: m, day: d, precision: .day)
             }
         }
-        // ---- 4. "Month YYYY" / "MonthYYYY" / "Month-YYYY" (month precision)
-        for r in runs where r.count == 4 && plausible(r.value) {
-            // Look back over an optional separator for a month name.
+        return nil
+    }
+
+    // ---- 4. "Month YYYY" / "MonthYYYY" / "Month-YYYY" (month precision)
+    static func matchMonthName(_ s: Scan) -> Match? {
+        for r in s.runs where r.count == 4 && s.plausibleYear(r.value) {
             var e = r.start
-            while e > 0, [" ", "_", "-", "."].contains(chars[e - 1]) { e -= 1 }
-            let prefix = String(chars[..<e]).lowercased()
+            while e > 0, [" ", "_", "-", "."].contains(s.chars[e - 1]) { e -= 1 }
+            let prefix = String(s.chars[..<e]).lowercased()
             for (name, m) in monthNames where prefix.hasSuffix(name) {
                 // Word boundary: the character before the name must not be a letter.
                 let before = prefix.dropLast(name.count).last
-                if before == nil || !(before!.isLetter) {
+                if before == nil || before?.isLetter == false {
                     return Match(year: r.value, month: m, day: nil, precision: .month)
                 }
             }
         }
-        // ---- 5. YYYY-MM (month precision), only when not part of a YYYY-YYYY range
-        if runs.count >= 2 {
-            for k in 0..<(runs.count - 1) {
-                let a = runs[k], b = runs[k + 1]
-                guard a.count == 4, b.count == 2, sepBetween(a, b) != nil,
-                      plausible(a.value), (1...12).contains(b.value) else { continue }
-                return Match(year: a.value, month: b.value, day: nil, precision: .month)
-            }
+        return nil
+    }
+
+    // ---- 5. YYYY-MM (month precision); "1994-1995" is a range, not a month
+    static func matchYearMonth(_ s: Scan) -> Match? {
+        guard s.runs.count >= 2 else { return nil }
+        for k in 0..<(s.runs.count - 1) {
+            let a = s.runs[k], b = s.runs[k + 1]
+            guard a.count == 4, b.count == 2, s.separator(a, b) != nil,
+                  s.plausibleYear(a.value), (1...12).contains(b.value) else { continue }
+            return Match(year: a.value, month: b.value, day: nil, precision: .month)
         }
-        // ---- 6. Bare 19xx / 20xx year (year precision)
-        for r in runs where r.count == 4 && plausible(r.value) {
+        return nil
+    }
+
+    // ---- 6. Bare 19xx / 20xx year (year precision)
+    static func matchBareYear(_ s: Scan) -> Match? {
+        for r in s.runs where r.count == 4 && s.plausibleYear(r.value) {
             // Camera counters, not years: "IMG_1995", "DSC2001", "100_2005"
             // (Kodak folder_frame). Look at what sits just before the
             // digits, through at most one "_" / "-".
             var e = r.start
-            if e > 0, chars[e - 1] == "_" || chars[e - 1] == "-" { e -= 1 }
-            if e > 0, chars[e - 1].isNumber { continue }
-            var s = e
-            while s > 0, chars[s - 1].isLetter { s -= 1 }
-            let word = String(chars[s..<e]).lowercased()
+            if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
+            if e > 0, s.chars[e - 1].isNumber { continue }
+            var start = e
+            while start > 0, s.chars[start - 1].isLetter { start -= 1 }
+            let word = String(s.chars[start..<e]).lowercased()
             if !word.isEmpty, word.count <= 4, sequencePrefixes.contains(word) { continue }
             return Match(year: r.value, month: nil, day: nil, precision: .year)
         }

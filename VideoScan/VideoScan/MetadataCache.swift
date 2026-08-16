@@ -100,11 +100,26 @@ final class MetadataCache {
                 notes TEXT,
                 content_hash TEXT,
                 content_hash_at REAL,
+                embedded_creation_date REAL,
+                embedded_creation_source TEXT,
+                origin_make TEXT,
+                origin_model TEXT,
+                origin_encoder TEXT,
                 PRIMARY KEY (path, file_size, mod_date)
             )
         """)
         migrateAddColumn("content_hash", type: "TEXT")
         migrateAddColumn("content_hash_at", type: "REAL")
+        // Embedded creation date + origin (2026-08-16). Same load-bearing
+        // reason as content_hash: a cache hit returns BEFORE ffprobe runs,
+        // so without these columns a rescan of an unchanged file would
+        // hand back nil and erase what a scan or the backfill captured.
+        // Additive, appended, NULL for pre-feature rows (→ nil).
+        migrateAddColumn("embedded_creation_date", type: "REAL")
+        migrateAddColumn("embedded_creation_source", type: "TEXT")
+        migrateAddColumn("origin_make", type: "TEXT")
+        migrateAddColumn("origin_model", type: "TEXT")
+        migrateAddColumn("origin_encoder", type: "TEXT")
     }
 
     /// Additive migration for databases created before 2026-08-11.
@@ -204,6 +219,12 @@ final class MetadataCache {
         o.contentHashAt         = chAt > 0 ? Date(timeIntervalSince1970: chAt) : nil
         o.directory             = col(stmt, 29)
         o.notes                 = col(stmt, 30)
+        let ecd                 = sqlite3_column_double(stmt, 33)
+        o.probe.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
+        o.probe.embeddedCreationSource = optCol(stmt, 34)
+        o.probe.originMake             = optCol(stmt, 35)
+        o.probe.originModel            = optCol(stmt, 36)
+        o.probe.originEncoder          = optCol(stmt, 37)
         return o
     }
 
@@ -215,7 +236,7 @@ final class MetadataCache {
         guard let db = db else { return }
         let sql = """
             INSERT OR REPLACE INTO probe_cache VALUES (
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
             )
         """
         var stmt: OpaquePointer?
@@ -255,7 +276,37 @@ final class MetadataCache {
         bind(stmt, 31, o.notes)
         bind(stmt, 32, o.contentHash)
         sqlite3_bind_double(stmt, 33, o.contentHashAt?.timeIntervalSince1970 ?? 0)
+        sqlite3_bind_double(stmt, 34, o.probe.embeddedCreationDate?.timeIntervalSince1970 ?? 0)
+        bindOpt(stmt, 35, o.probe.embeddedCreationSource)
+        bindOpt(stmt, 36, o.probe.originMake)
+        bindOpt(stmt, 37, o.probe.originModel)
+        bindOpt(stmt, 38, o.probe.originEncoder)
 
+        sqlite3_step(stmt)
+    }
+
+    /// Write a backfilled embedded date + origin onto an existing cache
+    /// row (2026-08-16). Same rationale as `updateContentHash`: the
+    /// probe cache answers BEFORE ffprobe runs, so a backfill that only
+    /// wrote catalog records would be erased by the next rescan of an
+    /// unchanged file. Updates only — never inserts.
+    func updateEmbeddedDate(path: String, date: Date?, source: String?,
+                            make: String?, model: String?, encoder: String?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db else { return }
+        let sql = """
+            UPDATE probe_cache SET embedded_creation_date = ?, embedded_creation_source = ?,
+                origin_make = ?, origin_model = ?, origin_encoder = ? WHERE path = ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_double(stmt, 1, date?.timeIntervalSince1970 ?? 0)
+        bindOpt(stmt, 2, source)
+        bindOpt(stmt, 3, make)
+        bindOpt(stmt, 4, model)
+        bindOpt(stmt, 5, encoder)
+        bind(stmt, 6, path)
         sqlite3_step(stmt)
     }
 
@@ -392,6 +443,12 @@ final class MetadataCache {
             rec.contentHashAt   = chAt2 > 0 ? Date(timeIntervalSince1970: chAt2) : nil
             rec.directory       = col(stmt, 29)
             rec.notes           = col(stmt, 30)
+            let ecd             = sqlite3_column_double(stmt, 33)
+            rec.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
+            rec.embeddedCreationSource = optCol(stmt, 34)
+            rec.originMake             = optCol(stmt, 35)
+            rec.originModel            = optCol(stmt, 36)
+            rec.originEncoder          = optCol(stmt, 37)
             out.append(rec)
         }
         return out
@@ -420,6 +477,17 @@ final class MetadataCache {
             return String(cString: cstr)
         }
         return ""
+    }
+
+    /// NULL / "" → nil (the optional-string columns added 2026-08-16).
+    private func optCol(_ stmt: OpaquePointer?, _ idx: Int32) -> String? {
+        let s = col(stmt, idx)
+        return s.isEmpty ? nil : s
+    }
+
+    /// nil → SQL NULL (keeps the optional columns honest for `IS NULL`).
+    private func bindOpt(_ stmt: OpaquePointer?, _ idx: Int32, _ val: String?) {
+        if let val { bind(stmt, idx, val) } else { sqlite3_bind_null(stmt, idx) }
     }
 
     private func bind(_ stmt: OpaquePointer?, _ idx: Int32, _ val: String) {
