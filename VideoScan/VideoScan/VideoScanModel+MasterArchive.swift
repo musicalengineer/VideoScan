@@ -124,6 +124,13 @@ final class ArchivePromotionIndex {
     private var builtFor: RecordsVersion?
     private var copyBySource: [UUID: VideoRecord] = [:]
     private var sourceByCopy: [UUID: UUID] = [:]
+    /// Archive totals for the sidebar panel: promoted copies whose full-file
+    /// fixity was recorded (i.e. verified at promotion), and their bytes.
+    private(set) var verifiedCount = 0
+    private(set) var verifiedBytes: Int64 = 0
+    /// Copies present in the catalog WITHOUT a fixity record — should be
+    /// zero; anything here was cataloged by rescan, not by Promote.
+    private(set) var unverifiedCount = 0
     /// Rebuild counter, exposed for the scale test ("did N lookups do
     /// ONE rebuild?").
     private(set) var rebuildCount = 0
@@ -140,12 +147,29 @@ final class ArchivePromotionIndex {
 
     func invalidate() { builtFor = nil }
 
+    struct Totals: Equatable {
+        var verified: Int
+        var verifiedBytes: Int64
+        var unverified: Int
+    }
+    func totals(in records: [VideoRecord], version: RecordsVersion) -> Totals {
+        rebuildIfNeeded(records, version: version)
+        return Totals(verified: verifiedCount, verifiedBytes: verifiedBytes, unverified: unverifiedCount)
+    }
+
     private func rebuildIfNeeded(_ records: [VideoRecord], version: RecordsVersion) {
         if builtFor == version { return }
         rebuildCount += 1
         copyBySource.removeAll(keepingCapacity: true)
         sourceByCopy.removeAll(keepingCapacity: true)
+        verifiedCount = 0; verifiedBytes = 0; unverifiedCount = 0
         for rec in records where rec.derivationKind == ArchivePromotion.derivationKind && !rec.isPurged {
+            if rec.archiveFixity != nil {
+                verifiedCount += 1
+                verifiedBytes += rec.sizeBytes
+            } else {
+                unverifiedCount += 1
+            }
             guard let src = rec.derivedFrom else { continue }
             copyBySource[src] = rec
             sourceByCopy[rec.id] = src
@@ -436,6 +460,12 @@ extension VideoScanModel {
     func masterArchiveCopy(of record: VideoRecord) -> VideoRecord? {
         archivePromotionIndex.copy(ofSourceID: record.id, in: records,
                                    version: promotionIndexVersion)
+    }
+
+    /// Sidebar totals: verified (fixity-recorded) archive copies + bytes,
+    /// and any copies lacking fixity. O(1) after the per-mutation rebuild.
+    var masterArchiveTotals: ArchivePromotionIndex.Totals {
+        archivePromotionIndex.totals(in: records, version: promotionIndexVersion)
     }
 
     /// The source record an archive copy was promoted from, or nil when

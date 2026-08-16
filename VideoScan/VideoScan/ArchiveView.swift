@@ -147,6 +147,23 @@ struct ArchiveView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 8)
+                let totals = model.masterArchiveTotals
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(totals.verified > 0 ? Color.green : Color.secondary)
+                        .font(.caption)
+                    Text("\(totals.verified) verified · \(ByteCountFormatter.string(fromByteCount: totals.verifiedBytes, countStyle: .file))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if totals.unverified > 0 {
+                        Text("· \(totals.unverified) unverified")
+                            .font(.caption)
+                            .foregroundStyle(Color.yellow)
+                            .help("Archive copies cataloged by rescan without a fixity record — re-promote or verify to record their checksums.")
+                    }
+                }
+                .padding(.leading, 8)
+                .help("Every promoted file is byte-verified: copied, then re-read and its SHA-256 compared before it is recorded. This count is those files.")
                 HStack(spacing: 8) {
                     Button("Reveal") { model.revealMasterArchiveInFinder() }
                     Button("Manifest") { model.openMasterArchiveManifest() }
