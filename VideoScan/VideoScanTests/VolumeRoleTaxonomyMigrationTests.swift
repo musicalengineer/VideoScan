@@ -17,7 +17,7 @@ import Foundation
 // Rule ↔ test map (for the report):
 //   D1 legacy "Long-Term Archive"/"LTA" → .offsite   applyPersistedRole_legacyStrings
 //   D2 legacy "Retired" → .unassigned + retiredAt    applyPersistedRole_retiredStampsOnce (+ RelocateRetireVolumeTests)
-//   D3 unknown raw → .unassigned, target kept        applyPersistedRole_unknownKeepsTarget / restore_junkRoleKeepsTarget
+//   D3 unknown raw → .unassigned, target kept        applyPersistedRole_unknownKeepsTarget / restore_legacyAndJunkRoles_allTargetsKept_realPrefsUntouched
 //   R1 boot volume root → .system                    migrate_bootVolumeBecomesSystem
 //   R2 .system on ~/folder → .working                migrate_homeFolderTaggedSystemBecomesWorking
 //   R3 unassigned ~/folder → .working                migrate_homeFolderDefaultsToWorking
@@ -225,20 +225,25 @@ struct VolumeRoleTaxonomyMigrationTests {
     // MARK: - Boot / home classification
 
     @Test func bootVolumeRootPathPredicate() {
-        let aliasToRoot: (String) -> String = { $0 == "/Volumes/BootDisk" ? "/" : $0 }
-        #expect(CatalogScanTarget.isBootVolumeRootPath("/", resolveAlias: aliasToRoot))
-        #expect(CatalogScanTarget.isBootVolumeRootPath("/System/Volumes/Data", resolveAlias: aliasToRoot))
-        #expect(CatalogScanTarget.isBootVolumeRootPath("/System/Volumes/Data/", resolveAlias: aliasToRoot))
-        #expect(CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk", resolveAlias: aliasToRoot))
-        #expect(CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk/", resolveAlias: aliasToRoot))
+        let boot = "BootDisk"
+        #expect(CatalogScanTarget.isBootVolumeRootPath("/", bootVolumeName: boot))
+        #expect(CatalogScanTarget.isBootVolumeRootPath("/System/Volumes/Data", bootVolumeName: boot))
+        #expect(CatalogScanTarget.isBootVolumeRootPath("/System/Volumes/Data/", bootVolumeName: boot))
+        #expect(CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk", bootVolumeName: boot))
+        #expect(CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk/", bootVolumeName: boot))
         // NOT the boot root: another volume, a folder INSIDE the boot
-        // volume (~/Movies), a folder under the alias.
-        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Volumes/MyBook", resolveAlias: aliasToRoot))
-        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Users/rickb/Movies", resolveAlias: aliasToRoot))
-        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk/Users/rickb", resolveAlias: aliasToRoot))
-        #expect(!CatalogScanTarget.isBootVolumeRootPath("", resolveAlias: aliasToRoot))
-        // Real machine: "/" is always the boot root with the default resolver.
+        // volume (~/Movies), a folder under the alias, unknown boot name.
+        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Volumes/MyBook", bootVolumeName: boot))
+        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Users/rickb/Movies", bootVolumeName: boot))
+        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk/Users/rickb", bootVolumeName: boot))
+        #expect(!CatalogScanTarget.isBootVolumeRootPath("", bootVolumeName: boot))
+        #expect(!CatalogScanTarget.isBootVolumeRootPath("/Volumes/BootDisk", bootVolumeName: nil))
+        // Real machine: "/" is always the boot root; the OS boot name is
+        // read once from "/" (internal SSD, never an external stat).
         #expect(CatalogScanTarget.isBootVolumeRootPath("/"))
+        if let real = CatalogScanTarget.bootVolumeName {
+            #expect(CatalogScanTarget.isBootVolumeRootPath("/Volumes/\(real)"))
+        }
     }
 
     @Test func homeFolderPathPredicate() {

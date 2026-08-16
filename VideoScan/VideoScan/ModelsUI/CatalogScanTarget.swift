@@ -245,23 +245,33 @@ extension CatalogScanTarget {
 /// `/Volumes/<BootName>` alias — a symlink macOS keeps pointing at "/".
 extension CatalogScanTarget {
 
+    /// The OS name of the boot volume ("M4drive", "Macintosh HD"), read
+    /// ONCE from "/" — the internal SSD, so this never spins up an
+    /// external disk. macOS also exposes the boot volume as the symlink
+    /// `/Volumes/<this name>` → "/", which is why the name is enough to
+    /// recognise the alias without stat()-ing anything under /Volumes
+    /// (a sleeping HDD's mount point would beachball — see the
+    /// VolumeReachability cache notes).
+    nonisolated static let bootVolumeName: String? = {
+        (try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeNameKey]))?.volumeName
+    }()
+
     /// True when `path` IS the boot volume root: "/", the APFS data
     /// volume mount "/System/Volumes/Data", or the `/Volumes/<BootName>`
-    /// alias (resolved via `URL.resolvingSymlinksInPath()` ≈ C `realpath()`,
-    /// so a folder INSIDE the boot volume — ~/Movies — is never "system").
-    /// `resolveAlias` is injectable so tests can pin the alias rule
-    /// without depending on the host's boot-volume name.
+    /// alias. A folder INSIDE the boot volume — ~/Movies — is never
+    /// "system". Pure string logic; `bootVolumeName` is injectable so
+    /// tests can pin the alias rule without depending on the host.
     nonisolated static func isBootVolumeRootPath(
         _ path: String,
-        resolveAlias: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        bootVolumeName: String? = CatalogScanTarget.bootVolumeName
     ) -> Bool {
         let p = PathScope.normalize(path)
         if p == "/" || p == "/System/Volumes/Data" { return true }
         let comps = (p as NSString).pathComponents
         // Exactly "/Volumes/<name>" — deeper paths are folders, not roots.
         guard comps.count == 3, comps[1] == "Volumes" else { return false }
-        let resolved = PathScope.normalize(resolveAlias(p))
-        return resolved == "/" || resolved == "/System/Volumes/Data"
+        guard let boot = bootVolumeName, !boot.isEmpty else { return false }
+        return comps[2] == boot
     }
 
     /// True when `path` lies inside a user home directory (`/Users/<name>`
