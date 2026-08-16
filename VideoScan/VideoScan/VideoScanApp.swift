@@ -595,6 +595,16 @@ struct VideoScanApp: App {
                 Button("Purge Non-Video Media…") {
                     catalogModel.showNonVideoMediaPurgeSheet = true
                 }
+                Divider()
+                // Refresh Embedded Dates (2026-08-16): one cheap tag-only
+                // ffprobe per reachable record that has no container
+                // creation date yet. Never automatic — Rick starts it.
+                Button(catalogModel.isRefreshingEmbeddedDates
+                       ? "Refreshing Embedded Dates…" : "Refresh Embedded Dates") {
+                    Task { await catalogModel.runEmbeddedDateBackfill() }
+                }
+                .disabled(catalogModel.isReadOnly || catalogModel.isRefreshingEmbeddedDates)
+                .help("Read the creation date and camera/app that each file carries inside it (survives copies; used to file the Master Archive). Only records missing one are probed.")
             }
         }
 

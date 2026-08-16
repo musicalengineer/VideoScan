@@ -127,6 +127,11 @@ extension VideoRecord {
         c.combinedFromPairID = combinedFromPairID
         c.sourceHost = sourceHost
         c.purgedAt = purgedAt
+        c.embeddedCreationDate = embeddedCreationDate
+        c.embeddedCreationSource = embeddedCreationSource
+        c.originMake = originMake
+        c.originModel = originModel
+        c.originEncoder = originEncoder
         c.setAsideReason = setAsideReason
         c.drmProtected = drmProtected
         c.needsReformat = needsReformat

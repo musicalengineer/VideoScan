@@ -736,6 +736,10 @@ final class VideoScanModel: ObservableObject {
     /// together exceed it) and drives the UI's disabled state.
     @Published var isComputingSignatures = false
 
+    /// True while a "Refresh Embedded Dates" pass is running (2026-08-16).
+    /// Same one-fleet-at-a-time guard as the signature pass.
+    @Published var isRefreshingEmbeddedDates = false
+
     /// Cooperative pause gate for combine tasks
     let combinePauseGate = PauseGate()
     @Published var isCombinePaused: Bool = false

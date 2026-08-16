@@ -62,6 +62,33 @@ public class VideoRecord: Identifiable, Decodable {
     /// volume's signatures current?" — a volume signed months ago and
     /// written to since is not the same as one signed this morning.
     public var contentHashAt: Date?
+
+    /// The container's own creation stamp (2026-08-16): QuickTime
+    /// `creation_time` / `com.apple.quicktime.creationdate` / a stream's
+    /// `creation_time`, captured by ffprobe at scan time and by the
+    /// "Refresh Embedded Dates" backfill. Unlike `dateCreatedRaw` (the
+    /// filesystem birth time, reset by every copy) this survives copies,
+    /// so it is what the Master Archive resolver files by. Already sanity-
+    /// filtered (EmbeddedDateSanity) — a stored value is believed. nil =
+    /// no usable tag (old tapes, VOBs, most AVIs). Additive optional:
+    /// legacy catalogs decode as nil, the DTO writes the key only when
+    /// present.
+    /// (`Date?` ≈ C++ `std::optional<Date>`.)
+    public var embeddedCreationDate: Date?
+    /// Which tag `embeddedCreationDate` came from: "format:creation_time",
+    /// "quicktime:com.apple.quicktime.creationdate", "stream:creation_time".
+    /// nil whenever the date is nil.
+    public var embeddedCreationSource: String?
+    /// ORIGIN line — what wrote the file (2026-08-16). Device make/model
+    /// from `make` / `model` / `com.apple.quicktime.make|model` (a phone or
+    /// camera), or the encoder string (`encoder`, `com.apple.quicktime.
+    /// software`, `HandBrake 1.7.3 …`, `Lavf60…`) when a program did.
+    /// Weighs the embedded date's confidence: a camera stamp is the
+    /// shooting date; a transcoder stamp may be the re-encode date. All
+    /// three additive-optional; see `originDescription` for display.
+    public var originMake: String?
+    public var originModel: String?
+    public var originEncoder: String?
     public var fullPath: String = ""
     public var directory: String = ""
     public var notes: String = ""
@@ -484,6 +511,14 @@ public class VideoRecord: Identifiable, Decodable {
         dateModified                = try c.decodeIfPresent(String.self, forKey: .dateModified) ?? ""
         dateCreatedRaw              = try c.decodeIfPresent(Date.self, forKey: .dateCreatedRaw)
         dateModifiedRaw             = try c.decodeIfPresent(Date.self, forKey: .dateModifiedRaw)
+        // Embedded creation date + origin (2026-08-16) — additive
+        // optional, same migration pattern as purgedAt: legacy catalogs
+        // (no keys) decode as nil.
+        embeddedCreationDate        = try c.decodeIfPresent(Date.self, forKey: .embeddedCreationDate)
+        embeddedCreationSource      = try c.decodeIfPresent(String.self, forKey: .embeddedCreationSource)
+        originMake                  = try c.decodeIfPresent(String.self, forKey: .originMake)
+        originModel                 = try c.decodeIfPresent(String.self, forKey: .originModel)
+        originEncoder               = try c.decodeIfPresent(String.self, forKey: .originEncoder)
         container                   = try c.decodeIfPresent(String.self, forKey: .container) ?? ""
         videoCodec                  = try c.decodeIfPresent(String.self, forKey: .videoCodec) ?? ""
         resolution                  = try c.decodeIfPresent(String.self, forKey: .resolution) ?? ""

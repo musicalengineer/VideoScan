@@ -409,44 +409,64 @@ enum ArchivePathResolver {
 
     // MARK: Date hint from record fields
 
-    /// Spec §2 date source, in rank order:
-    ///   1. Rick's hand-entered `userDate` (either confidence) — reduced
-    ///      precision preserved ("1992" → year-only).
-    ///   2. `inferredRecordDate` when `inferredDateConfidence` ≥ 0.6.
-    ///   3. Otherwise unknown. File creation dates are NOT used — on old
-    ///      tapes they are the transfer date, not the shooting date.
-    /// Returns the hint plus a low-confidence flag for the warning list.
+    /// Spec §2 date source — delegated to the ONE shared ranking,
+    /// `RecordDateResolver` (VideoScanCore), so placement and the archive
+    /// readiness date state can never disagree. Rank order there:
+    ///   1. Rick's hand-entered `userDate` at its precision (a year-only /
+    ///      month-only user date is refined by an agreeing finer machine
+    ///      date, never overruled).
+    ///   2. The container's `embeddedCreationDate` (camera/phone/NLE stamp).
+    ///   3. `inferredRecordDate` when `inferredDateConfidence` ≥ 0.6.
+    ///   4. A date pattern in the filename (year precision for a bare year).
+    ///   5. Otherwise unknown. Filesystem dates are NOT used — on old tapes
+    ///      they are the transfer date, not the shooting date.
+    /// Returns the hint plus a low-confidence flag for the warning list:
+    /// true when the placement rests on a < 0.6 signal (a filename
+    /// pattern) or when an inferred date existed but was below the floor.
     static func dateHint(userDate: String?,
                          inferredRecordDate: Date?,
-                         inferredDateConfidence: Float?) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
-        if let ud = userDate, let parts = UserDateEntry.components(of: ud) {
-            if let m = parts.month, let d = parts.day {
-                return (.day(year: parts.year, month: m, day: d), false)
-            }
-            if let m = parts.month {
-                return (.month(year: parts.year, month: m), false)
-            }
-            return (.year(parts.year), false)
-        }
-        if let inferred = inferredRecordDate {
-            let conf = inferredDateConfidence ?? 0
-            if conf >= inferredConfidenceFloor {
-                let dc = utcGregorian.dateComponents([.year, .month, .day], from: inferred)
-                if let y = dc.year, let m = dc.month, let d = dc.day {
-                    return (.day(year: y, month: m, day: d), false)
-                }
-            }
-            // An inferred date we do not trust: undated, flagged.
-            return (.unknown, true)
-        }
-        return (.unknown, false)
+                         inferredDateConfidence: Float?,
+                         embeddedCreationDate: Date? = nil,
+                         originMake: String? = nil,
+                         originModel: String? = nil,
+                         originEncoder: String? = nil,
+                         filename: String? = nil,
+                         userDateConfidence: String? = nil) -> (hint: ArchiveDateHint, lowConfidence: Bool) {
+        let r = RecordDateResolver.resolve(userDate: userDate,
+                                           userDateConfidence: userDateConfidence,
+                                           embeddedCreationDate: embeddedCreationDate,
+                                           originMake: originMake,
+                                           originModel: originModel,
+                                           originEncoder: originEncoder,
+                                           inferredRecordDate: inferredRecordDate,
+                                           inferredDateConfidence: inferredDateConfidence,
+                                           filename: filename)
+        return (hint(from: r), isLowConfidence(r))
     }
 
-    private static let utcGregorian: Calendar = {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
-        return cal
-    }()
+    /// Resolution → hint. `.decade` never arises from a record field today
+    /// (the resolver has no decade source) but the mapping is total.
+    static func hint(from r: RecordDateResolution) -> ArchiveDateHint {
+        guard let y = r.year else { return .unknown }
+        switch r.precision {
+        case .day:
+            if let m = r.month, let d = r.day { return .day(year: y, month: m, day: d) }
+            return .year(y)
+        case .month:
+            if let m = r.month { return .month(year: y, month: m) }
+            return .year(y)
+        case .year:    return .year(y)
+        case .decade:  return .decade(startYear: y - (y % 10))
+        case .unknown: return .unknown
+        }
+    }
+
+    /// The warning-list flag: a placed date below the trust floor, or an
+    /// undated record whose only signal was a rejected inferred date.
+    static func isLowConfidence(_ r: RecordDateResolution) -> Bool {
+        if r.precision == .unknown { return r.hadRejectedSignal }
+        return r.confidence < inferredConfidenceFloor
+    }
 }
 
 // MARK: - Main-actor bridge (record → facts)
@@ -458,7 +478,13 @@ extension ArchivePathResolver {
     static func facts(for record: VideoRecord) -> RecordFacts {
         let (hint, low) = dateHint(userDate: record.userDate,
                                    inferredRecordDate: record.inferredRecordDate,
-                                   inferredDateConfidence: record.inferredDateConfidence)
+                                   inferredDateConfidence: record.inferredDateConfidence,
+                                   embeddedCreationDate: record.embeddedCreationDate,
+                                   originMake: record.originMake,
+                                   originModel: record.originModel,
+                                   originEncoder: record.originEncoder,
+                                   filename: record.filename,
+                                   userDateConfidence: record.userDateConfidence)
         return RecordFacts(streamType: record.streamType,
                            filename: record.filename,
                            ext: record.ext,

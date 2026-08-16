@@ -96,8 +96,41 @@ struct InspectorDateView: View {
             }
 
             statusLine
+
+            // Embedded creation date (2026-08-16): what the camera / phone /
+            // app wrote INSIDE the file. Shown whenever present — it is what
+            // the Master Archive files by when Rick has not entered a date.
+            if let embedded = record.embeddedCreationDate {
+                HStack(spacing: 4) {
+                    Image(systemName: "camera.metering.center.weighted")
+                        .font(.system(size: 9))
+                    Text("Embedded: \(Self.embeddedFormatter.string(from: embedded)) (\(record.embeddedDateOriginLabel))")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.secondary)
+                .help(embeddedHelp(embedded))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("inspector.date.embedded")
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    /// "yyyy-MM-dd HH:mm" in UTC — the tag is a UTC instant and the archive
+    /// files by its UTC calendar day, so the inspector shows the same day.
+    static let embeddedFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
+    private func embeddedHelp(_ date: Date) -> String {
+        var s = "Creation date written inside the file (UTC), from \(record.embeddedCreationSource ?? "the container"). "
+        if let origin = record.originDescription { s += "Written by \(origin). " }
+        s += "It survives copies, unlike the Finder's Created/Modified dates, and files the Master Archive when you haven't entered a date. Your own date always wins."
+        return s
     }
 
     // MARK: Status line

@@ -121,6 +121,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let combinedFromPairID: UUID?
     public let scanContext: ScanContext
     public let purgedAt: Date?
+    public let embeddedCreationDate: Date?
+    public let embeddedCreationSource: String?
+    public let originMake: String?
+    public let originModel: String?
+    public let originEncoder: String?
     public let setAsideReason: String?
     public let needsReformat: Bool
     public let derivedFrom: UUID?
@@ -233,6 +238,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
         combinedFromPairID          = r.combinedFromPairID
         scanContext                 = r.scanContext
         purgedAt                    = r.purgedAt
+        embeddedCreationDate        = r.embeddedCreationDate
+        embeddedCreationSource      = r.embeddedCreationSource
+        originMake                  = r.originMake
+        originModel                 = r.originModel
+        originEncoder               = r.originEncoder
         setAsideReason              = r.setAsideReason
         needsReformat               = r.needsReformat
         derivedFrom                 = r.derivedFrom
@@ -394,6 +404,14 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // for the (vast majority) of records that are never purged, and means
         // un-purging a record makes its JSON byte-identical to before purge.
         try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
+        // Embedded creation date + origin (2026-08-16): keys written only
+        // when present — records without a container stamp (every legacy
+        // record) round-trip byte-identical.
+        try c.encodeIfPresent(embeddedCreationDate, forKey: .embeddedCreationDate)
+        try c.encodeIfPresent(embeddedCreationSource, forKey: .embeddedCreationSource)
+        try c.encodeIfPresent(originMake, forKey: .originMake)
+        try c.encodeIfPresent(originModel, forKey: .originModel)
+        try c.encodeIfPresent(originEncoder, forKey: .originEncoder)
         // Only write setAsideReason when present — same rationale as
         // purgedAt: pre-feature records round-trip byte-identical, and
         // restoring a set-aside record makes its JSON identical to before.
