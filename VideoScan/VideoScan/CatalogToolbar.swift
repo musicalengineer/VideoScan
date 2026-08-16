@@ -325,7 +325,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Button("Find Duplicates of Selected", action: onAnalyzeDuplicatesSelected)
                         .disabled(selectedIDs.isEmpty)
 
-                    if !volumesWithDeletableDups.isEmpty {
+                    if !model.isReadOnly && !volumesWithDeletableDups.isEmpty {
                         Divider()
                         Menu("Delete Duplicates on Volume…") {
                             ForEach(volumesWithDeletableDups, id: \.path) { vol in
@@ -336,17 +336,18 @@ struct CatalogToolbar<Dashboard: View>: View {
                         }
                     }
                 } label: {
-                    if isAnalyzingDuplicates {
+                    if isAnalyzingDuplicates || model.isDeletingDuplicates {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.small)
-                            Text("Analyzing…")
+                            Text(isAnalyzingDuplicates ? "Analyzing…" : "Deleting…")
                         }
                     } else {
                         Label("Duplicates", systemImage: "doc.on.doc")
                     }
                 }
                 .menuStyle(.borderlessButton)
-                .disabled(isScanning || isAnalyzingDuplicates || !hasRecords)
+                .disabled(isScanning || isAnalyzingDuplicates
+                          || model.isDeletingDuplicates || !hasRecords)
                 .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
 
                 if !duplicateStatus.isEmpty {
