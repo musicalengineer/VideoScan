@@ -10,6 +10,7 @@ inherit = "core"
 
 [shell_environment_policy.set]
 PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+GH_CONFIG_DIR = "/Users/rickb/Library/Application Support/VideoScan/gh-codex"
 
 [permissions.videoscan-dev]
 description = "Unattended local development for the trusted VideoScan project."
@@ -28,7 +29,35 @@ description = "Unattended local development for the trusted VideoScan project."
 "/Users/rickb/.ssh/config" = "read"
 "/Users/rickb/.ssh/known_hosts" = "read"
 "/Users/rickb/.ssh/id_ed25519" = "read"
+"/Users/rickb/.codex/packages/standalone/current" = "read"
+"/Users/rickb/.local/bin/codex" = "read"
+"/Users/rickb/.codex/packages/standalone/current/bin/codex" = "read"
+ # Allow Codex's patch helper and installed skills to execute/read.
+"/Users/rickb/.codex/packages/standalone" = "read"
+"/Users/rickb/.codex/skills" = "read"
 
+# Allow mounted-volume discovery and read-only inspection.
+"/Volumes" = "read"
+
+# Volumes Codex may modify for archive/storage work.
+"/Volumes/FamilyArchive" = "write"
+"/Volumes/Projects" = "write"
+"/Volumes/LaCieWorkspace" = "write"
+"/Volumes/MediaExpansion" = "write"
+"/Volumes/Crucial2TB" = "write"
+"/Volumes/CrucialX9" = "write"
+"/Volumes/CrucialX10" = "write"
+"/Volumes/SanDisk" = "write"
+
+# Permit Codex's patch helper to operate.
+"/Users/rickb/.local/bin" = "read"
+"/Users/rickb/.codex/packages/standalone/releases" = "read"
+
+# GitHub QA-manager access.
+"/opt/homebrew/bin" = "read"
+"/opt/homebrew/Cellar/gh" = "read"
+"/Users/rickb/.config/gh" = "read"
+"/Users/rickb/dev/immich" = "read"
 [permissions.videoscan-dev.filesystem.":workspace_roots"]
 "." = "write"
 
