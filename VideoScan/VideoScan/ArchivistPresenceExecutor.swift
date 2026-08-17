@@ -124,8 +124,13 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     /// and alias token lists for each keyword.
     let keywordQueries: [ArchivistKeywordQuery]
     let hasInvalidYearRange: Bool
+    /// Paging: how many proven matches to skip before collecting citations
+    /// ("show more" re-runs the same query with the offset advanced). The
+    /// exact count is still computed over every record.
+    let citationOffset: Int
 
-    init(_ payload: ArchivistQueryAST.Presence) {
+    init(_ payload: ArchivistQueryAST.Presence, citationOffset: Int = 0) {
+        self.citationOffset = max(0, citationOffset)
         people = (payload.people ?? []).map(Identity.init)
         if let start = payload.yearStart ?? payload.yearEnd,
            let end = payload.yearEnd ?? payload.yearStart {
@@ -317,7 +322,10 @@ enum ArchivistPresenceExecutor {
                 continue
             }
             provenMatchCount += 1
-            if citations.count < maxCitations { citations.append(citation) }
+            if provenMatchCount > query.citationOffset,
+               citations.count < maxCitations {
+                citations.append(citation)
+            }
         }
 
         guard provenMatchCount > 0 else {
@@ -329,7 +337,8 @@ enum ArchivistPresenceExecutor {
             evidence: ArchivistEvidenceSet(
                 citations: citations,
                 totalMatchCount: provenMatchCount,
-                isCitationListTruncated: citations.count < provenMatchCount))
+                isCitationListTruncated:
+                    query.citationOffset + citations.count < provenMatchCount))
     }
 
     private static func emptyResult(
