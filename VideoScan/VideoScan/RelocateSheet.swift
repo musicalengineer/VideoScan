@@ -182,7 +182,7 @@ struct RelocateSheet: View {
     }
 
     private var destinationSection: some View {
-        GroupBox("Destination Folder") {
+        GroupBox("Destination") {
             HStack {
                 Image(systemName: "folder.fill").foregroundColor(.orange)
                 if let dest = destinationFolder {
@@ -191,7 +191,7 @@ struct RelocateSheet: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 } else {
-                    Text("(choose a folder on a healthier drive)")
+                    Text("(choose the destination volume — the app builds from_<Source>/<subtree>)")
                         .foregroundColor(.secondary)
                         .font(.caption)
                 }
@@ -451,14 +451,37 @@ struct RelocateSheet: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Choose destination folder on a healthier drive"
+        panel.message = "Choose the destination VOLUME (or folder). The app places files under from_<SourceVolume>/<subtree> so the history stays readable."
         panel.prompt = "Select"
         if let current = destinationFolder { panel.directoryURL = current }
         if panel.runModal() == .OK, let url = panel.url {
-            destinationFolder = url
-            UserDefaults.standard.set(url.path, forKey: relocateDestFolderKey)
+            destinationFolder = Self.derivedDestination(chosen: url, sourcePath: sourceVolumePath)
+            UserDefaults.standard.set(destinationFolder?.path, forKey: relocateDestFolderKey)
             invalidatePreview()  // dest change invalidates preview
         }
+    }
+
+    /// Rick 2026-08-17: "humans easily make typos" — the app derives the
+    /// destination folder from the choice, so the user only ever picks a
+    /// volume. If the chosen folder is a VOLUME ROOT (or /Volumes/X),
+    /// the destination becomes `<root>/from_<SourceVolume>/<subtree of the
+    /// source beneath its volume>`; a source that IS a volume root maps to
+    /// `<root>/from_<SourceVolume>`. Any deeper chosen folder is used as-is
+    /// (the user meant it). Pure; tested.
+    static func derivedDestination(chosen: URL, sourcePath: String) -> URL {
+        let chosenStd = chosen.standardizedFileURL
+        let comps = chosenStd.pathComponents            // ["/", "Volumes", "X", ...]
+        let isVolumeRoot = comps.count == 3 && comps[1] == "Volumes"
+        guard isVolumeRoot else { return chosenStd }
+        let src = URL(fileURLWithPath: sourcePath).standardizedFileURL.pathComponents
+        guard src.count >= 3, src[1] == "Volumes" else {
+            // A non-/Volumes source (e.g. ~/Movies): from_<lastComponent>.
+            let name = src.last ?? "source"
+            return chosenStd.appendingPathComponent("from_\(name)", isDirectory: true)
+        }
+        var dest = chosenStd.appendingPathComponent("from_\(src[2])", isDirectory: true)
+        for c in src.dropFirst(3) { dest.appendPathComponent(c, isDirectory: true) }
+        return dest
     }
 
     /// Reconcile preview. The FS walk + per-file hashing runs OFF the main

@@ -19,6 +19,34 @@ import Foundation
 
 @Suite struct RelocateSheetBrowseTests {
 
+    // Rick 2026-08-17: the destination is DERIVED from the chosen volume so
+    // nobody types a path — from_<SourceVolume>/<subtree beneath its volume>.
+    @Test func derivedDestination_volumeRoot_getsFromSourceAndSubtree() {
+        let d = RelocateSheet.derivedDestination(
+            chosen: URL(fileURLWithPath: "/Volumes/SanDiskWorkspace"),
+            sourcePath: "/Volumes/LaCieWorkspace/CheesegraterArchive/highsierra_rickb")
+        #expect(d.path == "/Volumes/SanDiskWorkspace/from_LaCieWorkspace/CheesegraterArchive/highsierra_rickb")
+    }
+    @Test func derivedDestination_sourceIsVolumeRoot() {
+        let d = RelocateSheet.derivedDestination(
+            chosen: URL(fileURLWithPath: "/Volumes/SanDiskWorkspace/"),
+            sourcePath: "/Volumes/Mini2TB")
+        #expect(d.path == "/Volumes/SanDiskWorkspace/from_Mini2TB")
+    }
+    @Test func derivedDestination_deeperFolderIsUsedAsIs() {
+        let d = RelocateSheet.derivedDestination(
+            chosen: URL(fileURLWithPath: "/Volumes/SanDiskWorkspace/Custom/Place"),
+            sourcePath: "/Volumes/LaCieWorkspace/CheesegraterArchive")
+        #expect(d.path == "/Volumes/SanDiskWorkspace/Custom/Place")
+    }
+    @Test func derivedDestination_homeFolderSource() {
+        let d = RelocateSheet.derivedDestination(
+            chosen: URL(fileURLWithPath: "/Volumes/SanDiskWorkspace"),
+            sourcePath: "/Users/rickb/Movies")
+        #expect(d.path == "/Volumes/SanDiskWorkspace/from_Movies")
+    }
+
+
     // Bare-bones happy path: no trailing slash, returned untouched.
     @Test
     func normalizeSourcePath_passesThroughCleanPath() {
