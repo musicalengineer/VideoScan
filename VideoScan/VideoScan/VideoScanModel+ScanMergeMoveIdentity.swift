@@ -323,10 +323,19 @@ extension VideoScanModel {
     /// merge (cheap — a handful of strings), applied via component-boundary
     /// PathScope.contains.
     struct RelinkProtectedRoots: Sendable {
+        /// Normalized roots (no trailing slash), never "" or "/".
         var roots: [String]
 
+        init(roots: [String]) {
+            self.roots = roots.map(PathScope.normalize).filter { !$0.isEmpty && $0 != "/" }
+        }
+
+        /// Component-boundary containment; the path is normalized ONCE
+        /// (this runs per record in the merge derivation).
         nonisolated func contains(_ path: String) -> Bool {
-            roots.contains { PathScope.contains(path, within: $0) }
+            guard !roots.isEmpty else { return false }
+            let p = PathScope.normalize(path)
+            return roots.contains { p == $0 || p.hasPrefix($0 + "/") }
         }
     }
 

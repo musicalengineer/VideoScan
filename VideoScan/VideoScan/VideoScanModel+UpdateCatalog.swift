@@ -232,15 +232,25 @@ extension VideoScanModel {
     func refreshUpdateCatalogMissingCounts(applyDefaultSelection: Bool) async {
         updateCatalogCheckGeneration &+= 1
         let gen = updateCatalogCheckGeneration
-        var snaps: [UpdateCatalogPathSnap] = []
-        for row in updateCatalogRows where !row.phase.isRenamePending {
-            let paths = records.compactMap { rec -> String? in
-                guard rec.purgedAt == nil,
-                      PathScope.contains(rec.fullPath, within: row.targetPath) else { return nil }
-                return rec.fullPath
-            }
-            snaps.append(UpdateCatalogPathSnap(targetID: row.id, paths: paths))
+        // ONE pass over records (not rows × records): normalize each path
+        // once, then cheap hasPrefix per row root — PathScope.normalize is
+        // the hot frame the VolumeStatusCache incident taught us to avoid
+        // in O(rows × records) loops.
+        struct RowRoot { let id: UUID; let root: String; let slashed: String }
+        let roots: [RowRoot] = updateCatalogRows.compactMap { row in
+            guard !row.phase.isRenamePending else { return nil }
+            let r = PathScope.normalize(row.targetPath)
+            guard !r.isEmpty, r != "/" else { return nil }
+            return RowRoot(id: row.id, root: r, slashed: r + "/")
         }
+        var pathsByRow: [UUID: [String]] = [:]
+        for rec in records where rec.purgedAt == nil {
+            let p = PathScope.normalize(rec.fullPath)
+            for rr in roots where p == rr.root || p.hasPrefix(rr.slashed) {
+                pathsByRow[rr.id, default: []].append(rec.fullPath)
+            }
+        }
+        let snaps = roots.map { UpdateCatalogPathSnap(targetID: $0.id, paths: pathsByRow[$0.id] ?? []) }
         let counts = await Self.countMissingFiles(snaps)
         guard gen == updateCatalogCheckGeneration else { return }
         for i in updateCatalogRows.indices {
