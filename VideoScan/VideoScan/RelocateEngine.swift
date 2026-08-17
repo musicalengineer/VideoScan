@@ -47,6 +47,17 @@ enum RelocateEngine {
     /// pre-existing file at the destination is treated as a failure
     /// (likely a half-finished previous run); the reconcile phase's
     /// "adopt already-at-dest" bucket handles the legitimate case.
+    // @concurrent: this project builds with NonisolatedNonsendingByDefault,
+    // under which a nonisolated async function runs on the CALLER's actor.
+    // The caller (VideoScanModel.runRelocate) is @MainActor, so without this
+    // every copy + verify ran ON THE MAIN THREAD — Rick 2026-08-17: "0/2111
+    // … the UI seems beachbally" while 361 GB flowed. Fourth incident of
+    // the approachable-concurrency trap; see the memo. The #if guard
+    // matches the pattern used elsewhere (CI Xcode 16.4 has no
+    // @concurrent; there the old semantics already ran it off-actor).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
     static func runOne(_ job: RelocateJob,
                        fileManager: FileManager = .default) async -> RelocateOutcome {
         // Stage 1: destination collision check.
