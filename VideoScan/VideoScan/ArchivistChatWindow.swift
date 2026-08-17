@@ -454,6 +454,10 @@ struct ArchivistChatWindow: View {
                             .font(.caption)
                         Button("Reveal") { revealCitation(citation) }
                             .font(.caption)
+                        // Rick 2026-08-17: "show in catalog" — jump the
+                        // main window to this one row, highlighted.
+                        Button("Show in Catalog") { showCitationInCatalog(citation) }
+                            .font(.caption)
                     }
                     .buttonStyle(.borderless)
                 }
@@ -554,6 +558,23 @@ struct ArchivistChatWindow: View {
             return
         }
         play(record)
+    }
+
+    /// Same mechanism as the MFO window's "Show in Catalog": switch the
+    /// main window to the Catalog tab and select exactly this record.
+    /// The chat window stays where it is (always-on-top), so the row is
+    /// visible behind it — Hallie points, the catalog shows.
+    private func showCitationInCatalog(_ citation: HallieTurnExecutor.Citation) {
+        guard model.canNavigateToRecord(id: citation.recordID) else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "“\(citation.filename)” is no longer in the catalog — "
+                    + "it may have been removed or replaced by a re-scan."))
+            return
+        }
+        UserDefaults.standard.set(1, forKey: "selectedTab")
+        model.pendingCatalogSelection = citation.recordID
+        MainWindowHelper.shared.openMainWindow()
     }
 
     private func revealCitation(_ citation: HallieTurnExecutor.Citation) {
