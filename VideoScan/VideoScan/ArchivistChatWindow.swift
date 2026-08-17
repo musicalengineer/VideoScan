@@ -211,7 +211,7 @@ struct ArchivistChatWindow: View {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small)
                                 Text("thinking…")
-                                    .font(.caption)
+                                    .font(.system(size: 15))
                                     .foregroundStyle(.secondary)
                             }
                             .id("thinking")
@@ -222,7 +222,7 @@ struct ArchivistChatWindow: View {
                             // asleep so you are on the laptop" look
                             // identical without this line.
                             Text("answered by \(OllamaEndpoints.displayLabel(for: responder))")
-                                .font(.caption2)
+                                .font(.system(size: 13))
                                 .foregroundStyle(.tertiary)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
@@ -242,7 +242,7 @@ struct ArchivistChatWindow: View {
             HStack(spacing: 8) {
                 TextField("Ask about the family catalog…", text: $input)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .controlSize(.large)
                     .focused($inputFocused)
                     .onSubmit(send)
@@ -389,17 +389,17 @@ struct ArchivistChatWindow: View {
             if message.role == .user { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 5) {
                 Text(message.text)
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .textSelection(.enabled)
                 if let query = message.queryLine {
                     Text(query)
-                        .font(.footnote.monospaced())
+                        .font(.system(size: 15).monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 if let basis = message.basisLine {
                     Text(basis)
-                        .font(.footnote)
+                        .font(.system(size: 15))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -434,30 +434,30 @@ struct ArchivistChatWindow: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Evidence samples (up to 25; not all matches)")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
             ForEach(citations.indices, id: \.self) { index in
                 let citation = citations[index]
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(index + 1). \(citation.filename)"
                          + citationTimestamp(citation))
-                        .font(.caption.weight(.medium))
+                        .font(.system(size: 15, weight: .medium))
                         .lineLimit(2)
                         .textSelection(.enabled)
                     Text(citation.bases.map(citationBasis).joined(separator: "; "))
-                        .font(.caption2)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                         .textSelection(.enabled)
                     HStack(spacing: 8) {
                         Button("Play") { playCitation(citation) }
-                            .font(.caption)
+                            .font(.system(size: 15))
                         Button("Reveal") { revealCitation(citation) }
-                            .font(.caption)
+                            .font(.system(size: 15))
                         // Rick 2026-08-17: "show in catalog" — jump the
                         // main window to this one row, highlighted.
                         Button("Show in Catalog") { showCitationInCatalog(citation) }
-                            .font(.caption)
+                            .font(.system(size: 15))
                     }
                     .buttonStyle(.borderless)
                 }
@@ -472,18 +472,18 @@ struct ArchivistChatWindow: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Family archive sources")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
             ForEach(citations) { citation in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(citation.title)
-                        .font(.caption.weight(.medium))
+                        .font(.system(size: 15, weight: .medium))
                         .textSelection(.enabled)
                     let details = [citation.attribution, citation.locator]
                         .compactMap { $0 }
                     if !details.isEmpty {
                         Text(details.joined(separator: " · "))
-                            .font(.caption2)
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -1623,7 +1623,7 @@ private struct FlowChips: View {
                     onTap(chip)
                 } label: {
                     Text(chip.label)
-                        .font(.callout)
+                        .font(.system(size: 16))
                         .lineLimit(1)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
