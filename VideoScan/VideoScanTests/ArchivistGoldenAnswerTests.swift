@@ -34,14 +34,41 @@ private struct ArchivistGoldenASTCase: Decodable {
     let id: String
     let input: String
     let modelOutput: String
+    let expectedRoute: String?
     let expectedOutcome: String
     let expectedCount: Int?
     let expectedPaths: [String]?
     let expectedProseContains: String?
     let expectedBasisContains: String?
+    let expectedCitationBasisContains: [String]?
     let expectedTranslatorNotes: [String]?
     let expectedChipLabels: [String]?
+    let expectedOfferedActions: [String]?
     let continuation: Continuation?
+    let evidence: [String]
+}
+
+/// One turn of a v3 conversation case. `modelOutput` present = the turn is
+/// translated; `local` = it must resolve before translation.
+private struct ArchivistGoldenTurn: Decodable {
+    let input: String
+    let modelOutput: String?
+    let local: Bool?
+    let expectedRoute: String?
+    let expectedOutcome: String
+    let expectedCount: Int?
+    let expectedPaths: [String]?
+    let expectedProseContains: String?
+    let expectedBasisContains: String?
+    let expectedQueryContains: String?
+    let expectedMediaAction: String?
+    let expectedChipLabels: [String]?
+    let expectedOfferedActions: [String]?
+}
+
+private struct ArchivistGoldenConversationCase: Decodable {
+    let id: String
+    let turns: [ArchivistGoldenTurn]
     let evidence: [String]
 }
 
@@ -49,6 +76,7 @@ private struct ArchivistGoldenCorpus: Decodable {
     let schemaVersion: Int
     let cases: [ArchivistGoldenCase]
     let astCases: [ArchivistGoldenASTCase]
+    let conversationCases: [ArchivistGoldenConversationCase]
 }
 
 private func loadArchivistGoldenCorpus() throws -> ArchivistGoldenCorpus {
@@ -115,8 +143,11 @@ private func makeArchivistGoldenCatalog() -> [VideoRecord] {
 // MARK: - QueryAST-v2 fixture (Hallie log 2026-08-17 shapes)
 //
 // The catalog spells the place the way Rick's files do ("Cape-1992-archive",
-// "CapeCod_June_1997"); the family tree has two Richard Harding Breens; the
-// CyberBrain knows both as "Rick". Everything is synthetic — no family data.
+// "CapeCod_June_1997"); the family tree has two Richard Harding Breens, a
+// Donna with a three-generation maternal line and a father with no recorded
+// parents, and a Timothy born 2005; the CyberBrain knows the Richards as
+// "Rick", Donna as "Donna", Timothy as "Timmy". Everything is synthetic — no
+// family data.
 
 private let goldenFamilyTree = """
 0 HEAD
@@ -132,14 +163,58 @@ private let goldenFamilyTree = """
 1 BIRT
 2 DATE 4 JUL 1962
 1 FAMC @F1@
+1 FAMS @F2@
 0 @I3@ INDI
 1 NAME Mary /Breen/
 1 SEX F
 1 FAMS @F1@
+0 @I4@ INDI
+1 NAME Donna /Breen/
+1 SEX F
+1 FAMC @F3@
+1 FAMS @F2@
+0 @I5@ INDI
+1 NAME Timothy /Breen/
+1 SEX M
+1 BIRT
+2 DATE 22 APR 2005
+1 FAMC @F2@
+0 @I6@ INDI
+1 NAME Elaine /Bowser/
+1 SEX F
+1 FAMC @F4@
+1 FAMS @F3@
+0 @I7@ INDI
+1 NAME Ann /Smith/
+1 SEX F
+1 FAMC @F5@
+1 FAMS @F4@
+0 @I8@ INDI
+1 NAME Ruth /Cole/
+1 SEX F
+1 FAMS @F5@
+0 @I9@ INDI
+1 NAME Frank /Bowser/
+1 SEX M
+1 FAMS @F3@
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I3@
 1 CHIL @I2@
+0 @F2@ FAM
+1 HUSB @I2@
+1 WIFE @I4@
+1 CHIL @I5@
+0 @F3@ FAM
+1 HUSB @I9@
+1 WIFE @I6@
+1 CHIL @I4@
+0 @F4@ FAM
+1 WIFE @I7@
+1 CHIL @I6@
+0 @F5@ FAM
+1 WIFE @I8@
+1 CHIL @I7@
 0 TRLR
 """
 
@@ -156,6 +231,14 @@ private func makeGoldenCyberBrain() throws -> CyberBrainIndex {
                 id: "person.rick.jr", gedcomPersonID: "@I2@",
                 canonicalName: "Richard Harding Breen",
                 aliases: ["Rick", "Ricky"]),
+            CyberBrainPerson(
+                id: "person.donna", gedcomPersonID: "@I4@",
+                canonicalName: "Donna Breen",
+                aliases: ["Donna"]),
+            CyberBrainPerson(
+                id: "person.timothy", gedcomPersonID: "@I5@",
+                canonicalName: "Timothy Breen",
+                aliases: ["Timmy", "Tim"]),
         ],
         sources: []))
 }
@@ -164,7 +247,8 @@ private func makeGoldenPresenceRecords() -> [ArchivistPresenceRecordSnapshot] {
     let stamp = Date(timeIntervalSince1970: 1_700_000_000)
     func record(
         _ path: String, people: [String],
-        streamType: StreamType = .videoAndAudio
+        streamType: StreamType = .videoAndAudio,
+        transcript: String? = nil
     ) -> ArchivistPresenceRecordSnapshot {
         ArchivistPresenceRecordSnapshot(
             fullPath: path,
@@ -173,7 +257,8 @@ private func makeGoldenPresenceRecords() -> [ArchivistPresenceRecordSnapshot] {
             streamTypeRaw: streamType.rawValue,
             confirmedPeople: people.map {
                 ConfirmedTag(name: $0, confirmedAt: stamp)
-            })
+            },
+            transcript: transcript)
     }
     return [
         record("/Volumes/LaCie/Cape-1992-archive.mkv", people: ["Donna"]),
@@ -187,6 +272,12 @@ private func makeGoldenPresenceRecords() -> [ArchivistPresenceRecordSnapshot] {
         record("/Volumes/LaCie/Cape-1994-rick.mov", people: ["Rick"]),
         record("/Volumes/LaCie/audio/donna_interview_1996.wav",
                people: ["Donna"], streamType: .audioOnly),
+        // Timmy: one inside the "as a baby" band (born 2005), one well
+        // outside it, both saying the word.
+        record("/Volumes/LaCie/2006/timmy_playpen.mov", people: ["Timmy"],
+               transcript: "peekaboo! there you are"),
+        record("/Volumes/LaCie/2015/timmy_hideandseek.mov", people: ["Timmy"],
+               transcript: "peekaboo, found you"),
     ]
 }
 
@@ -218,6 +309,71 @@ private func goldenOutcomeName(_ outcome: HallieTurnExecutor.Outcome) -> String 
     }
 }
 
+/// Field-by-field grading shared by AST cases and conversation turns.
+@MainActor
+private func gradeGoldenResult(
+    _ result: HallieTurnExecutor.Result,
+    label: String,
+    expectedRoute: String?,
+    expectedOutcome: String,
+    expectedCount: Int?,
+    expectedPaths: [String]?,
+    expectedProseContains: String?,
+    expectedBasisContains: String?,
+    expectedCitationBasisContains: [String]? = nil,
+    expectedQueryContains: String? = nil,
+    expectedChipLabels: [String]?,
+    expectedOfferedActions: [String]?
+) {
+    if let expectedRoute {
+        #expect(HallieTurnExecutor.label(result.route) == expectedRoute,
+                "\(label): route \(result.route)")
+    }
+    #expect(goldenOutcomeName(result.outcome) == expectedOutcome,
+            "\(label): outcome \(result.outcome), prose '\(result.prose)', basis '\(result.basisLine)'")
+    if let prose = expectedProseContains {
+        #expect(result.prose.contains(prose),
+                "\(label): prose '\(result.prose)'")
+    }
+    if let basis = expectedBasisContains {
+        let allBasis = ([result.basisLine]
+            + result.citations.flatMap { $0.bases.map(\.summary) })
+            .joined(separator: " | ")
+        #expect(allBasis.contains(basis), "\(label): basis '\(allBasis)'")
+    }
+    if let citationBases = expectedCitationBasisContains {
+        let summaries = result.citations.flatMap { $0.bases.map(\.summary) }
+            .joined(separator: " | ")
+        for expected in citationBases {
+            #expect(summaries.contains(expected),
+                    "\(label): citation bases '\(summaries)' lack '\(expected)'")
+        }
+    }
+    if let query = expectedQueryContains {
+        #expect(result.queryDescription?.contains(query) == true,
+                "\(label): query '\(result.queryDescription ?? "nil")'")
+    }
+    if let paths = expectedPaths {
+        // Citations are capped at 25; every golden set is smaller.
+        #expect(Set(result.citations.map(\.fullPath)) == Set(paths),
+                "\(label): got \(result.citations.map(\.fullPath).sorted())")
+    }
+    if let count = expectedCount {
+        #expect(result.prose.contains("\(count) catalog item"),
+                "\(label): count not in prose '\(result.prose)'")
+        #expect(result.matchCount == count,
+                "\(label): matchCount \(String(describing: result.matchCount))")
+    }
+    if let labels = expectedChipLabels {
+        #expect(result.clarification?.candidates.map(\.label) == labels,
+                "\(label): chips \(result.clarification?.candidates.map(\.label) ?? [])")
+    }
+    if let offers = expectedOfferedActions {
+        #expect(result.offeredActions.map(HallieTurnExecutor.offerLabel) == offers,
+                "\(label): offers \(result.offeredActions.map(HallieTurnExecutor.offerLabel))")
+    }
+}
+
 /// Grades one executed turn against a v2 golden case. Shared by the
 /// deterministic run (modelOutput) and the live translator run.
 @MainActor
@@ -231,31 +387,17 @@ private func gradeGoldenAST(
         HallieTurnExecutor.Request(intent: .init(
             originalQuestion: testCase.input, ast: ast)),
         context: context)
-    #expect(goldenOutcomeName(result.outcome) == testCase.expectedOutcome,
-            "\(label): outcome \(result.outcome), prose '\(result.prose)', basis '\(result.basisLine)'")
-    if let prose = testCase.expectedProseContains {
-        #expect(result.prose.contains(prose),
-                "\(label): prose '\(result.prose)'")
-    }
-    if let basis = testCase.expectedBasisContains {
-        let allBasis = ([result.basisLine]
-            + result.citations.flatMap { $0.bases.map(\.summary) })
-            .joined(separator: " | ")
-        #expect(allBasis.contains(basis), "\(label): basis '\(allBasis)'")
-    }
-    if let paths = testCase.expectedPaths {
-        // Citations are capped at 25; every golden set is smaller.
-        #expect(Set(result.citations.map(\.fullPath)) == Set(paths),
-                "\(label): got \(result.citations.map(\.fullPath).sorted())")
-    }
-    if let count = testCase.expectedCount {
-        #expect(result.prose.contains("\(count) catalog item"),
-                "\(label): count not in prose '\(result.prose)'")
-    }
-    if let labels = testCase.expectedChipLabels {
-        #expect(result.clarification?.candidates.map(\.label) == labels,
-                "\(label): chips \(result.clarification?.candidates.map(\.label) ?? [])")
-    }
+    gradeGoldenResult(
+        result, label: label,
+        expectedRoute: testCase.expectedRoute,
+        expectedOutcome: testCase.expectedOutcome,
+        expectedCount: testCase.expectedCount,
+        expectedPaths: testCase.expectedPaths,
+        expectedProseContains: testCase.expectedProseContains,
+        expectedBasisContains: testCase.expectedBasisContains,
+        expectedCitationBasisContains: testCase.expectedCitationBasisContains,
+        expectedChipLabels: testCase.expectedChipLabels,
+        expectedOfferedActions: testCase.expectedOfferedActions)
     if let continuation = testCase.continuation {
         let pending = try #require(result.clarification, "\(label): no clarification to continue")
         let selected = try #require(goldenCandidateID(continuation.select),
@@ -270,6 +412,64 @@ private func gradeGoldenAST(
         if let basis = continuation.expectedBasisContains {
             #expect(continued.basisLine.contains(basis),
                     "\(label): continued basis '\(continued.basisLine)'")
+        }
+    }
+}
+
+/// Runs a v3 conversation: each turn goes through the same model-free step
+/// the app and shell use, then (if translated) through the reviewed model
+/// output, and every result feeds conversation memory for the next turn.
+@MainActor
+private func runGoldenConversation(
+    _ testCase: ArchivistGoldenConversationCase,
+    context: HallieTurnExecutor.Context
+) async throws {
+    var memory = HallieTurnExecutor.ConversationMemory()
+    for (index, turn) in testCase.turns.enumerated() {
+        let label = "\(testCase.id) turn \(index + 1) '\(turn.input)'"
+        let pre = HallieTurnExecutor.preTranslation(
+            question: turn.input, playAfterAnswer: false, memory: memory,
+            isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: context) })
+
+        let result: HallieTurnExecutor.Result
+        var executedIntent: HallieTurnExecutor.Intent?
+        switch pre {
+        case .translate(let question, _):
+            #expect(turn.local != true, "\(label): expected a local resolution, got translate")
+            let modelOutput = try #require(turn.modelOutput, "\(label): translated turn needs modelOutput")
+            #expect(question == turn.input, "\(label): translated text changed to '\(question)'")
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(Data(modelOutput.utf8))
+            let intent = HallieTurnExecutor.Intent(originalQuestion: turn.input, ast: decoded.ast)
+            result = try await HallieTurnExecutor.execute(
+                HallieTurnExecutor.Request(intent: intent), context: context)
+            executedIntent = intent
+        case .run(let intent):
+            #expect(turn.local == true, "\(label): resolved locally but not marked local")
+            result = try await HallieTurnExecutor.execute(
+                HallieTurnExecutor.Request(intent: intent), context: context)
+            executedIntent = intent
+        case .answer(let local):
+            #expect(turn.local == true, "\(label): answered locally but not marked local")
+            result = local
+        }
+        memory.record(intent: executedIntent, result: result)
+
+        gradeGoldenResult(
+            result, label: label,
+            expectedRoute: turn.expectedRoute,
+            expectedOutcome: turn.expectedOutcome,
+            expectedCount: turn.expectedCount,
+            expectedPaths: turn.expectedPaths,
+            expectedProseContains: turn.expectedProseContains,
+            expectedBasisContains: turn.expectedBasisContains,
+            expectedQueryContains: turn.expectedQueryContains,
+            expectedChipLabels: turn.expectedChipLabels,
+            expectedOfferedActions: turn.expectedOfferedActions)
+        if let media = turn.expectedMediaAction {
+            #expect(result.mediaAction?.kind.rawValue == media,
+                    "\(label): media action \(String(describing: result.mediaAction?.kind))")
+        } else {
+            #expect(result.mediaAction == nil, "\(label): unexpected media action")
         }
     }
 }
@@ -293,7 +493,7 @@ struct ArchivistGoldenAnswerTests {
 
     @Test func corpusIsReviewableAndInternallyConsistent() throws {
         let corpus = try loadArchivistGoldenCorpus()
-        #expect(corpus.schemaVersion == 2)
+        #expect(corpus.schemaVersion == 3)
         #expect(corpus.cases.count == 5)
         #expect(Set(corpus.cases.map(\.id)).count == corpus.cases.count)
         for testCase in corpus.cases {
@@ -304,7 +504,7 @@ struct ArchivistGoldenAnswerTests {
             #expect(!testCase.evidence.isEmpty,
                     "\(testCase.id): every answer needs stated evidence")
         }
-        #expect(corpus.astCases.count == 3)
+        #expect(corpus.astCases.count == 12)
         #expect(Set(corpus.astCases.map(\.id)).count == corpus.astCases.count)
         for testCase in corpus.astCases {
             #expect(!testCase.input.isEmpty, "\(testCase.id): missing user question")
@@ -317,6 +517,18 @@ struct ArchivistGoldenAnswerTests {
             // Raw model text must be JSON the tolerant decoder accepts.
             _ = try ArchivistQueryAST.decodeTranslatorOutput(
                 Data(testCase.modelOutput.utf8))
+        }
+        #expect(corpus.conversationCases.count == 6)
+        #expect(Set(corpus.conversationCases.map(\.id)).count
+                == corpus.conversationCases.count)
+        for testCase in corpus.conversationCases {
+            #expect(!testCase.turns.isEmpty, "\(testCase.id): needs turns")
+            #expect(!testCase.evidence.isEmpty,
+                    "\(testCase.id): every conversation needs stated evidence")
+            for turn in testCase.turns {
+                #expect((turn.modelOutput != nil) != (turn.local == true),
+                        "\(testCase.id): a turn is translated XOR local")
+            }
         }
     }
 
@@ -334,6 +546,18 @@ struct ArchivistGoldenAnswerTests {
             }
             try await gradeGoldenAST(
                 testCase, ast: decoded.ast, context: context, label: testCase.id)
+        }
+    }
+
+    /// v3 oracle: Rick's demo conversations (2026-08-17) turn by turn — the
+    /// follow-ups, refinements, family-tree shapes, and capability question
+    /// that used to reach the translator now resolve locally, and every
+    /// answer is graded on the same final-answer contract.
+    @Test func reviewedConversationsResolveFollowUpsWithoutTranslation() async throws {
+        let corpus = try loadArchivistGoldenCorpus()
+        for testCase in corpus.conversationCases {
+            try await runGoldenConversation(
+                testCase, context: try makeGoldenASTContext())
         }
     }
 

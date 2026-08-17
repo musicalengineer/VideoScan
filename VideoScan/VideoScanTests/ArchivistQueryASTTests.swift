@@ -66,7 +66,7 @@ struct ArchivistQueryASTTests {
         assertRejected(#"{"shape":"temporal","payload":{"subject":"Timmy","operation":"age","reference":{"kind":"clipDate"}}}"#)
         assertRejected(#"{"shape":"aggregate","payload":{"operation":"count","anchorPeople":["Donna"],"limit":10}}"#)
         assertRejected(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"marriage"}}"#)
-        assertRejected(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"kinship","relation":"cousin"}}"#)
+        assertRejected(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"kinship","relation":"godparent"}}"#)
         assertRejected(#"{"shape":"presence","payload":{"mediaKind":"hologram"}}"#)
     }
 

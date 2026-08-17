@@ -17,7 +17,22 @@ struct ArchivistQueryASTLiveEvalTests {
     private struct Case: Sendable {
         let id: String
         let question: String
-        let expected: ArchivistQueryAST
+        /// Any of these is a correct translation. Most cases have exactly
+        /// one; a few accept a benign spelling difference the tolerant
+        /// decoder already normalizes ("breens" vs "breen").
+        let accepted: [ArchivistQueryAST]
+
+        init(id: String, question: String, expected: ArchivistQueryAST) {
+            self.id = id
+            self.question = question
+            self.accepted = [expected]
+        }
+
+        init(id: String, question: String, accepted: [ArchivistQueryAST]) {
+            self.id = id
+            self.question = question
+            self.accepted = accepted
+        }
     }
 
     private static let cases: [Case] = [
@@ -83,7 +98,63 @@ struct ArchivistQueryASTLiveEvalTests {
             id: "cross-person-action-object",
             question: "Find Dan opening the red bike.",
             expected: .cross(.init(
-                people: ["dan"], keywords: ["opening", "red bike"])))
+                people: ["dan"], keywords: ["opening", "red bike"]))),
+
+        // Rick's demo to Donna, 2026-08-17 (verbatim phrasing).
+        Case(
+            id: "demo-count-donna-videos",
+            question: "count how many videos of donna we have?",
+            accepted: [
+                .presence(.init(people: ["donna"], mediaKind: .video)),
+                .presence(.init(people: ["donna"])),
+            ]),
+        Case(
+            id: "demo-family-tree-person",
+            question: "show donna's family tree",
+            expected: .graph(.init(people: ["donna"], operation: .familyTree))),
+        Case(
+            id: "demo-family-tree-no-apostrophe",
+            question: "show ricks family tree",
+            accepted: [
+                .graph(.init(people: ["ricks"], operation: .familyTree)),
+                .graph(.init(people: ["rick"], operation: .familyTree)),
+            ]),
+        Case(
+            id: "demo-family-tree-surname",
+            question: "get me the family tree for the breens",
+            accepted: [
+                .graph(.init(people: [], operation: .familyTree, surname: "breen")),
+                .graph(.init(people: [], operation: .familyTree, surname: "breens")),
+                .graph(.init(people: [], operation: .familyTree, surname: "Breen")),
+            ]),
+        Case(
+            id: "demo-family-tree-whole",
+            question: "show family tree",
+            expected: .graph(.init(people: [], operation: .familyTree))),
+        Case(
+            id: "demo-maternal-great-grandmother",
+            question: "who was donna's great grandmother on her maternal side?",
+            expected: .graph(.init(
+                people: ["donna"], operation: .kinship,
+                relation: .greatGrandmother, side: .maternal))),
+        Case(
+            id: "demo-cousins",
+            question: "who are rick's cousins?",
+            accepted: [
+                .graph(.init(people: ["rick"], operation: .kinship, relation: .cousins)),
+                .graph(.init(people: ["rick"], operation: .kinship, relation: .cousin)),
+            ]),
+        Case(
+            id: "demo-timmy-as-a-baby-saying-peekaboo",
+            question: "show timmy as a baby saying peekaboo",
+            accepted: [
+                .cross(.init(people: ["timmy"], keywords: ["as a baby"],
+                             transcript: ["peekaboo"])),
+                .cross(.init(people: ["timmy"], keywords: ["baby"],
+                             transcript: ["peekaboo"])),
+                .cross(.init(people: ["timmy"], mediaKind: .video,
+                             keywords: ["as a baby"], transcript: ["peekaboo"])),
+            ]),
     ]
 
     @Test(.timeLimit(.minutes(10)))
@@ -100,18 +171,23 @@ struct ArchivistQueryASTLiveEvalTests {
         brain.timeoutSeconds = 90
 
         var failures: [String] = []
+        var passes = 0
         for testCase in Self.cases {
             do {
                 let actual = try await brain.translateAST(testCase.question)
-                if actual != testCase.expected {
+                if testCase.accepted.contains(actual) {
+                    passes += 1
+                    print("NL AST eval PASS \(testCase.id): \(HallieTurnExecutor.description(of: actual))")
+                } else {
                     failures.append(
                         "\(testCase.id): got \(String(describing: actual)); "
-                            + "expected \(String(describing: testCase.expected))")
+                            + "accepted \(testCase.accepted.map { String(describing: $0) })")
                 }
             } catch {
                 failures.append("\(testCase.id): \(error)")
             }
         }
+        print("NL AST eval: \(passes)/\(Self.cases.count) exact — \(brain.displayName)")
 
         if !failures.isEmpty {
             Issue.record(Comment(rawValue:

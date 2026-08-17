@@ -37,21 +37,97 @@ struct HallieTurnExecutorTests {
                               anchorPeople: ["Donna"])), .aggregate),
             (.graph(.init(people: ["Donna"], operation: .biography)), .graph),
             (.event(.init(keywords: ["birthday"])), .unsupportedEvent),
-            (.cross(.init(people: ["Donna"], keywords: ["birthday"])),
-             .unsupportedCross),
+            (.cross(.init(people: ["Donna"], keywords: ["birthday"])), .cross),
         ]
 
         for (ast, expectedRoute) in cases {
             #expect(HallieTurnExecutor.route(ast) == expectedRoute)
         }
 
-        for ast in [cases[4].0, cases[5].0] {
-            let result = try await HallieTurnExecutor.execute(ast, context: .init())
-            #expect(result.outcome == .unsupported)
-            #expect(result.citations.isEmpty)
-            #expect(result.prose.contains("not supported"))
-            #expect(result.prose.contains("did not"))
+        let event = try await HallieTurnExecutor.execute(cases[4].0, context: .init())
+        #expect(event.outcome == .unsupported)
+        #expect(event.citations.isEmpty)
+        #expect(event.prose.contains("not supported"))
+        #expect(event.prose.contains("did not"))
+
+        // Cross is now executed deterministically (person AND keyword). With
+        // no records it declines honestly on evidence, never "unsupported".
+        let cross = try await HallieTurnExecutor.execute(cases[5].0, context: .init())
+        #expect(cross.route == .cross)
+        #expect(cross.outcome == .declined)
+        #expect(cross.citations.isEmpty)
+        #expect(cross.prose == ArchivistPresenceAnswerComposer.noEvidenceProse)
+    }
+
+    @Test func crossAndsPersonWithSpokenWordAndCitesBothBases() async throws {
+        let records = [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/isolated/2006/timmy_playpen.mov",
+                confirmedPeople: [tag("Timmy")],
+                transcript: "peekaboo! there you are",
+                transcriptModel: "fixture-whisper"),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/isolated/2006/timmy_bath.mov",
+                confirmedPeople: [tag("Timmy")],
+                transcript: "splash splash"),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/isolated/2006/donna_kitchen.mov",
+                confirmedPeople: [tag("Donna")],
+                transcript: "peekaboo"),
+        ]
+        let result = try await HallieTurnExecutor.execute(
+            .cross(.init(people: ["Timmy"], transcript: ["peekaboo"])),
+            context: .init(presenceRecords: records))
+        #expect(result.route == .cross)
+        #expect(result.outcome == .answered)
+        #expect(result.citations.map(\.fullPath) == ["/isolated/2006/timmy_playpen.mov"])
+        #expect(result.matchCount == 1)
+        let bases = try #require(result.citations.first?.bases)
+        #expect(bases.count == 2)
+        guard case .humanPersonTag(let query, _, _) = bases[0],
+              case .transcriptMention(let term, let model) = bases[1] else {
+            Issue.record("expected person tag + transcript bases, got \(bases)")
+            return
         }
+        #expect(query == "Timmy")
+        #expect(term == "peekaboo")
+        #expect(model == "fixture-whisper")
+    }
+
+    /// "show ricks family tree": nobody is called "ricks", but "rick" is a
+    /// People profile alias, so the possessive is read that way — visibly, in
+    /// the basis line — and the family-tree summary comes back for Rick.
+    @Test func missingApostrophePossessiveIsReadAsTheSingularAndSaidSo() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard /Breen/
+        1 SEX M
+        1 FAMS @F1@
+        0 @I2@ INDI
+        1 NAME Timothy /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 CHIL @I2@
+        0 TRLR
+        """)
+        let context = HallieTurnExecutor.Context(
+            profiles: [.init(stableID: "rick", canonicalName: "Richard Breen", aliases: ["Rick"])],
+            graph: graph)
+        let result = try await HallieTurnExecutor.execute(
+            .graph(.init(people: ["ricks"], operation: .familyTree)), context: context)
+        #expect(result.outcome == .answered)
+        #expect(result.prose.hasPrefix("Richard Breen's family tree — 1 child: Timothy Breen"))
+        #expect(result.basisLine.hasPrefix("Basis: reading “ricks” as “rick’s”; "))
+        #expect(result.offeredActions == [.openFamilyTree(personName: "Richard Breen")])
+
+        // A genuinely unknown plural is NOT rewritten into someone else.
+        let unknown = try await HallieTurnExecutor.execute(
+            .graph(.init(people: ["chris"], operation: .familyTree)), context: context)
+        #expect(unknown.outcome == .declined)
+        #expect(!unknown.basisLine.contains("reading"))
     }
 
     @Test func presenceReturnsTypedContainerNeutralCitations() async throws {

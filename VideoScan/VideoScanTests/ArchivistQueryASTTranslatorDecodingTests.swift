@@ -118,6 +118,8 @@ struct ArchivistQueryASTTranslatorDecodingTests {
             subject: "timmy", operation: .age, reference: .explicitYear(1998)))
         for shorthand in [
             #"{"explicitYear":1998}"#, #""1998""#, "1998",
+            // Right kind, wrong key for the number (qwen3.6 live, 2026-08-17).
+            #"{"kind":"explicitYear","value":1998}"#,
         ] {
             let decoded = try decode(
                 #"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":\#(shorthand)}}"#)
