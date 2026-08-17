@@ -437,3 +437,170 @@ private extension KeyedDecodingContainer {
         return try decodeBoundedList(key)
     }
 }
+
+// MARK: - Translator-output decoding (tolerant of benign model extras)
+
+/// The strict Codable above is the wire CONTRACT and stays strict: unknown
+/// keys, misplaced constraint fields, bad enum values, and empty required
+/// lists are rejected. This entry point sits in front of it for text that
+/// came from the translator model, which — schema or not — occasionally
+/// decorates a correct answer with harmless extras (`"limit":1` on a
+/// presence payload for "how many…", `"confidence"`, `"explanation"`, a
+/// `null` for an optional field). Failing the whole turn on those threw
+/// away good translations (Hallie log 2026-08-17, "how many videos of Donna
+/// do we have?").
+///
+/// Rules, deliberately narrow:
+///   * A key that is not any known constraint field is dropped and noted.
+///     A dropped key cannot widen or narrow the evidence set because no
+///     executor reads it, so the anti-hallucination contract is intact.
+///   * EXCEPT keys that mean the model tried to answer instead of translate
+///     ("answer", "sql", "response", …): those still fail the turn. A model
+///     that is phrasing facts is not translating, and its other fields are
+///     not to be trusted either.
+///   * A KNOWN constraint field in the wrong place ("transcript" on a
+///     presence payload, "yearStart" beside "shape") is NOT dropped — it
+///     reaches the strict decoder and is rejected, because silently dropping
+///     it would change the question's meaning.
+///   * `limit` is presentation, not evidence: kept for aggregate (where the
+///     contract defines it), dropped elsewhere.
+///   * `null` for an optional field means absent; the key is dropped.
+///   * List quirks are normalized: entries are trimmed, empty entries and
+///     stopword-only people/keywords ("videos", "the") are dropped. A
+///     required list that ends up empty is still rejected downstream.
+extension ArchivistQueryAST {
+    struct TranslatorDecoding: Sendable {
+        let ast: ArchivistQueryAST
+        /// Human-readable notes about what was ignored or normalized; empty
+        /// when the model output was already strict. Callers log these.
+        let notes: [String]
+    }
+
+    /// Every field name the contract knows, at any level. Anything else on a
+    /// known object is a benign extra.
+    static let knownFieldNames: Set<String> = [
+        "shape", "payload", "people", "yearStart", "yearEnd", "mediaKind",
+        "keywords", "transcript", "subject", "operation", "reference", "kind",
+        "year", "anchorPeople", "relation", "limit",
+    ]
+
+    /// Keys whose presence means the model stopped translating and started
+    /// answering. Never tolerated, at any level.
+    static let hostileFieldNames: Set<String> = [
+        "answer", "answers", "response", "reply", "prose", "text", "message",
+        "sql", "sqlquery", "query", "result", "results", "fact", "facts",
+    ]
+
+    private static let listFieldNames: Set<String> = [
+        "people", "keywords", "transcript", "anchorPeople",
+    ]
+    private static let requiredListFieldNames: Set<String> = [
+        "anchorPeople",
+    ]
+
+    static func decodeTranslatorOutput(_ data: Data) throws -> TranslatorDecoding {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              var top = object as? [String: Any] else {
+            // Not a JSON object at all: let the strict decoder produce the
+            // canonical error.
+            return TranslatorDecoding(
+                ast: try JSONDecoder().decode(ArchivistQueryAST.self, from: data),
+                notes: [])
+        }
+
+        var notes: [String] = []
+        let shape = top["shape"] as? String
+        top = try sanitize(top, path: "", shape: shape, notes: &notes)
+        if var payload = top["payload"] as? [String: Any] {
+            payload = try sanitize(payload, path: "payload.", shape: shape,
+                                   notes: &notes)
+            if var reference = payload["reference"] as? [String: Any] {
+                reference = try sanitize(reference, path: "payload.reference.",
+                                         shape: shape, notes: &notes)
+                payload["reference"] = reference
+            }
+            top["payload"] = payload
+        }
+
+        let cleaned = try JSONSerialization.data(withJSONObject: top)
+        let ast = try JSONDecoder().decode(ArchivistQueryAST.self, from: cleaned)
+        return TranslatorDecoding(ast: ast, notes: notes)
+    }
+
+    private static func sanitize(
+        _ object: [String: Any],
+        path: String,
+        shape: String?,
+        notes: inout [String]
+    ) throws -> [String: Any] {
+        var result: [String: Any] = [:]
+        for key in object.keys.sorted() {
+            guard let value = object[key] else { continue }
+            let isPayloadLevel = path == "payload."
+            if hostileFieldNames.contains(key.lowercased()) {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "translator attempted to answer: field "
+                        + "\(path)\(key) is not a translation"))
+            }
+            if !knownFieldNames.contains(key)
+                || (key == "limit" && !(isPayloadLevel && shape == "aggregate")) {
+                notes.append("ignored extra field \(path)\(key)")
+                continue
+            }
+            if value is NSNull {
+                notes.append("dropped null \(path)\(key)")
+                continue
+            }
+            if isPayloadLevel, listFieldNames.contains(key),
+               let list = value as? [Any] {
+                let strings = list.compactMap { $0 as? String }
+                guard strings.count == list.count else {
+                    result[key] = value        // non-string entries: strict rejects
+                    continue
+                }
+                let kept = normalizeList(strings, field: key, path: path,
+                                         notes: &notes)
+                if kept.isEmpty, !requiredListFieldNames.contains(key),
+                   !(key == "people" && shape == "graph") {
+                    if !strings.isEmpty {
+                        notes.append("dropped now-empty list \(path)\(key)")
+                    }
+                    continue
+                }
+                result[key] = kept
+                continue
+            }
+            result[key] = value
+        }
+        return result
+    }
+
+    private static func normalizeList(
+        _ values: [String],
+        field: String,
+        path: String,
+        notes: inout [String]
+    ) -> [String] {
+        var kept: [String] = []
+        for raw in values {
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty {
+                notes.append("dropped empty entry in \(path)\(field)")
+                continue
+            }
+            if field == "keywords" || field == "people" || field == "anchorPeople",
+               ArchivistKeywordText.significantTokens(value).isEmpty,
+               !ArchivistKeywordText.tokens(value).isEmpty {
+                notes.append("dropped stopword-only \(field) entry '\(value)'")
+                continue
+            }
+            if kept.contains(value) {
+                notes.append("dropped duplicate \(field) entry '\(value)'")
+                continue
+            }
+            kept.append(value)
+        }
+        return kept
+    }
+}

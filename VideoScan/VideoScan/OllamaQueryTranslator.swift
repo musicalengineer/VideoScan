@@ -1,4 +1,8 @@
 import Foundation
+import os
+
+private let translatorLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                   category: "HallieTranslator")
 
 // MARK: - Translator brains (NL sentence → NLQuerySpec)
 //
@@ -200,7 +204,16 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             text, schema: Self.astResponseSchema,
             systemPrompt: Self.astSystemPrompt)
         do {
-            return try JSONDecoder().decode(ArchivistQueryAST.self, from: astData)
+            // Tolerant of benign extras (`limit` on a presence payload,
+            // `confidence`, nulls) — see ArchivistQueryAST.decodeTranslatorOutput.
+            // Genuinely malformed shapes still fail here.
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(astData)
+            if !decoded.notes.isEmpty {
+                let notes = decoded.notes.joined(separator: "; ")
+                translatorLog.notice(
+                    "translator output normalized: \(notes, privacy: .public)")
+            }
+            return decoded.ast
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict ArchivistQueryAST "
