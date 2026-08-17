@@ -287,21 +287,9 @@ extension VideoScanModel {
         // Status stays .idle (the catalog has NOT been updated yet);
         // lastScannedDate is stamped on Apply.
         if isUpdateCatalogDeferred(root: target.searchPath) {
-            await parkScanResultsForUpdateCatalog(
-                target: target, volName: volName,
-                targetRecords: scopedRecords, scanWasComplete: scanWasComplete)
-            if scanWasComplete { ScanCheckpointStorage.delete(for: target.searchPath) }
-            logTargetScanSummary(volName: volName, records: scopedRecords)
-            finishDiscoveryAudit(audit, volName: volName, cataloged: scopedRecords.count)
-            appLog.write("Completed catalog scan of volume \(volName) for Update Catalog preview: \(completedCount) file(s) scanned, \(scopedRecords.count) catalogued — merge parked until Apply")
-            target.status = .idle
-            target.stopElapsedTimer()
-            notifyTargetsChanged()
-            updateGlobalScanState()
-            if !hasActiveTargets {
-                dashboard.stopThroughputTimer()
-                dashboard.scanPhase = .complete
-            }
+            await finalizeDeferredScanForUpdateCatalog(
+                target: target, volName: volName, targetRecords: scopedRecords,
+                scanWasComplete: scanWasComplete, completedCount: completedCount, audit: audit)
             return
         }
         await commitScanResults(
@@ -345,6 +333,36 @@ extension VideoScanModel {
             // only at next app launch.
             detectResumableTargets()
         }
+        if !hasActiveTargets {
+            dashboard.stopThroughputTimer()
+            dashboard.scanPhase = .complete
+        }
+    }
+
+    /// Update Catalog's deferred tail of `finalizeSingleTargetScan`: park +
+    /// dry-run instead of commit, consume the checkpoint when the walk was
+    /// complete, log/audit as usual, and put the target back to `.idle`
+    /// (the catalog is NOT updated yet — Apply stamps .complete +
+    /// lastScannedDate).
+    fileprivate func finalizeDeferredScanForUpdateCatalog(
+        target: CatalogScanTarget,
+        volName: String,
+        targetRecords: [VideoRecord],
+        scanWasComplete: Bool,
+        completedCount: Int,
+        audit: DiscoveryAuditCollector?
+    ) async {
+        await parkScanResultsForUpdateCatalog(
+            target: target, volName: volName,
+            targetRecords: targetRecords, scanWasComplete: scanWasComplete)
+        if scanWasComplete { ScanCheckpointStorage.delete(for: target.searchPath) }
+        logTargetScanSummary(volName: volName, records: targetRecords)
+        finishDiscoveryAudit(audit, volName: volName, cataloged: targetRecords.count)
+        appLog.write("Completed catalog scan of volume \(volName) for Update Catalog preview: \(completedCount) file(s) scanned, \(targetRecords.count) catalogued — merge parked until Apply")
+        target.status = .idle
+        target.stopElapsedTimer()
+        notifyTargetsChanged()
+        updateGlobalScanState()
         if !hasActiveTargets {
             dashboard.stopThroughputTimer()
             dashboard.scanPhase = .complete
