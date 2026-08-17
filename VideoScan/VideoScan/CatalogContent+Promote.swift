@@ -25,6 +25,10 @@ extension CatalogContent {
             ? "Promote \(activeRecs.count) to Archive"
             : "Promote to Archive"
         Button(label) {
+            // "Looks moved" (Update Catalog): a source that vanished while
+            // its volume is mounted gets the relink offer; the promote job
+            // reports the missing file on its own.
+            for r in activeRecs { model.noteMissingFileForUserAction(r) }
             model.requestPromote(recordIDs: activeRecs.map(\.id))
         }
         .disabled(!pureActive || !promotable || model.isReadOnly)

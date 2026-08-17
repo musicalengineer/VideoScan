@@ -581,6 +581,10 @@ struct CatalogContent: View {
                     // pattern). Reads the memoized candidate list — no
                     // O(records) work per body eval.
                     musicTriageBanner
+                    // "Looks moved" (Update Catalog, 2026-08-17): a file a
+                    // user action needed is missing while its volume is
+                    // mounted. Non-blocking, once per volume per session.
+                    looksMovedBanner
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
                     // of leaving the user staring at a blank table area.
@@ -1092,6 +1096,49 @@ struct CatalogContent: View {
                     onDismiss: { musicTriageDismissedCount = ids.count }
                 )
             }
+        }
+    }
+
+    /// Non-blocking "looks moved" notice — the nag-button pattern (the
+    /// button IS the fix): [Update Catalog…] opens the ONE door with the
+    /// file's target pre-checked; [Not now] dismisses. Reads one published
+    /// value — no O(records) work here.
+    @ViewBuilder
+    private var looksMovedBanner: some View {
+        if let notice = model.looksMovedNotice {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.folder")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.orange)
+                Text("\u{201C}\(notice.filename)\u{201D} isn't where the catalog expects. It looks like files or folders on \(notice.volumeName) were moved or renamed outside the app \u{2014} Update Catalog can find and relink them.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                Button("Update Catalog\u{2026}") {
+                    model.openUpdateCatalogFromLooksMoved()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(model.isReadOnly)
+                Button("Not now") {
+                    model.dismissLooksMovedNotice()
+                }
+                .controlSize(.small)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .accessibilityIdentifier("catalog.looksMovedBanner")
         }
     }
 

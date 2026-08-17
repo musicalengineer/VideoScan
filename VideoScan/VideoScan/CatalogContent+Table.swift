@@ -187,6 +187,11 @@ extension CatalogContent {
             // Double-click / Return on row(s) → smart open (QuickTime when
             // the cataloged codecs guarantee picture+sound, else VLC).
             let recs = ids.compactMap { id in records.first { $0.id == id } }
+            // "Looks moved" (Update Catalog, 2026-08-17): a file missing
+            // while its volume is mounted → non-blocking banner offering
+            // Update Catalog (once per volume per session). Never blocks
+            // the open of the files that ARE there.
+            for r in recs { model.noteMissingFileForUserAction(r) }
             MediaOpener.open(recs)
         }
     }
@@ -435,7 +440,11 @@ extension CatalogContent {
                            ? "Reveal in Finder"
                            : "Reveal in Finder (offline)") {
                         if VolumeReachability.isReachable(path: rec.fullPath) {
-                            NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                            // Missing while mounted → "looks moved" banner
+                            // (Update Catalog); Finder can't select it anyway.
+                            if !model.noteMissingFileForUserAction(rec) {
+                                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                            }
                         } else {
                             let alert = NSAlert()
                             alert.messageText = "File Offline"
@@ -446,6 +455,7 @@ extension CatalogContent {
                         }
                     }
                     Button("Open in QuickTime Player") {
+                        model.noteMissingFileForUserAction(rec)
                         if let qtURL = NSWorkspace.shared.urlForApplication(
                             withBundleIdentifier: "com.apple.QuickTimePlayerX"
                         ) {
@@ -461,6 +471,7 @@ extension CatalogContent {
                     // double-click auto-decision. Falls back to the
                     // system default handler when VLC isn't installed.
                     Button("Open in VLC") {
+                        model.noteMissingFileForUserAction(rec)
                         MediaOpener.openInVLC([rec])
                     }
 
@@ -1121,6 +1132,7 @@ extension CatalogContent {
                ? "Verify Audio (\(activeRecs.count) Files)"
                : "Verify Audio") {
             for r in verifiableRecs {
+                model.noteMissingFileForUserAction(r)
                 fileOpsCenter.startVerifyAudio(record: r, model: model)
             }
             openWindow(id: "combine")
