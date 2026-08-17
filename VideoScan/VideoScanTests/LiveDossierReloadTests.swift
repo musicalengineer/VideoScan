@@ -72,6 +72,53 @@ struct LiveDossierReloadTests {
         #expect(mem.dossierProcessedBy == "qwen+whisper")
     }
 
+    /// Rick 2026-08-17: 203 duplicate record ids appeared during a Migrate.
+    /// Memory had relinked a record to its new path; the on-disk snapshot
+    /// still carried the old path; the path-only match re-appended the same
+    /// id. Identity is the ID — a relinked record must merge, never duplicate.
+    @Test("relinked record (same id, new path) merges by id — never re-appended under the old path")
+    func relinkedRecordIsMatchedByID() {
+        let model = VideoScanModel()
+        let mem = makeRecord(path: "/Volumes/SanDisk/new/clip.mov")
+        model.records = [mem]
+        let snap = makeRecord(path: "/Volumes/LaCie/old/clip.mov",
+                              transcript: "hello",
+                              dossierAt: Date(timeIntervalSince1970: 1_800_000_000),
+                              dossierBy: "whisper")
+        // Same identity as the in-memory record (the disk file predates the relink).
+        let snapSameID = VideoRecord(id: mem.id)
+        snapSameID.fullPath = snap.fullPath; snapSameID.filename = snap.filename
+        snapSameID.audioTranscript = snap.audioTranscript
+        snapSameID.dossierProcessedAt = snap.dossierProcessedAt
+        snapSameID.dossierProcessedBy = snap.dossierProcessedBy
+
+        let n = model.mergeDossierFields(from: [snapSameID])
+        #expect(model.records.count == 1, "no duplicate id may be appended")
+        #expect(model.records.first === mem)
+        #expect(mem.fullPath == "/Volumes/SanDisk/new/clip.mov", "the relinked path wins; disk's stale path is not adopted")
+        #expect(mem.audioTranscript == "hello", "dossier fields still merge onto the id-matched record")
+        #expect(n == 1)
+    }
+
+    /// Load-time repair: existing catalogs already carrying twins are
+    /// deduped, keeping the relinked (current-home) record.
+    @Test("repairDuplicateRecordIDs keeps the relinked twin and drops the stale one")
+    func repairKeepsCurrentHome() {
+        let model = VideoScanModel()
+        let stale = makeRecord(path: "/Volumes/LaCie/old/clip.mov")
+        let current = VideoRecord(id: stale.id)
+        current.fullPath = "/Volumes/SanDisk/new/clip.mov"; current.filename = "clip.mov"
+        current.originalFullPath = stale.fullPath
+        let unrelated = makeRecord(path: "/Volumes/LaCie/other.mov")
+        model.records = [stale, unrelated, current]
+        let report = model.repairDuplicateRecordIDs()
+        #expect(report.duplicateIDs == 1 && report.dropped == 1)
+        #expect(model.records.count == 2)
+        #expect(model.records.contains { $0 === current })
+        #expect(!model.records.contains { $0 === stale })
+        #expect(model.repairDuplicateRecordIDs() == VideoScanModel.RecordIdentityRepairReport(), "idempotent")
+    }
+
     @Test("user-editable fields are never overwritten")
     func userFieldsPreserved() {
         let model = VideoScanModel()

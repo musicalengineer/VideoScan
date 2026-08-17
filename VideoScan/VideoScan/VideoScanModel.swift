@@ -875,6 +875,9 @@ final class VideoScanModel: ObservableObject {
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
+            // One UUID = one record. Repairs the 8/17 duplicate-id incident
+            // and any future re-append; see +RecordIdentityRepair.
+            repairDuplicateRecordIDs()
             // Migrate: backfill lifecycleStage for records that predate the field.
             var migrated = 0
             for rec in records where rec.lifecycleStage == .cataloged {

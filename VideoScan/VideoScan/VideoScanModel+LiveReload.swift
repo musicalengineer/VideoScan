@@ -141,16 +141,25 @@ extension VideoScanModel {
         // Index in-memory records by fullPath so we can decide
         // "merge onto existing" vs "this one is brand new, append it"
         // in one O(snapshot) pass.
-        var existing: [String: VideoRecord] = [:]
-        existing.reserveCapacity(records.count)
-        for r in records { existing[r.fullPath] = r }
+        // Match by ID FIRST, path second. Rick 2026-08-17: 203 duplicate
+        // record IDs appeared during a Migrate — memory had already
+        // relinked records to their SanDisk paths while catalog.json still
+        // carried the LaCie paths; a path-only match saw them as "brand
+        // new" and re-appended the same IDs. Any in-place path rewrite
+        // (Migrate, rename migration, Update Catalog relink) has this
+        // window between the rewrite and the next save.
+        var byID: [UUID: VideoRecord] = [:]
+        var byPath: [String: VideoRecord] = [:]
+        byID.reserveCapacity(records.count)
+        byPath.reserveCapacity(records.count)
+        for r in records { byID[r.id] = r; byPath[r.fullPath] = r }
 
         var changed = 0
         var added = 0
         var newRecords: [VideoRecord] = []
 
         for fresh in snapshot {
-            guard let mem = existing[fresh.fullPath] else {
+            guard let mem = byID[fresh.id] ?? byPath[fresh.fullPath] else {
                 // Brand-new record — disk has it, memory doesn't. Add
                 // it as-is. The snapshot record already has every
                 // field populated by the decoder; we just take the
