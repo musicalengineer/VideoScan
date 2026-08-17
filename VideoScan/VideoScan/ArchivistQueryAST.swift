@@ -468,6 +468,11 @@ private extension KeyedDecodingContainer {
 ///   * List quirks are normalized: entries are trimmed, empty entries and
 ///     stopword-only people/keywords ("videos", "the") are dropped. A
 ///     required list that ends up empty is still rejected downstream.
+///   * A temporal `reference` written in the model's shorthand —
+///     `{"explicitYear":1998}`, `{"currentSelection":true}`,
+///     `"currentSelection"`, or a bare year — is rewritten to the contract's
+///     `{"kind":…}` object. The meaning is unambiguous; only the spelling
+///     differs (seen live from qwen3.6, 2026-08-16).
 extension ArchivistQueryAST {
     struct TranslatorDecoding: Sendable {
         let ast: ArchivistQueryAST
@@ -514,6 +519,11 @@ extension ArchivistQueryAST {
         if var payload = top["payload"] as? [String: Any] {
             payload = try sanitize(payload, path: "payload.", shape: shape,
                                    notes: &notes)
+            if shape == "temporal", let reference = payload["reference"],
+               let rewritten = canonicalReference(reference) {
+                payload["reference"] = rewritten
+                notes.append("rewrote shorthand payload.reference")
+            }
             if var reference = payload["reference"] as? [String: Any] {
                 reference = try sanitize(reference, path: "payload.reference.",
                                          shape: shape, notes: &notes)
@@ -525,6 +535,38 @@ extension ArchivistQueryAST {
         let cleaned = try JSONSerialization.data(withJSONObject: top)
         let ast = try JSONDecoder().decode(ArchivistQueryAST.self, from: cleaned)
         return TranslatorDecoding(ast: ast, notes: notes)
+    }
+
+    /// Contract form for a temporal reference the model wrote in shorthand;
+    /// nil when it is already an object with "kind" (or unrecognizable, in
+    /// which case the strict decoder reports it).
+    private static func canonicalReference(_ value: Any) -> Any? {
+        if let object = value as? [String: Any] {
+            if object["kind"] != nil { return nil }
+            let keys = Set(object.keys.map { $0.lowercased() })
+            if keys == ["explicityear"],
+               let year = object.values.first as? Int {
+                return ["kind": "explicitYear", "year": year]
+            }
+            if keys == ["currentselection"] {
+                return ["kind": "currentSelection"]
+            }
+            return nil
+        }
+        if let text = value as? String {
+            let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if key.lowercased() == "currentselection" {
+                return ["kind": "currentSelection"]
+            }
+            if let year = Int(key), yearRange.contains(year) {
+                return ["kind": "explicitYear", "year": year]
+            }
+            return nil
+        }
+        if let year = value as? Int, yearRange.contains(year) {
+            return ["kind": "explicitYear", "year": year]
+        }
+        return nil
     }
 
     private static func sanitize(

@@ -111,6 +111,32 @@ struct ArchivistQueryASTTranslatorDecodingTests {
         assertRejected(#"{"shape":"aggregate","payload":{"operation":"coOccurrence","anchorPeople":["  "]}}"#)
     }
 
+    // MARK: Temporal reference shorthand (seen live from qwen3.6)
+
+    @Test func temporalReferenceShorthandIsRewrittenToContractForm() throws {
+        let expected = ArchivistQueryAST.temporal(.init(
+            subject: "timmy", operation: .age, reference: .explicitYear(1998)))
+        for shorthand in [
+            #"{"explicitYear":1998}"#, #""1998""#, "1998",
+        ] {
+            let decoded = try decode(
+                #"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":\#(shorthand)}}"#)
+            #expect(decoded.ast == expected, "\(shorthand)")
+            #expect(decoded.notes == ["rewrote shorthand payload.reference"])
+        }
+        let selection = ArchivistQueryAST.temporal(.init(
+            subject: "timmy", operation: .age, reference: .currentSelection))
+        for shorthand in [#"{"currentSelection":true}"#, #""currentSelection""#] {
+            let decoded = try decode(
+                #"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":\#(shorthand)}}"#)
+            #expect(decoded.ast == selection, "\(shorthand)")
+        }
+        // Not shorthand: an unknown reference kind is still malformed.
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":{"clipDate":1998}}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":{"explicitYear":1899}}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":"yesterday"}}"#)
+    }
+
     // MARK: Still rejected
 
     @Test func misplacedKnownConstraintFieldsAreStillRejected() {
