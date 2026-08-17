@@ -464,8 +464,30 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             astGraphOperation("birth"),
             astGraphOperation("death"),
             astGraphOperation("kinship", includeRelation: true),
+            astGraphFamilyTree,
         ],
     ]
+
+    /// familyTree: a person ("show Donna's family tree"), a surname ("the
+    /// Breens"), or neither ("show the family tree").
+    private static let astGraphFamilyTree: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "properties": [
+            "people": [
+                "type": "array",
+                "maxItems": ArchivistQueryAST.maxListItems,
+                "items": ["type": "string", "minLength": 1],
+            ],
+            "operation": ["type": "string", "enum": ["familyTree"]],
+            "surname": ["type": "string", "minLength": 1],
+        ],
+        "required": ["operation"],
+    ]
+
+    /// Every wire relation the deterministic executors can answer.
+    static let astRelationValues: [String] =
+        ArchivistQueryAST.Graph.Relation.allCases.map(\.rawValue)
 
     private static func astBranch(
         _ shape: String,
@@ -498,11 +520,11 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         if includeRelation {
             properties["relation"] = [
                 "type": "string",
-                "enum": [
-                    "father", "mother", "parents", "brother", "sister",
-                    "siblings", "son", "daughter", "children", "husband",
-                    "wife", "spouse",
-                ],
+                "enum": astRelationValues,
+            ]
+            properties["side"] = [
+                "type": "string",
+                "enum": ["maternal", "paternal"],
             ]
             required.append("relation")
         }
@@ -541,9 +563,19 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     otherwise omit it.
     - event: what happened at an event; put visible/event terms in keywords \
     and explicitly spoken terms in transcript.
-    - graph: biography, birth, death, or kinship about named people. relation \
-    is required only for kinship and must use a schema value.
-    - cross: a combined person plus visible/action/object or spoken-text search.
+    - graph: biography, birth, death, kinship, or familyTree about named \
+    people. relation is required only for kinship and must use a schema \
+    value; multi-hop relations exist (grandmother, great-grandmother, \
+    great-great-grandfather, aunt, uncle, cousin, niece, nephew, \
+    mother-in-law, ...). Add side "maternal" or "paternal" only when the user \
+    says which side ("on her mother's side" -> maternal). familyTree is for \
+    "show X's family tree / ancestry / lineage": people for one person, \
+    surname for a family ("the Breens" -> surname "breen"), neither for the \
+    whole tree.
+    - cross: a person plus visible/action/object or spoken-text search. \
+    Spoken words go in transcript, visible things in keywords. Age phrases \
+    such as "as a baby", "as a kid", "as a teenager" go in keywords verbatim; \
+    do NOT invent years for them.
 
     Legal examples:
     "show me Donna in 1994" -> \
@@ -565,10 +597,24 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"graph","payload":{"people":["ellen"],"operation":"death"}}
     "who is Ellen's father?" -> \
     {"shape":"graph","payload":{"people":["ellen"],"operation":"kinship","relation":"father"}}
+    "who was Donna's great grandmother on her maternal side?" -> \
+    {"shape":"graph","payload":{"people":["donna"],"operation":"kinship","relation":"great-grandmother","side":"maternal"}}
+    "who are Rick's cousins?" -> \
+    {"shape":"graph","payload":{"people":["rick"],"operation":"kinship","relation":"cousins"}}
+    "show Donna's family tree" -> \
+    {"shape":"graph","payload":{"people":["donna"],"operation":"familyTree"}}
+    "get me the family tree for the Breens" -> \
+    {"shape":"graph","payload":{"operation":"familyTree","surname":"breen"}}
+    "show the family tree" -> \
+    {"shape":"graph","payload":{"operation":"familyTree"}}
+    "count how many videos of Donna we have" -> \
+    {"shape":"presence","payload":{"people":["donna"],"mediaKind":"video"}}
     "what happened when someone said surprise?" -> \
     {"shape":"event","payload":{"transcript":["surprise"]}}
     "find Dan opening the red bike" -> \
     {"shape":"cross","payload":{"people":["dan"],"keywords":["opening","red bike"]}}
+    "show Timmy as a baby saying peekaboo" -> \
+    {"shape":"cross","payload":{"people":["timmy"],"keywords":["as a baby"],"transcript":["peekaboo"]}}
 
     Use lowercase extracted terms. The payload belongs only to its selected \
     shape. Output JSON only.
