@@ -34,7 +34,14 @@ enum HallieAppTurnCoordinator {
         let citations: [HallieTurnExecutor.Citation]
         let pendingClarification: PendingClarification?
         let playAfterAnswer: Bool
+        /// The intent that was executed, for conversation memory. Nil for
+        /// answers that ran no query (capability, follow-up media action,
+        /// follow-up declines).
+        let executedIntent: HallieTurnExecutor.Intent?
     }
+
+    /// The responder label for turns that never reached a model.
+    static let localResponder = "local (no model)"
 
     struct Dependencies: Sendable {
         /// Starts a local endpoint when appropriate and returns the effective
@@ -178,9 +185,10 @@ enum HallieAppTurnCoordinator {
         }
     }
 
-    /// Translate the exact user question, capture only the record projection
-    /// required by its route, then execute through the same core as the shell.
-    /// No literal-search fallback exists on this path.
+    /// Resolve the question against conversation memory FIRST (no model),
+    /// then translate the exact user question if nothing local applied,
+    /// capture only the record projection required by the route, and execute
+    /// through the same core as the shell. No literal-search fallback exists.
     @MainActor
     static func execute(
         question: String,
@@ -189,41 +197,73 @@ enum HallieAppTurnCoordinator {
         hosts: [String],
         modelName: String,
         playAfterAnswer: Bool = false,
+        memory: HallieTurnExecutor.ConversationMemory = .init(),
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
-        let effectiveHosts: [String]
-        do {
-            effectiveHosts = try await dependencies.startLocalBrain(hosts)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            // Demand-start is an optimization, not the fleet gatekeeper. A
-            // local executable/startup failure must still allow an already-up
-            // remote host to answer through the established failover path.
-            appLog.write("Hallie: local Ollama demand-start failed; trying configured fleet — \(error.localizedDescription)")
-            effectiveHosts = hosts
-        }
-        try Task.checkCancellation()
-        let translation = try await dependencies.translateAST(
-            question, effectiveHosts, modelName)
+
+        // Identity sources are loaded lazily and off-main, only if the
+        // resolver actually needs to ask "is 'matt' a person?".
+        let preTranslation = try await preTranslationOffMain(
+            question: question, playAfterAnswer: playAfterAnswer,
+            memory: memory, dependencies: dependencies)
         try Task.checkCancellation()
 
+        let intent: HallieTurnExecutor.Intent
+        let responderHost: String
+        switch preTranslation {
+        case .answer(let result):
+            return Response(
+                result: result,
+                responderHost: localResponder,
+                biographyPhoto: nil,
+                capturedReferentID: referent.recordID,
+                citations: Array(result.citations.prefix(25)),
+                pendingClarification: nil,
+                playAfterAnswer: false,
+                executedIntent: nil)
+
+        case .run(let local):
+            intent = local
+            responderHost = localResponder
+
+        case .translate(let effectiveQuestion, let wantsPlay):
+            let effectiveHosts: [String]
+            do {
+                effectiveHosts = try await dependencies.startLocalBrain(hosts)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Demand-start is an optimization, not the fleet gatekeeper. A
+                // local executable/startup failure must still allow an
+                // already-up remote host to answer through the established
+                // failover path.
+                appLog.write("Hallie: local Ollama demand-start failed; trying configured fleet — \(error.localizedDescription)")
+                effectiveHosts = hosts
+            }
+            try Task.checkCancellation()
+            let translation = try await dependencies.translateAST(
+                effectiveQuestion, effectiveHosts, modelName)
+            try Task.checkCancellation()
+            intent = HallieTurnExecutor.Intent(
+                originalQuestion: question,
+                ast: translation.ast,
+                playAfterAnswer: wantsPlay)
+            responderHost = translation.responderHost
+        }
+
         let context = try await captureContext(
-            route: HallieTurnExecutor.route(translation.ast),
+            ast: intent.ast,
             records: records,
             selectedDate: referent.temporalDate,
             dependencies: dependencies)
-        let request = HallieTurnExecutor.Request(intent: .init(
-            originalQuestion: question,
-            ast: translation.ast,
-            playAfterAnswer: playAfterAnswer))
+        let request = HallieTurnExecutor.Request(intent: intent)
         return try await runOffMain(
-            ast: translation.ast,
-            responderHost: translation.responderHost,
+            intent: intent,
+            responderHost: responderHost,
             capturedReferentID: referent.recordID,
             context: context,
-            playAfterAnswer: playAfterAnswer,
+            playAfterAnswer: intent.playAfterAnswer,
             dependencies: dependencies) {
                 try await dependencies.executeRequest(request, context)
             }
@@ -238,7 +278,7 @@ enum HallieAppTurnCoordinator {
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try await runOffMain(
-            ast: pending.clarification.intent.ast,
+            intent: pending.clarification.intent,
             responderHost: pending.responderHost,
             capturedReferentID: pending.capturedReferentID,
             context: pending.context,
@@ -251,17 +291,54 @@ enum HallieAppTurnCoordinator {
             }
     }
 
+    private static func preTranslationOffMain(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: HallieTurnExecutor.ConversationMemory,
+        dependencies: Dependencies
+    ) async throws -> HallieTurnExecutor.PreTranslation {
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> HallieTurnExecutor.PreTranslation in
+            try Task.checkCancellation()
+            // Lazy identity sources: nothing is read from disk unless the
+            // resolver asks about a name.
+            var loaded: HallieTurnExecutor.Context?
+            func sources() -> HallieTurnExecutor.Context {
+                if let loaded { return loaded }
+                let context = HallieTurnExecutor.Context(
+                    profiles: dependencies.loadProfiles(),
+                    graph: dependencies.loadGraph(),
+                    cyberBrain: dependencies.loadCyberBrain())
+                loaded = context
+                return context
+            }
+            return HallieTurnExecutor.preTranslation(
+                question: question,
+                playAfterAnswer: playAfterAnswer,
+                memory: memory,
+                isKnownPerson: { name in
+                    HallieTurnExecutor.isKnownPerson(name, context: sources())
+                })
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     @MainActor
     private static func captureContext(
-        route: HallieTurnExecutor.Route,
+        ast: ArchivistQueryAST,
         records: [VideoRecord],
         selectedDate: ArchivistTemporalSelectionDateSnapshot?,
         dependencies: Dependencies
     ) async throws -> HallieTurnExecutor.Context {
+        let route = HallieTurnExecutor.route(ast)
         let presenceRecords: [ArchivistPresenceRecordSnapshot]
         let aggregateRecords: [ArchivistAggregateRecordSnapshot]
         switch route {
-        case .presence:
+        case .presence, .cross:
             presenceRecords = await ArchivistPresenceRecordSnapshot.capture(
                 records)
             aggregateRecords = []
@@ -269,12 +346,15 @@ enum HallieAppTurnCoordinator {
             presenceRecords = []
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
-        case .temporal, .graph, .unsupportedEvent, .unsupportedCross:
+        case .temporal, .graph, .unsupportedEvent, .followUp, .capability:
             presenceRecords = []
             aggregateRecords = []
         }
         try Task.checkCancellation()
 
+        // "as a baby" needs a birth year: presence/cross turns that carry an
+        // age phrase load the identity sources too; plain ones do not.
+        let needsBirthYear = HallieTurnExecutor.needsBirthYearSources(ast)
         let worker = Task.detached(priority: .userInitiated) {
             () throws -> HallieTurnExecutor.Context in
             try Task.checkCancellation()
@@ -290,7 +370,17 @@ enum HallieAppTurnCoordinator {
                 profiles = dependencies.loadProfiles()
                 graph = dependencies.loadGraph()
                 cyberBrain = dependencies.loadCyberBrain()
-            case .presence, .unsupportedEvent, .unsupportedCross:
+            case .presence, .cross:
+                if needsBirthYear {
+                    profiles = dependencies.loadProfiles()
+                    graph = dependencies.loadGraph()
+                    cyberBrain = dependencies.loadCyberBrain()
+                } else {
+                    profiles = []
+                    graph = nil
+                    cyberBrain = nil
+                }
+            case .unsupportedEvent, .followUp, .capability:
                 profiles = []
                 graph = nil
                 cyberBrain = nil
@@ -313,7 +403,7 @@ enum HallieAppTurnCoordinator {
     }
 
     private static func runOffMain(
-        ast: ArchivistQueryAST,
+        intent: HallieTurnExecutor.Intent,
         responderHost: String,
         capturedReferentID: UUID?,
         context: HallieTurnExecutor.Context,
@@ -322,6 +412,7 @@ enum HallieAppTurnCoordinator {
         operation: @escaping @Sendable () async throws
             -> HallieTurnExecutor.Result
     ) async throws -> Response {
+        let ast = intent.ast
         let worker = Task.detached(priority: .userInitiated) {
             () async throws -> Response in
             try Task.checkCancellation()
@@ -354,7 +445,8 @@ enum HallieAppTurnCoordinator {
                 pendingClarification: pending,
                 playAfterAnswer: result.outcome == .answered
                     && result.clarification == nil
-                    && playAfterAnswer)
+                    && playAfterAnswer,
+                executedIntent: intent)
         }
         return try await withTaskCancellationHandler {
             try await worker.value

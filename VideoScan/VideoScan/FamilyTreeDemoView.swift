@@ -19,6 +19,9 @@ struct FamilyTreeDemoView: View {
     // right-click in either place can drop the other a hint.
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     @AppStorage("ftHighlightedPersonName") private var incomingHighlight: String = ""
+    /// Hallie's "Open in Family Tree: the Breens" offer drops a surname here;
+    /// it becomes the sidebar search text and is cleared once applied.
+    @AppStorage("ftIncomingSearchText") private var incomingSearchText: String = ""
 
     private var selectedPerson: FamilyTreePerson {
         people.first(where: { $0.id == selectedID }) ?? people[0]
@@ -62,12 +65,18 @@ struct FamilyTreeDemoView: View {
         }
         .onAppear { handleIncomingHighlight() }
         .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
+        .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
     }
 
-    /// If the People tab dropped a name into AppStorage, find the matching
-    /// person on this tree, select them, and clear the hint so it doesn't
-    /// fire again next time.
+    /// If the People tab (or Hallie) dropped a name into AppStorage, find the
+    /// matching person on this tree, select them, and clear the hint so it
+    /// doesn't fire again next time. A dropped surname becomes the sidebar
+    /// search text instead.
     private func handleIncomingHighlight() {
+        if !incomingSearchText.isEmpty {
+            searchText = incomingSearchText.trimmingCharacters(in: .whitespaces)
+            incomingSearchText = ""
+        }
         guard !incomingHighlight.isEmpty else { return }
         let trimmed = incomingHighlight.trimmingCharacters(in: .whitespaces)
         if let match = people.first(where: {

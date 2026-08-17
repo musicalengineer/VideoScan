@@ -52,6 +52,11 @@ struct ArchivistMessage: Identifiable {
                                 playAfterAnswer: Bool)
             /// Continue QueryAST-v2 with the executor-issued stable identity.
             case hallieIdentityChoice(HallieTurnExecutor.CandidateID)
+            /// Open the Family Tree tab focused on a person (offered after
+            /// "show Donna's family tree").
+            case openFamilyTree(personName: String)
+            /// Open the Family Tree tab filtered to a surname.
+            case openFamilyTreeSurname(String)
         }
         let id = UUID()
         let label: String
@@ -168,6 +173,10 @@ struct ArchivistChatWindow: View {
     /// The last filter's matches — "play the first one" needs a
     /// referent (class refs, not copies).
     @State private var lastMatches: [VideoRecord] = []
+    /// Per-conversation memory for the QueryAST-v2 path: the last answered
+    /// result set and AST, so "play one of them", "show more", and "and in
+    /// the 90s?" resolve deterministically before any translation.
+    @State private var hallieMemory = HallieTurnExecutor.ConversationMemory()
     /// Set by "play <something>": after the filter answer lands, the
     /// first match auto-plays.
     @State private var playAfterAnswer = false
@@ -647,7 +656,29 @@ struct ArchivistChatWindow: View {
             messages.append(ArchivistMessage(
                 role: .user, text: candidate.label))
             continueHallie(pending: pending, selecting: candidateID)
+        case .openFamilyTree(let personName):
+            openFamilyTreeTab(focus: personName, surname: nil)
+        case .openFamilyTreeSurname(let surname):
+            openFamilyTreeTab(focus: nil, surname: surname)
         }
+    }
+
+    /// Same cross-tab hook the People tab uses ("Show <name> in Family
+    /// Tree"): drop the name into AppStorage, switch the main window to the
+    /// Family Tree tab (tag 5), and let that view pick it up.
+    private func openFamilyTreeTab(focus personName: String?, surname: String?) {
+        if let personName {
+            UserDefaults.standard.set(personName, forKey: "ftHighlightedPersonName")
+        }
+        if let surname {
+            UserDefaults.standard.set(surname, forKey: "ftIncomingSearchText")
+        }
+        UserDefaults.standard.set(5, forKey: "selectedTab")
+        MainWindowHelper.shared.openMainWindow()
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: personName.map { "Opening the Family Tree tab focused on \($0)." }
+                ?? "Opening the Family Tree tab filtered to “\(surname ?? "")”."))
     }
 
     private func ask(_ text: String) {
@@ -692,10 +723,11 @@ struct ArchivistChatWindow: View {
             pendingHallieClarification = nil
         }
         messages.append(ArchivistMessage(role: .user, text: text))
-        // Explicit playback commands remain UI actions. Every factual
-        // question below goes through QueryAST-v2; the old v1 local/search
+        // Every question — including "play the first one" and "show more" —
+        // goes through the coordinator: follow-ups and capability questions
+        // resolve there against conversation memory with no model call, and
+        // everything else goes through QueryAST-v2. The old v1 local/search
         // paths must not intercept or broaden it.
-        if handlePlayCommand(text) { return }
 
         // Capture the sole Catalog referent and its best date BEFORE any
         // translation await. A later row change cannot alter this turn.
@@ -709,6 +741,7 @@ struct ArchivistChatWindow: View {
         let records = model.records
         let wantsPlayAfter = playAfterAnswer
         playAfterAnswer = false
+        let memory = hallieMemory
         let requestID = UUID()
         activeRequestTask?.cancel()
         activeRequestID = requestID
@@ -731,7 +764,8 @@ struct ArchivistChatWindow: View {
                     referent: referent,
                     hosts: hosts,
                     modelName: modelName,
-                    playAfterAnswer: wantsPlayAfter)
+                    playAfterAnswer: wantsPlayAfter,
+                    memory: memory)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response)
@@ -805,95 +839,94 @@ struct ArchivistChatWindow: View {
     private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
         lastResponder = response.responderHost
         pendingHallieClarification = response.pendingClarification
+        hallieMemory.record(intent: response.executedIntent,
+                            result: response.result)
         let citations = response.citations
+        let isFollowUpAction = response.result.route == .followUp
+            && response.result.mediaAction != nil
         // Bare "play first" may refer only to evidence actually shown in
-        // this answer, never an unseen broad result set.
-        lastMatches = citations.compactMap {
-            model.record(forID: $0.recordID)
+        // this answer, never an unseen broad result set. A follow-up media
+        // action keeps the previous referent list intact.
+        if !isFollowUpAction {
+            lastMatches = citations.compactMap {
+                model.record(forID: $0.recordID)
+            }
         }
         let clarificationChips = response.result.clarification?.candidates.map {
             ArchivistMessage.Chip(
                 label: $0.label,
                 action: .hallieIdentityChoice($0.id))
         } ?? []
+        let offerChips = response.result.offeredActions.map { offer -> ArchivistMessage.Chip in
+            let label = HallieTurnExecutor.offerLabel(offer)
+            switch offer {
+            case .openFamilyTree(let name):
+                return ArchivistMessage.Chip(
+                    label: label, action: .openFamilyTree(personName: name))
+            case .openFamilyTreeSurname(let surname):
+                return ArchivistMessage.Chip(
+                    label: label, action: .openFamilyTreeSurname(surname))
+            case .ask(let question, _):
+                return ArchivistMessage.Chip(
+                    label: label, action: .askText(question, playAfterAnswer: false))
+            }
+        }
         messages.append(ArchivistMessage(
             role: .assistant,
             text: response.result.prose,
             queryLine: response.result.queryDescription,
             basisLine: response.result.basisLine,
             biographyPhoto: response.biographyPhoto,
-            citations: citations,
+            citations: isFollowUpAction ? [] : citations,
             knowledgeCitations: response.result.knowledgeCitations,
             responder: response.responderHost,
             model: ollamaModel,
             route: Self.transcriptLabel(response.result.route),
             outcome: Self.transcriptLabel(response.result.outcome),
-            chips: clarificationChips))
-        if response.playAfterAnswer, !lastMatches.isEmpty {
+            chips: clarificationChips + offerChips))
+        if let action = response.result.mediaAction {
+            perform(action)
+        } else if response.playAfterAnswer, !lastMatches.isEmpty {
             play(bestOf: lastMatches)
+        }
+    }
+
+    /// A follow-up media action on ALREADY-CITED items ("play the first
+    /// one", "reveal it", "show me number 3"). Same honesty gates as the
+    /// citation buttons: offline volumes and vanished files are reported.
+    private func perform(_ action: HallieTurnExecutor.MediaActionRequest) {
+        switch action.kind {
+        case .play:
+            let records = action.citations.compactMap { model.record(forID: $0.recordID) }
+            guard !records.isEmpty else {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "That evidence item is no longer in the catalog."))
+                return
+            }
+            play(bestOf: records)
+        case .reveal:
+            for citation in action.citations.prefix(10) { revealCitation(citation) }
+        case .show:
+            if let first = action.citations.first { showCitationInCatalog(first) }
         }
     }
 
     private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
-        switch route {
-        case .presence: return "presence"
-        case .temporal: return "temporal"
-        case .aggregate: return "aggregate"
-        case .graph: return "graph"
-        case .unsupportedEvent: return "unsupported-event"
-        case .unsupportedCross: return "unsupported-cross"
-        }
+        HallieTurnExecutor.label(route)
     }
 
     private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {
-        switch outcome {
-        case .answered: return "answered"
-        case .declined: return "declined"
-        case .unsupported: return "unsupported"
-        case .needsClarification: return "needs-clarification"
-        }
+        HallieTurnExecutor.label(outcome)
     }
 
     // MARK: Play (Rick 2026-08-07: "at least 'play the current video'")
-
-    /// "play it / play the first one / play" plays the first match of
-    /// the LAST answer; "play <anything else>" runs the ask pipeline
-    /// on the remainder and auto-plays the first result. Smart-player
-    /// routing via MediaOpener (QuickTime vs VLC by container).
-    private func handlePlayCommand(_ text: String) -> Bool {
-        let lower = text.lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: .punctuationCharacters)
-        let verbs = ["play", "watch"]
-        guard let verb = verbs.first(where: {
-            lower == $0 || lower.hasPrefix($0 + " ")
-        }) else { return false }
-        let remainder = lower.dropFirst(verb.count)
-            .trimmingCharacters(in: .whitespaces)
-        let bareReferents: Set<String> = [
-            "", "it", "that", "this", "first", "the first", "the first one",
-            "the first video", "the current video", "the video", "them",
-        ]
-        if bareReferents.contains(remainder) {
-            guard !lastMatches.isEmpty else {
-                messages.append(ArchivistMessage(
-                    role: .assistant,
-                    text: "Play what? Ask me to find something first — then "
-                        + "say “play the first one”."))
-                return true
-            }
-            play(bestOf: lastMatches)
-            return true
-        }
-        // "play <query>": find it, then play the best match.
-        playAfterAnswer = true
-        // Re-enter with the query part only (original casing preserved
-        // by slicing the raw text).
-        let query = String(text.dropFirst(verb.count))
-            .trimmingCharacters(in: .whitespaces)
-        ask(query)
-        return true
-    }
+    //
+    // "play it / play the first one / play number 3" resolve in
+    // ArchivistFollowUpResolver against conversation memory (shared with the
+    // shell); "play <anything else>" translates the remainder and auto-plays
+    // the first result. Smart-player routing via MediaOpener (QuickTime vs
+    // VLC by container).
 
     /// Play with HONESTY (codex #300: MediaOpener silently drops
     /// unreachable records — the old path claimed "Playing" over a
