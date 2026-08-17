@@ -450,13 +450,18 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let payload):
+            // CyberBrain answers only when it knows the requested identity.
+            // A `nil` here means CyberBrain has no opinion, and the turn
+            // continues on the pre-existing profiles + GEDCOM path exactly
+            // as it would with no CyberBrain installed.
             if payload.operation == .biography,
-               let cyberBrain = context.cyberBrain {
-                return try await executeCyberBrainBiography(
-                    payload: payload,
-                    request: request,
-                    context: context,
-                    index: cyberBrain)
+               let cyberBrain = context.cyberBrain,
+               let result = try await executeCyberBrainBiography(
+                   payload: payload,
+                   request: request,
+                   context: context,
+                   index: cyberBrain) {
+                return result
             }
             guard let graph = context.graph else {
                 return Result(
@@ -561,12 +566,22 @@ enum HallieTurnExecutor {
         }
     }
 
+    /// The privacy ceiling the app grants its own Family Archivist. Every
+    /// planner call names it explicitly so the boundary is visible here, not
+    /// buried in a Core default.
+    static let appPrivacyCeiling: CyberBrainItem.Privacy = .private
+
+    /// Returns `nil` when CyberBrain does not know the requested identity so
+    /// the caller falls through to the profiles + GEDCOM path. That path owns
+    /// nickname → profile → GEDCOM bridging, profile ambiguity/conflict
+    /// handling, and `.profileStableID` / `.gedcomPersonID` continuations;
+    /// CyberBrain must not shadow it with a weaker name-only GEDCOM lookup.
     private static func executeCyberBrainBiography(
         payload: ArchivistQueryAST.Graph,
         request: Request,
         context: Context,
         index: CyberBrainIndex
-    ) async throws -> Result {
+    ) async throws -> Result? {
         guard let requestedName = payload.people.first else {
             return Result(
                 route: .graph,
@@ -578,32 +593,47 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
         }
         let graph = context.graph
+        let privacyCeiling = appPrivacyCeiling
+        let cyberBrainKnowsName: Bool
+        if case .notFound = index.resolve(requestedName) {
+            cyberBrainKnowsName = false
+        } else {
+            cyberBrainKnowsName = true
+        }
         let plan: CyberBrainAnswerPlan
         switch request.selectedIdentity {
         case nil:
+            guard cyberBrainKnowsName else { return nil }
             plan = try await detached {
                 CyberBrainBiographyPlanner.plan(
                     personName: requestedName,
                     index: index,
-                    graph: graph)
+                    graph: graph,
+                    privacyCeiling: privacyCeiling)
             }
         case .cyberBrainPersonID(let personID):
             plan = try await detached {
                 CyberBrainBiographyPlanner.plan(
                     personID: personID,
                     index: index,
-                    graph: graph)
+                    graph: graph,
+                    privacyCeiling: privacyCeiling)
             }
         case .gedcomPersonID(let personID):
-            guard let person = graph?.people[personID] else {
-                return invalidContinuationResult(for: request.intent.ast)
+            // A GEDCOM chip offered by the profiles + GEDCOM path continues
+            // there. If CyberBrain does know the name (a chip from another
+            // origin), the typed pointer is honored directly — never
+            // re-resolved through display text.
+            guard cyberBrainKnowsName else { return nil }
+            plan = try await detached {
+                CyberBrainBiographyPlanner.plan(
+                    gedcomPersonID: personID,
+                    index: index,
+                    graph: graph,
+                    privacyCeiling: privacyCeiling)
             }
-            plan = CyberBrainBiographyPlanner.plan(
-                personName: person.name,
-                index: index,
-                graph: graph)
         case .profileStableID:
-            return invalidContinuationResult(for: request.intent.ast)
+            return nil
         }
 
         let queryDescription =
@@ -618,15 +648,22 @@ enum HallieTurnExecutor {
         if plan.answerState == .ambiguous {
             let choices = plan.ambiguityCandidates.map { candidate -> Candidate in
                 if candidate.source == .gedcom {
+                    // Same-name family-tree people (Sr./Jr.) need labels the
+                    // user can tell apart; mirror the graph path's
+                    // birth/death or pointer suffix.
+                    let label = graph?.people[candidate.id].map {
+                        ArchivistBiographyPolicy.disambiguationCandidate(
+                            for: $0).label
+                    } ?? "\(candidate.canonicalName) (\(candidate.id))"
                     return Candidate(
                         id: .gedcomPersonID(candidate.id),
                         canonicalName: candidate.canonicalName,
-                        label: candidate.canonicalName)
+                        label: label)
                 }
                 return Candidate(
                     id: .cyberBrainPersonID(candidate.id),
                     canonicalName: candidate.canonicalName,
-                    label: candidate.canonicalName)
+                    label: cyberBrainLabel(candidate, plan: plan))
             }
             let stage: ClarificationStage = choices.first?.source == .gedcom
                 ? .gedcomPerson : .cyberBrainPerson
@@ -659,6 +696,22 @@ enum HallieTurnExecutor {
             citations: [],
             knowledgeCitations: knowledgeCitations,
             catalogPersonName: answered ? plan.subject : nil)
+    }
+
+    /// CyberBrain candidates that share a canonical name get their stable ID
+    /// appended so the shell's name reply and the chip text stay unique.
+    private static func cyberBrainLabel(
+        _ candidate: CyberBrainAnswerPlan.Candidate,
+        plan: CyberBrainAnswerPlan
+    ) -> String {
+        let key = PersonResolver.normalize(candidate.canonicalName)
+        let duplicates = plan.ambiguityCandidates.filter {
+            $0.source == .cyberBrain
+                && PersonResolver.normalize($0.canonicalName) == key
+        }.count
+        return duplicates > 1
+            ? "\(candidate.canonicalName) (\(candidate.id))"
+            : candidate.canonicalName
     }
 
     private static func unavailableProfilesResult(route: Route) -> Result {

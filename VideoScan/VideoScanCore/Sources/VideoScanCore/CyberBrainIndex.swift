@@ -199,6 +199,31 @@ public enum CyberBrainBiographyPlanner {
             itemLimit: itemLimit)
     }
 
+    /// Continues a previously offered imported-family-tree identity by its
+    /// GEDCOM pointer. Display text is never re-resolved: two same-name
+    /// people (Sr./Jr.) would otherwise stay ambiguous forever, and a GEDCOM
+    /// name that also happens to be a CyberBrain alias would silently answer
+    /// for a person the user did not select. Only that person's family-tree
+    /// facts are planned; a missing pointer fails closed.
+    public static func plan(
+        gedcomPersonID: String,
+        index: CyberBrainIndex,
+        graph: GedcomFamilyGraph?,
+        privacyCeiling: CyberBrainItem.Privacy = .private
+    ) -> CyberBrainAnswerPlan {
+        guard let graph, let person = graph.people[gedcomPersonID] else {
+            return CyberBrainAnswerPlan(
+                subject: gedcomPersonID,
+                answerState: .noEvidence,
+                uncertaintyStatements: [
+                    "That family-tree person is no longer available."
+                ],
+                constraints: [.doNotInferIdentity])
+        }
+        return gedcomOnlyPlan(
+            person: person, graph: graph, privacyCeiling: privacyCeiling)
+    }
+
     private static func resolvedPlan(
         person: CyberBrainPerson,
         index: CyberBrainIndex,
@@ -347,9 +372,21 @@ public enum CyberBrainBiographyPlanner {
                         source: .gedcom)
                 })
         }
+        return gedcomOnlyPlan(
+            person: matches[0], graph: graph, privacyCeiling: privacyCeiling)
+    }
+
+    /// Family-tree facts for exactly one already-identified GEDCOM person.
+    /// Shared by the name fallback and the pointer continuation so both
+    /// produce identical claims, citations, and privacy behavior.
+    private static func gedcomOnlyPlan(
+        person: GedcomFamilyGraph.Person,
+        graph: GedcomFamilyGraph,
+        privacyCeiling: CyberBrainItem.Privacy
+    ) -> CyberBrainAnswerPlan {
         guard gedcomFactPrivacy.isVisible(at: privacyCeiling) else {
             return CyberBrainAnswerPlan(
-                subject: matches[0].name,
+                subject: person.name,
                 answerState: .noEvidence,
                 uncertaintyStatements: [
                     "Imported family-tree facts are above this privacy ceiling."
@@ -360,10 +397,10 @@ public enum CyberBrainBiographyPlanner {
         var claims: [CyberBrainAnswerPlan.Claim] = []
         var citations: [String: CyberBrainAnswerPlan.Citation] = [:]
         appendGEDCOMClaims(
-            person: matches[0], displayName: matches[0].name,
+            person: person, displayName: person.name,
             graph: graph, claims: &claims, citations: &citations)
         return CyberBrainAnswerPlan(
-            subject: matches[0].name,
+            subject: person.name,
             answerState: claims.isEmpty ? .noEvidence : .answered,
             claims: claims,
             uncertaintyStatements: claims.isEmpty
