@@ -304,38 +304,38 @@ struct ProvenanceTests {
     }
 
     @Test
-    func migrationOverview_bestStuffCountsRecordsThatAreCombinedAndArchived() {
-        // Four records:
-        //   r1: combined + archived → counts
-        //   r2: combined + lives on LTA volume → counts
-        //   r3: combined but neither archived nor on LTA → does NOT count
-        //   r4: archived but not combined → does NOT count
+    func migrationOverview_bestStuffCountsVerifiedMasterArchiveCopies() {
+        // Rick 2026-08-17: "The best stuff" said nothing had reached LTS
+        // while four files sat verified in the Master Archive. Best stuff =
+        // promoted copies WITH fixity, regardless of Combine or the legacy
+        // .archived stamp; cloud copies reported separately.
         let pid = UUID()
-        let r1 = makeRecord(fullPath: "/Volumes/Backup/r1.mxf",
-                            stage: .archived,
-                            combinedFromPairID: pid)
-        let r2 = makeRecord(fullPath: "/Volumes/LTA/r2.mxf",
-                            stage: .none,
-                            combinedFromPairID: pid)
-        let r3 = makeRecord(fullPath: "/Volumes/Backup/r3.mxf",
-                            stage: .none,
-                            combinedFromPairID: pid)
-        let r4 = makeRecord(fullPath: "/Volumes/Backup/r4.mxf",
-                            stage: .archived,
-                            combinedFromPairID: nil)
+        let copy1 = makeRecord(fullPath: "/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1990-1999/1994/a.mkv")
+        copy1.derivationKind = ArchivePromotion.derivationKind
+        copy1.archiveFixity = ArchiveFixity(digest: "aa", verifiedAt: Date(), sizeBytes: 1024)
+        let copy2 = makeRecord(fullPath: "/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/2000-2009/2005/b.m4v")
+        copy2.derivationKind = ArchivePromotion.derivationKind
+        copy2.archiveFixity = ArchiveFixity(digest: "bb", verifiedAt: Date(), sizeBytes: 1024)
+        copy2.backupDestinations = [BackupEntry(name: "B2", kind: .cloud, date: Date())]
+        // Legacy signals alone no longer count.
+        let combinedArchived = makeRecord(fullPath: "/Volumes/Backup/r1.mxf", stage: .archived, combinedFromPairID: pid)
+        let onCloudRole = makeRecord(fullPath: "/Volumes/LTA/r2.mxf", stage: .none, combinedFromPairID: pid)
         let res = resolver([
             "/Volumes/Backup": (.backup, .reliable),
-            "/Volumes/LTA":    (.cloud,   .reliable)
+            "/Volumes/LTA":    (.cloud,   .reliable),
+            "/Volumes/FamilyArchive": (.archive, .reliable)
         ])
         let mo = VideoScanModel.buildMigrationOverview(
-            allRecords: [r1, r2, r3, r4],
+            allRecords: [copy1, copy2, combinedArchived, onCloudRole],
             resolveVolumeSafety: res,
             now: Date()
         )
         #expect(mo.bestStuffCount == 2)
-        // Bytes — two records × default 1024.
         #expect(mo.bestStuffBytes == 2048)
-        #expect(mo.bestStuffSentence.contains("2 clips"))
+        #expect(mo.bestStuffWithCloudCopy == 1)
+        #expect(mo.bestStuffSentence.contains("2 files"))
+        #expect(mo.bestStuffSentence.contains("Master Archive"))
+        #expect(mo.bestStuffSentence.contains("1 also have a cloud copy"))
     }
 
     // MARK: - Friendly-tone guard

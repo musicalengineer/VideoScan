@@ -116,6 +116,21 @@ struct RelocateJobsPanel: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 trailingMetric(for: job)
+                // Visible Cancel for anything not finished (Rick 2026-08-17:
+                // "doesn't seem like it allows for cancelling" — it was only
+                // in the right-click menu). Cancel is clean: everything
+                // copied so far is verified + committed; a rerun adopts it.
+                switch job.status {
+                case .queued, .reconciling, .copying:
+                    Button("Cancel") { _ = model.cancelRelocateJob(id: job.id) }
+                        .controlSize(.small)
+                        .help(job.status == .queued
+                              ? "Remove this job from the queue."
+                              : "Stop after the current file. Files already copied stay verified on the destination; rerunning the same Migrate adopts them.")
+                        .accessibilityIdentifier("relocateJobsPanel.row.cancel")
+                default:
+                    EmptyView()
+                }
             }
             if job.status == .copying, let p = job.copyProgress, p.total > 0 {
                 progressBlock(p)

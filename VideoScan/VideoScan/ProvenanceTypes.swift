@@ -303,16 +303,21 @@ struct MigrationOverview: Identifiable, Equatable {
     /// Total bytes the best-stuff cohort represents — for the friendly
     /// subhead, since users think in GB more than file counts.
     let bestStuffBytes: Int64
+    /// How many of those also have a recorded cloud copy (the 3-2-1 leg).
+    var bestStuffWithCloudCopy: Int = 0
 
     /// Friendly best-stuff sentence.
     var bestStuffSentence: String {
         if bestStuffCount == 0 {
-            return "No clips have made it all the way to long-term storage yet."
+            return "Nothing has been promoted to the Master Archive yet."
         }
         let gb = Double(bestStuffBytes) / 1_073_741_824.0
         let gbStr = gb >= 1 ? String(format: "%.1f GB", gb)
                             : String(format: "%.0f MB", gb * 1024)
-        return "Of your library, \(bestStuffCount) clip\(bestStuffCount == 1 ? "" : "s") "
-            + "(\(gbStr)) are repaired, combined, and archived to long-term storage."
+        let cloud = bestStuffWithCloudCopy == 0
+            ? "No cloud copy recorded yet — that's the next leg."
+            : "\(bestStuffWithCloudCopy) also have a cloud copy."
+        return "\(bestStuffCount) file\(bestStuffCount == 1 ? "" : "s") (\(gbStr)) "
+            + "are verified in the Master Archive. \(cloud)"
     }
 }

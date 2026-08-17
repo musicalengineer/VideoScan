@@ -661,17 +661,21 @@ extension VideoScanModel {
                               icon: "archivebox.fill")
         ]
 
-        // 4. Best stuff — Combined AND (archived OR lives on lta/archive).
+        // 4. Best stuff — what has actually reached long-term storage:
+        // VERIFIED copies in the Master Archive (promoted, full-file
+        // fixity recorded). Rick 2026-08-17: the sheet said "no clips have
+        // made it to LTS yet" while 4 files sat verified in the archive —
+        // the old rule demanded Combine + the legacy .archived stamp.
+        // Cloud is the next leg (BackupEntry .cloud), reported separately
+        // in the sentence, never required for this count.
         var bestStuffCount = 0
         var bestStuffBytes: Int64 = 0
-        for rec in allRecords where rec.combinedFromPairID != nil {
-            let isArchived = rec.archiveStage == .archived
-            let role = resolveVolumeSafety(rec.fullPath).role
-            let onSafeHome = role == .cloud || role == .archive
-            if isArchived || onSafeHome {
-                bestStuffCount += 1
-                bestStuffBytes += rec.sizeBytes
-            }
+        var withCloud = 0
+        for rec in allRecords where rec.derivationKind == ArchivePromotion.derivationKind
+                                    && rec.archiveFixity != nil && !rec.isPurged {
+            bestStuffCount += 1
+            bestStuffBytes += rec.sizeBytes
+            if rec.backupDestinations.contains(where: { $0.kind == .cloud }) { withCloud += 1 }
         }
 
         return MigrationOverview(
@@ -681,7 +685,8 @@ extension VideoScanModel {
             flowBars: flowBars,
             funnelStages: funnel,
             bestStuffCount: bestStuffCount,
-            bestStuffBytes: bestStuffBytes
+            bestStuffBytes: bestStuffBytes,
+            bestStuffWithCloudCopy: withCloud
         )
     }
 
