@@ -32,6 +32,16 @@ public struct GedcomFamilyGraph: Sendable {
         /// never reinterpreted (honesty over formatting).
         public var birthDate: String?
         public var deathDate: String?
+        /// The GEDCOM surname (the part between slashes: "Richard /Breen/ Jr"
+        /// → "Breen"), kept separately so a surname question ("the Breens")
+        /// can count people without guessing which name token is the family
+        /// name. `nil` when the NAME line had no slashes.
+        public var surname: String?
+
+        /// Four-digit year pulled out of the raw GEDCOM birth date ("4 JUL
+        /// 1962", "ABT 1944", "BET 1930 AND 1931" → first run wins). Nil when
+        /// the date has none. The raw string stays the displayed fact.
+        public var birthYear: Int? { GedcomFamilyGraph.year(in: birthDate) }
     }
 
     struct Family: Sendable {
@@ -97,6 +107,13 @@ public struct GedcomFamilyGraph: Sendable {
                 case (1, "NAME") where person.name.isEmpty:
                     person.name = value.replacingOccurrences(of: "/", with: " ")
                         .split(separator: " ").joined(separator: " ")
+                    if let open = value.firstIndex(of: "/"),
+                       let close = value[value.index(after: open)...]
+                        .firstIndex(of: "/") {
+                        let raw = value[value.index(after: open)..<close]
+                            .trimmingCharacters(in: .whitespaces)
+                        person.surname = raw.isEmpty ? nil : raw
+                    }
                 case (1, "SEX"):
                     person.sex = value
                 case (1, "FAMC"):
@@ -125,6 +142,41 @@ public struct GedcomFamilyGraph: Sendable {
             return nil
         }
         self.init(gedcomText: text)
+    }
+
+    /// First four-digit run in a raw GEDCOM date string, or nil.
+    static func year(in raw: String?) -> Int? {
+        guard let raw else { return nil }
+        var digits = ""
+        for character in raw {
+            if character.isNumber {
+                digits.append(character)
+            } else {
+                if digits.count == 4, let year = Int(digits) { return year }
+                digits.removeAll(keepingCapacity: true)
+            }
+        }
+        return digits.count == 4 ? Int(digits) : nil
+    }
+
+    /// Everyone whose GEDCOM surname matches (case/diacritic-insensitive).
+    /// "breens" and "the breens" are accepted spellings of "Breen" because
+    /// that is how people ask ("the family tree for the Breens").
+    public func people(withSurname typed: String) -> [Person] {
+        var key = FamilyIdentityText.normalized(typed)
+        if key.hasPrefix("the ") { key.removeFirst(4) }
+        key = key.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return [] }
+        func matches(_ person: Person) -> Bool {
+            guard let surname = person.surname else { return false }
+            let normalized = FamilyIdentityText.normalized(surname)
+            return normalized == key
+                || normalized + "s" == key
+                || normalized + "es" == key
+        }
+        return people.values.filter(matches).sorted {
+            $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
+        }
     }
 
     // MARK: Lookup

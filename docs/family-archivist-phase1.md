@@ -90,8 +90,38 @@ v2, and opens media only after an explicit shell command. `--once` supports
 non-interactive use. Its exit status is 0 only for a factual answer (2 =
 catalog unavailable, 3 = no evidence/source, 4 = unsupported QueryAST shape,
 5 = translation failure), and the responder is labeled as the interpreter,
-not the factual answerer. Event and cross-evidence shapes decline until they have
-deterministic executors; they are never coerced into a broader search.
+not the factual answerer. The event shape declines until it has a
+deterministic executor; it is never coerced into a broader search. Cross
+(person AND spoken/visible terms) runs on the presence executor since
+2026-08-17, with both bases cited per item.
+
+## Conversation memory and model-free turns (2026-08-17)
+
+Rick's demo to Donna showed five "normal human" phrasings failing. All five
+now resolve deterministically BEFORE any translation, in a step shared by
+the app coordinator and the shell (`HallieTurnExecutor.preTranslation` +
+`ConversationMemory`, resolver in `ArchivistFollowUpResolver`):
+
+1. Follow-ups on the last answer — "play one of them, say the first one",
+   "reveal number 3", "the one from 1994", "show more"/"the rest" (paging
+   by citation offset), and elliptical refinements ("and in the 90s?",
+   "what about matt?") that edit the previous validated AST field by field
+   ("refining your last question" in the basis line). No prior answer →
+   an honest "Ask me for something first".
+2. Family tree — `graph.familyTree` (person / surname / whole tree) with an
+   offered "Open in Family Tree" action; the sentence shapes are also
+   recognised locally.
+3. Multi-hop kinship with side — closed vocabulary up to great-great,
+   aunts/uncles, cousins, nieces/nephews, basic in-laws; the answer lists
+   the route per relative and names the exact missing hop.
+4. Cross-evidence and age phrases — "as a baby / kid / teenager" becomes a
+   year band from a vouched birth year (profile → CyberBrain → GEDCOM),
+   cited in the basis line.
+5. Capability questions — "can we change donna's biography?" and other
+   edit/remember/learn or media-mutation requests get an honest, model-free
+   answer with an offered next step.
+
+Golden corpus: `tests/archivist_golden_answers.json` v3 (`conversationCases`).
 
 Biography answers may attach the uniquely matched POI cover photo. The photo
 is presentation, not family-fact evidence: its path or bytes are never sent to

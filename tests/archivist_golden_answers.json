@@ -1,16 +1,20 @@
 {
-  "schemaVersion": 2,
-  "comment": "Golden questions for the Family Archivist. 'cases' (v1): the oracle is a deterministic synthetic catalog; expectedSpec must compose to infix, and that infix must return exactly expectedPaths. 'astCases' (v2, QueryAST): modelOutput is the RAW translator text (including model quirks such as an extra 'limit'); it must decode through ArchivistQueryAST.decodeTranslatorOutput and execute through HallieTurnExecutor over the synthetic v2 fixture (catalog + GEDCOM + CyberBrain, see ArchivistGoldenAnswerTests) to the stated outcome, count, paths, and prose. With NL_GOLDEN_EVAL=1 the real translator is graded by the same final-answer contract.",
+  "schemaVersion": 3,
+  "comment": "Golden questions for the Family Archivist. 'cases' (v1): the oracle is a deterministic synthetic catalog; expectedSpec must compose to infix, and that infix must return exactly expectedPaths. 'astCases' (v2, QueryAST): modelOutput is the RAW translator text (including model quirks such as an extra 'limit'); it must decode through ArchivistQueryAST.decodeTranslatorOutput and execute through HallieTurnExecutor over the synthetic v2 fixture (catalog + GEDCOM + CyberBrain, see ArchivistGoldenAnswerTests) to the stated outcome, count, paths, and prose. 'conversationCases' (v3): ordered turns through HallieTurnExecutor.preTranslation + ConversationMemory — a turn with modelOutput is translated (the model-free step must return .translate); a turn marked local must resolve WITHOUT translation (follow-up on the last answer, elliptical refinement, local family-tree shape, or honest capability answer). Every question here is verbatim from Rick's demo to Donna (Hallie log 2026-08-17) unless noted. With NL_GOLDEN_EVAL=1 the real translator is graded by the same final-answer contract.",
   "cases": [
     {
       "id": "donna-cape-1990-1995-count",
       "input": "How many videos do we have of Donna from 1990 through 1995 down the Cape?",
       "expectedSpec": {
-        "people": ["donna"],
+        "people": [
+          "donna"
+        ],
         "yearStart": 1990,
         "yearEnd": 1995,
         "mediaKind": "video",
-        "keywords": ["cape"],
+        "keywords": [
+          "cape"
+        ],
         "intent": "count"
       },
       "expectedInfix": "people:donna year:1990..1995 type:video cape",
@@ -20,13 +24,20 @@
       ],
       "expectedCount": 2,
       "answerState": "answered",
-      "evidence": ["confirmed person tag", "path year", "place text"]
+      "evidence": [
+        "confirmed person tag",
+        "path year",
+        "place text"
+      ]
     },
     {
       "id": "dad-breen-by-relationship",
       "input": "Show videos containing Dad Breen, Rick's father.",
       "expectedSpec": {
-        "people": ["dad", "breen"],
+        "people": [
+          "dad",
+          "breen"
+        ],
         "mediaKind": "video",
         "intent": "filter"
       },
@@ -36,13 +47,18 @@
       ],
       "expectedCount": 1,
       "answerState": "answered",
-      "evidence": ["confirmed person tag"]
+      "evidence": [
+        "confirmed person tag"
+      ]
     },
     {
       "id": "donna-and-timmy-together-count",
       "input": "How many videos have Donna and Timmy together?",
       "expectedSpec": {
-        "people": ["donna", "timmy"],
+        "people": [
+          "donna",
+          "timmy"
+        ],
         "mediaKind": "video",
         "intent": "count"
       },
@@ -52,7 +68,9 @@
       ],
       "expectedCount": 1,
       "answerState": "answered",
-      "evidence": ["two confirmed person tags on one record"]
+      "evidence": [
+        "two confirmed person tags on one record"
+      ]
     },
     {
       "id": "christmas-morning-1988-1995",
@@ -61,7 +79,9 @@
         "yearStart": 1988,
         "yearEnd": 1995,
         "mediaKind": "video",
-        "keywords": ["christmas morning"],
+        "keywords": [
+          "christmas morning"
+        ],
         "intent": "filter"
       },
       "expectedInfix": "year:1988..1995 type:video \"christmas morning\"",
@@ -70,15 +90,22 @@
       ],
       "expectedCount": 1,
       "answerState": "answered",
-      "evidence": ["path year", "scene caption phrase"]
+      "evidence": [
+        "path year",
+        "scene caption phrase"
+      ]
     },
     {
       "id": "dan-opens-red-bicycle",
       "input": "Find the clip where Dan opens a red bicycle.",
       "expectedSpec": {
-        "people": ["dan"],
+        "people": [
+          "dan"
+        ],
         "mediaKind": "video",
-        "keywords": ["red bicycle"],
+        "keywords": [
+          "red bicycle"
+        ],
         "intent": "filter"
       },
       "expectedInfix": "people:dan type:video \"red bicycle\"",
@@ -87,7 +114,10 @@
       ],
       "expectedCount": 1,
       "answerState": "answered",
-      "evidence": ["confirmed person tag", "scene caption phrase"]
+      "evidence": [
+        "confirmed person tag",
+        "scene caption phrase"
+      ]
     }
   ],
   "astCases": [
@@ -129,8 +159,13 @@
         "/Volumes/LaCie/1998/donna_birthday.mov"
       ],
       "expectedProseContains": "I found 8 catalog items",
-      "expectedTranslatorNotes": ["ignored extra field payload.limit"],
-      "evidence": ["confirmed person tag", "media kind (audio-only interview excluded)"]
+      "expectedTranslatorNotes": [
+        "ignored extra field payload.limit"
+      ],
+      "evidence": [
+        "confirmed person tag",
+        "media kind (audio-only interview excluded)"
+      ]
     },
     {
       "id": "who-is-ricks-dad-two-richards",
@@ -148,7 +183,330 @@
         "expectedProse": "Richard Harding Breen Jr's father: Richard Harding Breen Sr.",
         "expectedBasisContains": "CyberBrain identity “rick” → “Richard Harding Breen” → GEDCOM “Richard Harding Breen Jr”"
       },
-      "evidence": ["CyberBrain alias → GEDCOM pointer", "imported family tree (GEDCOM)"]
+      "evidence": [
+        "CyberBrain alias → GEDCOM pointer",
+        "imported family tree (GEDCOM)"
+      ]
+    },
+    {
+      "id": "count-how-many-videos-of-donna",
+      "input": "count how many videos of donna we have?",
+      "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\"}}",
+      "expectedRoute": "presence",
+      "expectedOutcome": "answered",
+      "expectedCount": 8,
+      "expectedPaths": [
+        "/Volumes/LaCie/Cape-1992-archive.mkv",
+        "/Volumes/LaCie/CapeCod_June_1997.mp4",
+        "/Volumes/LaCie/Donna-CapeCod-1990s_prob4_1.mov",
+        "/Volumes/LaCie/Cape-1993/reel.mov",
+        "/Volumes/LaCie/cape-1992-edit.mov",
+        "/Volumes/LaCie/Cape-2004-archive.mkv",
+        "/Volumes/LaCie/Down the Road 1995.mov",
+        "/Volumes/LaCie/1998/donna_birthday.mov"
+      ],
+      "expectedProseContains": "I found 8 catalog items",
+      "evidence": [
+        "confirmed person tag",
+        "media kind (audio-only interview excluded)"
+      ]
+    },
+    {
+      "id": "show-donnas-family-tree",
+      "input": "show donna's family tree",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"donna\"],\"operation\":\"familyTree\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "answered",
+      "expectedProseContains": "Donna Breen's family tree — parents: Elaine Bowser and Frank Bowser; grandparents: Ann Smith; married to Richard Harding Breen Jr; 1 child: Timothy Breen; 4 recorded ancestors across 3 generations and 1 recorded descendant across 1 generation.",
+      "expectedBasisContains": "CyberBrain identity “donna” → “Donna Breen” → GEDCOM “Donna Breen”",
+      "expectedOfferedActions": [
+        "Open in Family Tree: Donna Breen"
+      ],
+      "evidence": [
+        "CyberBrain alias → GEDCOM pointer",
+        "imported family tree (GEDCOM) neighbourhood + ancestor/descendant walk"
+      ]
+    },
+    {
+      "id": "show-ricks-family-tree-no-apostrophe",
+      "input": "show ricks family tree",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"ricks\"],\"operation\":\"familyTree\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "needsClarification",
+      "expectedProseContains": "Which rick do you mean?",
+      "expectedChipLabels": [
+        "Richard Harding Breen (b. 4 JUL 1962)",
+        "Richard Harding Breen (b. 12 MAR 1931)"
+      ],
+      "continuation": {
+        "select": "cyberBrain:person.rick.jr",
+        "expectedOutcome": "answered",
+        "expectedProse": "Richard Harding Breen Jr's family tree — parents: Mary Breen and Richard Harding Breen Sr; married to Donna Breen; 1 child: Timothy Breen; 2 recorded ancestors across 1 generation and 1 recorded descendant across 1 generation.",
+        "expectedBasisContains": "CyberBrain identity “rick” → “Richard Harding Breen” → GEDCOM “Richard Harding Breen Jr”"
+      },
+      "evidence": [
+        "missing-apostrophe possessive read as rick's (the basis note is pinned by HallieTurnExecutorTests; the live model already emits 'rick')",
+        "CyberBrain alias → two GEDCOM pointers → distinct chips",
+        "imported family tree (GEDCOM)"
+      ]
+    },
+    {
+      "id": "family-tree-for-the-breens",
+      "input": "get me the family tree for the breens",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"operation\":\"familyTree\",\"surname\":\"breen\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "answered",
+      "expectedProseContains": "The family tree records 5 people with the surname Breen — spanning 3 generations; earliest born 1931 (Richard Harding Breen Sr); latest born 2005 (Timothy Breen).",
+      "expectedOfferedActions": [
+        "Open in Family Tree: the Breens"
+      ],
+      "evidence": [
+        "GEDCOM surname roll-up (count, generations, earliest/latest birth)"
+      ]
+    },
+    {
+      "id": "family-tree-for-the-breens-model-variant",
+      "input": "get me the family tree for the breens",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"the breens\"],\"operation\":\"family tree\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "answered",
+      "expectedProseContains": "The family tree records 5 people with the surname Breen",
+      "expectedTranslatorNotes": [
+        "rewrote payload.operation 'family tree' to familyTree",
+        "rewrote payload.people 'the breens' to surname"
+      ],
+      "evidence": [
+        "tolerant decoder maps 'family tree' + 'the breens' to familyTree/surname"
+      ]
+    },
+    {
+      "id": "donnas-maternal-great-grandmother",
+      "input": "who was donna's great grandmother on her maternal side?",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"donna\"],\"operation\":\"kinship\",\"relation\":\"great-grandmother\",\"side\":\"maternal\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "answered",
+      "expectedProseContains": "Donna Breen's maternal great-grandmother: Ruth Cole (Donna Breen → mother Elaine Bowser → her mother Ann Smith → her mother Ruth Cole).",
+      "expectedBasisContains": "imported family tree (GEDCOM)",
+      "evidence": [
+        "three-hop maternal traversal with the path stated",
+        "GEDCOM"
+      ]
+    },
+    {
+      "id": "donnas-maternal-great-grandmother-model-variant",
+      "input": "who was donna's great grandmother on her maternal side?",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"donna\"],\"operation\":\"kinship\",\"relation\":\"maternal great grandmother\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "answered",
+      "expectedProseContains": "Ruth Cole",
+      "expectedTranslatorNotes": [
+        "rewrote payload.relation 'maternal great grandmother' to 'great-grandmother'",
+        "derived payload.side 'maternal' from relation wording"
+      ],
+      "evidence": [
+        "tolerant decoder splits side out of the relation wording"
+      ]
+    },
+    {
+      "id": "donnas-paternal-great-grandmother-missing-hop",
+      "input": "who was donna's great grandmother on her paternal side?",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"donna\"],\"operation\":\"kinship\",\"relation\":\"great-grandmother\",\"side\":\"paternal\"}}",
+      "expectedRoute": "graph",
+      "expectedOutcome": "declined",
+      "expectedProseContains": "The family tree records Donna Breen's father (Frank Bowser), but not her father's parents — so I can't name a paternal great-grandmother.",
+      "evidence": [
+        "exact missing hop named",
+        "GEDCOM"
+      ]
+    },
+    {
+      "id": "timmy-as-a-baby-saying-peekaboo",
+      "input": "show timmy as a baby saying peekaboo",
+      "modelOutput": "{\"shape\":\"cross\",\"payload\":{\"people\":[\"timmy\"],\"keywords\":[\"as a baby\"],\"transcript\":[\"peekaboo\"]}}",
+      "expectedRoute": "cross",
+      "expectedOutcome": "answered",
+      "expectedCount": 1,
+      "expectedPaths": [
+        "/Volumes/LaCie/2006/timmy_playpen.mov"
+      ],
+      "expectedProseContains": "I found 1 catalog item",
+      "expectedBasisContains": "using Timothy Breen's birth year 2005 from the family tree (“as a baby” = 2005–2007)",
+      "expectedCitationBasisContains": [
+        "confirmed person tag Timmy proves timmy",
+        "path year 2006",
+        "transcript mentions peekaboo"
+      ],
+      "evidence": [
+        "confirmed person tag",
+        "birth year via CyberBrain alias → GEDCOM",
+        "path year inside the baby band",
+        "transcript mention (2015 peekaboo excluded by band)"
+      ]
+    }
+  ],
+  "conversationCases": [
+    {
+      "id": "count-then-play-the-first-one",
+      "turns": [
+        {
+          "input": "count how many videos of donna we have?",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\"}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 8
+        },
+        {
+          "input": "play one of them, say the first one",
+          "local": true,
+          "expectedRoute": "follow-up",
+          "expectedOutcome": "answered",
+          "expectedMediaAction": "play",
+          "expectedPaths": [
+            "/Volumes/LaCie/Cape-1992-archive.mkv"
+          ],
+          "expectedProseContains": "Playing item 1 from my last answer: “Cape-1992-archive.mkv”.",
+          "expectedBasisContains": "your last answer's cited items; no new search was run"
+        }
+      ],
+      "evidence": [
+        "conversation memory: ordinal referent → citation #1 of the last result set; no translation, no new search"
+      ]
+    },
+    {
+      "id": "count-then-refine-to-the-90s",
+      "turns": [
+        {
+          "input": "count how many videos of donna we have?",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\"}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 8
+        },
+        {
+          "input": "and in the 90s?",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 7,
+          "expectedBasisContains": "refining your last question (years → 1990–1999)",
+          "expectedQueryContains": "years=1990...1999"
+        },
+        {
+          "input": "what about rick?",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 2,
+          "expectedPaths": [
+            "/Volumes/LaCie/Cape-1993/reel.mov",
+            "/Volumes/LaCie/Cape-1994-rick.mov"
+          ],
+          "expectedBasisContains": "refining your last question (person → rick)"
+        }
+      ],
+      "evidence": [
+        "AST refinement chain: years replaced, then person replaced on the refined AST; basis says so each time"
+      ]
+    },
+    {
+      "id": "count-then-show-more-when-all-shown",
+      "turns": [
+        {
+          "input": "count how many videos of donna we have?",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\"}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 8
+        },
+        {
+          "input": "show more",
+          "local": true,
+          "expectedRoute": "follow-up",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "That's all of them — I've already shown all 8."
+        }
+      ],
+      "evidence": [
+        "paging is honest when the first page already held every match"
+      ]
+    },
+    {
+      "id": "play-with-nothing-to-refer-to",
+      "turns": [
+        {
+          "input": "play one of them, say the first one",
+          "local": true,
+          "expectedRoute": "follow-up",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "Ask me for something first, then I can play one of them."
+        }
+      ],
+      "evidence": [
+        "no prior result set → honest decline, never a fresh search"
+      ]
+    },
+    {
+      "id": "capability-change-biography",
+      "turns": [
+        {
+          "input": "can we change donna's biography?",
+          "local": true,
+          "expectedRoute": "capability",
+          "expectedOutcome": "unsupported",
+          "expectedProseContains": "I can't edit biographies or family facts yet — Rick maintains the family knowledge (CyberBrain) by hand today; interviewing and edits through me are on the roadmap. Want me to show what I currently have for Donna instead?",
+          "expectedOfferedActions": [
+            "Show what I have for Donna"
+          ]
+        }
+      ],
+      "evidence": [
+        "model-free honest capability answer with an offered next step"
+      ]
+    },
+    {
+      "id": "family-tree-shapes-resolve-locally",
+      "turns": [
+        {
+          "input": "show donna's family tree",
+          "local": true,
+          "expectedRoute": "graph",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "Donna Breen's family tree",
+          "expectedOfferedActions": [
+            "Open in Family Tree: Donna Breen"
+          ]
+        },
+        {
+          "input": "show ricks family tree",
+          "local": true,
+          "expectedRoute": "graph",
+          "expectedOutcome": "needsClarification",
+          "expectedChipLabels": [
+            "Richard Harding Breen (b. 4 JUL 1962)",
+            "Richard Harding Breen (b. 12 MAR 1931)"
+          ]
+        },
+        {
+          "input": "get me the family tree for the breens",
+          "local": true,
+          "expectedRoute": "graph",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "The family tree records 5 people with the surname Breen",
+          "expectedOfferedActions": [
+            "Open in Family Tree: the Breens"
+          ]
+        },
+        {
+          "input": "show family tree",
+          "local": true,
+          "expectedRoute": "graph",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "The family tree records 9 people, with birth years from 1931 to 2005"
+        }
+      ],
+      "evidence": [
+        "family-tree sentences are recognised locally (no model) and reach the same graph executor as the translated form"
+      ]
     }
   ]
 }

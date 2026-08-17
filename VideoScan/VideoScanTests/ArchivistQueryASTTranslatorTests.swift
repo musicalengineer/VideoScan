@@ -97,7 +97,7 @@ struct ArchivistQueryASTTranslatorTests {
     @Test func strictV2DecodeRejectsInvalidModelOutput() async {
         var translator = OllamaQueryTranslator()
         translator.transport = .fake { _, _ in
-            astReply(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"kinship","relation":"cousin"}}"#)
+            astReply(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"kinship","relation":"godparent"}}"#)
         }
 
         do {

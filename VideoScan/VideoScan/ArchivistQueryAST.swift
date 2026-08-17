@@ -217,34 +217,95 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
     struct Graph: Codable, Equatable, Sendable {
         enum Operation: String, Codable, Equatable, Sendable {
             case biography, birth, death, kinship
+            /// "show Donna's family tree" — a neighbourhood summary (person)
+            /// or a surname roll-up, plus an offer to open the Family Tree tab.
+            case familyTree
         }
 
-        enum Relation: String, Codable, Equatable, Sendable {
+        /// Closed kinship vocabulary. One-hop relations are the original
+        /// contract; the multi-hop ones (grandparents, great-grandparents,
+        /// aunts/uncles, cousins, nieces/nephews, basic in-laws) map onto
+        /// `GedcomFamilyGraph.ExtendedRelation` and may carry a `side`.
+        enum Relation: String, Codable, Equatable, Sendable, CaseIterable {
             case father, mother, parents
             case brother, sister, siblings
             case son, daughter, children
             case husband, wife, spouse
+            case grandfather, grandmother, grandparents
+            case greatGrandfather = "great-grandfather"
+            case greatGrandmother = "great-grandmother"
+            case greatGrandparents = "great-grandparents"
+            case greatGreatGrandfather = "great-great-grandfather"
+            case greatGreatGrandmother = "great-great-grandmother"
+            case greatGreatGrandparents = "great-great-grandparents"
+            case uncle, aunt
+            case auntsAndUncles = "aunts-and-uncles"
+            case cousin, cousins
+            case nephew, niece
+            case niecesAndNephews = "nieces-and-nephews"
+            case fatherInLaw = "father-in-law"
+            case motherInLaw = "mother-in-law"
+            case parentsInLaw = "parents-in-law"
+            case brotherInLaw = "brother-in-law"
+            case sisterInLaw = "sister-in-law"
+            case sonInLaw = "son-in-law"
+            case daughterInLaw = "daughter-in-law"
+
+            /// The one-hop relations answered by `GedcomFamilyGraph.relatives`.
+            var isSingleHop: Bool {
+                switch self {
+                case .father, .mother, .parents, .brother, .sister, .siblings,
+                     .son, .daughter, .children, .husband, .wife, .spouse:
+                    return true
+                default:
+                    return false
+                }
+            }
         }
 
+        /// Which parent the first hop goes through ("on her maternal side").
+        enum Side: String, Codable, Equatable, Sendable {
+            case maternal, paternal
+        }
+
+        /// Empty only for `familyTree` (surname or whole-tree forms).
         var people: [String]
         var operation: Operation
         var relation: Relation?
+        var side: Side?
+        /// Surname roll-up for `familyTree` ("the Breens").
+        var surname: String?
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
-            case people, operation, relation
+            case people, operation, relation, side, surname
         }
 
-        init(people: [String], operation: Operation, relation: Relation? = nil) {
+        init(people: [String], operation: Operation, relation: Relation? = nil,
+             side: Side? = nil, surname: String? = nil) {
             self.people = people
             self.operation = operation
             self.relation = relation
+            self.side = side
+            self.surname = surname
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.strictContainer(keyedBy: CodingKeys.self)
-            people = try c.decodeBoundedList(.people, requireNonempty: true)
             operation = try c.decode(Operation.self, forKey: .operation)
+            if operation == .familyTree {
+                people = try c.decodeBoundedListIfPresent(.people) ?? []
+            } else {
+                people = try c.decodeBoundedList(.people, requireNonempty: true)
+            }
             relation = try c.decodeNonNullIfPresent(Relation.self, forKey: .relation)
+            side = try c.decodeNonNullIfPresent(Side.self, forKey: .side)
+            surname = try c.decodeNonNullIfPresent(String.self, forKey: .surname)
+            if let surname,
+               surname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .surname, in: c,
+                    debugDescription: "surname must not be empty")
+            }
 
             if operation == .kinship {
                 guard relation != nil else {
@@ -256,6 +317,21 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
                 throw DecodingError.dataCorruptedError(
                     forKey: .relation, in: c,
                     debugDescription: "relation is valid only for kinship")
+            }
+            if side != nil, operation != .kinship {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .side, in: c,
+                    debugDescription: "side is valid only for kinship")
+            }
+            if surname != nil, operation != .familyTree {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .surname, in: c,
+                    debugDescription: "surname is valid only for familyTree")
+            }
+            if operation == .familyTree, !people.isEmpty, surname != nil {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .surname, in: c,
+                    debugDescription: "familyTree takes people or surname, not both")
             }
         }
     }
@@ -486,7 +562,7 @@ extension ArchivistQueryAST {
     static let knownFieldNames: Set<String> = [
         "shape", "payload", "people", "yearStart", "yearEnd", "mediaKind",
         "keywords", "transcript", "subject", "operation", "reference", "kind",
-        "year", "anchorPeople", "relation", "limit",
+        "year", "anchorPeople", "relation", "limit", "side", "surname",
     ]
 
     /// Keys whose presence means the model stopped translating and started
@@ -529,6 +605,9 @@ extension ArchivistQueryAST {
                                          shape: shape, notes: &notes)
                 payload["reference"] = reference
             }
+            if shape == "graph" {
+                payload = canonicalGraphPayload(payload, notes: &notes)
+            }
             top["payload"] = payload
         }
 
@@ -537,12 +616,98 @@ extension ArchivistQueryAST {
         return TranslatorDecoding(ast: ast, notes: notes)
     }
 
+    /// Graph-payload spellings the model uses for meanings the contract
+    /// already has: "family tree"/"ancestors"/"lineage" → familyTree, and
+    /// colloquial kinship words ("grandma", "great grandmother", "maternal
+    /// great-grandmother" → relation + side, "mom" → mother). Only the
+    /// spelling changes; an unknown word is left for the strict decoder to
+    /// reject, never guessed.
+    private static func canonicalGraphPayload(
+        _ payload: [String: Any],
+        notes: inout [String]
+    ) -> [String: Any] {
+        var result = payload
+        if let operation = payload["operation"] as? String,
+           Graph.Operation(rawValue: operation) == nil {
+            let key = operation.lowercased()
+                .replacingOccurrences(of: "_", with: "")
+                .replacingOccurrences(of: "-", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            let treeWords: Set<String> = [
+                "familytree", "tree", "ancestors", "ancestry", "ancestor",
+                "descendants", "descendant", "lineage", "pedigree",
+                "genealogy", "family", "familyhistory", "relatives",
+            ]
+            if treeWords.contains(key) {
+                result["operation"] = "familyTree"
+                notes.append("rewrote payload.operation '\(operation)' to familyTree")
+            } else if let known = Graph.Operation(rawValue: key)
+                        ?? (key == "bio" ? .biography : nil) {
+                result["operation"] = known.rawValue
+                notes.append("rewrote payload.operation '\(operation)' to \(known.rawValue)")
+            }
+        }
+        if let relation = payload["relation"] as? String,
+           Graph.Relation(rawValue: relation) == nil {
+            var canonical: String?
+            var impliedSide: String?
+            if let single = GedcomFamilyGraph.relation(fromWord: relation) {
+                canonical = single.rawValue
+            } else if let extended = GedcomFamilyGraph.extendedRelation(
+                fromPhrase: relation) {
+                canonical = extended.relation.rawValue
+                impliedSide = extended.side?.rawValue
+            }
+            if let canonical {
+                result["relation"] = canonical
+                notes.append("rewrote payload.relation '\(relation)' to '\(canonical)'")
+            }
+            if let impliedSide, payload["side"] == nil {
+                result["side"] = impliedSide
+                notes.append("derived payload.side '\(impliedSide)' from relation wording")
+            }
+        }
+        if let side = payload["side"] as? String,
+           Graph.Side(rawValue: side) == nil {
+            let key = side.lowercased()
+            let mapped: String? = key.contains("mother") || key.contains("maternal")
+                ? "maternal"
+                : key.contains("father") || key.contains("paternal")
+                    ? "paternal" : nil
+            if let mapped {
+                result["side"] = mapped
+                notes.append("rewrote payload.side '\(side)' to '\(mapped)'")
+            }
+        }
+        // "the Breens" offered as a person is a surname roll-up in disguise.
+        if result["operation"] as? String == "familyTree",
+           result["surname"] == nil,
+           let people = result["people"] as? [String], people.count == 1,
+           let only = people.first {
+            let lowered = only.lowercased().trimmingCharacters(in: .whitespaces)
+            if lowered.hasPrefix("the "), lowered.hasSuffix("s") {
+                result["surname"] = String(only.dropFirst(4))
+                result["people"] = [String]()
+                notes.append("rewrote payload.people '\(only)' to surname")
+            }
+        }
+        return result
+    }
+
     /// Contract form for a temporal reference the model wrote in shorthand;
     /// nil when it is already an object with "kind" (or unrecognizable, in
     /// which case the strict decoder reports it).
     private static func canonicalReference(_ value: Any) -> Any? {
         if let object = value as? [String: Any] {
-            if object["kind"] != nil { return nil }
+            if let kind = object["kind"] as? String {
+                // `{"kind":"explicitYear","value":1998}` — right kind, wrong
+                // key for the number (seen live from qwen3.6, 2026-08-17).
+                guard kind == "explicitYear", object["year"] == nil,
+                      object.count == 2,
+                      let year = (object["value"] ?? object["explicitYear"]) as? Int
+                else { return nil }
+                return ["kind": "explicitYear", "year": year]
+            }
             let keys = Set(object.keys.map { $0.lowercased() })
             if keys == ["explicityear"],
                let year = object.values.first as? Int {

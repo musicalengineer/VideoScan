@@ -444,8 +444,7 @@ struct HallieShellCLITests {
                               anchorPeople: ["Donna"])), .aggregate),
             (.graph(.init(people: ["Donna"], operation: .biography)), .graph),
             (.event(.init(keywords: ["birthday"])), .unsupportedEvent),
-            (.cross(.init(people: ["Donna"], transcript: ["birthday"])),
-             .unsupportedCross),
+            (.cross(.init(people: ["Donna"], transcript: ["birthday"])), .cross),
         ]
         for (ast, expected) in cases {
             #expect(HallieShellCLI.route(ast) == expected)
@@ -485,36 +484,46 @@ struct HallieShellCLITests {
         }
     }
 
-    @Test func eventAndCrossAreDeclinedBySharedTurnWithoutMediaAction() async throws {
-        for ast in [
-            ArchivistQueryAST.event(.init(keywords: ["first birthday"])),
-            .cross(.init(people: ["Donna"], keywords: ["red bike"])),
-        ] {
-            let harness = Harness(translations: [ast])
-            let options = try HallieShellCLI.parse(arguments: [
-                "--hallie", "--once", "fixture question",
-            ])
-            let code = await HallieShellCLI.run(
-                options: options, output: { harness.output.append($0) },
-                dependencies: harness.dependencies())
+    @Test func eventIsDeclinedBySharedTurnWithoutMediaAction() async throws {
+        let ast = ArchivistQueryAST.event(.init(keywords: ["first birthday"]))
+        let harness = Harness(translations: [ast])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", "fixture question",
+        ])
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
 
-            #expect(harness.output.contains { $0.contains("not supported") })
-            #expect(harness.output.contains {
-                $0.contains("did not run a broader search")
-                    || $0.contains("did not coerce this into presence search")
-            })
-            #expect(harness.output.contains { $0.contains("QueryAST shape=") })
-            #expect(harness.mediaActions.isEmpty)
-            #expect(code == HallieShellCLI.ExitCode.unsupportedShape.rawValue)
-        }
+        #expect(harness.output.contains { $0.contains("not supported") })
+        #expect(harness.output.contains { $0.contains("did not run a broader search") })
+        #expect(harness.output.contains { $0.contains("QueryAST shape=") })
+        #expect(harness.mediaActions.isEmpty)
+        #expect(code == HallieShellCLI.ExitCode.unsupportedShape.rawValue)
+    }
+
+    /// Cross now runs on the deterministic presence executor: with no
+    /// matching evidence it declines on evidence (exit 3), never as an
+    /// unsupported shape, and never opens media.
+    @Test func crossExecutesDeterministicallyAndDeclinesOnNoEvidence() async throws {
+        let ast = ArchivistQueryAST.cross(.init(people: ["Donna"], keywords: ["red bike"]))
+        let harness = Harness(translations: [ast])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", "fixture question",
+        ])
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.output.contains { $0.contains("shape=cross") })
+        #expect(!harness.output.contains { $0.contains("not supported") })
+        #expect(harness.mediaActions.isEmpty)
+        #expect(code == HallieShellCLI.ExitCode.noEvidence.rawValue)
     }
 
     @Test func unsupportedRoutesRenderSharedResultWithoutShellOverride() async throws {
         for (ast, route) in [
             (ArchivistQueryAST.event(.init(keywords: ["birthday"])),
              HallieTurnExecutor.Route.unsupportedEvent),
-            (.cross(.init(people: ["Donna"], keywords: ["red bike"])),
-             .unsupportedCross),
         ] {
             let harness = Harness(translations: [ast])
             harness.executeTurn = { _, _ in
@@ -1037,7 +1046,10 @@ struct HallieShellCLITests {
 
     @Test func mainRoutesHallieBeforeSwiftUIAndShellUsesTypedTranslator() throws {
         let main = try source(named: "main.swift")
+        // The shell's rendering lives in a sibling extension file; the
+        // source sensors below cover both.
         let shell = try source(named: "HallieShellCLI.swift")
+            + source(named: "HallieShellCLI+Render.swift")
         let hallieBranch = try #require(main.range(of: "if isHallieShell"))
         let appMain = try #require(main.range(of: "VideoScanApp.main()",
                                              options: .backwards))

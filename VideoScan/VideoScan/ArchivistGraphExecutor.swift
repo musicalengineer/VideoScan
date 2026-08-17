@@ -73,28 +73,72 @@ struct ArchivistGraphAmbiguityCandidate: Sendable, Equatable {
 /// only these bounded value fields cross into the factual graph layer.
 struct ArchivistGraphQuery: Sendable, Equatable {
     enum Operation: String, Sendable, Equatable {
-        case biography, birth, death, kinship
+        case biography, birth, death, kinship, familyTree
     }
 
-    enum Relation: String, Sendable, Equatable {
+    /// Mirrors the wire vocabulary by raw value. One-hop relations answer
+    /// through `GedcomFamilyGraph.relatives`; the rest through the multi-hop
+    /// path resolver (`ExtendedRelation`).
+    enum Relation: String, Sendable, Equatable, CaseIterable {
         case father, mother, parents
         case brother, sister, siblings
         case son, daughter, children
         case husband, wife, spouse
+        case grandfather, grandmother, grandparents
+        case greatGrandfather = "great-grandfather"
+        case greatGrandmother = "great-grandmother"
+        case greatGrandparents = "great-grandparents"
+        case greatGreatGrandfather = "great-great-grandfather"
+        case greatGreatGrandmother = "great-great-grandmother"
+        case greatGreatGrandparents = "great-great-grandparents"
+        case uncle, aunt
+        case auntsAndUncles = "aunts-and-uncles"
+        case cousin, cousins
+        case nephew, niece
+        case niecesAndNephews = "nieces-and-nephews"
+        case fatherInLaw = "father-in-law"
+        case motherInLaw = "mother-in-law"
+        case parentsInLaw = "parents-in-law"
+        case brotherInLaw = "brother-in-law"
+        case sisterInLaw = "sister-in-law"
+        case sonInLaw = "son-in-law"
+        case daughterInLaw = "daughter-in-law"
+
+        var singleHop: GedcomFamilyGraph.Relation? {
+            GedcomFamilyGraph.Relation(rawValue: rawValue)
+        }
+
+        var extended: GedcomFamilyGraph.ExtendedRelation? {
+            GedcomFamilyGraph.ExtendedRelation(rawValue: rawValue)
+        }
+    }
+
+    enum Side: String, Sendable, Equatable {
+        case maternal, paternal
+
+        var graphSide: GedcomFamilyGraph.KinshipSide {
+            self == .maternal ? .maternal : .paternal
+        }
     }
 
     let people: [String]
     let operation: Operation
     let relation: Relation?
+    let side: Side?
+    let surname: String?
 
     init(
         people: [String],
         operation: Operation,
-        relation: Relation? = nil
+        relation: Relation? = nil,
+        side: Side? = nil,
+        surname: String? = nil
     ) {
         self.people = people
         self.operation = operation
         self.relation = relation
+        self.side = side
+        self.surname = surname
     }
 
     init(_ payload: ArchivistQueryAST.Graph) {
@@ -104,22 +148,17 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         case .birth: operation = .birth
         case .death: operation = .death
         case .kinship: operation = .kinship
+        case .familyTree: operation = .familyTree
         }
-        switch payload.relation {
-        case .some(.father): relation = .father
-        case .some(.mother): relation = .mother
-        case .some(.parents): relation = .parents
-        case .some(.brother): relation = .brother
-        case .some(.sister): relation = .sister
-        case .some(.siblings): relation = .siblings
-        case .some(.son): relation = .son
-        case .some(.daughter): relation = .daughter
-        case .some(.children): relation = .children
-        case .some(.husband): relation = .husband
-        case .some(.wife): relation = .wife
-        case .some(.spouse): relation = .spouse
-        case nil: relation = nil
+        // Raw values are the shared closed vocabulary; a wire relation that
+        // has no executor twin becomes nil and fails closed as "missing".
+        relation = payload.relation.flatMap { Relation(rawValue: $0.rawValue) }
+        switch payload.side {
+        case .some(.maternal): side = .maternal
+        case .some(.paternal): side = .paternal
+        case nil: side = nil
         }
+        surname = payload.surname
     }
 }
 
@@ -134,6 +173,13 @@ enum ArchivistGraphConclusion: Sendable, Equatable {
     case unsupportedPeopleCount(Int)
     case missingRelation
     case unexpectedRelation
+}
+
+/// Where the Family Tree tab should land if the user takes the offered
+/// action. Presentation hint only; it carries a display name, never a claim.
+enum ArchivistFamilyTreeFocus: Sendable, Equatable {
+    case person(name: String)
+    case surname(String)
 }
 
 /// Exact GEDCOM values used to compose an answer. This value stays on the
@@ -157,12 +203,40 @@ struct ArchivistGraphEvidence: Sendable, Equatable {
         let people: [RelatedPerson]
     }
 
+    /// One multi-hop route ("Donna → mother Elaine → her mother Ann").
+    struct KinshipPath: Sendable, Equatable {
+        struct Hop: Sendable, Equatable {
+            let label: String
+            let person: RelatedPerson
+        }
+        let hops: [Hop]
+    }
+
     let subjectID: String
     let subjectName: String
     let birthDate: String?
     let deathDate: String?
     let relationships: [Relationship]
     let identityBridge: IdentityBridge?
+    let kinshipPaths: [KinshipPath]
+
+    init(
+        subjectID: String,
+        subjectName: String,
+        birthDate: String?,
+        deathDate: String?,
+        relationships: [Relationship],
+        identityBridge: IdentityBridge?,
+        kinshipPaths: [KinshipPath] = []
+    ) {
+        self.subjectID = subjectID
+        self.subjectName = subjectName
+        self.birthDate = birthDate
+        self.deathDate = deathDate
+        self.relationships = relationships
+        self.identityBridge = identityBridge
+        self.kinshipPaths = kinshipPaths
+    }
 }
 
 struct ArchivistGraphResult: Sendable, Equatable {
@@ -174,13 +248,37 @@ struct ArchivistGraphResult: Sendable, Equatable {
     let profileCandidates: [String]
     let ambiguityCandidates: [ArchivistGraphAmbiguityCandidate]
     let catalogPersonName: String?
+    let familyTreeFocus: ArchivistFamilyTreeFocus?
+
+    init(
+        conclusion: ArchivistGraphConclusion,
+        prose: String,
+        basisLine: String,
+        evidence: ArchivistGraphEvidence?,
+        candidates: [ArchivistBiographyAnswer.Candidate],
+        profileCandidates: [String],
+        ambiguityCandidates: [ArchivistGraphAmbiguityCandidate],
+        catalogPersonName: String?,
+        familyTreeFocus: ArchivistFamilyTreeFocus? = nil
+    ) {
+        self.conclusion = conclusion
+        self.prose = prose
+        self.basisLine = basisLine
+        self.evidence = evidence
+        self.candidates = candidates
+        self.profileCandidates = profileCandidates
+        self.ambiguityCandidates = ambiguityCandidates
+        self.catalogPersonName = catalogPersonName
+        self.familyTreeFocus = familyTreeFocus
+    }
 }
 
 /// Pure executor for QueryAST's family-graph shape. The LLM supplies only the
 /// validated AST; family evidence and factual prose never cross back through
 /// the model. Multi-subject semantics are intentionally not invented: the
 /// current wire format permits a list but does not define conjunction or
-/// per-person output, so anything except one subject fails closed.
+/// per-person output, so anything except one subject fails closed (the
+/// `familyTree` surname / whole-tree forms are the one defined exception).
 enum ArchivistGraphExecutor {
     private static let queryValidationBasis =
         "Checked: graph-query validation only; no family source was consulted."
@@ -197,6 +295,12 @@ enum ArchivistGraphExecutor {
         inputs: ArchivistGraphInputs,
         subject selection: ArchivistGraphSubjectSelection
     ) -> ArchivistGraphResult {
+        if query.operation == .familyTree, query.people.isEmpty {
+            guard query.relation == nil, query.side == nil else {
+                return declineUnexpectedRelation()
+            }
+            return executeFamilyTreeWithoutPerson(query, graph: inputs.graph)
+        }
         guard query.people.count == 1 else {
             return decline(
                 .unsupportedPeopleCount(query.people.count),
@@ -219,7 +323,7 @@ enum ArchivistGraphExecutor {
                 prose: "A kinship question must specify a relationship.",
                 basis: queryValidationBasis)
         }
-        if query.operation != .kinship, query.relation != nil {
+        if query.operation != .kinship, query.relation != nil || query.side != nil {
             return declineUnexpectedRelation()
         }
 
@@ -256,6 +360,13 @@ enum ArchivistGraphExecutor {
 
         case .people(let people, let profileRoute):
             guard people.count == 1 else {
+                // A surname typed as a person ("the breens", "breens") for a
+                // family-tree request is a roll-up, not an unknown person.
+                if query.operation == .familyTree, people.isEmpty,
+                   let summary = ArchivistFamilyTreePolicy.summary(
+                       surname: typedName, in: inputs.graph) {
+                    return familyTreeSurnameResult(summary)
+                }
                 let answer = policyUnresolved(
                     typedName: typedName, candidates: people,
                     query: query, graph: inputs.graph)
@@ -430,6 +541,26 @@ enum ArchivistGraphExecutor {
                 identityBridge: identityBridge,
                 unresolvedProfileRoute: nil)
 
+        case .familyTree:
+            let answer = ArchivistFamilyTreePolicy.summary(
+                personID: person.id, in: graph)
+            let result = fromPolicy(
+                answer,
+                evidence: biographyEvidence(
+                    for: person, in: graph, identityBridge: identityBridge),
+                identityBridge: identityBridge,
+                unresolvedProfileRoute: nil)
+            return ArchivistGraphResult(
+                conclusion: result.conclusion,
+                prose: result.prose,
+                basisLine: result.basisLine,
+                evidence: result.evidence,
+                candidates: result.candidates,
+                profileCandidates: result.profileCandidates,
+                ambiguityCandidates: result.ambiguityCandidates,
+                catalogPersonName: result.catalogPersonName,
+                familyTreeFocus: .person(name: person.name))
+
         case .birth, .death:
             guard query.relation == nil else {
                 return declineUnexpectedRelation()
@@ -447,40 +578,31 @@ enum ArchivistGraphExecutor {
                 unresolvedProfileRoute: nil)
 
         case .kinship:
-            guard let relation = query.relation,
-                  let graphRelation = GedcomFamilyGraph.Relation(
-                    rawValue: relation.rawValue) else {
+            guard let relation = query.relation else {
                 return decline(
                     .missingRelation,
                     prose: "A kinship question must specify a relationship.",
                     basis: queryValidationBasis)
             }
-            let relatives = graph.relatives(graphRelation, of: person)
-                .sorted(by: personOrder)
-            let evidence = kinshipEvidence(
-                for: person, relation: graphRelation, relatives: relatives,
-                identityBridge: identityBridge)
-            guard !relatives.isEmpty else {
-                return ArchivistGraphResult(
-                    conclusion: .missingFact,
-                    prose: "The family tree doesn't record a \(relation.rawValue) for \(person.name).",
-                    basisLine: factualBasis(identityBridge),
-                    evidence: evidence,
-                    candidates: [],
-                    profileCandidates: [],
-                    ambiguityCandidates: [],
-                    catalogPersonName: nil)
+            if let graphRelation = relation.singleHop {
+                if query.side != nil {
+                    // "maternal father" has no meaning; refuse rather than
+                    // silently drop the side.
+                    return declineUnexpectedRelation()
+                }
+                return executeSingleHop(
+                    graphRelation, person: person, graph: graph,
+                    identityBridge: identityBridge)
             }
-            return ArchivistGraphResult(
-                conclusion: .answered,
-                prose: "\(person.name)'s \(relation.rawValue): "
-                    + relatives.map(\.name).joined(separator: ", ") + ".",
-                basisLine: factualBasis(identityBridge),
-                evidence: evidence,
-                candidates: [],
-                profileCandidates: [],
-                ambiguityCandidates: [],
-                catalogPersonName: nil)
+            guard let extended = relation.extended else {
+                return decline(
+                    .missingRelation,
+                    prose: "A kinship question must specify a relationship.",
+                    basis: queryValidationBasis)
+            }
+            return executeExtended(
+                extended, side: query.side?.graphSide, person: person,
+                graph: graph, identityBridge: identityBridge)
         }
     }
 
@@ -499,7 +621,7 @@ enum ArchivistGraphExecutor {
             return ArchivistBiographyPolicy.lifeDate(
                 for: typedName, birth: false,
                 candidates: candidates, in: graph)
-        case .biography, .kinship:
+        case .biography, .kinship, .familyTree:
             // BiographyPolicy owns the canonical fail-closed not-found and
             // ambiguity wording; no relationship is evaluated until unique.
             return ArchivistBiographyPolicy.biography(
@@ -585,7 +707,7 @@ enum ArchivistGraphExecutor {
             identityBridge: identityBridge)
     }
 
-    private static func kinshipEvidence(
+    static func kinshipEvidence(
         for person: GedcomFamilyGraph.Person,
         relation: GedcomFamilyGraph.Relation,
         relatives: [GedcomFamilyGraph.Person],
@@ -618,7 +740,7 @@ enum ArchivistGraphExecutor {
             basis: queryValidationBasis)
     }
 
-    private static func factualBasis(
+    static func factualBasis(
         _ bridge: ArchivistGraphEvidence.IdentityBridge?
     ) -> String {
         identityBridgeBasis(bridge, answered: true)
@@ -725,7 +847,7 @@ enum ArchivistGraphExecutor {
             aliases: aliases)
     }
 
-    private static func personOrder(
+    static func personOrder(
         _ lhs: GedcomFamilyGraph.Person,
         _ rhs: GedcomFamilyGraph.Person
     ) -> Bool {

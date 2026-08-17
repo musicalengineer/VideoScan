@@ -185,7 +185,11 @@ struct HallieAppV2IntegrationTests {
             #expect(invocation.selectedDate == selectedDate)
 
             switch HallieTurnExecutor.route(ast) {
-            case .presence:
+            case .presence, .cross:
+                // Cross runs on the presence executor (person + spoken words
+                // ANDed), so it captures presence snapshots too. Neither
+                // loads identity sources unless an age phrase needs a birth
+                // year.
                 #expect(invocation.presenceCount == 1)
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.isEmpty == true)
@@ -205,7 +209,7 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(invocation.graphWasInjected)
-            case .unsupportedEvent, .unsupportedCross:
+            case .unsupportedEvent, .followUp, .capability:
                 #expect(invocation.presenceCount == 0)
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.isEmpty == true)
@@ -736,7 +740,7 @@ struct HallieAppV2IntegrationTests {
         #expect(ask.contains("activeRequestID == requestID"))
 
         #expect(coordinator.contains("translator.translateAST(question)"))
-        #expect(coordinator.contains("HallieTurnExecutor.route(translation.ast)"))
+        #expect(coordinator.contains("HallieTurnExecutor.route(ast)"))
         #expect(coordinator.contains("HallieTurnExecutor.execute(request, context: context)"))
         #expect(coordinator.contains("dependencies.executeRequest(request, context)"))
         #expect(!coordinator.contains("translator.translate(question)"))
@@ -752,7 +756,10 @@ struct HallieAppV2IntegrationTests {
             chat, from: "private func commitHallie(",
             through: "// MARK: Play")
         #expect(commit.contains("action: .hallieIdentityChoice($0.id)"))
-        #expect(!commit.contains("action: .askText"))
+        // Clarification candidates never re-enter the ask pipeline by label;
+        // only executor OFFERS (".ask(question:label:)") may become askText.
+        #expect(!commit.contains("action: .askText($0.label"))
+        #expect(!commit.contains("askText(candidate"))
         #expect(commit.contains("response.pendingClarification"))
         #expect(chat.contains("HallieAppTurnCoordinator.continue("))
         #expect(ask.contains("let number = Int(folded)"))

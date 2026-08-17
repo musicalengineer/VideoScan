@@ -10,8 +10,17 @@ enum HallieTurnExecutor {
         case temporal
         case aggregate
         case graph
+        /// Person + spoken/visible terms ANDed; runs on the presence
+        /// executor with every basis cited (2026-08-17: "show timmy as a
+        /// baby saying peekaboo").
+        case cross
         case unsupportedEvent
-        case unsupportedCross
+        /// A model-free turn about the previous answer: play/reveal/show a
+        /// cited item, paging, an elliptical refinement, or an honest
+        /// "ask me for something first".
+        case followUp
+        /// A model-free honest answer about what Hallie can and cannot do.
+        case capability
     }
 
     enum Outcome: Sendable, Equatable {
@@ -77,15 +86,25 @@ enum HallieTurnExecutor {
         let originalQuestion: String
         let ast: ArchivistQueryAST
         let playAfterAnswer: Bool
+        /// Paging: proven matches to skip before citing ("show more").
+        let citationOffset: Int
+        /// Set when the AST came from a follow-up refinement of the previous
+        /// question rather than a fresh translation; quoted in the basis line
+        /// so the answer says so ("refining your last question").
+        let refinementNote: String?
 
         init(
             originalQuestion: String,
             ast: ArchivistQueryAST,
-            playAfterAnswer: Bool = false
+            playAfterAnswer: Bool = false,
+            citationOffset: Int = 0,
+            refinementNote: String? = nil
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
             self.playAfterAnswer = playAfterAnswer
+            self.citationOffset = max(0, citationOffset)
+            self.refinementNote = refinementNote
         }
     }
 
@@ -193,6 +212,30 @@ enum HallieTurnExecutor {
         let locator: String?
     }
 
+    /// A media action the user asked for on ALREADY-CITED items ("play the
+    /// first one"). The executor never opens media; the client performs it
+    /// (app: player/Finder/Catalog row; shell: its media-action seam).
+    struct MediaActionRequest: Sendable, Equatable {
+        enum Kind: String, Sendable, Equatable {
+            case play
+            case reveal
+            case show
+        }
+        let kind: Kind
+        let citations: [Citation]
+    }
+
+    /// Something the client may offer as a next step (a chip in the app, a
+    /// line in the shell). Never performed automatically.
+    enum OfferedAction: Sendable, Equatable {
+        /// Open the Family Tree tab focused on this person.
+        case openFamilyTree(personName: String)
+        /// Open the Family Tree tab filtered to this surname.
+        case openFamilyTreeSurname(String)
+        /// Ask this question next (label is what the chip shows).
+        case ask(question: String, label: String)
+    }
+
     struct Result: Sendable, Equatable {
         let route: Route
         let outcome: Outcome
@@ -203,6 +246,11 @@ enum HallieTurnExecutor {
         let knowledgeCitations: [KnowledgeCitation]
         let catalogPersonName: String?
         let clarification: Clarification?
+        /// Exact match count for list answers (presence/cross), independent
+        /// of the bounded citation page; nil for other routes.
+        let matchCount: Int?
+        let mediaAction: MediaActionRequest?
+        let offeredActions: [OfferedAction]
 
         init(
             route: Route,
@@ -213,7 +261,10 @@ enum HallieTurnExecutor {
             citations: [Citation],
             knowledgeCitations: [KnowledgeCitation] = [],
             catalogPersonName: String?,
-            clarification: Clarification? = nil
+            clarification: Clarification? = nil,
+            matchCount: Int? = nil,
+            mediaAction: MediaActionRequest? = nil,
+            offeredActions: [OfferedAction] = []
         ) {
             self.route = route
             self.outcome = outcome
@@ -224,6 +275,9 @@ enum HallieTurnExecutor {
             self.knowledgeCitations = knowledgeCitations
             self.catalogPersonName = catalogPersonName
             self.clarification = clarification
+            self.matchCount = matchCount
+            self.mediaAction = mediaAction
+            self.offeredActions = offeredActions
         }
     }
 
@@ -292,7 +346,7 @@ enum HallieTurnExecutor {
         case .aggregate: return .aggregate
         case .graph: return .graph
         case .event: return .unsupportedEvent
-        case .cross: return .unsupportedCross
+        case .cross: return .cross
         }
     }
 
@@ -302,8 +356,34 @@ enum HallieTurnExecutor {
         case .temporal: return "shape=temporal"
         case .aggregate: return "shape=aggregate"
         case .graph: return "shape=graph"
+        case .cross: return "shape=cross"
         case .unsupportedEvent: return "shape=event (unsupported)"
-        case .unsupportedCross: return "shape=cross (unsupported)"
+        case .followUp: return "follow-up"
+        case .capability: return "capability"
+        }
+    }
+
+    /// Transcript-log / UI label for a route. One spelling, shared by the app
+    /// window and the shell so the log never drifts between clients.
+    static func label(_ route: Route) -> String {
+        switch route {
+        case .presence: return "presence"
+        case .temporal: return "temporal"
+        case .aggregate: return "aggregate"
+        case .graph: return "graph"
+        case .cross: return "cross"
+        case .unsupportedEvent: return "unsupported-event"
+        case .followUp: return "follow-up"
+        case .capability: return "capability"
+        }
+    }
+
+    static func label(_ outcome: Outcome) -> String {
+        switch outcome {
+        case .answered: return "answered"
+        case .declined: return "declined"
+        case .unsupported: return "unsupported"
+        case .needsClarification: return "needs-clarification"
         }
     }
 
@@ -369,21 +449,27 @@ enum HallieTurnExecutor {
             guard request.selectedIdentity == nil else {
                 return invalidContinuationResult(for: ast)
             }
-            let query = ArchivistPresenceQuery(payload)
-            let records = context.presenceRecords
-            let execute = dependencies.executePresence
-            let result = try await detached {
-                execute(query, records)
+            return try await executePresenceLike(
+                payload, route: .presence, request: request,
+                context: context, dependencies: dependencies)
+
+        case .cross(let payload):
+            guard request.selectedIdentity == nil else {
+                return invalidContinuationResult(for: ast)
             }
-            let answer = ArchivistPresenceAnswerComposer.compose(result)
-            return Result(
-                route: .presence,
-                outcome: result.conclusion == .present ? .answered : .declined,
-                prose: answer.prose,
-                basisLine: answer.basisLine,
-                queryDescription: result.interpretedQuery,
-                citations: normalize(result.evidence.citations),
-                catalogPersonName: nil)
+            // Spoken terms and visible/topic terms are both keyword
+            // constraints on the presence executor: every keyword must be
+            // proven by SOME field (transcript, caption, filename, …) and
+            // the basis names which. Nothing is coerced or widened.
+            let merged = ArchivistQueryAST.Presence(
+                people: payload.people,
+                yearStart: payload.yearStart,
+                yearEnd: payload.yearEnd,
+                mediaKind: payload.mediaKind,
+                keywords: (payload.keywords ?? []) + (payload.transcript ?? []))
+            return try await executePresenceLike(
+                merged, route: .cross, request: request,
+                context: context, dependencies: dependencies)
 
         case .temporal(let payload):
             guard let profiles = context.profiles else {
@@ -449,7 +535,24 @@ enum HallieTurnExecutor {
                 citations: citations,
                 catalogPersonName: nil)
 
-        case .graph(let payload):
+        case .graph(let rawPayload):
+            // "show ricks family tree": a possessive typed without its
+            // apostrophe. When nobody knows "ricks" but someone knows "rick",
+            // read it that way — visibly, in the basis line — instead of
+            // declaring the person unknown.
+            let (payload, singularNote) = singularizedGraphPayload(
+                rawPayload, request: request, context: context)
+            if let singularNote {
+                let inner = try await execute(
+                    Request(intent: Intent(
+                        originalQuestion: request.intent.originalQuestion,
+                        ast: .graph(payload),
+                        playAfterAnswer: request.intent.playAfterAnswer,
+                        citationOffset: request.intent.citationOffset,
+                        refinementNote: request.intent.refinementNote)),
+                    context: context, dependencies: dependencies)
+                return inner.prefixingBasis(singularNote)
+            }
             // CyberBrain answers only when it knows the requested identity.
             // A `nil` here means CyberBrain has no opinion, and the turn
             // continues on the pre-existing profiles + GEDCOM path exactly
@@ -489,9 +592,7 @@ enum HallieTurnExecutor {
                     catalogPersonName: nil)
             }
             let query = ArchivistGraphQuery(payload)
-            let queryDescription =
-                "shape=graph operation=\(payload.operation.rawValue) "
-                + "person=\(payload.people.joined(separator: ","))"
+            let queryDescription = graphQueryDescription(payload)
             let inputs = ArchivistGraphInputs(
                 graph: graph,
                 profiles: (context.profiles ?? []).map {
@@ -551,7 +652,8 @@ enum HallieTurnExecutor {
                 basisLine: result.basisLine,
                 queryDescription: queryDescription,
                 citations: [],
-                catalogPersonName: result.catalogPersonName)
+                catalogPersonName: result.catalogPersonName,
+                offeredActions: familyTreeOffers(result.familyTreeFocus))
 
         case .event:
             guard request.selectedIdentity == nil else {
@@ -562,19 +664,6 @@ enum HallieTurnExecutor {
                 outcome: .unsupported,
                 prose: "Event queries are not supported yet; I did not run a broader search.",
                 basisLine: "Basis: QueryAST shape=event has no deterministic executor.",
-                queryDescription: nil,
-                citations: [],
-                catalogPersonName: nil)
-
-        case .cross:
-            guard request.selectedIdentity == nil else {
-                return invalidContinuationResult(for: ast)
-            }
-            return Result(
-                route: .unsupportedCross,
-                outcome: .unsupported,
-                prose: "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
-                basisLine: "Basis: QueryAST shape=cross has no deterministic executor.",
                 queryDescription: nil,
                 citations: [],
                 catalogPersonName: nil)
@@ -735,9 +824,7 @@ enum HallieTurnExecutor {
               let graph = context.graph else {
             return nil
         }
-        let queryDescription =
-            "shape=graph operation=\(payload.operation.rawValue) "
-            + "person=\(payload.people.joined(separator: ","))"
+        let queryDescription = graphQueryDescription(payload)
 
         let person: CyberBrainPerson
         switch request.selectedIdentity {
@@ -823,276 +910,74 @@ enum HallieTurnExecutor {
             basisLine: basis,
             queryDescription: queryDescription,
             citations: [],
-            catalogPersonName: result.catalogPersonName)
+            catalogPersonName: result.catalogPersonName,
+            offeredActions: familyTreeOffers(result.familyTreeFocus))
     }
 
-    /// Chip label for a CyberBrain candidate. Same-name people (Sr./Jr.)
-    /// get the linked GEDCOM birth/death detail, mirroring the graph path's
-    /// disambiguation labels; without a family-tree link the stable ID is
-    /// appended. Shared by the biography and kinship/birth/death routes so
-    /// the two clarifications read identically.
-    private static func bridgedLabel(
-        _ candidate: CyberBrainPerson,
-        among candidates: [CyberBrainPerson],
-        graph: GedcomFamilyGraph?
-    ) -> String {
-        let key = PersonResolver.normalize(candidate.canonicalName)
-        let duplicates = candidates.filter {
-            PersonResolver.normalize($0.canonicalName) == key
-        }.count
-        guard duplicates > 1 else { return candidate.canonicalName }
-        if let gedcomID = candidate.gedcomPersonID,
-           let person = graph?.people[gedcomID] {
-            let detail = ArchivistBiographyPolicy
-                .disambiguationCandidate(for: person).label
-            // Keep the CyberBrain canonical name in front so the chip still
-            // reads as the person the archive knows.
-            if detail.hasPrefix(person.name), detail.count > person.name.count {
-                return candidate.canonicalName
-                    + String(detail.dropFirst(person.name.count))
-            }
-            return detail
+    static func graphQueryDescription(_ payload: ArchivistQueryAST.Graph) -> String {
+        var parts = ["shape=graph operation=\(payload.operation.rawValue)"]
+        if !payload.people.isEmpty {
+            parts.append("person=\(payload.people.joined(separator: ","))")
         }
-        return "\(candidate.canonicalName) (\(candidate.id))"
+        if let relation = payload.relation { parts.append("relation=\(relation.rawValue)") }
+        if let side = payload.side { parts.append("side=\(side.rawValue)") }
+        if let surname = payload.surname { parts.append("surname=\(surname)") }
+        return parts.joined(separator: " ")
     }
 
-    /// Biography-route wrapper over `bridgedLabel` for planner candidates.
-    private static func cyberBrainLabel(
-        _ candidate: CyberBrainAnswerPlan.Candidate,
-        plan: CyberBrainAnswerPlan,
-        index: CyberBrainIndex,
-        graph: GedcomFamilyGraph?
-    ) -> String {
-        let people = plan.ambiguityCandidates
-            .filter { $0.source == .cyberBrain }
-            .compactMap { index.person(id: $0.id) }
-        guard let person = index.person(id: candidate.id) else {
-            return "\(candidate.canonicalName) (\(candidate.id))"
+    static func familyTreeOffers(_ focus: ArchivistFamilyTreeFocus?) -> [OfferedAction] {
+        switch focus {
+        case nil: return []
+        case .person(let name): return [.openFamilyTree(personName: name)]
+        case .surname(let surname): return [.openFamilyTreeSurname(surname)]
         }
-        return bridgedLabel(person, among: people, graph: graph)
     }
 
-    private static func unavailableProfilesResult(route: Route) -> Result {
-        let shape = route == .temporal ? "temporal" : "aggregate"
-        return Result(
-            route: route,
-            outcome: .declined,
-            prose: "I can't answer that reliably because People profiles are unavailable.",
-            basisLine: "Basis: profile evidence could not be read.",
-            queryDescription: "shape=\(shape)",
-            citations: [],
-            catalogPersonName: nil)
+    /// The whole set of names anybody in the context can vouch for: People
+    /// profiles (name + aliases), CyberBrain (name + aliases), GEDCOM (token
+    /// match), and — for family-tree requests — GEDCOM surnames.
+    static func isKnownPerson(
+        _ name: String,
+        context: Context,
+        acceptSurname: Bool = false
+    ) -> Bool {
+        let key = PersonResolver.normalize(name)
+        guard !key.isEmpty else { return false }
+        if let profiles = context.profiles, profiles.contains(where: {
+            ([$0.canonicalName] + $0.aliases).contains { PersonResolver.normalize($0) == key }
+        }) { return true }
+        if let cyberBrain = context.cyberBrain {
+            if case .notFound = cyberBrain.resolve(name) {} else { return true }
+        }
+        if let graph = context.graph {
+            if !graph.people(matching: name).isEmpty { return true }
+            if acceptSurname, !graph.people(withSurname: name).isEmpty { return true }
+        }
+        return false
     }
 
-    private static func invalidContinuationResult(
-        for ast: ArchivistQueryAST
-    ) -> Result {
-        Result(
-            route: route(ast),
-            outcome: .declined,
-            prose: "That identity choice is no longer available.",
-            basisLine: "Basis: the clarification selection was stale or did not belong to this question.",
-            queryDescription: description(of: ast),
-            citations: [],
-            catalogPersonName: nil)
-    }
-
-    /// Re-check the opaque identity against the new immutable capture. A chip
-    /// may outlive a profile edit or GEDCOM reload; an ID whose meaning changed
-    /// is stale even if the raw string still exists.
-    private static func selectionIsCurrent(
-        _ candidate: Candidate,
+    /// "ricks" → "rick" when only the singular is a known name. Returns the
+    /// payload to execute and, when rewritten, the note for the basis line.
+    private static func singularizedGraphPayload(
+        _ payload: ArchivistQueryAST.Graph,
+        request: Request,
         context: Context
-    ) -> Bool {
-        switch candidate.id {
-        case .profileStableID(let stableID):
-            guard let profiles = context.profiles else { return false }
-            let definitions = profiles.filter { $0.stableID == stableID }
-            guard let first = definitions.first,
-                  definitions.allSatisfy({ sameProfileMeaning($0, first) })
-            else { return false }
-            return PersonResolver.normalize(
-                deterministicProfile(definitions).canonicalName)
-                == PersonResolver.normalize(candidate.canonicalName)
-
-        case .gedcomPersonID(let personID):
-            guard let person = context.graph?.people[personID] else {
-                return false
-            }
-            return PersonResolver.normalize(person.name)
-                == PersonResolver.normalize(candidate.canonicalName)
-
-        case .cyberBrainPersonID(let personID):
-            guard let person = context.cyberBrain?.person(id: personID) else {
-                return false
-            }
-            return PersonResolver.normalize(person.canonicalName)
-                == PersonResolver.normalize(candidate.canonicalName)
-        }
+    ) -> (ArchivistQueryAST.Graph, String?) {
+        guard request.selectedIdentity == nil,
+              payload.people.count == 1,
+              let typed = payload.people.first?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              typed.count > 2,
+              typed.lowercased().hasSuffix("s"),
+              !typed.contains("'"), !typed.contains("’"),
+              !isKnownPerson(typed, context: context,
+                             acceptSurname: payload.operation == .familyTree)
+        else { return (payload, nil) }
+        let singular = String(typed.dropLast())
+        guard isKnownPerson(singular, context: context) else { return (payload, nil) }
+        var rewritten = payload
+        rewritten.people = [singular]
+        return (rewritten, "reading “\(typed)” as “\(singular)’s”")
     }
 
-    private static func detached<Value: Sendable>(
-        _ operation: @escaping @Sendable () -> Value
-    ) async throws -> Value {
-        let task = Task.detached { () throws -> Value in
-            try Task.checkCancellation()
-            let value = operation()
-            try Task.checkCancellation()
-            return value
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
-    }
-
-    private static func temporalResolution(
-        _ requested: String,
-        profiles: [ProfileSnapshot],
-        selectedIdentity: CandidateID?
-    ) -> ArchivistTemporalSubjectResolution {
-        if let selectedIdentity {
-            guard case .profileStableID(let rawID) = selectedIdentity else {
-                return .missing(requested: requested)
-            }
-            guard !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return .missing(requested: requested) }
-            let definitions = profiles.filter { $0.stableID == rawID }
-            guard let first = definitions.first,
-                  definitions.allSatisfy({ sameProfileMeaning($0, first) }) else {
-                return .missing(requested: requested)
-            }
-            let profile = deterministicProfile(definitions)
-            return .resolved(
-                requested: requested,
-                subject: .init(
-                    stableID: profile.stableID,
-                    canonicalName: profile.canonicalName,
-                    birthdate: profile.birthdate))
-        }
-
-        let key = PersonResolver.normalize(requested)
-        let grouped = Dictionary(grouping: profiles, by: \.stableID)
-        var matches: [ProfileSnapshot] = []
-        for stableID in grouped.keys.sorted() {
-            guard let definitions = grouped[stableID],
-                  let first = definitions.first else { continue }
-            let participates = definitions.contains(where: {
-                      ([$0.canonicalName] + $0.aliases).contains {
-                          PersonResolver.normalize($0) == key
-                      }
-                  })
-            guard participates else { continue }
-            guard definitions.allSatisfy({ sameProfileMeaning($0, first) })
-            else { return .missing(requested: requested) }
-            matches.append(deterministicProfile(definitions))
-        }
-        matches.sort(by: profileOrder)
-        if matches.isEmpty { return .missing(requested: requested) }
-        if matches.count > 1 {
-            return .ambiguous(
-                requested: requested,
-                candidates: matches.map {
-                    .init(stableID: $0.stableID,
-                          canonicalName: $0.canonicalName)
-                })
-        }
-        let profile = matches[0]
-        return .resolved(
-            requested: requested,
-            subject: .init(
-                stableID: profile.stableID,
-                canonicalName: profile.canonicalName,
-                birthdate: profile.birthdate))
-    }
-
-    private static func profileCandidates(
-        _ candidates: [ArchivistTemporalSubjectResolution.Candidate]
-    ) -> [Candidate] {
-        let nameCounts = Dictionary(grouping: candidates) {
-            PersonResolver.normalize($0.canonicalName)
-        }.mapValues { $0.count }
-        return candidates.sorted {
-            let lhs = PersonResolver.normalize($0.canonicalName)
-            let rhs = PersonResolver.normalize($1.canonicalName)
-            return lhs == rhs ? $0.stableID < $1.stableID : lhs < rhs
-        }.map { candidate in
-            let duplicate = nameCounts[PersonResolver.normalize(
-                candidate.canonicalName), default: 0] > 1
-            return Candidate(
-                id: .profileStableID(candidate.stableID),
-                canonicalName: candidate.canonicalName,
-                label: duplicate
-                    ? "\(candidate.canonicalName) (\(candidate.stableID))"
-                    : candidate.canonicalName)
-        }
-    }
-
-    private static func sameProfileMeaning(
-        _ lhs: ProfileSnapshot,
-        _ rhs: ProfileSnapshot
-    ) -> Bool {
-        PersonResolver.normalize(lhs.canonicalName)
-            == PersonResolver.normalize(rhs.canonicalName)
-            && Set(lhs.aliases.map { PersonResolver.normalize($0) })
-                == Set(rhs.aliases.map { PersonResolver.normalize($0) })
-            && lhs.birthdate == rhs.birthdate
-    }
-
-    private static func deterministicProfile(
-        _ definitions: [ProfileSnapshot]
-    ) -> ProfileSnapshot {
-        definitions.sorted(by: profileOrder)[0]
-    }
-
-    private static func profileOrder(
-        _ lhs: ProfileSnapshot,
-        _ rhs: ProfileSnapshot
-    ) -> Bool {
-        let left = PersonResolver.normalize(lhs.canonicalName)
-        let right = PersonResolver.normalize(rhs.canonicalName)
-        if left != right { return left < right }
-        if lhs.canonicalName != rhs.canonicalName {
-            return lhs.canonicalName < rhs.canonicalName
-        }
-        return lhs.stableID < rhs.stableID
-    }
-
-    private static func aggregateIdentities(
-        profiles: [ProfileSnapshot]
-    ) -> ArchivistAggregateIdentityCatalog {
-        // Only POI-backed stable identities are admitted. Unknown confirmed
-        // tag spellings remain unresolved rather than becoming identities.
-        ArchivistAggregateIdentityCatalog(identities: profiles.map {
-            ArchivistAggregateIdentity(
-                stableID: $0.stableID,
-                canonicalName: $0.canonicalName,
-                aliases: $0.aliases)
-        })
-    }
-
-    private static func normalize(
-        _ citations: [ArchivistEvidenceCitation]
-    ) -> [Citation] {
-        citations.map {
-            Citation(
-                recordID: $0.recordID,
-                fullPath: $0.fullPath,
-                filename: $0.filename,
-                playbackSeconds: $0.playbackSeconds,
-                bases: $0.bases)
-        }
-    }
-
-    private static func normalize(
-        _ citation: ArchivistAggregateSampleCitation
-    ) -> Citation {
-        Citation(
-            recordID: citation.recordID,
-            fullPath: citation.fullPath,
-            filename: citation.filename,
-            playbackSeconds: citation.playbackSeconds,
-            bases: citation.bases)
-    }
 }

@@ -29,8 +29,9 @@ enum HallieShellCLI {
     }
 
     enum Route: Equatable {
-        case presence, temporal, aggregate, graph
-        case unsupportedEvent, unsupportedCross
+        case presence, temporal, aggregate, graph, cross
+        case unsupportedEvent
+        case followUp, capability
     }
 
     enum MediaAction: Equatable {
@@ -60,7 +61,7 @@ enum HallieShellCLI {
         }
     }
 
-    private enum CommandOutcome {
+    enum CommandOutcome {
         case continueSession
         case quit
         case mediaFailure
@@ -304,8 +305,10 @@ enum HallieShellCLI {
         case .temporal: return .temporal
         case .aggregate: return .aggregate
         case .graph: return .graph
+        case .cross: return .cross
         case .unsupportedEvent: return .unsupportedEvent
-        case .unsupportedCross: return .unsupportedCross
+        case .followUp: return .followUp
+        case .capability: return .capability
         }
     }
 
@@ -364,7 +367,7 @@ enum HallieShellCLI {
         }
     }
 
-    private struct Session {
+    struct Session {
         struct PendingClarification {
             let value: HallieTurnExecutor.Clarification
             let context: HallieTurnExecutor.Context
@@ -385,8 +388,22 @@ enum HallieShellCLI {
         var biographyPhoto: ArchivistBiographyPhoto?
         var lastResponder = "none"
         var pendingClarification: PendingClarification?
+        /// Conversation memory: the last result set / AST for follow-ups
+        /// ("play the first one", "show more", "and in the 90s?").
+        var memory = HallieTurnExecutor.ConversationMemory()
 
         func record(_ id: UUID) -> VideoRecord? { records.first { $0.id == id } }
+
+        var identityContext: HallieTurnExecutor.Context {
+            HallieTurnExecutor.Context(
+                profiles: profiles?.map {
+                    HallieTurnExecutor.ProfileSnapshot(
+                        stableID: $0.id, canonicalName: $0.name,
+                        aliases: $0.aliases, birthdate: $0.birthdate)
+                },
+                graph: graph,
+                cyberBrain: cyberBrain)
+        }
     }
 
     private static func answer(
@@ -409,14 +426,52 @@ enum HallieShellCLI {
         }
         do {
             state.biographyPhoto = nil
-            // Anti-hallucination boundary: the translator receives exactly the
-            // user's question. Catalog, profile, GEDCOM, and citations stay local.
-            let translation = try await dependencies.translateAST(question, options)
-            state.lastResponder = translation.responderHost
-            output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
+            // Model-free step first: capability questions, follow-ups on the
+            // last answer, refinements, local family-tree shapes.
+            let identity = state.identityContext
+            let pre = HallieTurnExecutor.preTranslation(
+                question: question,
+                playAfterAnswer: false,
+                memory: state.memory,
+                isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) })
+            let intent: HallieTurnExecutor.Intent
+            switch pre {
+            case .answer(let result):
+                state.lastResponder = "local"
+                output("interpreted: \(HallieTurnExecutor.label(result.route))")
+                render(result, ast: nil, context: identity, state: &state,
+                       output: output)
+                let outcome = performMediaAction(
+                    result.mediaAction, output: output, dependencies: dependencies)
+                let event = transcriptEvent(
+                    result: result, responder: "local", state: &state)
+                await dependencies.recordTranscript([event])
+                if outcome == .mediaFailure { return .declined }
+                switch result.outcome {
+                case .answered: return .answered
+                case .declined, .needsClarification: return .declined
+                case .unsupported: return .unsupported
+                }
+            case .run(let local):
+                state.lastResponder = "local"
+                intent = local
+                output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
+            case .translate(let effectiveQuestion, let wantsPlay):
+                // Anti-hallucination boundary: the translator receives exactly
+                // the user's question. Catalog, profile, GEDCOM, and citations
+                // stay local.
+                let translation = try await dependencies.translateAST(
+                    effectiveQuestion, options)
+                state.lastResponder = translation.responderHost
+                output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
+                intent = HallieTurnExecutor.Intent(
+                    originalQuestion: question,
+                    ast: translation.ast,
+                    playAfterAnswer: wantsPlay)
+            }
 
-            switch HallieTurnExecutor.route(translation.ast) {
-            case .presence:
+            switch HallieTurnExecutor.route(intent.ast) {
+            case .presence, .cross:
                 if state.presenceSnapshots == nil {
                     state.presenceSnapshots = await ArchivistPresenceRecordSnapshot
                         .capture(state.records)
@@ -426,7 +481,7 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
-            case .temporal, .graph, .unsupportedEvent, .unsupportedCross:
+            case .temporal, .graph, .unsupportedEvent, .followUp, .capability:
                 break
             }
 
@@ -447,23 +502,30 @@ enum HallieShellCLI {
                 graph: state.graph,
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate)
-            let request = HallieTurnExecutor.Request(intent: .init(
-                originalQuestion: question,
-                ast: translation.ast))
+            let request = HallieTurnExecutor.Request(intent: intent)
             let result = try await dependencies.executeRequest(request, context)
+            state.memory.record(intent: intent, result: result)
 
             render(
                 result,
-                ast: translation.ast,
+                ast: intent.ast,
                 context: context,
                 state: &state,
                 output: output)
-            output("interpreted by \(translation.responderHost)")
+            output("interpreted by \(state.lastResponder)")
             let assistantEvent = transcriptEvent(
                 result: result,
-                responder: translation.responderHost,
+                responder: state.lastResponder,
                 state: &state)
             await dependencies.recordTranscript([assistantEvent])
+            // "play donna at christmas": the search ran; now play the first
+            // available citation, honestly reporting when none is.
+            if intent.playAfterAnswer, result.outcome == .answered,
+               result.clarification == nil, !result.citations.isEmpty {
+                _ = performMediaAction(
+                    .init(kind: .play, citations: result.citations),
+                    output: output, dependencies: dependencies)
+            }
             switch result.outcome {
             case .answered: return .answered
             case .declined: return .declined
@@ -511,6 +573,7 @@ enum HallieShellCLI {
             state.pendingClarification = nil
             let result = try await dependencies.continueTurn(
                 pending.value, selectedID, pending.context)
+            state.memory.record(intent: pending.value.intent, result: result)
             render(
                 result,
                 ast: pending.value.intent.ast,
@@ -543,85 +606,6 @@ enum HallieShellCLI {
         }
     }
 
-    private static func transcriptEvent(
-        result: HallieTurnExecutor.Result,
-        responder: String,
-        state: inout Session
-    ) -> HallieTranscriptEvent {
-        transcriptEvent(
-            kind: .assistant,
-            text: result.prose,
-            queryDescription: result.queryDescription,
-            basisLine: result.basisLine,
-            responder: responder,
-            route: transcriptLabel(result.route),
-            outcome: transcriptLabel(result.outcome),
-            offeredActions: result.clarification?.candidates.map(\.label) ?? [],
-            citations: result.citations,
-            knowledgeCitations: result.knowledgeCitations,
-            state: &state)
-    }
-
-    private static func transcriptEvent(
-        kind: HallieTranscriptEvent.Kind,
-        text: String,
-        queryDescription: String? = nil,
-        basisLine: String? = nil,
-        responder: String? = nil,
-        route: String? = nil,
-        outcome: String? = nil,
-        offeredActions: [String] = [],
-        citations: [HallieTurnExecutor.Citation] = [],
-        knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = [],
-        state: inout Session
-    ) -> HallieTranscriptEvent {
-        state.transcriptSequence += 1
-        return HallieTranscriptEvent(
-            sessionID: state.transcriptSessionID,
-            sequence: state.transcriptSequence,
-            client: .shell,
-            kind: kind,
-            text: text,
-            queryDescription: queryDescription,
-            basisLine: basisLine,
-            responder: responder,
-            model: state.model,
-            route: route,
-            outcome: outcome,
-            offeredActions: offeredActions,
-            mediaEvidence: citations.map {
-                .init(recordID: $0.recordID,
-                      filename: $0.filename,
-                      fullPath: $0.fullPath,
-                      playbackSeconds: $0.playbackSeconds,
-                      bases: $0.bases.map(evidenceDescription))
-            },
-            knowledgeEvidence: knowledgeCitations.map {
-                .init(id: $0.id, title: $0.title,
-                      attribution: $0.attribution, locator: $0.locator)
-            })
-    }
-
-    private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
-        switch route {
-        case .presence: return "presence"
-        case .temporal: return "temporal"
-        case .aggregate: return "aggregate"
-        case .graph: return "graph"
-        case .unsupportedEvent: return "unsupported-event"
-        case .unsupportedCross: return "unsupported-cross"
-        }
-    }
-
-    private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {
-        switch outcome {
-        case .answered: return "answered"
-        case .declined: return "declined"
-        case .unsupported: return "unsupported"
-        case .needsClarification: return "needs-clarification"
-        }
-    }
-
     private static func clarificationSelection(
         _ reply: String,
         from candidates: [HallieTurnExecutor.Candidate]
@@ -637,52 +621,6 @@ enum HallieShellCLI {
         }
         guard matches.count == 1 else { return nil }
         return matches[0].id
-    }
-
-    private static func render(
-        _ result: HallieTurnExecutor.Result,
-        ast: ArchivistQueryAST,
-        context: HallieTurnExecutor.Context,
-        state: inout Session,
-        output: (String) -> Void
-    ) {
-        state.citations = result.citations
-        state.knowledgeCitations = result.knowledgeCitations
-        state.pendingClarification = result.clarification.map {
-            Session.PendingClarification(value: $0, context: context)
-        }
-        state.biographyPhoto = nil
-        if result.clarification == nil,
-           case .graph(let payload) = ast,
-           payload.operation == .biography,
-           let canonical = result.catalogPersonName {
-            state.biographyPhoto = ArchivistBiographyPhoto.resolve(
-                personName: canonical, profiles: state.profiles ?? [])
-        }
-        output(result.prose)
-        output(result.basisLine)
-        if result.route == .graph, let photo = state.biographyPhoto {
-            output("photo: \(photo.fileURL.path)")
-        }
-        if let queryDescription = result.queryDescription {
-            output("query: \(queryDescription)")
-        }
-        printCitations(state.citations, output: output)
-        printKnowledgeCitations(state.knowledgeCitations, output: output)
-        if let clarification = result.clarification {
-            printClarification(clarification, output: output)
-        }
-    }
-
-    private static func printClarification(
-        _ clarification: HallieTurnExecutor.Clarification,
-        output: (String) -> Void
-    ) {
-        output("choices:")
-        for (index, candidate) in clarification.candidates.enumerated() {
-            output("  \(index + 1). \(candidate.label)")
-        }
-        output("Reply with a number or exact name; :cancel abandons this question.")
     }
 
     private static func handleCommand(
@@ -767,31 +705,6 @@ enum HallieShellCLI {
         return .continueSession
     }
 
-    private static func printCitations(
-        _ citations: [HallieTurnExecutor.Citation],
-                                       output: (String) -> Void) {
-        guard !citations.isEmpty else { output("citations: none"); return }
-        output("citations:")
-        for (index, citation) in citations.enumerated() {
-            let at = citation.playbackSeconds.map { String(format: " @ %.1fs", $0) } ?? ""
-            output("  \(index + 1). \(citation.filename)\(at) — \(citation.fullPath)")
-            output("     \(citation.bases.map(evidenceDescription).joined(separator: "; "))")
-        }
-    }
-
-    private static func printKnowledgeCitations(
-        _ citations: [HallieTurnExecutor.KnowledgeCitation],
-        output: (String) -> Void
-    ) {
-        guard !citations.isEmpty else { return }
-        output("knowledge sources:")
-        for (index, citation) in citations.enumerated() {
-            let attribution = citation.attribution.map { " — \($0)" } ?? ""
-            let locator = citation.locator.map { " [\($0)]" } ?? ""
-            output("  \(index + 1). \(citation.title)\(attribution)\(locator)")
-        }
-    }
-
     private static func temporalSelectionDate(
         _ record: VideoRecord
     ) -> ArchivistTemporalSelectionDateSnapshot? {
@@ -815,10 +728,6 @@ enum HallieShellCLI {
                 date: modified)
         }
         return nil
-    }
-
-    private static func evidenceDescription(_ basis: ArchivistEvidenceBasis) -> String {
-        basis.summary
     }
 
     private static var defaultCatalogURL: URL {
