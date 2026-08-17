@@ -41,7 +41,7 @@ struct ArchivistTabButton: View {
                         .scaleEffect(s)
                         .shadow(color: Color.pink.opacity(0.35 * a), radius: 6)
                 }
-                Text(archivistName.isEmpty || archivistName == "Name TBD" ? "Archivist" : archivistName)
+                Text(archivistName.isEmpty || archivistName == "Name TBD" ? "Archivist" : "Ask " + archivistName)
                     .font(.system(size: fontSize, weight: .semibold))
                     .foregroundStyle(Self.gradient)
             }
