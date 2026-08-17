@@ -82,6 +82,11 @@ enum CatalogScopePolicy {
         case stillImage    = "still-image"
         case musicFormat   = "music-format"
         case unlinkedAudio = "unlinked-audio"
+        /// iPhone Live Photo movie halves exported by Photos as
+        /// `jpegvideocomplement_<hex>.mov` beside `fullsizeoutput_<hex>.jpeg`
+        /// (Rick 2026-08-17: 1,399 of them, ~3 s each; "how would I ever
+        /// use them? they're associated with photos — untrack them").
+        case livePhotoComplement = "live-photo-complement"
 
         /// Friendly label for UI (no jargon).
         var friendlyLabel: String {
@@ -89,8 +94,17 @@ enum CatalogScopePolicy {
             case .stillImage:    return "Photos and camera images"
             case .musicFormat:   return "Music files"
             case .unlinkedAudio: return "Audio with no matching video"
+            case .livePhotoComplement: return "Live Photo movie halves (Photos owns them)"
             }
         }
+    }
+
+    /// Photos' Live Photo export naming: the 3-second movie half.
+    /// Matched on the FILENAME only (case-insensitive) — the pattern is
+    /// specific enough that a sibling check adds nothing but I/O.
+    static func isLivePhotoComplement(filename: String) -> Bool {
+        let lower = filename.lowercased()
+        return lower.hasPrefix("jpegvideocomplement_") && lower.hasSuffix(".mov")
     }
 
     /// Stills / camera raw — ONE source of truth, shared with the

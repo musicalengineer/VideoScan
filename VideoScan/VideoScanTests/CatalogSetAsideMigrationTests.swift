@@ -83,6 +83,28 @@ struct TidyCatalogTests {
         return model
     }
 
+    /// Rick 2026-08-17: 1,399 `jpegvideocomplement_*.mov` (iPhone Live
+    /// Photo movie halves exported by Photos) — "how would I ever use them?
+    /// … untrack them". They are VIDEO by format, so the format switch
+    /// alone would keep them; the filename rule must set them aside, and
+    /// must not touch look-alikes.
+    @Test("Live Photo movie halves are set aside by filename; look-alikes are not")
+    func livePhotoComplementsAreSetAside() async {
+        let model = VideoScanModel()
+        let live1 = rec("jpegvideocomplement_75a.mov", stream: .videoAndAudio, duration: 3.4)
+        let live2 = rec("JPEGVIDEOCOMPLEMENT_7fd.MOV", stream: .videoAndAudio, duration: 3.1)
+        let notLive1 = rec("jpegvideocomplement_notes.txt", stream: .ffprobeFailed)
+        let notLive2 = rec("my_jpegvideocomplement_75a.mov", stream: .videoAndAudio, duration: 120)
+        let video = rec("family_1987.mov", stream: .videoOnly, duration: 300)
+        model.records = [live1, live2, notLive1, notLive2, video]
+        let plan = await model.computeTidyCatalogPlan()
+        #expect(plan.livePhotoComplementCount == 2)
+        #expect(plan.rows.filter { $0.reason == .livePhotoComplement }.map(\.filename).sorted()
+                == ["JPEGVIDEOCOMPLEMENT_7fd.MOV", "jpegvideocomplement_75a.mov"])
+        #expect(!plan.rows.contains { $0.filename == "my_jpegvideocomplement_75a.mov" })
+        #expect(CatalogScopePolicy.SetAsideReason.livePhotoComplement.friendlyLabel.contains("Live Photo"))
+    }
+
     @Test("dry-run counts by category; kept tallies are honest")
     func dryRunCounts() async {
         let model = mixedModel()

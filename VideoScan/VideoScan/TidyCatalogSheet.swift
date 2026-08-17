@@ -44,6 +44,8 @@ struct TidyCatalogSheet: View {
                                  "Music files", plan.musicCount)
                         countRow("waveform.slash", .gray,
                                  "Audio with no matching video", plan.unlinkedAudioCount)
+                        countRow("livephoto", .teal,
+                                 "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
                         Divider()
                         countRow("checkmark.circle", .green,
                                  "Audio kept — belongs to a video", plan.keptLinkedAudio)

@@ -55,6 +55,7 @@ extension VideoScanModel {
         var stillCount = 0
         var musicCount = 0
         var unlinkedAudioCount = 0
+        var livePhotoComplementCount = 0
     }
 
     /// Compute the dry-run plan. Snapshot on the main actor (cheap value
@@ -86,7 +87,7 @@ extension VideoScanModel {
         }
 
         let plan = await Self.buildTidyPlan(candidates: candidates, videoSnaps: videoSnaps)
-        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
+        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
         return plan
     }
 
@@ -116,6 +117,15 @@ extension VideoScanModel {
             // HARD INVARIANT: pair members exit before classification.
             if c.pairProtected {
                 plan.keptPairProtected += 1
+                continue
+            }
+            // Live Photo movie halves are VIDEO by format but Photos
+            // artifacts by nature — classified before the format switch.
+            if CatalogScopePolicy.isLivePhotoComplement(filename: c.snap.filename) {
+                plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
+                                       fullPath: c.fullPath, sizeBytes: c.sizeBytes,
+                                       reason: .livePhotoComplement))
+                plan.livePhotoComplementCount += 1
                 continue
             }
             switch CatalogScopePolicy.classify(ext: c.ext, streamTypeRaw: c.streamTypeRaw) {
