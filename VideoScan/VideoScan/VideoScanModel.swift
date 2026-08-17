@@ -1237,7 +1237,7 @@ final class VideoScanModel: ObservableObject {
     /// role was "Archive" but which are NOT the designated Master Archive.
     /// `.archive` now means THE Master Archive, so we do not silently
     /// rename these — the Volumes window surfaces a one-time sheet asking
-    /// Original / Backup / Working for each. Filled by
+    /// Workspace / Backup for each. Filled by
     /// `migrateVolumeRoles()`, drained by `resolveRoleReclassification`.
     @Published var pendingRoleReclassifications: [CatalogScanTarget] = []
 

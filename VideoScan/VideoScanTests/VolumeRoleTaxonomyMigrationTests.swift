@@ -154,13 +154,26 @@ struct VolumeRoleTaxonomyMigrationTests {
     }
 
     private func restore(_ k: Keys) -> [CatalogScanTarget] {
-        ScanTargetPersistence.restore(
+        restore(k, reporting: true).targets
+    }
+
+    private func restore(_ k: Keys, reporting: Bool) -> ScanTargetPersistence.RestoreReport {
+        ScanTargetPersistence.restoreReporting(
             existing: [],
             savedTargetsKey: k.paths, savedDatesKey: k.dates, savedPhasesKey: k.phases,
             savedRolesKey: k.roles, savedTrustKey: k.trust, savedFilesystemKey: k.fs,
             savedMediaTechKey: k.mt, savedPurchaseYearKey: k.py, savedCapacityKey: k.cap,
             savedNotesKey: k.notes, savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn,
             savedRetiredWitnessesKey: k.retWit)
+    }
+
+    private func persist(_ targets: [CatalogScanTarget], _ k: Keys) {
+        ScanTargetPersistence.persistPaths(targets, key: k.paths)
+        ScanTargetPersistence.persistMetadata(
+            targets, savedDatesKey: k.dates, savedPhasesKey: k.phases, savedRolesKey: k.roles,
+            savedTrustKey: k.trust, savedFilesystemKey: k.fs, savedMediaTechKey: k.mt,
+            savedPurchaseYearKey: k.py, savedCapacityKey: k.cap, savedNotesKey: k.notes,
+            savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn, savedRetiredWitnessesKey: k.retWit)
     }
 
     /// Poisoned-state + isolation: a saved-roles dictionary carrying every
@@ -320,9 +333,9 @@ struct VolumeRoleTaxonomyMigrationTests {
         let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
         master.role = .archive
         let legacyA = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
-        legacyA.role = .archive
+        legacyA.role = .archive; legacyA.isReachable = true
         let legacyB = CatalogScanTarget(searchPath: "/Volumes/MyBook")
-        legacyB.role = .archive
+        legacyB.role = .archive; legacyB.isReachable = true
         let backup = CatalogScanTarget(searchPath: "/Volumes/X9")
         backup.role = .backup
         m.scanTargets = [master, legacyA, legacyB, backup]
@@ -352,7 +365,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         let m = makeModel()
         let root = CatalogScanTarget(searchPath: "/")
         let movies = CatalogScanTarget(searchPath: NSHomeDirectory() + "/Movies")
-        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
+        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace"); legacy.isReachable = true
         legacy.role = .archive
         let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
         master.role = .archive
@@ -381,7 +394,7 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     @Test func migrate_dropsStaleQueueEntries() {
         let m = makeModel()
-        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
+        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace"); legacy.isReachable = true
         legacy.role = .archive
         let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
         master.role = .archive
@@ -399,7 +412,7 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     @Test func resolveReclassification_acceptsPickerRoles_refusesArchiveSystem() {
         let m = makeModel()
-        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
+        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace"); legacy.isReachable = true
         legacy.role = .archive
         let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
         master.role = .archive
@@ -423,28 +436,265 @@ struct VolumeRoleTaxonomyMigrationTests {
     }
 
     /// Initialize on a queued legacy-Archive target resolves the question
-    /// (it IS the master now) and leaves role Archive.
-    @Test func initializeMasterArchive_resolvesQueuedTarget() throws {
+    /// (it IS the master now) and leaves role Archive; the PREVIOUS master
+    /// is queued right away (codex m3 — designation change re-runs the
+    /// pass), never renamed.
+    @Test func initializeMasterArchive_resolvesQueuedTarget_andQueuesPreviousMaster() throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("roletax")
         defer { sb.cleanup() }
-        let m = makeModel()
-        let t = CatalogScanTarget(searchPath: sb.archiveVolume.path)
-        t.role = .archive
-        let other = CatalogScanTarget(searchPath: "/Volumes/Elsewhere")
-        other.role = .archive
-        m.scanTargets = [t, other]
-        designateMaster(m, at: "/Volumes/Elsewhere")   // someone else is master
-        m.migrateVolumeRoles()
-        #expect(m.pendingRoleReclassifications.contains { $0 === t })
+        try MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+            path.hasPrefix("/Volumes/Elsewhere") ? "UUID-ELSEWHERE" : "UUID-TMP"
+        }) {
+            let m = makeModel()
+            let t = CatalogScanTarget(searchPath: sb.archiveVolume.path)
+            t.role = .archive
+            let other = CatalogScanTarget(searchPath: "/Volumes/Elsewhere")
+            other.role = .archive
+            other.isReachable = true
+            m.scanTargets = [t, other]
+            designateMaster(m, at: "/Volumes/Elsewhere")   // someone else is master
+            m.migrateVolumeRoles()
+            #expect(m.pendingRoleReclassifications.contains { $0 === t })
 
-        try m.initializeMasterArchive(at: sb.archiveVolume)
-        #expect(t.role == .archive)
-        #expect(!m.pendingRoleReclassifications.contains { $0 === t })
-        // …and the previous master is now the non-master Archive → queued
-        // on the next pass, never renamed.
+            try m.initializeMasterArchive(at: sb.archiveVolume)
+            #expect(t.role == .archive)
+            #expect(!m.pendingRoleReclassifications.contains { $0 === t })
+            #expect(other.role == .archive, "never silently renamed")
+            // Initialize refreshes real reachability (the synthetic
+            // /Volumes/Elsewhere goes offline → "unknown ≠ not-master", not
+            // queued). Once it is back online, the pass Initialize re-runs
+            // on any designation change queues it.
+            other.isReachable = true
+            m.migrateVolumeRoles()
+            #expect(m.pendingRoleReclassifications.contains { $0 === other },
+                    "previous master queued once its identity is readable")
+        }
+    }
+
+    // MARK: - codex M1: R4 never queues the real master under another path
+
+    /// (a) The master volume was renamed: `reresolveMasterArchiveMount`
+    /// rehomed the designation to /Volumes/New while the stale /Volumes/Old
+    /// target (role .archive) is still in scanTargets. Whether that stale
+    /// target is offline (identity unreadable), online with the master's
+    /// UUID, or flagged as a rename candidate pointing at the master, it
+    /// must NOT be offered for downgrade.
+    @Test func M1_renamedMasterOldPathTarget_neverQueued() {
+        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+            path.hasPrefix("/Volumes/New") || path.hasPrefix("/Volumes/Old") ? "UUID-MASTER" : nil
+        }) {
+            let m = makeModel()
+            let new = CatalogScanTarget(searchPath: "/Volumes/New")
+            new.role = .archive; new.isReachable = true
+            let old = CatalogScanTarget(searchPath: "/Volumes/Old")
+            old.role = .archive; old.isReachable = false          // unplugged old name
+            let stranger = CatalogScanTarget(searchPath: "/Volumes/Stranger")
+            stranger.role = .archive; stranger.isReachable = true // provably not master (nil UUID → unknown!)
+            m.scanTargets = [new, old, stranger]
+            m.masterArchive = MasterArchiveDesignation(
+                targetPath: "/Volumes/New",
+                rootPath: MasterArchiveLayout.rootURL(forTargetPath: "/Volumes/New").path,
+                volumeUUID: "UUID-MASTER")
+
+            m.migrateVolumeRoles()
+            #expect(!m.pendingRoleReclassifications.contains { $0 === old }, "offline old-path target: identity unknown ≠ not-master")
+            #expect(!m.pendingRoleReclassifications.contains { $0 === new })
+            #expect(!m.pendingRoleReclassifications.contains { $0 === stranger }, "reports no UUID → unknown → not queued")
+
+            // Old path comes back online reporting the master's UUID (a
+            // second mount point / alias of the same volume) → still not queued.
+            old.isReachable = true
+            m.migrateVolumeRoles()
+            #expect(!m.pendingRoleReclassifications.contains { $0 === old }, "same volume UUID as the designation")
+            #expect(m.pendingRoleReclassifications.isEmpty)
+        }
+    }
+
+    /// (a') Rename-candidate route: the cache says "/Volumes/Old is the
+    /// volume now at /Volumes/New" — enough to keep it out of the queue
+    /// even when the UUID probe cannot see it.
+    @Test func M1_renameCandidatePointingAtMaster_neverQueued() {
+        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+            path.hasPrefix("/Volumes/New") ? "UUID-MASTER" : nil
+        }) {
+            let m = makeModel()
+            let new = CatalogScanTarget(searchPath: "/Volumes/New")
+            new.role = .archive; new.isReachable = true
+            let old = CatalogScanTarget(searchPath: "/Volumes/Old")
+            old.role = .archive; old.isReachable = true
+            m.scanTargets = [new, old]
+            m.masterArchive = MasterArchiveDesignation(
+                targetPath: "/Volumes/New",
+                rootPath: MasterArchiveLayout.rootURL(forTargetPath: "/Volumes/New").path,
+                volumeUUID: "UUID-MASTER")
+            m.publishVolumeRenameCandidates(["/Volumes/Old": VolumeRenameCandidate(
+                targetPath: "/Volumes/Old", newTargetPath: "/Volumes/New", newVolumeRoot: "/Volumes/New",
+                oldVolumeName: "Old", newVolumeName: "New", volumeUUID: "UUID-MASTER",
+                acceptedUUIDs: ["UUID-MASTER"], matchingRecords: 3, mismatchedRecords: 0,
+                uuidMatched: true, sampledCount: 3, cleanCount: 3, action: .autoMigrate(drift: false))])
+
+            #expect(!m.isProvablyNotMasterArchiveVolume(old))
+            m.migrateVolumeRoles()
+            #expect(m.pendingRoleReclassifications.isEmpty)
+        }
+    }
+
+    /// (b) Master offline + path drift: the designation resolves to NO
+    /// target (path gone, UUID not mounted) → R4 is disabled entirely; an
+    /// Archive-role stranger is left alone until the master is resolvable.
+    @Test func M1_unresolvedMaster_disablesR4() {
+        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+            path.hasPrefix("/Volumes/LaCie") ? "UUID-LACIE" : nil
+        }) {
+            let m = makeModel()
+            let lacie = CatalogScanTarget(searchPath: "/Volumes/LaCie")
+            lacie.role = .archive; lacie.isReachable = true
+            m.scanTargets = [lacie]
+            m.masterArchive = MasterArchiveDesignation(
+                targetPath: "/Volumes/FamilyArchive",       // no such target, not mounted
+                rootPath: MasterArchiveLayout.rootURL(forTargetPath: "/Volumes/FamilyArchive").path,
+                volumeUUID: "UUID-MASTER")
+            #expect(m.resolvedMasterArchiveTarget() == nil, "precondition: master unresolvable")
+            #expect(m.isProvablyNotMasterArchiveVolume(lacie), "LaCie IS provably not the master…")
+            m.migrateVolumeRoles()
+            #expect(m.pendingRoleReclassifications.isEmpty, "…but R4 needs the master resolved before asking anyone")
+
+            // Master target appears (plugged in, path matches) → now asked.
+            let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+            master.role = .archive; master.isReachable = true
+            m.scanTargets.append(master)
+            m.migrateVolumeRoles()
+            #expect(m.pendingRoleReclassifications.map(\.searchPath) == ["/Volumes/LaCie"])
+        }
+    }
+
+    // MARK: - codex m3: designation changes at runtime
+
+    @Test func m3_clearMasterArchive_demotesExMaster_noQueue() {
+        let m = makeModel()
+        let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        master.role = .archive; master.isReachable = true
+        m.scanTargets = [master]
+        designateMaster(m, at: "/Volumes/FamilyArchive")
+        m.clearMasterArchive()
+        #expect(m.masterArchive == nil)
+        #expect(master.role == .unassigned, "ex-master is not the Master Archive any more")
+        #expect(m.pendingRoleReclassifications.isEmpty)
+    }
+
+    @Test func m3_adoptImportedDesignation_rerunsMigration() {
+        let m = makeModel()
+        let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        master.role = .archive; master.isReachable = true
+        let legacy = CatalogScanTarget(searchPath: "/Volumes/LaCieWorkspace")
+        legacy.role = .archive; legacy.isReachable = true
+        m.scanTargets = [master, legacy]
         m.migrateVolumeRoles()
-        #expect(other.role == .archive)
-        #expect(m.pendingRoleReclassifications.contains { $0 === other })
+        #expect(m.pendingRoleReclassifications.isEmpty, "no designation → nobody asked")
+        m.adoptImportedMasterArchive(MasterArchiveDesignation(
+            targetPath: "/Volumes/FamilyArchive",
+            rootPath: MasterArchiveLayout.rootURL(forTargetPath: "/Volumes/FamilyArchive").path))
+        #expect(m.pendingRoleReclassifications.map(\.searchPath) == ["/Volumes/LaCieWorkspace"],
+                "adopting a designation re-runs the pass without waiting for relaunch")
+        #expect(master.role == .archive)
+    }
+
+    // MARK: - codex m1/m2/m6: decode-time stamp is persisted once, reason only with the stamp, no zombie retirement
+
+    @Test func m1_legacyRetired_persistedOnceOnRestore_stampStable() {
+        let k = Keys()
+        defer { k.cleanup() }
+        UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
+        UserDefaults.standard.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
+
+        // Launch 1: restore reports the legacy decode; the model persists.
+        let r1 = restore(k, reporting: true)
+        #expect(r1.legacyRolesDecoded == 1)
+        let t1 = try? #require(r1.targets.first)
+        let stamp1 = t1?.retiredAt
+        #expect(stamp1 != nil)
+        persist(r1.targets, k)
+        let written = UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String]
+        #expect(written?["/Volumes/RicksBackups"] == "Unassigned", "prefs healed to the current name")
+        #expect((UserDefaults.standard.dictionary(forKey: k.retAt) as? [String: Date])?["/Volumes/RicksBackups"] == stamp1)
+
+        // Launch 2 (later): nothing legacy left; the stamp is the SAME one.
+        let r2 = restore(k, reporting: true)
+        #expect(r2.legacyRolesDecoded == 0)
+        #expect(r2.targets.first?.retiredAt == stamp1, "no drift launch to launch")
+        #expect(r2.targets.first?.retiredReason == ScanTargetPersistence.legacyRetiredMigrationReason)
+    }
+
+    @Test func m2_migrationReason_onlyWithMigrationStamp() {
+        // Flow-retired volume with an EMPTY reason whose role string is
+        // also legacy "Retired": the real stamp stays and the reason must
+        // NOT be replaced by the migration boilerplate.
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000)
+        let t = CatalogScanTarget(searchPath: "/Volumes/Mini2TB")
+        t.retiredAt = stamp
+        t.retiredReason = ""
+        ScanTargetPersistence.applyPersistedRole("Retired", to: t)
+        #expect(t.retiredAt == stamp)
+        #expect(t.retiredReason == "", "reason untouched — the stamp pre-existed")
+        // Same with reason nil.
+        let u = CatalogScanTarget(searchPath: "/Volumes/Mini2TB")
+        u.retiredAt = stamp
+        ScanTargetPersistence.applyPersistedRole("Retired", to: u)
+        #expect(u.retiredReason == nil)
+    }
+
+    @Test func m6_noZombieRetirement_afterReinstateAndRestore() {
+        let k = Keys()
+        defer { k.cleanup() }
+        UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
+        UserDefaults.standard.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
+
+        let m = makeModel()
+        m.scanTargets = restore(k)
+        let t = try? #require(m.scanTargets.first)
+        #expect(t?.isRetired == true)
+        #expect(m.reinstateVolume(at: "/Volumes/RicksBackups"))
+        #expect(t?.retiredAt == nil)
+        persist(m.scanTargets, k)   // what the model's persistScanDates writes
+
+        let again = restore(k)
+        #expect(again.first?.retiredAt == nil, "reinstated stays reinstated across restore")
+        #expect(again.first?.role == .unassigned)
+        #expect((UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String])?["/Volumes/RicksBackups"] == "Unassigned")
+    }
+
+    // MARK: - codex m5: bundle import onto an existing target
+
+    @Test func m5_bundleImport_neverUnArchivesTheMaster_neverReRetiresFromLegacyRole() throws {
+        func snap(_ role: String, path: String) throws -> VolumeMetadataSnapshot {
+            let json = """
+            {"searchPath":"\(path)","phase":"Cataloged","role":"\(role)","trust":"Reliable",
+             "mediaTech":"HDD","filesystem":"HFS+","notes":""}
+            """
+            return try JSONDecoder().decode(VolumeMetadataSnapshot.self, from: Data(json.utf8))
+        }
+        // Master keeps Master Archive whatever an old snapshot says.
+        let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        master.role = .archive
+        ScanTargetPersistence.applyVolumeSnapshot(try snap("Backup", path: "/Volumes/FamilyArchive"),
+                                                  to: master, isNewTarget: false, preserveRole: true)
+        #expect(master.role == .archive)
+        #expect(master.trust == .reliable, "other fields still merge")
+
+        // Reinstated volume + legacy "Retired" snapshot (no explicit stamp):
+        // existing target is NOT re-retired…
+        let reinstated = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
+        reinstated.role = .backup
+        ScanTargetPersistence.applyVolumeSnapshot(try snap("Retired", path: "/Volumes/RicksBackups"),
+                                                  to: reinstated, isNewTarget: false)
+        #expect(reinstated.retiredAt == nil, "existing target: no stamp from a legacy role string")
+        #expect(reinstated.role == .unassigned, "…but the role still maps")
+        // …while a NEW target from the same legacy snapshot is stamped
+        // (the only history it has is the bundle's).
+        let fresh = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
+        ScanTargetPersistence.applyVolumeSnapshot(try snap("Retired", path: "/Volumes/RicksBackups"),
+                                                  to: fresh, isNewTarget: true)
+        #expect(fresh.retiredAt != nil)
     }
 
     // MARK: - Retired = retiredAt only

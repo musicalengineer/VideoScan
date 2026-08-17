@@ -263,6 +263,9 @@ extension VideoScanModel {
             noteCatalogRecordsMutated()
             saveCatalogDebounced()
             log("Master Archive volume found at \(rehomed.targetPath) (same volume UUID; was \(current.targetPath)).")
+            // Designation moved → re-run the role pass (its M1 guards keep
+            // the stale old-path target of THIS volume out of the queue).
+            migrateVolumeRoles()
             masterArchiveLog.notice("rehomed master archive \(current.targetPath, privacy: .public) → \(rehomed.targetPath, privacy: .public)")
             return
         }
@@ -381,6 +384,10 @@ extension VideoScanModel {
         masterArchiveIdentityMismatch = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
+        // Designation changed → a previous master (still `.archive`) is now
+        // a non-master Archive → re-run the role pass so it is queued for
+        // reclassification instead of waiting for the next launch (codex m3).
+        migrateVolumeRoles()
 
         // Finder marker (best-effort; never fails Initialize).
         let badged = MasterArchiveIcon.apply(volumeOrFolderPath: targetPath, archiveRootPath: rootURL.path)
@@ -403,6 +410,8 @@ extension VideoScanModel {
         masterArchive = imported
         log("Adopted the imported Master Archive designation: \(imported.targetPath).")
         reresolveMasterArchiveMount()
+        // Designation changed → the role picture changed (codex m3).
+        migrateVolumeRoles()
     }
 
     /// v1 clear: forget the designation. The on-disk tree and its
@@ -412,10 +421,22 @@ extension VideoScanModel {
     func clearMasterArchive() {
         guard let current = masterArchive else { return }
         MasterArchiveIcon.remove(volumeOrFolderPath: current.targetPath, archiveRootPath: current.rootPath)
+        // `.archive` means THE Master Archive; with no designation the
+        // ex-master's role is meaningless — demote to Unassigned so it is
+        // not mistaken for the master, and so it never lands in the
+        // reclassification queue as a "legacy Archive" (codex m3).
+        let exMaster = resolvedMasterArchiveTarget() ?? masterArchiveTarget
         masterArchive = nil
+        if let t = exMaster, t.role == .archive {
+            t.role = .unassigned
+            pendingRoleReclassifications.removeAll { $0 === t }
+            persistScanDates()
+            notifyTargetsChanged()
+        }
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
         log("Master Archive designation cleared (files on disk untouched).")
+        migrateVolumeRoles()
     }
 
     /// Filesystem-only scaffold — the tree + both index files. Pure

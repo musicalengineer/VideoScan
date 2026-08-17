@@ -28,23 +28,24 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
     ///   - "Retired" → `.unassigned` AND `retiredAt` stamped if nil
     ///     (`lastScannedDate` if known, else `now`), reason set if empty
     ///   - unknown string → `.unassigned` + one log line, target kept
-    /// Idempotent: a target that already carries a stamp is not re-stamped,
-    /// and a current raw string is a plain assignment.
+    /// Idempotent: a target that already carries a stamp is not re-stamped
+    /// (and its reason is left alone — the migration reason is written ONLY
+    /// together with a migration stamp), and a current raw string is a
+    /// plain assignment. `stampLegacyRetired: false` maps the role but
+    /// never creates a stamp — bundle import onto an EXISTING target uses
+    /// it so a stale legacy snapshot cannot re-retire a reinstated volume.
     /// Returns the decode so callers can act on `unknownRaw`.
     @discardableResult
     static func applyPersistedRole(_ raw: String,
                                    to t: CatalogScanTarget,
-                                   now: Date = Date()) -> VolumeRole.LegacyDecode {
+                                   now: Date = Date(),
+                                   stampLegacyRetired: Bool = true) -> VolumeRole.LegacyDecode {
         let d = VolumeRole.decodeLegacy(raw)
         t.role = d.role
-        if d.wasRetired {
-            if t.retiredAt == nil {
-                t.retiredAt = t.lastScannedDate ?? now
-                rolePersistenceLog.notice("legacy 'Retired' role on \(t.searchPath, privacy: .public) → retiredAt stamped (\(t.lastScannedDate == nil ? "now" : "lastScannedDate", privacy: .public))")
-            }
-            if (t.retiredReason ?? "").isEmpty {
-                t.retiredReason = legacyRetiredMigrationReason
-            }
+        if d.wasRetired, stampLegacyRetired, t.retiredAt == nil {
+            t.retiredAt = t.lastScannedDate ?? now
+            t.retiredReason = legacyRetiredMigrationReason
+            rolePersistenceLog.notice("legacy 'Retired' role on \(t.searchPath, privacy: .public) → retiredAt stamped (\(t.lastScannedDate == nil ? "now" : "lastScannedDate", privacy: .public))")
         }
         if let unknown = d.unknownRaw {
             rolePersistenceLog.error("unknown persisted VolumeRole '\(unknown, privacy: .public)' on \(t.searchPath, privacy: .public) → Unassigned (target kept)")
@@ -55,6 +56,15 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
     }
 
     // MARK: - Restore
+
+    /// What `restoreReporting` found besides the targets. `legacyRolesDecoded`
+    /// counts role strings that were NOT the current raw value (renamed,
+    /// merged, "Retired", junk) — the caller must persist once so the prefs
+    /// heal and a migration `retiredAt` stamp does not drift launch to launch.
+    struct RestoreReport {
+        var targets: [CatalogScanTarget] = []
+        var legacyRolesDecoded = 0
+    }
 
     /// Restore scan targets from UserDefaults. Returns new targets not already
     /// present in `existing`.
@@ -74,6 +84,34 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String
     ) -> [CatalogScanTarget] {
+        restoreReporting(
+            existing: existing, savedTargetsKey: savedTargetsKey, savedDatesKey: savedDatesKey,
+            savedPhasesKey: savedPhasesKey, savedRolesKey: savedRolesKey, savedTrustKey: savedTrustKey,
+            savedFilesystemKey: savedFilesystemKey, savedMediaTechKey: savedMediaTechKey,
+            savedPurchaseYearKey: savedPurchaseYearKey, savedCapacityKey: savedCapacityKey,
+            savedNotesKey: savedNotesKey, savedRetiredAtKey: savedRetiredAtKey,
+            savedRetiredReasonKey: savedRetiredReasonKey,
+            savedRetiredWitnessesKey: savedRetiredWitnessesKey).targets
+    }
+
+    /// `restore` plus the legacy-role count (see `RestoreReport`).
+    static func restoreReporting(
+        existing: [CatalogScanTarget],
+        savedTargetsKey: String,
+        savedDatesKey: String,
+        savedPhasesKey: String,
+        savedRolesKey: String,
+        savedTrustKey: String,
+        savedFilesystemKey: String,
+        savedMediaTechKey: String,
+        savedPurchaseYearKey: String,
+        savedCapacityKey: String,
+        savedNotesKey: String,
+        savedRetiredAtKey: String,
+        savedRetiredReasonKey: String,
+        savedRetiredWitnessesKey: String
+    ) -> RestoreReport {
+        var report = RestoreReport()
         let paths = UserDefaults.standard.stringArray(forKey: savedTargetsKey) ?? []
         let dates = UserDefaults.standard.dictionary(forKey: savedDatesKey) as? [String: Date] ?? [:]
         let phases = UserDefaults.standard.dictionary(forKey: savedPhasesKey) as? [String: String] ?? [:]
@@ -125,12 +163,14 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
                 t.retiredWitnesses = retiredWitnesses[p]
                 // Role last: legacy-aware (may stamp retiredAt — see above).
                 if let raw = roles[p] {
-                    applyPersistedRole(raw, to: t)
+                    let d = applyPersistedRole(raw, to: t)
+                    if raw != d.role.rawValue { report.legacyRolesDecoded += 1 }
                 }
                 result.append(t)
             }
         }
-        return result
+        report.targets = result
+        return report
     }
 
     // MARK: - Persist
@@ -199,7 +239,20 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
 
     // MARK: - Volume Snapshot
 
-    static func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
+    /// - Parameters:
+    ///   - isNewTarget: the target was just created FOR this snapshot (no
+    ///     local history). Only then may a legacy "Retired" role string
+    ///     create a `retiredAt` stamp; an existing target keeps its own
+    ///     retirement state unless the snapshot carries an EXPLICIT
+    ///     `retiredAt` (codex m5 — a stale legacy bundle must not re-retire
+    ///     a volume reinstated locally).
+    ///   - preserveRole: leave `t.role` untouched (the caller knows the
+    ///     target is the designated Master Archive — an old snapshot's
+    ///     "Backup"/"Archive"/whatever must not un-Archive it).
+    static func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot,
+                                    to t: CatalogScanTarget,
+                                    isNewTarget: Bool = true,
+                                    preserveRole: Bool = false) {
         if let phase = VolumePhase(rawValue: s.phase) { t.phase = phase }
         if let trust = VolumeTrust(rawValue: s.trust) { t.trust = trust }
         if let tech = VolumeMediaTech(rawValue: s.mediaTech) { t.mediaTech = tech }
@@ -215,9 +268,12 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         t.retiredReason = s.retiredReason
         t.retiredWitnesses = s.retiredWitnesses
         // Role LAST and legacy-aware: a pre-taxonomy bundle carrying
-        // role "Retired" (no stamp) becomes an unassigned target WITH a
-        // stamp; "Long-Term Archive" becomes Cloud. Same rules as the
+        // role "Retired" (no stamp) becomes an unassigned target — WITH a
+        // stamp only when the target is new (see `isNewTarget`);
+        // "Long-Term Archive" becomes Cloud. Same rules as the
         // UserDefaults restore path — one decoder for both.
-        applyPersistedRole(s.role, to: t)
+        if !preserveRole {
+            applyPersistedRole(s.role, to: t, stampLegacyRetired: isNewTarget)
+        }
     }
 }

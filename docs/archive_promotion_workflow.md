@@ -51,7 +51,7 @@ Rules
 ## 3. Catalog model (additive only)
 
 - Catalog-level: `masterArchiveTargetID: UUID?` (the CatalogScanTarget) + `masterArchiveRootPath: String` (the `Breen_Family_Archive` folder). Persisted with the catalog (snapshot header extension, additive key). Single owner: setting a new master requires explicit "Change master archive" (later); v1 = set once, clearable.
-- The designated target gets `role = .archive` (or `.lta` if user says so) and is a normal scan target so the archive tree is cataloged like any volume.
+- The designated target gets `role = .archive` ("Master Archive" — the only way that role is ever set) and is a normal scan target so the archive tree is cataloged like any volume.
 - Promoted copy = **new `VideoRecord`** at the archive path: `derivedFrom = source.id`, `derivationKind = .archivePromotion` (new enum case, additive), `contentHash` = sha256, `starRating = max(source, 3)`, people/dates/notes copied, `archiveStage = .masterAssigned`, `lifecycleStage = .archived`.
 - Source record: `archiveStage = .masterAssigned`, journey event `.promote` ("Promoted to Master Archive as …"). Source stays live — deletion is a separate human decision.
 - Query helper: `model.masterArchiveCopy(of: record) -> VideoRecord?` (via derivedFrom + kind) and the reverse. Cached by revision like other memos.

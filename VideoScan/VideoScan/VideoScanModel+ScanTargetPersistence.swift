@@ -29,7 +29,7 @@ extension VideoScanModel {
             installGauntletScanTargetIfRequested()
             return
         }
-        let restored = ScanTargetPersistence.restore(
+        let report = ScanTargetPersistence.restoreReporting(
             existing: scanTargets,
             savedTargetsKey: Self.savedTargetsKey,
             savedDatesKey: Self.savedDatesKey,
@@ -45,7 +45,14 @@ extension VideoScanModel {
             savedRetiredReasonKey: Self.savedRetiredReasonKey,
             savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey
         )
-        scanTargets.append(contentsOf: restored)
+        scanTargets.append(contentsOf: report.targets)
+        // Legacy role strings (taxonomy 2026-08-16) were decoded — persist
+        // ONCE now so the prefs heal and a migration `retiredAt` stamp is
+        // fixed rather than re-derived on every launch (codex m1).
+        if report.legacyRolesDecoded > 0 {
+            log("Updated \(report.legacyRolesDecoded) saved volume role(s) to the current names.")
+            persistScanDates()
+        }
 
         // One-time heal for pre-fix pollution: if the persisted path list
         // still carries RAM-disk scratch entries (ScanTargetPersistence

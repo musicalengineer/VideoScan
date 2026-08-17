@@ -80,8 +80,8 @@ struct MasterArchiveInitSheet: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Label(offer.isNewTarget
-                      ? "Also add \(volumeLabel) as a scan target (role: Archive)"
-                      : "Set \(volumeLabel)'s role to Archive",
+                      ? "Also add \(volumeLabel) as a scan target (role: Master Archive)"
+                      : "Set \(volumeLabel)'s role to Master Archive",
                       systemImage: "checkmark.circle")
                     .font(.system(size: 12))
                 if alreadyInitialized {

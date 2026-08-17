@@ -339,7 +339,14 @@ extension VideoScanModel {
         // carry a VideoScan_Temp snapshot.
         for snap in payload.volumes.volumes where !CatalogScanTarget.isScratchVolumePath(snap.searchPath) {
             if let existing = scanTargets.first(where: { $0.searchPath == snap.searchPath }) {
-                applyVolumeSnapshot(snap, to: existing)
+                // codex m5: the designated Master Archive keeps its role
+                // whatever an older snapshot says; an existing target never
+                // gets a retiredAt stamp from a legacy "Retired" role
+                // string (only from an explicit retiredAt field).
+                ScanTargetPersistence.applyVolumeSnapshot(
+                    snap, to: existing,
+                    isNewTarget: false,
+                    preserveRole: isMasterArchive(existing))
                 updated += 1
             } else {
                 let t = CatalogScanTarget(searchPath: snap.searchPath)
