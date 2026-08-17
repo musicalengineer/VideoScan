@@ -342,10 +342,17 @@ struct ArchivistChatWindow: View {
                             .background(Circle().fill(Color(red: 0.93, green: 0.95, blue: 0.97)))
                     }
                 }
-                .frame(width: 84, height: 84)
+                // Rick 2026-08-17: "make Hallie look a bit more real, image
+                // area larger, more personal without being overwhelming."
+                // 84 → 132 pt, a warm sepia-toned double ring instead of the
+                // thin purple stroke, and a soft shadow so she sits ON the
+                // window rather than in it.
+                .frame(width: 132, height: 132)
                 .background(Circle().fill(Color.white))
                 .clipShape(Circle())
-                .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 2))
+                .overlay(Circle().stroke(Color(red: 0.62, green: 0.48, blue: 0.32).opacity(0.55), lineWidth: 3))
+                .overlay(Circle().inset(by: -5).stroke(Color(red: 0.62, green: 0.48, blue: 0.32).opacity(0.18), lineWidth: 1))
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -371,13 +378,19 @@ struct ArchivistChatWindow: View {
             }
             .help("Click to pick a portrait or GIF — right-click for quick switches")
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 TextField("Name TBD", text: $archivistName)
                     .textFieldStyle(.plain)
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: 26, weight: .semibold, design: .serif))
                 Text("Family Archivist")
-                    .font(.subheadline)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
+                if archivistName == "Hallie Mae" {
+                    // Who she was — the archivist is a real person.
+                    Text("Hallie Mae McGill Latta · 1876–1908 · Louisville, Kentucky")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Image(systemName: "sparkles")
@@ -395,6 +408,9 @@ struct ArchivistChatWindow: View {
                                             in: .userDomainMask).first?
             .appendingPathComponent("VideoScan/archivist").path ?? ""
         return [
+            // Hallie Mae herself (Rick's family records, restored 2026-08-17).
+            ("Hallie Mae — portrait c.1900", base + "/HallieMaeMcGillLatta-portrait.jpeg"),
+            ("Hallie Mae — wedding c.1897", base + "/HallieMaeMcGillLatta-wedding-circa1897-straightened.jpeg"),
             ("Librarian cartoon", base + "/librarian-cartoon.png"),
             ("Donna photo", base + "/donna-photo.jpeg"),
             ("Flat librarian", base + "/librarian-flat.png"),
