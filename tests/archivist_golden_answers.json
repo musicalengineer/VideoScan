@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "comment": "Five executable golden questions for the Family Archivist. The oracle is a deterministic synthetic catalog: expectedSpec must compose to infix, and that infix must return exactly expectedPaths. With NL_GOLDEN_EVAL=1 the real translator is graded by the same final-answer contract.",
+  "schemaVersion": 2,
+  "comment": "Golden questions for the Family Archivist. 'cases' (v1): the oracle is a deterministic synthetic catalog; expectedSpec must compose to infix, and that infix must return exactly expectedPaths. 'astCases' (v2, QueryAST): modelOutput is the RAW translator text (including model quirks such as an extra 'limit'); it must decode through ArchivistQueryAST.decodeTranslatorOutput and execute through HallieTurnExecutor over the synthetic v2 fixture (catalog + GEDCOM + CyberBrain, see ArchivistGoldenAnswerTests) to the stated outcome, count, paths, and prose. With NL_GOLDEN_EVAL=1 the real translator is graded by the same final-answer contract.",
   "cases": [
     {
       "id": "donna-cape-1990-1995-count",
@@ -88,6 +88,67 @@
       "expectedCount": 1,
       "answerState": "answered",
       "evidence": ["confirmed person tag", "scene caption phrase"]
+    }
+  ],
+  "astCases": [
+    {
+      "id": "donna-down-the-cape-90s",
+      "input": "show videos of donna down the cape in the 90s",
+      "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"yearStart\":1990,\"yearEnd\":1999,\"mediaKind\":\"video\",\"keywords\":[\"down the cape\"]}}",
+      "expectedOutcome": "answered",
+      "expectedCount": 5,
+      "expectedPaths": [
+        "/Volumes/LaCie/Cape-1992-archive.mkv",
+        "/Volumes/LaCie/CapeCod_June_1997.mp4",
+        "/Volumes/LaCie/Donna-CapeCod-1990s_prob4_1.mov",
+        "/Volumes/LaCie/Cape-1993/reel.mov",
+        "/Volumes/LaCie/cape-1992-edit.mov"
+      ],
+      "expectedProseContains": "I found 5 catalog items",
+      "expectedBasisContains": "filename token 'cape' for 'down the cape'",
+      "evidence": [
+        "confirmed person tag",
+        "path year",
+        "filename/directory place token via stopword-stripped keyword"
+      ]
+    },
+    {
+      "id": "how-many-donna-videos-with-limit-quirk",
+      "input": "how many videos of Donna do we have?",
+      "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\",\"limit\":1}}",
+      "expectedOutcome": "answered",
+      "expectedCount": 8,
+      "expectedPaths": [
+        "/Volumes/LaCie/Cape-1992-archive.mkv",
+        "/Volumes/LaCie/CapeCod_June_1997.mp4",
+        "/Volumes/LaCie/Donna-CapeCod-1990s_prob4_1.mov",
+        "/Volumes/LaCie/Cape-1993/reel.mov",
+        "/Volumes/LaCie/cape-1992-edit.mov",
+        "/Volumes/LaCie/Cape-2004-archive.mkv",
+        "/Volumes/LaCie/Down the Road 1995.mov",
+        "/Volumes/LaCie/1998/donna_birthday.mov"
+      ],
+      "expectedProseContains": "I found 8 catalog items",
+      "expectedTranslatorNotes": ["ignored extra field payload.limit"],
+      "evidence": ["confirmed person tag", "media kind (audio-only interview excluded)"]
+    },
+    {
+      "id": "who-is-ricks-dad-two-richards",
+      "input": "who is rick's dad?",
+      "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"rick\"],\"operation\":\"kinship\",\"relation\":\"father\"}}",
+      "expectedOutcome": "needsClarification",
+      "expectedProseContains": "Which rick do you mean?",
+      "expectedChipLabels": [
+        "Richard Harding Breen (b. 4 JUL 1962)",
+        "Richard Harding Breen (b. 12 MAR 1931)"
+      ],
+      "continuation": {
+        "select": "cyberBrain:person.rick.jr",
+        "expectedOutcome": "answered",
+        "expectedProse": "Richard Harding Breen Jr's father: Richard Harding Breen Sr.",
+        "expectedBasisContains": "CyberBrain identity “rick” → “Richard Harding Breen” → GEDCOM “Richard Harding Breen Jr”"
+      },
+      "evidence": ["CyberBrain alias → GEDCOM pointer", "imported family tree (GEDCOM)"]
     }
   ]
 }
