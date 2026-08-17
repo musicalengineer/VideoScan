@@ -845,6 +845,19 @@ struct CatalogView: View {
             NonVideoMediaPurgeSheet(preselectedVolumeKey: nil)
                 .environmentObject(model)
         }
+        // Update Catalog (2026-08-17): the ONE door for "files were moved /
+        // renamed outside the app". Opened from the Catalog menu, the
+        // volume-rename badge, the "looks moved" banner and the target
+        // context menus. Dismissing (× / Esc) routes through the model so
+        // parked-but-unapplied rescan results are discarded, never
+        // committed. See VideoScanModel+UpdateCatalog.swift.
+        .sheet(isPresented: Binding(
+            get: { model.showUpdateCatalogSheet },
+            set: { if !$0 { model.closeUpdateCatalog() } }
+        )) {
+            UpdateCatalogSheet()
+                .environmentObject(model)
+        }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
         // Window scene (defined in VideoScanApp.swift, id: "compare").
         // The Compare button uses openWindow(id: "compare") instead.

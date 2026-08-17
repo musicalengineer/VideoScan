@@ -208,6 +208,9 @@ extension VideoScanModel {
                 appLog.write("Completed catalog scan of volume \(volName): no video files found")
             }
             discardPreservedFieldsSnapshot(of: target)
+            // Update Catalog: a deferred rescan that found nothing has
+            // nothing to park — tell the sheet so its row doesn't spin.
+            noteUpdateCatalogScanEnded(target: target, emptyDiscovery: true, cancelled: false)
             // The walk ran to completion (it just found nothing), so any
             // checkpoint is consumed — e.g. a network scan's post-walk
             // checkpoint, or a resumed checkpoint with zero paths.
@@ -232,6 +235,7 @@ extension VideoScanModel {
             // resumability must survive a user cancel (QA 2026-07-02;
             // pinned by userCancelMidProbeLeavesCatalogAndCheckpointIntact).
             discardPreservedFieldsSnapshot(of: target)
+            noteUpdateCatalogScanEnded(target: target, emptyDiscovery: false, cancelled: true)
             appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s) — catalog unchanged")
             updateGlobalScanState()
             return
@@ -275,6 +279,31 @@ extension VideoScanModel {
         // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
         // discovered: volume died mid-probe) upserts without pruning.
         let scanWasComplete = completedCount >= discoveredCount && !walkIncomplete
+        // UPDATE CATALOG (2026-08-17): when this root's rescan was started
+        // from the Update Catalog sheet, the merge is DEFERRED — results are
+        // parked and dry-run for the preview; the sheet's Apply commits them
+        // (VideoScanModel+UpdateCatalog). The scan itself, the scope gate,
+        // and the preservation pass above ran exactly as for a normal scan.
+        // Status stays .idle (the catalog has NOT been updated yet);
+        // lastScannedDate is stamped on Apply.
+        if isUpdateCatalogDeferred(root: target.searchPath) {
+            await parkScanResultsForUpdateCatalog(
+                target: target, volName: volName,
+                targetRecords: scopedRecords, scanWasComplete: scanWasComplete)
+            if scanWasComplete { ScanCheckpointStorage.delete(for: target.searchPath) }
+            logTargetScanSummary(volName: volName, records: scopedRecords)
+            finishDiscoveryAudit(audit, volName: volName, cataloged: scopedRecords.count)
+            appLog.write("Completed catalog scan of volume \(volName) for Update Catalog preview: \(completedCount) file(s) scanned, \(scopedRecords.count) catalogued — merge parked until Apply")
+            target.status = .idle
+            target.stopElapsedTimer()
+            notifyTargetsChanged()
+            updateGlobalScanState()
+            if !hasActiveTargets {
+                dashboard.stopThroughputTimer()
+                dashboard.scanPhase = .complete
+            }
+            return
+        }
         await commitScanResults(
             root: target.searchPath,
             volName: volName,
@@ -428,6 +457,7 @@ extension VideoScanModel {
             // consumer on this path — discard it, or the map grows by one
             // stale entry per failed start (QA 2026-07-02).
             discardPreservedFieldsSnapshot(of: target)
+            noteUpdateCatalogScanEnded(target: target, emptyDiscovery: false, cancelled: false)
             target.status = .error
             target.stopElapsedTimer()
             updateGlobalScanState()

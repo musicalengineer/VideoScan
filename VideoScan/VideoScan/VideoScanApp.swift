@@ -592,6 +592,14 @@ struct VideoScanApp: App {
             // untouched. The same dialog is reachable by right-clicking a
             // volume in the Volumes window (that volume pre-selected).
             CommandMenu("Catalog") {
+                // Update Catalog (2026-08-17): rescan + relink after files
+                // were moved/renamed outside the app; preview, then Apply.
+                Button("Update Catalog…") {
+                    catalogModel.openUpdateCatalog()
+                }
+                .disabled(catalogModel.isReadOnly)
+                .help("Files or folders moved or renamed outside VideoScan? Rescan the drives you pick and relink every record to where its file is now — with a preview before anything changes.")
+                Divider()
                 Button("Purge Non-Video Media…") {
                     catalogModel.showNonVideoMediaPurgeSheet = true
                 }

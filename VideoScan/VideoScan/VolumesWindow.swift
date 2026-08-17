@@ -356,6 +356,16 @@ struct VolumesWindow: View {
         // Drive Health — quick way to inspect SMART data without
         // entering the editor. Enabled whenever the volume is
         // online; offline drives can't be probed.
+        // Update Catalog (2026-08-17): rescan + relink with a preview.
+        // Eligible for reachable, non-retired volumes (and offline volumes
+        // with a detected rename — the sheet handles both).
+        Button("Update Catalog…") {
+            model.openUpdateCatalog(preselecting: [target.id])
+        }
+        .disabled(model.isReadOnly || target.isRetired || target.isScratchVolume)
+        .help("Files or folders moved outside VideoScan? Preview what a rescan would change and relink moved files to their records.")
+        .accessibilityIdentifier("volumeRow.updateCatalog")
+
         Button("Show Drive Health…") {
             driveHealthTarget = target
         }
