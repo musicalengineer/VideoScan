@@ -1046,7 +1046,10 @@ struct HallieShellCLITests {
 
     @Test func mainRoutesHallieBeforeSwiftUIAndShellUsesTypedTranslator() throws {
         let main = try source(named: "main.swift")
+        // The shell's rendering lives in a sibling extension file; the
+        // source sensors below cover both.
         let shell = try source(named: "HallieShellCLI.swift")
+            + source(named: "HallieShellCLI+Render.swift")
         let hallieBranch = try #require(main.range(of: "if isHallieShell"))
         let appMain = try #require(main.range(of: "VideoScanApp.main()",
                                              options: .backwards))
