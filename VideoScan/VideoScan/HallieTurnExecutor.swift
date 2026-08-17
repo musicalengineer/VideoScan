@@ -463,6 +463,21 @@ enum HallieTurnExecutor {
                    index: cyberBrain) {
                 return result
             }
+            // Kinship / birth / death get the SAME alias bridge as biography:
+            // a CyberBrain nickname ("rick") resolves to its GEDCOM pointer,
+            // ambiguity yields the same distinct-label chips, and the typed
+            // continuation lands here again. `nil` = CyberBrain has no
+            // opinion; fall through to the profiles + GEDCOM path.
+            if payload.operation != .biography,
+               let cyberBrain = context.cyberBrain,
+               let result = try await executeCyberBrainBridgedGraph(
+                   payload: payload,
+                   request: request,
+                   context: context,
+                   index: cyberBrain,
+                   dependencies: dependencies) {
+                return result
+            }
             guard let graph = context.graph else {
                 return Result(
                     route: .graph,
@@ -663,7 +678,8 @@ enum HallieTurnExecutor {
                 return Candidate(
                     id: .cyberBrainPersonID(candidate.id),
                     canonicalName: candidate.canonicalName,
-                    label: cyberBrainLabel(candidate, plan: plan))
+                    label: cyberBrainLabel(candidate, plan: plan,
+                                           index: index, graph: graph))
             }
             let stage: ClarificationStage = choices.first?.source == .gedcom
                 ? .gedcomPerson : .cyberBrainPerson
@@ -698,20 +714,162 @@ enum HallieTurnExecutor {
             catalogPersonName: answered ? plan.subject : nil)
     }
 
-    /// CyberBrain candidates that share a canonical name get their stable ID
-    /// appended so the shell's name reply and the chip text stay unique.
-    private static func cyberBrainLabel(
-        _ candidate: CyberBrainAnswerPlan.Candidate,
-        plan: CyberBrainAnswerPlan
+    /// Non-biography graph operations (kinship, birth, death) routed through
+    /// CyberBrain identity resolution and then answered by the deterministic
+    /// GEDCOM executor by pointer. Returns `nil` when CyberBrain does not know
+    /// the name (or knows it but has no family-tree link), so the caller
+    /// continues on the profiles + GEDCOM path unchanged.
+    private static func executeCyberBrainBridgedGraph(
+        payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        index: CyberBrainIndex,
+        dependencies: Dependencies
+    ) async throws -> Result? {
+        // Multi-subject and empty-name validation belongs to the graph
+        // executor; only a single, non-blank name is bridged here.
+        guard payload.people.count == 1,
+              let requestedName = payload.people.first?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !requestedName.isEmpty,
+              let graph = context.graph else {
+            return nil
+        }
+        let queryDescription =
+            "shape=graph operation=\(payload.operation.rawValue) "
+            + "person=\(payload.people.joined(separator: ","))"
+
+        let person: CyberBrainPerson
+        switch request.selectedIdentity {
+        case nil:
+            switch index.resolve(requestedName) {
+            case .notFound:
+                return nil
+            case .resolved(let resolved):
+                guard resolved.gedcomPersonID.flatMap({ graph.people[$0] })
+                        != nil else {
+                    return nil
+                }
+                person = resolved
+            case .ambiguous(let people):
+                let linked = people.filter {
+                    $0.gedcomPersonID.flatMap { graph.people[$0] } != nil
+                }
+                guard !linked.isEmpty else { return nil }
+                let choices = linked.map { candidate in
+                    Candidate(
+                        id: .cyberBrainPersonID(candidate.id),
+                        canonicalName: candidate.canonicalName,
+                        label: bridgedLabel(candidate, among: linked,
+                                            graph: graph))
+                }
+                return Result(
+                    route: .graph,
+                    outcome: .needsClarification,
+                    prose: "Which \(requestedName) do you mean?",
+                    basisLine: "Basis: Breen Family CyberBrain knows more than one person by that name; no family fact was selected.",
+                    queryDescription: queryDescription,
+                    citations: [],
+                    catalogPersonName: nil,
+                    clarification: Clarification(
+                        intent: request.intent,
+                        stage: .cyberBrainPerson,
+                        candidates: choices,
+                        continuationToken: context.continuationToken))
+            }
+        case .cyberBrainPersonID(let personID):
+            guard let selected = index.person(id: personID) else {
+                return invalidContinuationResult(for: request.intent.ast)
+            }
+            person = selected
+        case .gedcomPersonID, .profileStableID:
+            return nil
+        }
+
+        guard let gedcomID = person.gedcomPersonID,
+              let gedcomPerson = graph.people[gedcomID] else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I know \(person.canonicalName) from the family archive, but they aren't linked to the imported family tree, so I can't answer that reliably.",
+                basisLine: "Basis: Breen Family CyberBrain identity without a GEDCOM link; family tree not consulted.",
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil)
+        }
+
+        let query = ArchivistGraphQuery(payload)
+        let inputs = ArchivistGraphInputs(
+            graph: graph, profiles: [] as [ArchivistGraphProfileSnapshot])
+        let execute = dependencies.executeGraph
+        let result = try await detached {
+            execute(query, inputs, .gedcomPersonID(gedcomID))
+        }
+        // Prepend the identity bridge to the executor's own basis line so the
+        // answer states how "rick" became a GEDCOM person, mirroring the
+        // profile-bridge wording on the profiles + GEDCOM path.
+        let bridge = "Breen Family CyberBrain identity “"
+            + requestedName + "” → “" + person.canonicalName + "” → GEDCOM “"
+            + gedcomPerson.name + "”; "
+        var basis = result.basisLine
+        for prefix in ["Basis: ", "Checked: "] where basis.hasPrefix(prefix) {
+            basis = prefix + bridge + basis.dropFirst(prefix.count)
+            break
+        }
+        return Result(
+            route: .graph,
+            outcome: result.conclusion == .answered ? .answered : .declined,
+            prose: result.prose,
+            basisLine: basis,
+            queryDescription: queryDescription,
+            citations: [],
+            catalogPersonName: result.catalogPersonName)
+    }
+
+    /// Chip label for a CyberBrain candidate. Same-name people (Sr./Jr.)
+    /// get the linked GEDCOM birth/death detail, mirroring the graph path's
+    /// disambiguation labels; without a family-tree link the stable ID is
+    /// appended. Shared by the biography and kinship/birth/death routes so
+    /// the two clarifications read identically.
+    private static func bridgedLabel(
+        _ candidate: CyberBrainPerson,
+        among candidates: [CyberBrainPerson],
+        graph: GedcomFamilyGraph?
     ) -> String {
         let key = PersonResolver.normalize(candidate.canonicalName)
-        let duplicates = plan.ambiguityCandidates.filter {
-            $0.source == .cyberBrain
-                && PersonResolver.normalize($0.canonicalName) == key
+        let duplicates = candidates.filter {
+            PersonResolver.normalize($0.canonicalName) == key
         }.count
-        return duplicates > 1
-            ? "\(candidate.canonicalName) (\(candidate.id))"
-            : candidate.canonicalName
+        guard duplicates > 1 else { return candidate.canonicalName }
+        if let gedcomID = candidate.gedcomPersonID,
+           let person = graph?.people[gedcomID] {
+            let detail = ArchivistBiographyPolicy
+                .disambiguationCandidate(for: person).label
+            // Keep the CyberBrain canonical name in front so the chip still
+            // reads as the person the archive knows.
+            if detail.hasPrefix(person.name), detail.count > person.name.count {
+                return candidate.canonicalName
+                    + String(detail.dropFirst(person.name.count))
+            }
+            return detail
+        }
+        return "\(candidate.canonicalName) (\(candidate.id))"
+    }
+
+    /// Biography-route wrapper over `bridgedLabel` for planner candidates.
+    private static func cyberBrainLabel(
+        _ candidate: CyberBrainAnswerPlan.Candidate,
+        plan: CyberBrainAnswerPlan,
+        index: CyberBrainIndex,
+        graph: GedcomFamilyGraph?
+    ) -> String {
+        let people = plan.ambiguityCandidates
+            .filter { $0.source == .cyberBrain }
+            .compactMap { index.person(id: $0.id) }
+        guard let person = index.person(id: candidate.id) else {
+            return "\(candidate.canonicalName) (\(candidate.id))"
+        }
+        return bridgedLabel(person, among: people, graph: graph)
     }
 
     private static func unavailableProfilesResult(route: Route) -> Result {
