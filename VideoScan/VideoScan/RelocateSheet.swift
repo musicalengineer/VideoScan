@@ -23,6 +23,12 @@ struct RelocateSheet: View {
               FileManager.default.fileExists(atPath: p) else { return nil }
         return URL(fileURLWithPath: p)
     }()
+    /// Rick 2026-08-17: the destination must be HIS choice. When on, a
+    /// chosen volume root gets from_<SourceVolume>/<subtree> beneath it;
+    /// when off, the chosen folder is used exactly as chosen. Remembered.
+    @AppStorage("relocate.preserveSourceLayout") private var preserveSourceLayout: Bool = true
+    /// The folder as the user picked it (before any layout derivation).
+    @State private var chosenDestinationRoot: URL?
     @State private var dryRun: Bool = false
     @State private var maxConcurrency: Int = 1
     /// When ON, reconcile classifies records duplicated on other volumes
@@ -200,6 +206,13 @@ struct RelocateSheet: View {
                     .accessibilityIdentifier("relocateSheet.chooseDest")
             }
             .padding(4)
+            Toggle("Preserve source layout beneath the chosen folder (from_<Volume>/<subtree>)",
+                   isOn: $preserveSourceLayout)
+                .font(.caption)
+                .padding(.horizontal, 4)
+                .onChange(of: preserveSourceLayout) { _, _ in applyDestinationChoice() }
+                .help("On: a chosen volume root becomes <root>/from_<SourceVolume>/<subtree>, so history stays readable in Finder. Off: files go exactly where you chose (the app tracks provenance either way).")
+                .accessibilityIdentifier("relocateSheet.preserveLayout")
         }
     }
 
@@ -455,10 +468,20 @@ struct RelocateSheet: View {
         panel.prompt = "Select"
         if let current = destinationFolder { panel.directoryURL = current }
         if panel.runModal() == .OK, let url = panel.url {
-            destinationFolder = Self.derivedDestination(chosen: url, sourcePath: sourceVolumePath)
-            UserDefaults.standard.set(destinationFolder?.path, forKey: relocateDestFolderKey)
-            invalidatePreview()  // dest change invalidates preview
+            chosenDestinationRoot = url
+            applyDestinationChoice()
         }
+    }
+
+    /// Resolve the final destination from the user's choice + the layout
+    /// toggle; show it before Migrate so nothing surprises.
+    private func applyDestinationChoice() {
+        guard let chosen = chosenDestinationRoot else { return }
+        destinationFolder = preserveSourceLayout
+            ? Self.derivedDestination(chosen: chosen, sourcePath: sourceVolumePath)
+            : chosen.standardizedFileURL
+        UserDefaults.standard.set(destinationFolder?.path, forKey: relocateDestFolderKey)
+        invalidatePreview()  // dest change invalidates preview
     }
 
     /// Rick 2026-08-17: "humans easily make typos" — the app derives the
