@@ -112,7 +112,13 @@ struct ScanMergeMoveIdentityTests {
                 "The record's identity must survive the rename (RED pre-fix: fresh id)")
         #expect(after === original,
                 "The surviving record must be the ORIGINAL instance (pair references resolve by identity)")
-        #expect(after.notes == "curated")
+        // Update Catalog (2026-08-17): the relink appends ONE File Journey
+        // line after the user's note — the note itself is untouched.
+        #expect(after.notes.hasPrefix("curated\n"))
+        #expect(after.notes.contains("(relinked by Update Catalog)"),
+                "A relink must leave a journey line on the record")
+        #expect(after.originalFullPath == oldURL.path,
+                "First move stamps originalFullPath with the old location")
         #expect(after.lifecycleStage == .archived)
         #expect(after.sceneCaptions.first?.text == "backyard 1987")
         #expect(after.filename == "1987-tape-a-RENAMED.mov",
@@ -171,7 +177,10 @@ struct ScanMergeMoveIdentityTests {
                 "Identity must survive the cross-root move (RED pre-fix: stranger id)")
         #expect(followed.audioTranscript == "…Donna laughing on the porch…",
                 "The transcript must follow the file")
-        #expect(followed.notes == "1987 Christmas master")
+        #expect(followed.notes.hasPrefix("1987 Christmas master\n"),
+                "User note preserved; the relink journey line follows it")
+        #expect(followed.notes.contains("Moved from \(tapeX.path)"),
+                "Journey line names the old location")
         #expect(!model.records.contains { $0.fullPath == tapeX.path },
                 "No ghost record may remain at the old path")
 
@@ -279,7 +288,7 @@ struct ScanMergeMoveIdentityTests {
         #expect(survivingIDs == Set(seeds.map(\.id)),
                 "Every record identity must survive the reorganize (RED pre-fix: all replaced)")
         let clip0 = model.records.first { $0.fullPath == vids.appendingPathComponent("archive/clip0.mov").path }
-        #expect(clip0?.notes == "curated", "Enrichment must follow each file")
+        #expect(clip0?.notes.hasPrefix("curated") == true, "Enrichment must follow each file")
         let snapshots = try FileManager.default.contentsOfDirectory(atPath: store.path)
             .filter { $0.hasPrefix("catalog.pre-merge.") }
         #expect(snapshots.isEmpty,
@@ -535,15 +544,20 @@ struct ScanMergeMoveMatcherTests {
                 "…/family/xmas/tape.mkv (3 trailing components) must beat …/misc/tape.mkv (1)")
     }
 
-    @Test func lexicographicCandidateIsTheFinalTiebreak() {
-        let result = VideoScanModel.matchMovedFiles(
-            added: [ScanMergeAddedFile(path: "/new/tape.mkv", fingerprint: fp(1))],
-            candidates: [
-                ScanMergeMoveCandidate(path: "/volB/tape.mkv", fingerprint: fp(1), sameRoot: false),
-                ScanMergeMoveCandidate(path: "/volA/tape.mkv", fingerprint: fp(1), sameRoot: false),
-            ])
-        #expect(result == ["/new/tape.mkv": "/volA/tape.mkv"],
-                "Equal rank → lexicographically smaller candidate path, deterministically")
+    // Update Catalog (Rick 2026-08-17): equal evidence is AMBIGUOUS — the
+    // matcher no longer breaks ties lexicographically. Both candidates stay
+    // missing, the added file stays new, and the group is reported.
+    @Test func equalEvidenceIsAmbiguousNotGuessed() {
+        let added = [ScanMergeAddedFile(path: "/new/tape.mkv", fingerprint: fp(1))]
+        let candidates = [
+            ScanMergeMoveCandidate(path: "/volB/tape.mkv", fingerprint: fp(1), sameRoot: false),
+            ScanMergeMoveCandidate(path: "/volA/tape.mkv", fingerprint: fp(1), sameRoot: false),
+        ]
+        let result = VideoScanModel.matchMovedFilesWithAmbiguity(added: added, candidates: candidates)
+        #expect(result.adoptions.isEmpty, "Equal rank must NOT be resolved by path order")
+        #expect(result.ambiguous == [ScanMergeAmbiguity(
+            addedPaths: ["/new/tape.mkv"],
+            candidatePaths: ["/volA/tape.mkv", "/volB/tape.mkv"])])
     }
 
     @Test func oneCandidateManyAddedAdoptsExactlyOnce() {

@@ -389,6 +389,16 @@ extension CatalogView {
                 Label(hasResumable ? "Resume Scan" : (single ? "Scan / Update Catalog" : "Scan Selected"),
                       systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
             }
+            // Update Catalog (2026-08-17): the previewed, relinking flavor
+            // of a rescan — for when files were moved/renamed outside the
+            // app. Opens the sheet with these targets pre-checked.
+            Button(action: {
+                model.openUpdateCatalog(preselecting: Set(targets.map(\.id)))
+            }) {
+                Label("Update Catalog…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(model.isReadOnly)
+            .help("Preview what a rescan would change (moved / new / missing / unchanged), relink moved files to their records, then Apply.")
             // File signatures for this volume — coverage first, then the
             // action. Showing "1,204 of 1,513 files have signatures"
             // BEFORE the button turns a blind command into an informed
@@ -779,8 +789,11 @@ extension CatalogView {
     @ViewBuilder
     private func volumeRenameBadge(candidate: VolumeRenameCandidate, rowID: UUID) -> some View {
         Button(action: {
+            // Routes to the ONE door (Update Catalog, 2026-08-17): the
+            // sheet lists this target as "Volume renamed" and Apply runs
+            // the same migration + dialog (with Undo) as before.
             guard let t = target(for: rowID) else { return }
-            Task { await model.userInitiatedVolumeRenameMigration(for: t) }
+            model.openUpdateCatalog(preselecting: [t.id])
         }) {
             HStack(spacing: 4) {
                 Image(systemName: "externaldrive.badge.questionmark")
@@ -810,7 +823,7 @@ extension CatalogView {
         var text = c.uuidMatched
             ? "The drive now connected as “\(c.newVolumeName)” looks like “\(c.oldVolumeName)” with a new name — it has the same volume ID, and a spot-check of its files matches."
             : "The drive now connected as “\(c.newVolumeName)” looks like “\(c.oldVolumeName)” with a new name — a spot-check found its files at the same places."
-        text += "\n\nClick to update the catalog so \(c.matchingRecords) file record(s) follow the new name. Nothing on the drive itself is touched, and a safety copy of the catalog is saved first (you can Undo)."
+        text += "\n\nClick to open Update Catalog, where Apply makes \(c.matchingRecords) file record(s) follow the new name. Nothing on the drive itself is touched, and a safety copy of the catalog is saved first (you can Undo)."
         if c.mismatchedRecords > 0 {
             text += "\n\n\(c.mismatchedRecords) record(s) under \(c.oldVolumeName) can't be proven to belong to this drive — those will be left alone and reported."
         }

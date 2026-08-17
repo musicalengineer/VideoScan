@@ -113,7 +113,10 @@ struct CatalogScopeMoveIdentityTests {
         #expect(survivor?.pairedWith === partner, "pair wiring must survive the move")
         #expect(partner.pairedWith === oldAudio, "partner's back-reference must survive")
         #expect(survivor?.pairGroupID == gid)
-        #expect(survivor?.notes == "Donna singing — keep forever")
+        // Update Catalog (2026-08-17): a relink appends ONE journey line
+        // after the user's note; the note itself is intact.
+        #expect(survivor?.notes.hasPrefix("Donna singing — keep forever") == true)
+        #expect(survivor?.notes.contains("(relinked by Update Catalog)") == true)
         #expect(model.records.count == 2, "relocation, not prune + stranger")
     }
 
@@ -150,7 +153,7 @@ struct CatalogScopeMoveIdentityTests {
         #expect(survivor != nil,
                 "moved unpaired audio record was deleted — a move must be a relocation (RED pre-fix)")
         #expect(survivor?.fullPath == newURL.path)
-        #expect(survivor?.notes == "might be grampa's voice")
+        #expect(survivor?.notes.hasPrefix("might be grampa's voice") == true)
         #expect(model.records.count == 1)
     }
 }

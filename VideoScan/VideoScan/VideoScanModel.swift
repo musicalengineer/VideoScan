@@ -1187,6 +1187,30 @@ final class VideoScanModel: ObservableObject {
     /// showUnrelatedAudioPurgeSheet as the live purge surface.
     @Published var showNonVideoMediaPurgeSheet: Bool = false
 
+    // MARK: - Update Catalog (VideoScanModel+UpdateCatalog.swift)
+    //
+    // Stored here because extensions cannot add stored properties. The
+    // ONE door for "humans moved things outside the app": rename badge +
+    // deferred rescan-with-preview + relink + the "looks moved" banner.
+    /// Sheet visibility — bound in ContentView, set by the Catalog menu,
+    /// the rename badge, and the "looks moved" banner.
+    @Published var showUpdateCatalogSheet: Bool = false
+    /// One row per eligible scan target; a pure value the sheet renders.
+    @Published var updateCatalogRows: [UpdateCatalogRow] = []
+    /// "Looks moved" banner payload (nil = hidden).
+    @Published var looksMovedNotice: LooksMovedNotice?
+    /// Normalized roots whose finishing scan must PARK its results for the
+    /// sheet instead of committing.
+    var updateCatalogDeferredRoots: Set<String> = []
+    /// Parked probe results per normalized root — live records, main actor
+    /// only. Cleared on Apply and on close.
+    var updateCatalogPendingMerges: [String: UpdateCatalogPendingMerge] = [:]
+    /// Volumes already prompted with the "looks moved" banner this session
+    /// (once per volume unless the user asks again).
+    var looksMovedPromptedVolumes: Set<String> = []
+    /// Generation guard for the off-main missing-file default check.
+    var updateCatalogCheckGeneration: Int = 0
+
     // MARK: - Master Archive (docs/archive_promotion_workflow.md)
     //
     // Stored here (not in VideoScanModel+MasterArchive.swift) because
