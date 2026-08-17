@@ -129,6 +129,25 @@ enum SignatureVerification {
         guard let duplicateBefore = VerifiedFileIdentity.capture(path: duplicatePath)
         else { return .failure(.unreadable(duplicatePath)) }
 
+        // Refusal accelerators (Rick 2026-08-17: a LaCie pass with ~1,400
+        // name-alike NON-duplicates was paying two full 50 GB reads per
+        // refusal — "at this rate it'll be tomorrow night"). Both gates
+        // can only REFUSE faster; the delete path below still requires
+        // full, fresh, identical hashes of both files.
+        //   1. Different sizes can never be identical bytes.
+        //   2. Same size but different first bytes: compare the heads
+        //      before committing to two full reads (encodes/containers
+        //      almost always diverge within the first few MB).
+        guard keeperBefore.size == duplicateBefore.size else {
+            return .failure(.contentDiffers)
+        }
+        guard !hooks.shouldCancel() else { return .failure(.cancelled) }
+        switch headsMatch(keeperPath: keeperPath, duplicatePath: duplicatePath) {
+        case .some(false): return .failure(.contentDiffers)
+        case .none: break            // unreadable head — let the full pass decide/report
+        case .some(true): break
+        }
+
         guard !hooks.shouldCancel() else { return .failure(.cancelled) }
         let keeperHash = cancellableFullHash(
             path: keeperPath, label: "keeper", hooks: hooks)
@@ -278,6 +297,36 @@ enum SignatureVerification {
                 path: quarantined.path,
                 reason: "\(reason); restore failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Bytes compared by the head gate. 4 MB: past every container header
+    /// and into the first frames, cheap on any medium.
+    static let headCompareBytes = 4 * 1024 * 1024
+
+    /// Compare the first `headCompareBytes` of both files. true = identical
+    /// heads (files MAY still differ later — the full hash decides), false =
+    /// definitely different, nil = could not read (caller falls through to
+    /// the full pass so the real error is reported).
+    static func headsMatch(keeperPath: String, duplicatePath: String,
+                           bytes: Int = headCompareBytes) -> Bool? {
+        func head(_ path: String) -> Data? {
+            let fd = open(path, O_RDONLY)
+            guard fd >= 0 else { return nil }
+            defer { close(fd) }
+            var data = Data(count: bytes)
+            let n = data.withUnsafeMutableBytes { buf -> Int in
+                var total = 0
+                while total < bytes {
+                    let r = read(fd, buf.baseAddress! + total, bytes - total)
+                    if r > 0 { total += r } else if r == 0 { break } else if errno != EINTR { return -1 }
+                }
+                return total
+            }
+            guard n >= 0 else { return nil }
+            return data.prefix(n)
+        }
+        guard let a = head(keeperPath), let b = head(duplicatePath) else { return nil }
+        return a == b
     }
 
     private static func cancellableFullHash(path: String, label: String,

@@ -132,6 +132,48 @@ struct SignatureConcurrencyScaleTests {
 @Suite("Signature verification — the delete gate")
 struct SignatureVerificationTests {
 
+    // Refusal accelerators (2026-08-17). Both may only make REFUSALS
+    // faster; the success path still hashes both files in full.
+
+    /// Different sizes are refused without reading either body — pinned by
+    /// a size difference that lives past the head window.
+    @Test func differentSizesRefuseImmediately() {
+        var a = [UInt8](repeating: 7, count: 6 * 1024 * 1024)
+        let b = a; a.append(1)
+        let pa = tempFile("size-a.mov", a), pb = tempFile("size-b.mov", b)
+        #expect(SignatureVerification.verify(keeperPath: pa, duplicatePath: pb) == .failure(.contentDiffers))
+    }
+
+    /// Same size, different first bytes → refused by the head compare.
+    @Test func differentHeadsRefuseBeforeFullHash() {
+        var a = [UInt8](repeating: 7, count: 6 * 1024 * 1024)
+        var b = a; b[10] = 9
+        let pa = tempFile("head-a.mov", a), pb = tempFile("head-b.mov", b)
+        #expect(SignatureVerification.headsMatch(keeperPath: pa, duplicatePath: pb) == false)
+        #expect(SignatureVerification.verify(keeperPath: pa, duplicatePath: pb) == .failure(.contentDiffers))
+        a.removeAll(); b.removeAll()
+    }
+
+    /// Same size, identical head, difference PAST the head window: the head
+    /// gate must say "match" and the FULL hash must still refuse.
+    @Test func identicalHeadsStillRequireFullHash() {
+        var a = [UInt8](repeating: 7, count: 6 * 1024 * 1024)
+        var b = a; b[5 * 1024 * 1024 + 123] = 9
+        let pa = tempFile("tail-a.mov", a), pb = tempFile("tail-b.mov", b)
+        #expect(SignatureVerification.headsMatch(keeperPath: pa, duplicatePath: pb) == true)
+        #expect(SignatureVerification.verify(keeperPath: pa, duplicatePath: pb) == .failure(.contentDiffers))
+        a.removeAll(); b.removeAll()
+    }
+
+    /// Truly identical files still verify (the accelerators never block success).
+    @Test func identicalFilesStillVerify() {
+        let a = [UInt8](repeating: 3, count: 5 * 1024 * 1024 + 17)
+        let pa = tempFile("same-a.mov", a), pb = tempFile("same-b.mov", a)
+        if case .failure(let f) = SignatureVerification.verify(keeperPath: pa, duplicatePath: pb) {
+            Issue.record("identical files must verify, got \(f)")
+        }
+    }
+
     private func tempFile(_ name: String, _ bytes: [UInt8]) -> String {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("SigVerify-\(UUID().uuidString)", isDirectory: true)
