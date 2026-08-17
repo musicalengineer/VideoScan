@@ -311,10 +311,17 @@ extension GedcomFamilyGraph {
             + chainWords.joined(separator: "'s ") + "'s " + word
     }
 
+    /// Relatives read alphabetically (the person asked about first), then by
+    /// route for repeated names — the same stable order the biography policy
+    /// uses, so prose and evidence never disagree.
     private static func pathOrder(_ lhs: [KinshipHop], _ rhs: [KinshipHop]) -> Bool {
-        let left = lhs.map { FamilyIdentityText.normalized($0.person.name) + $0.person.id }
-        let right = rhs.map { FamilyIdentityText.normalized($0.person.name) + $0.person.id }
-        return left.lexicographicallyPrecedes(right)
+        func key(_ hop: KinshipHop) -> String {
+            FamilyIdentityText.normalized(hop.person.name) + hop.person.id
+        }
+        if let l = lhs.last, let r = rhs.last, key(l) != key(r) {
+            return key(l) < key(r)
+        }
+        return lhs.map(key).lexicographicallyPrecedes(rhs.map(key))
     }
 
     /// Colloquial spellings → the closed vocabulary. Also returns a side when
@@ -340,7 +347,9 @@ extension GedcomFamilyGraph {
         }
         text = text.replacingOccurrences(of: "great great", with: "greatgreat")
             .replacingOccurrences(of: "great ", with: "great")
-            .replacingOccurrences(of: "in law", with: "inlaw")
+            .replacingOccurrences(of: " in laws", with: "inlaws")
+            .replacingOccurrences(of: " in law", with: "inlaw")
+            .replacingOccurrences(of: "in laws", with: "inlaws")
             .replacingOccurrences(of: "  ", with: " ")
             .trimmingCharacters(in: .whitespaces)
         let table: [String: ExtendedRelation] = [
