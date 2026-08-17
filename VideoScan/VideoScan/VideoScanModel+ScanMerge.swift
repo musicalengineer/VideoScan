@@ -49,6 +49,13 @@ import os
 //     from the tripwire's prune count (a folder reorganize is not a mass
 //     deletion). Candidates whose file still exists are COPIES — never
 //     adopted. See VideoScanModel+ScanMergeMoveIdentity.swift.
+//     Update Catalog (2026-08-17): contentHash agreement when both sides
+//     have one; AMBIGUITY is never guessed (left as new + missing, counted
+//     in `outcome.ambiguous`); archive copies / Master Archive paths /
+//     retire witnesses never relink; and the merge's derivation is shared
+//     with a DRY-RUN `previewScanMerge` so the Update Catalog sheet can
+//     show "n moved, n new, n missing, n unchanged" before Apply. See
+//     VideoScanModel+UpdateCatalog.swift.
 //   - Mass-deletion tripwire (defense in depth): a complete scan whose
 //     merge would remove MORE THAN 50 records AND MORE THAN 20% of the
 //     existing records under the root first snapshots catalog.json to a
@@ -82,6 +89,10 @@ struct ScanMergeOutcome: Equatable {
     /// (a mass folder reorganize is not a mass deletion). See
     /// VideoScanModel+ScanMergeMoveIdentity.swift.
     var moved: Int = 0
+    /// Identity groups the move matcher refused to guess (Update Catalog,
+    /// 2026-08-17): several identical files on one side or the other. Left
+    /// as new + missing; surfaced by the preview as "ambiguous — review".
+    var ambiguous: Int = 0
     /// Fresh records committed under the root: same-path refreshes PLUS
     /// genuinely new paths (i.e. every record in `targetRecords`). The
     /// overlap is `refreshed`; `moved` is the subset of new paths that
@@ -177,6 +188,226 @@ extension VideoScanModel {
         return ScanMergeExistenceEvidence(rootReachable: true, existsByPath: exists)
     }
 
+    // MARK: - Shared derivation (commit AND Update Catalog preview)
+    //
+    // Update Catalog (2026-08-17) needs "what WOULD this merge do?" before
+    // the user presses Apply. Rather than a second implementation that
+    // could drift from the real merge, the merge is split into three
+    // pieces the preview and the commit share verbatim:
+    //   1. hoistScanMergeEvidenceInputs — PRE-await, values only;
+    //   2. the detached existence sweep (unchanged);
+    //   3. deriveScanMerge — POST-await, synchronous, re-derived from the
+    //      CURRENT records array; returns every set the mutation acts on.
+    // commitScanResults = 1 → await 2 → 3 → mutate (no await between 3 and
+    // the mutation — the atomicity discipline below is preserved by
+    // construction). previewScanMerge = 1 → await 2 → 3 → summarize.
+    // "Preview equals apply" therefore holds whenever the catalog did not
+    // change in between; the merge always re-derives, never trusts a
+    // stale plan.
+
+    /// Pre-await inputs for the detached evidence sweep — plain strings.
+    struct ScanMergeEvidenceInputs: Sendable {
+        var vanishedPaths: [String]
+        var moveCandidatePaths: [String]
+    }
+
+    /// Everything the mutation acts on, derived synchronously on the main
+    /// actor from the CURRENT records array. Holds live record references
+    /// — must be consumed before the next suspension point.
+    struct ScanMergeDerivation {
+        var newPaths: Set<String>
+        var existingUnderRoot: [VideoRecord]
+        var vanished: [VideoRecord]
+        var rootReachable: Bool
+        var genuinelyGone: [VideoRecord]
+        var retainedInvisible: [VideoRecord]
+        var moveMatch: ScanMergeMoveMatch
+        var refreshed: Int { existingUnderRoot.count - vanished.count }
+        /// Genuine strangers: added paths that neither refreshed a record
+        /// nor relinked one.
+        func strangerCount(targetCount: Int) -> Int {
+            max(0, targetCount - refreshed - moveMatch.adoptions.count)
+        }
+    }
+
+    /// Sendable summary of what a merge would do — the Update Catalog
+    /// preview payload. Every count is derived from exactly the sets the
+    /// commit path acts on.
+    struct ScanMergePreview: Sendable, Equatable {
+        var scanWasComplete: Bool = true
+        /// Same-path records the rescan re-saw (refreshed in place).
+        var unchanged: Int = 0
+        /// Genuinely new files (fresh records; not a refresh, not a relink).
+        var new: Int = 0
+        /// Records that would follow their files (same-root rename or
+        /// cross-target relink).
+        var moved: Int = 0
+        /// Records whose files are genuinely gone — WOULD be pruned, behind
+        /// the tripwire (a snapshot is written first when it fires).
+        var missing: Int = 0
+        /// Un-re-seen records whose files still exist (invisible to scan
+        /// options) — kept, never pruned.
+        var retainedInvisible: Int = 0
+        /// Partial scan only: un-re-seen records retained on incomplete
+        /// evidence.
+        var retainedStale: Int = 0
+        var rootReachable: Bool = true
+        var tripwireWouldFire: Bool = false
+        /// Identity groups the matcher refused to guess (listed for review;
+        /// left as new + missing).
+        var ambiguous: [ScanMergeAmbiguity] = []
+        /// old → new for the relinks (capped for display; `moved` is the
+        /// full count). Cross-root entries are moves between targets.
+        var relinks: [ScanMergeRelinkPreview] = []
+        /// Free-text caveat for the sheet (e.g. "empty discovery — nothing
+        /// to update"). Empty when the counts speak for themselves.
+        var note: String = ""
+        static let relinkListCap = 500
+    }
+
+    struct ScanMergeRelinkPreview: Sendable, Equatable, Hashable {
+        var oldPath: String
+        var newPath: String
+        var crossRoot: Bool
+    }
+
+    /// Step 1 — PRE-await hoist. Paths only; nothing here feeds the merge
+    /// except as stat evidence keyed by path.
+    func hoistScanMergeEvidenceInputs(root: String, targetRecords: [VideoRecord]) -> ScanMergeEvidenceInputs {
+        let newPaths = Set(targetRecords.map(\.fullPath))
+        let vanished: [String] = records.compactMap { rec in
+            guard PathScope.contains(rec.fullPath, within: root),
+                  !newPaths.contains(rec.fullPath) else { return nil }
+            return rec.fullPath
+        }
+        let moveCandidates = hoistOutsideRootMoveCandidatePaths(root: root, targetRecords: targetRecords)
+        return ScanMergeEvidenceInputs(vanishedPaths: vanished, moveCandidatePaths: moveCandidates)
+    }
+
+    /// Step 2 — the ONE suspension: detached existence sweep for both the
+    /// vanished set and the outside-root move candidates.
+    func gatherScanMergeEvidence(root: String, inputs: ScanMergeEvidenceInputs)
+        async -> (ScanMergeExistenceEvidence, [String: Bool])
+    {
+        let afterRootCheck = scanMergeAfterRootCheckForTesting
+        let vanishedPaths = inputs.vanishedPaths
+        let movePaths = inputs.moveCandidatePaths
+        let evidenceTask = Task.detached(priority: .userInitiated) {
+            let existence = Self.gatherScanMergeExistenceEvidence(
+                root: root, vanishedPaths: vanishedPaths, afterRootCheck: afterRootCheck)
+            let moveCandidateExists = Self.gatherMoveCandidateExistenceEvidence(paths: movePaths)
+            return (existence, moveCandidateExists)
+        }
+        if let hook = scanMergeDuringExistenceChecksForTesting { await hook() }
+        return await evidenceTask.value
+    }
+
+    /// Step 3 — POST-await re-derivation (synchronous, main actor).
+    ///
+    /// ATOMICITY RE-DERIVATION (QA correctness constraint, 2026-07-02):
+    /// the await in step 2 is the merge's ONE suspension point, and
+    /// `records` may have been mutated meanwhile (another target's
+    /// finalize, a LiveReload merge, a user edit). Everything the merge
+    /// acts on is therefore re-derived from the CURRENT records array
+    /// here — no pre-await record set survives. The existence evidence
+    /// stays valid because it is keyed by PATH:
+    ///   - path in evidence → use its on-disk verdict;
+    ///   - path NOT in evidence (record appeared under the root during
+    ///     the await) → NO evidence, so it is RETAINED (`?? true`) —
+    ///     never prune a record whose file was never statted;
+    ///   - path that left the catalog during the await → simply absent
+    ///     from the re-derived vanished set; its evidence goes unused.
+    func deriveScanMerge(
+        root: String,
+        targetRecords: [VideoRecord],
+        evidence: ScanMergeExistenceEvidence,
+        moveCandidateExists: [String: Bool]
+    ) -> ScanMergeDerivation {
+        let newPaths = Set(targetRecords.map(\.fullPath))
+        let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
+        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+        var genuinelyGone: [VideoRecord] = []
+        var retainedInvisible: [VideoRecord] = []
+        if evidence.rootReachable {
+            for rec in vanished {
+                if evidence.existsByPath[rec.fullPath] ?? true {
+                    retainedInvisible.append(rec)
+                } else {
+                    genuinelyGone.append(rec)
+                }
+            }
+        } else {
+            retainedInvisible = vanished
+        }
+        // MOVE / RENAME IDENTITY: fingerprint-match this scan's added files
+        // against (a) the genuinely-gone set (same-root rename) and (b)
+        // outside-root records whose file the detached sweep proved gone
+        // (cross-root move). Matched candidates are RELOCATIONS, not
+        // deletions — pulled out of genuinelyGone BEFORE the tripwire judges
+        // the prune count, so a whole-folder reorganize can't fire the
+        // mass-deletion tripwire.
+        let match = deriveMoveMatch(
+            root: root,
+            targetRecords: targetRecords,
+            existingPathsUnderRoot: Set(existingUnderRoot.map(\.fullPath)),
+            genuinelyGone: genuinelyGone,
+            outsideRootCandidateExists: moveCandidateExists)
+        if !match.adoptions.isEmpty {
+            let adoptedOldPaths = Set(match.adoptions.values)
+            genuinelyGone.removeAll { adoptedOldPaths.contains($0.fullPath) }
+        }
+        return ScanMergeDerivation(
+            newPaths: newPaths,
+            existingUnderRoot: existingUnderRoot,
+            vanished: vanished,
+            rootReachable: evidence.rootReachable,
+            genuinelyGone: genuinelyGone,
+            retainedInvisible: retainedInvisible,
+            moveMatch: match)
+    }
+
+    /// Dry run — what `commitScanResults` WOULD do right now, as counts.
+    /// Mutates nothing (no snapshot, no prune, no relink, no log spam).
+    /// Suspends once (the same detached evidence sweep as the commit).
+    func previewScanMerge(
+        root: String,
+        targetRecords: [VideoRecord],
+        scanWasComplete: Bool
+    ) async -> ScanMergePreview {
+        var p = ScanMergePreview()
+        p.scanWasComplete = scanWasComplete
+        guard scanWasComplete else {
+            let newPaths = Set(targetRecords.map(\.fullPath))
+            let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
+            let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+            p.unchanged = existingUnderRoot.count - vanished.count
+            p.new = targetRecords.count - p.unchanged
+            p.retainedStale = vanished.count
+            return p
+        }
+        let inputs = hoistScanMergeEvidenceInputs(root: root, targetRecords: targetRecords)
+        let (evidence, moveExists) = await gatherScanMergeEvidence(root: root, inputs: inputs)
+        let d = deriveScanMerge(root: root, targetRecords: targetRecords,
+                                evidence: evidence, moveCandidateExists: moveExists)
+        p.unchanged = d.refreshed
+        p.moved = d.moveMatch.adoptions.count
+        p.new = d.strangerCount(targetCount: targetRecords.count)
+        p.missing = d.genuinelyGone.count
+        p.retainedInvisible = d.retainedInvisible.count
+        p.rootReachable = d.rootReachable
+        p.tripwireWouldFire = Self.scanMergeTripwireWouldFire(
+            existingCount: d.existingUnderRoot.count, removedCount: d.genuinelyGone.count)
+        p.ambiguous = d.moveMatch.ambiguous
+        for (newPath, oldPath) in d.moveMatch.adoptions.sorted(by: { $0.value < $1.value })
+            .prefix(ScanMergePreview.relinkListCap)
+        {
+            p.relinks.append(ScanMergeRelinkPreview(
+                oldPath: oldPath, newPath: newPath,
+                crossRoot: !PathScope.contains(oldPath, within: root)))
+        }
+        return p
+    }
+
     /// Commit a finished scan into the catalog: replace records under the
     /// scanned `root` (component-boundary scoped) with `targetRecords`.
     ///
@@ -201,7 +432,6 @@ extension VideoScanModel {
             return mergePartialScanResults(root: root, volName: volName, targetRecords: targetRecords)
         }
         var outcome = ScanMergeOutcome()
-        let newPaths = Set(targetRecords.map(\.fullPath))
         outcome.upserted = targetRecords.count
 
         // Complete scan. "Not re-seen" conflates two very different things:
@@ -219,88 +449,26 @@ extension VideoScanModel {
         //
         // OFF-MAIN-ACTOR (QA/perf 2026-07-02): the stats run on a detached
         // task — vanished paths are hoisted as plain strings, the sweep
-        // returns Sendable evidence keyed by path. This derivation exists
-        // ONLY to know which paths to stat; it is deliberately shadowed by
-        // the post-await re-derivation below and must never feed the merge.
-        let vanishedPathsPreAwait: [String] = records.compactMap { rec in
-            guard PathScope.contains(rec.fullPath, within: root),
-                  !newPaths.contains(rec.fullPath) else { return nil }
-            return rec.fullPath
-        }
-        // Move/rename identity (2026-07-02): outside-root records whose
-        // fingerprint matches one of this scan's added files are cross-root
-        // MOVE candidates — but only if their file is genuinely gone from
-        // its old location, which is blocking I/O to find out. Hoisted as
-        // plain paths here; statted on the SAME detached task below (the
-        // merge keeps its ONE suspension point); match decisions are
-        // re-derived post-await. See VideoScanModel+ScanMergeMoveIdentity.
-        let moveCandidatePathsPreAwait = hoistOutsideRootMoveCandidatePaths(
-            root: root, targetRecords: targetRecords)
-        let afterRootCheck = scanMergeAfterRootCheckForTesting
-        let evidenceTask = Task.detached(priority: .userInitiated) {
-            let existence = Self.gatherScanMergeExistenceEvidence(
-                root: root, vanishedPaths: vanishedPathsPreAwait, afterRootCheck: afterRootCheck)
-            let moveCandidateExists = Self.gatherMoveCandidateExistenceEvidence(
-                paths: moveCandidatePathsPreAwait)
-            return (existence, moveCandidateExists)
-        }
-        if let hook = scanMergeDuringExistenceChecksForTesting { await hook() }
-        let (evidence, moveCandidateExists) = await evidenceTask.value
+        // returns Sendable evidence keyed by path. The hoist exists ONLY to
+        // know which paths to stat; it is deliberately shadowed by the
+        // post-await re-derivation and must never feed the merge.
+        let inputs = hoistScanMergeEvidenceInputs(root: root, targetRecords: targetRecords)
+        let (evidence, moveCandidateExists) = await gatherScanMergeEvidence(root: root, inputs: inputs)
 
-        // ATOMICITY RE-DERIVATION (QA correctness constraint, 2026-07-02):
-        // the await above is the merge's ONE suspension point, and `records`
-        // may have been mutated meanwhile (another target's finalize, a
-        // LiveReload merge, a user edit). Everything the merge acts on is
-        // therefore re-derived from the CURRENT records array here — no
-        // pre-await record set survives past this comment. The existence
-        // evidence stays valid because it is keyed by PATH:
-        //   - path in evidence → use its on-disk verdict;
-        //   - path NOT in evidence (record appeared under the root during
-        //     the await) → NO evidence, so it is RETAINED (`?? true`) —
-        //     never prune a record whose file was never statted;
-        //   - path that left the catalog during the await → simply absent
-        //     from the re-derived vanished set; its evidence goes unused.
         // From here to the records.removeAll/append below there are no
         // further awaits, so the mutation is atomic on the main actor.
-        let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
-        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
-        outcome.refreshed = existingUnderRoot.count - vanished.count
-
-        var genuinelyGone: [VideoRecord] = []
-        var retainedInvisible: [VideoRecord] = []
-        let rootReachable = evidence.rootReachable
-        if rootReachable {
-            for rec in vanished {
-                if evidence.existsByPath[rec.fullPath] ?? true {
-                    retainedInvisible.append(rec)
-                } else {
-                    genuinelyGone.append(rec)
-                }
-            }
-        } else {
-            retainedInvisible = vanished
-        }
-
-        // MOVE / RENAME IDENTITY (2026-07-02): fingerprint-match this scan's
-        // added files against (a) the genuinely-gone set (same-root rename)
-        // and (b) outside-root records whose file the detached sweep proved
-        // gone (cross-root move). Derivation runs against the CURRENT
-        // records array (same post-await re-derivation discipline as the
-        // prune path); a candidate with no stat evidence is never adopted.
-        // Matched candidates are RELOCATIONS, not deletions — pull them out
-        // of genuinelyGone BEFORE the tripwire judges the prune count, so a
-        // whole-folder reorganize can't fire the mass-deletion tripwire.
-        let adoptions = deriveMoveAdoptions(
-            root: root,
-            targetRecords: targetRecords,
-            existingPathsUnderRoot: Set(existingUnderRoot.map(\.fullPath)),
-            genuinelyGone: genuinelyGone,
-            outsideRootCandidateExists: moveCandidateExists)
-        if !adoptions.isEmpty {
-            let adoptedOldPaths = Set(adoptions.values)
-            genuinelyGone.removeAll { adoptedOldPaths.contains($0.fullPath) }
-        }
+        let d = deriveScanMerge(root: root, targetRecords: targetRecords,
+                                evidence: evidence, moveCandidateExists: moveCandidateExists)
+        let newPaths = d.newPaths
+        let existingUnderRoot = d.existingUnderRoot
+        let vanished = d.vanished
+        let rootReachable = d.rootReachable
+        var genuinelyGone = d.genuinelyGone
+        let retainedInvisible = d.retainedInvisible
+        let adoptions = d.moveMatch.adoptions
+        outcome.refreshed = d.refreshed
         outcome.moved = adoptions.count
+        outcome.ambiguous = d.moveMatch.ambiguous.count
         outcome.pruned = genuinelyGone.count
         outcome.retainedInvisible = retainedInvisible.count
 
@@ -311,6 +479,9 @@ extension VideoScanModel {
             scanMergeLog.warning("Scan merge for \(volName, privacy: .public): root unreachable at merge time; retained all \(vanished.count) vanished records under \(root, privacy: .public)")
         } else if !retainedInvisible.isEmpty {
             log("  ℹ Kept \(retainedInvisible.count) existing record(s) under \(root) that this scan did not re-see — their files exist on disk but were not visible to this scan's options (e.g. extensionless probing off, small-file skip, audio files off, skip-listed folders).")
+        }
+        if outcome.ambiguous > 0 {
+            log("  ⚠ \(outcome.ambiguous) identity group(s) were ambiguous (several identical files) — left as new + missing rather than guessed. Review them via Update Catalog.")
         }
 
         // Tripwire: never silently mass-delete — see applyMassRemovalTripwire.
@@ -337,7 +508,6 @@ extension VideoScanModel {
                 partner.pairConfidence = nil
             }
         }
-
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
         // stay untouched (original instances, so their dossier/user fields
