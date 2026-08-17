@@ -104,3 +104,6 @@ tests/fixtures/photos/*.tif
 assets/app_photos/
 # Vault blobs are LOCAL backup artifacts — never committed (2026-08-03).
 vault/
+
+# Rick's family photos staged for the archivist portrait / promotion — NEVER in git (privacy rule)
+/photos/
