@@ -284,6 +284,22 @@ struct ArchivistChatWindow: View {
 
     // MARK: Identity header
 
+    /// Optional gaze frames beside the chosen portrait: `<name>-left.<ext>`
+    /// and `<name>-right.<ext>` (head turned slightly). Absent → the single
+    /// still is used for every gaze (still lives via motion).
+    static func gazeFrames(for path: String) -> [ArchivistLivingPortrait.Gaze: NSImage] {
+        let url = URL(fileURLWithPath: path)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        var out: [ArchivistLivingPortrait.Gaze: NSImage] = [:]
+        for (gaze, suffix) in [(ArchivistLivingPortrait.Gaze.left, "-left"), (.right, "-right")] {
+            let candidate = url.deletingLastPathComponent()
+                .appendingPathComponent(stem + suffix).appendingPathExtension(ext)
+            if let img = NSImage(contentsOfFile: candidate.path) { out[gaze] = img }
+        }
+        return out
+    }
+
     /// Portrait + editable name. Click the portrait to pick a photo
     /// from the archive; the name edits in place.
     private var identityHeader: some View {
@@ -300,9 +316,14 @@ struct ArchivistChatWindow: View {
                         if archivistPhotoPath.lowercased().hasSuffix(".gif") {
                             AnimatablePortrait(path: archivistPhotoPath)
                         } else if let image = NSImage(contentsOfFile: archivistPhotoPath) {
-                            Image(nsImage: image)
-                                .resizable()
-                                .scaledToFill()
+                            // She lives a little: breathing, drifting tilt,
+                            // a lean toward the input while you type, a glow
+                            // while thinking, a nod when she answers.
+                            ArchivistLivingPortrait(image: image,
+                                                    frames: Self.gazeFrames(for: archivistPhotoPath),
+                                                    isListening: inputFocused && !isThinking,
+                                                    isThinking: isThinking,
+                                                    answerCount: messages.count)
                         }
                     } else if archivistAvatar == "hallie" {
                         HallieMaeAvatar(isTalking: isThinking)
