@@ -37,6 +37,11 @@ struct TidyCatalogSheet: View {
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    Text("Tidy REMOVES entries from the catalog — your files are not touched, and anything set aside can be put back.")
+                        .font(.callout.weight(.medium))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                         countRow("photo.stack", .orange,
                                  "Photos and camera images", plan.stillCount)

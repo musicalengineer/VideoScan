@@ -665,6 +665,7 @@ extension CatalogContent {
                     // single + multi select; the model routes to the
                     // no-master alert or the confirmation sheet.
                     promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+                    removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
 
                     // Verify Audio / Verification Results / Repair
                     // Damaged Audio / Confirm Repair — extracted to

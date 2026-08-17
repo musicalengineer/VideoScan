@@ -125,9 +125,12 @@ extension VideoScanModel {
     /// Returns a result summary the UI displays in the result sheet.
     @discardableResult
     func deleteConfirmedJunk(
-        _ records: [VideoRecord],
+        _ requested: [VideoRecord],
         mode: JunkDeletionMode
     ) async -> JunkDeletionResult {
+        // Master Archive files are never bulk-deleted (see
+        // excludingMasterArchiveFiles).
+        let records = excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk")
         // Empty-selection short-circuit: keep the public contract crisp and
         // avoid an unnecessary debounced save() that would re-write
         // catalog.json identical-bytes. Empty selection is a UI no-op,

@@ -87,6 +87,10 @@ enum CatalogScopePolicy {
         /// (Rick 2026-08-17: 1,399 of them, ~3 s each; "how would I ever
         /// use them? they're associated with photos — untrack them").
         case livePhotoComplement = "live-photo-complement"
+        /// "Remove from Catalog" on a selection (Rick 2026-08-17: "it was
+        /// not clear what path to remove from catalog… not delete"). Same
+        /// reversible set-aside as Tidy — files untouched.
+        case removedByUser = "removed-by-user"
 
         /// Friendly label for UI (no jargon).
         var friendlyLabel: String {
@@ -95,6 +99,7 @@ enum CatalogScopePolicy {
             case .musicFormat:   return "Music files"
             case .unlinkedAudio: return "Audio with no matching video"
             case .livePhotoComplement: return "Live Photo movie halves (Photos owns them)"
+            case .removedByUser: return "Removed from the catalog by you (files untouched)"
             }
         }
     }

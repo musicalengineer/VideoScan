@@ -532,6 +532,32 @@ extension VideoScanModel {
         return ArchivePathResolver.isInside(path: path, root: root)
     }
 
+    // MARK: Archive protection for bulk verbs
+
+    /// The Master Archive tree is app-managed: files under it leave ONLY
+    /// through explicit archive actions (a future "Withdraw from Archive"
+    /// that also updates the manifest). Every bulk verb — Remove from
+    /// Catalog, Delete Confirmed Junk, Delete Duplicates, purge — filters
+    /// through this (Rick 2026-08-17: "in archive master window we
+    /// shouldn't be bulk deleting so we'll check volume role"). Returns
+    /// the records that are safe to act on and logs what was protected.
+    func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String) -> [VideoRecord] {
+        guard masterArchiveRootPath != nil else { return recs }
+        var kept: [VideoRecord] = []
+        var protected = 0
+        for r in recs {
+            if isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath) {
+                protected += 1
+            } else {
+                kept.append(r)
+            }
+        }
+        if protected > 0 {
+            log("\(verb): left \(protected) file(s) alone — they live in the Master Archive, which only archive actions may change.")
+        }
+        return kept
+    }
+
     // MARK: Promote — plan + routing
 
     /// Build the confirmation-sheet plan for `ids` (spec §4). Runs once

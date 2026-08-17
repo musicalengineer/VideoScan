@@ -209,6 +209,33 @@ extension VideoScanModel {
         return changed.count
     }
 
+    /// "Remove from Catalog" for an explicit selection: set aside with
+    /// reason `.removedByUser`. Files are never touched; reversible via the
+    /// same Put Back / Undo as Tidy. Pair-protected records are skipped
+    /// (Combine's raw material). Returns the count set aside.
+    @discardableResult
+    func removeFromCatalog(recordIDs ids: [UUID]) -> Int {
+        guard !isReadOnly else {
+            log("Remove from Catalog refused — read-only viewer mode.")
+            return 0
+        }
+        var changed: [UUID] = []
+        let allowed = Set(excludingMasterArchiveFiles(ids.compactMap { record(forID: $0) },
+                                                      verb: "Remove from Catalog").map(\.id))
+        for id in ids where allowed.contains(id) {
+            guard let rec = record(forID: id), !rec.isPurged, rec.setAsideReason == nil,
+                  !CatalogScopePolicy.isPairProtected(rec) else { continue }
+            rec.setAsideReason = CatalogScopePolicy.SetAsideReason.removedByUser.rawValue
+            changed.append(rec.id)
+        }
+        guard !changed.isEmpty else { return 0 }
+        saveCatalogDebounced()
+        lastTidyBatch = LastTidyBatch(ids: changed)
+        noteCatalogRecordsMutated()
+        log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back.")
+        return changed.count
+    }
+
     /// Undo the most recent Tidy apply — clears `setAsideReason` on the
     /// whole batch. Returns true when at least one record was restored.
     @discardableResult

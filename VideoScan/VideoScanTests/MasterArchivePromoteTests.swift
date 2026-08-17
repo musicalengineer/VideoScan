@@ -385,6 +385,33 @@ struct MasterArchivePromoteSensorTests {
         #expect(archived.count == model.records.filter { model.isArchiveCopy($0) }.count)
     }
 
+    /// Rick 2026-08-17: "in the archive master window we shouldn't be bulk
+    /// deleting" — every bulk verb leaves Master Archive files alone. Pin
+    /// the shared guard for Remove from Catalog and purge; the copy stays
+    /// active, the ordinary record is acted on.
+    @Test func bulkVerbsNeverTouchMasterArchiveFiles() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("guard")
+        defer { sb.cleanup() }
+        let files = try seed(sb, count: 2)
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let recs = files.map { MasterArchiveTestSupport.makeRecord(path: $0.path, streamType: .videoAndAudio, userDate: "2001") }
+        model.records = recs
+        _ = try #require(await MasterArchiveTestSupport.promote(model, ids: [recs[0].id]))
+        let copy = try #require(model.masterArchiveCopy(of: recs[0]))
+
+        // Remove from Catalog: the archive copy is protected; the plain source is not.
+        let removed = model.removeFromCatalog(recordIDs: [copy.id, recs[1].id])
+        #expect(removed == 1)
+        #expect(copy.setAsideReason == nil)
+        #expect(recs[1].setAsideReason == CatalogScopePolicy.SetAsideReason.removedByUser.rawValue)
+
+        // Purge: same rule.
+        let purged = model.purgeRecords(ids: [copy.id])
+        #expect(purged == 0)
+        #expect(copy.purgedAt == nil)
+    }
+
     @Test("ISOLATION (poisoned-state): UserDefaults VALUES and the real App Support tree are byte-for-byte unchanged by Initialize + Promote + save; a poisoned shared designation is not inherited")
     func isolation() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("iso")

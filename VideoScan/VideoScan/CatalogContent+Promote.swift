@@ -34,6 +34,21 @@ extension CatalogContent {
         .accessibilityIdentifier("catalog.row.promoteToArchive")
     }
 
+    /// "Remove from Catalog (keep files)" — the app forgets these rows;
+    /// nothing on disk changes. Distinct from every Delete verb on purpose.
+    @ViewBuilder
+    func removeFromCatalogMenuItem(activeRecs: [VideoRecord], pureActive: Bool) -> some View {
+        let label = activeRecs.count > 1
+            ? "Remove \(activeRecs.count) from Catalog (keep files)"
+            : "Remove from Catalog (keep files)"
+        Button(label) {
+            model.removeFromCatalog(recordIDs: activeRecs.map(\.id))
+        }
+        .disabled(!pureActive || activeRecs.isEmpty || model.isReadOnly)
+        .help("Take these entries out of the working catalog. Files are not touched; find them again under Show ▸ Set-aside files and put them back any time.")
+        .accessibilityIdentifier("catalog.row.removeFromCatalog")
+    }
+
     /// Inspector: the archive copy promoted from the selected record.
     /// O(1) memoized reverse-index read (ArchivePromotionIndex).
     var masterCopyOfSelected: VideoRecord? {

@@ -187,7 +187,8 @@ extension VideoScanModel {
         defer { isDeletingDuplicates = false }
 
         let selection = duplicateDeletionSelection(onVolume: volumePath)
-        let targets = selection.targets
+        // Master Archive files are never bulk-deleted, even as "extras".
+        let targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
         let keepers = selection.keepers
         let skippedCount = selection.skippedCount
 
