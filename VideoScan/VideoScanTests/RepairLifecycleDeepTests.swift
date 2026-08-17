@@ -456,7 +456,7 @@ struct SupersededVisibilityAuditTests {
         ("Correlator.swift", 1),
         ("DuplicateDetector.swift", 1),
         ("TriageView.swift", 1),
-        ("ArchiveView.swift", 1),
+        ("ArchiveView+Categories.swift", 1),   // 2026-08-17: the Archive tab's pfActiveRecords call moved here (memoized snapshot)
         ("WorkbenchView.swift", 1),
         ("VolumeCompare.swift", 2),     // per-record backups + runCompare
         ("VideoScanModel+Duplicates.swift", 1),
