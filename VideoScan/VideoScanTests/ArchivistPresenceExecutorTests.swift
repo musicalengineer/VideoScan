@@ -220,28 +220,29 @@ struct ArchivistPresenceExecutorTests {
         #expect(result.conclusion == .noEvidence)
     }
 
-    @Test func contentAccentAgreementMatchesProductionIndex() async {
+    /// Keyword text is diacritic-folded in EVERY tier (phrase, token, alias),
+    /// so an unaccented question still finds an accented file. This is a
+    /// deliberate divergence from CatalogSearchIndex, which keeps accents:
+    /// Hallie's questions are typed casually, the catalog box is not.
+    @Test func keywordAccentsAreFoldedInEveryTier() async {
         let value = record("/Archive/caf\u{00E9}/party.mov")
         let records = [value]
         let index = CatalogSearchIndex()
         index.rebuild(records: records)
         let snapshots = await ArchivistPresenceRecordSnapshot.capture(records)
 
-        let accentedIndexCount = index.filter(
-            records: records, query: "caf\u{00E9}").count
         let accentedResult = ArchivistPresenceExecutor.execute(
             ArchivistPresenceQuery(.init(keywords: ["caf\u{00E9}"])),
             records: snapshots)
-        #expect(accentedResult.evidence.totalMatchCount == accentedIndexCount)
-        #expect(accentedIndexCount == 1)
+        #expect(accentedResult.evidence.totalMatchCount == 1)
+        #expect(index.filter(records: records, query: "caf\u{00E9}").count == 1)
 
-        let plainIndexCount = index.filter(
-            records: records, query: "cafe").count
         let plainResult = ArchivistPresenceExecutor.execute(
             ArchivistPresenceQuery(.init(keywords: ["cafe"])),
             records: snapshots)
-        #expect(plainResult.evidence.totalMatchCount == plainIndexCount)
-        #expect(plainIndexCount == 0)
+        #expect(plainResult.evidence.totalMatchCount == 1)
+        // The catalog index stays accent-sensitive; the divergence is known.
+        #expect(index.filter(records: records, query: "cafe").isEmpty)
     }
 
     @Test func invertedInMemoryYearRangeFailsClosed() async {

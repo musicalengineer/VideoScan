@@ -498,29 +498,7 @@ struct ArchivistChatWindow: View {
     }
 
     private func citationBasis(_ basis: ArchivistEvidenceBasis) -> String {
-        switch basis {
-        case .humanPersonTag(let query, let tag, _):
-            return "confirmed person tag \(tag) proves \(query)"
-        case .catalogField(let field, let query, let value):
-            return "\(field) contains \(query) (\(value))"
-        case .inferredDate(let year, let confidence):
-            let confidenceText = confidence.map {
-                String(format: "%.2f", $0)
-            } ?? "unrecorded"
-            return "inferred year \(year), confidence \(confidenceText)"
-        case .fileDate(let field, let year, _):
-            return "\(field) year \(year)"
-        case .pathYear(let year, _):
-            return "path year \(year)"
-        case .mediaKind(let requested, let stream):
-            return "media \(requested) (\(stream))"
-        case .transcriptMention(let term, let model):
-            return "transcript mentions \(term) (\(model ?? "model unrecorded"))"
-        case .caption(let term, let time, _, let model):
-            return "caption mentions \(term) at "
-                + String(format: "%.1fs", time)
-                + " (\(model ?? "model unrecorded"))"
-        }
+        basis.summary
     }
 
     /// Snapshot newly displayed bubbles before leaving MainActor. The actor

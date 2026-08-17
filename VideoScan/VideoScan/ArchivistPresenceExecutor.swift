@@ -15,6 +15,51 @@ enum ArchivistEvidenceBasis: Sendable, Equatable {
     case transcriptMention(queryTerm: String, model: String?)
     case caption(queryTerm: String, timestamp: Double, text: String,
                  model: String?)
+    /// Token-tier keyword evidence: every significant token of `queryTerm`
+    /// (or of `alias`, when non-nil) is a token of `matchedValue`. Cited
+    /// distinctly from a whole-phrase hit so the basis line says exactly what
+    /// matched ("filename token 'cape' for 'down the cape'").
+    case keywordTokens(field: String, queryTerm: String,
+                       matchedTokens: [String], alias: String?,
+                       matchedValue: String, timestamp: Double?)
+
+    /// One human-readable summary shared by the chat window, the shell, and
+    /// the conversation log so evidence wording cannot drift between clients.
+    var summary: String {
+        switch self {
+        case .humanPersonTag(let query, let tag, _):
+            return "confirmed person tag \(tag) proves \(query)"
+        case .catalogField(let field, let query, let value):
+            return "\(field) contains \(query) (\(value))"
+        case .inferredDate(let year, let confidence):
+            let confidenceText = confidence.map {
+                String(format: "%.2f", $0)
+            } ?? "unrecorded"
+            return "inferred year \(year), confidence \(confidenceText)"
+        case .fileDate(let field, let year, _):
+            return "\(field) year \(year)"
+        case .pathYear(let year, _):
+            return "path year \(year)"
+        case .mediaKind(let requested, let stream):
+            return "media \(requested) (\(stream))"
+        case .transcriptMention(let term, let model):
+            return "transcript mentions \(term) (\(model ?? "model unrecorded"))"
+        case .caption(let term, let time, _, let model):
+            return "caption mentions \(term) at "
+                + String(format: "%.1fs", time)
+                + " (\(model ?? "model unrecorded"))"
+        case .keywordTokens(let field, let query, let tokens, let alias,
+                            let value, let timestamp):
+            let noun = tokens.count == 1 ? "token" : "tokens"
+            let quoted = "'" + tokens.joined(separator: " ") + "'"
+            let at = timestamp.map { String(format: " at %.1fs", $0) } ?? ""
+            if let alias {
+                return "\(field) \(noun) \(quoted) via alias '\(alias)' of "
+                    + "'\(query)'\(at) (\(value))"
+            }
+            return "\(field) \(noun) \(quoted) for '\(query)'\(at) (\(value))"
+        }
+    }
 }
 
 struct ArchivistEvidenceCitation: Sendable, Equatable, Identifiable {
@@ -75,6 +120,9 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     let years: ClosedRange<Int>?
     let mediaKind: String?
     let keywords: [String]
+    /// Pre-computed once per query: normalized phrase, significant tokens,
+    /// and alias token lists for each keyword.
+    let keywordQueries: [ArchivistKeywordQuery]
     let hasInvalidYearRange: Bool
 
     init(_ payload: ArchivistQueryAST.Presence) {
@@ -94,6 +142,7 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
         }
         mediaKind = payload.mediaKind?.rawValue
         keywords = payload.keywords ?? []
+        keywordQueries = keywords.map(ArchivistKeywordQuery.init)
     }
 
     var isEmpty: Bool {
@@ -319,14 +368,17 @@ enum ArchivistPresenceExecutor {
             bases.append(.mediaKind(
                 requested: mediaKind, streamType: record.streamTypeRaw))
         }
-        for keyword in query.keywords {
+        for keyword in query.keywordQueries {
             guard let basis = keywordBasis(keyword, in: record) else { return nil }
             bases.append(basis)
         }
 
         let playback = bases.compactMap { basis -> Double? in
-            guard case .caption(_, let timestamp, _, _) = basis else { return nil }
-            return timestamp
+            switch basis {
+            case .caption(_, let timestamp, _, _): return timestamp
+            case .keywordTokens(_, _, _, _, _, let timestamp): return timestamp
+            default: return nil
+            }
         }.min()
         return ArchivistEvidenceCitation(
             recordID: record.id,
@@ -429,42 +481,74 @@ enum ArchivistPresenceExecutor {
         return nil
     }
 
+    /// Tier 1: whole-phrase substring (strongest, cited as "contains").
+    /// Tier 2: every significant token of the keyword is a token of a value.
+    /// Tier 3: the same token test for each alias in ArchivistKeywordAliases.
+    /// A keyword with no significant tokens ("the video") only gets tier 1.
     private static func keywordBasis(
-        _ queryTerm: String,
+        _ keyword: ArchivistKeywordQuery,
         in record: ArchivistPresenceRecordSnapshot
     ) -> ArchivistEvidenceBasis? {
+        if let basis = phraseKeywordBasis(keyword, in: record) {
+            return basis
+        }
+        guard !keyword.significantTokens.isEmpty else { return nil }
+        // List 0 is the keyword's own tokens (tier 2); the rest are aliases
+        // (tier 3). One field scan serves all of them.
+        guard let hit = ArchivistKeywordFieldScan.firstValue(
+            in: record, containingAnyOf: keyword.tokenListBytes) else {
+            return nil
+        }
+        let matched = keyword.tokenLists[hit.listIndex]
+        return .keywordTokens(
+            field: hit.field, queryTerm: keyword.original,
+            matchedTokens: matched,
+            alias: hit.listIndex == 0 ? nil : matched.joined(separator: " "),
+            matchedValue: hit.value, timestamp: hit.timestamp)
+    }
+
+    private static func phraseKeywordBasis(
+        _ keyword: ArchivistKeywordQuery,
+        in record: ArchivistPresenceRecordSnapshot
+    ) -> ArchivistEvidenceBasis? {
+        let queryTerm = keyword.original
+        let phrase = keyword.phrase
+        guard !phrase.isEmpty else { return nil }
+        let phraseBytes = keyword.phraseBytes
+        func contains(_ value: String) -> Bool {
+            ArchivistKeywordText.withFoldedBytes(value) {
+                ArchivistKeywordText.containsPhrase(phraseBytes, in: $0)
+            }
+        }
         func catalog(_ field: String, _ values: [String]) -> ArchivistEvidenceBasis? {
-            guard let value = values.first(where: { contains($0, queryTerm) }) else {
+            guard let value = values.first(where: { contains($0) }) else {
                 return nil
             }
             return .catalogField(
                 field: field, queryTerm: queryTerm, matchedValue: value)
         }
 
+        // Note: the former camelCase-spaced path variant ("cape cod" vs
+        // "CapeCod") is subsumed by the token tier, which cites it honestly
+        // as a token hit instead of a literal "contains".
         if let basis = catalog("tag", record.tags) { return basis }
         if let basis = catalog("userNotes", [record.userNotes]) { return basis }
-        if let basis = catalog("filename", [
-            record.filename, pathTokenize(record.filename),
-        ]) { return basis }
-        if let basis = catalog("directory", [
-            record.directory, pathTokenize(record.directory),
-        ]) { return basis }
-        if let basis = catalog("volumeName", [
-            record.volumeName, pathTokenize(record.volumeName),
-        ]) { return basis }
+        if let basis = catalog("filename", [record.filename]) { return basis }
+        if let basis = catalog("directory", [record.directory]) { return basis }
+        if let basis = catalog("volumeName", [record.volumeName]) { return basis }
         if let tag = record.confirmedPeople.first(where: {
-            contains($0.name, queryTerm)
+            contains($0.name)
         }) {
             return .humanPersonTag(
                 queryIdentity: queryTerm, taggedName: tag.name,
                 confirmedAt: tag.confirmedAt)
         }
-        if let transcript = record.transcript, contains(transcript, queryTerm) {
+        if let transcript = record.transcript, contains(transcript) {
             return .transcriptMention(
                 queryTerm: queryTerm, model: record.transcriptModel)
         }
         if let caption = record.captions.first(where: {
-            contains($0.text, queryTerm)
+            contains($0.text)
         }) {
             return .caption(
                 queryTerm: queryTerm, timestamp: caption.timestamp,
@@ -497,14 +581,6 @@ enum ArchivistPresenceExecutor {
             .lowercased().precomposedStringWithCanonicalMapping
     }
 
-    private static func contentNormalized(_ value: String) -> String {
-        value.lowercased().precomposedStringWithCanonicalMapping
-    }
-
-    private static func contains(_ value: String, _ queryTerm: String) -> Bool {
-        contentNormalized(value).contains(contentNormalized(queryTerm))
-    }
-
     /// One O(path length) scan, independent of the requested range width.
     private static func standalonePathYear(
         in path: String,
@@ -529,35 +605,6 @@ enum ArchivistPresenceExecutor {
         return matchingRun()
     }
 
-    /// Mirrors CatalogSearchIndex's path analyzer without retaining or
-    /// touching its main-actor mutable index during detached execution.
-    private static func pathTokenize(_ value: String) -> String {
-        if value.isEmpty { return value }
-        let characters = Array(value)
-        var output = ""
-        output.reserveCapacity(value.count + 8)
-        for index in characters.indices {
-            let character = characters[index]
-            if index > 0 {
-                let previous = characters[index - 1]
-                let next = index + 1 < characters.count
-                    ? characters[index + 1] : nil
-                if character.isUppercase,
-                   previous.isLowercase || previous.isNumber {
-                    output.append(" ")
-                } else if character.isUppercase, previous.isUppercase,
-                          let next, next.isLowercase {
-                    output.append(" ")
-                } else if character.isNumber, previous.isLetter {
-                    output.append(" ")
-                } else if character.isLetter, previous.isNumber {
-                    output.append(" ")
-                }
-            }
-            output.append(character)
-        }
-        return output
-    }
 }
 
 enum ArchivistPresenceAnswerComposer {
