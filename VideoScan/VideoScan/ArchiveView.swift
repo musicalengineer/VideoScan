@@ -1,18 +1,38 @@
 import SwiftUI
 
 // MARK: - Archive Tab
+//
+// Master-Archive-driven since 2026-08-17 (Rick): the sidebar reads the
+// promoted-copy set (ArchiveView+Categories.swift), NOT the legacy
+// lifecycleStage/archiveStage pipeline stamps. Layout:
+//
+//   ArchiveView.swift             — shell, sidebar, MASTER ARCHIVE panel, footer
+//   ArchiveView+Table.swift       — file table, status cell, context menu
+//   ArchiveView+Categories.swift  — pure derivations (categories, status, people)
+//   ArchiveView+DetailSheet.swift — the per-record detail sheet
 
 struct ArchiveView: View {
     @EnvironmentObject var model: VideoScanModel
 
-    @State private var selectedCategory: ArchiveCategory = .allFiles
-    @State private var selectedIDs: Set<UUID> = []
-    @State private var searchText: String = ""
-    @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
-    @State private var archiveDetailRecord: VideoRecord?
+    @State var selectedCategory: ArchiveCategory = .archived
+    @State var selectedIDs: Set<UUID> = []
+    @State var searchText: String = ""
+    @State var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
+    @State var archiveDetailRecord: VideoRecord?
     /// Retired volumes are noise in the archive sidebar by default — same
     /// convention as the Volumes window's "show retired" (Rick 2026-08-16).
     @AppStorage("archive.sidebar.showRetired") private var showRetiredVolumes = false
+    /// Category lists + volume counts, computed ONCE per records version
+    /// (see ArchiveCategorySnapshot). A class held by @State: mutating it
+    /// during body does not re-render.
+    @State private var categoryMemo = RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>()
+    /// First-appearance default: Not Yet Archived when the archive is
+    /// empty, else Archived. Applied once so a user's click sticks.
+    @State private var didPickDefaultCategory = false
+    /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
+    @AppStorage("selectedTab") var selectedTab: Int = 0
+
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HSplitView {
@@ -22,6 +42,7 @@ struct ArchiveView: View {
                 .frame(minWidth: 500)
         }
         .onAppear {
+            pickDefaultCategoryIfNeeded()
             handlePendingArchiveNavigation()
             restoreFocusedMedia()
         }
@@ -31,10 +52,43 @@ struct ArchiveView: View {
         }
     }
 
+    // MARK: - Snapshot access
+
+    /// The volume rows the sidebar shows (scratch screened, retired
+    /// optionally hidden). Their searchPaths key the memo so a volume
+    /// add/remove recomputes the counts.
+    private var visibleVolumeTargets: [CatalogScanTarget] {
+        CatalogScanTarget.excludingScratch(model.scanTargets)
+    }
+
+    /// Memoized: O(1) on every render except the first after a records
+    /// change. Everything in the sidebar, footer and table reads THIS.
+    var snapshot: ArchiveCategorySnapshot {
+        ArchiveCategorySnapshot.cached(in: categoryMemo,
+                                       model: model,
+                                       volumeSearchPaths: visibleVolumeTargets.map(\.searchPath))
+    }
+
+    private func pickDefaultCategoryIfNeeded() {
+        guard !didPickDefaultCategory else { return }
+        didPickDefaultCategory = true
+        selectedCategory = snapshot.archived.isEmpty ? .notYetArchived : .archived
+    }
+
+    /// Which sidebar row a record lives under (for navigation from
+    /// elsewhere — Catalog "Show in Archive", focus restore).
+    private func category(containing id: UUID) -> ArchiveCategory {
+        guard let rec = model.record(forID: id) else { return .notYetArchived }
+        switch ArchiveCategorySnapshot.status(of: rec, model: model) {
+        case .notArchived: return .notYetArchived
+        default:           return .archived
+        }
+    }
+
     private func handlePendingArchiveNavigation() {
         guard let id = model.pendingArchiveSelection else { return }
         model.pendingArchiveSelection = nil
-        selectedCategory = .allFiles
+        selectedCategory = category(containing: id)
         searchText = ""
         model.focusedMediaIDs = model.focusSet(for: id)
         selectedIDs = model.focusedMediaIDs
@@ -43,7 +97,9 @@ struct ArchiveView: View {
     private func restoreFocusedMedia() {
         guard model.pendingArchiveSelection == nil,
               !model.focusedMediaIDs.isEmpty else { return }
-        selectedCategory = .allFiles
+        if let first = model.focusedMediaIDs.first {
+            selectedCategory = category(containing: first)
+        }
         searchText = ""
         selectedIDs = model.focusedMediaIDs
     }
@@ -68,17 +124,10 @@ struct ArchiveView: View {
 
                     Divider().padding(.vertical, 4)
 
-                    sidebarRow(.allFiles)
-
-                    Divider().padding(.vertical, 4)
-
-                    sidebarSection("PIPELINE") {
-                        sidebarRow(.hasFamily)
-                        sidebarRow(.masterSet)
-                        sidebarRow(.backedUp)
-                        sidebarRow(.ready)
-                        sidebarRow(.archived)
-                    }
+                    sidebarRow(.archived)
+                    sidebarRow(.notYetArchived)
+                    sidebarRow(.needsDate)
+                        .padding(.leading, 12)
 
                     Divider().padding(.vertical, 8)
 
@@ -86,10 +135,11 @@ struct ArchiveView: View {
                         // Screen the RAM-disk scratch volume — plumbing,
                         // not an archive target. Retired volumes hidden
                         // unless asked for.
-                        let all = CatalogScanTarget.excludingScratch(model.scanTargets)
+                        let all = visibleVolumeTargets
                         let retiredCount = all.filter(\.isRetired).count
+                        let counts = snapshot.volumeFileCounts
                         ForEach(all.filter { showRetiredVolumes || !$0.isRetired }, id: \.id) { target in
-                            volumeRoleRow(target)
+                            volumeRoleRow(target, fileCount: counts[target.searchPath] ?? 0)
                         }
                         if retiredCount > 0 {
                             Toggle(isOn: $showRetiredVolumes) {
@@ -110,8 +160,7 @@ struct ArchiveView: View {
 
             Divider()
 
-            // Volume progress summary
-            volumeProgressBar
+            archiveFooter
                 .padding(12)
         }
         .background(Color(NSColor.controlBackgroundColor))
@@ -208,7 +257,7 @@ struct ArchiveView: View {
     }
 
     private func sidebarRow(_ category: ArchiveCategory) -> some View {
-        let count = countForCategory(category)
+        let count = snapshot.count(for: category)
         return Button {
             selectedCategory = category
             selectedIDs = []
@@ -236,13 +285,23 @@ struct ArchiveView: View {
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+        .help(categoryHelp(category))
     }
 
-    @Environment(\.openWindow) private var openWindow
+    private func categoryHelp(_ category: ArchiveCategory) -> String {
+        switch category {
+        case .archived:
+            return "Assets with a byte-verified copy in the Master Archive (one row per asset)."
+        case .notYetArchived:
+            return "Active catalog assets with no Master Archive copy yet. Right-click → Promote to Archive."
+        case .needsDate:
+            return "Not-yet-archived assets with no resolvable date — Promote would file them under Undated/. Set a date in the Inspector first."
+        }
+    }
 
-    private func volumeRoleRow(_ target: CatalogScanTarget) -> some View {
+    /// `fileCount` comes from the memoized snapshot — no per-row filter.
+    private func volumeRoleRow(_ target: CatalogScanTarget, fileCount: Int) -> some View {
         let name = VolumeReachability.displayLabel(forPath: target.searchPath)
-        let fileCount = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
 
         return HStack(spacing: 6) {
             VolumeBadge(role: target.role,
@@ -316,345 +375,22 @@ struct ArchiveView: View {
         }
     }
 
-    private var volumeProgressBar: some View {
-        let total = keeperRecords.count
-        let fullyArchived = keeperRecords.filter { $0.archiveStage >= .archived }.count
-        let backedUp = keeperRecords.filter { $0.archiveStage >= .backedUp }.count
-        let pct = total > 0 ? Double(backedUp) / Double(total) : 0
-
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("\(total) keepers")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.secondary)
-            ProgressView(value: pct)
-                .tint(pct >= 1.0 ? .green : .accentColor)
-            Text("\(backedUp) backed up · \(fullyArchived) archived")
-                .font(.system(size: 14))
-                .foregroundColor(.secondary)
-        }
+    /// "N of M media files archived · X GB verified" — one honest line.
+    private var archiveFooter: some View {
+        Text(snapshot.footerText(totals: model.masterArchiveTotals))
+            .font(.system(size: 14))
+            .foregroundColor(.secondary)
+            .lineLimit(2)
+            .help("N = assets with a verified Master Archive copy; M = every active catalog asset (archive copies not double-counted).")
     }
-
-    // MARK: - File List
-
-    private var fileList: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            HStack(spacing: 10) {
-                Image(systemName: selectedCategory.icon)
-                    .foregroundColor(selectedCategory.color)
-                Text(selectedCategory.label)
-                    .font(.headline)
-
-                Spacer()
-
-                TextField("Search", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 180)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            // File table
-            let rows = filteredRecords
-            if rows.isEmpty {
-                emptyState
-            } else {
-                fileTable(rows: rows)
-            }
-        }
-    }
-
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: selectedCategory == .archived ? "checkmark.seal" : "tray")
-                .font(.system(size: 43))
-                .foregroundColor(.secondary)
-            Text(emptyMessage)
-                .font(.headline)
-                .foregroundColor(.secondary)
-            Text(emptySubtitle)
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyMessage: String {
-        switch selectedCategory {
-        case .allFiles:      return "No keepers yet"
-        case .hasFamily:     return "No files with family detected"
-        case .archived:      return "Nothing archived yet"
-        default:             return "No files in this category"
-        }
-    }
-
-    private var emptySubtitle: String {
-        switch selectedCategory {
-        case .allFiles:
-            return "Mark files as Important or Recoverable in the Triage tab to see them here."
-        case .hasFamily:
-            return "Run Person Finder in the People tab to detect family members in your media."
-        case .archived:
-            return "Promote backed-up keepers to Archived once they have verified 3-2-1 redundancy."
-        default:
-            return ""
-        }
-    }
-
-    private func fileTable(rows: [VideoRecord]) -> some View {
-        let sorted = rows.sorted(using: sortOrder)
-        return Table(sorted, selection: $selectedIDs, sortOrder: $sortOrder) {
-            TableColumn("Filename", value: \.filename) { rec in
-                Text(rec.filename)
-                    .font(.system(size: 16, design: .monospaced))
-                    .foregroundColor(.green)
-                    .lineLimit(1)
-                    .help(rec.fullPath)
-            }
-            .width(min: 180, ideal: 280)
-
-            TableColumn("Duration", value: \.durationSeconds) { rec in
-                Text(rec.duration.isEmpty ? "—" : rec.duration)
-                    .font(.system(size: 15, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-            .width(min: 60, ideal: 75)
-
-            TableColumn("People") { rec in
-                if rec.detectedPeople.isEmpty {
-                    Text("—")
-                        .font(.system(size: 15))
-                        .foregroundColor(.secondary)
-                } else {
-                    Text(rec.detectedPeople.joined(separator: ", "))
-                        .font(.system(size: 15))
-                        .foregroundColor(.blue)
-                        .lineLimit(1)
-                }
-            }
-            .width(min: 80, ideal: 120)
-
-            TableColumn("Archived To") { rec in
-                archiveDestinations(rec)
-            }
-            .width(min: 160, ideal: 240)
-
-            TableColumn("Lifecycle") { rec in
-                lifecycleCheckmarks(rec)
-            }
-            .width(min: 140, ideal: 180)
-        }
-        .contextMenu(forSelectionType: UUID.self) { ids in
-            recordContextMenu(for: ids)
-        } primaryAction: { ids in
-            // Double-click / Return on row(s) → smart open (QuickTime when
-            // the cataloged codecs guarantee picture+sound, else VLC).
-            let recs = ids.compactMap { id in rows.first { $0.id == id } }
-            MediaOpener.open(recs)
-        }
-    }
-
-    private func archiveDestinations(_ rec: VideoRecord) -> some View {
-        HStack(spacing: 6) {
-            if rec.backupDestinations.isEmpty && rec.masterLocation.isEmpty {
-                Text("No destinations recorded")
-                    .font(.system(size: 15))
-                    .foregroundColor(.orange)
-            } else {
-                if !rec.masterLocation.isEmpty {
-                    Label(rec.masterLocation, systemImage: "crown.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(.purple)
-                }
-                ForEach(rec.backupDestinations) { entry in
-                    Label(entry.name, systemImage: entry.kind.icon)
-                        .font(.system(size: 14))
-                        .foregroundColor(entry.kind == .cloud ? .blue : entry.kind == .offsite ? .teal : .secondary)
-                }
-            }
-        }
-    }
-
-    // MARK: - Lifecycle Checkmarks
-
-    private func lifecycleCheckmarks(_ rec: VideoRecord) -> some View {
-        HStack(spacing: 3) {
-            checkmark("H", passed: rec.archiveStage >= .healthy, help: "Healthy")
-            checkmark("M", passed: rec.archiveStage >= .masterAssigned,
-                      help: rec.masterLocation.isEmpty ? "Master" : "Master: \(rec.masterLocation)")
-            checkmark("B", passed: rec.archiveStage >= .backedUp,
-                      help: rec.backupDestinations.isEmpty
-                        ? "Backed Up"
-                        : "Backed up to: " + rec.backupDestinations.map(\.name).joined(separator: ", "))
-            checkmark("R", passed: rec.archiveStage >= .readyForArchive, help: "Ready for Archive")
-            checkmark("A", passed: rec.archiveStage >= .archived, help: "Archived")
-        }
-    }
-
-    private func checkmark(_ letter: String, passed: Bool, help: String) -> some View {
-        Text(letter)
-            .font(.system(size: 13, weight: .bold, design: .monospaced))
-            .foregroundColor(passed ? .white : .secondary.opacity(0.5))
-            .frame(width: 18, height: 18)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(passed ? Color.green : Color.secondary.opacity(0.15))
-            )
-            .help(help)
-    }
-
-    // MARK: - Context Menu
-
-    @ViewBuilder
-    private func recordContextMenu(for ids: Set<UUID>) -> some View {
-        let recs = ids.compactMap { id in model.records.first { $0.id == id } }
-        let count = recs.count
-
-        lifecycleAndBackupSections(for: recs)
-
-        Divider()
-
-        Button {
-            archiveDetailRecord = recs.first
-        } label: {
-            Label("Show Archive Details", systemImage: "info.circle")
-        }
-        .disabled(count != 1)
-
-        Button {
-            if let rec = recs.first {
-                showInCatalog(rec)
-            }
-        } label: {
-            Label("Show in Catalog", systemImage: "film.stack")
-        }
-        .disabled(count != 1)
-
-        if let rec = recs.first, rec.pairedWith != nil || rec.pairGroupID != nil {
-            Button {
-                showPairInCatalog(rec)
-            } label: {
-                Label("Show Pair in Catalog", systemImage: "link")
-            }
-        }
-
-        Button {
-            if let rec = recs.first {
-                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
-            }
-        } label: {
-            Label("Reveal in Finder", systemImage: "folder")
-        }
-        .disabled(count != 1)
-    }
-
-
-    @ViewBuilder
-    private func lifecycleAndBackupSections(for recs: [VideoRecord]) -> some View {
-        Divider()
-        Section("Lifecycle") {
-            Button { model.setArchiveStage(.healthy, for: recs) } label: {
-                Label("Mark Healthy", systemImage: "heart.fill")
-            }
-            Button { model.setArchiveStage(.masterAssigned, for: recs) } label: {
-                Label("Designate as Master", systemImage: "crown.fill")
-            }
-            Button { model.setArchiveStage(.backedUp, for: recs) } label: {
-                Label("Mark Backed Up", systemImage: "doc.on.doc.fill")
-            }
-            Button { model.setArchiveStage(.readyForArchive, for: recs) } label: {
-                Label("Mark Ready for Archive", systemImage: "checkmark.seal.fill")
-            }
-            Button { model.setArchiveStage(.archived, for: recs) } label: {
-                Label("Mark Archived", systemImage: "archivebox.fill")
-            }
-        }
-
-        Divider()
-
-        Section("Backed Up To") {
-            Button {
-                model.addBackup(BackupEntry(name: "LTA_Crucial", kind: .local, date: Date()), to: recs)
-            } label: {
-                Label("LTA_Crucial (Local)", systemImage: "externaldrive.fill")
-            }
-            Button {
-                model.addBackup(BackupEntry(name: "iCloud", kind: .cloud, date: Date()), to: recs)
-            } label: {
-                Label("iCloud (Cloud)", systemImage: "icloud.fill")
-            }
-            Button {
-                model.addBackup(BackupEntry(name: "Breen's NAS", kind: .offsite, date: Date()), to: recs)
-            } label: {
-                Label("Breen's NAS (Offsite)", systemImage: "building.2.fill")
-            }
-        }
-    }
-
-    // MARK: - Navigate to Catalog
-
-    @AppStorage("selectedTab") private var selectedTab: Int = 0
-
-    private func showInCatalog(_ rec: VideoRecord) {
-        model.focusedMediaIDs = model.focusSet(for: rec.id)
-        model.pendingCatalogSelection = rec.id
-        model.pendingCatalogPairMode = false
-        selectedTab = 1
-    }
-
-    private func showPairInCatalog(_ rec: VideoRecord) {
-        model.focusedMediaIDs = model.focusSet(for: rec.id)
-        model.pendingCatalogSelection = rec.id
-        model.pendingCatalogPairMode = true
-        selectedTab = 1
-    }
-
 
     // MARK: - Filtering
 
-    /// Base pool: only files explicitly promoted to the vault.
-    /// Global-inert filter: purged (removed-from-catalog) records are
-    /// excluded — they're hidden from every consumer until restored.
-    private var keeperRecords: [VideoRecord] {
-        pfActiveRecords(model.records).filter { $0.lifecycleStage == .archived }
-    }
-
-    /// Master Set = one entry per archived asset (see filteredRecords).
-    private var masterSetRecords: [VideoRecord] {
-        pfActiveRecords(model.records).filter { rec in
-            if model.isArchiveCopy(rec) {
-                return model.promotionSource(of: rec) == nil      // orphan copy stands in for its source
-            }
-            return model.masterArchiveCopy(of: rec) != nil
-        }
-    }
-
-    private var filteredRecords: [VideoRecord] {
-        let byCategory: [VideoRecord]
-        switch selectedCategory {
-        case .allFiles:
-            byCategory = keeperRecords
-        case .hasFamily:
-            byCategory = keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }
-        case .masterSet:
-            // ONE row per archived asset: the source that has a verified
-            // master copy, or an orphan copy whose source is gone. Never
-            // both the source and its copy (Rick 2026-08-16: "Master Set
-            // 5" vs "4 verified" was this double count).
-            byCategory = masterSetRecords
-        case .backedUp:
-            byCategory = keeperRecords.filter { $0.archiveStage == .backedUp }
-        case .ready:
-            byCategory = keeperRecords.filter { $0.archiveStage == .readyForArchive }
-        case .archived:
-            byCategory = keeperRecords.filter { $0.archiveStage == .archived }
-        }
-
+    /// The selected category's rows, narrowed by the search box.
+    /// Category membership itself is memoized (snapshot); only the
+    /// search filter runs per keystroke, over that category's rows.
+    var filteredRecords: [VideoRecord] {
+        let byCategory = snapshot.records(for: selectedCategory)
         if searchText.isEmpty { return byCategory }
         let q = searchText.lowercased()
         return byCategory.filter {
@@ -662,222 +398,9 @@ struct ArchiveView: View {
             $0.fullPath.lowercased().contains(q) ||
             $0.videoCodec.lowercased().contains(q) ||
             $0.notes.lowercased().contains(q) ||
-            $0.detectedPeople.contains { $0.lowercased().contains(q) }
-        }
-    }
-
-    private func countForCategory(_ cat: ArchiveCategory) -> Int {
-        switch cat {
-        case .allFiles:      return keeperRecords.count
-        case .hasFamily:     return keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }.count
-        case .masterSet:     return masterSetRecords.count
-        case .backedUp:      return keeperRecords.filter { $0.archiveStage == .backedUp }.count
-        case .ready:         return keeperRecords.filter { $0.archiveStage == .readyForArchive }.count
-        case .archived:      return keeperRecords.filter { $0.archiveStage == .archived }.count
-        }
-    }
-}
-
-// MARK: - Archive Category (sidebar items)
-
-enum ArchiveCategory: String, CaseIterable {
-    case allFiles   = "allFiles"
-    case hasFamily  = "hasFamily"
-    case masterSet  = "masterSet"
-    case backedUp   = "backedUp"
-    case ready      = "ready"
-    case archived   = "archived"
-
-    var label: String {
-        switch self {
-        case .allFiles:  return "All Keepers"
-        case .hasFamily: return "Has Family"
-        case .masterSet: return "Master Set"
-        case .backedUp:  return "Backed Up"
-        case .ready:     return "Ready for Archive"
-        case .archived:  return "Fully Archived"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .allFiles:  return "tray.full.fill"
-        case .hasFamily: return "person.2.fill"
-        case .masterSet: return "crown.fill"
-        case .backedUp:  return "doc.on.doc.fill"
-        case .ready:     return "checkmark.seal.fill"
-        case .archived:  return "archivebox.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .allFiles:  return .primary
-        case .hasFamily: return .blue
-        case .masterSet: return .purple
-        case .backedUp:  return .indigo
-        case .ready:     return .mint
-        case .archived:  return .green
-        }
-    }
-}
-
-// MARK: - Archive Detail Sheet
-
-struct ArchiveDetailSheet: View {
-    let record: VideoRecord
-    let allRecords: [VideoRecord]
-    @Environment(\.dismiss) private var dismiss
-
-    private var duplicates: [VideoRecord] {
-        guard let gid = record.duplicateGroupID else { return [] }
-        return allRecords.filter { $0.duplicateGroupID == gid && $0.id != record.id }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: record.archiveHealth.icon)
-                    .font(.title2)
-                    .foregroundColor(record.archiveHealth.color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(record.filename)
-                        .font(.headline)
-                    Text(record.fullPath)
-                        .font(.system(size: 14, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding()
-            .background(record.archiveHealth.color.opacity(0.08))
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    detailSection("Status") {
-                        detailRow("Classification", record.mediaDisposition.rawValue,
-                                  icon: record.mediaDisposition.icon, color: record.mediaDisposition.color)
-                        detailRow("Rating", record.starRating > 0
-                                  ? String(repeating: "\u{2605}", count: record.starRating)
-                                  : "Not rated")
-                        detailRow("Archive Health", record.archiveHealth.label,
-                                  icon: record.archiveHealth.icon, color: record.archiveHealth.color)
-                    }
-
-                    detailSection("Media") {
-                        detailRow("Stream Type", record.streamType.rawValue)
-                        if !record.duration.isEmpty { detailRow("Duration", record.duration) }
-                        if !record.size.isEmpty { detailRow("Size", record.size) }
-                        if !record.resolution.isEmpty { detailRow("Resolution", record.resolution) }
-                        if !record.videoCodec.isEmpty { detailRow("Video Codec", record.videoCodec) }
-                        if !record.audioCodec.isEmpty { detailRow("Audio Codec", record.audioCodec) }
-                        detailRow("Volume", record.volumeName)
-                    }
-
-                    detailSection("Archive Pipeline") {
-                        pipelineRow("Healthy", record.archiveStage >= .healthy)
-                        pipelineRow("Master Assigned", record.archiveStage >= .masterAssigned,
-                                    detail: record.masterLocation.isEmpty ? nil : record.masterLocation)
-                        pipelineRow("Backed Up", record.archiveStage >= .backedUp,
-                                    detail: record.backupDestinations.isEmpty
-                                    ? nil
-                                    : record.backupDestinations.map { "\($0.name) (\($0.kind.rawValue))" }.joined(separator: ", "))
-                        pipelineRow("Ready for Archive", record.archiveStage >= .readyForArchive)
-                        pipelineRow("Archived", record.archiveStage >= .archived)
-                    }
-
-                    if !record.notes.isEmpty {
-                        detailSection("Notes") {
-                            Text(record.notes)
-                                .font(.system(size: 16))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-
-                    if !duplicates.isEmpty {
-                        detailSection("Copies (\(duplicates.count))") {
-                            ForEach(duplicates) { dup in
-                                HStack(spacing: 6) {
-                                    Image(systemName: VolumeReachability.isReachable(path: dup.fullPath)
-                                          ? "externaldrive.fill" : "externaldrive.badge.xmark")
-                                        .foregroundColor(VolumeReachability.isReachable(path: dup.fullPath) ? .green : .secondary)
-                                        .frame(width: 16)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(dup.filename)
-                                            .font(.system(size: 15, weight: .medium))
-                                        Text("\(dup.volumeName)\(VolumeReachability.isReachable(path: dup.fullPath) ? "" : " (offline)")")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if record.pairedWith != nil {
-                        detailSection("A/V Pair") {
-                            if let partner = record.pairedWith {
-                                detailRow("Partner", partner.filename)
-                                detailRow("Partner Type", partner.streamType.rawValue)
-                            }
-                        }
-                    }
-                }
-                .padding()
-            }
-        }
-        .frame(width: 480, height: 520)
-    }
-
-    @ViewBuilder
-    private func detailSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.secondary)
-            content()
-        }
-    }
-
-    private func detailRow(_ label: String, _ value: String,
-                           icon: String? = nil, color: Color? = nil) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 16))
-                .foregroundColor(.secondary)
-                .frame(width: 120, alignment: .trailing)
-            if let icon = icon {
-                Image(systemName: icon)
-                    .foregroundColor(color ?? .primary)
-                    .frame(width: 16)
-            }
-            Text(value)
-                .font(.system(size: 16, weight: .medium))
-            Spacer()
-        }
-    }
-
-    private func pipelineRow(_ label: String, _ passed: Bool, detail: String? = nil) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: passed ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(passed ? .green : .secondary.opacity(0.4))
-                .frame(width: 16)
-            Text(label)
-                .font(.system(size: 16, weight: passed ? .medium : .regular))
-                .foregroundColor(passed ? .primary : .secondary)
-            if let detail = detail {
-                Text("— \(detail)")
-                    .font(.system(size: 15))
-                    .foregroundColor(.secondary)
-            }
-            Spacer()
+            $0.detectedPeople.contains { $0.lowercased().contains(q) } ||
+            $0.confirmedByUserPeople.contains { $0.name.lowercased().contains(q) } ||
+            $0.suspectedPeople.contains { $0.lowercased().contains(q) }
         }
     }
 }
