@@ -27,4 +27,8 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 
 ## 2b 🖥 Migrate /Volumes/MediaExpansion → /Volumes/Projects/_staging_from_MediaExpansion
 - Preview: 134 records · 3 copy (9.7 GB: avtest2.mov, Rick Breen.mov, LeavingForMontana.mov — loose files at volume root the staging copy skipped) · 130 adopt (104 mirrored + 26 moved Donna_clips) · 1 safely-redundant (FoxyRock-Piano.mov, witness = Master Archive copy on FamilyArchive).
-- Apply: (pending)
+- Apply (14:45–14:46): succeeded=3 adopted=130 safelyRedundant=1, 9.96 GB, 43.5 s. gen 205; 399 records on Projects (all present); MediaExpansion 1 (Manually Deleted, witness=FamilyArchive); dangling 52.
+- Confirm-dialog wording ("Migrate 134 records 1.33 TB") counts scoped bytes, not copy bytes — fold into #162.
+
+## 3a 🖥 Scan target /Volumes/Projects (whole volume) → Scan
+- (pending)
