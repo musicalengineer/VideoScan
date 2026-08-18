@@ -84,6 +84,13 @@ final class PersistentLog: LogSink, @unchecked Sendable {
     private var writesSinceRotationCheck = 0
     private var rotating = false
 
+    /// Number of fsyncs (`FileHandle.synchronize`) issued by write /
+    /// writeBatch / flush. Test seam only (GH #162 QA, 2026-08-18): the
+    /// scale sensor pins that a 100k-line batch costs ONE fsync, not
+    /// 100k — a per-line fsync from the main actor is exactly the
+    /// beachball QA flagged on the Reconcile-preview logger.
+    private(set) var synchronizeCount = 0
+
     /// If the file at `url` exceeds the threshold, archive it and leave
     /// no file at `url`. Caller reopens. MUST hold `lock`.
     private func rotateIfOversized() {
@@ -182,6 +189,59 @@ final class PersistentLog: LogSink, @unchecked Sendable {
             handle.write(data)
             // Sync to disk immediately — no OS buffering
             try? handle.synchronize()
+            synchronizeCount += 1
+        }
+    }
+
+    /// Write many lines under ONE lock acquisition, ONE FileHandle.write
+    /// and ONE fsync (GH #162 QA, 2026-08-18). `write(_:)` is
+    /// crash-safe-per-line by design — DateFormatter + write + fsync
+    /// every call — which is right for a live migrate loop and wrong for
+    /// a Reconcile-preview dump of thousands–100k lines from the main
+    /// actor. Callers build the `[String]` wherever they like and hand
+    /// it here from OFF the main actor; the lines land in the file in
+    /// order, each stamped exactly as `write(_:)` would stamp it (same
+    /// "[HH:mm:ss] " prefix, one timestamp for the whole batch). Empty
+    /// batches are a no-op — no fsync, no rotation check.
+    func writeBatch(_ lines: [String]) {
+        guard !lines.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Same rotation cadence as write(): count the batch as its
+        // line count so a marathon of batches still triggers the size
+        // re-check.
+        writesSinceRotationCheck += lines.count
+        if writesSinceRotationCheck >= Self.rotationCheckEvery {
+            writesSinceRotationCheck = 0
+            let hadHandle = handle != nil
+            rotateIfOversized()
+            if hadHandle, handle == nil {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+                handle = try? FileHandle(forWritingTo: url)
+                let fmt = DateFormatter()
+                fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                let header = "VideoScan \(name) log — rotated \(fmt.string(from: Date())) (previous archived beside this file)\n"
+                    + "─────────────────────────────────────────────\n"
+                if let data = header.data(using: .utf8) { handle?.write(data) }
+            }
+        }
+
+        guard let handle else { return }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm:ss"
+        let stamp = "[\(fmt.string(from: Date()))] "
+        var buf = String()
+        buf.reserveCapacity(lines.reduce(0) { $0 + $1.utf8.count + stamp.utf8.count + 1 })
+        for line in lines {
+            buf += stamp
+            buf += line
+            buf += "\n"
+        }
+        if let data = buf.data(using: .utf8) {
+            handle.write(data)
+            try? handle.synchronize()
+            synchronizeCount += 1
         }
     }
 
@@ -192,6 +252,17 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         try? handle?.synchronize()
+        if handle != nil { synchronizeCount += 1 }
+    }
+
+    /// True while a file handle is open (start() ran and close() hasn't).
+    /// Lets a secondary writer (the Migrate sheet's Reconcile preview,
+    /// GH #162) reuse an open session instead of stamping a fresh
+    /// "started" header on every call.
+    var isOpen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return handle != nil
     }
 
     /// Close the log file.

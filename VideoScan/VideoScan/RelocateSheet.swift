@@ -86,8 +86,14 @@ struct RelocateSheet: View {
         }
     }
 
-    private var totalBytesString: String {
-        ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+    /// Bytes the run will actually copy (GH #162 follow-up, 2026-08-18):
+    /// the preview plan's ready + source-move bytes when a preview exists,
+    /// else the whole scope as an honest upper bound. Drives BOTH the
+    /// "bytes to copy" row and the free-space check — the old whole-scope
+    /// figure could block a migrate (or scare Rick) over bytes that were
+    /// never going to move (adopt / safely-redundant / deleted).
+    private var bytesToCopy: (bytes: Int64, label: String) {
+        ReconcileLogLines.bytesToCopy(scopeBytes: totalBytes, plan: previewResult)
     }
 
     private var freeBytesOnDest: Int64? {
@@ -103,7 +109,7 @@ struct RelocateSheet: View {
 
     private var insufficientSpace: Bool {
         guard let free = freeBytesOnDest else { return false }
-        return free < totalBytes
+        return free < bytesToCopy.bytes
     }
 
     private var sourceVolumeExists: Bool {
@@ -301,10 +307,11 @@ struct RelocateSheet: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 HStack {
-                    Text("Total bytes to copy:")
+                    Text(previewResult == nil ? "Bytes to copy (upper bound):" : "Bytes to copy:")
                     Spacer()
-                    Text(totalBytesString)
+                    Text(bytesToCopy.label)
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("relocateSheet.bytesToCopy")
                 }
                 HStack {
                     Text("Free on destination:")
@@ -407,6 +414,12 @@ struct RelocateSheet: View {
             // is already running (the Run click slips into the queue);
             // "Run / Dry Run" otherwise. The Jobs panel toolbar button
             // surfaces the depth so the user can verify their adds.
+            // GH #162 (2026-08-18): the Migrate wording breaks the scope
+            // down by reconcile bucket once a preview exists ("3 to copy
+            // (9.96 GB), 130 already at destination …") — the old
+            // "134 record(s) (1.33 TB)" was the whole scope's bytes and
+            // read as "1.33 TB will be copied". See
+            // ReconcileLogLines.migrateButtonLabel for the fallback.
             let busy = model.isRelocating
             let label: String = {
                 if dryRun {
@@ -414,8 +427,10 @@ struct RelocateSheet: View {
                         ? "Add Dry Run to Queue (\(scopedRecords.count) record(s))"
                         : "Dry Run (\(scopedRecords.count) record(s))"
                 }
-                let base = "\(scopedRecords.count) record(s) (\(totalBytesString))"
-                return busy ? "Add to Queue — \(base)" : "Migrate \(base)"
+                return ReconcileLogLines.migrateButtonLabel(scopeCount: scopedRecords.count,
+                                                            scopeBytes: totalBytes,
+                                                            plan: previewResult,
+                                                            busy: busy)
             }()
             Button(label) { handleRelocate() }
                 .buttonStyle(.borderedProminent)
@@ -583,9 +598,18 @@ struct RelocateSheet: View {
                 )
             }.value
             if Task.isCancelled { return }   // superseded by a newer preview/invalidation
-            previewResult = RelocateReconcile.materialize(plan, scope: scope)
+            let result = RelocateReconcile.materialize(plan, scope: scope)
+            previewResult = result
             previewProgress = nil
             isPreviewing = false
+            // GH #162 (2026-08-18): the preview's statements belong in
+            // relocate.log too — summary + per-file buckets (esp. safely-
+            // redundant + first witness), tagged [PREVIEW]. Logged HERE,
+            // after the cancellation check, so a superseded preview never
+            // leaves a misleading trail. Same string builder as the live run.
+            model.logReconcilePreview(result,
+                                      sourceVolumeRootPath: src,
+                                      destinationRoot: dest)
         }
     }
 
