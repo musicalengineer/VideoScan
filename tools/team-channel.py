@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-AGENTS = ("codex", "claude", "fred", "rick")
+AGENTS = ("codex", "claude", "fred", "rick", "bob")
 DEFAULT_DB = (
     Path.home()
     / "Library"
