@@ -407,6 +407,12 @@ struct RelocateSheet: View {
             // is already running (the Run click slips into the queue);
             // "Run / Dry Run" otherwise. The Jobs panel toolbar button
             // surfaces the depth so the user can verify their adds.
+            // GH #162 (2026-08-18): the Migrate wording breaks the scope
+            // down by reconcile bucket once a preview exists ("3 to copy
+            // (9.96 GB), 130 already at destination …") — the old
+            // "134 record(s) (1.33 TB)" was the whole scope's bytes and
+            // read as "1.33 TB will be copied". See
+            // ReconcileLogLines.migrateButtonLabel for the fallback.
             let busy = model.isRelocating
             let label: String = {
                 if dryRun {
@@ -414,8 +420,10 @@ struct RelocateSheet: View {
                         ? "Add Dry Run to Queue (\(scopedRecords.count) record(s))"
                         : "Dry Run (\(scopedRecords.count) record(s))"
                 }
-                let base = "\(scopedRecords.count) record(s) (\(totalBytesString))"
-                return busy ? "Add to Queue — \(base)" : "Migrate \(base)"
+                return ReconcileLogLines.migrateButtonLabel(scopeCount: scopedRecords.count,
+                                                            scopeBytes: totalBytes,
+                                                            plan: previewResult,
+                                                            busy: busy)
             }()
             Button(label) { handleRelocate() }
                 .buttonStyle(.borderedProminent)
@@ -583,9 +591,18 @@ struct RelocateSheet: View {
                 )
             }.value
             if Task.isCancelled { return }   // superseded by a newer preview/invalidation
-            previewResult = RelocateReconcile.materialize(plan, scope: scope)
+            let result = RelocateReconcile.materialize(plan, scope: scope)
+            previewResult = result
             previewProgress = nil
             isPreviewing = false
+            // GH #162 (2026-08-18): the preview's statements belong in
+            // relocate.log too — summary + per-file buckets (esp. safely-
+            // redundant + first witness), tagged [PREVIEW]. Logged HERE,
+            // after the cancellation check, so a superseded preview never
+            // leaves a misleading trail. Same string builder as the live run.
+            model.logReconcilePreview(result,
+                                      sourceVolumeRootPath: src,
+                                      destinationRoot: dest)
         }
     }
 

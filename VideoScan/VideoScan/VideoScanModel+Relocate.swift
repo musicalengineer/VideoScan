@@ -307,7 +307,9 @@ extension VideoScanModel {
         reconcileProgress = nil
         let reconcile = RelocateReconcile.materialize(plan, scope: scope)
         logReconcileSummary(reconcile)
-        relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
+        // Shared string builder with the sheet's preview (GH #162) — same
+        // wording, the preview just adds a [PREVIEW] prefix + source/dest.
+        relocateLog.write(ReconcileLogLines.summaryLine(reconcile))
 
         // Cancellation check after reconcile (which can run minutes on a
         // flaky HDD): stop before touching the catalog so a cancel during
@@ -352,14 +354,14 @@ extension VideoScanModel {
             for r in reconcile.manuallyDeleted {
                 r.archiveStage = .manuallyDeleted
                 r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
-                relocateLog.write("[RECONCILE] manually-deleted: \(r.fullPath)")
+                relocateLog.write(ReconcileLogLines.manuallyDeletedLine(path: r.fullPath))
                 dashboard.relocateManuallyDeleted += 1
                 dashboard.relocateCompleted += 1
             }
             for (r, dest) in reconcile.adopted {
                 if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
                 if r.originVolume == nil { r.originVolume = r.volumeName }
-                relocateLog.write("[RECONCILE] adopted: \(r.fullPath) → \(dest)")
+                relocateLog.write(ReconcileLogLines.adoptedLine(path: r.fullPath, dest: dest))
                 r.fullPath = dest
                 r.directory = (dest as NSString).deletingLastPathComponent
                 r.notes = appendNote(r.notes, "Reconcile \(stamp()): adopted existing copy at dest")
@@ -391,7 +393,9 @@ extension VideoScanModel {
                     Self.formatSafelyRedundantNote(stamp: stamp(),
                                                    witnesses: entry.witnesses,
                                                    totalWitnessCount: entry.totalWitnessCount))
-                relocateLog.write("[RECONCILE] safely-redundant: \(r.fullPath) — \(entry.totalWitnessCount) witness(es), first: \(entry.witnesses.first ?? "?")")
+                relocateLog.write(ReconcileLogLines.safelyRedundantLine(path: r.fullPath,
+                                                                        totalWitnessCount: entry.totalWitnessCount,
+                                                                        firstWitness: entry.witnesses.first))
                 dashboard.relocateSafelyRedundant += 1
                 dashboard.relocateCompleted += 1
                 safelyRedundantBytes += r.sizeBytes
@@ -419,7 +423,7 @@ extension VideoScanModel {
         var toMigrate: [VideoRecord] = reconcile.ready
         if !options.dryRun {
             for (r, newSrc) in reconcile.sourceSideMoves {
-                relocateLog.write("[RECONCILE] source-move: \(r.fullPath) → \(newSrc)")
+                relocateLog.write(ReconcileLogLines.sourceMoveLine(path: r.fullPath, newSourcePath: newSrc))
                 r.fullPath = newSrc
                 r.directory = (newSrc as NSString).deletingLastPathComponent
                 r.notes = appendNote(r.notes, "Reconcile \(stamp()): source-side move detected")
@@ -433,7 +437,7 @@ extension VideoScanModel {
             // every entry here unconditionally keeps relocateCompleted able
             // to reach relocateTotal in both modes.
             for r in reconcile.previouslyRelocated {
-                relocateLog.write("[RECONCILE] previously-relocated, skipping: \(r.fullPath)")
+                relocateLog.write(ReconcileLogLines.previouslyRelocatedLine(path: r.fullPath))
                 dashboard.relocateSkipped += 1
                 dashboard.relocateCompleted += 1
                 _ = r  // record left alone
@@ -910,6 +914,28 @@ extension VideoScanModel {
             Manually deleted:   \(r.manuallyDeleted.count)   (marked, kept for audit)
             Previously done:    \(r.previouslyRelocated.count)
         """)
+    }
+
+    /// Write a sheet-side "Reconcile preview" to relocate.log (GH #162,
+    /// 2026-08-18). Same summary + per-file lines as the live run above,
+    /// every one prefixed `[PREVIEW]` so it can never be read as a
+    /// committed decision. `relocateLog` is file-private to this
+    /// extension, hence the model-level entry point; RelocateSheet calls
+    /// it back on the main actor AFTER its cancellation check, so a
+    /// superseded/cancelled preview logs nothing. `start(append:)` is
+    /// what the live run does per session — without it the write is a
+    /// silent no-op (Fix 3 above); the header it stamps marks the
+    /// preview session in the log.
+    func logReconcilePreview(_ reconcile: ReconcileResult,
+                             sourceVolumeRootPath: String,
+                             destinationRoot: URL) {
+        relocateLog.start(append: true)
+        for line in ReconcileLogLines.allLines(reconcile,
+                                               prefix: ReconcileLogLines.previewPrefix,
+                                               source: sourceVolumeRootPath,
+                                               dest: destinationRoot.path) {
+            relocateLog.write(line)
+        }
     }
 
     private func logRelocateSummary(salvageFailedPaths: [String], snapshotTaken: Bool) {

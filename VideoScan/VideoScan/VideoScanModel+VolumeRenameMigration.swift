@@ -75,7 +75,8 @@
 //     Logger category "volumeRename".
 //   - Migration is NEVER gated on scanning and never auto-starts a
 //     rescan; when drift was seen the dialog offers the EXISTING
-//     "Scan / Update Catalog" action (startTarget — no new machinery).
+//     "Rescan" action (startTarget — no new machinery; label was
+//     "Scan / Update Catalog" until GH #162 renamed it).
 //
 // Worst-case memory: two value snapshots of the catalog (fullPath + UUID
 // + size, ~160 B/record → ~16–32 MB transient at 100k records) plus the
@@ -845,7 +846,7 @@ extension VideoScanModel {
     }
 
     /// Dialog follow-up when drift was seen: run the EXISTING incremental
-    /// rescan on the migrated target ("Scan / Update Catalog" — the same
+    /// rescan on the migrated target ("Rescan" — the same
     /// verb, the same startTarget entry point, the same scan merge +
     /// move-identity + progress UI; no new scan machinery). Never called
     /// automatically — migration is not gated on scanning.

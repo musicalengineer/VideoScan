@@ -97,6 +97,32 @@ extension View {
 /// measuring cell and the footer that consumes the measurement.
 let volumeTableCoordinateSpace = "volumeTablePane"
 
+// MARK: - ScanVerb (GH #162, 2026-08-18)
+//
+// The committing per-target rescan (startTarget = scan-merge, lands in
+// the catalog immediately) used to be labelled "Scan / Update Catalog"
+// — the same words as Catalog → "Update Catalog…", which PREVIEWS first
+// and parks the merge. Two verbs sharing "Update Catalog" with opposite
+// commit semantics cost Rick a real forensic detour on the 08-18
+// clean-up runbook. The committing verb is now plain "Rescan" everywhere
+// (row context menu, volume-rename drift notice); the log line text is
+// unchanged. Plain enum (not on the @MainActor view) so a test can pin
+// the strings without hopping actors.
+
+enum ScanVerb {
+    /// The committing per-target rescan verb.
+    static let rescan = "Rescan"
+
+    /// Help text for the committing rescan — says out loud that it commits.
+    static let rescanHelp = "Rescan now and merge the results into the catalog (commits immediately — Update Catalog… previews first)."
+
+    /// Row context-menu label for the scan action, by selection state.
+    static func menuLabel(hasResumable: Bool, single: Bool) -> String {
+        if hasResumable { return "Resume Scan" }
+        return single ? rescan : "Scan Selected"
+    }
+}
+
 extension CatalogView {
 
     // MARK: - Volume Table
@@ -386,9 +412,10 @@ extension CatalogView {
                 }
             }) {
                 let hasResumable = targets.contains { $0.status == .resumable }
-                Label(hasResumable ? "Resume Scan" : (single ? "Scan / Update Catalog" : "Scan Selected"),
+                Label(ScanVerb.menuLabel(hasResumable: hasResumable, single: single),
                       systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
             }
+            .help(ScanVerb.rescanHelp)
             // Update Catalog (2026-08-17): the previewed, relinking flavor
             // of a rescan — for when files were moved/renamed outside the
             // app. Opens the sheet with these targets pre-checked.
@@ -845,7 +872,7 @@ extension CatalogView {
     }
 
     /// Buttons per notice kind. The drift follow-up reuses the EXISTING
-    /// per-target rescan verb ("Scan / Update Catalog" — same label as the
+    /// per-target rescan verb (`ScanVerb.rescan` — same label as the
     /// row context menu, same startTarget entry point; one verb, one
     /// meaning). Undo restores the pre-migration snapshot verbatim.
     @ViewBuilder
@@ -854,7 +881,7 @@ extension CatalogView {
         case .migrated:
             Button("OK") { model.pendingVolumeRenameNotice = nil }
             if notice.driftDetected {
-                Button("Scan / Update Catalog") { model.rescanAfterVolumeRename(notice) }
+                Button(ScanVerb.rescan) { model.rescanAfterVolumeRename(notice) }
             }
             Button("Undo") { model.undoVolumeRenameMigration(notice) }
         case .ask:
