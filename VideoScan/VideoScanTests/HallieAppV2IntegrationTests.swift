@@ -812,8 +812,13 @@ struct HallieAppV2IntegrationTests {
         let coordinator = try productionSource("HallieAppTurnCoordinator.swift")
 
         #expect(chat.contains("Evidence samples (up to 25; not all matches)"))
-        #expect(chat.contains("Button(\"Play\")"))
-        #expect(chat.contains("Button(\"Reveal\")"))
+        // The Play / Reveal / Show-in-Catalog actions moved into
+        // ArchivistCitationRow (colored, iconed) on 2026-08-17.
+        let row = try productionSource("ArchivistCitationRow.swift")
+        #expect(row.contains("actionButton(\"Play\""))
+        #expect(row.contains("actionButton(\"Reveal in Finder\""))
+        #expect(row.contains("actionButton(\"Show in Catalog\""))
+        #expect(chat.contains("ArchivistCitationRow("))
         #expect(chat.contains("let citations = response.citations"))
         #expect(coordinator.contains("citations: Array(result.citations.prefix(25))"))
         #expect(chat.contains("model.record(forID: citation.recordID)"))
