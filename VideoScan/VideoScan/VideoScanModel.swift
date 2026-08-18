@@ -596,6 +596,22 @@ final class VideoScanModel: ObservableObject {
         catalogScopeSettings.save(to: .standard)
     }
 
+    /// Duplicate keeper election preferences (2026-08-18): the
+    /// user-ordered volume precedence list that decides which copy of a
+    /// duplicate group is "Keep" (DuplicateKeeperPolicy — 8/14
+    /// offline-strand and 8/17 volume-provenance findings). Test hosts get
+    /// the seed default and never read/write the real plist.
+    @Published var duplicateKeeperSettings: DuplicateKeeperSettings =
+        TestEnvironment.isTestHost
+            ? DuplicateKeeperSettings()
+            : DuplicateKeeperSettings.restored(from: .standard)
+
+    /// Explicit save — same contract as `saveCatalogScopeSettings`.
+    func saveDuplicateKeeperSettings() {
+        guard !TestEnvironment.isTestHost else { return }
+        duplicateKeeperSettings.save(to: .standard)
+    }
+
     /// Catalog media-kind facet (GH #124 layer 1): the persisted "which
     /// stream shapes does the catalog table show" preference. DEFAULT
     /// `.videoBearing` — the table opens on video-bearing records so 80k

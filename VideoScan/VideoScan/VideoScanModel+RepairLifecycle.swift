@@ -122,15 +122,26 @@ extension VideoScanModel {
     ///   lifecycleStage          copy only while repair is cataloged
     ///   archiveStage            copy only while repair is .none
     ///   userDate(+confidence)   copy only when repair's is nil
+    ///
+    /// Shared with duplicate deletion (2026-08-18): the same rules fold
+    /// an extra copy's human metadata into its group keeper before the
+    /// extra's row leaves the catalog (VideoScanModel+Duplicates). Returns
+    /// the names of the fields that actually changed on `repair` (empty
+    /// when nothing carried) so callers can log one honest line.
     @MainActor
-    func applyHumanMetadataInheritance(from original: VideoRecord, to repair: VideoRecord) {
+    @discardableResult
+    func applyHumanMetadataInheritance(from original: VideoRecord, to repair: VideoRecord) -> [String] {
+        var carried: [String] = []
+        let tagsBefore = repair.tags
         for tag in original.tags {
             repair.tags = WorkflowTags.adding(tag, to: repair.tags)
         }
+        if repair.tags != tagsBefore { carried.append("tags") }
         if !original.userNotes.isEmpty {
             repair.userNotes = repair.userNotes.isEmpty
                 ? original.userNotes
                 : "\(repair.userNotes)\n\(original.userNotes)"
+            carried.append("notes")
         }
         // People tiers (deep-test findings 3 + 4): a person lives in
         // EXACTLY ONE tier, and the repair's own judgment — confirmed
@@ -149,24 +160,34 @@ extension VideoScanModel {
         for confirmed in original.confirmedByUserPeople
         where !repairHasJudgment(for: confirmed.name) {
             repair.confirmedByUserPeople.append(confirmed)
+            if !carried.contains("confirmed people") { carried.append("confirmed people") }
         }
         for name in original.rejectedPeople where !repairHasJudgment(for: name) {
             repair.rejectedPeople.append(name)
+            if !carried.contains("rejected people") { carried.append("rejected people") }
         }
-        repair.starRating = max(repair.starRating, original.starRating)
-        if repair.mediaDisposition == .unreviewed {
+        if original.starRating > repair.starRating {
+            repair.starRating = original.starRating
+            carried.append("star rating")
+        }
+        if repair.mediaDisposition == .unreviewed, original.mediaDisposition != .unreviewed {
             repair.mediaDisposition = original.mediaDisposition
+            carried.append("disposition")
         }
-        if repair.lifecycleStage == .cataloged {
+        if repair.lifecycleStage == .cataloged, original.lifecycleStage != .cataloged {
             repair.lifecycleStage = original.lifecycleStage
+            carried.append("lifecycle stage")
         }
-        if repair.archiveStage == .none {
+        if repair.archiveStage == .none, original.archiveStage != .none {
             repair.archiveStage = original.archiveStage
+            carried.append("archive stage")
         }
-        if repair.userDate == nil {
+        if repair.userDate == nil, original.userDate != nil {
             repair.userDate = original.userDate
             repair.userDateConfidence = original.userDateConfidence
+            carried.append("date")
         }
+        return carried
     }
 
     // MARK: Confirm

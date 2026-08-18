@@ -43,6 +43,11 @@ struct VolumesWindow: View {
     /// button toggles this; the panel itself observes `model.relocateQueue`.
     @State private var showRelocateJobsPanel: Bool = false
 
+    /// "Which copy do we keep?" — duplicate keeper precedence sheet
+    /// (2026-08-18). A volumes-level preference, so it lives here rather
+    /// than in the Catalog toolbar.
+    @State private var showKeeperPrecedence: Bool = false
+
     /// Drive Health — standalone sheet target. Lives at the window
     /// level (not the row) so the sheet inherits the parent's
     /// environmentObject reliably.
@@ -195,6 +200,11 @@ struct VolumesWindow: View {
             RelocateJobsPanel()
                 .environmentObject(model)
         }
+        // Duplicate keeper precedence (2026-08-18).
+        .sheet(isPresented: $showKeeperPrecedence) {
+            DuplicateKeeperPrecedenceSheet()
+                .environmentObject(model)
+        }
         // Drive Health standalone sheet. Triggered from the row
         // context menu ("Show Drive Health…"). Same data as the
         // inline editor card, but bigger.
@@ -281,6 +291,17 @@ struct VolumesWindow: View {
                 }
                 .help("Queue of Migrate runs — kick off several and walk away. A running job stays here after you Hide its progress; cancel or monitor it from this panel.")
                 .accessibilityIdentifier("volumesWindow.relocateJobs")
+            }
+            // Duplicate keeper precedence — which drive's copy we keep
+            // when the same video is on several (2026-08-18).
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showKeeperPrecedence = true
+                } label: {
+                    Label("Which copy to keep", systemImage: "list.number")
+                }
+                .help("Order your drives so duplicate cleanup keeps the copy on the drive you trust most.")
+                .accessibilityIdentifier("volumesWindow.keeperPrecedence")
             }
         }
         .alert(item: $reinstateTarget) { tgt in

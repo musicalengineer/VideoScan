@@ -22,7 +22,13 @@ enum DuplicateDetector {
         let reasons: [String]
     }
 
-    static func analyze(records inputRecords: [VideoRecord]) -> DuplicateAnalysisSummary {
+    /// - Parameter keeperPolicy: volume precedence + human-metadata rules
+    ///   for the keeper election (2026-08-18). Grouping is unaffected by
+    ///   it. Defaults to `.unconfigured` (no volume facts, no list) so the
+    ///   pre-existing call sites and tests keep their behavior modulo the
+    ///   now-deterministic tie-break.
+    static func analyze(records inputRecords: [VideoRecord],
+                        keeperPolicy: DuplicateKeeperPolicy = .unconfigured) -> DuplicateAnalysisSummary {
         // Global-inert: purged records do not participate in duplicate
         // detection (a removed-from-catalog file shouldn't pull a live record
         // into a duplicate group). Filter at the entry point.
@@ -71,7 +77,7 @@ enum DuplicateDetector {
             let componentIDs = walkComponent(from: record.id, adjacency: adjacency, visited: &visited)
             guard componentIDs.count > 1 else { continue }
             let component = componentIDs.compactMap { recordsByID[$0] }
-            guard let keeper = component.max(by: { keeperScore($0) < keeperScore($1) }) else { continue }
+            guard let keeper = electKeeper(from: component, policy: keeperPolicy) else { continue }
 
             let starMembers = buildStarMembers(keeper: keeper, component: component, pairByIDs: pairByIDs)
             guard starMembers.count > 1 else { continue }
@@ -307,10 +313,32 @@ enum DuplicateDetector {
     @concurrent
     #endif
     static func analyzeDetached(
-        _ clones: sending [VideoRecord]
+        _ clones: sending [VideoRecord],
+        keeperPolicy: DuplicateKeeperPolicy = .unconfigured
     ) async -> sending (analyzed: [VideoRecord], summary: DuplicateAnalysisSummary) {
-        let summary = analyze(records: clones)
+        let summary = analyze(records: clones, keeperPolicy: keeperPolicy)
         return (clones, summary)
+    }
+
+    // MARK: - Keeper election (2026-08-18)
+
+    /// Elect the group's keeper: lexicographic max of (volume precedence,
+    /// human-metadata score, technical `keeperScore`, path). See
+    /// DuplicateKeeperPolicy for the WHY (8/14 offline-strand finding,
+    /// 8/17 volume-provenance finding). Before this the election was
+    /// `keeperScore` alone, which ties for byte-identical copies and
+    /// left the winner to input order.
+    ///
+    /// Keys are computed ONCE per member (O(component)), not inside the
+    /// comparator, so a 100k-record catalog adds no quadratic work.
+    static func electKeeper(from component: [VideoRecord],
+                            policy: DuplicateKeeperPolicy) -> VideoRecord? {
+        var best: (record: VideoRecord, key: DuplicateKeeperPolicy.ElectionKey)?
+        for record in component {
+            let key = policy.electionKey(for: record, technicalScore: keeperScore(record))
+            if best == nil || key > best!.key { best = (record, key) }
+        }
+        return best?.record
     }
 
     // MARK: - Scoring rules
@@ -434,7 +462,12 @@ enum DuplicateDetector {
             .max(by: { $0.1 < $1.1 })?.0 ?? ""
     }
 
-    private static func keeperScore(_ record: VideoRecord) -> Int {
+    /// TECHNICAL keeper merit — playability, streams, codecs, size,
+    /// resolution, date. Since 2026-08-18 this is the THIRD key of the
+    /// election (after volume precedence and human metadata), no longer
+    /// the whole vote. Internal-visible so DuplicateKeeperPolicy tests
+    /// can build expected keys.
+    static func keeperScore(_ record: VideoRecord) -> Int {
         var score = 0
         if record.isPlayable == "Yes" { score += 40 }
 

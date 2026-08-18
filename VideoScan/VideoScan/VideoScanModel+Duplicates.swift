@@ -134,7 +134,12 @@ extension VideoScanModel {
         var freshClones: [VideoRecord] = []
         freshClones.reserveCapacity(scope.count)
         for rec in scope { freshClones.append(rec.snapshotClone()) }
-        let (clones, summary) = await DuplicateDetector.analyzeDetached(freshClones)
+        // Keeper policy is a Sendable snapshot of the settings + per-target
+        // facts (role / reachable / retired / master), built HERE on main
+        // because CatalogScanTarget can't cross the actor boundary.
+        let keeperPolicy = duplicateKeeperPolicy()
+        let (clones, summary) = await DuplicateDetector.analyzeDetached(
+            freshClones, keeperPolicy: keeperPolicy)
         let stamp = Date()
         // QA P2-3: a record pruned during the await gets no ghost writes
         // and no stamp (symmetric with the correlate atomicity guard).
@@ -164,6 +169,24 @@ extension VideoScanModel {
         // One mutation notification (debounced save + cache invalidation +
         // view refresh) replaces the records=[]/records=tmp double-republish.
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+    }
+
+    /// The keeper-election policy for THIS catalog right now: the
+    /// user-ordered precedence list plus a snapshot of every scan target's
+    /// role / reachability / retirement / master-archive status
+    /// (2026-08-18). Pure value — safe to hand to the off-main analyzer.
+    func duplicateKeeperPolicy() -> DuplicateKeeperPolicy {
+        var facts: [String: DuplicateKeeperPolicy.VolumeFacts] = [:]
+        for target in scanTargets {
+            facts[target.searchPath] = DuplicateKeeperPolicy.VolumeFacts(
+                role: target.role,
+                isReachable: target.isReachable,
+                isRetired: target.isRetired,
+                isMasterArchive: isMasterArchive(target))
+        }
+        return DuplicateKeeperPolicy(
+            precedence: duplicateKeeperSettings.volumePrecedence,
+            facts: facts)
     }
 
     /// Delete high-confidence duplicate files on a given volume, but ONLY when
@@ -279,6 +302,24 @@ extension VideoScanModel {
             case .deleted(let bytes):
                 bytesFreed += bytes
                 deleted += 1
+                // Metadata carry-over (2026-08-18). The bytes are gone —
+                // verified identical to the keeper — but the ROW still
+                // holds whatever Rick put on this copy (stars, people,
+                // notes, tags, provenance stamp). Fold it into the
+                // keeper before the row leaves the catalog, using the
+                // SAME union rules as repair adoption
+                // (applyHumanMetadataInheritance): never clobber a
+                // judgment already on the keeper, never touch machine
+                // metadata. Uses the live keeper object from `keepers`
+                // (a `records` member), so the merge lands in the
+                // catalog, not on a clone.
+                let extraRow = currentRecord ?? record
+                let carried = applyHumanMetadataInheritance(from: extraRow, to: keeper)
+                if !carried.isEmpty {
+                    log("  Carried over to \(keeper.filename) from \(record.filename): "
+                        + carried.joined(separator: ", "))
+                    catalogMutated = true
+                }
                 if let index = records.firstIndex(where: {
                     $0.id == expectedID && $0.fullPath == expectedPath
                 }) {
