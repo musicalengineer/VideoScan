@@ -86,8 +86,14 @@ struct RelocateSheet: View {
         }
     }
 
-    private var totalBytesString: String {
-        ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+    /// Bytes the run will actually copy (GH #162 follow-up, 2026-08-18):
+    /// the preview plan's ready + source-move bytes when a preview exists,
+    /// else the whole scope as an honest upper bound. Drives BOTH the
+    /// "bytes to copy" row and the free-space check — the old whole-scope
+    /// figure could block a migrate (or scare Rick) over bytes that were
+    /// never going to move (adopt / safely-redundant / deleted).
+    private var bytesToCopy: (bytes: Int64, label: String) {
+        ReconcileLogLines.bytesToCopy(scopeBytes: totalBytes, plan: previewResult)
     }
 
     private var freeBytesOnDest: Int64? {
@@ -103,7 +109,7 @@ struct RelocateSheet: View {
 
     private var insufficientSpace: Bool {
         guard let free = freeBytesOnDest else { return false }
-        return free < totalBytes
+        return free < bytesToCopy.bytes
     }
 
     private var sourceVolumeExists: Bool {
@@ -301,10 +307,11 @@ struct RelocateSheet: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 HStack {
-                    Text("Total bytes to copy:")
+                    Text(previewResult == nil ? "Bytes to copy (upper bound):" : "Bytes to copy:")
                     Spacer()
-                    Text(totalBytesString)
+                    Text(bytesToCopy.label)
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("relocateSheet.bytesToCopy")
                 }
                 HStack {
                     Text("Free on destination:")

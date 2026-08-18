@@ -176,6 +176,52 @@ struct ReconcilePreviewLoggingTests {
         #expect(queued.hasPrefix("Add to Queue — 134 record(s) (1.33 TB)"))
     }
 
+    // MARK: - 2b. Bytes to copy (sheet row + free-space check)
+
+    @Test("plan present: bytes to copy = ready + source-move bytes, exact label")
+    func bytesToCopyWithPlan() {
+        let r = syntheticResult()
+        let out = ReconcileLogLines.bytesToCopy(scopeBytes: 1_330_000_000_000, plan: r)
+        #expect(out.bytes == 9_960_000_000)   // 5 GB + 4 GB ready + 0.96 GB source-move
+        #expect(out.label == "9.96 GB")
+        #expect(ReconcileLogLines.copyBytes(r) == 9_960_000_000)
+    }
+
+    @Test("plan absent: whole scope as an honest upper bound")
+    func bytesToCopyWithoutPlan() {
+        let out = ReconcileLogLines.bytesToCopy(scopeBytes: 1_330_000_000_000, plan: nil)
+        #expect(out.bytes == 1_330_000_000_000)
+        #expect(out.label == "up to 1.33 TB — run Reconcile preview for the exact copy size")
+    }
+
+    // regression: sensor — adopted / safely-redundant / manually-deleted /
+    // previously-relocated records never move bytes; the copy figure and
+    // the free-space check must not count them (the whole-scope figure
+    // used to, which is how 1.33 TB stood in for a 9.96 GB copy).
+    @Test("zero-copy buckets contribute 0 bytes")
+    func zeroCopyBucketsContributeNothing() {
+        let big = 500_000_000_000 as Int64
+        let noCopy = ReconcileResult(
+            ready: [],
+            manuallyDeleted: [rec("/Volumes/Src/gone.mov", size: big)],
+            sourceSideMoves: [],
+            adopted: [(rec: rec("/Volumes/Src/d.mov", size: big), destPath: "/Volumes/Dest/d.mov")],
+            safelyRedundant: [SafelyRedundantEntry(rec: rec("/Volumes/Src/e.mov", size: big),
+                                                   witnesses: ["/Volumes/Other/e.mov"],
+                                                   totalWitnessCount: 1,
+                                                   safeWitnesses: [], degradedWitnesses: [])],
+            previouslyRelocated: [rec("/Volumes/Src/f.mov", size: big)]
+        )
+        #expect(ReconcileLogLines.copyBytes(noCopy) == 0)
+        let out = ReconcileLogLines.bytesToCopy(scopeBytes: 4 * big, plan: noCopy)
+        #expect(out.bytes == 0)
+        #expect(out.label == "Zero KB")
+        // Button wording agrees: nothing to copy.
+        #expect(ReconcileLogLines.migrateButtonLabel(scopeCount: 4, scopeBytes: 4 * big,
+                                                     plan: noCopy, busy: false)
+                .hasPrefix("Migrate 4 record(s): 0 to copy (Zero KB)"))
+    }
+
     // MARK: - 3. Rescan verb sensor
 
     // regression: GH #162 — the committing rescan must never again share

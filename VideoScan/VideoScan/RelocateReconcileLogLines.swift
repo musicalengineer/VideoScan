@@ -129,6 +129,34 @@ enum ReconcileLogLines {
             + perFileLines(r, prefix: prefix)
     }
 
+    // MARK: Bytes to copy (GH #162 follow-up, 2026-08-18)
+
+    /// Bytes the migrate phase will actually copy for `plan`: Bucket A
+    /// (ready) + Bucket C (source-side moves — path rewritten, then sent
+    /// through the same copy pipeline). Adopted, safely-redundant,
+    /// manually-deleted and previously-relocated records contribute ZERO
+    /// — they are catalog-only decisions, no bytes move.
+    static func copyBytes(_ plan: ReconcileResult) -> Int64 {
+        plan.ready.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            + plan.sourceSideMoves.reduce(Int64(0)) { $0 + $1.rec.sizeBytes }
+    }
+
+    /// What the sheet's "bytes to copy" row and its free-space check
+    /// should use. With a preview: the plan's real copy bytes. Without:
+    /// the whole scope (an upper bound — every record MIGHT need copying),
+    /// and the label says so instead of posing as an exact figure. The
+    /// old sheet always showed whole-scope bytes as "Total bytes to copy",
+    /// which is how "1.33 TB" got read as the copy size when 9.96 GB moved.
+    static func bytesToCopy(scopeBytes: Int64,
+                            plan: ReconcileResult?) -> (bytes: Int64, label: String) {
+        let fmt = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+        guard let plan else {
+            return (scopeBytes, "up to \(fmt(scopeBytes)) — run Reconcile preview for the exact copy size")
+        }
+        let bytes = copyBytes(plan)
+        return (bytes, fmt(bytes))
+    }
+
     // MARK: Migrate button wording (GH #162, 2026-08-18)
 
     /// The Migrate button used to read "Migrate 134 record(s) (1.33 TB)" —
@@ -148,9 +176,8 @@ enum ReconcileLogLines {
         // "To copy" = Bucket A (ready) + Bucket C (source-side moves — path
         // rewritten, then copied like A). Adopt/redundant/deleted/done
         // never touch bytes.
-        let toCopy = plan.ready + plan.sourceSideMoves.map(\.rec)
-        let copyBytes = toCopy.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        var parts: [String] = ["\(toCopy.count) to copy (\(fmt(copyBytes)))"]
+        let toCopyCount = plan.ready.count + plan.sourceSideMoves.count
+        var parts: [String] = ["\(toCopyCount) to copy (\(fmt(copyBytes(plan))))"]
         if !plan.adopted.isEmpty {
             parts.append("\(plan.adopted.count) already at destination (adopt, no copy)")
         }

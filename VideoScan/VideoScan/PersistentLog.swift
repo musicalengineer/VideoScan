@@ -194,6 +194,16 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         try? handle?.synchronize()
     }
 
+    /// True while a file handle is open (start() ran and close() hasn't).
+    /// Lets a secondary writer (the Migrate sheet's Reconcile preview,
+    /// GH #162) reuse an open session instead of stamping a fresh
+    /// "started" header on every call.
+    var isOpen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return handle != nil
+    }
+
     /// Close the log file.
     func close() {
         lock.lock()

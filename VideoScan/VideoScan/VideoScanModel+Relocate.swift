@@ -922,14 +922,17 @@ extension VideoScanModel {
     /// committed decision. `relocateLog` is file-private to this
     /// extension, hence the model-level entry point; RelocateSheet calls
     /// it back on the main actor AFTER its cancellation check, so a
-    /// superseded/cancelled preview logs nothing. `start(append:)` is
-    /// what the live run does per session — without it the write is a
-    /// silent no-op (Fix 3 above); the header it stamps marks the
-    /// preview session in the log.
+    /// superseded/cancelled preview logs nothing. Writes are silent
+    /// no-ops until `start(append:)` has run (Fix 3 above), so we open
+    /// the file only if no session is open yet — repeated previews (or a
+    /// preview after a live run) reuse the open handle instead of stamping
+    /// a fresh "started" header each time. A one-line `[PREVIEW] session`
+    /// marker separates previews in the log instead.
     func logReconcilePreview(_ reconcile: ReconcileResult,
                              sourceVolumeRootPath: String,
                              destinationRoot: URL) {
-        relocateLog.start(append: true)
+        if !relocateLog.isOpen { relocateLog.start(append: true) }
+        relocateLog.write("── [PREVIEW] session \(stamp()) source=\(sourceVolumeRootPath) dest=\(destinationRoot.path)")
         for line in ReconcileLogLines.allLines(reconcile,
                                                prefix: ReconcileLogLines.previewPrefix,
                                                source: sourceVolumeRootPath,
