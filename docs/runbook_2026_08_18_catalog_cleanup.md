@@ -21,4 +21,9 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 ## 2a 🖥 Migrate osx10.8_backup (LaCie) → /Volumes/Projects/osx10.8_backup
 - Reconcile preview: 288 classified · 3 copy · 263 adopt (already at dest) · 20 safely-redundant (mark deleted w/ witness).
 - ⌨️ verified: all 23 non-adopts exist on LaCie; Finder copy had skipped rickb/Movies/. Witnesses for the 20: from-Mini2TB 12, MediaExpansion/MoviesExpansion 6, ~/Movies 1, LaCie other 1. The 3 copies: DSCN0359.AVI, divx splash .part, playbutton798x450.mov.
-- Apply result: (pending)
+- Apply (14:38–14:41): succeeded=3 adopted=263 safelyRedundant=20, 96.7 MB copied, 155.8 s (reconcile hashing dominates).
+- ⌨️ verified gen 202: 266 records on /Volumes/Projects/osx10.8_backup, all with originalFullPath, all present; 20 LaCie records = Manually Deleted (witnesses in relocate.log). 7,119 records; dangling 78.
+- Filed GH #162: Reconcile PREVIEW writes nothing to relocate.log.
+
+## 2b 🖥 Migrate /Volumes/MediaExpansion → /Volumes/Projects/_staging_from_MediaExpansion
+- (pending)
