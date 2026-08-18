@@ -21,6 +21,12 @@ enum HallieTurnExecutor {
         case followUp
         /// A model-free honest answer about what Hallie can and cannot do.
         case capability
+        /// The deterministic help card ("help", "?", "what can you do").
+        case help
+        /// A one-line friendly reply ("thanks", "hi", "good morning").
+        case smalltalk
+        /// "start over" — conversation memory cleared.
+        case reset
     }
 
     enum Outcome: Sendable, Equatable {
@@ -90,21 +96,31 @@ enum HallieTurnExecutor {
         let citationOffset: Int
         /// Set when the AST came from a follow-up refinement of the previous
         /// question rather than a fresh translation; quoted in the basis line
-        /// so the answer says so ("refining your last question").
+        /// so the answer says so ("refining: rick + guitar · around 2005").
         let refinementNote: String?
+        /// The cumulative chain after this refinement, remembered for the
+        /// next fragment. Nil for fresh questions and paging.
+        let refinementChain: ArchivistFollowUpResolver.Chain?
+        /// The answer's lead for a refined turn ("Narrowed to Westford,
+        /// around 2005"); the executor appends the count.
+        let refinementChange: String?
 
         init(
             originalQuestion: String,
             ast: ArchivistQueryAST,
             playAfterAnswer: Bool = false,
             citationOffset: Int = 0,
-            refinementNote: String? = nil
+            refinementNote: String? = nil,
+            refinementChain: ArchivistFollowUpResolver.Chain? = nil,
+            refinementChange: String? = nil
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
             self.playAfterAnswer = playAfterAnswer
             self.citationOffset = max(0, citationOffset)
             self.refinementNote = refinementNote
+            self.refinementChain = refinementChain
+            self.refinementChange = refinementChange
         }
     }
 
@@ -360,6 +376,9 @@ enum HallieTurnExecutor {
         case .unsupportedEvent: return "shape=event (unsupported)"
         case .followUp: return "follow-up"
         case .capability: return "capability"
+        case .help: return "help"
+        case .smalltalk: return "smalltalk"
+        case .reset: return "reset"
         }
     }
 
@@ -375,6 +394,9 @@ enum HallieTurnExecutor {
         case .unsupportedEvent: return "unsupported-event"
         case .followUp: return "follow-up"
         case .capability: return "capability"
+        case .help: return "help"
+        case .smalltalk: return "smalltalk"
+        case .reset: return "reset"
         }
     }
 

@@ -53,6 +53,17 @@ enum ArchivistAgePhrase {
         "young", "still", "just", "the", "being",
     ]
 
+    /// The band a single word names ("baby" → .baby), or nil. Lets the
+    /// follow-up resolver spot "as a baby" inside a fragment.
+    static func band(forWord word: String) -> Band? {
+        bandWords[word]
+    }
+
+    /// Whether the word carries no meaning in an age phrase ("as", "a").
+    static func isCarrier(_ word: String) -> Bool {
+        carriers.contains(word)
+    }
+
     /// The first keyword that is an age phrase and nothing else. A keyword
     /// with additional content ("baby shower") is a real topic and is left
     /// alone.

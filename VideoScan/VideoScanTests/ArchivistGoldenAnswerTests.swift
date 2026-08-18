@@ -518,7 +518,7 @@ struct ArchivistGoldenAnswerTests {
             _ = try ArchivistQueryAST.decodeTranslatorOutput(
                 Data(testCase.modelOutput.utf8))
         }
-        #expect(corpus.conversationCases.count == 6)
+        #expect(corpus.conversationCases.count == 9)
         #expect(Set(corpus.conversationCases.map(\.id)).count
                 == corpus.conversationCases.count)
         for testCase in corpus.conversationCases {

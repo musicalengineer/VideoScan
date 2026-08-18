@@ -1,8 +1,9 @@
 // HallieTurnExecutor+Conversation.swift
 // Per-conversation memory and the model-free step that runs BEFORE any
-// translation: follow-ups on the last answer, elliptical refinements,
-// local family-tree shapes, and honest capability answers. Shared by the
-// app coordinator and the shell so both clients behave identically.
+// translation: help / small talk / reset, capability answers, follow-ups on
+// the last answer, cumulative refinements, and local family-tree shapes.
+// Shared by the app coordinator and the shell so both clients behave
+// identically. Nothing here calls a model.
 
 import Foundation
 import VideoScanCore
@@ -26,19 +27,35 @@ extension HallieTurnExecutor {
         /// The last executed AST, list or not — the thing "and in the 90s?"
         /// refines.
         private(set) var lastAST: ArchivistQueryAST?
+        /// The cumulative refinement chain behind `lastAST` ("rick + guitar +
+        /// westford · around 2005"); the base chain for a fresh question.
+        private(set) var lastChain: ArchivistFollowUpResolver.Chain?
         /// Convenience context for callers: people and years of the last AST.
         private(set) var lastPeople: [String] = []
         private(set) var lastYears: ClosedRange<Int>?
 
         init() {}
 
-        /// Record an executed turn. Follow-up media actions and capability
-        /// answers carry no AST and leave memory untouched; a refined or
-        /// paged query replaces it like any other.
+        /// Forget everything ("start over").
+        mutating func reset() {
+            self = ConversationMemory()
+        }
+
+        /// Record an executed turn. Follow-up media actions, help, small
+        /// talk and capability answers carry no AST and leave memory
+        /// untouched; a reset clears it; a refined or paged query replaces
+        /// it like any other.
         mutating func record(intent: Intent?, result: Result) {
+            if result.route == .reset {
+                reset()
+                return
+            }
             guard let intent else { return }
             let ast = intent.ast
             lastAST = ast
+            lastChain = intent.refinementChain
+                ?? (intent.citationOffset > 0 ? lastChain : nil)
+                ?? ArchivistFollowUpResolver.Chain.base(for: ast)
             (lastPeople, lastYears) = Self.context(of: ast)
             switch result.route {
             case .presence, .cross, .aggregate:
@@ -53,7 +70,8 @@ extension HallieTurnExecutor {
                     // "one of them" any more.
                     lastResultSet = nil
                 }
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability:
+            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+                 .help, .smalltalk, .reset:
                 break
             }
         }
@@ -70,7 +88,8 @@ extension HallieTurnExecutor {
                 ast: lastResultSet?.ast ?? lastAST,
                 items: items,
                 shownCount: lastResultSet?.shownCount ?? 0,
-                totalMatchCount: lastResultSet?.totalMatchCount ?? 0)
+                totalMatchCount: lastResultSet?.totalMatchCount ?? 0,
+                chain: lastChain)
         }
 
         private static func context(of ast: ArchivistQueryAST) -> ([String], ClosedRange<Int>?) {
@@ -130,16 +149,22 @@ extension HallieTurnExecutor {
         case answer(Result)
     }
 
-    /// Runs the model-free resolvers in order: capability question →
-    /// follow-up on the last answer → nothing. Pure given its inputs.
+    /// Runs the model-free resolvers in order: help / small talk / reset →
+    /// capability question → follow-up on the last answer → nothing. Pure
+    /// given its inputs.
     static func preTranslation(
         question: String,
         playAfterAnswer: Bool,
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool
     ) -> PreTranslation {
+        // Capability first: "how do i change donna's bio" is a capability
+        // question, and only then is "how do i …" a how-to for the help card.
         if let capability = ArchivistCapabilityQuestion.detect(question) {
             return .answer(capabilityResult(capability))
+        }
+        if let command = ArchivistConversationCommand.detect(question) {
+            return .answer(commandResult(command))
         }
         let resolution = ArchivistFollowUpResolver.resolve(
             question, snapshot: memory.followUpSnapshot,
@@ -192,13 +217,15 @@ extension HallieTurnExecutor {
                 citationOffset: last.shownCount,
                 refinementNote: "continuing your last question (items \(last.shownCount + 1) on)"))
 
-        case .refine(let ast, let replaced):
+        case .refine(let ast, let chain, let whatChanged):
             return .run(Intent(
                 originalQuestion: question,
                 ast: ast,
                 playAfterAnswer: playAfterAnswer,
                 citationOffset: 0,
-                refinementNote: "refining your last question (\(replaced.description))"))
+                refinementNote: "refining: \(chain.description)",
+                refinementChain: chain,
+                refinementChange: whatChanged))
 
         case .localQuery(let ast):
             return .run(Intent(
@@ -226,10 +253,23 @@ extension HallieTurnExecutor {
         case .declineNotRefinable(let reason):
             return .answer(followUpDecline(
                 "I can't refine my last answer that way — \(reason). Ask it as a new question and I'll look it up."))
+
+        case .declineUninterpretable(let fragment):
+            return .answer(followUpDecline(
+                "I couldn't tell how “\(fragment)” narrows down my last answer. "
+                + "You can add a person (“with Donna”), a place or topic (“in Westford”, "
+                + "“playing guitar”), or a time (“around 2005”, “in the 90s”) — or say "
+                + "“help” to see what I can do.",
+                offeredActions: [
+                    .ask(question: "help", label: "Show me what I can ask"),
+                    .ask(question: "start over", label: "Start over"),
+                ]))
         }
     }
 
-    private static func followUpDecline(_ prose: String) -> Result {
+    private static func followUpDecline(
+        _ prose: String, offeredActions: [OfferedAction] = []
+    ) -> Result {
         Result(
             route: .followUp,
             outcome: .declined,
@@ -237,7 +277,45 @@ extension HallieTurnExecutor {
             basisLine: "Basis: conversation memory only; no catalog query or media action was performed.",
             queryDescription: nil,
             citations: [],
-            catalogPersonName: nil)
+            catalogPersonName: nil,
+            offeredActions: offeredActions)
+    }
+
+    /// Help card / small talk / reset — deterministic, never a decline.
+    static func commandResult(_ command: ArchivistConversationCommand) -> Result {
+        switch command {
+        case .help:
+            return Result(
+                route: .help,
+                outcome: .answered,
+                prose: ArchivistConversationCommand.helpCard,
+                basisLine: "Basis: help card; no model call, no catalog query.",
+                queryDescription: "help",
+                citations: [],
+                catalogPersonName: nil,
+                offeredActions: ArchivistConversationCommand.helpExamples.map {
+                    .ask(question: $0.question, label: $0.label)
+                })
+        case .smalltalk(let kind):
+            return Result(
+                route: .smalltalk,
+                outcome: .answered,
+                prose: ArchivistConversationCommand.smalltalkReply(kind),
+                basisLine: "Basis: small talk; no model call, no catalog query.",
+                queryDescription: "smalltalk",
+                citations: [],
+                catalogPersonName: nil)
+        case .reset:
+            return Result(
+                route: .reset,
+                outcome: .answered,
+                prose: ArchivistConversationCommand.resetReply,
+                basisLine: "Basis: conversation memory cleared; no model call, no catalog query.",
+                queryDescription: "reset",
+                citations: [],
+                catalogPersonName: nil,
+                offeredActions: [.ask(question: "help", label: "Show me what I can ask")])
+        }
     }
 
     /// The honest capability answer. No model call, no evidence lookup; the

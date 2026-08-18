@@ -388,7 +388,7 @@
           "expectedRoute": "presence",
           "expectedOutcome": "answered",
           "expectedCount": 7,
-          "expectedBasisContains": "refining your last question (years → 1990–1999)",
+          "expectedBasisContains": "refining: donna · 1990–1999",
           "expectedQueryContains": "years=1990...1999"
         },
         {
@@ -401,7 +401,7 @@
             "/Volumes/LaCie/Cape-1993/reel.mov",
             "/Volumes/LaCie/Cape-1994-rick.mov"
           ],
-          "expectedBasisContains": "refining your last question (person → rick)"
+          "expectedBasisContains": "refining: rick · 1990–1999"
         }
       ],
       "evidence": [
@@ -506,6 +506,199 @@
       ],
       "evidence": [
         "family-tree sentences are recognised locally (no model) and reach the same graph executor as the translated form"
+      ]
+    },
+    {
+      "id": "ricks-chain-narrows-cumulatively",
+      "turns": [
+        {
+          "input": "show me rick",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"rick\"]}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 2
+        },
+        {
+          "input": "at the cape",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 2,
+          "expectedProseContains": "Narrowed to Cape — 2 catalog items.",
+          "expectedBasisContains": "refining: rick + cape;",
+          "expectedQueryContains": "keyword=cape"
+        },
+        {
+          "input": "in 1993",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 1,
+          "expectedPaths": [
+            "/Volumes/LaCie/Cape-1993/reel.mov"
+          ],
+          "expectedProseContains": "Narrowed to 1993 — 1 catalog item.",
+          "expectedBasisContains": "refining: rick + cape · 1993;",
+          "expectedQueryContains": "year=1993"
+        },
+        {
+          "input": "with donna",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 1,
+          "expectedPaths": [
+            "/Volumes/LaCie/Cape-1993/reel.mov"
+          ],
+          "expectedProseContains": "Added Donna — 1 catalog item.",
+          "expectedBasisContains": "refining: rick + cape + donna · 1993;",
+          "expectedQueryContains": "person=rick person=donna"
+        },
+        {
+          "input": "what about timmy?",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "Switched to Timmy — nothing matched.",
+          "expectedBasisContains": "refining: cape + timmy · 1993;"
+        },
+        {
+          "input": "show me videos of timmy",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"timmy\"]}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 2
+        },
+        {
+          "input": "start over",
+          "local": true,
+          "expectedRoute": "reset",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "I've cleared what we were talking about",
+          "expectedOfferedActions": [
+            "Show me what I can ask"
+          ]
+        },
+        {
+          "input": "and in 1993",
+          "local": true,
+          "expectedRoute": "follow-up",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "Ask me for something first, then I can refine it."
+        }
+      ],
+      "evidence": [
+        "Rick 2026-08-17: bare fragments refine the previous list question cumulatively (AND); the basis line carries the chain and the answer says what changed with the count; a comparative lead swaps the person; a fully formed question starts fresh; 'start over' clears memory so the next fragment has nothing to refine"
+      ]
+    },
+    {
+      "id": "help-smalltalk-and-reset-never-reach-the-model",
+      "turns": [
+        {
+          "input": "help",
+          "local": true,
+          "expectedRoute": "help",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "show me videos of Donna down the Cape in the 90s",
+          "expectedBasisContains": "help card; no model call",
+          "expectedOfferedActions": [
+            "Try: videos of Donna down the Cape in the 90s",
+            "Try: who is Rick's dad?",
+            "Try: show Donna's family tree"
+          ]
+        },
+        {
+          "input": "?",
+          "local": true,
+          "expectedRoute": "help",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "who is Rick's dad?"
+        },
+        {
+          "input": "What can you do?",
+          "local": true,
+          "expectedRoute": "help",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "start over · help"
+        },
+        {
+          "input": "how do I ask you things?",
+          "local": true,
+          "expectedRoute": "help",
+          "expectedOutcome": "answered"
+        },
+        {
+          "input": "thanks!",
+          "local": true,
+          "expectedRoute": "smalltalk",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "You're very welcome"
+        },
+        {
+          "input": "Good morning Hallie",
+          "local": true,
+          "expectedRoute": "smalltalk",
+          "expectedOutcome": "answered",
+          "expectedProseContains": "Hi! I'm Hallie Mae"
+        },
+        {
+          "input": "hello",
+          "local": true,
+          "expectedRoute": "smalltalk",
+          "expectedOutcome": "answered"
+        },
+        {
+          "input": "start over",
+          "local": true,
+          "expectedRoute": "reset",
+          "expectedOutcome": "answered",
+          "expectedBasisContains": "conversation memory cleared"
+        }
+      ],
+      "evidence": [
+        "help/smalltalk/reset are deterministic whole-message commands answered locally; never a decline, never a model call"
+      ]
+    },
+    {
+      "id": "unreadable-fragment-offers-help",
+      "turns": [
+        {
+          "input": "count how many videos of donna we have?",
+          "modelOutput": "{\"shape\":\"presence\",\"payload\":{\"people\":[\"donna\"],\"mediaKind\":\"video\"}}",
+          "expectedRoute": "presence",
+          "expectedOutcome": "answered",
+          "expectedCount": 8
+        },
+        {
+          "input": "hmm?",
+          "local": true,
+          "expectedRoute": "follow-up",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "I couldn't tell how “hmm” narrows down my last answer.",
+          "expectedOfferedActions": [
+            "Show me what I can ask",
+            "Start over"
+          ]
+        },
+        {
+          "input": "playing guitar",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "Narrowed to Guitar — nothing matched.",
+          "expectedBasisContains": "refining: donna + guitar;"
+        },
+        {
+          "input": "in the 90s",
+          "local": true,
+          "expectedRoute": "presence",
+          "expectedOutcome": "declined",
+          "expectedProseContains": "Narrowed to 1990–1999 — nothing matched.",
+          "expectedBasisContains": "refining: donna + guitar · 1990–1999;"
+        }
+      ],
+      "evidence": [
+        "runaway guard: a filler-only fragment is declined honestly with the help offer; an unmatched topic still keeps the chain (AND) so the next fragment narrows the same question"
       ]
     }
   ]

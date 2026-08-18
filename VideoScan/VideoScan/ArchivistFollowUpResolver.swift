@@ -30,13 +30,16 @@ enum ArchivistFollowUpResolver {
         let shownCount: Int
         /// The exact match count of the last result set.
         let totalMatchCount: Int
+        /// The refinement chain so far (nil = derive from the AST).
+        let chain: Chain?
 
         init(ast: ArchivistQueryAST?, items: [Item], shownCount: Int? = nil,
-             totalMatchCount: Int? = nil) {
+             totalMatchCount: Int? = nil, chain: Chain? = nil) {
             self.ast = ast
             self.items = items
             self.shownCount = shownCount ?? items.count
             self.totalMatchCount = totalMatchCount ?? items.count
+            self.chain = chain
         }
     }
 
@@ -46,20 +49,87 @@ enum ArchivistFollowUpResolver {
         case show
     }
 
-    /// Which AST field a refinement replaced, for the basis line.
-    enum Replaced: Sendable, Equatable {
-        case years(ClosedRange<Int>)
-        case person(String)
-        case keyword(String)
+    /// The cumulative refinement chain the user has stacked onto the base
+    /// question — what the basis line prints ("refining: rick + guitar +
+    /// westford · around 2005"). Terms are people and topic words in the
+    /// order they were said; the year label is whatever the last year phrase
+    /// was ("around 2005", "1990–1999", "as a baby").
+    struct Chain: Sendable, Equatable {
+        var terms: [String]
+        var yearLabel: String?
+
+        init(terms: [String] = [], yearLabel: String? = nil) {
+            self.terms = terms
+            self.yearLabel = yearLabel
+        }
 
         var description: String {
+            var text = terms.joined(separator: " + ")
+            if let yearLabel {
+                text += text.isEmpty ? yearLabel : " · " + yearLabel
+            }
+            return text
+        }
+
+        /// The chain a fresh (translated or local) AST starts with: its
+        /// people, then its topic words, then its years.
+        static func base(for ast: ArchivistQueryAST) -> Chain {
+            func label(_ start: Int?, _ end: Int?) -> String? {
+                guard let lower = start ?? end, let upper = end ?? start else { return nil }
+                return lower == upper ? "\(lower)" : "\(lower)–\(upper)"
+            }
+            switch ast {
+            case .presence(let p):
+                return Chain(terms: (p.people ?? []) + (p.keywords ?? []),
+                             yearLabel: label(p.yearStart, p.yearEnd))
+            case .cross(let p):
+                return Chain(terms: (p.people ?? []) + (p.keywords ?? []) + (p.transcript ?? []),
+                             yearLabel: label(p.yearStart, p.yearEnd))
+            case .event(let p):
+                return Chain(terms: (p.people ?? []) + (p.keywords ?? []),
+                             yearLabel: label(p.yearStart, p.yearEnd))
+            case .temporal(let p):
+                if case .explicitYear(let year) = p.reference {
+                    return Chain(terms: [p.subject], yearLabel: "\(year)")
+                }
+                return Chain(terms: [p.subject])
+            case .aggregate(let p): return Chain(terms: p.anchorPeople)
+            case .graph(let p): return Chain(terms: p.people + (p.surname.map { ["the \($0)s"] } ?? []))
+            }
+        }
+
+        static func capitalized(_ text: String) -> String {
+            text.split(separator: " ")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
+        }
+    }
+
+    /// One edit to the previous AST. Adds are cumulative (AND); replaces
+    /// happen for comparative leads ("what about matt?", "instead of").
+    enum Change: Sendable, Equatable {
+        case years(ClosedRange<Int>, label: String)
+        /// "as a baby": years cleared, keyword kept; the presence executor
+        /// turns it into a birth-year band and cites the source.
+        case ageBand(keyword: String)
+        case addPerson(String)
+        /// "what about matt?" (of: nil → all people) or "matt instead of
+        /// donna" (of: donna → just that one).
+        case replacePerson(String, of: String?)
+        case removePerson(String)
+        case addKeyword(String)
+        case replaceKeyword(String)
+
+        /// Human label for the answer's "what changed" lead.
+        var prose: String {
             switch self {
-            case .years(let range):
-                return range.lowerBound == range.upperBound
-                    ? "year → \(range.lowerBound)"
-                    : "years → \(range.lowerBound)–\(range.upperBound)"
-            case .person(let name): return "person → \(name)"
-            case .keyword(let word): return "keyword → \(word)"
+            case .years(_, let label): return "Narrowed to \(label)"
+            case .ageBand(let keyword): return "Narrowed to \(keyword)"
+            case .addPerson(let name): return "Added \(Chain.capitalized(name))"
+            case .replacePerson(let name, _): return "Switched to \(Chain.capitalized(name))"
+            case .removePerson(let name): return "Dropped \(Chain.capitalized(name))"
+            case .addKeyword(let word): return "Narrowed to \(Chain.capitalized(word))"
+            case .replaceKeyword(let word): return "Switched to \(Chain.capitalized(word))"
             }
         }
     }
@@ -73,8 +143,11 @@ enum ArchivistFollowUpResolver {
         case searchThenPlay(String)
         /// Next page of the same result set.
         case nextPage
-        /// The previous AST with one field replaced.
-        case refine(ArchivistQueryAST, replaced: Replaced)
+        /// The previous AST with the fragment's edits applied cumulatively.
+        /// `chain` is the full chain after this step (for the basis line and
+        /// for the next turn's memory); `whatChanged` is the answer's lead
+        /// ("Narrowed to Westford, around 2005").
+        case refine(ArchivistQueryAST, chain: Chain, whatChanged: String)
         /// A sentence whose shape is unmistakable locally ("show Donna's
         /// family tree"): the AST is built here, no translation needed. Only
         /// used for the family-tree forms; everything else still translates.
@@ -85,6 +158,10 @@ enum ArchivistFollowUpResolver {
         case declineNoMatchingItem(String)
         case declineNothingMore(total: Int)
         case declineNotRefinable(reason: String)
+        /// A short fragment while a list answer is active that could not be
+        /// read as any refinement ("hmm?", "and then"). The client offers the
+        /// help card.
+        case declineUninterpretable(String)
     }
 
     // MARK: - Entry
@@ -417,182 +494,5 @@ enum ArchivistFollowUpResolver {
                 .trimmingCharacters(in: .whitespaces)
         }
         return text
-    }
-
-    // MARK: - Elliptical refinement
-
-    private static let refinementLeads: [String] = [
-        "and what about", "and how about", "what about", "how about",
-        "and", "or", "now", "same for", "same but", "and now", "but",
-        "also", "and also", "ok and", "okay and", "then",
-    ]
-    private static let scopeWords: Set<String> = [
-        "in", "from", "during", "for", "with", "of", "the", "just", "only",
-        "back", "over", "around", "about", "to", "at", "on", "maybe", "say",
-        "instead", "please", "then", "hallie", "same", "again", "but",
-        "one", "ones", "videos", "video", "clips", "clip",
-    ]
-
-    private static func refinementResolution(
-        _ words: [String], snapshot: Snapshot?, isKnownPerson: (String) -> Bool
-    ) -> Resolution? {
-        var residualWords = words
-        var hadLead = false
-        for lead in refinementLeads.sorted(by: { $0.count > $1.count }) {
-            let leadWords = lead.split(separator: " ").map(String.init)
-            if Array(residualWords.prefix(leadWords.count)) == leadWords,
-               residualWords.count > leadWords.count {
-                residualWords = Array(residualWords.dropFirst(leadWords.count))
-                hadLead = true
-                break
-            }
-        }
-        // Without a lead ("and …", "what about …") only a very short scope
-        // phrase counts: "in the 90s?", "1994?", "matt?".
-        guard hadLead || residualWords.count <= 4 else { return nil }
-        let residual = residualWords.filter { !scopeWords.contains($0) }
-        guard !residual.isEmpty, residual.count <= 4 else { return nil }
-        // A sentence with a verb is a question of its own.
-        let verbs: Set<String> = [
-            "show", "play", "find", "who", "what", "when", "where", "how", "is",
-            "was", "are", "were", "do", "does", "did", "can", "could", "tell",
-            "count", "list", "reveal", "open", "get", "give", "search", "watch",
-        ]
-        if !hadLead, residualWords.contains(where: { verbs.contains($0) }) { return nil }
-        if residual.contains(where: { verbs.contains($0) }) { return nil }
-        // "and rick's father?" is a kinship question, not a field swap.
-        if residual.contains(where: { $0.hasSuffix("'s") }) { return nil }
-
-        let replaced: Replaced
-        if let years = yearExpression(residual) {
-            replaced = .years(years)
-        } else {
-            // A name lookup costs identity sources; only pay it when there is
-            // a previous question to refine, and — without a lead — only for
-            // a single bare word ("matt?").
-            guard snapshot?.ast != nil, hadLead || residual.count == 1 else {
-                return hadLead ? .declineNoPriorResult(nil) : nil
-            }
-            let candidate = residual.joined(separator: " ")
-            if isKnownPerson(candidate) {
-                replaced = .person(candidate)
-            } else if hadLead {
-                replaced = .keyword(candidate)
-            } else {
-                // Bare unknown word with no lead — not confidently a refinement.
-                return nil
-            }
-        }
-        guard let snapshot, let ast = snapshot.ast else {
-            return hadLead ? .declineNoPriorResult(nil) : nil
-        }
-        return refine(ast, replaced: replaced)
-    }
-
-    /// Year phrases people actually say: "1994", "1990 to 1995", "the 90s",
-    /// "1990s", "early 90s", "late eighties".
-    static func yearExpression(_ words: [String]) -> ClosedRange<Int>? {
-        let decadeWords: [String: Int] = [
-            "forties": 1940, "fifties": 1950, "sixties": 1960, "seventies": 1970,
-            "eighties": 1980, "nineties": 1990, "aughts": 2000, "twenties": 2020,
-            "40s": 1940, "50s": 1950, "60s": 1960, "70s": 1970, "80s": 1980,
-            "90s": 1990, "00s": 2000, "10s": 2010, "20s": 2020,
-            "1940s": 1940, "1950s": 1950, "1960s": 1960, "1970s": 1970,
-            "1980s": 1980, "1990s": 1990, "2000s": 2000, "2010s": 2010,
-            "2020s": 2020,
-        ]
-        var qualifier: String?
-        var remaining = words
-        if let first = remaining.first, ["early", "mid", "late"].contains(first) {
-            qualifier = first
-            remaining.removeFirst()
-        }
-        if remaining.count == 1, let decade = decadeWords[remaining[0]] {
-            switch qualifier {
-            case "early": return decade...(decade + 3)
-            case "mid": return (decade + 4)...(decade + 6)
-            case "late": return (decade + 7)...(decade + 9)
-            default: return decade...(decade + 9)
-            }
-        }
-        let years = remaining.compactMap { Int($0) }
-        guard qualifier == nil, !years.isEmpty,
-              years.allSatisfy({ ArchivistQueryAST.yearRange.contains($0) })
-        else { return nil }
-        let connectors: Set<String> = ["to", "through", "thru", "until", "till", "and"]
-        let others = remaining.filter { Int($0) == nil }
-        guard others.allSatisfy(connectors.contains) else { return nil }
-        if years.count == 1 { return years[0]...years[0] }
-        if years.count == 2, years[0] <= years[1] { return years[0]...years[1] }
-        return nil
-    }
-
-    static func refine(_ ast: ArchivistQueryAST, replaced: Replaced) -> Resolution {
-        switch (ast, replaced) {
-        case (.presence(var payload), .years(let range)):
-            payload.yearStart = range.lowerBound
-            payload.yearEnd = range.upperBound
-            return .refine(.presence(payload), replaced: replaced)
-        case (.presence(var payload), .person(let name)):
-            payload.people = [name]
-            return .refine(.presence(payload), replaced: replaced)
-        case (.presence(var payload), .keyword(let word)):
-            payload.keywords = [word]
-            return .refine(.presence(payload), replaced: replaced)
-
-        case (.cross(var payload), .years(let range)):
-            payload.yearStart = range.lowerBound
-            payload.yearEnd = range.upperBound
-            return .refine(.cross(payload), replaced: replaced)
-        case (.cross(var payload), .person(let name)):
-            payload.people = [name]
-            return .refine(.cross(payload), replaced: replaced)
-        case (.cross(var payload), .keyword(let word)):
-            payload.keywords = [word]
-            return .refine(.cross(payload), replaced: replaced)
-
-        case (.event(var payload), .years(let range)):
-            payload.yearStart = range.lowerBound
-            payload.yearEnd = range.upperBound
-            return .refine(.event(payload), replaced: replaced)
-        case (.event(var payload), .person(let name)):
-            payload.people = [name]
-            return .refine(.event(payload), replaced: replaced)
-        case (.event(var payload), .keyword(let word)):
-            payload.keywords = [word]
-            return .refine(.event(payload), replaced: replaced)
-
-        case (.graph(var payload), .person(let name)):
-            payload.people = [name]
-            payload.surname = nil
-            return .refine(.graph(payload), replaced: replaced)
-        case (.graph, .years):
-            return .declineNotRefinable(
-                reason: "a family-tree question doesn't take a year")
-        case (.graph, .keyword):
-            return .declineNotRefinable(
-                reason: "a family-tree question doesn't take a topic word")
-
-        case (.temporal(var payload), .person(let name)):
-            payload.subject = name
-            return .refine(.temporal(payload), replaced: replaced)
-        case (.temporal(var payload), .years(let range)):
-            guard range.lowerBound == range.upperBound else {
-                return .declineNotRefinable(
-                    reason: "an age question needs a single year")
-            }
-            payload.reference = .explicitYear(range.lowerBound)
-            return .refine(.temporal(payload), replaced: replaced)
-        case (.temporal, .keyword):
-            return .declineNotRefinable(
-                reason: "an age question doesn't take a topic word")
-
-        case (.aggregate(var payload), .person(let name)):
-            payload.anchorPeople = [name]
-            return .refine(.aggregate(payload), replaced: replaced)
-        case (.aggregate, .years), (.aggregate, .keyword):
-            return .declineNotRefinable(
-                reason: "a who-appears-with question only takes a person")
-        }
     }
 }

@@ -97,7 +97,7 @@ struct HallieAppTurnCoordinatorFollowUpTests {
         let refined = try await execute("and in the 90s?", memory: &memory, calls: calls)
         #expect(refined.result.route == .presence)
         #expect(refined.result.matchCount == 3)
-        #expect(refined.result.basisLine.contains("refining your last question (years → 1990–1999)"))
+        #expect(refined.result.basisLine.contains("refining: donna · 1990–1999"))
         #expect(refined.responderHost == HallieAppTurnCoordinator.localResponder)
         #expect(calls.values.last == "execute:shape=presence offset=0")
         #expect(!calls.values.contains { $0.hasPrefix("translate:and") })

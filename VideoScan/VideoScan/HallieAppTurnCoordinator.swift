@@ -346,7 +346,7 @@ enum HallieAppTurnCoordinator {
             presenceRecords = []
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
-        case .temporal, .graph, .unsupportedEvent, .followUp, .capability:
+        case .temporal, .graph, .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
             presenceRecords = []
             aggregateRecords = []
         }
@@ -380,7 +380,7 @@ enum HallieAppTurnCoordinator {
                     graph = nil
                     cyberBrain = nil
                 }
-            case .unsupportedEvent, .followUp, .capability:
+            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
                 profiles = []
                 graph = nil
                 cyberBrain = nil

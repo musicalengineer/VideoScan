@@ -70,6 +70,12 @@ extension HallieTurnExecutor {
             prose = shown == 0
                 ? "That's all of them — I've already shown all \(total)."
                 : "Here are \(shown) more (items \(offset + 1)–\(offset + shown) of \(total))."
+        } else if let change = request.intent.refinementChange {
+            // A refined turn says what changed and what is left:
+            // "Narrowed to Westford, around 2005 — 3 catalog items."
+            prose = result.conclusion == .present
+                ? "\(change) — \(total) catalog item\(total == 1 ? "" : "s")."
+                : "\(change) — nothing matched. " + ArchivistPresenceAnswerComposer.noEvidenceProse
         }
 
         var basis = answer.basisLine

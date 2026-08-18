@@ -153,13 +153,13 @@ struct HallieConversationMemoryTests {
         #expect(nineties.route == .presence)
         #expect(nineties.matchCount == 20)
         #expect(nineties.basisLine.hasPrefix(
-            "Basis: refining your last question (years → 1990–1999); "))
+            "Basis: refining: donna · 1990–1999; "))
         #expect(nineties.queryDescription == "shape=presence person=donna years=1990...1999")
 
         let rick = try await run("what about rick?", memory: &memory, context: context)
         #expect(rick.matchCount == 2)
         #expect(rick.queryDescription == "shape=presence person=rick years=1990...1999")
-        #expect(rick.basisLine.hasPrefix("Basis: refining your last question (person → rick); "))
+        #expect(rick.basisLine.hasPrefix("Basis: refining: rick · 1990–1999; "))
 
         // The chain continues from the refined AST, not the original.
         let year = try await run("1996?", memory: &memory, context: context)
