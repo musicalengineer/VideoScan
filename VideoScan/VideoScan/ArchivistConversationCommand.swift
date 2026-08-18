@@ -1,0 +1,230 @@
+// ArchivistConversationCommand.swift
+// Deterministic, model-free handling of the three things family members type
+// that are not questions at all (Rick 2026-08-17, "family members will use
+// this"): asking for help ("help", "?", "what can you do"), small talk
+// ("thanks", "hi", "good morning"), and clearing the conversation ("start
+// over", "forget that"). Each is answered locally — never declined, never sent
+// to the translator. Pure: text in, classification out; no I/O.
+
+import Foundation
+
+enum ArchivistConversationCommand: Equatable, Sendable {
+    /// Show the help card.
+    case help
+    /// A one-line friendly reply.
+    case smalltalk(Smalltalk)
+    /// Clear conversation memory.
+    case reset
+
+    enum Smalltalk: Equatable, Sendable {
+        case greeting
+        case thanks
+        case farewell
+        case affirmation
+    }
+
+    // MARK: - Detection
+
+    /// Whole-message forms only. Anything with real content beyond these
+    /// phrases ("thanks, now show me rick") is not a command and falls
+    /// through to the ordinary pipeline.
+    static func detect(_ text: String) -> ArchivistConversationCommand? {
+        let lowered = text.lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lowered.isEmpty else { return nil }
+        // "?" / "??" alone is a request for help.
+        if lowered.allSatisfy({ "?!.".contains($0) }) { return .help }
+
+        // Strip trailing punctuation, then a leading/trailing "hallie" and
+        // politeness so "thanks hallie!" and "hallie, help" both classify.
+        var words = lowered
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+            .map(String.init)
+        let addressedOnly = !words.isEmpty && words.allSatisfy { addressWords.contains($0) }
+        words.removeAll { addressWords.contains($0) }
+        guard !words.isEmpty else {
+            // "hey hallie" / "hallie?" is a greeting; "ok" / "please" alone is
+            // nothing (the follow-up resolver says so honestly).
+            let greeting = addressedOnly
+                && (lowered.contains("hallie") || lowered.hasPrefix("hey"))
+            return greeting ? .smalltalk(.greeting) : nil
+        }
+        let phrase = words.joined(separator: " ")
+
+        if helpPhrases.contains(phrase) { return .help }
+        if resetPhrases.contains(phrase) { return .reset }
+        if let smalltalk = smalltalkPhrases[phrase] { return .smalltalk(smalltalk) }
+
+        // "how do i …" / "how can we …" is a how-to question about Hallie
+        // herself; the help card answers it with worked examples. Capability
+        // questions ("how do i change donna's bio") are classified BEFORE
+        // this by ArchivistCapabilityQuestion, so only genuine how-to reaches
+        // here.
+        for lead in howToLeads where phrase == lead || phrase.hasPrefix(lead + " ") {
+            return .help
+        }
+        // "what can you do", "what can i ask you about", "what do you know
+        // how to do", "what kinds of things can i ask" — any what-can/what-do
+        // sentence about "you"/"i ask" with no family content is help.
+        // Every word must be from the closed help vocabulary, so "what do
+        // you know about donna" (a biography question) never lands here.
+        if words.first == "what", words.count <= 10,
+           words.contains(where: { ["can", "could", "do", "should"].contains($0) }),
+           words.contains(where: { ["you", "ask", "hallie"].contains($0) }),
+           words.allSatisfy({ helpVocabulary.contains($0) }) {
+            return .help
+        }
+        return nil
+    }
+
+    private static let addressWords: Set<String> = [
+        "hallie", "please", "hey", "ok", "okay", "oh", "well",
+    ]
+
+    private static let helpPhrases: Set<String> = [
+        "help", "help me", "i need help", "need help", "some help",
+        "commands", "command list", "list commands", "show commands",
+        "examples", "example", "example questions", "some examples",
+        "show examples", "show me examples", "give me examples",
+        "give me some examples", "show me some examples",
+        "what can you do", "what can you do for me", "what do you do",
+        "what can i ask", "what can i ask you", "what can i ask you about",
+        "what can we ask", "what can we ask you", "what should i ask",
+        "what should i ask you", "what do you know", "what do you know about",
+        "what are you", "who are you", "what is this", "what's this",
+        "how does this work", "how do you work", "how does it work",
+        "how do i use this", "how do i use you", "how do we use this",
+        "how do i talk to you", "how do i ask", "how do i ask you",
+        "how do i ask you things", "how do i ask questions", "how to use",
+        "how to", "instructions", "usage", "menu", "options", "tips",
+        "what now", "what next", "im lost", "i'm lost", "i am lost",
+        "i don't know what to ask", "i dont know what to ask",
+        "not sure what to ask", "what kind of questions can i ask",
+        "what kinds of questions can i ask", "what questions can i ask",
+        "what can you help with", "what can you help me with",
+        "can you help me", "can you help", "help please",
+    ]
+
+    private static let howToLeads: [String] = [
+        "how do i", "how do we", "how can i", "how can we", "how would i",
+        "how should i", "how do you", "how to",
+    ]
+
+    private static let helpVocabulary: Set<String> = [
+        "what", "can", "could", "do", "does", "should", "you", "i", "we", "ask",
+        "hallie", "know", "help", "questions", "question", "things", "thing",
+        "kind", "kinds", "sort", "sorts", "type", "types", "of", "for", "with",
+        "about", "me", "us", "the", "to", "say", "are", "is", "able", "possible",
+        "stuff", "all", "anything", "else", "here", "this", "tell", "find",
+        "out", "exactly", "actually", "even", "answer", "handle", "understand",
+        "good", "at", "your", "job", "purpose",
+    ]
+
+    private static let resetPhrases: Set<String> = [
+        "start over", "start again", "start fresh", "start a new question",
+        "new question", "a new question", "new topic", "new search",
+        "forget that", "forget it", "forget all that", "forget about that",
+        "forget the last one", "forget what i said", "reset", "reset that",
+        "clear", "clear that", "clear it", "clear all", "clear everything",
+        "clear the conversation", "clear memory", "never mind", "nevermind",
+        "never mind that", "nevermind that", "scratch that", "scrap that",
+        "drop that", "let's start over", "lets start over", "from the top",
+        "begin again", "fresh start", "restart", "start clean",
+    ]
+
+    private static let smalltalkPhrases: [String: Smalltalk] = [
+        // Greetings
+        "hi": .greeting, "hello": .greeting, "hiya": .greeting, "hi there": .greeting,
+        "hello there": .greeting, "howdy": .greeting, "good morning": .greeting,
+        "good afternoon": .greeting, "good evening": .greeting, "morning": .greeting,
+        "afternoon": .greeting, "evening": .greeting, "yo": .greeting,
+        "how are you": .greeting, "how are you doing": .greeting,
+        "how are you today": .greeting, "hows it going": .greeting,
+        "how's it going": .greeting, "hi hallie": .greeting, "are you there": .greeting,
+        "you there": .greeting, "anyone there": .greeting, "hello hallie": .greeting,
+        // Thanks
+        "thanks": .thanks, "thank you": .thanks, "thank you very much": .thanks,
+        "thanks very much": .thanks, "thanks so much": .thanks, "thanks a lot": .thanks,
+        "thank you so much": .thanks, "many thanks": .thanks, "thanks a bunch": .thanks,
+        "thanks a million": .thanks, "thank u": .thanks, "thx": .thanks, "ty": .thanks,
+        "cheers": .thanks, "much appreciated": .thanks, "appreciate it": .thanks,
+        "i appreciate it": .thanks, "thanks that's great": .thanks,
+        "thanks thats great": .thanks, "great thanks": .thanks, "perfect thanks": .thanks,
+        "great thank you": .thanks, "perfect thank you": .thanks, "wonderful thanks": .thanks,
+        "awesome thanks": .thanks, "nice thanks": .thanks, "cool thanks": .thanks,
+        // Farewells
+        "bye": .farewell, "goodbye": .farewell, "bye bye": .farewell,
+        "good night": .farewell, "goodnight": .farewell, "night": .farewell,
+        "see you": .farewell, "see you later": .farewell, "later": .farewell,
+        "talk later": .farewell, "talk to you later": .farewell, "gotta go": .farewell,
+        "that's all": .farewell, "thats all": .farewell, "that's all for now": .farewell,
+        "thats all for now": .farewell, "all done": .farewell, "done": .farewell,
+        "im done": .farewell, "i'm done": .farewell, "that's it": .farewell,
+        "thats it": .farewell, "that's it for now": .farewell, "thats it for now": .farewell,
+        // Affirmations that need no action
+        "great": .affirmation, "perfect": .affirmation, "wonderful": .affirmation,
+        "awesome": .affirmation, "nice": .affirmation, "cool": .affirmation,
+        "lovely": .affirmation, "excellent": .affirmation, "good": .affirmation,
+        "very good": .affirmation, "good job": .affirmation, "well done": .affirmation,
+        "nice work": .affirmation, "good work": .affirmation, "you're the best": .affirmation,
+        "youre the best": .affirmation, "love it": .affirmation, "i love it": .affirmation,
+        "yay": .affirmation, "wow": .affirmation, "neat": .affirmation, "sweet": .affirmation,
+        "fantastic": .affirmation, "amazing": .affirmation, "brilliant": .affirmation,
+    ]
+
+    // MARK: - Replies
+
+    /// The help card: a short intro and example questions in family language,
+    /// grouped by kind. Plain text with line breaks; renders as one bubble.
+    static let helpCard: String = """
+        Hi — I'm Hallie Mae, the family archivist. I answer from the video catalog and \
+        the family tree, and I always show my evidence. Here's the kind of thing you can ask:
+
+        Videos
+        • show me videos of Donna down the Cape in the 90s
+        • Christmas videos from 2006
+        • show Timmy as a baby saying peekaboo
+        • how many videos of Matt do we have?
+
+        Family
+        • who is Rick's dad?
+        • who was Donna's great grandmother on her maternal side?
+        • show Donna's family tree
+        • tell me about Thankful Pratt
+
+        Follow-ups (after an answer)
+        • play the first one · show more · reveal that one · show it in the catalog
+        • narrow it down a step at a time: “playing guitar” · “in Westford” · “around 2005” · “with Donna”
+        • and in the 90s? · what about Matt?
+
+        Housekeeping
+        • start over · help
+        """
+
+    /// Three example questions offered as clickable chips under the card.
+    static let helpExamples: [(question: String, label: String)] = [
+        ("show me videos of Donna down the Cape in the 90s",
+         "Try: videos of Donna down the Cape in the 90s"),
+        ("who is Rick's dad?", "Try: who is Rick's dad?"),
+        ("show Donna's family tree", "Try: show Donna's family tree"),
+    ]
+
+    static func smalltalkReply(_ kind: Smalltalk) -> String {
+        switch kind {
+        case .greeting:
+            return "Hi! I'm Hallie Mae, the family archivist. Ask me about the family "
+                + "videos or the family tree — or say “help” for some examples."
+        case .thanks:
+            return "You're very welcome — ask me anything about the family videos "
+                + "whenever you like."
+        case .farewell:
+            return "Bye for now — I'll be right here when you want to look through more."
+        case .affirmation:
+            return "Glad that helped! Ask me another one whenever you're ready."
+        }
+    }
+
+    static let resetReply =
+        "Okay — I've cleared what we were talking about. Ask me anything."
+}

@@ -100,7 +100,7 @@ struct HallieShellCLIFollowUpTests {
 
         // "show more" paged; "and in the 90s?" refined without the model.
         #expect(harness.output.contains("Here are 5 more (items 26–30 of 30)."))
-        #expect(harness.output.contains { $0.contains("refining your last question (years → 1990–1999)") })
+        #expect(harness.output.contains { $0.contains("refining: donna · 1990–1999") })
         #expect(harness.output.contains("interpreted: shape=presence (local)"))
 
         // Capability question answered locally with an offer line.

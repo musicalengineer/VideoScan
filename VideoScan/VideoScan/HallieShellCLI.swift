@@ -32,6 +32,7 @@ enum HallieShellCLI {
         case presence, temporal, aggregate, graph, cross
         case unsupportedEvent
         case followUp, capability
+        case help, smalltalk, reset
     }
 
     enum MediaAction: Equatable {
@@ -309,6 +310,9 @@ enum HallieShellCLI {
         case .unsupportedEvent: return .unsupportedEvent
         case .followUp: return .followUp
         case .capability: return .capability
+        case .help: return .help
+        case .smalltalk: return .smalltalk
+        case .reset: return .reset
         }
     }
 
@@ -438,6 +442,8 @@ enum HallieShellCLI {
             switch pre {
             case .answer(let result):
                 state.lastResponder = "local"
+                // "start over" clears memory; other local answers leave it.
+                state.memory.record(intent: nil, result: result)
                 output("interpreted: \(HallieTurnExecutor.label(result.route))")
                 render(result, ast: nil, context: identity, state: &state,
                        output: output)
@@ -481,7 +487,7 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability:
+            case .temporal, .graph, .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
                 break
             }
 
