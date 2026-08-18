@@ -190,6 +190,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         Family
         • who is Rick's dad?
         • who was Donna's great grandmother on her maternal side?
+        • how am I related to you? · how is Donna related to Thankful Pratt?
         • show Donna's family tree
         • tell me about Thankful Pratt
 

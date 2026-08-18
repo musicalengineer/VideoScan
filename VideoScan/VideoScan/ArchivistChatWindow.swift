@@ -208,6 +208,15 @@ struct ArchivistChatWindow: View {
     /// Rick 2026-08-18: slow cycle through Hallie Mae's four angle stills
     /// when they sit beside the portrait; ON prefers them over video loops.
     @AppStorage("archivist.cycleAngles") private var cycleAngles = true
+    /// Who "I" is when someone asks "how am I related to you?" — the person
+    /// using the app (Rick 2026-08-18; the pronoun binding lives in
+    /// HallieSpeakerBinding). "You" is the archivist herself; if her display
+    /// name isn't how the family tree spells her, `archivist.personName`
+    /// pins the tree spelling. Keys shared with
+    /// `HallieTurnExecutor.Speakers.fromDefaults()`.
+    @AppStorage("archivist.ownerPersonName") private var ownerPersonName = "Rick Breen"
+    @AppStorage("archivist.personName") private var archivistPersonName = ""
+    @State private var showSpeakerSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -270,6 +279,12 @@ struct ArchivistChatWindow: View {
         }
         .frame(minWidth: 480, idealWidth: 540, minHeight: 480, idealHeight: 680)
         .background(ArchivistWindowConfigurator())
+        .sheet(isPresented: $showSpeakerSettings) {
+            ArchivistSpeakerSettingsSheet(
+                ownerPersonName: $ownerPersonName,
+                archivistPersonName: $archivistPersonName,
+                archivistName: archivistName)
+        }
         .onAppear {
             inputFocused = true
             // A pre-avatar launch may have persisted the placeholder —
@@ -446,6 +461,11 @@ struct ArchivistChatWindow: View {
                 // Rick 2026-08-18: prefer the slow walk through her angle
                 // stills even when video loops sit beside the portrait.
                 Toggle("Cycle through her angles", isOn: $cycleAngles)
+                Divider()
+                // "how am I related to you?" needs to know who "I" is.
+                Button("Who is talking to her… (\(ownerPersonName.isEmpty ? "not set" : ownerPersonName))") {
+                    showSpeakerSettings = true
+                }
                 Divider()
                 Button("Choose a photo or GIF…", action: choosePhoto)
             }

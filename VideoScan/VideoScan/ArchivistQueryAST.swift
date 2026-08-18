@@ -11,6 +11,8 @@ import Foundation
 ///       "transcript":["birthday"]}}
 ///     {"shape":"graph","payload":{"people":["Ellen"],
 ///       "operation":"biography"}}
+///     {"shape":"graph","payload":{"people":["me","you"],
+///       "operation":"relationship"}}
 ///     {"shape":"cross","payload":{"people":["Dan"],
 ///       "keywords":["red bike"],"transcript":["opens"]}}
 ///
@@ -220,6 +222,13 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
             /// "show Donna's family tree" — a neighbourhood summary (person)
             /// or a surname roll-up, plus an offer to open the Family Tree tab.
             case familyTree
+            /// "how am I related to you?" / "how is Donna related to Thankful
+            /// Pratt?" — the SYMMETRIC question: `people` is exactly the two
+            /// names (pronouns allowed; the executor binds "I"/"you"), no
+            /// `relation`. Added 2026-08-18 after Hallie's log showed the
+            /// translator forcing this into one-directional kinship with a
+            /// made-up relation ("sel…") that the strict decoder rejected.
+            case relationship
         }
 
         /// Closed kinship vocabulary. One-hop relations are the original
@@ -268,7 +277,8 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
             case maternal, paternal
         }
 
-        /// Empty only for `familyTree` (surname or whole-tree forms).
+        /// Empty only for `familyTree` (surname or whole-tree forms);
+        /// exactly two for `relationship`.
         var people: [String]
         var operation: Operation
         var relation: Relation?
@@ -307,6 +317,12 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
                     debugDescription: "surname must not be empty")
             }
 
+            if operation == .relationship, people.count != 2 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .people, in: c,
+                    debugDescription: "relationship requires exactly two people "
+                        + "(got \(people.count))")
+            }
             if operation == .kinship {
                 guard relation != nil else {
                     throw DecodingError.dataCorruptedError(
@@ -544,6 +560,14 @@ private extension KeyedDecodingContainer {
 ///   * List quirks are normalized: entries are trimmed, empty entries and
 ///     stopword-only people/keywords ("videos", "the") are dropped. A
 ///     required list that ends up empty is still rejected downstream.
+///     Speaker pronouns in `people` ("me", "you", "myself") are KEPT even
+///     though they are stopwords for keyword search — the executor binds
+///     them to the owner / the archivist (2026-08-18).
+///   * A graph `kinship` whose relation is a "how are we related" word
+///     ("self", "related", "relationship", …) is rewritten to the
+///     `relationship` operation and the relation dropped; the strict decoder
+///     then still requires exactly two people, so a one-name payload fails
+///     with a clear message rather than a guessed second party.
 ///   * A temporal `reference` written in the model's shorthand —
 ///     `{"explicitYear":1998}`, `{"currentSelection":true}`,
 ///     `"currentSelection"`, or a bare year — is rewritten to the contract's
@@ -647,7 +671,54 @@ extension ArchivistQueryAST {
                 notes.append("rewrote payload.operation '\(operation)' to \(known.rawValue)")
             }
         }
-        if let relation = payload["relation"] as? String,
+        // "how am I related to you" → kinship + relation "self"/"related"
+        // (seen live from qwen3.6, 2026-08-18: `"relation":"sel…"`). The
+        // meaning is the symmetric relationship operation; only the spelling
+        // is wrong. Rewrite the operation, drop the pseudo-relation.
+        if result["operation"] as? String == "kinship",
+           let relation = payload["relation"] as? String {
+            let key = relation.lowercased()
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .trimmingCharacters(in: .whitespaces)
+            let relationshipWords: Set<String> = [
+                "self", "related", "relation", "relationship", "relative",
+                "related to", "relatedto", "how related", "connection",
+                "connected", "kin", "kinship", "any", "unknown",
+            ]
+            if relationshipWords.contains(key) {
+                result["operation"] = "relationship"
+                result["relation"] = nil
+                notes.append("rewrote kinship relation '\(relation)' to the relationship operation")
+            }
+        }
+        if let operation = payload["operation"] as? String,
+           Graph.Operation(rawValue: operation) == nil,
+           ["relationship", "related", "relation", "howrelated", "relatedto",
+            "connection", "kin"].contains(
+                operation.lowercased()
+                    .replacingOccurrences(of: "_", with: "")
+                    .replacingOccurrences(of: "-", with: "")
+                    .replacingOccurrences(of: " ", with: "")),
+           result["operation"] as? String != "relationship" {
+            result["operation"] = "relationship"
+            result["relation"] = nil
+            notes.append("rewrote payload.operation '\(operation)' to relationship")
+        }
+        if result["operation"] as? String == "relationship",
+           let people = result["people"] as? [String], people.count == 1,
+           people[0].lowercased().hasPrefix("me and ") || people[0].lowercased().hasPrefix("me & ") {
+            // "me and you" packed into ONE entry — split, never invent.
+            let parts = people[0].components(separatedBy: " and ")
+                .flatMap { $0.components(separatedBy: " & ") }
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if parts.count == 2 {
+                result["people"] = parts
+                notes.append("split payload.people '\(people[0])' into two entries")
+            }
+        }
+        if let relation = result["relation"] as? String,
            Graph.Relation(rawValue: relation) == nil {
             var canonical: String?
             var impliedSide: String?
@@ -794,6 +865,17 @@ extension ArchivistQueryAST {
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if value.isEmpty {
                 notes.append("dropped empty entry in \(path)\(field)")
+                continue
+            }
+            if field == "people", HallieTurnExecutor.isSpeakerPronoun(value) {
+                // "you"/"me" are stopwords for keyword search but PEOPLE
+                // here: the executor binds them (2026-08-18 log evidence:
+                // people:["you"]). Kept verbatim.
+                if kept.contains(value) {
+                    notes.append("dropped duplicate \(field) entry '\(value)'")
+                    continue
+                }
+                kept.append(value)
                 continue
             }
             if field == "keywords" || field == "people" || field == "anchorPeople",

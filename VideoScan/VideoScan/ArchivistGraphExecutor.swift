@@ -74,6 +74,16 @@ struct ArchivistGraphAmbiguityCandidate: Sendable, Equatable {
 struct ArchivistGraphQuery: Sendable, Equatable {
     enum Operation: String, Sendable, Equatable {
         case biography, birth, death, kinship, familyTree
+        /// "how is A related to B" — `people` is exactly two (2026-08-18).
+        case relationship
+    }
+
+    /// Who a people-list slot is in Hallie's voice, when the caller bound a
+    /// pronoun: the owner is "you"/"your", the archivist herself is "I"/"my".
+    /// Presentation only — identity still resolves through the same path.
+    enum Voice: String, Sendable, Equatable {
+        case owner
+        case archivist
     }
 
     /// Mirrors the wire vocabulary by raw value. One-hop relations answer
@@ -126,22 +136,26 @@ struct ArchivistGraphQuery: Sendable, Equatable {
     let relation: Relation?
     let side: Side?
     let surname: String?
+    /// People-list index → voice, for slots that were bound pronouns.
+    let voices: [Int: Voice]
 
     init(
         people: [String],
         operation: Operation,
         relation: Relation? = nil,
         side: Side? = nil,
-        surname: String? = nil
+        surname: String? = nil,
+        voices: [Int: Voice] = [:]
     ) {
         self.people = people
         self.operation = operation
         self.relation = relation
         self.side = side
         self.surname = surname
+        self.voices = voices
     }
 
-    init(_ payload: ArchivistQueryAST.Graph) {
+    init(_ payload: ArchivistQueryAST.Graph, voices: [Int: Voice] = [:]) {
         people = payload.people
         switch payload.operation {
         case .biography: operation = .biography
@@ -149,7 +163,9 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         case .death: operation = .death
         case .kinship: operation = .kinship
         case .familyTree: operation = .familyTree
+        case .relationship: operation = .relationship
         }
+        self.voices = voices
         // Raw values are the shared closed vocabulary; a wire relation that
         // has no executor twin becomes nil and fails closed as "missing".
         relation = payload.relation.flatMap { Relation(rawValue: $0.rawValue) }
@@ -219,6 +235,9 @@ struct ArchivistGraphEvidence: Sendable, Equatable {
     let relationships: [Relationship]
     let identityBridge: IdentityBridge?
     let kinshipPaths: [KinshipPath]
+    /// The second person of a `relationship` answer (B), also when no path
+    /// was found — so offered actions can still name both people.
+    let counterpart: RelatedPerson?
 
     init(
         subjectID: String,
@@ -227,7 +246,8 @@ struct ArchivistGraphEvidence: Sendable, Equatable {
         deathDate: String?,
         relationships: [Relationship],
         identityBridge: IdentityBridge?,
-        kinshipPaths: [KinshipPath] = []
+        kinshipPaths: [KinshipPath] = [],
+        counterpart: RelatedPerson? = nil
     ) {
         self.subjectID = subjectID
         self.subjectName = subjectName
@@ -236,6 +256,7 @@ struct ArchivistGraphEvidence: Sendable, Equatable {
         self.relationships = relationships
         self.identityBridge = identityBridge
         self.kinshipPaths = kinshipPaths
+        self.counterpart = counterpart
     }
 }
 
@@ -249,6 +270,9 @@ struct ArchivistGraphResult: Sendable, Equatable {
     let ambiguityCandidates: [ArchivistGraphAmbiguityCandidate]
     let catalogPersonName: String?
     let familyTreeFocus: ArchivistFamilyTreeFocus?
+    /// For a two-person `relationship` query: which people-list slot the
+    /// ambiguity / not-found conclusion is about (0 or 1). Nil otherwise.
+    let subjectIndex: Int?
 
     init(
         conclusion: ArchivistGraphConclusion,
@@ -259,7 +283,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         profileCandidates: [String],
         ambiguityCandidates: [ArchivistGraphAmbiguityCandidate],
         catalogPersonName: String?,
-        familyTreeFocus: ArchivistFamilyTreeFocus? = nil
+        familyTreeFocus: ArchivistFamilyTreeFocus? = nil,
+        subjectIndex: Int? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -270,6 +295,18 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.ambiguityCandidates = ambiguityCandidates
         self.catalogPersonName = catalogPersonName
         self.familyTreeFocus = familyTreeFocus
+        self.subjectIndex = subjectIndex
+    }
+
+    /// The same result tagged with the people-list slot it concerns.
+    func taggingSubject(_ index: Int) -> ArchivistGraphResult {
+        ArchivistGraphResult(
+            conclusion: conclusion, prose: prose, basisLine: basisLine,
+            evidence: evidence, candidates: candidates,
+            profileCandidates: profileCandidates,
+            ambiguityCandidates: ambiguityCandidates,
+            catalogPersonName: catalogPersonName,
+            familyTreeFocus: familyTreeFocus, subjectIndex: index)
     }
 }
 
@@ -280,7 +317,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
 /// per-person output, so anything except one subject fails closed (the
 /// `familyTree` surname / whole-tree forms are the one defined exception).
 enum ArchivistGraphExecutor {
-    private static let queryValidationBasis =
+    static let queryValidationBasis =
         "Checked: graph-query validation only; no family source was consulted."
 
     static func execute(
@@ -300,6 +337,13 @@ enum ArchivistGraphExecutor {
                 return declineUnexpectedRelation()
             }
             return executeFamilyTreeWithoutPerson(query, graph: inputs.graph)
+        }
+        if query.operation == .relationship {
+            // Two people; a single selection floats to whichever of them
+            // turns out ambiguous (see executeRelationship).
+            return executeRelationship(
+                query, inputs: inputs, subjects: [.unresolved, .unresolved],
+                floatingSelection: selection)
         }
         guard query.people.count == 1 else {
             return decline(
@@ -327,12 +371,41 @@ enum ArchivistGraphExecutor {
             return declineUnexpectedRelation()
         }
 
+        switch resolveSubject(typedName, selection: selection,
+                              inputs: inputs, query: query) {
+        case .result(let result):
+            return result
+        case .person(let person, let bridge):
+            return executeResolved(
+                query, person: person, graph: inputs.graph,
+                identityBridge: bridge)
+        }
+    }
+
+    /// Outcome of resolving ONE typed name: the unique GEDCOM person (with
+    /// the profile bridge, if any), or the complete result to return as-is
+    /// (ambiguity chips, not-found, profile conflict, surname roll-up).
+    enum SubjectResolution {
+        case person(GedcomFamilyGraph.Person,
+                    identityBridge: ArchivistGraphEvidence.IdentityBridge?)
+        case result(ArchivistGraphResult)
+    }
+
+    /// Identity resolution shared by every graph operation, including the
+    /// two-person `relationship` (which calls it once per slot). Same
+    /// specificity rules as before; nothing about the answer is decided here.
+    static func resolveSubject(
+        _ typedName: String,
+        selection: ArchivistGraphSubjectSelection,
+        inputs: ArchivistGraphInputs,
+        query: ArchivistGraphQuery
+    ) -> SubjectResolution {
         switch resolve(typedName, selection: selection, inputs: inputs) {
         case .profileAmbiguous(let profiles):
             let nameCounts = Dictionary(grouping: profiles) {
                 normalize($0.canonicalName)
             }.mapValues { $0.count }
-            return ArchivistGraphResult(
+            return .result(ArchivistGraphResult(
                 conclusion: .profileAmbiguous,
                 prose: "Which \(typedName) do you mean?",
                 basisLine: "Checked: People profiles.",
@@ -350,13 +423,13 @@ enum ArchivistGraphExecutor {
                             ? "\(profile.canonicalName) (\(profile.stableID))"
                             : profile.canonicalName)
                 },
-                catalogPersonName: nil)
+                catalogPersonName: nil))
 
         case .profileConflict(let stableID):
-            return decline(
+            return .result(decline(
                 .conflictingProfileStableID(stableID),
                 prose: "The People profiles contain conflicting definitions for one identity.",
-                basis: "Checked: People profiles; the family tree was not consulted.")
+                basis: "Checked: People profiles; the family tree was not consulted."))
 
         case .people(let people, let profileRoute):
             guard people.count == 1 else {
@@ -365,20 +438,18 @@ enum ArchivistGraphExecutor {
                 if query.operation == .familyTree, people.isEmpty,
                    let summary = ArchivistFamilyTreePolicy.summary(
                        surname: typedName, in: inputs.graph) {
-                    return familyTreeSurnameResult(summary)
+                    return .result(familyTreeSurnameResult(summary))
                 }
                 let answer = policyUnresolved(
                     typedName: typedName, candidates: people,
                     query: query, graph: inputs.graph)
-                return fromPolicy(
+                return .result(fromPolicy(
                     answer, evidence: nil, identityBridge: nil,
-                    unresolvedProfileRoute: profileRoute)
+                    unresolvedProfileRoute: profileRoute))
             }
             let bridge = identityBridge(
                 profileRoute, effectivePerson: people[0])
-            return executeResolved(
-                query, person: people[0], graph: inputs.graph,
-                identityBridge: bridge)
+            return .person(people[0], identityBridge: bridge)
         }
     }
 
@@ -577,6 +648,14 @@ enum ArchivistGraphExecutor {
                 identityBridge: identityBridge,
                 unresolvedProfileRoute: nil)
 
+        case .relationship:
+            // Two-person operation; dispatched before single-subject
+            // resolution. Reaching here means a caller misrouted it.
+            return decline(
+                .unsupportedPeopleCount(1),
+                prose: "A relationship question needs two people.",
+                basis: queryValidationBasis)
+
         case .kinship:
             guard let relation = query.relation else {
                 return decline(
@@ -621,7 +700,7 @@ enum ArchivistGraphExecutor {
             return ArchivistBiographyPolicy.lifeDate(
                 for: typedName, birth: false,
                 candidates: candidates, in: graph)
-        case .biography, .kinship, .familyTree:
+        case .biography, .kinship, .familyTree, .relationship:
             // BiographyPolicy owns the canonical fail-closed not-found and
             // ambiguity wording; no relationship is evaluated until unique.
             return ArchivistBiographyPolicy.biography(
@@ -787,7 +866,7 @@ enum ArchivistGraphExecutor {
             effectiveGEDCOMName: effectivePerson.name)
     }
 
-    private static func decline(
+    static func decline(
         _ conclusion: ArchivistGraphConclusion,
         prose: String,
         basis: String

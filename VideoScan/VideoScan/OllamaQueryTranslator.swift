@@ -464,6 +464,8 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             astGraphOperation("birth"),
             astGraphOperation("death"),
             astGraphOperation("kinship", includeRelation: true),
+            // "how am I related to you?": exactly two people, no relation.
+            astGraphOperation("relationship", minPeople: 2, maxPeople: 2),
             astGraphFamilyTree,
         ],
     ]
@@ -506,12 +508,14 @@ struct OllamaQueryTranslator: NLQueryTranslating {
 
     private static func astGraphOperation(
         _ operation: String,
-        includeRelation: Bool = false
+        includeRelation: Bool = false,
+        minPeople: Int = 1,
+        maxPeople: Int = ArchivistQueryAST.maxListItems
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "people": [
-                "type": "array", "minItems": 1,
-                "maxItems": ArchivistQueryAST.maxListItems,
+                "type": "array", "minItems": minPeople,
+                "maxItems": maxPeople,
                 "items": ["type": "string", "minLength": 1],
             ],
             "operation": ["type": "string", "enum": [operation]],
@@ -563,15 +567,19 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     otherwise omit it.
     - event: what happened at an event; put visible/event terms in keywords \
     and explicitly spoken terms in transcript.
-    - graph: biography, birth, death, kinship, or familyTree about named \
-    people. relation is required only for kinship and must use a schema \
-    value; multi-hop relations exist (grandmother, great-grandmother, \
-    great-great-grandfather, aunt, uncle, cousin, niece, nephew, \
-    mother-in-law, ...). Add side "maternal" or "paternal" only when the user \
-    says which side ("on her mother's side" -> maternal). familyTree is for \
-    "show X's family tree / ancestry / lineage": people for one person, \
-    surname for a family ("the Breens" -> surname "breen"), neither for the \
-    whole tree.
+    - graph: biography, birth, death, kinship, relationship, or familyTree \
+    about named people. relation is required only for kinship and must use \
+    a schema value; multi-hop relations exist (grandmother, \
+    great-grandmother, great-great-grandfather, aunt, uncle, cousin, niece, \
+    nephew, mother-in-law, ...). Add side "maternal" or "paternal" only when \
+    the user says which side ("on her mother's side" -> maternal). \
+    relationship is "how is A related to B" / "what is A to B": people is \
+    exactly the two names in the user's order and there is NO relation \
+    field. Pronouns are people: keep "me" (I/my/myself) and "you" (your/ \
+    yourself/the archivist's own name) verbatim in people; never replace \
+    them with a name. familyTree is for "show X's family tree / ancestry / \
+    lineage": people for one person, surname for a family ("the Breens" -> \
+    surname "breen"), neither for the whole tree.
     - cross: a person plus visible/action/object or spoken-text search. \
     Spoken words go in transcript, visible things in keywords. Age phrases \
     such as "as a baby", "as a kid", "as a teenager" go in keywords verbatim; \
@@ -601,6 +609,14 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"graph","payload":{"people":["donna"],"operation":"kinship","relation":"great-grandmother","side":"maternal"}}
     "who are Rick's cousins?" -> \
     {"shape":"graph","payload":{"people":["rick"],"operation":"kinship","relation":"cousins"}}
+    "who is my father?" -> \
+    {"shape":"graph","payload":{"people":["me"],"operation":"kinship","relation":"father"}}
+    "how am I related to you?" -> \
+    {"shape":"graph","payload":{"people":["me","you"],"operation":"relationship"}}
+    "how is Donna related to Thankful Pratt?" -> \
+    {"shape":"graph","payload":{"people":["donna","thankful pratt"],"operation":"relationship"}}
+    "what's Timmy to Hallie Mae?" -> \
+    {"shape":"graph","payload":{"people":["timmy","hallie mae"],"operation":"relationship"}}
     "show Donna's family tree" -> \
     {"shape":"graph","payload":{"people":["donna"],"operation":"familyTree"}}
     "get me the family tree for the Breens" -> \

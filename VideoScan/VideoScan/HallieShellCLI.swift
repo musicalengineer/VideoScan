@@ -507,7 +507,8 @@ enum HallieShellCLI {
                 profiles: profiles,
                 graph: state.graph,
                 cyberBrain: state.cyberBrain,
-                selectedTemporalDate: selectedDate)
+                selectedTemporalDate: selectedDate,
+                speakers: HallieTurnExecutor.Speakers.fromDefaults())
             let request = HallieTurnExecutor.Request(intent: intent)
             let result = try await dependencies.executeRequest(request, context)
             state.memory.record(intent: intent, result: result)

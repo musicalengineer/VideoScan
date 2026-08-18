@@ -54,6 +54,9 @@ enum HallieAppTurnCoordinator {
         let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
         let loadCyberBrain: @Sendable () -> CyberBrainIndex?
+        /// Who "I" and "you" are (2026-08-18): the owner's name and the
+        /// archivist's name from the `archivist.*` settings.
+        let loadSpeakers: @Sendable () -> HallieTurnExecutor.Speakers
         let executeRequest: @Sendable (
             HallieTurnExecutor.Request, HallieTurnExecutor.Context
         ) async throws -> HallieTurnExecutor.Result
@@ -70,6 +73,9 @@ enum HallieAppTurnCoordinator {
             loadProfiles: @escaping @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?,
             loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
+            loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
+                HallieTurnExecutor.Speakers.fromDefaults()
+            },
             executeRequest: @escaping @Sendable (
                 HallieTurnExecutor.Request, HallieTurnExecutor.Context
             ) async throws -> HallieTurnExecutor.Result,
@@ -85,6 +91,7 @@ enum HallieAppTurnCoordinator {
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
+            self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
             self.continueTurn = continueTurn
             self.resolveBiographyPhoto = resolveBiographyPhoto
@@ -391,7 +398,8 @@ enum HallieAppTurnCoordinator {
                 profiles: profiles,
                 graph: graph,
                 cyberBrain: cyberBrain,
-                selectedTemporalDate: selectedDate)
+                selectedTemporalDate: selectedDate,
+                speakers: route == .graph ? dependencies.loadSpeakers() : .none)
             try Task.checkCancellation()
             return context
         }

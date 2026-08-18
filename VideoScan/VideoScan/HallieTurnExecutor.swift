@@ -75,7 +75,7 @@ enum HallieTurnExecutor {
         case gedcomPerson
         case cyberBrainPerson
 
-        fileprivate func accepts(_ source: IdentitySource) -> Bool {
+        func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
             case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
                  (.cyberBrainPerson, .cyberBrain):
@@ -104,6 +104,15 @@ enum HallieTurnExecutor {
         /// The answer's lead for a refined turn ("Narrowed to Westford,
         /// around 2005"); the executor appends the count.
         let refinementChange: String?
+        /// How "I"/"you" in a graph people list were bound for this turn
+        /// (owner / archivist). Set once, before identity resolution, and
+        /// carried through clarifications so a chip never re-reads a
+        /// pronoun differently. Echoed in the basis line.
+        let speakerBindings: [SpeakerBinding]
+        /// For a two-person `relationship` question whose FIRST slot was
+        /// already disambiguated by a chip: slot index → chosen identity,
+        /// so the second slot's clarification does not lose it.
+        let pinnedGraphSubjects: [Int: CandidateID]
 
         init(
             originalQuestion: String,
@@ -112,7 +121,9 @@ enum HallieTurnExecutor {
             citationOffset: Int = 0,
             refinementNote: String? = nil,
             refinementChain: ArchivistFollowUpResolver.Chain? = nil,
-            refinementChange: String? = nil
+            refinementChange: String? = nil,
+            speakerBindings: [SpeakerBinding] = [],
+            pinnedGraphSubjects: [Int: CandidateID] = [:]
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
@@ -121,12 +132,34 @@ enum HallieTurnExecutor {
             self.refinementNote = refinementNote
             self.refinementChain = refinementChain
             self.refinementChange = refinementChange
+            self.speakerBindings = speakerBindings
+            self.pinnedGraphSubjects = pinnedGraphSubjects
+        }
+
+        /// The same intent with a rewritten graph AST and/or extra pins.
+        func replacing(
+            ast newAST: ArchivistQueryAST? = nil,
+            speakerBindings newBindings: [SpeakerBinding]? = nil,
+            pinnedGraphSubjects newPins: [Int: CandidateID]? = nil
+        ) -> Intent {
+            Intent(
+                originalQuestion: originalQuestion,
+                ast: newAST ?? ast,
+                playAfterAnswer: playAfterAnswer,
+                citationOffset: citationOffset,
+                refinementNote: refinementNote,
+                refinementChain: refinementChain,
+                refinementChange: refinementChange,
+                speakerBindings: newBindings ?? speakerBindings,
+                pinnedGraphSubjects: newPins ?? pinnedGraphSubjects)
         }
     }
 
     struct Request: Sendable, Equatable {
         let intent: Intent
-        fileprivate let selectedIdentity: CandidateID?
+        /// Readable by the executor's extension files; only `continue` (this
+        /// file) can construct a Request that carries one.
+        let selectedIdentity: CandidateID?
 
         init(intent: Intent) {
             self.intent = intent
@@ -156,6 +189,20 @@ enum HallieTurnExecutor {
             self.candidates = candidates
             self.continuationToken = continuationToken
         }
+    }
+
+    /// Factory for the executor's extension files. The initializer and the
+    /// context token stay fileprivate so no client can forge a continuation;
+    /// only executor code holding a live Context can mint one.
+    static func makeClarification(
+        intent: Intent,
+        stage: ClarificationStage,
+        candidates: [Candidate],
+        context: Context
+    ) -> Clarification {
+        Clarification(
+            intent: intent, stage: stage, candidates: candidates,
+            continuationToken: context.continuationToken)
     }
 
     /// The only People-gallery values admitted to factual execution. Photos,
@@ -190,6 +237,9 @@ enum HallieTurnExecutor {
         let graph: GedcomFamilyGraph?
         let cyberBrain: CyberBrainIndex?
         let selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot?
+        /// Who "I" and "you" are (2026-08-18). `.none` = pronouns cannot be
+        /// bound and the executor says so.
+        let speakers: Speakers
         /// An opaque capture identity. Copying Context preserves it; invoking
         /// the initializer creates a new capture that cannot continue an old
         /// clarification even if visible stable IDs and names are unchanged.
@@ -201,7 +251,8 @@ enum HallieTurnExecutor {
             profiles: [ProfileSnapshot]? = [],
             graph: GedcomFamilyGraph? = nil,
             cyberBrain: CyberBrainIndex? = nil,
-            selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil
+            selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
+            speakers: Speakers = .none
         ) {
             self.presenceRecords = presenceRecords
             self.aggregateRecords = aggregateRecords
@@ -209,6 +260,7 @@ enum HallieTurnExecutor {
             self.graph = graph
             self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
+            self.speakers = speakers
             self.continuationToken = UUID()
         }
     }
@@ -317,6 +369,14 @@ enum HallieTurnExecutor {
             ArchivistGraphInputs,
             ArchivistGraphSubjectSelection
         ) -> ArchivistGraphResult
+        /// Two-person relationship: per-slot selections (already resolved
+        /// to GEDCOM pointers by the identity flow) plus a floating one.
+        let executeRelationship: @Sendable (
+            ArchivistGraphQuery,
+            ArchivistGraphInputs,
+            [ArchivistGraphSubjectSelection],
+            ArchivistGraphSubjectSelection
+        ) -> ArchivistGraphResult
 
         init(
             executePresence: @escaping @Sendable (
@@ -337,12 +397,23 @@ enum HallieTurnExecutor {
                 ArchivistGraphQuery,
                 ArchivistGraphInputs,
                 ArchivistGraphSubjectSelection
-            ) -> ArchivistGraphResult
+            ) -> ArchivistGraphResult,
+            executeRelationship: @escaping @Sendable (
+                ArchivistGraphQuery,
+                ArchivistGraphInputs,
+                [ArchivistGraphSubjectSelection],
+                ArchivistGraphSubjectSelection
+            ) -> ArchivistGraphResult = { query, inputs, subjects, floating in
+                ArchivistGraphExecutor.executeRelationship(
+                    query, inputs: inputs, subjects: subjects,
+                    floatingSelection: floating)
+            }
         ) {
             self.executePresence = executePresence
             self.executeTemporal = executeTemporal
             self.executeAggregate = executeAggregate
             self.executeGraph = executeGraph
+            self.executeRelationship = executeRelationship
         }
 
         static let production = Dependencies(
@@ -558,124 +629,36 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let rawPayload):
-            // "show ricks family tree": a possessive typed without its
-            // apostrophe. When nobody knows "ricks" but someone knows "rick",
-            // read it that way — visibly, in the basis line — instead of
-            // declaring the person unknown.
-            let (payload, singularNote) = singularizedGraphPayload(
-                rawPayload, request: request, context: context)
-            if let singularNote {
-                let inner = try await execute(
-                    Request(intent: Intent(
-                        originalQuestion: request.intent.originalQuestion,
-                        ast: .graph(payload),
-                        playAfterAnswer: request.intent.playAfterAnswer,
-                        citationOffset: request.intent.citationOffset,
-                        refinementNote: request.intent.refinementNote)),
-                    context: context, dependencies: dependencies)
-                return inner.prefixingBasis(singularNote)
-            }
-            // CyberBrain answers only when it knows the requested identity.
-            // A `nil` here means CyberBrain has no opinion, and the turn
-            // continues on the pre-existing profiles + GEDCOM path exactly
-            // as it would with no CyberBrain installed.
-            if payload.operation == .biography,
-               let cyberBrain = context.cyberBrain,
-               let result = try await executeCyberBrainBiography(
-                   payload: payload,
-                   request: request,
-                   context: context,
-                   index: cyberBrain) {
-                return result
-            }
-            // Kinship / birth / death get the SAME alias bridge as biography:
-            // a CyberBrain nickname ("rick") resolves to its GEDCOM pointer,
-            // ambiguity yields the same distinct-label chips, and the typed
-            // continuation lands here again. `nil` = CyberBrain has no
-            // opinion; fall through to the profiles + GEDCOM path.
-            if payload.operation != .biography,
-               let cyberBrain = context.cyberBrain,
-               let result = try await executeCyberBrainBridgedGraph(
-                   payload: payload,
-                   request: request,
-                   context: context,
-                   index: cyberBrain,
-                   dependencies: dependencies) {
-                return result
-            }
-            guard let graph = context.graph else {
-                return Result(
-                    route: .graph,
-                    outcome: .declined,
-                    prose: "I don't have an imported family tree, so I can't answer that reliably.",
-                    basisLine: "Basis: no readable GEDCOM was available.",
-                    queryDescription: "shape=graph",
-                    citations: [],
-                    catalogPersonName: nil)
-            }
-            let query = ArchivistGraphQuery(payload)
-            let queryDescription = graphQueryDescription(payload)
-            let inputs = ArchivistGraphInputs(
-                graph: graph,
-                profiles: (context.profiles ?? []).map {
-                    ArchivistGraphProfileSnapshot(
-                        stableID: $0.stableID,
-                        canonicalName: $0.canonicalName,
-                        aliases: $0.aliases)
-                })
-            let selection: ArchivistGraphSubjectSelection
-            switch request.selectedIdentity {
-            case nil: selection = .unresolved
-            case .profileStableID(let id): selection = .profileStableID(id)
-            case .gedcomPersonID(let id): selection = .gedcomPersonID(id)
-            case .cyberBrainPersonID:
-                return invalidContinuationResult(for: ast)
-            }
-            let execute = dependencies.executeGraph
-            let result = try await detached {
-                execute(query, inputs, selection)
-            }
-            if !result.ambiguityCandidates.isEmpty {
-                let choices = result.ambiguityCandidates.map { candidate in
-                    switch candidate.id {
-                    case .profileStableID(let id):
-                        return Candidate(
-                            id: .profileStableID(id),
-                            canonicalName: candidate.canonicalName,
-                            label: candidate.label)
-                    case .gedcomPersonID(let id):
-                        return Candidate(
-                            id: .gedcomPersonID(id),
-                            canonicalName: candidate.canonicalName,
-                            label: candidate.label)
-                    }
+            // Pronouns first (2026-08-18: "how am I related to you?"):
+            // "I"/"me"/"my" → the owner, "you"/"Hallie" → the archivist,
+            // bound deterministically and recorded on the Intent so every
+            // continuation reads them the same way. Fresh turns only — a
+            // continuation's intent already carries bound names.
+            if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty {
+                let binding = bindPronouns(
+                    rawPayload.people, speakers: context.speakers,
+                    isKnownPerson: { isKnownPerson($0, context: context) })
+                if let unbound = binding.unbound.first {
+                    return unboundPronounResult(unbound, payload: rawPayload)
                 }
-                let stage: ClarificationStage = choices[0].source == .peopleProfile
-                    ? .profileIdentity : .gedcomPerson
-                let clarification = Clarification(
-                    intent: request.intent,
-                    stage: stage,
-                    candidates: choices,
-                    continuationToken: context.continuationToken)
-                return Result(
-                    route: .graph,
-                    outcome: .needsClarification,
-                    prose: result.prose,
-                    basisLine: result.basisLine,
-                    queryDescription: queryDescription,
-                    citations: [],
-                    catalogPersonName: nil,
-                    clarification: clarification)
+                if !binding.bindings.isEmpty {
+                    var bound = rawPayload
+                    bound.people = binding.people
+                    let inner = try await execute(
+                        Request(intent: request.intent.replacing(
+                            ast: .graph(bound), speakerBindings: binding.bindings)),
+                        context: context, dependencies: dependencies)
+                    return inner
+                }
             }
-            return Result(
-                route: .graph,
-                outcome: result.conclusion == .answered ? .answered : .declined,
-                prose: result.prose,
-                basisLine: result.basisLine,
-                queryDescription: queryDescription,
-                citations: [],
-                catalogPersonName: result.catalogPersonName,
-                offeredActions: familyTreeOffers(result.familyTreeFocus))
+            let result = try await executeGraphCase(
+                rawPayload, request: request, context: context,
+                dependencies: dependencies)
+            // The binding is evidence: say what "you" and "I" meant.
+            if let note = bindingNote(request.intent.speakerBindings) {
+                return result.prefixingBasis(note)
+            }
+            return result
 
         case .event:
             guard request.selectedIdentity == nil else {
@@ -690,6 +673,138 @@ enum HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+    }
+
+    /// The graph route proper, after pronoun binding. Split out so the
+    /// binding note can be prefixed on whichever of the several returns
+    /// answers (CyberBrain biography, bridged kinship, plain GEDCOM,
+    /// relationship).
+    private static func executeGraphCase(
+        _ rawPayload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        let ast = request.intent.ast
+        // "show ricks family tree": a possessive typed without its
+        // apostrophe. When nobody knows "ricks" but someone knows "rick",
+        // read it that way — visibly, in the basis line — instead of
+        // declaring the person unknown.
+        let (payload, singularNote) = singularizedGraphPayload(
+            rawPayload, request: request, context: context)
+        if let singularNote {
+            let inner = try await executeGraphCase(
+                payload,
+                request: Request(intent: request.intent.replacing(ast: .graph(payload))),
+                context: context, dependencies: dependencies)
+            return inner.prefixingBasis(singularNote)
+        }
+        if payload.operation == .relationship {
+            return try await executeRelationship(
+                payload: payload, request: request, context: context,
+                dependencies: dependencies)
+        }
+        // CyberBrain answers only when it knows the requested identity.
+        // A `nil` here means CyberBrain has no opinion, and the turn
+        // continues on the pre-existing profiles + GEDCOM path exactly
+        // as it would with no CyberBrain installed.
+        if payload.operation == .biography,
+           let cyberBrain = context.cyberBrain,
+           let result = try await executeCyberBrainBiography(
+               payload: payload,
+               request: request,
+               context: context,
+               index: cyberBrain) {
+            return result
+        }
+        // Kinship / birth / death get the SAME alias bridge as biography:
+        // a CyberBrain nickname ("rick") resolves to its GEDCOM pointer,
+        // ambiguity yields the same distinct-label chips, and the typed
+        // continuation lands here again. `nil` = CyberBrain has no
+        // opinion; fall through to the profiles + GEDCOM path.
+        if payload.operation != .biography,
+           let cyberBrain = context.cyberBrain,
+           let result = try await executeCyberBrainBridgedGraph(
+               payload: payload,
+               request: request,
+               context: context,
+               index: cyberBrain,
+               dependencies: dependencies) {
+            return result
+        }
+        guard let graph = context.graph else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I don't have an imported family tree, so I can't answer that reliably.",
+                basisLine: "Basis: no readable GEDCOM was available.",
+                queryDescription: "shape=graph",
+                citations: [],
+                catalogPersonName: nil)
+        }
+        let query = ArchivistGraphQuery(payload)
+        let queryDescription = graphQueryDescription(payload)
+        let inputs = ArchivistGraphInputs(
+            graph: graph,
+            profiles: (context.profiles ?? []).map {
+                ArchivistGraphProfileSnapshot(
+                    stableID: $0.stableID,
+                    canonicalName: $0.canonicalName,
+                    aliases: $0.aliases)
+            })
+        let selection: ArchivistGraphSubjectSelection
+        switch request.selectedIdentity {
+        case nil: selection = .unresolved
+        case .profileStableID(let id): selection = .profileStableID(id)
+        case .gedcomPersonID(let id): selection = .gedcomPersonID(id)
+        case .cyberBrainPersonID:
+            return invalidContinuationResult(for: ast)
+        }
+        let execute = dependencies.executeGraph
+        let result = try await detached {
+            execute(query, inputs, selection)
+        }
+        if !result.ambiguityCandidates.isEmpty {
+            let choices = result.ambiguityCandidates.map { candidate in
+                switch candidate.id {
+                case .profileStableID(let id):
+                    return Candidate(
+                        id: .profileStableID(id),
+                        canonicalName: candidate.canonicalName,
+                        label: candidate.label)
+                case .gedcomPersonID(let id):
+                    return Candidate(
+                        id: .gedcomPersonID(id),
+                        canonicalName: candidate.canonicalName,
+                        label: candidate.label)
+                }
+            }
+            let stage: ClarificationStage = choices[0].source == .peopleProfile
+                ? .profileIdentity : .gedcomPerson
+            let clarification = Clarification(
+                intent: request.intent,
+                stage: stage,
+                candidates: choices,
+                continuationToken: context.continuationToken)
+            return Result(
+                route: .graph,
+                outcome: .needsClarification,
+                prose: result.prose,
+                basisLine: result.basisLine,
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil,
+                clarification: clarification)
+        }
+        return Result(
+            route: .graph,
+            outcome: result.conclusion == .answered ? .answered : .declined,
+            prose: result.prose,
+            basisLine: result.basisLine,
+            queryDescription: queryDescription,
+            citations: [],
+            catalogPersonName: result.catalogPersonName,
+            offeredActions: familyTreeOffers(result.familyTreeFocus))
     }
 
     /// The privacy ceiling the app grants its own Family Archivist. Every
