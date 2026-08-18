@@ -368,8 +368,12 @@ enum DuplicateDetector {
             for m in members {
                 if m === keeper {
                     m.duplicateDisposition = .keep
-                    m.duplicateBestMatchFilename = strongest.isEmpty
-                        ? (previous?.filename ?? m.duplicateBestMatchFilename) : strongest
+                    // Same rule as classifyGroup: an elected keeper with no
+                    // currently-scoring pair gets an EMPTY best match — never
+                    // the old keeper's filename, which may no longer be a
+                    // valid match and would mislead the UI (codex #474,
+                    // 2026-08-18).
+                    m.duplicateBestMatchFilename = strongest
                 } else {
                     // The old keeper (and anyone marked keep) becomes an
                     // extra or review item by ITS OWN confidence, exactly

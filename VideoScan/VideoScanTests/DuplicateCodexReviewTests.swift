@@ -532,6 +532,31 @@ struct DuplicateReelectionBestMatchTests {
         #expect(x?.duplicateBestMatchFilename == "clip.mov" && y?.duplicateBestMatchFilename == "clip.mov",
                 "non-keepers point at the new keeper")
     }
+
+    /// Codex #474: a newly elected keeper with NO currently-scoring pair
+    /// gets an EMPTY best match — same rule as classifyGroup — never the
+    /// old keeper's filename (which may no longer be a valid match).
+    @Test func newKeeperWithNoScoringPairGetsEmptyBestMatch() async {
+        func rec(_ path: String, filename: String, md5: String, size: Int64, tc: String, keep: Bool) -> VideoRecord {
+            let r = VideoRecord()
+            r.fullPath = path; r.filename = filename
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            r.durationSeconds = keep ? 30 : 900   // wildly different durations → no pair score
+            r.partialMD5 = md5; r.sizeBytes = size; r.timecode = tc
+            r.duplicateConfidence = .high
+            r.duplicateDisposition = keep ? .keep : .extraCopy
+            return r
+        }
+        let g = UUID()
+        let x = rec("/Volumes/CrucialX9/old.mov", filename: "old.mov", md5: "h1", size: 100, tc: "01:00:00:00", keep: true)
+        let z = rec("/Volumes/FamilyArchive/new.mov", filename: "new.mov", md5: "h2", size: 999_999, tc: "05:00:00:00", keep: false)
+        for r in [x, z] { r.duplicateGroupID = g }
+        let policy = DuplicateKeeperPolicy(precedence: DuplicateKeeperSettings.defaultPrecedence)
+        let (out, _) = await DuplicateDetector.reelectKeepersDetached([x, z], keeperPolicy: policy)
+        let z2 = out.first { $0.fullPath.hasPrefix("/Volumes/FamilyArchive/") }
+        #expect(z2?.duplicateDisposition == .keep)
+        #expect(z2?.duplicateBestMatchFilename == "", "no scoring pair ⇒ empty best match, not the old keeper's 'old.mov'")
+    }
 }
 
 @MainActor
