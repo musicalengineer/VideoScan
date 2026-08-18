@@ -30,5 +30,9 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 - Apply (14:45–14:46): succeeded=3 adopted=130 safelyRedundant=1, 9.96 GB, 43.5 s. gen 205; 399 records on Projects (all present); MediaExpansion 1 (Manually Deleted, witness=FamilyArchive); dangling 52.
 - Confirm-dialog wording ("Migrate 134 records 1.33 TB") counts scoped bytes, not copy bytes — fold into #162.
 
+## (detour 14:48) 🖥 accidental rescan of MediaExpansion
+- 17,719 admitted / 108 cataloged / 17,611 sniff-rejected (FCP render/peak files). Merge: 108 upserted → **107 new bare records** for files whose metadata records were just relinked to Projects. Catalog 7,226 (gen 206).
+- Consequence: 107 dup groups (Projects twin has tags/provenance; MediaExpansion twin bare). Keep election in 3c must favor Projects; delete-vs-keep MediaExpansion copies = Rick's decision.
+
 ## 3a 🖥 Scan target /Volumes/Projects (whole volume) → Scan
 - (pending)
