@@ -26,4 +26,5 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 - Filed GH #162: Reconcile PREVIEW writes nothing to relocate.log.
 
 ## 2b 🖥 Migrate /Volumes/MediaExpansion → /Volumes/Projects/_staging_from_MediaExpansion
-- (pending)
+- Preview: 134 records · 3 copy (9.7 GB: avtest2.mov, Rick Breen.mov, LeavingForMontana.mov — loose files at volume root the staging copy skipped) · 130 adopt (104 mirrored + 26 moved Donna_clips) · 1 safely-redundant (FoxyRock-Piano.mov, witness = Master Archive copy on FamilyArchive).
+- Apply: (pending)
