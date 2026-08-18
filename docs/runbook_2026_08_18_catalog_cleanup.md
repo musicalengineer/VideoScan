@@ -36,3 +36,8 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 
 ## 3a 🖥 Scan target /Volumes/Projects (whole volume) → Scan
 - (pending)
+
+## 5 ⌨️ MXF strays (osx10.8_backup/Avid MediaFiles/MXF/99) — done 15:00
+- 145 files / 741 MB, all UNIQUE by (size, partialMD5) vs every other Avid tree; sidecars msmMMOB.mdb + msmFMID.pmr present. "Boston" project clips.
+- Decision: keep; move the whole `Avid MediaFiles` folder as a unit into the consolidated Avid home (step 6) — same volume, `mv`, then Update Catalog relinks.
+- 1a question resolved: 14:27:53 = plain committing scan from the row verb "Scan / Update Catalog"; 14:28:02 = real preview (parked). Naming collision noted on #162.
