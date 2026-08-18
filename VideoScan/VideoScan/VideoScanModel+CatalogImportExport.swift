@@ -77,7 +77,9 @@ extension VideoScanModel {
 
         // Rewire pairedWith back-references within the imported array so
         // imported pairs keep pointing at each other, not at nothing.
-        let importedByID = Dictionary(uniqueKeysWithValues: snapshot.records.map { ($0.id, $0) })
+        // Never trap on a file carrying duplicate ids (8/17 incident).
+        let importedByID = Dictionary(CatalogStore.dedupingByID(snapshot.records, sourceName: "import").map { ($0.id, $0) },
+                                      uniquingKeysWith: { first, _ in first })
         for rec in snapshot.records {
             if let pid = rec.pendingPairedWithID {
                 rec.pairedWith = importedByID[pid]

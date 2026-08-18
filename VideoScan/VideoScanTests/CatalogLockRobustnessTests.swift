@@ -579,6 +579,31 @@ final class CatalogLockRobustnessTests: XCTestCase {
 
     // MARK: - Isolation
 
+    /// 2026-08-17 crash at launch: a catalog.json carrying duplicate record
+    /// ids (203 twins created by the live-reload re-append bug) trapped in
+    /// Dictionary(uniqueKeysWithValues:) inside decode. A file with twins
+    /// must LOAD, keeping the current home (relinked twin) and dropping the
+    /// stale one.
+    @MainActor
+    func testCatalogWithDuplicateRecordIDsStillLoads_keepingTheCurrentHome() throws {
+        let store = CatalogStore(directory: dir)
+        let id = UUID()
+        let json = """
+        {"version":\(CatalogSnapshot.currentVersion),"savedAt":"2026-08-17T00:00:00Z","generation":1,
+         "records":[
+           {"id":"\(id.uuidString)","filename":"clip.mov","fullPath":"/Volumes/LaCie/old/clip.mov","directory":"/Volumes/LaCie/old","ext":"MOV"},
+           {"id":"\(id.uuidString)","filename":"clip.mov","fullPath":"/Volumes/SanDisk/new/clip.mov","directory":"/Volumes/SanDisk/new","ext":"MOV","originalFullPath":"/Volumes/LaCie/old/clip.mov"},
+           {"id":"\(UUID().uuidString)","filename":"other.mov","fullPath":"/Volumes/LaCie/other.mov","directory":"/Volumes/LaCie","ext":"MOV"}
+         ]}
+        """
+        try Data(json.utf8).write(to: catalogURL)
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 2, "twins collapse to one record; the file must load, not trap")
+        let survivor = try XCTUnwrap(loaded.first { $0.id == id })
+        XCTAssertEqual(survivor.fullPath, "/Volumes/SanDisk/new/clip.mov", "the relinked (current home) twin wins")
+        XCTAssertEqual(Set(loaded.map(\.id)).count, 2)
+    }
+
     func testTestsNeverTouchTheRealCatalog() throws {
         let appSupport = try XCTUnwrap(
             FileManager.default.urls(for: .applicationSupportDirectory,

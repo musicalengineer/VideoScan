@@ -499,9 +499,19 @@ final class CatalogStore {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
+            // One UUID = one record. A file that carries twins (the 8/17
+            // live-reload re-append incident) must LOAD — the old
+            // Dictionary(uniqueKeysWithValues:) trapped on the first
+            // duplicate and the app crashed at launch. Dedupe here with
+            // the same policy the model uses (keep the current home:
+            // relinked twin, else the one whose file exists, else first);
+            // the model's repair then finds nothing to do.
+            let records = Self.dedupingByID(snapshot.records, sourceName: url.lastPathComponent)
             // Build id → record map and rewire pairedWith references.
-            let byID = Dictionary(uniqueKeysWithValues: snapshot.records.map { ($0.id, $0) })
-            for rec in snapshot.records {
+            var byID: [UUID: VideoRecord] = [:]
+            byID.reserveCapacity(records.count)
+            for r in records { byID[r.id] = r }
+            for rec in records {
                 if let pid = rec.pendingPairedWithID {
                     rec.pairedWith = byID[pid]
                     rec.pendingPairedWithID = nil
@@ -511,16 +521,46 @@ final class CatalogStore {
                     }
                 }
             }
-            let cleared = CorrelationScorer.revalidateExistingPairs(in: snapshot.records)
+            let cleared = CorrelationScorer.revalidateExistingPairs(in: records)
             if cleared > 0 {
                 NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
                       cleared, url.lastPathComponent)
             }
-            return (snapshot.records, snapshot.version, snapshot.masterArchive)
+            return (records, snapshot.version, snapshot.masterArchive)
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
             return nil
         }
+    }
+
+    /// Dedupe by record id, keeping the current home. Pure; logs a summary
+    /// when it drops anything.
+    nonisolated static func dedupingByID(_ records: [VideoRecord], sourceName: String) -> [VideoRecord] {
+        var index: [UUID: Int] = [:]
+        var kept: [VideoRecord] = []
+        kept.reserveCapacity(records.count)
+        var dropped = 0
+        for rec in records {
+            if let i = index[rec.id] {
+                dropped += 1
+                let current = kept[i]
+                let recRelinked = rec.originalFullPath != nil, curRelinked = current.originalFullPath != nil
+                if recRelinked != curRelinked {
+                    if recRelinked { kept[i] = rec }
+                } else if FileManager.default.fileExists(atPath: rec.fullPath)
+                            && !FileManager.default.fileExists(atPath: current.fullPath) {
+                    kept[i] = rec
+                }
+            } else {
+                index[rec.id] = kept.count
+                kept.append(rec)
+            }
+        }
+        if dropped > 0 {
+            NSLog("VideoScan: %@ carried duplicate record id(s) — kept the current home for each, dropped %d stale twin(s) (files untouched)", sourceName, dropped)
+            catalogStoreLog.notice("decode: dropped \(dropped) duplicate-id twin(s) from \(sourceName, privacy: .public)")
+        }
+        return kept
     }
 
     /// Decode a catalog snapshot at an ARBITRARY path — the timestamped
