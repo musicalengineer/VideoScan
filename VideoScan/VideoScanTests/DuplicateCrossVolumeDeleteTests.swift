@@ -378,6 +378,7 @@ struct DuplicateCrossVolumeDeleteTests {
 
         let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
         #expect(result.deleted == 1, "only the same-drive extra")
+        #expect(result.skipped == 1, "the dropped working copy is reported as skipped (codex E)")
         #expect(FileManager.default.fileExists(atPath: cross.path), "cross-drive working copy retained")
         #expect(!FileManager.default.fileExists(atPath: sameE.path))
         #expect(FileManager.default.fileExists(atPath: k.path) && FileManager.default.fileExists(atPath: sameK.path))

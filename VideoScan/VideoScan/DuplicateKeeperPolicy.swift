@@ -81,6 +81,24 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
     /// under, and what `analyze(records:)` uses when no policy is passed.
     static let unconfigured = DuplicateKeeperPolicy(precedence: [], facts: [:])
 
+    // MARK: Ledger stamp (codex review B)
+
+    /// A deterministic description of everything that can change an
+    /// election outcome: list order + every known volume's role /
+    /// reachability / retired / master facts. Stored beside the settings
+    /// after a full Find Duplicates pass; when the live descriptor differs,
+    /// the next pass re-elects keepers for ALL groups. A plain string (not
+    /// `Hasher`, which is randomly seeded per process) so it survives a
+    /// relaunch.
+    var electionDescriptor: String {
+        var parts: [String] = ["list=" + precedence.joined(separator: "|")]
+        for key in facts.keys.sorted() {
+            let f = facts[key]!  // swiftlint:disable:this force_unwrapping
+            parts.append("\(key)=\(f.role.rawValue)/\(f.isReachable ? "on" : "off")/\(f.isRetired ? "retired" : "live")/\(f.isMasterArchive ? "master" : "-")")
+        }
+        return parts.joined(separator: ";")
+    }
+
     // MARK: Election key
 
     /// Everything the keeper election compares, packed so that
@@ -359,8 +377,15 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
     /// carry-over are unchanged either way. Strings: WorkingCopyCleanupText.
     var alsoCleanUpWorkingCopies: Bool = false
 
+    /// `DuplicateKeeperPolicy.electionDescriptor` of the policy the LAST
+    /// full Find Duplicates pass elected under (codex review B). nil =
+    /// never stamped ⇒ next pass re-elects everything. Catalog-level, not
+    /// per-record: one value, no schema change.
+    var lastElectionDescriptor: String?
+
     static let precedenceKey = "dupKeep_volumePrecedence"
     static let workingCopyCleanupKey = "dupKeep_alsoCleanUpWorkingCopies"
+    static let lastElectionKey = "dupKeep_lastElectionDescriptor"
 
     static func restored(from defaults: UserDefaults) -> DuplicateKeeperSettings {
         var s = DuplicateKeeperSettings()
@@ -372,12 +397,14 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
         if defaults.object(forKey: workingCopyCleanupKey) != nil {
             s.alsoCleanUpWorkingCopies = defaults.bool(forKey: workingCopyCleanupKey)
         }
+        s.lastElectionDescriptor = defaults.string(forKey: lastElectionKey)
         return s
     }
 
     func save(to defaults: UserDefaults) {
         defaults.set(volumePrecedence, forKey: Self.precedenceKey)
         defaults.set(alsoCleanUpWorkingCopies, forKey: Self.workingCopyCleanupKey)
+        defaults.set(lastElectionDescriptor, forKey: Self.lastElectionKey)
     }
 }
 
@@ -425,7 +452,7 @@ enum WorkingCopyCleanupText {
     /// One-line hint after the list or the toggle changes: results on
     /// screen were elected under the old settings (analysis is never
     /// auto-run).
-    static let reanalyzeHint = "Settings changed — run Find Duplicates again so masters and extras reflect them."
+    static let reanalyzeHint = "Find Duplicates will re-elect keepers under the new order."
 
     /// Log summary line prefix: "Working-copy cleanup on <volume>: …".
     static func logSummary(volume: String, detail: String) -> String {

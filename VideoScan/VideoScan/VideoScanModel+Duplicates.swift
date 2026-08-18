@@ -148,7 +148,17 @@ extension VideoScanModel {
             }
         }
 
-        let scope: [VideoRecord]
+        // Codex review B: the ledger only re-derives new/changed records,
+        // so a changed keeper policy (list order, retire, reachability,
+        // master) never reached stamped groups. Compare the live election
+        // descriptor with the one the last full pass ran under; when they
+        // differ, re-elect keepers for ALL groups (election only —
+        // grouping/hash work is reused).
+        let livePolicy = duplicateKeeperPolicy()
+        let policyStale = selectedIDs == nil
+            && duplicateKeeperSettings.lastElectionDescriptor != livePolicy.electionDescriptor
+
+        var scope: [VideoRecord]
         let deltaCount: Int
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
@@ -157,9 +167,16 @@ extension VideoScanModel {
         } else {
             let active = pfActiveRecords(records)
             let delta = active.filter { $0.dupAnalyzedAt == nil }
-            guard !delta.isEmpty else {
-                duplicateStatus = "Duplicates up to date"
-                log("Duplicate analysis: nothing new since the last pass — 0 records pending.")
+            if delta.isEmpty {
+                if policyStale {
+                    let changed = await reelectDuplicateKeepers(policy: livePolicy)
+                    duplicateStatus = "Keepers re-elected (\(changed) group\(changed == 1 ? "" : "s") changed)"
+                    log("Duplicate analysis: nothing new to group — re-elected keepers under the current order (\(changed) group(s) changed).")
+                    NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+                } else {
+                    duplicateStatus = "Duplicates up to date"
+                    log("Duplicate analysis: nothing new since the last pass — 0 records pending.")
+                }
                 return
             }
             deltaCount = delta.count
@@ -186,9 +203,8 @@ extension VideoScanModel {
         // Keeper policy is a Sendable snapshot of the settings + per-target
         // facts (role / reachable / retired / master), built HERE on main
         // because CatalogScanTarget can't cross the actor boundary.
-        let keeperPolicy = duplicateKeeperPolicy()
         let (clones, summary) = await DuplicateDetector.analyzeDetached(
-            freshClones, keeperPolicy: keeperPolicy)
+            freshClones, keeperPolicy: livePolicy)
         let stamp = Date()
         // QA P2-3: a record pruned during the await gets no ghost writes
         // and no stamp (symmetric with the correlate atomicity guard).
@@ -206,7 +222,12 @@ extension VideoScanModel {
         }
 
         duplicateStatus = "\(summary.extraCopies) duplicates in \(summary.groups) groups"
-        // A fresh pass reflects the current keeper settings (QA minor 7).
+        // Stale policy: the groups OUTSIDE this pass's scope still carry
+        // keepers elected under the old order — re-elect them too.
+        if policyStale {
+            let changed = await reelectDuplicateKeepers(policy: livePolicy)
+            if changed > 0 { log("  Re-elected keepers under the current order: \(changed) group(s) changed.") }
+        }
         if selectedIDs == nil { duplicateReanalyzeHint = nil }
 
         log("""
@@ -264,8 +285,11 @@ extension VideoScanModel {
         // Master Archive files are never bulk-deleted, even as "extras".
         var targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
         let keepers = selection.keepers
-        let skippedCount = selection.skippedCount
-        let skippedNote = selection.skippedReasons
+        // Both may grow if the snapshot tripwire drops the cross-drive part
+        // (codex review E) — the summary and the skipped count then say so.
+        var skippedCount = selection.skippedCount
+        var summaryLine = selection.summaryLine
+        var skippedNote = selection.skippedReasons
             .map { "\($0.count) file(s): \($0.reason)" }
             .joined(separator: "; ")
         let volumeName = URL(fileURLWithPath: volumePath).lastPathComponent
@@ -295,23 +319,32 @@ extension VideoScanModel {
                 ? Double(selection.crossVolumeCount) / Double(selection.volumeRecordCount) : 1
             if selection.crossVolumeCount > Self.crossVolumeSnapshotThreshold
                 || fraction > Self.crossVolumeSnapshotFraction {
-                if let snap = snapshotCatalog(prefix: "pre-dup-crossvolume") {
-                    log("\nPre-delete safety snapshot (\(selection.crossVolumeCount) cross-drive extras): \(snap)")
+                duplicateStatus = "Writing safety snapshot…"
+                // Encode + write run off-main; this await is the barrier —
+                // nothing is unlinked until the snapshot has landed (or
+                // failed) — codex review D.
+                if let snap = await snapshotCatalogAsync(prefix: "pre-dup-crossvolume") {
+                    log("\nPre-delete safety snapshot (\(selection.crossVolumeCount) working copies): \(snap)")
                 } else {
                     let before = targets.count
                     targets = targets.filter { rec in
                         guard let g = rec.duplicateGroupID, let k = keepers[g] else { return false }
                         return PathScope.contains(k.fullPath, within: volumePath)
                     }
-                    log("\n⚠️ Could not write the pre-delete safety snapshot — leaving the \(before - targets.count) cross-drive extra(s) alone; only same-drive extras will be removed.")
-                    guard !targets.isEmpty else { return (0, 0, skippedCount + before, 0) }
+                    let dropped = before - targets.count
+                    skippedCount += dropped
+                    summaryLine = "\(targets.count) same-drive extra\(targets.count == 1 ? "" : "s")"
+                        + " (\(dropped) working cop\(dropped == 1 ? "y" : "ies") left alone — no safety snapshot)"
+                    skippedNote += (skippedNote.isEmpty ? "" : "; ") + "\(dropped) file(s): safety snapshot could not be written"
+                    log("\n⚠️ Could not write the pre-delete safety snapshot — leaving the \(dropped) working cop\(dropped == 1 ? "y" : "ies") alone; only same-drive extras will be removed.")
+                    guard !targets.isEmpty else { return (0, 0, skippedCount, 0) }
                 }
             }
         }
 
         if selection.crossVolumeMode {
             log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName,
-                    detail: "removing \(targets.count) extra cop\(targets.count == 1 ? "y" : "ies") — \(selection.summaryLine)…"))
+                    detail: "removing \(targets.count) extra cop\(targets.count == 1 ? "y" : "ies") — \(summaryLine)…"))
         } else {
             log("\nDeleting \(targets.count) same-volume duplicate(s) on \(volumePath)…")
         }
@@ -413,8 +446,16 @@ extension VideoScanModel {
                     if !carried.isEmpty {
                         log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
                             + carried.joined(separator: ", "))
-                        catalogMutated = true
                     }
+                    // Codex review A: enrichment the master lacks
+                    // (transcript, captions, dossier, detected people,
+                    // inferred date, Avid identity) + a provenance line.
+                    let enriched = applyEnrichmentInheritance(from: extraRow, to: liveMaster)
+                    if !enriched.isEmpty {
+                        log("  Enrichment carried to master \(liveMaster.filename): "
+                            + enriched.joined(separator: ", "))
+                    }
+                    catalogMutated = true
                 } else {
                     log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
                 }
@@ -449,7 +490,7 @@ extension VideoScanModel {
 
         let freed = ByteCountFormatter.string(fromByteCount: bytesFreed, countStyle: .file)
         let completion = "\(deleted) deleted, \(failed) failed, \(refused) refused by verification, "
-            + "\(skippedCount) skipped, \(freed) freed (\(selection.summaryLine))"
+            + "\(skippedCount) skipped, \(freed) freed (\(summaryLine))"
         if selection.crossVolumeMode {
             log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
         } else {
@@ -630,6 +671,38 @@ extension VideoScanModel {
     func noteDuplicateKeeperSettingsChanged() {
         saveDuplicateKeeperSettings()
         refreshDossierCountsNow()
-        duplicateReanalyzeHint = WorkingCopyCleanupText.reanalyzeHint
+        // Only an election-affecting change (list order — the toggle
+        // doesn't move keepers) earns the hint; codex review B pins the
+        // re-election itself to the descriptor comparison in Analyze.
+        let stale = duplicateKeeperSettings.lastElectionDescriptor != duplicateKeeperPolicy().electionDescriptor
+        duplicateReanalyzeHint = stale ? WorkingCopyCleanupText.reanalyzeHint : nil
+    }
+}
+
+
+// MARK: - Keeper re-election (codex review B, 2026-08-18)
+
+extension VideoScanModel {
+    /// Re-elect keepers for every existing group under `policy` — off-main
+    /// over clones, copy back disposition + best-match, then stamp the
+    /// policy descriptor so the next Analyze knows the ledger is current.
+    /// Returns the number of groups whose keeper changed.
+    @discardableResult
+    func reelectDuplicateKeepers(policy: DuplicateKeeperPolicy) async -> Int {
+        let grouped = pfActiveRecords(records).filter { $0.duplicateGroupID != nil }
+        var clones: [VideoRecord] = []
+        clones.reserveCapacity(grouped.count)
+        for rec in grouped { clones.append(rec.snapshotClone()) }
+        let (analyzed, changed) = await DuplicateDetector.reelectKeepersDetached(clones, keeperPolicy: policy)
+        let liveInstances = Set(records.map(ObjectIdentifier.init))
+        for (original, clone) in zip(grouped, analyzed) {
+            guard liveInstances.contains(ObjectIdentifier(original)) else { continue }
+            original.duplicateDisposition = clone.duplicateDisposition
+            original.duplicateBestMatchFilename = clone.duplicateBestMatchFilename
+        }
+        duplicateKeeperSettings.lastElectionDescriptor = policy.electionDescriptor
+        saveDuplicateKeeperSettings()
+        duplicateReanalyzeHint = nil
+        return changed
     }
 }

@@ -50,10 +50,18 @@ enum DuplicateDetector {
             pairByIDs[PairKey(pair.left.id, pair.right.id)] = pair
         }
 
-        // Star-topology grouping: elect a keeper first, then only include
-        // records that score against the keeper directly.  This prevents
+        // Star-topology grouping: pick a HUB first, then only include
+        // records that score against the hub directly.  This prevents
         // transitive contamination where A↔B↔C chains inflate groups with
         // unrelated files.
+        //
+        // Codex review C (2026-08-18): membership is decoupled from keeper
+        // preference. The hub is the best-CONNECTED member (most direct
+        // matches, then technical merit, then path); the keeper is then
+        // elected AMONG the star members by DuplicateKeeperPolicy. Before
+        // this the policy keeper was also the hub, so a high-precedence
+        // copy sitting at the edge of an A–B–C chain shrank the group to
+        // its own neighbours and dropped the rest unclassified.
         let recordsByID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
         var assigned = Set<UUID>()
         var groups = 0
@@ -77,10 +85,11 @@ enum DuplicateDetector {
             let componentIDs = walkComponent(from: record.id, adjacency: adjacency, visited: &visited)
             guard componentIDs.count > 1 else { continue }
             let component = componentIDs.compactMap { recordsByID[$0] }
-            guard let keeper = electKeeper(from: component, policy: keeperPolicy) else { continue }
+            guard let hub = electHub(from: component, adjacency: adjacency) else { continue }
 
-            let starMembers = buildStarMembers(keeper: keeper, component: component, pairByIDs: pairByIDs)
+            let starMembers = buildStarMembers(keeper: hub, component: component, pairByIDs: pairByIDs)
             guard starMembers.count > 1 else { continue }
+            let keeper = electKeeper(from: starMembers, policy: keeperPolicy) ?? hub
 
             let result = classifyGroup(
                 starMembers: starMembers, keeper: keeper,
@@ -318,6 +327,70 @@ enum DuplicateDetector {
     ) async -> sending (analyzed: [VideoRecord], summary: DuplicateAnalysisSummary) {
         let summary = analyze(records: clones, keeperPolicy: keeperPolicy)
         return (clones, summary)
+    }
+
+    // MARK: - Keeper re-election under a changed policy (2026-08-18, codex review B)
+
+    /// Re-elect the keeper of EVERY existing group among `clones` under
+    /// `policy` — no pair building, no re-grouping: membership,
+    /// confidence and reasons are kept; only `duplicateDisposition` and
+    /// `duplicateBestMatchFilename` move. Runs off-main over snapshot
+    /// clones exactly like `analyzeDetached`. Returns the number of groups
+    /// whose keeper changed.
+    static func reelectKeepersDetached(
+        _ clones: sending [VideoRecord],
+        keeperPolicy: DuplicateKeeperPolicy
+    ) async -> sending (analyzed: [VideoRecord], changedGroups: Int) {
+        var byGroup: [UUID: [VideoRecord]] = [:]
+        for rec in clones {
+            guard let g = rec.duplicateGroupID else { continue }
+            byGroup[g, default: []].append(rec)
+        }
+        var changed = 0
+        for (_, members) in byGroup where members.count > 1 {
+            guard let keeper = electKeeper(from: members, policy: keeperPolicy) else { continue }
+            let previous = members.first { $0.duplicateDisposition == .keep }
+            guard previous !== keeper else { continue }
+            changed += 1
+            for m in members {
+                if m === keeper {
+                    m.duplicateDisposition = .keep
+                    m.duplicateBestMatchFilename = previous?.filename ?? m.duplicateBestMatchFilename
+                } else {
+                    // The old keeper (and anyone marked keep) becomes an
+                    // extra or review item by ITS OWN confidence, exactly
+                    // as classifyGroup would have said.
+                    if m.duplicateDisposition == .keep {
+                        m.duplicateDisposition = m.duplicateConfidence == .high ? .extraCopy : .review
+                    }
+                    m.duplicateBestMatchFilename = keeper.filename
+                }
+            }
+        }
+        return (clones, changed)
+    }
+
+    // MARK: - Hub selection (2026-08-18, codex review C)
+
+    /// The star's centre: the member with the most direct matches inside
+    /// the component, then the technically best, then the smallest path.
+    /// Purely structural — the policy plays no part here.
+    static func electHub(from component: [VideoRecord],
+                         adjacency: [UUID: Set<UUID>]) -> VideoRecord? {
+        var best: VideoRecord?
+        var bestKey: (Int, Int, String)?
+        for record in component {
+            let key = (adjacency[record.id]?.count ?? 0, keeperScore(record), record.fullPath)
+            if let current = bestKey {
+                let better = key.0 != current.0 ? key.0 > current.0
+                    : key.1 != current.1 ? key.1 > current.1
+                    : key.2 < current.2
+                if !better { continue }
+            }
+            best = record
+            bestKey = key
+        }
+        return best
     }
 
     // MARK: - Keeper election (2026-08-18)
