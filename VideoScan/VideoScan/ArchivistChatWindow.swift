@@ -417,6 +417,7 @@ struct ArchivistChatWindow: View {
             .appendingPathComponent("VideoScan/archivist").path ?? ""
         return [
             // Hallie Mae herself (Rick's family records, restored 2026-08-17).
+            ("Hallie Mae — reconstructed, in the library", base + "/HallieMaeReconstructed.png"),
             ("Hallie Mae — portrait c.1900", base + "/HallieMaeMcGillLatta-portrait.jpeg"),
             ("Hallie Mae — wedding c.1897", base + "/HallieMaeMcGillLatta-wedding-circa1897-straightened.jpeg"),
             ("Librarian cartoon", base + "/librarian-cartoon.png"),
