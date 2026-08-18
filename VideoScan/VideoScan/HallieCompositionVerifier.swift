@@ -89,9 +89,10 @@ enum HallieCompositionVerifier {
     // MARK: - Sentences
 
     /// Split prose into sentences. A sentence ends at `.`, `!`, or `?`
-    /// (not one followed by a digit, so "12.5s" survives) or at a line
-    /// break, and any bracket tags that immediately follow the terminator
-    /// belong to the sentence they close ("… born in 1920. [c1]").
+    /// followed by whitespace, a tag, a closing quote, or the end of text
+    /// (so "12.5s" and "donna_cape.mov" survive) or at a line break, and any
+    /// bracket tags that immediately follow the terminator belong to the
+    /// sentence they close ("… born in 1920. [c1]").
     static func splitSentences(_ text: String) -> [String] {
         var sentences: [String] = []
         var current = ""
@@ -111,15 +112,25 @@ enum HallieCompositionVerifier {
             }
             current.append(character)
             if character == "." || character == "!" || character == "?" {
-                // Decimal / abbreviation guard: "12.5", "b.1920".
-                if index + 1 < scalars.count, scalars[index + 1].isNumber {
-                    index += 1
-                    continue
-                }
                 // Consume run-on terminators ("?!", "...").
                 var lookahead = index + 1
                 while lookahead < scalars.count,
                       [".", "!", "?"].contains(scalars[lookahead]) {
+                    current.append(scalars[lookahead])
+                    lookahead += 1
+                }
+                // Decimal / filename / abbreviation guard: "12.5s",
+                // "donna_cape.mov", "b.1920" — a terminator glued to the next
+                // word does not end a sentence.
+                if lookahead < scalars.count,
+                   scalars[lookahead].isLetter || scalars[lookahead].isNumber
+                    || scalars[lookahead] == "_" {
+                    index = lookahead
+                    continue
+                }
+                // Closing quotes / parentheses stay with the sentence.
+                while lookahead < scalars.count,
+                      ["\"", "”", "’", "'", ")"].contains(scalars[lookahead]) {
                     current.append(scalars[lookahead])
                     lookahead += 1
                 }
