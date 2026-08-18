@@ -104,7 +104,7 @@ struct RelocateSheet: View {
 
     private var freeBytesString: String {
         guard let free = freeBytesOnDest else { return "—" }
-        return ByteCountFormatter.string(fromByteCount: free, countStyle: .file)
+        return MediaBytes.display(free)
     }
 
     private var insufficientSpace: Bool {
@@ -155,7 +155,7 @@ struct RelocateSheet: View {
     }
 
     private var redundantBytesString: String {
-        ByteCountFormatter.string(fromByteCount: redundantBytes, countStyle: .file)
+        MediaBytes.display(redundantBytes)
     }
 
     // MARK: - Body
@@ -364,7 +364,7 @@ struct RelocateSheet: View {
     /// preview and the live run.
     private func bucketSummaryRows(_ r: ReconcileResult) -> some View {
         let readyBytes = r.ready.reduce(0) { $0 + $1.sizeBytes }
-        let readyBytesString = ByteCountFormatter.string(fromByteCount: readyBytes, countStyle: .file)
+        let readyBytesString = MediaBytes.display(readyBytes)
         let nRedundant = r.safelyRedundant.count
         return VStack(alignment: .leading, spacing: 2) {
             bucketRow("Ready to migrate", count: r.ready.count, detail: readyBytesString)

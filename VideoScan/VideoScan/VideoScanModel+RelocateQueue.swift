@@ -305,7 +305,6 @@ extension VideoScanModel {
         guard let s = job.summary else {
             return job.statusLabel
         }
-        let gb = Double(s.bytesCopied) / 1_073_741_824.0
         let duration: String = {
             guard let e = job.elapsedSeconds else { return "" }
             if e < 60 { return "\(Int(e))s" }
@@ -316,7 +315,8 @@ extension VideoScanModel {
         if s.safelyBackedUpCount > 0 {
             parts.append("\(s.safelyBackedUpCount) safely backed up")
         }
-        parts.append(String(format: "%.1f GB written", gb))
+        // Rick 2026-08-18: decimal via the shared formatter (was base-1024 "GB").
+        parts.append("\(MediaBytes.display(s.bytesCopied)) written")
         let summaryLine = parts.joined(separator: " · ")
         return duration.isEmpty ? summaryLine : "\(summaryLine) in \(duration)"
     }

@@ -31,7 +31,8 @@ struct VolumeProvenanceSheet: View {
             buttonBar
         }
         .padding(22)
-        .frame(minWidth: 620, idealWidth: 680, minHeight: 520)
+        // Sheet size +10% both axes (Rick 2026-08-18: content needed scrolling at the old default).
+        .frame(minWidth: 680, idealWidth: 750, minHeight: 570, idealHeight: 620)
     }
 
     // MARK: - Header
@@ -297,12 +298,7 @@ private struct DestinationCard: View {
     }
 
     private static func byteString(_ bytes: Int64) -> String {
-        let mb: Int64 = 1_048_576
-        let gb: Int64 = 1_073_741_824
-        let tb: Int64 = 1_099_511_627_776
-        if bytes < mb { return String(format: "%.0f KB", Double(bytes) / 1024.0) }
-        if bytes < gb { return String(format: "%.1f MB", Double(bytes) / Double(mb)) }
-        if bytes < tb { return String(format: "%.1f GB", Double(bytes) / Double(gb)) }
-        return String(format: "%.2f TB", Double(bytes) / Double(tb))
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 }

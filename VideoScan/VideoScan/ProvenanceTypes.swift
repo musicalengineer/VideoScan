@@ -311,9 +311,8 @@ struct MigrationOverview: Identifiable, Equatable {
         if bestStuffCount == 0 {
             return "Nothing has been promoted to the Master Archive yet."
         }
-        let gb = Double(bestStuffBytes) / 1_073_741_824.0
-        let gbStr = gb >= 1 ? String(format: "%.1f GB", gb)
-                            : String(format: "%.0f MB", gb * 1024)
+        // Rick 2026-08-18: decimal via the shared formatter (was base-1024 "GB").
+        let gbStr = MediaBytes.display(bestStuffBytes)
         let cloud = bestStuffWithCloudCopy == 0
             ? "No cloud copy recorded yet — that's the next leg."
             : "\(bestStuffWithCloudCopy) also have a cloud copy."

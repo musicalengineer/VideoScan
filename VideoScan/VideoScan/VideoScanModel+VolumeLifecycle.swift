@@ -246,9 +246,8 @@ extension VideoScanModel {
             let ao = volRecords.filter { $0.streamType == .audioOnly }.count
             let failed = volRecords.filter { $0.streamType == .ffprobeFailed }.count
             let bytes = volRecords.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
-            let mediaSize = bytes < 1_073_741_824
-                ? String(format: "%.1f MB", Double(bytes) / 1_048_576)
-                : String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+            // Rick 2026-08-18: decimal via the shared formatter (was base-1024 "GB").
+            let mediaSize = MediaBytes.display(bytes)
             let codecs = Set(volRecords.compactMap { $0.videoCodec.isEmpty ? nil : $0.videoCodec }).sorted().joined(separator: "; ")
             let containers = Set(volRecords.compactMap { $0.container.isEmpty ? nil : $0.container }).sorted().joined(separator: "; ")
             let lastScan: String

@@ -24,13 +24,15 @@ struct FormattingTests {
     }
 
     // regression: #28 — Byte size formatting: scale crossings (B→KB→MB→GB→TB) render correctly
+    // Decimal since 2026-08-18 (routes through MediaBytes — Finder / df base).
     @Test func humanSize() {
-        #expect(Formatting.humanSize(0) == "0.0 B")
-        #expect(Formatting.humanSize(512) == "512.0 B")
-        #expect(Formatting.humanSize(1024) == "1.0 KB")
-        #expect(Formatting.humanSize(1_048_576) == "1.0 MB")
-        #expect(Formatting.humanSize(1_073_741_824) == "1.0 GB")
-        #expect(Formatting.humanSize(1_099_511_627_776) == "1.0 TB")
+        #expect(Formatting.humanSize(0) == "0 B")
+        #expect(Formatting.humanSize(512) == "512 B")
+        #expect(Formatting.humanSize(1_000) == "1.0 KB")
+        #expect(Formatting.humanSize(1_000_000) == "1.0 MB")
+        #expect(Formatting.humanSize(1_000_000_000) == "1.0 GB")
+        #expect(Formatting.humanSize(1_000_000_000_000) == "1.0 TB")
+        #expect(Formatting.humanSize(1_073_741_824) == "1.1 GB")
     }
 
     @Test func csvEscape() {
@@ -93,11 +95,11 @@ struct FormattingExtendedTests {
         #expect(Formatting.duration(86400) == "24:00:00")
     }
 
-    // regression: #28 — Byte size formatting: sub-KB and non-round values format with one decimal
+    // regression: #28 — Byte size formatting: sub-KB values are whole bytes; non-round values one decimal
     @Test func humanSizeEdgeCases() {
-        #expect(Formatting.humanSize(0) == "0.0 B")
-        #expect(Formatting.humanSize(1) == "1.0 B")
-        #expect(Formatting.humanSize(1023) == "1023.0 B")
-        #expect(Formatting.humanSize(2_500_000_000) == "2.3 GB")
+        #expect(Formatting.humanSize(0) == "0 B")
+        #expect(Formatting.humanSize(1) == "1 B")
+        #expect(Formatting.humanSize(999) == "999 B")
+        #expect(Formatting.humanSize(2_500_000_000) == "2.5 GB")
     }
 }

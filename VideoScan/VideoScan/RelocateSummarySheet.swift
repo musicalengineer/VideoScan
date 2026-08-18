@@ -471,6 +471,7 @@ struct RelocateSummarySheet: View {
     // MARK: - Helpers
 
     private func byteString(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 }

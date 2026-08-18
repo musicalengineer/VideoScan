@@ -386,9 +386,10 @@ import Testing
     }
 
     @Test func humanSizeFormat() {
-        #expect(Formatting.humanSize(0) == "0.0 B")
-        #expect(Formatting.humanSize(1024) == "1.0 KB")
-        #expect(Formatting.humanSize(1_073_741_824) == "1.0 GB")
+        // Decimal since 2026-08-18 (MediaBytes — Finder / df base).
+        #expect(Formatting.humanSize(0) == "0 B")
+        #expect(Formatting.humanSize(1_000) == "1.0 KB")
+        #expect(Formatting.humanSize(1_000_000_000) == "1.0 GB")
     }
 
     @Test func csvEscapeQuotesCommas() {

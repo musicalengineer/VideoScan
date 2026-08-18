@@ -80,8 +80,10 @@ struct MediaDistributionSheet: View {
             footer
         }
         .padding(20)
-        .frame(minWidth: 720, idealWidth: 860, maxWidth: .infinity,
-               minHeight: 460, idealHeight: 560, maxHeight: .infinity)
+        // Sheet size +10% both axes (Rick 2026-08-18: the legend and
+        // footer needed scrolling at the old 720×460 default).
+        .frame(minWidth: 800, idealWidth: 950, maxWidth: .infinity,
+               minHeight: 510, idealHeight: 620, maxHeight: .infinity)
         .task { recompute(reproject: true) }
         // Refresh when the catalog changes underneath us (deletes,
         // migrations, repairs all post this).

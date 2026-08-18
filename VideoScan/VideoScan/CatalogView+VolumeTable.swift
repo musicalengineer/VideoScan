@@ -682,17 +682,12 @@ extension CatalogView {
         }
     }
 
+    /// Media Size cell. Rick 2026-08-18: DECIMAL via `MediaBytes` — this
+    /// was base-1024 with "GB"/"TB" labels, so the column read ~7–10%
+    /// under Finder and the TOTAL MEDIA footer under it disagreed with
+    /// `df -H`. Same helper as the footer, so the column still adds up.
     private static func formatBytesStatic(_ bytes: Int64) -> String {
-        let mb: Int64 = 1_048_576
-        let gb: Int64 = 1_073_741_824
-        let tb: Int64 = 1_099_511_627_776
-        if bytes < gb {
-            return String(format: "%.1f MB", Double(bytes) / Double(mb))
-        } else if bytes < tb {
-            return String(format: "%.1f GB", Double(bytes) / Double(gb))
-        } else {
-            return String(format: "%.2f TB", Double(bytes) / Double(tb))
-        }
+        MediaBytes.display(bytes)
     }
 
     private static func shortDateStatic(_ date: Date) -> String {

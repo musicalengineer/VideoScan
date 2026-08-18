@@ -411,6 +411,10 @@ struct CatalogView: View {
     /// triggers: the calculation is O(records), so it must never run
     /// from a view body.
     @State var storageTotals = CatalogStorageTotals()
+    /// In-flight existence probe for the footer's "marked deleted, still
+    /// on disk" caption (Rick 2026-08-18). Held so a newer recompute can
+    /// cancel a stale sweep before it publishes into `storageTotals`.
+    @State var manuallyDeletedProbeTask: Task<Void, Never>? = nil
     /// Measured frames of the volume table's Media Size / Scanned /
     /// Phase columns, reported by the cells themselves via
     /// VolumeColumnFramesKey. The TOTAL MEDIA footer puts one figure on
@@ -1218,13 +1222,9 @@ struct CatalogView: View {
         let ao = records.filter { $0.streamType == .audioOnly }.count
         let noStreams = records.filter { $0.streamType == .noStreams }.count
 
-        let catBytes = records.count * 2048
-        let catSize = catBytes < 1_048_576
-            ? String(format: "%.0f KB", Double(catBytes) / 1024)
-            : String(format: "%.1f MB", Double(catBytes) / 1_048_576)
-        let mediaSize = totalBytes < 1_073_741_824
-            ? String(format: "%.1f MB", Double(totalBytes) / 1_048_576)
-            : String(format: "%.1f GB", Double(totalBytes) / 1_073_741_824)
+        // Rick 2026-08-18: decimal via the shared formatter (was base-1024 "GB").
+        let catSize = MediaBytes.display(Int64(records.count) * 2048)
+        let mediaSize = MediaBytes.display(totalBytes)
 
         let codecs = Set(records.compactMap { $0.videoCodec.isEmpty ? nil : $0.videoCodec })
         let containers = Set(records.compactMap { $0.container.isEmpty ? nil : $0.container })

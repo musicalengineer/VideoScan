@@ -266,10 +266,8 @@ struct DriveHealthCard: View {
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useGB, .useTB]
-        formatter.countStyle = .decimal
-        return formatter.string(fromByteCount: bytes)
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -332,7 +330,8 @@ struct DriveHealthSheet: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(minWidth: 540, minHeight: 460)
+        // Sheet size +10% both axes (Rick 2026-08-18: content needed scrolling at the old default).
+        .frame(minWidth: 600, idealWidth: 640, minHeight: 510, idealHeight: 560)
         .accessibilityIdentifier("driveHealth.sheet")
     }
 }

@@ -34,7 +34,8 @@ struct RelocateJobsPanel: View {
             footerBar
         }
         .padding(20)
-        .frame(minWidth: 640, idealWidth: 720, minHeight: 420, idealHeight: 520)
+        // Sheet size +10% both axes (Rick 2026-08-18: content needed scrolling at the old default).
+        .frame(minWidth: 700, idealWidth: 800, minHeight: 460, idealHeight: 570)
         .accessibilityIdentifier("relocateJobsPanel.root")
         // Show-summary sheet — opened from row context menu. Carries
         // the archived RelocateSummary so the same family-friendly
@@ -320,7 +321,8 @@ struct RelocateJobsPanel: View {
     }
 
     private func byteString(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 
     private func elapsedString(_ seconds: TimeInterval) -> String {

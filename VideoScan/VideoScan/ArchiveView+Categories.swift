@@ -125,7 +125,7 @@ struct ArchiveCategorySnapshot {
 
     /// Footer "N of M media files archived · X GB verified".
     func footerText(totals: ArchivePromotionIndex.Totals) -> String {
-        let bytes = ByteCountFormatter.string(fromByteCount: totals.verifiedBytes, countStyle: .file)
+        let bytes = MediaBytes.display(totals.verifiedBytes)
         return "\(archived.count) of \(activeAssetCount) media files archived · \(bytes) verified"
     }
 

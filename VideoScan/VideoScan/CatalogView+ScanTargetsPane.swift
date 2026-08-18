@@ -184,6 +184,7 @@ extension CatalogView {
             records: model.records,
             onlineVolumes: onlineVolumes
         )
+        scheduleManuallyDeletedProbe(onlineVolumes: onlineVolumes)
         // Content-hash backfill plan for the Catalog Options menu. Reuses
         // the SAME cached volume set rather than stat()-ing per record.
         hashBackfillPlan = VideoScanModel.planContentHashBackfill(
@@ -228,6 +229,39 @@ extension CatalogView {
             )
         }
         volumeAggregateCache = built
+    }
+
+    /// The footer's "+ X TB marked deleted, still on disk" figure needs
+    /// one `stat` per manually-deleted record — filesystem I/O that must
+    /// never run inside `recomputeVolumeAggregates()` on the main actor.
+    /// Same shape as MediaDistributionSheet's compute: project the
+    /// (small) manually-deleted subset here on main, hand the Sendable
+    /// probes to a detached task, publish the answer back under a
+    /// generation guard so a stale sweep can't overwrite a newer one.
+    /// Until it reports, `manuallyDeletedOnDiskBytes` is nil and the
+    /// caption hedges ("may still be on disk").
+    ///
+    /// Memory: one (path, Int64) pair per manually-deleted record —
+    /// ~1,100 records ≈ 150 KB on Rick's catalog; worst case O(records).
+    private func scheduleManuallyDeletedProbe(onlineVolumes: Set<String>) {
+        manuallyDeletedProbeTask?.cancel()
+        let probes = CatalogStorageTotalsCalculator.manuallyDeletedProbes(
+            records: model.records, onlineVolumes: onlineVolumes)
+        guard !probes.isEmpty else {
+            storageTotals.manuallyDeletedOnDiskBytes = 0
+            storageTotals.manuallyDeletedOnDiskFiles = 0
+            return
+        }
+        manuallyDeletedProbeTask = Task {
+            // (`Task.detached` ≈ a worker thread that does NOT inherit
+            // the caller's actor; only Sendable values cross.)
+            let found = await Task.detached(priority: .utility) {
+                CatalogStorageTotalsCalculator.manuallyDeletedOnDisk(probes)
+            }.value
+            if Task.isCancelled { return }   // superseded by a newer recompute
+            storageTotals.manuallyDeletedOnDiskBytes = found.bytes
+            storageTotals.manuallyDeletedOnDiskFiles = found.files
+        }
     }
 
     /// Look up the CatalogScanTarget for a VolumeRow ID.
@@ -728,11 +762,12 @@ extension CatalogView {
         let perRowHeight: CGFloat = 28
         let bottomMargin: CGFloat = 8
         let displayRowCount = max(CGFloat(volumeTableRows.count), 3)
+        let footerHeight = VolumeTableTotalsFooter.height(for: storageTotals)
         let needed = toolbarHeight + tableHeaderHeight
                    + (displayRowCount * perRowHeight) + bottomMargin
-                   + VolumeTableTotalsFooter.height
+                   + footerHeight
         // Cap raised by the footer's height so pinning TOTAL MEDIA
         // doesn't cost a row of visible volumes at the 400pt ceiling.
-        return min(400 + VolumeTableTotalsFooter.height, needed)
+        return min(400 + footerHeight, needed)
     }
 }

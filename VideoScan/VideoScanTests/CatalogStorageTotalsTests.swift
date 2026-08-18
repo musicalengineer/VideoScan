@@ -365,21 +365,149 @@ struct CatalogStorageDisplayTests {
         #expect(t.uniqueCaption.contains("duplicates"))
     }
 
-    /// Rick's requested shape: "5.6 TB", "150 GB" — one decimal until
-    /// three significant figures, then none.
+    /// Rick's requested shape: "5.6 TB", "150 GB" — one decimal for TB,
+    /// none for GB at or above 10. DECIMAL units since 2026-08-18
+    /// (Finder / `df -H` base) — the old base-1024 footer read "4.9 TB"
+    /// for a drive Finder calls 5.41 TB.
     @Test func displaySizeMatchesRequestedShape() {
-        #expect(CatalogStorageTotals.displaySize(0) == "0 GB")
-        #expect(CatalogStorageTotals.displaySize(150 * GB) == "150 GB")
-        #expect(CatalogStorageTotals.displaySize(Int64(5.6 * Double(GB) * 1024)) == "5.6 TB")
-        #expect(CatalogStorageTotals.displaySize(7 * GB) == "7.0 GB")
+        #expect(CatalogStorageTotals.displaySize(0) == "0 B")
+        #expect(CatalogStorageTotals.displaySize(150 * MediaBytes.GB) == "150 GB")
+        #expect(CatalogStorageTotals.displaySize(5_600 * MediaBytes.GB) == "5.6 TB")
+        #expect(CatalogStorageTotals.displaySize(7 * MediaBytes.GB) == "7.0 GB")
+        #expect(CatalogStorageTotals.displaySize(5_410 * MediaBytes.GB) == "5.4 TB")
     }
 
-    /// Base-1024, matching the Media Size column directly above the
-    /// footer. A total in different units than the column it sits under
-    /// reads as a bug.
+    /// Same helper as the Media Size column directly above the footer,
+    /// so the total still visibly adds up to the column it sits under —
+    /// and both now agree with Finder.
     @Test func displayUsesSameBaseAsMediaSizeColumn() {
-        #expect(CatalogStorageTotals.displaySize(1_073_741_824) == "1.0 GB")
-        #expect(CatalogStorageTotals.displaySize(1_099_511_627_776) == "1.0 TB")
+        #expect(CatalogStorageTotals.displaySize(1_000_000_000) == "1.0 GB")
+        #expect(CatalogStorageTotals.displaySize(1_000_000_000_000) == "1.0 TB")
+        #expect(CatalogStorageTotals.displaySize(1_073_741_824) == MediaBytes.display(1_073_741_824))
+        #expect(CatalogStorageTotals.displaySize(-5) == "0 B")   // corrupt metadata clamps, never "-5 B"
+    }
+}
+
+// MARK: - Manually deleted (Rick 2026-08-18)
+
+/// Migrate's safely-redundant bucket marks a source record
+/// `.manuallyDeleted` without touching the file. The catalog view hides
+/// those rows; the footer used to COUNT them, so TOTAL MEDIA sat ~1.1 TB
+/// above the catalog's own figure. Pinned here: they leave every headline
+/// number and land in their own honesty field + caption.
+@Suite("Storage totals — manually deleted records")
+struct CatalogStorageManuallyDeletedTests {
+
+    private func mdRec(_ name: String, bytes: Int64, dir: String = "/Volumes/SanDiskWorkspace/Old") -> VideoRecord {
+        let r = stRec(name, bytes: bytes, dir: dir, md5: "md-\(name)")
+        r.archiveStage = .manuallyDeleted
+        return r
+    }
+
+    @Test func manuallyDeletedLeavesGrossUniqueAndOnline() {
+        let live = stRec("a.mov", bytes: 4 * GB, md5: "a")
+        let dead = mdRec("gone.mov", bytes: 3 * GB)
+        let t = CatalogStorageTotalsCalculator.compute(records: [live, dead],
+                                                       onlineVolumes: ["LaCie8TB", "SanDiskWorkspace"])
+        #expect(t.grossBytes == 4 * GB)
+        #expect(t.uniqueBytes == 4 * GB)
+        #expect(t.onlineBytes == 4 * GB)
+        #expect(t.fileCount == 1)
+        #expect(t.uniqueFileCount == 1)
+        #expect(t.manuallyDeletedBytes == 3 * GB)
+        #expect(t.manuallyDeletedFiles == 1)
+        #expect(t.waterfallBalances)
+    }
+
+    /// A manually-deleted record must not participate in the duplicate
+    /// collapse either — its twin on a live drive is the KEEPER, not an
+    /// extra copy of a ghost.
+    @Test func manuallyDeletedNeverElectsAKeeper() {
+        let live = stRec("a.mov", bytes: 2 * GB, dir: "/Volumes/LaCie8TB/Family", md5: "same")
+        let dead = mdRec("a.mov", bytes: 2 * GB, dir: "/Volumes/A_sorts_first/Family")
+        let t = CatalogStorageTotalsCalculator.compute(records: [live, dead])
+        #expect(t.uniqueBytes == 2 * GB)
+        #expect(t.duplicateBytes == 0)
+    }
+
+    @Test func manuallyDeletedVolumeDoesNotCountAsAVolume() {
+        let live = stRec("a.mov", bytes: 1 * GB)
+        let dead = mdRec("b.mov", bytes: 1 * GB, dir: "/Volumes/OnlyGhosts/x")
+        let t = CatalogStorageTotalsCalculator.compute(records: [live, dead])
+        #expect(t.volumeCount == 1)
+    }
+
+    @Test func allManuallyDeletedIsAnEmptyFooterWithACaption() {
+        let t = CatalogStorageTotalsCalculator.compute(records: [mdRec("x.mov", bytes: 5 * GB)])
+        #expect(t.grossBytes == 0)
+        #expect(t.fileCount == 0)
+        #expect(t.manuallyDeletedBytes == 5 * GB)
+        #expect(t.manuallyDeletedCaption != nil)
+    }
+
+    // MARK: Caption
+
+    @Test func captionAbsentWhenNothingIsMarkedDeleted() {
+        let t = CatalogStorageTotalsCalculator.compute(records: [stRec("a.mov")])
+        #expect(t.manuallyDeletedCaption == nil)
+        #expect(!t.breakdownTooltip.contains("Manually Deleted"))
+    }
+
+    /// Before the off-main probe reports, the caption must HEDGE — the
+    /// footer has not looked at the disk yet.
+    @Test func captionHedgesUntilTheProbeReports() {
+        var t = CatalogStorageTotalsCalculator.compute(records: [stRec("a.mov"), mdRec("g.mov", bytes: 1_300 * MediaBytes.GB)])
+        #expect(t.manuallyDeletedOnDiskBytes == nil)
+        #expect(t.manuallyDeletedCaption == "+ 1.3 TB marked deleted (may still be on disk)")
+        #expect(t.breakdownTooltip.contains("on-disk check pending"))
+
+        t.manuallyDeletedOnDiskBytes = 1_260 * MediaBytes.GB
+        t.manuallyDeletedOnDiskFiles = 1
+        #expect(t.manuallyDeletedCaption == "+ 1.3 TB marked deleted, still on disk")
+        #expect(t.breakdownTooltip.contains("still on disk"))
+    }
+
+    /// Probe looked and found every marked file truly gone → no caption.
+    /// Nothing to disclose; the footer should not grow a line for zero.
+    @Test func captionAbsentWhenProbeFindsNothingOnDisk() {
+        var t = CatalogStorageTotalsCalculator.compute(records: [stRec("a.mov"), mdRec("g.mov", bytes: 1 * GB)])
+        t.manuallyDeletedOnDiskBytes = 0
+        #expect(t.manuallyDeletedCaption == nil)
+        #expect(VolumeTableTotalsFooter.height(for: t) == VolumeTableTotalsFooter.height)
+        t.manuallyDeletedOnDiskBytes = 1 * GB
+        #expect(VolumeTableTotalsFooter.height(for: t) > VolumeTableTotalsFooter.height)
+    }
+
+    // MARK: Probe halves
+
+    @Test func probesCoverOnlyActiveManuallyDeletedOnOnlineVolumes() {
+        let live = stRec("a.mov")
+        let onlineDead = mdRec("b.mov", bytes: 1 * GB, dir: "/Volumes/SanDiskWorkspace/x")
+        let offlineDead = mdRec("c.mov", bytes: 1 * GB, dir: "/Volumes/MyBook/x")
+        let purgedDead = mdRec("d.mov", bytes: 1 * GB)
+        purgedDead.purgedAt = Date()
+        let zeroDead = mdRec("e.mov", bytes: 0)
+        let probes = CatalogStorageTotalsCalculator.manuallyDeletedProbes(
+            records: [live, onlineDead, offlineDead, purgedDead, zeroDead],
+            onlineVolumes: ["SanDiskWorkspace", "LaCie8TB"])
+        #expect(probes.map(\.fullPath) == ["/Volumes/SanDiskWorkspace/x/b.mov"])
+        // Unknown reachability keeps every checkable candidate.
+        let all = CatalogStorageTotalsCalculator.manuallyDeletedProbes(
+            records: [live, onlineDead, offlineDead, purgedDead, zeroDead])
+        #expect(all.count == 2)
+    }
+
+    /// The I/O half with an injected `exists` — no real filesystem.
+    @Test func onDiskSumsOnlyWhatExists() {
+        let probes = [
+            CatalogStorageTotalsCalculator.ManuallyDeletedProbe(fullPath: "/v/keep.mov", sizeBytes: 3 * GB),
+            CatalogStorageTotalsCalculator.ManuallyDeletedProbe(fullPath: "/v/gone.mov", sizeBytes: 5 * GB),
+        ]
+        let r = CatalogStorageTotalsCalculator.manuallyDeletedOnDisk(probes) { $0.hasSuffix("keep.mov") }
+        #expect(r.bytes == 3 * GB)
+        #expect(r.files == 1)
+        let none = CatalogStorageTotalsCalculator.manuallyDeletedOnDisk([]) { _ in true }
+        #expect(none.bytes == 0 && none.files == 0)
     }
 }
 

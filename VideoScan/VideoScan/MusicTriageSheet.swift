@@ -162,7 +162,7 @@ struct MusicTriageSheet: View {
                                 .truncationMode(.head)
                         }
                         Spacer()
-                        Text(rec.size)
+                        Text(rec.sizeDisplay)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.secondary)
                     }

@@ -308,10 +308,8 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     }
 
     static func humanBytes(_ bytes: Int64) -> String {
-        let f = ByteCountFormatter()
-        f.allowedUnits = [.useMB, .useGB, .useTB]
-        f.countStyle = .file
-        return f.string(fromByteCount: bytes)
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 }
 

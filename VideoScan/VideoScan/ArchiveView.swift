@@ -201,7 +201,7 @@ struct ArchiveView: View {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(totals.verified > 0 ? Color.green : Color.secondary)
                         .font(.system(size: 13))
-                    Text("\(totals.verified) verified · \(ByteCountFormatter.string(fromByteCount: totals.verifiedBytes, countStyle: .file))")
+                    Text("\(totals.verified) verified · \(MediaBytes.display(totals.verifiedBytes))")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                     if totals.unverified > 0 {

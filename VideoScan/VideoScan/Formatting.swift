@@ -20,14 +20,16 @@ enum Formatting {
     }
 
     /// Format byte count as human-readable size (KB, MB, GB, etc.).
+    ///
+    /// Routes through `MediaBytes` (Rick 2026-08-18): DECIMAL units,
+    /// the same base Finder and `df -H` use. This helper used to be
+    /// base-1024 with "GB" labels, so a freshly scanned record's Size
+    /// column disagreed with Finder's Get Info by ~7%. Records scanned
+    /// before this change keep their persisted base-1024 `size` string
+    /// until rescanned; the catalog table now formats from `sizeBytes`
+    /// so the column reads consistently regardless.
     static func humanSize(_ bytes: Int64) -> String {
-        let units = ["B", "KB", "MB", "GB", "TB"]
-        var val = Double(bytes)
-        for unit in units {
-            if abs(val) < 1024 { return String(format: "%.1f \(unit)", val) }
-            val /= 1024
-        }
-        return String(format: "%.1f PB", val)
+        MediaBytes.display(bytes)
     }
 
     /// Human-readable size from megabytes (e.g., 12587 MB → "12.3 GB").

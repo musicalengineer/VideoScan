@@ -200,9 +200,7 @@ let referencePhotoExts: Set<String> = [
 
 enum BundleSize {
     static func human(_ bytes: Int64) -> String {
-        let fmt = ByteCountFormatter()
-        fmt.allowedUnits = [.useGB, .useMB, .useKB]
-        fmt.countStyle = .file
-        return fmt.string(fromByteCount: bytes)
+        // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
+        MediaBytes.display(bytes)
     }
 }

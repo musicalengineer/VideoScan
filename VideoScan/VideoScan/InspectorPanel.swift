@@ -144,7 +144,7 @@ struct InspectorPanel: View {
 
                     // Sections
                     inspectorSection("General", systemImage: "doc") {
-                        inspectorRow("Size", rec.size)
+                        inspectorRow("Size", rec.sizeDisplay)
                         inspectorRow("Duration", rec.duration)
                         inspectorRow("Container", rec.container)
                         inspectorRow("Extension", rec.ext)

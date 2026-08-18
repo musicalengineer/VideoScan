@@ -36,7 +36,12 @@ struct MigrationOverviewSheet: View {
             buttonBar
         }
         .padding(22)
-        .frame(minWidth: 720, idealWidth: 800, minHeight: 600, idealHeight: 720)
+        // Sheet size +10% both axes (Rick 2026-08-18: four sections
+        // needed scrolling at the old 800×720 default). 790pt tall still
+        // clears a 1440×900 display with the menu bar; the ScrollView
+        // stays only because the flow section is one bar per source
+        // role and can genuinely outgrow any fixed height.
+        .frame(minWidth: 800, idealWidth: 880, minHeight: 660, idealHeight: 790)
     }
 
     // MARK: - Header
@@ -72,7 +77,7 @@ struct MigrationOverviewSheet: View {
             } else {
                 HStack(alignment: .top, spacing: 22) {
                     fleetChart
-                        .frame(width: 220, height: 220)
+                        .frame(width: 200, height: 200)
                     fleetLegend
                     Spacer()
                 }

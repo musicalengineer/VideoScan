@@ -181,7 +181,8 @@ struct VolumeTableTotalsFooter: View {
                         .padding(.trailing, 12)
                 }
             }
-            .padding(.vertical, 7)
+            .padding(.top, 7)
+            .padding(.bottom, totals.manuallyDeletedCaption == nil ? 7 : 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(NSColor.underPageBackgroundColor).opacity(0.5))
             .contentShape(Rectangle())
@@ -192,17 +193,48 @@ struct VolumeTableTotalsFooter: View {
                 "Total media in catalog \(totals.grossDisplay). "
                 + "Online now \(totals.onlineDisplay). "
                 + "\(totals.uniqueDisplay) unique media, \(totals.uniqueCaption)."
+                + (totals.manuallyDeletedCaption.map { " \($0)." } ?? "")
             )
             .accessibilityIdentifier("catalog.totalMediaFooter")
-            // Gap between the summary band and the catalog toolbar
-            // below it (Rick 2026-08-11: the middle of the window reads
-            // as crammed). Applied OUTSIDE the background so it is real
-            // whitespace, not a taller tinted band.
-            .padding(.bottom, 10)
+
+            // Honesty caption (Rick 2026-08-18): the gross figure now
+            // EXCLUDES records marked Manually Deleted, to agree with
+            // the catalog view — but Migrate's safely-redundant rule
+            // marks without touching the file, so those bytes are very
+            // often still occupying a drive. Say so, under the figure
+            // they were removed from, in the footer's caption register.
+            // Absent entirely when there is nothing to disclose, so the
+            // common case pays no height for it.
+            if let caption = totals.manuallyDeletedCaption {
+                Text(caption)
+                    .font(Self.captionFont)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, mediaSizeX)
+                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(NSColor.underPageBackgroundColor).opacity(0.5))
+                    .opacity(isStale ? 0.55 : 1.0)
+                    .accessibilityIdentifier("catalog.totalMediaFooter.manuallyDeleted")
+            }
         }
+        // Gap between the summary band and the catalog toolbar
+        // below it (Rick 2026-08-11: the middle of the window reads
+        // as crammed). Applied OUTSIDE the background so it is real
+        // whitespace, not a taller tinted band.
+        .padding(.bottom, 10)
     }
 
     /// Height the pane's auto-sizing math must reserve. Kept next to the
     /// layout it describes so the two stay in step.
     static let height: CGFloat = 48
+    /// Extra height when the manually-deleted caption line is showing.
+    static let captionLineHeight: CGFloat = 16
+
+    /// Height for a given totals value — the pane's auto-size math calls
+    /// this so the caption line never squeezes a volume row off screen.
+    static func height(for totals: CatalogStorageTotals) -> CGFloat {
+        height + (totals.manuallyDeletedCaption == nil ? 0 : captionLineHeight)
+    }
 }

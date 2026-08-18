@@ -45,6 +45,20 @@
 // it were a measurement is the failure mode this field exists to
 // prevent.
 //
+// MANUALLY DELETED (Rick 2026-08-18). Migrate's safely-redundant bucket
+// marks a source record `archiveStage == .manuallyDeleted` WITHOUT
+// touching the file — "marked, kept for audit". The catalog view hides
+// those rows, but this footer used to count them, so TOTAL MEDIA sat
+// ~1.1 TB above the catalog's own number and Rick could not reconcile
+// the two. Now the footer excludes them from gross / online / unique
+// exactly as the catalog view does, and reports them SEPARATELY:
+// `manuallyDeletedBytes` (from metadata, this pure pass) and, once the
+// off-main probe reports in, `manuallyDeletedOnDiskBytes` — the bytes
+// whose file still actually exists. The footer's caption
+// "+ X TB marked deleted, still on disk" is that second figure; until
+// the probe lands it falls back to the metadata figure and says
+// "may still be on disk".
+//
 // COST. Two O(n) passes plus one dictionary group-by, no disk I/O, no
 // media reads. Budgeted at 100k records by CatalogStorageTotalsTests
 // (feature-test checklist dimension 2). Memory is one small String key
@@ -102,6 +116,18 @@ struct CatalogStorageTotals: Equatable, Sendable {
     /// partial MD5 to twin on nor a completed dup analysis. They were
     /// necessarily scored unique, so this is the size of the doubt.
     var unanalyzedFiles: Int = 0
+
+    /// Bytes of active records marked `.manuallyDeleted` — EXCLUDED from
+    /// every figure above (Rick 2026-08-18: match the catalog view).
+    /// Metadata only; the file may or may not still exist.
+    var manuallyDeletedBytes: Int64 = 0
+    var manuallyDeletedFiles: Int = 0
+    /// Of `manuallyDeletedBytes`, the bytes whose file the off-main
+    /// probe found still present on a mounted volume. `nil` until the
+    /// probe has reported for THIS catalog revision — the caption then
+    /// hedges ("may still be on disk") instead of asserting.
+    var manuallyDeletedOnDiskBytes: Int64? = nil
+    var manuallyDeletedOnDiskFiles: Int = 0
 
     /// True when every excluded byte is accounted for. The invariant the
     /// sensor test pins; also cheap enough to assert in debug UI code.
@@ -245,6 +271,62 @@ enum CatalogStorageTotalsCalculator {
         return rec.duplicateGroupID != nil
     }
 
+    // MARK: Manually deleted
+
+    /// The catalog view's own exclusion, mirrored here so the footer and
+    /// the table can never disagree about what "in the catalog" means.
+    static func isManuallyDeleted(_ rec: VideoRecord) -> Bool {
+        rec.archiveStage == .manuallyDeleted
+    }
+
+    /// One manually-deleted record's identity for the off-main existence
+    /// probe. A value type so it can cross to a detached task —
+    /// `VideoRecord` is a class the main actor owns.
+    struct ManuallyDeletedProbe: Sendable, Equatable {
+        var fullPath: String
+        var sizeBytes: Int64
+    }
+
+    /// Project the manually-deleted subset for probing. Runs on the main
+    /// actor (cheap field reads, O(records) but no I/O). Records on
+    /// volumes known to be OFFLINE are dropped up front: their files
+    /// cannot be checked, so they are neither "still on disk" nor gone —
+    /// and skipping them keeps the probe from stat()-ing unmounted paths.
+    /// `nil` reachability keeps everything, matching `compute`.
+    static func manuallyDeletedProbes(
+        records: [VideoRecord],
+        onlineVolumes: Set<String>? = nil
+    ) -> [ManuallyDeletedProbe] {
+        var out: [ManuallyDeletedProbe] = []
+        for rec in pfActiveRecords(records) where isManuallyDeleted(rec) && rec.sizeBytes > 0 {
+            if let online = onlineVolumes,
+               !online.contains(VolumeReachability.volumeName(forPath: rec.fullPath)) {
+                continue
+            }
+            out.append(ManuallyDeletedProbe(fullPath: rec.fullPath, sizeBytes: rec.sizeBytes))
+        }
+        return out
+    }
+
+    /// The I/O half: which probes still have a file behind them. MUST run
+    /// off the main actor — it is one `stat` per manually-deleted record
+    /// (~1,100 on Rick's catalog today; O(records) in the worst case).
+    /// The caller wraps it in `Task.detached` and publishes the result
+    /// back into `CatalogStorageTotals` under a generation guard.
+    /// `exists` is injectable so tests never touch the real filesystem.
+    static func manuallyDeletedOnDisk(
+        _ probes: [ManuallyDeletedProbe],
+        exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> (bytes: Int64, files: Int) {
+        var bytes: Int64 = 0
+        var files = 0
+        for p in probes where exists(p.fullPath) {
+            bytes += p.sizeBytes
+            files += 1
+        }
+        return (bytes, files)
+    }
+
     // MARK: Entry point
 
     /// Compute both headline numbers and the full waterfall.
@@ -267,14 +349,32 @@ enum CatalogStorageTotalsCalculator {
         records: [VideoRecord],
         onlineVolumes: Set<String>? = nil
     ) -> CatalogStorageTotals {
-        let active = pfActiveRecords(records)
-        guard !active.isEmpty else { return CatalogStorageTotals() }
+        let present = pfActiveRecords(records)
+        guard !present.isEmpty else { return CatalogStorageTotals() }
+
+        var t = CatalogStorageTotals()
+
+        // Manually-deleted records leave the storage arithmetic here —
+        // the catalog view hides them, so the footer must not count
+        // them (Rick 2026-08-18: the two numbers disagreed by ~1.1 TB).
+        // Their bytes are tallied separately for the honesty caption.
+        // One partition pass; `active` is what every figure below sees.
+        var active: [VideoRecord] = []
+        active.reserveCapacity(present.count)
+        for rec in present {
+            if isManuallyDeleted(rec) {
+                t.manuallyDeletedBytes += max(0, rec.sizeBytes)
+                t.manuallyDeletedFiles += 1
+            } else {
+                active.append(rec)
+            }
+        }
+        guard !active.isEmpty else { return t }
 
         // Precompute the two per-catalog sets ONCE (the O(n²) trap).
         let videoStemKeys = MusicTriage.videoStemKeys(in: active)
         let duplicateIDs = duplicateCopyIDs(in: active)
 
-        var t = CatalogStorageTotals()
         var volumes = Set<String>()
         volumes.reserveCapacity(32)
 
@@ -322,36 +422,37 @@ enum CatalogStorageTotalsCalculator {
 
 extension CatalogStorageTotals {
 
-    /// Rick's requested shape: "7.3 TB", "150 GB". Base-1024 to MATCH
-    /// the per-volume Media Size column directly above the footer — a
-    /// total that doesn't add up to the column it sits under reads as a
-    /// bug even when both numbers are individually defensible.
-    ///
-    /// Three or more significant figures drop the decimal ("150 GB", not
-    /// "150.4 GB") — spurious precision on a storage-planning figure.
+    /// Rick's requested shape: "7.3 TB", "150 GB" — via `MediaBytes`,
+    /// the app-wide DECIMAL formatter (Rick 2026-08-18). This used to be
+    /// base-1024 to match the Media Size column; both now route through
+    /// the same helper, so they still agree with each other AND with
+    /// Finder / `df -H` / the label on the drive.
     static func displaySize(_ bytes: Int64) -> String {
-        let kb = 1024.0
-        let mb = kb * 1024
-        let gb = mb * 1024
-        let tb = gb * 1024
-        let v = Double(max(0, bytes))
-
-        let (scaled, unit): (Double, String)
-        switch v {
-        case tb...:     (scaled, unit) = (v / tb, "TB")
-        case gb..<tb:   (scaled, unit) = (v / gb, "GB")
-        case mb..<gb:   (scaled, unit) = (v / mb, "MB")
-        case kb..<mb:   (scaled, unit) = (v / kb, "KB")
-        default:        return "0 GB"
-        }
-        return scaled >= 100
-            ? String(format: "%.0f %@", scaled, unit)
-            : String(format: "%.1f %@", scaled, unit)
+        MediaBytes.display(max(0, bytes))
     }
 
     var grossDisplay: String { Self.displaySize(grossBytes) }
     var onlineDisplay: String { Self.displaySize(onlineBytes) }
     var uniqueDisplay: String { Self.displaySize(uniqueBytes) }
+
+    /// The honesty caption under the gross figure (Rick 2026-08-18):
+    ///
+    ///     "+ 1.3 TB marked deleted, still on disk"
+    ///
+    /// Present only when there is something to say. Once the off-main
+    /// probe has reported, the figure is the bytes whose file EXISTS
+    /// right now; before it reports (or if it found nothing reachable
+    /// to check) the metadata total is shown with a hedge, because a
+    /// footer that asserts "still on disk" without having looked is the
+    /// exact kind of confident number this file exists to prevent.
+    var manuallyDeletedCaption: String? {
+        if let onDisk = manuallyDeletedOnDiskBytes {
+            guard onDisk > 0 else { return nil }
+            return "+ \(Self.displaySize(onDisk)) marked deleted, still on disk"
+        }
+        guard manuallyDeletedBytes > 0 else { return nil }
+        return "+ \(Self.displaySize(manuallyDeletedBytes)) marked deleted (may still be on disk)"
+    }
 
     /// The parenthetical beside the unique figure.
     ///
@@ -396,6 +497,14 @@ extension CatalogStorageTotals {
             "",
             "Unique A/V material:  \(Self.displaySize(uniqueBytes))  (\(uniqueFileCount) files)",
         ]
+        if manuallyDeletedFiles > 0 {
+            lines.append("")
+            lines.append("Not counted above: \(manuallyDeletedFiles) records marked")
+            lines.append("Manually Deleted (\(Self.displaySize(manuallyDeletedBytes)))"
+                         + (manuallyDeletedOnDiskBytes.map {
+                             " — \(Self.displaySize($0)) still on disk (\(manuallyDeletedOnDiskFiles) files)"
+                           } ?? " — on-disk check pending"))
+        }
         if unanalyzedFiles > 0 {
             let pct = Int((duplicateCoverage * 100).rounded())
             lines.append("")

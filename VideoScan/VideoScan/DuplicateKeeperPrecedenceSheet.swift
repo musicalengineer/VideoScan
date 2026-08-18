@@ -30,7 +30,8 @@ struct DuplicateKeeperPrecedenceSheet: View {
             footer
         }
         .padding(22)
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 560)
+        // Sheet size +10% both axes (Rick 2026-08-18: content needed scrolling at the old default).
+        .frame(minWidth: 580, idealWidth: 620, minHeight: 620, idealHeight: 660)
     }
 
     // MARK: Header

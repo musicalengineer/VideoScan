@@ -114,7 +114,7 @@ struct FormattingBoundaryTests {
     // --- humanSize() ---
 
     @Test func humanSizeZero() {
-        #expect(Formatting.humanSize(0) == "0.0 B")
+        #expect(Formatting.humanSize(0) == "0 B")
     }
 
     @Test func humanSizeNegative() {
@@ -123,11 +123,12 @@ struct FormattingBoundaryTests {
     }
 
     @Test func humanSizeOneByte() {
-        #expect(Formatting.humanSize(1) == "1.0 B")
+        #expect(Formatting.humanSize(1) == "1 B")
     }
 
     @Test func humanSizeExactKB() {
-        let result = Formatting.humanSize(1024)
+        // Decimal since 2026-08-18: 1000 bytes is the kilobyte Finder shows.
+        let result = Formatting.humanSize(1_000)
         #expect(result == "1.0 KB")
     }
 

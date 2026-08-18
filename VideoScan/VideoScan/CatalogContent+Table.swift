@@ -333,7 +333,9 @@ extension CatalogContent {
             .width(min: 64, ideal: 72)
 
             TableColumn("Size", value: \.sizeBytes) { rec in
-                Text(rec.size)
+                // Formatted from bytes, not the persisted string (Rick
+                // 2026-08-18: decimal units, consistent across rows).
+                Text(rec.sizeDisplay)
                     .help("File size on disk")
             }
             .width(min: 60, ideal: 75)
