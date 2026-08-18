@@ -172,6 +172,7 @@ extension VideoScanModel {
                     let changed = await reelectDuplicateKeepers(policy: livePolicy)
                     duplicateStatus = "Keepers re-elected (\(changed) group\(changed == 1 ? "" : "s") changed)"
                     log("Duplicate analysis: nothing new to group — re-elected keepers under the current order (\(changed) group(s) changed).")
+                    duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
                     NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
                 } else {
                     duplicateStatus = "Duplicates up to date"
@@ -228,7 +229,12 @@ extension VideoScanModel {
             let changed = await reelectDuplicateKeepers(policy: livePolicy)
             if changed > 0 { log("  Re-elected keepers under the current order: \(changed) group(s) changed.") }
         }
-        if selectedIDs == nil { duplicateReanalyzeHint = nil }
+        // Codex final nit: only drop the hint when the catalog really is
+        // current — a re-election that skipped rows leaves the stamp stale
+        // on purpose, and the hint must survive with it.
+        if selectedIDs == nil {
+            duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
+        }
 
         log("""
 

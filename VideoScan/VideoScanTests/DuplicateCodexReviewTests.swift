@@ -567,6 +567,38 @@ struct DuplicateReelectionStampTests {
         #expect(!model.isDuplicateKeeperPolicyStale)
     }
 
+    /// Codex final nit: through the FULL analyzeDuplicates() path, a
+    /// re-election that skipped rows must leave the "re-elect" hint
+    /// visible (the catalog is still policy-stale); a clean second run
+    /// clears it.
+    @Test func hintSurvivesSkippedRowsThroughAnalyzeDuplicates() async {
+        let model = makeModel(tempDir("DupHint"))
+        model.scanTargets = [target("/Volumes/A"), target("/Volumes/B")]
+        model.duplicateKeeperSettings.volumePrecedence = ["B", "A"]
+        let g = UUID()
+        let a = dupRecord(path: "/Volumes/A/x.mov", group: g, disposition: .keep, stamped: true)
+        let b = dupRecord(path: "/Volumes/B/x.mov", group: g, disposition: .extraCopy, stamped: true)
+        model.records = [a, b]
+        model.noteDuplicateKeeperSettingsChanged()
+        #expect(model.duplicateReanalyzeHint == WorkingCopyCleanupText.reanalyzeHint)
+
+        // Force a skipped row during the re-election inside Analyze.
+        model.duplicateReelectionAwaitHook = {
+            let a2 = dupRecord(path: "/Volumes/A/x.mov", group: g, disposition: .keep, stamped: true)
+            model.records = [a2, b]
+        }
+        await model.analyzeDuplicates()
+        #expect(model.isDuplicateKeeperPolicyStale, "stamp deliberately left stale")
+        #expect(model.duplicateReanalyzeHint == WorkingCopyCleanupText.reanalyzeHint, "hint must survive")
+
+        // Second run, no interference: stamp lands, hint clears.
+        model.duplicateReelectionAwaitHook = nil
+        await model.analyzeDuplicates()
+        #expect(!model.isDuplicateKeeperPolicyStale)
+        #expect(model.duplicateReanalyzeHint == nil)
+        #expect(model.records.first { $0.fullPath.hasPrefix("/Volumes/B/") }?.duplicateDisposition == .keep)
+    }
+
     /// NOTE 4 (isolation, CLAUDE.md dimension 4): the stamp carries the
     /// catalog identity. A stamp written for one catalog directory —
     /// poisoned into the shared settings — is stale for another catalog,
