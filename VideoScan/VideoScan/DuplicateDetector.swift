@@ -352,10 +352,24 @@ enum DuplicateDetector {
             let previous = members.first { $0.duplicateDisposition == .keep }
             guard previous !== keeper else { continue }
             changed += 1
+            // Codex follow-up NOTE 2: the new keeper's best match is the
+            // STRONGEST-scoring other member — the same rule
+            // classifyGroup applies — not simply the old keeper. Groups
+            // are small, so re-scoring the members' pairs here is cheap.
+            var pairByIDs: [PairKey: Candidate] = [:]
+            for i in 0..<(members.count - 1) {
+                for j in (i + 1)..<members.count {
+                    if let pair = score(left: members[i], right: members[j]) {
+                        pairByIDs[PairKey(members[i].id, members[j].id)] = pair
+                    }
+                }
+            }
+            let strongest = strongestMatchFilename(for: keeper, in: members, pairByIDs: pairByIDs)
             for m in members {
                 if m === keeper {
                     m.duplicateDisposition = .keep
-                    m.duplicateBestMatchFilename = previous?.filename ?? m.duplicateBestMatchFilename
+                    m.duplicateBestMatchFilename = strongest.isEmpty
+                        ? (previous?.filename ?? m.duplicateBestMatchFilename) : strongest
                 } else {
                     // The old keeper (and anyone marked keep) becomes an
                     // extra or review item by ITS OWN confidence, exactly

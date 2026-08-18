@@ -156,7 +156,7 @@ extension VideoScanModel {
         // grouping/hash work is reused).
         let livePolicy = duplicateKeeperPolicy()
         let policyStale = selectedIDs == nil
-            && duplicateKeeperSettings.lastElectionDescriptor != livePolicy.electionDescriptor
+            && duplicateKeeperSettings.lastElectionDescriptor != electionStamp(for: livePolicy)
 
         var scope: [VideoRecord]
         let deltaCount: Int
@@ -440,8 +440,15 @@ extension VideoScanModel {
                 // the await (mirrors the extra's currentRecord check) — a
                 // catalog replacement during the disk work must not send
                 // the merge to a detached object.
-                let extraRow = currentRecord ?? record
-                if let liveMaster = records.first(where: { $0.id == keeper.id }) {
+                // Codex follow-up MAJOR 1: BOTH merges require the extra's
+                // LIVE row (same id AND path after the await). If the
+                // catalog changed during verification, the pre-await
+                // `record` is detached — merging its fields into the master
+                // would carry stale metadata. Skip, and say so.
+                if currentRecord == nil {
+                    log("  catalog changed during verification — carry-over skipped for \(record.filename) (file already verified and removed)")
+                } else if let extraRow = currentRecord,
+                          let liveMaster = records.first(where: { $0.id == keeper.id }) {
                     let carried = applyHumanMetadataInheritance(from: extraRow, to: liveMaster)
                     if !carried.isEmpty {
                         log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
@@ -674,8 +681,7 @@ extension VideoScanModel {
         // Only an election-affecting change (list order — the toggle
         // doesn't move keepers) earns the hint; codex review B pins the
         // re-election itself to the descriptor comparison in Analyze.
-        let stale = duplicateKeeperSettings.lastElectionDescriptor != duplicateKeeperPolicy().electionDescriptor
-        duplicateReanalyzeHint = stale ? WorkingCopyCleanupText.reanalyzeHint : nil
+        duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
     }
 }
 
@@ -694,15 +700,41 @@ extension VideoScanModel {
         clones.reserveCapacity(grouped.count)
         for rec in grouped { clones.append(rec.snapshotClone()) }
         let (analyzed, changed) = await DuplicateDetector.reelectKeepersDetached(clones, keeperPolicy: policy)
+        // Test seam: lets a test mutate the catalog "during the await"
+        // (same role as SignatureVerification.Hooks for the delete path).
+        if let hook = duplicateReelectionAwaitHook { await hook() }
         let liveInstances = Set(records.map(ObjectIdentifier.init))
+        var skippedRows = 0
         for (original, clone) in zip(grouped, analyzed) {
-            guard liveInstances.contains(ObjectIdentifier(original)) else { continue }
+            guard liveInstances.contains(ObjectIdentifier(original)) else { skippedRows += 1; continue }
             original.duplicateDisposition = clone.duplicateDisposition
             original.duplicateBestMatchFilename = clone.duplicateBestMatchFilename
         }
-        duplicateKeeperSettings.lastElectionDescriptor = policy.electionDescriptor
-        saveDuplicateKeeperSettings()
-        duplicateReanalyzeHint = nil
+        // Codex follow-up NOTE 3: stamp the policy as current ONLY when it
+        // was applied to every row; otherwise leave it stale so the next
+        // Find Duplicates re-elects again.
+        if skippedRows == 0 {
+            duplicateKeeperSettings.lastElectionDescriptor = electionStamp(for: policy)
+            saveDuplicateKeeperSettings()
+            duplicateReanalyzeHint = nil
+        } else {
+            log("  Keeper re-election: \(skippedRows) row(s) changed during the pass — policy left unstamped; the next Find Duplicates re-elects again.")
+        }
         return changed
+    }
+
+    /// The value compared/stored for the ledger stamp: the policy
+    /// descriptor PREFIXED with the catalog's identity (its file location)
+    /// — codex follow-up NOTE 4. Settings live in UserDefaults, which is
+    /// per-user, not per-catalog; another catalog directory or a viewer
+    /// session sharing the same preferences must not be able to suppress
+    /// re-election here.
+    func electionStamp(for policy: DuplicateKeeperPolicy) -> String {
+        "catalog=\(catalogStore.fileLocation);" + policy.electionDescriptor
+    }
+
+    /// True when the stored stamp is not the live one for THIS catalog.
+    var isDuplicateKeeperPolicyStale: Bool {
+        duplicateKeeperSettings.lastElectionDescriptor != electionStamp(for: duplicateKeeperPolicy())
     }
 }

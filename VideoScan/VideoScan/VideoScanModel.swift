@@ -611,6 +611,12 @@ final class VideoScanModel: ObservableObject {
     /// by the next full Analyze pass. Never triggers analysis itself.
     @Published var duplicateReanalyzeHint: String?
 
+    /// Test-only seam for `reelectDuplicateKeepers`: awaited between the
+    /// off-main election and the main-actor copy-back so a test can
+    /// replace catalog rows mid-pass (codex follow-up NOTE 3). nil in
+    /// production.
+    var duplicateReelectionAwaitHook: (@MainActor () async -> Void)?
+
     /// Explicit save — same contract as `saveCatalogScopeSettings`.
     func saveDuplicateKeeperSettings() {
         guard !TestEnvironment.isTestHost else { return }

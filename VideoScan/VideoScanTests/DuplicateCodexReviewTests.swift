@@ -190,7 +190,7 @@ struct DuplicateStalePolicyReelectionTests {
         let b = dupRecord(path: "/Volumes/B/x.mov", group: g, disposition: .extraCopy, stamped: true)
         model.records = [a, b]
         // Stamp the ledger as "elected under [A, B]".
-        model.duplicateKeeperSettings.lastElectionDescriptor = model.duplicateKeeperPolicy().electionDescriptor
+        model.duplicateKeeperSettings.lastElectionDescriptor = model.electionStamp(for: model.duplicateKeeperPolicy())
 
         await model.analyzeDuplicates()
         #expect(a.duplicateDisposition == .keep && b.duplicateDisposition == .extraCopy, "same policy ⇒ no change")
@@ -206,7 +206,7 @@ struct DuplicateStalePolicyReelectionTests {
         #expect(a.duplicateBestMatchFilename == b.filename)
         #expect(a.duplicateGroupID == g && b.duplicateGroupID == g, "grouping untouched")
         #expect(model.duplicateReanalyzeHint == nil)
-        #expect(model.duplicateKeeperSettings.lastElectionDescriptor == model.duplicateKeeperPolicy().electionDescriptor)
+        #expect(model.duplicateKeeperSettings.lastElectionDescriptor == model.electionStamp(for: model.duplicateKeeperPolicy()))
 
         // Third run: nothing stale, nothing new.
         await model.analyzeDuplicates()
@@ -272,11 +272,20 @@ struct DuplicateHubKeeperDecouplingTests {
 @Suite(.serialized)
 struct DuplicateSnapshotOffMainTests {
 
-    /// 100k records: the async snapshot lands, and while its encode/write
-    /// runs the main actor stays responsive (ping latency well under the
-    /// beachball threshold). Only the DTO map runs on main.
-    @Test("100k pre-delete snapshot keeps main responsive", .timeLimit(.minutes(2)))
-    func snapshotAsyncKeepsMainResponsive() async throws {
+    /// 100k records: the async snapshot lands, and the MAIN THREAD is never
+    /// blocked for longer than the stated budget — including the
+    /// synchronous DTO map (the one main-actor part of the snapshot).
+    /// Measured directly (codex follow-up NOTE 5): a background thread
+    /// keeps issuing `DispatchQueue.main.sync {}` pings for the whole
+    /// operation; the longest ping IS the longest stretch main was busy.
+    /// Budget 1.5 s worst-case main block; total < 60 s.
+    ///
+    /// The 100k SELECTION + ELECTION scale checks live in
+    /// DuplicateCrossVolumeDeleteTests.selectionScale100k and
+    /// DuplicateKeeperScaleTests.electionScale100k (referenced, not
+    /// duplicated here).
+    @Test("100k pre-delete snapshot: bounded main-thread block", .timeLimit(.minutes(2)))
+    func snapshotAsyncBoundsMainThreadBlocking() async throws {
         let dir = tempDir("DupSnapScale")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
@@ -290,24 +299,37 @@ struct DuplicateSnapshotOffMainTests {
         }
         model.records = catalog
 
-        let start = ContinuousClock.now
-        let job = Task { await model.snapshotCatalogAsync(prefix: "pre-dup-crossvolume") }
-        // Let the DTO map (main) finish, then ping main while encoding.
-        try await Task.sleep(for: .milliseconds(200))
-        var worstPing: Duration = .zero
-        for _ in 0..<20 {
-            let t0 = ContinuousClock.now
-            await Task.yield()
-            let ping = t0.duration(to: .now)
-            if ping > worstPing { worstPing = ping }
-            try await Task.sleep(for: .milliseconds(20))
+        // Background pinger: records the worst main-thread round trip.
+        final class Probe: @unchecked Sendable {
+            let lock = NSLock()
+            var worst: Duration = .zero
+            var stop = false
         }
-        let path = await job.value
+        let probe = Probe()
+        let pinger = Thread {
+            while !probe.lock.withLock({ probe.stop }) {
+                let t0 = ContinuousClock.now
+                DispatchQueue.main.sync { }
+                let dt = t0.duration(to: .now)
+                probe.lock.withLock { if dt > probe.worst { probe.worst = dt } }
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+        }
+        pinger.start()
+        // Let the pinger establish a baseline before the snapshot starts.
+        try await Task.sleep(for: .milliseconds(50))
+
+        let start = ContinuousClock.now
+        let path = await model.snapshotCatalogAsync(prefix: "pre-dup-crossvolume")
         let total = start.duration(to: .now)
+        // Give the pinger one more turn after completion, then stop it.
+        try await Task.sleep(for: .milliseconds(20))
+        probe.lock.withLock { probe.stop = true }
+        let worst = probe.lock.withLock { probe.worst }
 
         #expect(path != nil, "snapshot must land")
         #expect(FileManager.default.fileExists(atPath: path ?? ""))
-        #expect(worstPing < .milliseconds(250), "main actor blocked during snapshot encode: worst ping \(worstPing)")
+        #expect(worst < .seconds(1.5), "main thread blocked \(worst) during a 100k snapshot (budget 1.5 s)")
         #expect(total < .seconds(60), "100k snapshot took \(total)")
     }
 }
@@ -409,5 +431,171 @@ struct DuplicateWorkingCopyMediaMatrixTests {
         #expect(FileManager.default.fileExists(atPath: source), "\(testCase.label): master must survive")
         #expect(!FileManager.default.fileExists(atPath: copyURL.path))
         #expect(master.audioTranscript == "matrix transcript", "\(testCase.label): enrichment carried")
+    }
+}
+
+
+// MARK: - Codex follow-up (377c5d4a review)
+
+@MainActor
+@Suite(.serialized)
+struct DuplicateCarryOverLiveRowGuardTests {
+
+    /// MAJOR 1: the extra's catalog row is replaced while byte-verify runs
+    /// → the (verified identical) file is still deleted, but NOTHING is
+    /// carried onto the master — neither human nor enrichment fields — and
+    /// the console says why.
+    @Test func replacedRowDuringVerifyDeletesButCarriesNothing() async throws {
+        let dir = tempDir("DupLiveRow")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keeperURL = dir.appendingPathComponent("keeper.mov")
+        let copyURL = dir.appendingPathComponent("copy.mov")
+        let bytes = [UInt8](repeating: 4, count: FileHasher.segmentSize * 2)
+        write(keeperURL, bytes); write(copyURL, bytes)
+        let group = UUID()
+        let extraID = UUID()
+        let model = makeModel(dir)
+        let master = dupRecord(path: keeperURL.path, size: Int64(bytes.count), group: group, disposition: .keep)
+        let extra = VideoRecord(id: extraID)
+        extra.fullPath = copyURL.path; extra.filename = "copy.mov"; extra.sizeBytes = Int64(bytes.count)
+        extra.partialMD5 = "m"; extra.durationSeconds = 61
+        extra.duplicateGroupID = group; extra.duplicateDisposition = .extraCopy; extra.duplicateConfidence = .high
+        extra.starRating = 3; extra.userNotes = "stale human"; extra.audioTranscript = "stale transcript"
+        model.records = [master, extra]
+
+        let allowHashing = DispatchSemaphore(value: 0)
+        let gate = NSLock()
+        var paused = false, hashingStarted = false
+        let hooks = SignatureVerification.Hooks(
+            shouldCancel: { Task.isCancelled },
+            didReadBlock: { _ in
+                let first = gate.withLock { let f = !paused; paused = true; hashingStarted = true; return f }
+                if first { allowHashing.wait() }
+            })
+        let deletion = Task { await model.deleteDuplicates(onVolume: dir.path, verificationHooks: hooks) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if gate.withLock({ hashingStarted }) { break }
+            await Task.yield()
+        }
+        #expect(gate.withLock { hashingStarted })
+        // Replace the extra's row (new id, same path) while the worker holds.
+        let replacement = VideoRecord()
+        replacement.fullPath = copyURL.path; replacement.filename = "copy.mov"
+        model.records = [master, replacement]
+        allowHashing.signal()
+        let result = await deletion.value
+
+        #expect(result.deleted == 1)
+        #expect(!FileManager.default.fileExists(atPath: copyURL.path))
+        #expect(master.starRating == 0 && master.userNotes.isEmpty, "human merge skipped")
+        #expect(master.audioTranscript == nil && master.notes.isEmpty, "enrichment merge skipped")
+        try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce (150 ms)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("catalog changed during verification — carry-over skipped for copy.mov (file already verified and removed)"))
+    }
+}
+
+@Suite("Codex follow-up NOTE 2 — re-election best match")
+struct DuplicateReelectionBestMatchTests {
+
+    /// After re-election the new keeper's best match is its STRONGEST
+    /// scoring group-mate (Y, sharing hash+size), not the old keeper X.
+    @Test func newKeeperBestMatchIsStrongestScoringMember() async {
+        func makeGroup() -> [VideoRecord] {
+            func rec(_ path: String, filename: String, md5: String, size: Int64, keep: Bool) -> VideoRecord {
+                let r = VideoRecord()
+                r.fullPath = path; r.filename = filename
+                r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+                r.durationSeconds = 30; r.partialMD5 = md5; r.sizeBytes = size
+                r.timecode = "01:00:00:00"
+                r.duplicateConfidence = .high
+                r.duplicateDisposition = keep ? .keep : .extraCopy
+                return r
+            }
+            let g = UUID()
+            let x = rec("/Volumes/CrucialX9/clip.mov", filename: "clip.mov", md5: "hx", size: 100, keep: true)          // old keeper
+            let y = rec("/Volumes/CrucialX10/clip (1).mov", filename: "clip (1).mov", md5: "hz", size: 200, keep: false) // shares hash+size with Z
+            let z = rec("/Volumes/FamilyArchive/clip.mov", filename: "clip.mov", md5: "hz", size: 200, keep: false)      // policy keeper
+            for r in [x, y, z] { r.duplicateGroupID = g }
+            return [x, y, z]
+        }
+        let policy = DuplicateKeeperPolicy(precedence: DuplicateKeeperSettings.defaultPrecedence)
+        let (out, changed) = await DuplicateDetector.reelectKeepersDetached(makeGroup(), keeperPolicy: policy)
+        #expect(changed == 1)
+        let z = out.first { $0.fullPath.hasPrefix("/Volumes/FamilyArchive/") }
+        let x = out.first { $0.fullPath.hasPrefix("/Volumes/CrucialX9/") }
+        let y = out.first { $0.fullPath.hasPrefix("/Volumes/CrucialX10/") }
+        #expect(z?.duplicateDisposition == .keep)
+        #expect(z?.duplicateBestMatchFilename == "clip (1).mov", "strongest match is Y (hash+size), not old keeper X")
+        #expect(x?.duplicateDisposition == .extraCopy && y?.duplicateDisposition == .extraCopy)
+        #expect(x?.duplicateBestMatchFilename == "clip.mov" && y?.duplicateBestMatchFilename == "clip.mov",
+                "non-keepers point at the new keeper")
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct DuplicateReelectionStampTests {
+
+    /// NOTE 3: rows replaced during the re-election await ⇒ the policy is
+    /// NOT stamped; the next Find Duplicates re-elects again.
+    @Test func skippedRowsLeaveThePolicyUnstamped() async {
+        let model = makeModel(tempDir("DupStamp"))
+        model.scanTargets = [target("/Volumes/A"), target("/Volumes/B")]
+        model.duplicateKeeperSettings.volumePrecedence = ["B", "A"]
+        let g = UUID()
+        let a = dupRecord(path: "/Volumes/A/x.mov", group: g, disposition: .keep, stamped: true)
+        let b = dupRecord(path: "/Volumes/B/x.mov", group: g, disposition: .extraCopy, stamped: true)
+        model.records = [a, b]
+        model.duplicateReelectionAwaitHook = {
+            // Replace row `a` with a fresh instance mid-pass.
+            let a2 = dupRecord(path: "/Volumes/A/x.mov", group: g, disposition: .keep, stamped: true)
+            model.records = [a2, b]
+        }
+        let policy = model.duplicateKeeperPolicy()
+        _ = await model.reelectDuplicateKeepers(policy: policy)
+        #expect(model.duplicateKeeperSettings.lastElectionDescriptor == nil, "must stay unstamped")
+        #expect(model.isDuplicateKeeperPolicyStale)
+        try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce (150 ms)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("1 row(s) changed during the pass — policy left unstamped"))
+
+        // Without interference the stamp lands.
+        model.duplicateReelectionAwaitHook = nil
+        _ = await model.reelectDuplicateKeepers(policy: policy)
+        #expect(!model.isDuplicateKeeperPolicyStale)
+    }
+
+    /// NOTE 4 (isolation, CLAUDE.md dimension 4): the stamp carries the
+    /// catalog identity. A stamp written for one catalog directory —
+    /// poisoned into the shared settings — is stale for another catalog,
+    /// so re-election is never suppressed across catalogs/viewer sessions.
+    @Test func stampIsBoundToCatalogIdentity() async {
+        let dirA = tempDir("DupCatA"), dirB = tempDir("DupCatB")
+        defer { try? FileManager.default.removeItem(at: dirA); try? FileManager.default.removeItem(at: dirB) }
+        let modelA = makeModel(dirA)
+        let modelB = makeModel(dirB)
+        for m in [modelA, modelB] {
+            m.scanTargets = [target("/Volumes/A"), target("/Volumes/B")]
+            m.duplicateKeeperSettings.volumePrecedence = ["A", "B"]
+        }
+        _ = await modelA.reelectDuplicateKeepers(policy: modelA.duplicateKeeperPolicy())
+        let stampA = modelA.duplicateKeeperSettings.lastElectionDescriptor
+        #expect(stampA?.hasPrefix("catalog=\(modelA.catalogStore.fileLocation);") == true)
+        #expect(!modelA.isDuplicateKeeperPolicyStale)
+
+        // Poison B's settings with A's stamp (same policy, other catalog).
+        modelB.duplicateKeeperSettings.lastElectionDescriptor = stampA
+        #expect(modelB.isDuplicateKeeperPolicyStale, "another catalog's stamp must not count")
+
+        // And B's own Find Duplicates re-elects (keeper flips to policy order).
+        let g = UUID()
+        let a = dupRecord(path: "/Volumes/A/x.mov", group: g, disposition: .extraCopy, stamped: true)
+        let b = dupRecord(path: "/Volumes/B/x.mov", group: g, disposition: .keep, stamped: true)
+        modelB.records = [a, b]
+        await modelB.analyzeDuplicates()
+        #expect(a.duplicateDisposition == .keep && b.duplicateDisposition == .extraCopy)
+        #expect(!modelB.isDuplicateKeeperPolicyStale)
     }
 }
