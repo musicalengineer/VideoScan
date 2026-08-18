@@ -107,3 +107,7 @@ vault/
 
 # Rick's family photos staged for the archivist portrait / promotion — NEVER in git (privacy rule)
 /photos/
+
+# Personal media never in git (8/03 privacy scrub) — Hallie portraits live on disk only
+assets/Hallie/
+assets/hallie/

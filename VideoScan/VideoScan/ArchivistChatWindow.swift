@@ -205,6 +205,9 @@ struct ArchivistChatWindow: View {
     /// "donna" (the caricature from Rick's photo) or "hallie" (the
     /// original librarian). Right-click the portrait to switch.
     @AppStorage("archivist.avatar") private var archivistAvatar = "donna"
+    /// Rick 2026-08-18: slow cycle through Hallie Mae's four angle stills
+    /// when they sit beside the portrait; ON prefers them over video loops.
+    @AppStorage("archivist.cycleAngles") private var cycleAngles = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -310,6 +313,57 @@ struct ArchivistChatWindow: View {
         return out
     }
 
+    /// Hallie Mae's ANGLE stills beside the chosen portrait (Rick 2026-08-18:
+    /// "a slow cycle through four photos of her from different angles").
+    /// Discovers `<stem>-angle1.<ext>`, `-angle2`, … contiguous from 1 and
+    /// stops at the first gap; fewer than two → empty (nothing to cycle).
+    /// Also accepts a portrait whose OWN stem is the numbered set — e.g.
+    /// `HallieMaeAngles-1.png` with `-2..-4` siblings — so picking the
+    /// first frame as the portrait is enough. Returns file URLs only (pure,
+    /// testable); `angleFrames(for:)` decodes them.
+    static func angleFrameURLs(besideImageAt path: String) -> [URL] {
+        let url = URL(fileURLWithPath: path)
+        let dir = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let fm = FileManager.default
+        // A numbered stem ("Foo-1") means the portrait itself is frame 1.
+        // Swift's `#/…/#` regex literal ≈ std::regex, but checked at compile time.
+        let numbered = stem.firstMatch(of: #/^(.*-)(\d+)$/#).flatMap { m -> (base: String, start: Int)? in
+            guard let n = Int(m.2), n == 1 else { return nil }
+            return (String(m.1), n)
+        }
+        var found: [URL] = []
+        if let numbered {
+            var n = numbered.start
+            while true {
+                let c = dir.appendingPathComponent(numbered.base + String(n)).appendingPathExtension(ext)
+                guard fm.fileExists(atPath: c.path) else { break }
+                found.append(c); n += 1
+            }
+        } else {
+            var n = 1
+            while true {
+                let c = dir.appendingPathComponent("\(stem)-angle\(n)").appendingPathExtension(ext)
+                guard fm.fileExists(atPath: c.path) else { break }
+                found.append(c); n += 1
+            }
+        }
+        return found.count >= 2 ? found : []
+    }
+
+    /// Decoded angle frames, cached for the last portrait path so the
+    /// identity header's re-renders (focus, thinking) don't re-read four
+    /// PNGs. Single-entry cache: worst case ≈ 6 MB of bitmap for four
+    /// 619×619 frames.
+    @MainActor private static var angleFrameCache: (path: String, frames: [NSImage])?
+    @MainActor static func angleFrames(for path: String) -> [NSImage] {
+        if let c = angleFrameCache, c.path == path { return c.frames }
+        let frames = angleFrameURLs(besideImageAt: path).compactMap { NSImage(contentsOfFile: $0.path) }
+        angleFrameCache = (path, frames)
+        return frames
+    }
+
     /// Portrait + editable name. Click the portrait to pick a photo
     /// from the archive; the name edits in place.
     private var identityHeader: some View {
@@ -324,7 +378,12 @@ struct ArchivistChatWindow: View {
                         // through NSImageView, the only view that
                         // animates them, and keep proportional fit.
                         let loops = ArchivistPortraitLoops.discover(besideImageAt: archivistPhotoPath)
-                        if loops.hasVideo && !reduceMotion {
+                        // Rick 2026-08-18: her four angle stills. Video loops
+                        // (Rick's deliberate choice) win unless he asked to
+                        // "Cycle through her angles" and the stills are there.
+                        let angleFrames = Self.angleFrames(for: archivistPhotoPath)
+                        let preferAngles = cycleAngles && angleFrames.count >= 2
+                        if loops.hasVideo && !reduceMotion && !preferAngles {
                             // Outsourced "librarian at her desk" loops:
                             // idle / listening / thinking, seamless, muted.
                             ArchivistVideoPortrait(
@@ -338,8 +397,10 @@ struct ArchivistChatWindow: View {
                             // while thinking, a nod when she answers.
                             ArchivistLivingPortrait(image: image,
                                                     frames: Self.gazeFrames(for: archivistPhotoPath),
+                                                    angleFrames: cycleAngles ? angleFrames : [],
                                                     isListening: inputFocused && !isThinking,
                                                     isThinking: isThinking,
+                                                    isComposing: inputFocused && !input.isEmpty,
                                                     answerCount: messages.count)
                         }
                     } else if archivistAvatar == "hallie" {
@@ -382,6 +443,10 @@ struct ArchivistChatWindow: View {
                     archivistPhotoPath = ""
                 }
                 Divider()
+                // Rick 2026-08-18: prefer the slow walk through her angle
+                // stills even when video loops sit beside the portrait.
+                Toggle("Cycle through her angles", isOn: $cycleAngles)
+                Divider()
                 Button("Choose a photo or GIF…", action: choosePhoto)
             }
             .help("Click to pick a portrait or GIF — right-click for quick switches")
@@ -418,6 +483,12 @@ struct ArchivistChatWindow: View {
         return [
             // Hallie Mae herself (Rick's family records, restored 2026-08-17).
             ("Hallie Mae — reconstructed, in the library", base + "/HallieMaeReconstructed.png"),
+            // Rick 2026-08-18: four stills of her from different angles; the
+            // header discovers -2..-4 beside -1 and slowly cycles. The repo
+            // copy is a fallback so Rick sees her before installing.
+            ("Hallie Mae — four angles", base + "/HallieMaeAngles-1.png"),
+            ("Hallie Mae — four angles (repo copy)",
+             NSHomeDirectory() + "/dev/VideoScan/assets/Hallie/HallieMaeAngles-1.png"),
             ("Hallie Mae — portrait c.1900", base + "/HallieMaeMcGillLatta-portrait.jpeg"),
             ("Hallie Mae — wedding c.1897", base + "/HallieMaeMcGillLatta-wedding-circa1897-straightened.jpeg"),
             ("Librarian cartoon", base + "/librarian-cartoon.png"),
