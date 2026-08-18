@@ -484,29 +484,15 @@ struct ArchivistChatWindow: View {
                 .foregroundStyle(.secondary)
             ForEach(citations.indices, id: \.self) { index in
                 let citation = citations[index]
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("\(index + 1). \(citation.filename)"
-                         + citationTimestamp(citation))
-                        .font(.system(size: 15, weight: .medium))
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                    Text(citation.bases.map(citationBasis).joined(separator: "; "))
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                    HStack(spacing: 8) {
-                        Button("Play") { playCitation(citation) }
-                            .font(.system(size: 15))
-                        Button("Reveal") { revealCitation(citation) }
-                            .font(.system(size: 15))
-                        // Rick 2026-08-17: "show in catalog" — jump the
-                        // main window to this one row, highlighted.
-                        Button("Show in Catalog") { showCitationInCatalog(citation) }
-                            .font(.system(size: 15))
-                    }
-                    .buttonStyle(.borderless)
-                }
+                ArchivistCitationRow(
+                    index: index,
+                    citation: citation,
+                    timestampSuffix: citationTimestamp(citation),
+                    basisLines: citation.bases.map(citationBasis),
+                    record: model.record(forID: citation.recordID),
+                    onPlay: { playCitation(citation) },
+                    onReveal: { revealCitation(citation) },
+                    onShowInCatalog: { showCitationInCatalog(citation) })
                 if index != citations.indices.last { Divider() }
             }
         }
