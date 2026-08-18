@@ -4,8 +4,9 @@ import SwiftUI
 //
 // "Which copy do we keep?" — the user-ordered volume list behind
 // DuplicateKeeperPolicy. Opened from the Volumes window toolbar because
-// this is a fact ABOUT volumes (LaCie holds the 2009 originals, the
-// Crucials are scratch — Rick 8/17), not a per-file setting.
+// this is a fact ABOUT volumes — Rick's 8/18 decision: order by
+// estimated reliability, RAID › HDD › SSD (SSDs are the working tier,
+// never the master copy) — not a per-file setting.
 //
 // Deliberately small: a reorderable list, an "Add" menu of mounted /
 // known volumes, per-row remove, and a reset. Every mutation writes
@@ -42,8 +43,12 @@ struct DuplicateKeeperPrecedenceSheet: View {
                 Text("Which copy do we keep?")
                     .font(.title2.bold())
                     .accessibilityIdentifier("dupKeeper.title")
-                Text("When the same video lives on more than one drive, the copy on the drive nearest the top is the one we keep. Drives that are unplugged or retired always come after the ones that are here now.")
+                Text("Drives higher in the list are the more reliable homes — RAID, then hard drives, then fast SSDs used for working copies. The copy on the highest drive is the one we keep.")
                     .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Drives that are unplugged or retired always come after the ones that are here now.")
+                    .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -64,6 +69,14 @@ struct DuplicateKeeperPrecedenceSheet: View {
                     Image(systemName: name.hasPrefix("/") ? "folder" : "externaldrive")
                         .foregroundColor(.secondary)
                     Text(name)
+                    if let tier = tierHint(for: name) {
+                        Text(tier)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundColor(.secondary)
+                            .help("From this drive's Media type in the Volumes editor")
+                    }
                     Spacer()
                     if let hint = statusHint(for: name) {
                         Text(hint)
@@ -184,10 +197,28 @@ struct DuplicateKeeperPrecedenceSheet: View {
         DuplicateKeeperPolicy.volumeName(forPath: path) ?? PathScope.normalize(path)
     }
 
+    private func target(named name: String) -> CatalogScanTarget? {
+        model.scanTargets.first { Self.listName(forPath: $0.searchPath) == name }
+    }
+
+    /// RAID / HDD / SSD chip from the target's user-entered `mediaTech`
+    /// (Volumes editor). Nil when unknown or not a scan target — the
+    /// list is Rick's judgment; the chip is only a reminder of why.
+    private func tierHint(for name: String) -> String? {
+        guard let tech = target(named: name)?.mediaTech else { return nil }
+        switch tech {
+        case .raid0, .raid1, .raid5, .raid10: return "RAID"
+        case .hdd: return "HDD"
+        case .ssd: return "SSD"
+        case .cloud: return "Cloud"
+        case .network: return "Network"
+        case .unknown: return nil
+        }
+    }
+
     /// "not plugged in" / "retired" hint from the matching scan target.
     private func statusHint(for name: String) -> String? {
-        let target = model.scanTargets.first { Self.listName(forPath: $0.searchPath) == name }
-        guard let target else { return nil }
+        guard let target = target(named: name) else { return nil }
         if target.isRetired { return "retired" }
         if !target.isReachable { return "not plugged in" }
         return nil

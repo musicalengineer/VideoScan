@@ -8,8 +8,9 @@ import Testing
 //   * 8/14 — 2,027 high-confidence groups elected a shelved OFFLINE drive
 //     as Keep with the live master as Extra (byte-verify can't catch it).
 //   * 8/17 — Rick: "LaCie = 2009 Cheesegrater originals; Crucials =
-//     scratch" — volume precedence the technical scorer never saw, and a
-//     delete could remove the metadata-bearing copy.
+//     scratch" — volume facts the technical scorer never saw, and a
+//     delete could remove the metadata-bearing copy. 8/18 decision: the
+//     list is ordered by estimated reliability, RAID › HDD › SSD.
 //
 // Dimensions (CLAUDE.md feature-test checklist): Logic, Scale, Sensor.
 // The election is pure (DuplicateKeeperPolicy + DuplicateDetector.
@@ -109,11 +110,13 @@ struct DuplicateKeeperElectionTests {
         #expect(crucial.duplicateDisposition == .extraCopy)
     }
 
-    /// The seed order itself: LaCieWorkspace › … › CrucialX9, and an
-    /// unlisted volume falls after every listed one.
-    @Test func seedOrderIsRicks8_17Order() {
+    /// The seed order itself (Rick 2026-08-18: estimated reliability,
+    /// RAID › HDD › SSD working tier): FamilyArchive › Projects ›
+    /// LaCieWorkspace › MediaExpansion › SanDiskWorkspace › CrucialX10 ›
+    /// CrucialX9; an unlisted volume falls after every listed one.
+    @Test func seedOrderIsRicksReliabilityOrder() {
         let policy = DuplicateKeeperPolicy(precedence: DuplicateKeeperSettings.defaultPrecedence)
-        let expected = ["LaCieWorkspace", "MediaExpansion", "FamilyArchive", "Projects",
+        let expected = ["FamilyArchive", "Projects", "LaCieWorkspace", "MediaExpansion",
                         "SanDiskWorkspace", "CrucialX10", "CrucialX9"]
         #expect(DuplicateKeeperSettings.defaultPrecedence == expected)
         let scores = expected.map { policy.precedenceScore(forPath: "/Volumes/\($0)/x.mov", facts: nil) }
@@ -336,7 +339,7 @@ struct DuplicateKeeperScaleTests {
         // Sensor: the winner is online, on the top listed volume, and
         // star-rated — never an offline/retired volume, whatever the
         // technical scores say.
-        #expect(keeper?.fullPath.hasPrefix("/Volumes/LaCieWorkspace/") == true)
+        #expect(keeper?.fullPath.hasPrefix("/Volumes/FamilyArchive/") == true)
         #expect((keeper?.starRating ?? 0) > 0)
     }
 

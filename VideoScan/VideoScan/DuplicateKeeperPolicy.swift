@@ -11,11 +11,13 @@ import Foundation
 //   * 8/14 finding — 2,027 high-confidence groups (2.1 TB) elected a
 //     shelved, OFFLINE/retired drive as "Keep" with the live master as
 //     "Extra copy". Byte-verify can't catch that; the election has to.
-//   * 8/17 (Rick) — volumes carry provenance the scorer never saw:
-//     "LaCie = 2009 Cheesegrater originals; Crucials = scratch". A
-//     delete could remove the metadata-bearing original and keep a bare
-//     scratch twin — star rating, confirmed people, notes, provenance
-//     stamp and transcript all on the copy about to be removed.
+//   * 8/17 (Rick) — volumes carry facts the scorer never saw ("LaCie =
+//     2009 Cheesegrater originals; Crucials = scratch"). A delete could
+//     remove the metadata-bearing copy and keep a bare scratch twin —
+//     star rating, confirmed people, notes, provenance stamp and
+//     transcript all on the copy about to be removed. Rick's 8/18
+//     decision: the list is ordered by ESTIMATED RELIABILITY (RAID ›
+//     HDD › SSD working tier), see DuplicateKeeperSettings.
 //
 // THE POLICY. Keeper = lexicographic max of
 //     (volume precedence, human-metadata score, technical keeperScore,
@@ -32,7 +34,7 @@ import Foundation
 //        the Master Archive (excluded from bulk delete already, so it is
 //        the natural top),
 //        then the user-ordered precedence list (settings, seeded with
-//        Rick's 8/17 order),
+//        Rick's reliability order RAID › HDD › SSD),
 //        then unlisted volumes by role: workspace › cloud › unassigned ›
 //        system/home-folder › backup (VolumeRole doc: backup is "never
 //        elected Keep over a live file").
@@ -237,13 +239,23 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
 /// owner calls `saveDuplicateKeeperSettings()` explicitly.
 struct DuplicateKeeperSettings: Equatable, Sendable {
 
-    /// Rick's 8/17 order, editable in the Volumes window. Names are
+    /// Rick's seed order (decided 2026-08-18), editable in the Volumes
+    /// window. The order is ESTIMATED RELIABILITY — not provenance, not
+    /// speed:
+    ///   RAID (FamilyArchive, Projects — redundant, most reliable)
+    ///   › new respectable HDDs (LaCieWorkspace, MediaExpansion,
+    ///     SanDiskWorkspace)
+    ///   › SSDs (CrucialX10, CrucialX9 — the fast working/scratch tier;
+    ///     media there is in flight to somewhere permanent and is never
+    ///     the master copy).
+    /// So when the same bytes sit on a RAID and an SSD, the RAID copy is
+    /// Keep and the SSD copy is the extra we may clear. Names are
     /// /Volumes entries; the list may also hold absolute paths.
     static let defaultPrecedence: [String] = [
-        "LaCieWorkspace",
-        "MediaExpansion",
         "FamilyArchive",
         "Projects",
+        "LaCieWorkspace",
+        "MediaExpansion",
         "SanDiskWorkspace",
         "CrucialX10",
         "CrucialX9",
