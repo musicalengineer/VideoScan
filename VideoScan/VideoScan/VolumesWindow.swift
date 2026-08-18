@@ -50,6 +50,12 @@ struct VolumesWindow: View {
     @State private var keeperPrecedenceSheet: KeeperPrecedenceSheetToken?
     private struct KeeperPrecedenceSheetToken: Identifiable { let id = 0 }
 
+    /// "Where media lives" — donut of the catalog by (non-retired) volume
+    /// (2026-08-18, after the LaCie redistribution). Same token pattern
+    /// as the keeper-precedence sheet: `.sheet(item:)`, not isPresented.
+    @State private var mediaDistributionSheet: MediaDistributionSheetToken?
+    private struct MediaDistributionSheetToken: Identifiable { let id = 0 }
+
     /// Drive Health — standalone sheet target. Lives at the window
     /// level (not the row) so the sheet inherits the parent's
     /// environmentObject reliably.
@@ -207,6 +213,11 @@ struct VolumesWindow: View {
             DuplicateKeeperPrecedenceSheet()
                 .environmentObject(model)
         }
+        // Where media lives — by-volume donut (2026-08-18).
+        .sheet(item: $mediaDistributionSheet) { _ in
+            MediaDistributionSheet()
+                .environmentObject(model)
+        }
         // Drive Health standalone sheet. Triggered from the row
         // context menu ("Show Drive Health…"). Same data as the
         // inline editor card, but bigger.
@@ -304,6 +315,17 @@ struct VolumesWindow: View {
                 }
                 .help("Order your drives so duplicate cleanup keeps the copy on the drive you trust most.")
                 .accessibilityIdentifier("volumesWindow.keeperPrecedence")
+            }
+            // Where media lives — donut of the catalog by volume, non-
+            // retired drives only (2026-08-18).
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    mediaDistributionSheet = MediaDistributionSheetToken()
+                } label: {
+                    Label("Where media lives", systemImage: "chart.pie")
+                }
+                .help("A picture of how your library is spread across your drives right now.")
+                .accessibilityIdentifier("volumesWindow.mediaDistribution")
             }
         }
         .alert(item: $reinstateTarget) { tgt in
