@@ -375,7 +375,10 @@ struct RelocateIntegrationTests {
         let ws = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
-        let src = ws.source.appendingPathComponent("done.bin")
+        // 2026-08-17: "already relocated" means already under THIS
+        // destination — a record with a history from an earlier hop still
+        // migrates. So the record must LIVE under ws.dest to be skipped.
+        let src = ws.dest.appendingPathComponent("done.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 128)
         let rec = makeRecord(fullPath: src.path, size: sx, md5: hx)
         rec.originalFullPath = "/Volumes/SomePastVolume/done.bin"
@@ -385,8 +388,11 @@ struct RelocateIntegrationTests {
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [rec]
 
+        // Scope must include the record: source root = the workspace root
+        // (parent of both source and dest); the record already lives under
+        // ws.dest, so it is skipped as already-at-destination.
         model.relocateVolume(RelocateOptions(
-            sourceVolumeRootPath: ws.source.path,
+            sourceVolumeRootPath: ws.root.path,
             destinationRoot: ws.dest,
             maxConcurrency: 1,
             dryRun: false,

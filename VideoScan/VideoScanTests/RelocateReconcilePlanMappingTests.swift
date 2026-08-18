@@ -282,6 +282,7 @@ struct RelocateReconcilePlanMappingTests {
     // pin: the default (skipAlreadyRelocated: true, both explicit and via
     // the parameter default) keeps the historical short-circuit — a
     // previously-relocated record is never classified further.
+    // 2026-08-17: skipped only when the record already lives UNDER the destination.
     @Test func reconcilePlan_defaultSkip_previouslyRelocatedShortCircuits() throws {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("vs-recon-skip-\(UUID().uuidString)")
@@ -298,7 +299,7 @@ struct RelocateReconcilePlanMappingTests {
         let explicit = RelocateReconcile.reconcilePlan(
             records: [input], witnesses: [input],
             sourceVolumeRootPath: tmp.path,
-            destinationRoot: URL(fileURLWithPath: "/tmp/no-dest"),
+            destinationRoot: URL(fileURLWithPath: tmp.path),
             sourceFiles: [.init(path: here.path, size: 512)],
             destFiles: [],
             skipDupsOnOtherVolumes: false,
@@ -308,7 +309,7 @@ struct RelocateReconcilePlanMappingTests {
         let defaulted = RelocateReconcile.reconcilePlan(
             records: [input], witnesses: [input],
             sourceVolumeRootPath: tmp.path,
-            destinationRoot: URL(fileURLWithPath: "/tmp/no-dest"),
+            destinationRoot: URL(fileURLWithPath: tmp.path),
             sourceFiles: [.init(path: here.path, size: 512)],
             destFiles: [],
             skipDupsOnOtherVolumes: false,
