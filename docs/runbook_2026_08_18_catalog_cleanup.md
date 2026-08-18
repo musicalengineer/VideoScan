@@ -54,3 +54,20 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 - 145 files / 741 MB, all UNIQUE by (size, partialMD5) vs every other Avid tree; sidecars msmMMOB.mdb + msmFMID.pmr present. "Boston" project clips.
 - Decision: keep; move the whole `Avid MediaFiles` folder as a unit into the consolidated Avid home (step 6) — same volume, `mv`, then Update Catalog relinks.
 - 1a question resolved: 14:27:53 = plain committing scan from the row verb "Scan / Update Catalog"; 14:28:02 = real preview (parked). Naming collision noted on #162.
+
+## 3c addendum ⌨️ per-source duplication (15:35) — present files, excl. Manually Deleted
+| source | records | GB | dup'd elsewhere | of which w/ human metadata | unique here |
+|---|---|---|---|---|---|
+| /Volumes/MediaExpansion | 107 | 1329 | 105 (1287 GB) | 0 | 2 (42 GB) |
+| ~/Movies | 163 | 106 | 163 | **90** | 0 |
+| CrucialX9/Matt | 97 | 151 | 81 (126 GB) | **81** | 16 (25 GB) |
+| CrucialX9 (all) | 419 | 505 | 101 | 100 | 318 (359 GB) |
+| CrucialX10 | 50 | 427 | 7 (221 GB) | 5 | 43 (206 GB) |
+| Projects/_staging_from_MediaExpansion | 133 | 1308 | 107 | 80 (adopted twins) | 26 (Donna_clips) |
+| Projects/_staging_from_LaCie | 97 | 88 | 97 | 0 | 0 |
+| Projects/MoviesExpansion | 184 | 119 | 166 | 0 | 18 (12 GB) |
+| Projects/MiscMovies | 39 | 86 | 37 | 0 | 2 |
+| Projects/MiscPhotosWithMovies | 76 | 4 | 76 | 0 | 0 |
+| LaCie/Movies · Pictures · ImmichBenchmark | 19 · 76 · 16 | 83 · 4 · 19 | all | 10 · 74 · 12 | 0 |
+Reading: MediaExpansion = pure staging leftover (metadata already on Projects twins). ~/Movies + CrucialX9/Matt = metadata lives on the copy precedence would delete → carry-over first. Projects/_staging_from_LaCie, MiscMovies, MiscPhotosWithMovies = LaCie originals exist, no metadata either side → precedence decides.
+Branches in flight (not merged): fix/162-preview-logging (24 tests green; free-space follow-up in progress), feature/dup-keeper-precedence (in progress).
