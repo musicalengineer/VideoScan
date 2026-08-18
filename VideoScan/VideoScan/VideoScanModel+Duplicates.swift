@@ -118,6 +118,9 @@ extension VideoScanModel {
     static let crossVolumeSnapshotThreshold = 50
     static let crossVolumeSnapshotFraction = 0.20
 
+    /// Mid-batch checkpoint interval (QA minor 4).
+    static let deletionCheckpointEvery = 25
+
     /// Duplicate analysis under the analysis-ledger contract
     /// (docs/analysis_ledger_design.md, 2026-07-05):
     ///
@@ -203,6 +206,8 @@ extension VideoScanModel {
         }
 
         duplicateStatus = "\(summary.extraCopies) duplicates in \(summary.groups) groups"
+        // A fresh pass reflects the current keeper settings (QA minor 7).
+        if selectedIDs == nil { duplicateReanalyzeHint = nil }
 
         log("""
 
@@ -398,12 +403,20 @@ extension VideoScanModel {
                 // metadata. Uses the live keeper object from `keepers`
                 // (a `records` member), so the merge lands in the
                 // catalog, not on a clone.
+                // QA minor 3: re-resolve the master in `records` by id AFTER
+                // the await (mirrors the extra's currentRecord check) — a
+                // catalog replacement during the disk work must not send
+                // the merge to a detached object.
                 let extraRow = currentRecord ?? record
-                let carried = applyHumanMetadataInheritance(from: extraRow, to: keeper)
-                if !carried.isEmpty {
-                    log("  Carried over to \(keeper.filename) from \(record.filename): "
-                        + carried.joined(separator: ", "))
-                    catalogMutated = true
+                if let liveMaster = records.first(where: { $0.id == keeper.id }) {
+                    let carried = applyHumanMetadataInheritance(from: extraRow, to: liveMaster)
+                    if !carried.isEmpty {
+                        log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
+                            + carried.joined(separator: ", "))
+                        catalogMutated = true
+                    }
+                } else {
+                    log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
                 }
                 if let index = records.firstIndex(where: {
                     $0.id == expectedID && $0.fullPath == expectedPath
@@ -417,6 +430,12 @@ extension VideoScanModel {
                     log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeper.fullPath))
                 } else {
                     log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
+                }
+                // QA minor 4: checkpoint every N successful removals so a
+                // crash mid-batch loses at most N carry-overs (the
+                // notification drives the debounced save).
+                if catalogMutated, deleted % Self.deletionCheckpointEvery == 0 {
+                    NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
                 }
             case .retained(let path, let reason):
                 failed += 1
@@ -545,6 +564,7 @@ extension VideoScanModel {
         let keepers = keepersByGroupID()
         let crossMode = duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let policy = crossMode ? duplicateKeeperPolicy() : nil
+        let hasMasterArchive = masterArchiveRootPath != nil
         var verdictByPair: [String: Bool] = [:]
         var volumeCounts: [String: Int] = [:]
         for rec in records {
@@ -555,6 +575,9 @@ extension VideoScanModel {
             let keeperVolume = volumeRoot(for: keeper.fullPath)
             var deletable = volume == keeperVolume
             if !deletable, let policy {
+                // QA minor 6: same Master-Archive-copy skip as the
+                // selection, so menu count == alert count.
+                if hasMasterArchive, isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) { continue }
                 let pairKey = volume + "\u{0}" + keeperVolume
                 if let cached = verdictByPair[pairKey] {
                     deletable = cached
@@ -594,5 +617,19 @@ extension VideoScanModel {
             }
         }
         return (path as NSString).deletingLastPathComponent
+    }
+}
+
+
+// MARK: - Keeper settings changes (QA minor 7, 2026-08-18)
+
+extension VideoScanModel {
+    /// Call after ANY user change to `duplicateKeeperSettings` (list order,
+    /// toggle): saves, refreshes the Duplicates menu counts, and raises the
+    /// one-line "run Find Duplicates again" hint. Never auto-runs analysis.
+    func noteDuplicateKeeperSettingsChanged() {
+        saveDuplicateKeeperSettings()
+        refreshDossierCountsNow()
+        duplicateReanalyzeHint = WorkingCopyCleanupText.reanalyzeHint
     }
 }

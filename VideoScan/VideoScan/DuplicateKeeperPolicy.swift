@@ -194,19 +194,26 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
 
     /// Eligibility of removing the copy at `extraPath` (on the chosen drive
     /// `volumeRoot`) when its master is at `keeperPath` on `keeperRoot`.
-    /// Conservative by construction: the keeper's drive must be ONLINE,
-    /// not retired, KNOWN (listed or a scan target) whenever the chosen
-    /// drive is listed, and rank STRICTLY higher than the chosen drive in
-    /// the same VolumeRank order the election used.
+    /// Conservative by construction (QA 2026-08-18):
+    ///   * the master's drive must be ONLINE and not retired;
+    ///   * the master's drive must be KNOWN — listed or a scan target —
+    ///     UNCONDITIONALLY: deletion never trusts a drive the app knows
+    ///     nothing about, whatever "here" is;
+    ///   * the master's drive must sit STRICTLY higher than the chosen
+    ///     drive by PRECEDENCE position only (Master Archive › list › role
+    ///     — the same `precedenceScore` the election used). "Here"'s
+    ///     availability is deliberately NOT part of the comparison: a
+    ///     stale offline/retired flag on the drive being cleaned must not
+    ///     let a lower-listed master qualify.
     func crossVolumeVerdict(extraPath: String, volumeRoot: String,
                             keeperPath: String, keeperRoot: String) -> CrossVolumeVerdict {
         if PathScope.normalize(keeperRoot) == PathScope.normalize(volumeRoot) { return .sameVolume }
         let keeperRank = volumeRank(forPath: keeperPath)
         if keeperRank.isRetired { return .keeperRetired }
         if !keeperRank.isOnline { return .keeperOffline }
-        let hereRank = volumeRank(forPath: extraPath)
-        if keeperRank.isUnknown && listIndex(forPath: extraPath) != nil { return .keeperVolumeUnknown }
-        guard keeperRank > hereRank else { return .keeperNotHigherRanked }
+        if keeperRank.isUnknown { return .keeperVolumeUnknown }
+        let herePrecedence = volumeRank(forPath: extraPath).precedence
+        guard keeperRank.precedence > herePrecedence else { return .keeperNotHigherRanked }
         return .eligible
     }
 
@@ -401,6 +408,24 @@ enum WorkingCopyCleanupText {
             + "\(workingCopies) working cop\(workingCopies == 1 ? "y" : "ies") whose master is on \(vols). "
             + "Masters are never touched."
     }
+
+    /// Confirmation-alert paragraph when the toggle is ON.
+    static let confirmationOn =
+        "\"\(toggleLabel)\" is ON. Every file is checked byte-for-byte against its master first, "
+        + "and stars, people and notes move to the master."
+
+    /// Confirmation-alert paragraph when the toggle is OFF — names both
+    /// places the toggle lives.
+    static func confirmationOff(volume: String) -> String {
+        "Only duplicates whose master is also on \(volume) will be deleted. "
+        + "Copies whose master is on another drive are never touched "
+        + "(turn on \"\(toggleLabel)\" in the Duplicates menu or the Volumes window's \"Which copy do we keep?\" sheet to change that)."
+    }
+
+    /// One-line hint after the list or the toggle changes: results on
+    /// screen were elected under the old settings (analysis is never
+    /// auto-run).
+    static let reanalyzeHint = "Settings changed — run Find Duplicates again so masters and extras reflect them."
 
     /// Log summary line prefix: "Working-copy cleanup on <volume>: …".
     static func logSummary(volume: String, detail: String) -> String {

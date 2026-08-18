@@ -112,12 +112,38 @@ struct DuplicateCrossVolumeEligibilityTests {
         #expect(verdict(keeperVol: "MysteryDrive") == .keeperVolumeUnknown)
     }
 
-    @Test func unknownKeeperVolumeMayStillRankWhenHereIsUnlisted() {
-        // Neither drive listed; both unassigned/unknown → equal rank → not
-        // strictly higher → not eligible. Conservative.
+    /// QA major 1: an unknown master drive is refused UNCONDITIONALLY —
+    /// even when "here" is unlisted/unknown too. Deletion never trusts a
+    /// drive the app knows nothing about.
+    @Test func unknownKeeperVolumeIsRefusedEvenWhenHereIsUnlisted() {
         let p = DuplicateKeeperPolicy(precedence: [], facts: [:])
         #expect(p.crossVolumeVerdict(extraPath: "/Volumes/A", volumeRoot: "/Volumes/A",
-                                     keeperPath: "/Volumes/B/a.mov", keeperRoot: "/Volumes/B") == .keeperNotHigherRanked)
+                                     keeperPath: "/Volumes/B/a.mov", keeperRoot: "/Volumes/B") == .keeperVolumeUnknown)
+        // Known-but-unlisted master (a scan target) with an unknown "here":
+        // still compared by precedence, not refused for unknown-ness.
+        let q = DuplicateKeeperPolicy(precedence: [], facts: ["/Volumes/B": facts(role: .workspace)])
+        #expect(q.crossVolumeVerdict(extraPath: "/Volumes/A", volumeRoot: "/Volumes/A",
+                                     keeperPath: "/Volumes/B/a.mov", keeperRoot: "/Volumes/B") == .eligible,
+                "workspace (50) outranks an unknown/unassigned here (30)")
+    }
+
+    /// QA minor 2: a stale offline/retired flag on the drive BEING CLEANED
+    /// must not let a lower-listed master qualify — the comparison is by
+    /// precedence position only.
+    @Test func staleOfflineFlagOnHereDoesNotPromoteLowerListedKeeper() {
+        let p = DuplicateKeeperPolicy(
+            precedence: ["Here", "Lower"],
+            facts: ["/Volumes/Here": facts(reachable: false, retired: true),   // stale flags
+                    "/Volumes/Lower": facts()])
+        #expect(p.crossVolumeVerdict(extraPath: "/Volumes/Here", volumeRoot: "/Volumes/Here",
+                                     keeperPath: "/Volumes/Lower/a.mov", keeperRoot: "/Volumes/Lower") == .keeperNotHigherRanked)
+        // And a genuinely higher-listed master is still eligible despite
+        // "here" being flagged offline.
+        let q = DuplicateKeeperPolicy(
+            precedence: ["Upper", "Here"],
+            facts: ["/Volumes/Here": facts(reachable: false), "/Volumes/Upper": facts()])
+        #expect(q.crossVolumeVerdict(extraPath: "/Volumes/Here", volumeRoot: "/Volumes/Here",
+                                     keeperPath: "/Volumes/Upper/a.mov", keeperRoot: "/Volumes/Upper") == .eligible)
     }
 
     /// The verdict's ordering IS the election's ordering (VolumeRank is
@@ -306,6 +332,102 @@ struct DuplicateCrossVolumeDeleteTests {
         #expect(sel.summaryLine == "2 same-drive extras + 1 working copy whose master is on RaidLike")
         #expect(sel.confirmationText(volumeName: "SsdLike")
                 == "Remove 3 extra copies on SsdLike: 2 same-drive extras + 1 working copy whose master is on RaidLike. Masters are never touched.")
+    }
+
+    /// QA test (a): a cross batch > 20% of the volume's records (here 1 of
+    /// 1 = 100%) writes a catalog.pre-dup-crossvolume snapshot first.
+    @Test func crossBatchOverThresholdWritesSnapshot() async throws {
+        let rig = makeRig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        rig.model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+        let bytes = (0..<8_000).map { UInt8($0 % 11) }
+        let k = rig.keeperVol.appendingPathComponent("a.mov"); write(k, bytes)
+        let e = rig.extraVol.appendingPathComponent("a copy.mov"); write(e, bytes)
+        let g = UUID()
+        rig.model.records = [dupRecord(path: k.path, size: 8_000, group: g, disposition: .keep),
+                             dupRecord(path: e.path, size: 8_000, group: g, disposition: .extraCopy)]
+
+        let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
+        #expect(result.deleted == 1)
+        let snaps = (try? FileManager.default.contentsOfDirectory(atPath: rig.dir.path))?
+            .filter { $0.hasPrefix("catalog.pre-dup-crossvolume.") && $0.hasSuffix(".json") } ?? []
+        #expect(snaps.count == 1, "expected one pre-dup-crossvolume snapshot, got \(snaps)")
+    }
+
+    /// QA test (a): snapshot failure drops the cross-drive part; same-drive
+    /// extras still proceed. (Store read-only ⇒ writeSnapshot returns false.)
+    @Test func snapshotFailureDropsCrossPartSameDriveProceeds() async throws {
+        let rig = makeRig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        rig.model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+        rig.model.catalogStore.isReadOnly = true      // snapshot cannot be written
+        let bytes = (0..<8_000).map { UInt8($0 % 11) }
+        let k = rig.keeperVol.appendingPathComponent("a.mov"); write(k, bytes)
+        let cross = rig.extraVol.appendingPathComponent("a copy.mov"); write(cross, bytes)
+        let sameK = rig.extraVol.appendingPathComponent("b.mov"); write(sameK, bytes)
+        let sameE = rig.extraVol.appendingPathComponent("b copy.mov"); write(sameE, bytes)
+        let g1 = UUID(), g2 = UUID()
+        rig.model.records = [
+            dupRecord(path: k.path, size: 8_000, group: g1, disposition: .keep),
+            dupRecord(path: cross.path, size: 8_000, group: g1, disposition: .extraCopy),
+            dupRecord(path: sameK.path, size: 8_000, group: g2, disposition: .keep),
+            dupRecord(path: sameE.path, size: 8_000, group: g2, disposition: .extraCopy),
+        ]
+        let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
+        #expect(sel.crossVolumeCount == 1 && sel.sameVolumeCount == 1)
+
+        let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
+        #expect(result.deleted == 1, "only the same-drive extra")
+        #expect(FileManager.default.fileExists(atPath: cross.path), "cross-drive working copy retained")
+        #expect(!FileManager.default.fileExists(atPath: sameE.path))
+        #expect(FileManager.default.fileExists(atPath: k.path) && FileManager.default.fileExists(atPath: sameK.path))
+    }
+
+    /// QA test (b): a copy that lives in the Master Archive is never a
+    /// working copy — skipped with the "Master Archive file" reason in ON
+    /// mode, and the menu count agrees with the alert count (0).
+    @Test func masterArchiveCopyIsSkippedInOnModeAndMenuAgrees() async throws {
+        let rig = makeRig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        rig.model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+        let archiveRoot = rig.extraVol.appendingPathComponent("Breen_Family_Archive", isDirectory: true)
+        rig.model.masterArchive = MasterArchiveDesignation(targetPath: rig.extraVol.path, rootPath: archiveRoot.path)
+        let g = UUID()
+        rig.model.records = [
+            dupRecord(path: rig.keeperVol.appendingPathComponent("a.mov").path, group: g, disposition: .keep),
+            dupRecord(path: archiveRoot.appendingPathComponent("1990s/a.mov").path, group: g, disposition: .extraCopy),
+        ]
+        let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
+        #expect(sel.targets.isEmpty)
+        #expect(sel.skippedReasons.map(\.reason) == [WorkingCopyCleanupText.reasonMasterArchiveFile])
+        #expect(rig.model.volumesWithDeletableDuplicates().isEmpty, "menu count must equal alert count")
+    }
+
+    /// QA test (c): the master made unreadable AFTER planning → the
+    /// byte-verify refuses, nothing deleted, nothing carried.
+    @Test func unreadableMasterAfterSelectionRefusesAndCarriesNothing() async throws {
+        let rig = makeRig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        rig.model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+        let bytes = (0..<8_000).map { UInt8($0 % 11) }
+        let k = rig.keeperVol.appendingPathComponent("a.mov"); write(k, bytes)
+        let e = rig.extraVol.appendingPathComponent("a copy.mov"); write(e, bytes)
+        let g = UUID()
+        let keeper = dupRecord(path: k.path, size: 8_000, group: g, disposition: .keep)
+        let extra = dupRecord(path: e.path, size: 8_000, group: g, disposition: .extraCopy)
+        extra.starRating = 3
+        rig.model.records = [keeper, extra]
+        let sel = rig.model.duplicateDeletionSelection(onVolume: rig.extraVol.path)
+        #expect(sel.targets.count == 1)
+        // Planning is done and says "eligible"; now the master goes unreadable.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: k.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: k.path) }
+
+        let result = await rig.model.deleteDuplicates(onVolume: rig.extraVol.path)
+        #expect(result.deleted == 0)
+        #expect(FileManager.default.fileExists(atPath: e.path))
+        #expect(keeper.starRating == 0, "nothing carried")
+        #expect(extra.duplicateDisposition == .review)
     }
 
     /// Settings isolation: the toggle round-trips through INJECTED defaults

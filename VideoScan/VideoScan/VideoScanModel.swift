@@ -606,6 +606,11 @@ final class VideoScanModel: ObservableObject {
             ? DuplicateKeeperSettings()
             : DuplicateKeeperSettings.restored(from: .standard)
 
+    /// One-line "settings changed — run Find Duplicates again" note
+    /// (QA minor 7). Set by `noteDuplicateKeeperSettingsChanged`, cleared
+    /// by the next full Analyze pass. Never triggers analysis itself.
+    @Published var duplicateReanalyzeHint: String?
+
     /// Explicit save — same contract as `saveCatalogScopeSettings`.
     func saveDuplicateKeeperSettings() {
         guard !TestEnvironment.isTestHost else { return }

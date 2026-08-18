@@ -10,7 +10,7 @@ import SwiftUI
 //
 // Deliberately small: a reorderable list, an "Add" menu of mounted /
 // known volumes, per-row remove, and a reset. Every mutation writes
-// through `model.saveDuplicateKeeperSettings()` (explicit-save pattern —
+// through `model.noteDuplicateKeeperSettingsChanged()` (explicit-save pattern —
 // @Published kills didSet). Family language per
 // feedback_friendly_language.md.
 
@@ -130,7 +130,7 @@ struct DuplicateKeeperPrecedenceSheet: View {
 
             Button("Reset to Rick's order") {
                 model.duplicateKeeperSettings.volumePrecedence = DuplicateKeeperSettings.defaultPrecedence
-                model.saveDuplicateKeeperSettings()
+                model.noteDuplicateKeeperSettingsChanged()
             }
             .accessibilityIdentifier("dupKeeper.reset")
         }
@@ -144,9 +144,7 @@ struct DuplicateKeeperPrecedenceSheet: View {
                 get: { model.duplicateKeeperSettings.alsoCleanUpWorkingCopies },
                 set: { on in
                     model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
-                    model.saveDuplicateKeeperSettings()
-                    // The Duplicates menu counts depend on the mode.
-                    model.refreshDossierCountsNow()
+                    model.noteDuplicateKeeperSettingsChanged()
                 })) {
                 Text(WorkingCopyCleanupText.toggleLabel)
             }
@@ -164,6 +162,12 @@ struct DuplicateKeeperPrecedenceSheet: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let hint = model.duplicateReanalyzeHint {
+                Label(hint, systemImage: "arrow.clockwise")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .accessibilityIdentifier("dupKeeper.reanalyzeHint")
+            }
             Text("Ties between drives at the same level go to the copy that carries more of your work — stars, people you've confirmed, notes — then to the technically better file. Takes effect the next time duplicates are analyzed.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -183,19 +187,19 @@ struct DuplicateKeeperPrecedenceSheet: View {
         var list = precedence
         list.move(fromOffsets: source, toOffset: destination)
         model.duplicateKeeperSettings.volumePrecedence = list
-        model.saveDuplicateKeeperSettings()
+        model.noteDuplicateKeeperSettingsChanged()
     }
 
     private func remove(_ name: String) {
         model.duplicateKeeperSettings.volumePrecedence.removeAll { $0 == name }
         selection.remove(name)
-        model.saveDuplicateKeeperSettings()
+        model.noteDuplicateKeeperSettingsChanged()
     }
 
     private func add(_ name: String) {
         guard !precedence.contains(name) else { return }
         model.duplicateKeeperSettings.volumePrecedence.append(name)
-        model.saveDuplicateKeeperSettings()
+        model.noteDuplicateKeeperSettingsChanged()
     }
 
     /// Volumes worth offering: every scan target (as a /Volumes name, or

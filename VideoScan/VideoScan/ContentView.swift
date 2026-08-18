@@ -1381,9 +1381,9 @@ extension CatalogView {
         var text = "This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\n"
         if deleteTargetCrossMode {
             text += "\(deleteTargetSummary)\n\n"
-            text += "\"\(WorkingCopyCleanupText.toggleLabel)\" is ON. Every file is checked byte-for-byte against its master first, and stars, people and notes move to the master.\n\n"
+            text += WorkingCopyCleanupText.confirmationOn + "\n\n"
         } else {
-            text += "Only duplicates whose master is also on \(volume) will be deleted. Copies whose master is on another drive are never touched (turn on \"\(WorkingCopyCleanupText.toggleLabel)\" in Volumes to change that).\n\n"
+            text += WorkingCopyCleanupText.confirmationOff(volume: volume) + "\n\n"
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text

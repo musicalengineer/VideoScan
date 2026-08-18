@@ -344,9 +344,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                             get: { model.duplicateKeeperSettings.alsoCleanUpWorkingCopies },
                             set: { on in
                                 model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
-                                model.saveDuplicateKeeperSettings()
-                                model.refreshDossierCountsNow()
+                                model.noteDuplicateKeeperSettingsChanged()
                             }))
+                        if let hint = model.duplicateReanalyzeHint {
+                            Text(hint)
+                        }
                     }
                 } label: {
                     if isAnalyzingDuplicates || model.isDeletingDuplicates {
