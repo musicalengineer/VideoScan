@@ -746,6 +746,27 @@ extension VideoScanModel {
     @discardableResult
     func snapshotCatalog(prefix: String) -> String? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
+        guard let snap = snapshotPath(prefix: prefix) else { return nil }
+        if catalogStore.writeSnapshot(records: records, toPath: snap) {
+            return snap
+        }
+        return nil
+    }
+
+    /// Off-main variant of `snapshotCatalog` (codex review D): the encode
+    /// and write happen detached; the caller awaits the result as a
+    /// barrier. Same naming, same fail-safe (nil ⇒ no snapshot).
+    func snapshotCatalogAsync(prefix: String) async -> String? {
+        if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
+        guard let snap = snapshotPath(prefix: prefix) else { return nil }
+        if await catalogStore.writeSnapshotAsync(records: records, toPath: snap) {
+            return snap
+        }
+        return nil
+    }
+
+    /// catalog.<prefix>.<stamp>[.n].json beside catalog.json, uniquified.
+    private func snapshotPath(prefix: String) -> String? {
         let dir = (catalogStore.fileLocation as NSString).deletingLastPathComponent
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
@@ -756,9 +777,6 @@ extension VideoScanModel {
             snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).\(n).json")
             n += 1
         }
-        if catalogStore.writeSnapshot(records: records, toPath: snap) {
-            return snap
-        }
-        return nil
+        return snap
     }
 }

@@ -67,10 +67,59 @@ private func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
 extension VideoScanModel {
 
     struct DuplicateDeletionSelection {
+        /// Everything eligible for verify+remove on this volume: the
+        /// same-drive extras, plus (only when "Also clean up working
+        /// copies" is ON) the working copies whose master passed
+        /// `DuplicateKeeperPolicy.crossVolumeVerdict`.
         let targets: [VideoRecord]
         let keepers: [UUID: VideoRecord]
+        /// Extras on this volume that are NOT in `targets`.
         let skippedCount: Int
+        /// How many of `targets` have their keeper on this same drive.
+        let sameVolumeCount: Int
+        /// How many of `targets` have their keeper on another drive
+        /// (always 0 when the toggle is OFF).
+        let crossVolumeCount: Int
+        /// Display names of the drives holding the keepers of the
+        /// cross-volume targets, sorted, deduped.
+        let crossVolumeKeeperVolumes: [String]
+        /// Why the skipped ones were skipped (family language) → count.
+        /// With the toggle OFF this is the single legacy reason.
+        let skippedReasons: [(reason: String, count: Int)]
+        /// True when the mode was ON for this selection.
+        let crossVolumeMode: Bool
+        /// Number of catalog records on this volume — the denominator of
+        /// the ">20% of the volume" snapshot tripwire.
+        let volumeRecordCount: Int
+
+        /// The split line: "N same-drive extras" or
+        /// "N same-drive extras + M working copies whose master is on X, Y".
+        var summaryLine: String {
+            let same = "\(sameVolumeCount) same-drive extra\(sameVolumeCount == 1 ? "" : "s")"
+            guard crossVolumeMode, crossVolumeCount > 0 else { return same }
+            let vols = crossVolumeKeeperVolumes.joined(separator: ", ")
+            return same + " + \(crossVolumeCount) working cop\(crossVolumeCount == 1 ? "y" : "ies") whose master is on \(vols)"
+        }
+
+        /// The confirmation-alert body (WorkingCopyCleanupText.confirmation).
+        func confirmationText(volumeName: String) -> String {
+            WorkingCopyCleanupText.confirmation(total: targets.count, volume: volumeName,
+                                                sameDrive: sameVolumeCount, workingCopies: crossVolumeCount,
+                                                masterVolumes: crossVolumeKeeperVolumes)
+        }
     }
+
+    /// Cross-volume batches larger than this (files) or than
+    /// `crossVolumeSnapshotFraction` of the volume's records take a
+    /// catalog.pre-dup-crossvolume.<stamp>.json recovery snapshot first
+    /// (same helper as the scan-merge / target-removal tripwires). No
+    /// snapshot → the cross-volume part degrades to nothing (fail safe);
+    /// the same-drive part proceeds as before.
+    static let crossVolumeSnapshotThreshold = 50
+    static let crossVolumeSnapshotFraction = 0.20
+
+    /// Mid-batch checkpoint interval (QA minor 4).
+    static let deletionCheckpointEvery = 25
 
     /// Duplicate analysis under the analysis-ledger contract
     /// (docs/analysis_ledger_design.md, 2026-07-05):
@@ -99,7 +148,17 @@ extension VideoScanModel {
             }
         }
 
-        let scope: [VideoRecord]
+        // Codex review B: the ledger only re-derives new/changed records,
+        // so a changed keeper policy (list order, retire, reachability,
+        // master) never reached stamped groups. Compare the live election
+        // descriptor with the one the last full pass ran under; when they
+        // differ, re-elect keepers for ALL groups (election only —
+        // grouping/hash work is reused).
+        let livePolicy = duplicateKeeperPolicy()
+        let policyStale = selectedIDs == nil
+            && duplicateKeeperSettings.lastElectionDescriptor != electionStamp(for: livePolicy)
+
+        var scope: [VideoRecord]
         let deltaCount: Int
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
@@ -108,9 +167,17 @@ extension VideoScanModel {
         } else {
             let active = pfActiveRecords(records)
             let delta = active.filter { $0.dupAnalyzedAt == nil }
-            guard !delta.isEmpty else {
-                duplicateStatus = "Duplicates up to date"
-                log("Duplicate analysis: nothing new since the last pass — 0 records pending.")
+            if delta.isEmpty {
+                if policyStale {
+                    let changed = await reelectDuplicateKeepers(policy: livePolicy)
+                    duplicateStatus = "Keepers re-elected (\(changed) group\(changed == 1 ? "" : "s") changed)"
+                    log("Duplicate analysis: nothing new to group — re-elected keepers under the current order (\(changed) group(s) changed).")
+                    duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
+                    NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+                } else {
+                    duplicateStatus = "Duplicates up to date"
+                    log("Duplicate analysis: nothing new since the last pass — 0 records pending.")
+                }
                 return
             }
             deltaCount = delta.count
@@ -134,7 +201,11 @@ extension VideoScanModel {
         var freshClones: [VideoRecord] = []
         freshClones.reserveCapacity(scope.count)
         for rec in scope { freshClones.append(rec.snapshotClone()) }
-        let (clones, summary) = await DuplicateDetector.analyzeDetached(freshClones)
+        // Keeper policy is a Sendable snapshot of the settings + per-target
+        // facts (role / reachable / retired / master), built HERE on main
+        // because CatalogScanTarget can't cross the actor boundary.
+        let (clones, summary) = await DuplicateDetector.analyzeDetached(
+            freshClones, keeperPolicy: livePolicy)
         let stamp = Date()
         // QA P2-3: a record pruned during the await gets no ghost writes
         // and no stamp (symmetric with the correlate atomicity guard).
@@ -152,6 +223,18 @@ extension VideoScanModel {
         }
 
         duplicateStatus = "\(summary.extraCopies) duplicates in \(summary.groups) groups"
+        // Stale policy: the groups OUTSIDE this pass's scope still carry
+        // keepers elected under the old order — re-elect them too.
+        if policyStale {
+            let changed = await reelectDuplicateKeepers(policy: livePolicy)
+            if changed > 0 { log("  Re-elected keepers under the current order: \(changed) group(s) changed.") }
+        }
+        // Codex final nit: only drop the hint when the catalog really is
+        // current — a re-election that skipped rows leaves the stamp stale
+        // on purpose, and the hint must survive with it.
+        if selectedIDs == nil {
+            duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
+        }
 
         log("""
 
@@ -164,6 +247,24 @@ extension VideoScanModel {
         // One mutation notification (debounced save + cache invalidation +
         // view refresh) replaces the records=[]/records=tmp double-republish.
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+    }
+
+    /// The keeper-election policy for THIS catalog right now: the
+    /// user-ordered precedence list plus a snapshot of every scan target's
+    /// role / reachability / retirement / master-archive status
+    /// (2026-08-18). Pure value — safe to hand to the off-main analyzer.
+    func duplicateKeeperPolicy() -> DuplicateKeeperPolicy {
+        var facts: [String: DuplicateKeeperPolicy.VolumeFacts] = [:]
+        for target in scanTargets {
+            facts[target.searchPath] = DuplicateKeeperPolicy.VolumeFacts(
+                role: target.role,
+                isReachable: target.isReachable,
+                isRetired: target.isRetired,
+                isMasterArchive: isMasterArchive(target))
+        }
+        return DuplicateKeeperPolicy(
+            precedence: duplicateKeeperSettings.volumePrecedence,
+            facts: facts)
     }
 
     /// Delete high-confidence duplicate files on a given volume, but ONLY when
@@ -188,22 +289,73 @@ extension VideoScanModel {
 
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         // Master Archive files are never bulk-deleted, even as "extras".
-        let targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
+        var targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
         let keepers = selection.keepers
-        let skippedCount = selection.skippedCount
+        // Both may grow if the snapshot tripwire drops the cross-drive part
+        // (codex review E) — the summary and the skipped count then say so.
+        var skippedCount = selection.skippedCount
+        var summaryLine = selection.summaryLine
+        var skippedNote = selection.skippedReasons
+            .map { "\($0.count) file(s): \($0.reason)" }
+            .joined(separator: "; ")
+        let volumeName = URL(fileURLWithPath: volumePath).lastPathComponent
+        // Which of the targets are working copies (master on another
+        // drive) — drives the per-file [WORKING-COPY] log line.
+        let workingCopyIDs: Set<UUID> = selection.crossVolumeMode
+            ? Set(targets.compactMap { rec -> UUID? in
+                guard let g = rec.duplicateGroupID, let k = keepers[g] else { return nil }
+                return PathScope.contains(k.fullPath, within: volumePath) ? nil : rec.id
+              })
+            : []
 
         guard !targets.isEmpty else {
             if skippedCount > 0 {
-                log("\nNo same-volume duplicates to delete on \(volumePath). Skipped \(skippedCount) file(s) whose keeper is on a different volume.")
+                log("\nNo duplicates to delete on \(volumePath). Skipped \(skippedCount) file(s) — \(skippedNote).")
             } else {
                 log("\nNo high-confidence duplicates to delete on \(volumePath)")
             }
             return (0, 0, skippedCount, 0)
         }
 
-        log("\nDeleting \(targets.count) same-volume duplicate(s) on \(volumePath)…")
+        // Cross-volume tripwire (2026-08-18): a big cross-drive batch
+        // takes a recovery snapshot first; if it can't be written, the
+        // cross-volume part is dropped and only same-drive extras proceed.
+        if selection.crossVolumeMode, selection.crossVolumeCount > 0 {
+            let fraction = selection.volumeRecordCount > 0
+                ? Double(selection.crossVolumeCount) / Double(selection.volumeRecordCount) : 1
+            if selection.crossVolumeCount > Self.crossVolumeSnapshotThreshold
+                || fraction > Self.crossVolumeSnapshotFraction {
+                duplicateStatus = "Writing safety snapshot…"
+                // Encode + write run off-main; this await is the barrier —
+                // nothing is unlinked until the snapshot has landed (or
+                // failed) — codex review D.
+                if let snap = await snapshotCatalogAsync(prefix: "pre-dup-crossvolume") {
+                    log("\nPre-delete safety snapshot (\(selection.crossVolumeCount) working copies): \(snap)")
+                } else {
+                    let before = targets.count
+                    targets = targets.filter { rec in
+                        guard let g = rec.duplicateGroupID, let k = keepers[g] else { return false }
+                        return PathScope.contains(k.fullPath, within: volumePath)
+                    }
+                    let dropped = before - targets.count
+                    skippedCount += dropped
+                    summaryLine = "\(targets.count) same-drive extra\(targets.count == 1 ? "" : "s")"
+                        + " (\(dropped) working cop\(dropped == 1 ? "y" : "ies") left alone — no safety snapshot)"
+                    skippedNote += (skippedNote.isEmpty ? "" : "; ") + "\(dropped) file(s): safety snapshot could not be written"
+                    log("\n⚠️ Could not write the pre-delete safety snapshot — leaving the \(dropped) working cop\(dropped == 1 ? "y" : "ies") alone; only same-drive extras will be removed.")
+                    guard !targets.isEmpty else { return (0, 0, skippedCount, 0) }
+                }
+            }
+        }
+
+        if selection.crossVolumeMode {
+            log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName,
+                    detail: "removing \(targets.count) extra cop\(targets.count == 1 ? "y" : "ies") — \(summaryLine)…"))
+        } else {
+            log("\nDeleting \(targets.count) same-volume duplicate(s) on \(volumePath)…")
+        }
         if skippedCount > 0 {
-            log("  (Skipping \(skippedCount) file(s) whose keeper is on a different volume)")
+            log("  (Skipping \(skippedCount) file(s) — \(skippedNote))")
         }
 
         var deleted = 0
@@ -279,6 +431,47 @@ extension VideoScanModel {
             case .deleted(let bytes):
                 bytesFreed += bytes
                 deleted += 1
+                // Metadata carry-over (2026-08-18). The bytes are gone —
+                // verified identical to the keeper — but the ROW still
+                // holds whatever Rick put on this copy (stars, people,
+                // notes, tags, provenance stamp). Fold it into the
+                // keeper before the row leaves the catalog, using the
+                // SAME union rules as repair adoption
+                // (applyHumanMetadataInheritance): never clobber a
+                // judgment already on the keeper, never touch machine
+                // metadata. Uses the live keeper object from `keepers`
+                // (a `records` member), so the merge lands in the
+                // catalog, not on a clone.
+                // QA minor 3: re-resolve the master in `records` by id AFTER
+                // the await (mirrors the extra's currentRecord check) — a
+                // catalog replacement during the disk work must not send
+                // the merge to a detached object.
+                // Codex follow-up MAJOR 1: BOTH merges require the extra's
+                // LIVE row (same id AND path after the await). If the
+                // catalog changed during verification, the pre-await
+                // `record` is detached — merging its fields into the master
+                // would carry stale metadata. Skip, and say so.
+                if currentRecord == nil {
+                    log("  catalog changed during verification — carry-over skipped for \(record.filename) (file already verified and removed)")
+                } else if let extraRow = currentRecord,
+                          let liveMaster = records.first(where: { $0.id == keeper.id }) {
+                    let carried = applyHumanMetadataInheritance(from: extraRow, to: liveMaster)
+                    if !carried.isEmpty {
+                        log("  Carried over to master \(liveMaster.filename) from \(record.filename): "
+                            + carried.joined(separator: ", "))
+                    }
+                    // Codex review A: enrichment the master lacks
+                    // (transcript, captions, dossier, detected people,
+                    // inferred date, Avid identity) + a provenance line.
+                    let enriched = applyEnrichmentInheritance(from: extraRow, to: liveMaster)
+                    if !enriched.isEmpty {
+                        log("  Enrichment carried to master \(liveMaster.filename): "
+                            + enriched.joined(separator: ", "))
+                    }
+                    catalogMutated = true
+                } else {
+                    log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
+                }
                 if let index = records.firstIndex(where: {
                     $0.id == expectedID && $0.fullPath == expectedPath
                 }) {
@@ -287,7 +480,17 @@ extension VideoScanModel {
                 } else {
                     log("  Catalog changed while deleting \(record.filename); current row retained")
                 }
-                log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
+                if workingCopyIDs.contains(expectedID) {
+                    log("  " + WorkingCopyCleanupText.logRemoved(path: expectedPath, masterPath: keeper.fullPath))
+                } else {
+                    log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
+                }
+                // QA minor 4: checkpoint every N successful removals so a
+                // crash mid-batch loses at most N carry-overs (the
+                // notification drives the debounced save).
+                if catalogMutated, deleted % Self.deletionCheckpointEvery == 0 {
+                    NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+                }
             case .retained(let path, let reason):
                 failed += 1
                 log("  RETAINED safely at \(path): \(reason)")
@@ -299,8 +502,13 @@ extension VideoScanModel {
         }
 
         let freed = ByteCountFormatter.string(fromByteCount: bytesFreed, countStyle: .file)
-        log("\nDuplicate deletion complete: \(deleted) deleted, \(failed) failed, "
-            + "\(refused) refused by verification, \(skippedCount) skipped (cross-volume), \(freed) freed")
+        let completion = "\(deleted) deleted, \(failed) failed, \(refused) refused by verification, "
+            + "\(skippedCount) skipped, \(freed) freed (\(summaryLine))"
+        if selection.crossVolumeMode {
+            log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
+        } else {
+            log("\nDuplicate deletion complete: " + completion)
+        }
         if refused > 0 {
             log("  \(refused) file(s) were NOT identical to their keeper despite matching "
                 + "on hash/name/duration — they are marked Review and left on disk.")
@@ -318,43 +526,122 @@ extension VideoScanModel {
 
     /// O(N) candidate planning, isolated from disk I/O so the adopted 100k
     /// scale gate can pin it independently of media size.
+    ///
+    /// Toggle OFF (default): byte-for-byte the pre-2026-08-18 rule — an
+    /// extra on `volumePath` is a target iff its master (keeper) is also
+    /// under `volumePath`. Toggle ON ("Also clean up working copies"): a
+    /// working copy is ALSO a target iff `crossVolumeVerdict` says
+    /// eligible (master online, not retired, known, strictly higher-ranked
+    /// drive) and the copy is not itself a Master Archive file. Everything
+    /// skipped carries a WorkingCopyCleanupText reason for the log.
     func duplicateDeletionSelection(onVolume volumePath: String)
         -> DuplicateDeletionSelection {
         let keepers = keepersByGroupID()
-        let targets = records.filter { rec in
-            guard rec.duplicateDisposition == .extraCopy,
-                  PathScope.contains(rec.fullPath, within: volumePath),
-                  let groupID = rec.duplicateGroupID,
-                  let keeper = keepers[groupID] else { return false }
-            return PathScope.contains(keeper.fullPath, within: volumePath)
+        let crossMode = duplicateKeeperSettings.alsoCleanUpWorkingCopies
+        let policy = crossMode ? duplicateKeeperPolicy() : nil
+        let hereRoot = volumeRoot(for: volumePath)
+        let hasMasterArchive = masterArchiveRootPath != nil
+
+        var targets: [VideoRecord] = []
+        var sameCount = 0
+        var crossCount = 0
+        var crossKeeperVolumes = Set<String>()
+        var skipped: [String: Int] = [:]
+        var volumeRecordCount = 0
+        // Memo: keeper-volume verdicts repeat across a drive's records
+        // (a handful of drives), so cache per keeper ROOT — keeps this
+        // O(N) with a tiny constant, no per-record policy scans.
+        var verdictByKeeperRoot: [String: DuplicateKeeperPolicy.CrossVolumeVerdict] = [:]
+
+        for rec in records where PathScope.contains(rec.fullPath, within: volumePath) {
+            volumeRecordCount += 1
+            guard rec.duplicateDisposition == .extraCopy else { continue }
+            guard let groupID = rec.duplicateGroupID, let keeper = keepers[groupID] else {
+                skipped[WorkingCopyCleanupText.reasonNoMaster, default: 0] += 1
+                continue
+            }
+            if PathScope.contains(keeper.fullPath, within: volumePath) {
+                targets.append(rec)
+                sameCount += 1
+                continue
+            }
+            guard crossMode, let policy else {
+                skipped[WorkingCopyCleanupText.reasonMasterOnAnotherDrive, default: 0] += 1
+                continue
+            }
+            // A copy that lives in the Master Archive is never a working
+            // copy (the bulk-delete exclusion still applies downstream;
+            // this only names it in the skipped reasons).
+            if hasMasterArchive, isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) {
+                skipped[WorkingCopyCleanupText.reasonMasterArchiveFile, default: 0] += 1
+                continue
+            }
+            let keeperRoot = volumeRoot(for: keeper.fullPath)
+            let verdict: DuplicateKeeperPolicy.CrossVolumeVerdict
+            if let cached = verdictByKeeperRoot[keeperRoot] {
+                verdict = cached
+            } else {
+                // Rank the CHOSEN drive (volumePath) rather than each file:
+                // every extra here shares it, which is what makes the
+                // per-keeper-root memo exact.
+                verdict = policy.crossVolumeVerdict(extraPath: volumePath, volumeRoot: hereRoot,
+                                                    keeperPath: keeper.fullPath, keeperRoot: keeperRoot)
+                verdictByKeeperRoot[keeperRoot] = verdict
+            }
+            if verdict.isEligible {
+                targets.append(rec)
+                crossCount += 1
+                crossKeeperVolumes.insert(URL(fileURLWithPath: keeperRoot).lastPathComponent)
+            } else {
+                skipped[verdict.reason, default: 0] += 1
+            }
         }
-        let targetIDs = Set(targets.map(\.id))
-        let skippedCount = records.lazy.filter { rec in
-            rec.duplicateDisposition == .extraCopy
-                && PathScope.contains(rec.fullPath, within: volumePath)
-                && !targetIDs.contains(rec.id)
-        }.count
-        return DuplicateDeletionSelection(targets: targets,
-                                          keepers: keepers,
-                                          skippedCount: skippedCount)
+        return DuplicateDeletionSelection(
+            targets: targets,
+            keepers: keepers,
+            skippedCount: skipped.values.reduce(0, +),
+            sameVolumeCount: sameCount,
+            crossVolumeCount: crossCount,
+            crossVolumeKeeperVolumes: crossKeeperVolumes.sorted(),
+            skippedReasons: skipped.sorted { $0.value > $1.value }.map { (reason: $0.key, count: $0.value) },
+            crossVolumeMode: crossMode,
+            volumeRecordCount: volumeRecordCount)
     }
 
-    /// Returns the distinct volume root paths that have high-confidence duplicate
-    /// extra copies deletable on that volume (keeper also on same volume).
+    /// Returns the distinct volume root paths that have high-confidence
+    /// duplicate extra copies deletable on that volume: master on the same
+    /// volume, plus — only with "Also clean up working copies" ON —
+    /// working copies whose master passes the eligibility. Same rule
+    /// as `duplicateDeletionSelection`, so the menu count and the alert
+    /// count agree.
     func volumesWithDeletableDuplicates() -> [(path: String, count: Int)] {
         let keepers = keepersByGroupID()
-        let extras = records.filter { rec in
+        let crossMode = duplicateKeeperSettings.alsoCleanUpWorkingCopies
+        let policy = crossMode ? duplicateKeeperPolicy() : nil
+        let hasMasterArchive = masterArchiveRootPath != nil
+        var verdictByPair: [String: Bool] = [:]
+        var volumeCounts: [String: Int] = [:]
+        for rec in records {
             guard rec.duplicateDisposition == .extraCopy,
                   let groupID = rec.duplicateGroupID,
-                  let keeper = keepers[groupID] else { return false }
+                  let keeper = keepers[groupID] else { continue }
             let volume = volumeRoot(for: rec.fullPath)
             let keeperVolume = volumeRoot(for: keeper.fullPath)
-            return volume == keeperVolume
-        }
-        var volumeCounts: [String: Int] = [:]
-        for record in extras {
-            let volume = volumeRoot(for: record.fullPath)
-            volumeCounts[volume, default: 0] += 1
+            var deletable = volume == keeperVolume
+            if !deletable, let policy {
+                // QA minor 6: same Master-Archive-copy skip as the
+                // selection, so menu count == alert count.
+                if hasMasterArchive, isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) { continue }
+                let pairKey = volume + "\u{0}" + keeperVolume
+                if let cached = verdictByPair[pairKey] {
+                    deletable = cached
+                } else {
+                    deletable = policy.crossVolumeVerdict(extraPath: volume, volumeRoot: volume,
+                                                          keeperPath: keeper.fullPath, keeperRoot: keeperVolume).isEligible
+                    verdictByPair[pairKey] = deletable
+                }
+            }
+            if deletable { volumeCounts[volume, default: 0] += 1 }
         }
         return volumeCounts.sorted { $0.key < $1.key }.map { (path: $0.key, count: $0.value) }
     }
@@ -384,5 +671,76 @@ extension VideoScanModel {
             }
         }
         return (path as NSString).deletingLastPathComponent
+    }
+}
+
+
+// MARK: - Keeper settings changes (QA minor 7, 2026-08-18)
+
+extension VideoScanModel {
+    /// Call after ANY user change to `duplicateKeeperSettings` (list order,
+    /// toggle): saves, refreshes the Duplicates menu counts, and raises the
+    /// one-line "run Find Duplicates again" hint. Never auto-runs analysis.
+    func noteDuplicateKeeperSettingsChanged() {
+        saveDuplicateKeeperSettings()
+        refreshDossierCountsNow()
+        // Only an election-affecting change (list order — the toggle
+        // doesn't move keepers) earns the hint; codex review B pins the
+        // re-election itself to the descriptor comparison in Analyze.
+        duplicateReanalyzeHint = isDuplicateKeeperPolicyStale ? WorkingCopyCleanupText.reanalyzeHint : nil
+    }
+}
+
+
+// MARK: - Keeper re-election (codex review B, 2026-08-18)
+
+extension VideoScanModel {
+    /// Re-elect keepers for every existing group under `policy` — off-main
+    /// over clones, copy back disposition + best-match, then stamp the
+    /// policy descriptor so the next Analyze knows the ledger is current.
+    /// Returns the number of groups whose keeper changed.
+    @discardableResult
+    func reelectDuplicateKeepers(policy: DuplicateKeeperPolicy) async -> Int {
+        let grouped = pfActiveRecords(records).filter { $0.duplicateGroupID != nil }
+        var clones: [VideoRecord] = []
+        clones.reserveCapacity(grouped.count)
+        for rec in grouped { clones.append(rec.snapshotClone()) }
+        let (analyzed, changed) = await DuplicateDetector.reelectKeepersDetached(clones, keeperPolicy: policy)
+        // Test seam: lets a test mutate the catalog "during the await"
+        // (same role as SignatureVerification.Hooks for the delete path).
+        if let hook = duplicateReelectionAwaitHook { await hook() }
+        let liveInstances = Set(records.map(ObjectIdentifier.init))
+        var skippedRows = 0
+        for (original, clone) in zip(grouped, analyzed) {
+            guard liveInstances.contains(ObjectIdentifier(original)) else { skippedRows += 1; continue }
+            original.duplicateDisposition = clone.duplicateDisposition
+            original.duplicateBestMatchFilename = clone.duplicateBestMatchFilename
+        }
+        // Codex follow-up NOTE 3: stamp the policy as current ONLY when it
+        // was applied to every row; otherwise leave it stale so the next
+        // Find Duplicates re-elects again.
+        if skippedRows == 0 {
+            duplicateKeeperSettings.lastElectionDescriptor = electionStamp(for: policy)
+            saveDuplicateKeeperSettings()
+            duplicateReanalyzeHint = nil
+        } else {
+            log("  Keeper re-election: \(skippedRows) row(s) changed during the pass — policy left unstamped; the next Find Duplicates re-elects again.")
+        }
+        return changed
+    }
+
+    /// The value compared/stored for the ledger stamp: the policy
+    /// descriptor PREFIXED with the catalog's identity (its file location)
+    /// — codex follow-up NOTE 4. Settings live in UserDefaults, which is
+    /// per-user, not per-catalog; another catalog directory or a viewer
+    /// session sharing the same preferences must not be able to suppress
+    /// re-election here.
+    func electionStamp(for policy: DuplicateKeeperPolicy) -> String {
+        "catalog=\(catalogStore.fileLocation);" + policy.electionDescriptor
+    }
+
+    /// True when the stored stamp is not the live one for THIS catalog.
+    var isDuplicateKeeperPolicyStale: Bool {
+        duplicateKeeperSettings.lastElectionDescriptor != electionStamp(for: duplicateKeeperPolicy())
     }
 }

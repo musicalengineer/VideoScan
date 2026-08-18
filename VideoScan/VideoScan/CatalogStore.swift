@@ -757,6 +757,23 @@ final class CatalogStore {
                                    to: URL(fileURLWithPath: path))
     }
 
+    /// Same contract as `writeSnapshot`, but only the DTO map (the ONE
+    /// place the live records are read) runs on the main actor; JSON
+    /// encode + atomic write + fsync run detached (codex review D,
+    /// 2026-08-18 — a library-scale synchronous snapshot on main is a
+    /// beachball). Callers `await` it as a barrier before any unlink.
+    func writeSnapshotAsync(records: [VideoRecord], toPath path: String) async -> Bool {
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.writeSnapshotAsync refused — read-only viewer mode")
+            return false
+        }
+        let payload = Self.makePayload(records: records, masterArchive: masterArchive)
+        let url = URL(fileURLWithPath: path)
+        return await Task.detached(priority: .userInitiated) {
+            Self.encodeAndWrite(payload: payload, to: url)
+        }.value
+    }
+
     /// Build the on-disk payload as a Sendable DTO. Must run on the main
     /// actor — `VideoRecordDTO(_:)` is the ONLY place the live (non-Sendable)
     /// VideoRecord is read on the save path. Each DTO copies every persisted
