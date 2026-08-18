@@ -34,8 +34,21 @@ App-side evidence: `~/Library/Logs/VideoScan/{videoscan,catalog,relocate}.log`; 
 - 17,719 admitted / 108 cataloged / 17,611 sniff-rejected (FCP render/peak files). Merge: 108 upserted → **107 new bare records** for files whose metadata records were just relinked to Projects. Catalog 7,226 (gen 206).
 - Consequence: 107 dup groups (Projects twin has tags/provenance; MediaExpansion twin bare). Keep election in 3c must favor Projects; delete-vs-keep MediaExpansion copies = Rick's decision.
 
-## 3a 🖥 Scan target /Volumes/Projects (whole volume) → Scan
-- (pending)
+## 3a 🖥 Scan target /Volumes/Projects (whole volume) → Scan (14:51–14:59)
+- 701,927 enumerated / 409,747 admitted / **956 cataloged** (387 refreshed = the relinked ones) / 359,578 sniff-rejected / 388 probe-rejected. Catalog **7,795** (gen 207); Projects 968; dangling 52.
+
+## 3c ⌨️ Duplicate report (15:10, scratchpad/dup_groups.json; by size+partialMD5, present files only)
+- 417 groups / 1,071 records / **2.17 TB** of extras. Nearly all are Rick's own redistribution copies:
+  - Projects ⇄ MediaExpansion (staging: Converted_VHS 910 GB in 24 groups + MoviesExpansion 34 GB) · ~/Movies ⇄ Projects/MoviesExpansion (111 groups, 67 GB) · LaCie Pictures/Movies ⇄ Projects/MiscPhotosWithMovies+_staging_from_LaCie · Projects⇄Projects double copies (MoviesExpansion vs _staging_from_MediaExpansion/MoviesExpansion; EppyDot.mov 3×) · CrucialX9/Matt scratch copies.
+- Same-volume extras (in-app Delete Duplicates can reach): **186 files / 174 GB** (Projects 145/157 GB, SanDisk 26/11 GB, CrucialX9 9/4 GB, home 5).
+- **151 precedence-vs-metadata conflicts** (103 ~/Movies vs Projects, 32 CrucialX9 vs Projects, 14 CrucialX9 vs LaCie): the metadata lives on the copy precedence would delete.
+- **BLOCKER for 3d:** DuplicateDetector.keeperScore ignores human metadata, volume precedence and online/offline — identical files tie → arbitrary keeper (root of 8/14 offline-strand). App dup-delete is same-volume-only + byte-verified + no carry-over. → feature/dup-keeper-precedence branch dispatched (election = precedence › metadata › technical; carry-over on delete; precedence pane). 3b/3d wait for Rick's review + rebuild.
+
+## 4a prep ⌨️ — files to move out of /Volumes/Projects/osx10.8_backup (same volume; then 4b Update Catalog → Projects relinks)
+- To `/Volumes/Projects/FromCheesegrater_10.8/`: rickb/Desktop/EP/ (Part1-3, xmas-1990-part1, EP3) · rickb/Desktop/"Sequence 1-QuickTime H.264.mov" · RickGuitar2025.MP4 (18 GB; NOTE FamilyArchive already holds 2025-xx-xx_RickGuitar2025.mov 71 GB — different file) · AvidMediaComposer/Avid Users/ChristmasDay.mov (11 GB) + MPEG/ (m2v+aiff exports) · rickb/Movies/ (Christmas2010 IMG_*.MOV etc.) · Gold_Avid-Projects (194 MB, project files).
+- `Avid MediaFiles/` (MXF/99, 145 unique) → `/Volumes/Projects/AvidMedia/osx10.8_backup/Avid MediaFiles/` as a unit (step 6 home).
+- Trash: rickb/Desktop/Apple_OSX_Installers (≈24 GB), rickb/Library, rickb/Music/iTunes (commercial), rest of rickb/.
+
 
 ## 5 ⌨️ MXF strays (osx10.8_backup/Avid MediaFiles/MXF/99) — done 15:00
 - 145 files / 741 MB, all UNIQUE by (size, partialMD5) vs every other Avid tree; sidecars msmMMOB.mdb + msmFMID.pmr present. "Boston" project clips.
