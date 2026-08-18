@@ -547,7 +547,20 @@ enum RelocateReconcile {
             // short-circuit was unconditional, which made the option a
             // silent no-op AND left these records uncounted so the
             // progress bar stalled short of its total (QA 2026-07-01).
-            if skipAlreadyRelocated, rec.originalFullPath != nil {
+            // "Already relocated" means ALREADY AT THIS DESTINATION — not
+            // "ever moved". Rick 2026-08-17: ExternalRAID (moved once in May
+            // from the dying Cheesegrater RAID onto LaCie, so every record
+            // carries originalFullPath) skipped all 799 files on the second
+            // hop LaCie → SanDisk: "your files are safe, done… nothing is
+            // there". A record whose CURRENT path is already under the
+            // destination root has nothing to do; one that merely has a
+            // history keeps going through the normal cascade (Bucket D
+            // adoption still catches pre-copied files).
+            if skipAlreadyRelocated,
+               rec.originalFullPath != nil,
+               VideoScanModel.samePath(destinationRoot.path,
+                                       (rec.fullPath as NSString).deletingLastPathComponent)
+                || rec.fullPath.hasPrefix(destinationRoot.path + "/") {
                 plan.previouslyRelocatedIDs.append(rec.id)
                 continue
             }

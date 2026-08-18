@@ -172,6 +172,44 @@ struct RelocateReconcileTests {
 
     // MARK: - Already-relocated short-circuit
 
+    /// Rick 2026-08-17: a SECOND hop must not be skipped just because the
+    /// record has a history. ExternalRAID files moved Cheesegrater → LaCie in
+    /// May (originalFullPath set) were then migrated LaCie → SanDisk and ALL
+    /// 799 were "previously-relocated, skipping". "Already relocated" means
+    /// already under THIS destination.
+    @Test
+    func recordWithHistoryStillMigratesOnASecondHop() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs-recon-hop-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let here = tmp.appendingPathComponent("clip.mxf")
+        try Data(repeating: 1, count: 1024).write(to: here)
+
+        let r = rec("clip.mxf", path: here.path, size: 1024, md5: "H")
+        r.originalFullPath = "/Volumes/ExternalRAID/clip.mxf"     // first hop, long ago
+        r.originVolume = "ExternalRAID"
+        let result = reconcileLegacy(
+            records: [r],
+            sourceVolumeRootPath: tmp.path,
+            destinationRoot: URL(fileURLWithPath: "/tmp/second-hop-dest"),
+            sourceFiles: [.init(path: here.path, size: 1024)],
+            destFiles: [],
+            hash: hashFn([here.path: "H"])
+        )
+        #expect(result.previouslyRelocated.isEmpty, "history alone must not skip a new hop")
+        #expect(result.ready.count == 1)
+    }
+
+    @Test
+    func destinationProblemsAreRefused() {
+        #expect(RelocateSheet.destinationProblem(source: "/Volumes/LaCie/A", destination: URL(fileURLWithPath: "/Volumes/LaCie/A")) != nil)
+        #expect(RelocateSheet.destinationProblem(source: "/Volumes/LaCie/A", destination: URL(fileURLWithPath: "/Volumes/LaCie/A/sub")) != nil)
+        #expect(RelocateSheet.destinationProblem(source: "/Volumes/LaCie/A/deep", destination: URL(fileURLWithPath: "/Volumes/LaCie/A")) != nil)
+        #expect(RelocateSheet.destinationProblem(source: "/Volumes/LaCie/A", destination: URL(fileURLWithPath: "/Volumes/SanDisk/from_LaCie/A")) == nil)
+        #expect(RelocateSheet.destinationProblem(source: "/Volumes/LaCie/A", destination: nil) == nil)
+    }
+
     @Test
     func previouslyRelocatedRecordIsShortCircuited() {
         let r = rec("done.mov",

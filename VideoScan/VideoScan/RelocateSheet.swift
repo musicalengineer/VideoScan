@@ -110,6 +110,23 @@ struct RelocateSheet: View {
         FileManager.default.fileExists(atPath: sourceVolumePath)
     }
 
+    /// Destination equal to, inside, or containing the source is never a
+    /// migration (Rick 2026-08-17: a job ran with dest == source and
+    /// reported "done" having copied nothing). nil = fine; else the reason.
+    static func destinationProblem(source: String, destination: URL?) -> String? {
+        guard let dest = destination else { return nil }
+        let src = URL(fileURLWithPath: source).standardizedFileURL.path
+        let dst = dest.standardizedFileURL.path
+        if src == dst { return "The destination is the source folder itself — choose a different volume or folder." }
+        if dst.hasPrefix(src + "/") { return "The destination is inside the source — that would copy the folder into itself." }
+        if src.hasPrefix(dst + "/") { return "The destination contains the source — files are already there; choose a different folder." }
+        return nil
+    }
+
+    private var destinationProblemText: String? {
+        Self.destinationProblem(source: sourceVolumePath, destination: destinationFolder)
+    }
+
     private var canRelocate: Bool {
         // Note (§3 Relocate Job Queue — 2026-05-31): we no longer block
         // on `model.isRelocating`. If a job is already running, this
@@ -119,6 +136,7 @@ struct RelocateSheet: View {
         !model.isReadOnly
             && !scopedRecords.isEmpty
             && destinationFolder != nil
+            && destinationProblemText == nil
             && sourceVolumeExists
             && !insufficientSpace
     }
@@ -206,6 +224,13 @@ struct RelocateSheet: View {
                     .accessibilityIdentifier("relocateSheet.chooseDest")
             }
             .padding(4)
+            if let problem = destinationProblemText {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 4)
+                    .accessibilityIdentifier("relocateSheet.destinationProblem")
+            }
             Toggle("Preserve source layout beneath the chosen folder (from_<Volume>/<subtree>)",
                    isOn: $preserveSourceLayout)
                 .font(.caption)
