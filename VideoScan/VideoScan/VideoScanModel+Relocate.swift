@@ -922,22 +922,35 @@ extension VideoScanModel {
     /// committed decision. `relocateLog` is file-private to this
     /// extension, hence the model-level entry point; RelocateSheet calls
     /// it back on the main actor AFTER its cancellation check, so a
-    /// superseded/cancelled preview logs nothing. Writes are silent
-    /// no-ops until `start(append:)` has run (Fix 3 above), so we open
-    /// the file only if no session is open yet — repeated previews (or a
-    /// preview after a live run) reuse the open handle instead of stamping
-    /// a fresh "started" header each time. A one-line `[PREVIEW] session`
-    /// marker separates previews in the log instead.
+    /// superseded/cancelled preview logs nothing.
+    ///
+    /// Session handling: writes are silent no-ops until `start(append:)`
+    /// has run (Fix 3 above), so we open the file only if no session is
+    /// open yet. Preview → preview reuses the open handle (no repeated
+    /// "started" headers); preview → LIVE run does NOT — `runRelocate`
+    /// unconditionally calls `start(append:)` and stamps its own session
+    /// header, as it always has. A one-line `[PREVIEW] session` marker
+    /// separates previews in the log.
+    ///
+    /// Main-actor cost (QA, 2026-08-18): the `[String]` is built HERE
+    /// (cheap — string interpolation over the plan) and then written
+    /// OFF-main in one `writeBatch` — one lock, one write, one fsync.
+    /// The old per-line `write` did DateFormatter + write + fsync per
+    /// record on the main actor; at whole-volume scale (thousands–100k
+    /// records) that is a beachball. `relocateLog` is `@unchecked
+    /// Sendable` and the lines are plain Strings, so the detached task
+    /// carries nothing actor-bound.
     func logReconcilePreview(_ reconcile: ReconcileResult,
                              sourceVolumeRootPath: String,
                              destinationRoot: URL) {
         if !relocateLog.isOpen { relocateLog.start(append: true) }
-        relocateLog.write("── [PREVIEW] session \(stamp()) source=\(sourceVolumeRootPath) dest=\(destinationRoot.path)")
-        for line in ReconcileLogLines.allLines(reconcile,
-                                               prefix: ReconcileLogLines.previewPrefix,
-                                               source: sourceVolumeRootPath,
-                                               dest: destinationRoot.path) {
-            relocateLog.write(line)
+        var lines = ["── [PREVIEW] session \(stamp()) source=\(sourceVolumeRootPath) dest=\(destinationRoot.path)"]
+        lines += ReconcileLogLines.allLines(reconcile,
+                                            prefix: ReconcileLogLines.previewPrefix,
+                                            source: sourceVolumeRootPath,
+                                            dest: destinationRoot.path)
+        Task.detached(priority: .utility) {
+            relocateLog.writeBatch(lines)
         }
     }
 
