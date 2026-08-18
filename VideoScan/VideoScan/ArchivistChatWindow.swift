@@ -86,6 +86,12 @@ struct ArchivistMessage: Identifiable {
     var model: String? = nil
     var route: String? = nil
     var outcome: String? = nil
+    /// "template" | "model": who phrased this bubble (assistant only).
+    var composedBy: String? = nil
+    /// The transcript-log text when the model phrased the answer: the same
+    /// sentences WITH their claim tags, so the log stays traceable while the
+    /// bubble stays clean. Nil = log `text`.
+    var transcriptText: String? = nil
     var chips: [Chip] = []
 
     /// Production seam for person clarification.  These must be resolved
@@ -201,6 +207,10 @@ struct ArchivistChatWindow: View {
     /// line, like name TBD, photo TBD (i will pick from archive)").
     @AppStorage("archivist.name") private var archivistName = "Hallie Mae"
     @AppStorage("archivist.photoPath") private var archivistPhotoPath = ""
+    /// "Let Hallie phrase answers in her own words (facts stay locked)".
+    /// Default ON; the composer only ever re-says an approved plan and the
+    /// verifier drops anything else (docs/hallie_grounded_composition.md).
+    @AppStorage(HallieCompositionSettings.key) private var composeWithModel = true
     /// Which drawn avatar fronts the archivist when no photo is set:
     /// "donna" (the caricature from Rick's photo) or "hallie" (the
     /// original librarian). Right-click the portrait to switch.
@@ -667,7 +677,7 @@ struct ArchivistChatWindow: View {
                 sequence: transcriptSequence,
                 client: .app,
                 kind: message.role == .user ? .user : .assistant,
-                text: message.text,
+                text: message.transcriptText ?? message.text,
                 queryDescription: message.queryLine,
                 basisLine: message.basisLine,
                 responder: message.responder,
@@ -676,7 +686,8 @@ struct ArchivistChatWindow: View {
                 outcome: message.outcome,
                 offeredActions: message.chips.map(\.label),
                 mediaEvidence: media,
-                knowledgeEvidence: knowledge))
+                knowledgeEvidence: knowledge,
+                composedBy: message.composedBy))
         }
         guard !events.isEmpty else { return }
         Task { await HallieConversationRecorder.shared.append(events) }
@@ -865,6 +876,8 @@ struct ArchivistChatWindow: View {
         let wantsPlayAfter = playAfterAnswer
         playAfterAnswer = false
         let memory = hallieMemory
+        let history = recentHistory()
+        let compose = composeWithModel
         let requestID = UUID()
         activeRequestTask?.cancel()
         activeRequestID = requestID
@@ -888,7 +901,9 @@ struct ArchivistChatWindow: View {
                     hosts: hosts,
                     modelName: modelName,
                     playAfterAnswer: wantsPlayAfter,
-                    memory: memory)
+                    memory: memory,
+                    composeWithModel: compose,
+                    history: history)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response)
@@ -926,6 +941,7 @@ struct ArchivistChatWindow: View {
     ) {
         guard !isThinking else { return }
         pendingHallieClarification = nil
+        let history = recentHistory()
         let requestID = UUID()
         activeRequestTask?.cancel()
         activeRequestID = requestID
@@ -942,7 +958,8 @@ struct ArchivistChatWindow: View {
             do {
                 let response = try await HallieAppTurnCoordinator.continue(
                     pending: pending,
-                    selecting: candidateID)
+                    selecting: candidateID,
+                    history: history)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response)
@@ -1006,6 +1023,8 @@ struct ArchivistChatWindow: View {
             model: ollamaModel,
             route: Self.transcriptLabel(response.result.route),
             outcome: Self.transcriptLabel(response.result.outcome),
+            composedBy: response.result.composedBy.rawValue,
+            transcriptText: response.result.transcriptText,
             chips: clarificationChips + offerChips))
         if let action = response.result.mediaAction {
             perform(action)
@@ -1037,6 +1056,26 @@ struct ArchivistChatWindow: View {
 
     private static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
         HallieTurnExecutor.label(route)
+    }
+
+    /// The last few (question, shown answer) pairs for the composer — the
+    /// bubbles as displayed, nothing hidden. Bounded so the prompt stays
+    /// small regardless of conversation length.
+    private func recentHistory() -> [HallieGroundedComposer.HistoryTurn] {
+        var turns: [HallieGroundedComposer.HistoryTurn] = []
+        var pendingUser: String?
+        for message in messages {
+            switch message.role {
+            case .user:
+                pendingUser = message.text
+            case .assistant:
+                if let user = pendingUser {
+                    turns.append(.init(user: user, assistant: message.text))
+                    pendingUser = nil
+                }
+            }
+        }
+        return Array(turns.suffix(HallieGroundedComposer.historyTurns))
     }
 
     private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {

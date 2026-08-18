@@ -319,6 +319,17 @@ enum HallieTurnExecutor {
         let matchCount: Int?
         let mediaAction: MediaActionRequest?
         let offeredActions: [OfferedAction]
+        /// The typed facts behind `prose`, when the route builds one itself
+        /// (presence lists, CyberBrain biographies). Nil = derive from the
+        /// templated prose (see HallieAnswerPlan.derive).
+        let answerPlan: HallieAnswerPlan?
+        /// Who wrote `prose`: the deterministic template (always, until a
+        /// client applies a verified composition) or the local model.
+        let composedBy: HallieComposedBy
+        /// The transcript-log text: the composed prose WITH its claim tags
+        /// so the log shows which claim each sentence rests on. Nil = log
+        /// `prose` as is.
+        let transcriptText: String?
 
         init(
             route: Route,
@@ -332,7 +343,10 @@ enum HallieTurnExecutor {
             clarification: Clarification? = nil,
             matchCount: Int? = nil,
             mediaAction: MediaActionRequest? = nil,
-            offeredActions: [OfferedAction] = []
+            offeredActions: [OfferedAction] = [],
+            answerPlan: HallieAnswerPlan? = nil,
+            composedBy: HallieComposedBy = .template,
+            transcriptText: String? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -346,6 +360,32 @@ enum HallieTurnExecutor {
             self.matchCount = matchCount
             self.mediaAction = mediaAction
             self.offeredActions = offeredActions
+            self.answerPlan = answerPlan
+            self.composedBy = composedBy
+            self.transcriptText = transcriptText
+        }
+
+        /// The same answer with its prose replaced by a verified composition.
+        /// Basis line, citations, chips, and every other field are untouched:
+        /// only the wording changes, never the facts or their provenance.
+        func applying(_ composition: HallieGroundedComposer.Outcome) -> Result {
+            Result(
+                route: route,
+                outcome: outcome,
+                prose: composition.displayText,
+                basisLine: basisLine,
+                queryDescription: queryDescription,
+                citations: citations,
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: catalogPersonName,
+                clarification: clarification,
+                matchCount: matchCount,
+                mediaAction: mediaAction,
+                offeredActions: offeredActions,
+                answerPlan: answerPlan,
+                composedBy: composition.composedBy,
+                transcriptText: composition.composedBy == .model
+                    ? composition.transcriptText : nil)
         }
     }
 
@@ -927,17 +967,23 @@ enum HallieTurnExecutor {
 
         let answered = plan.answerState == .answered
             || plan.answerState == .disputed
+        let prose = CyberBrainDeterministicComposer.compose(plan)
         return Result(
             route: .graph,
             outcome: answered ? .answered : .declined,
-            prose: CyberBrainDeterministicComposer.compose(plan),
+            prose: prose,
             basisLine: knowledgeCitations.isEmpty
                 ? "Basis: Breen Family CyberBrain; no supporting source was selected."
                 : "Basis: Breen Family CyberBrain; \(knowledgeCitations.count) supporting source\(knowledgeCitations.count == 1 ? "" : "s").",
             queryDescription: queryDescription,
             citations: [],
             knowledgeCitations: knowledgeCitations,
-            catalogPersonName: answered ? plan.subject : nil)
+            catalogPersonName: answered ? plan.subject : nil,
+            // The approved CyberBrain claims, verbatim, are the only thing a
+            // model may rephrase for this answer (docs/cyberbrain_design.md §9).
+            answerPlan: answered
+                ? HallieAnswerPlan.biography(plan, fallbackText: prose)
+                : nil)
     }
 
     /// Non-biography graph operations (kinship, birth, death) routed through

@@ -52,6 +52,10 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     let offeredActions: [String]
     let mediaEvidence: [MediaEvidence]
     let knowledgeEvidence: [KnowledgeEvidence]
+    /// "template" | "model" — who phrased an assistant answer. Optional so
+    /// older lines (and non-answer events) decode unchanged. When "model",
+    /// `text` keeps the claim tags ("… [c1]") for traceability.
+    let composedBy: String?
 
     init(
         timestamp: Date = Date(),
@@ -69,7 +73,8 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         outcome: String? = nil,
         offeredActions: [String] = [],
         mediaEvidence: [MediaEvidence] = [],
-        knowledgeEvidence: [KnowledgeEvidence] = []
+        knowledgeEvidence: [KnowledgeEvidence] = [],
+        composedBy: String? = nil
     ) {
         self.version = Self.schemaVersion
         self.timestamp = timestamp
@@ -88,6 +93,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.offeredActions = offeredActions
         self.mediaEvidence = mediaEvidence
         self.knowledgeEvidence = knowledgeEvidence
+        self.composedBy = composedBy
     }
 }
 

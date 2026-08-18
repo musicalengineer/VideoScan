@@ -15,7 +15,9 @@ extension HallieShellCLI {
     ) -> HallieTranscriptEvent {
         transcriptEvent(
             kind: .assistant,
-            text: result.prose,
+            // The log keeps the claim tags a model-phrased answer carried,
+            // so every logged sentence traces to its plan claim.
+            text: result.transcriptText ?? result.prose,
             queryDescription: result.queryDescription,
             basisLine: result.basisLine,
             responder: responder,
@@ -25,6 +27,7 @@ extension HallieShellCLI {
                 + result.offeredActions.map(HallieTurnExecutor.offerLabel),
             citations: result.citations,
             knowledgeCitations: result.knowledgeCitations,
+            composedBy: result.composedBy.rawValue,
             state: &state)
     }
 
@@ -39,6 +42,7 @@ extension HallieShellCLI {
         offeredActions: [String] = [],
         citations: [HallieTurnExecutor.Citation] = [],
         knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = [],
+        composedBy: String? = nil,
         state: inout Session
     ) -> HallieTranscriptEvent {
         state.transcriptSequence += 1
@@ -65,7 +69,8 @@ extension HallieShellCLI {
             knowledgeEvidence: knowledgeCitations.map {
                 .init(id: $0.id, title: $0.title,
                       attribution: $0.attribution, locator: $0.locator)
-            })
+            },
+            composedBy: composedBy)
     }
 
     static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {
@@ -144,6 +149,7 @@ extension HallieShellCLI {
                 personName: canonical, profiles: state.profiles ?? [])
         }
         output(result.prose)
+        if result.composedBy == .model { output("phrased by: model (facts verified against the plan)") }
         output(result.basisLine)
         if result.route == .graph, let photo = state.biographyPhoto {
             output("photo: \(photo.fileURL.path)")

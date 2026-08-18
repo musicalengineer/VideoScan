@@ -399,6 +399,9 @@ extension HallieTurnExecutor.Result {
             clarification: clarification,
             matchCount: matchCount,
             mediaAction: mediaAction,
-            offeredActions: offeredActions)
+            offeredActions: offeredActions,
+            answerPlan: answerPlan,
+            composedBy: composedBy,
+            transcriptText: transcriptText)
     }
 }

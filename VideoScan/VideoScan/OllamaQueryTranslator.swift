@@ -221,12 +221,28 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         }
     }
 
+    /// Plain-text generation for Hallie's grounded composer: the SAME
+    /// host, model, transport, envelope handling, and error classes as
+    /// translation, minus the JSON schema. The caller supplies a system
+    /// prompt that carries only an approved answer plan (never the archive)
+    /// and verifies the reply before showing it — see
+    /// docs/hallie_grounded_composition.md. Temperature stays low but
+    /// non-zero so the wording can breathe without the facts moving.
+    func composePlainText(system: String, user: String) async throws -> String {
+        let (content, _) = try await requestContent(
+            user, schema: nil, systemPrompt: system,
+            options: ["temperature": 0.3, "num_predict": 320])
+        return content
+    }
+
     /// Shared transport and ollama-envelope machinery. The only caller-
-    /// selected inputs are the output schema and translator-only prompt.
+    /// selected inputs are the output schema (nil = free text), the
+    /// system prompt, and generation options.
     private func requestContent(
         _ text: String,
-        schema: [String: Any],
-        systemPrompt: String
+        schema: [String: Any]?,
+        systemPrompt: String,
+        options: [String: Any] = ["temperature": 0, "num_predict": 512]
     ) async throws -> (content: String, data: Data) {
         // `host` may be a bare name ("RicksM4.local"), a name with a
         // port, or a full URL ("https://ollama.example.com") now that
@@ -235,17 +251,18 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         guard let url = URL(string: urlString) else {
             throw NLTranslatorError.unreachable("bad URL for host \(host)")
         }
-        let body = try JSONSerialization.data(withJSONObject: [
+        var payload: [String: Any] = [
             "model": model,
             "stream": false,
             "think": false,
-            "format": schema,
-            "options": ["temperature": 0, "num_predict": 512],
+            "options": options,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text],
             ],
-        ] as [String: Any])
+        ]
+        if let schema { payload["format"] = schema }
+        let body = try JSONSerialization.data(withJSONObject: payload)
 
         let data: Data
         switch transport {

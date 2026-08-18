@@ -87,6 +87,14 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
         }
     }
 
+    /// Plain-text phrasing for the grounded composer, walking the same host
+    /// order with the same probe / retry policy as translation.
+    func composePlainText(system: String, user: String) async throws -> String {
+        try await walkHosts { attempt in
+            try await attempt.composePlainText(system: system, user: user)
+        }
+    }
+
     private func walkHosts<Result>(
         _ request: (OllamaQueryTranslator) async throws -> Result
     ) async throws -> Result {

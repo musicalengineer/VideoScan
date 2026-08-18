@@ -87,15 +87,29 @@ extension HallieTurnExecutor {
                 + basis.dropFirst("Basis: ".count)
         }
 
+        let citations = normalize(result.evidence.citations)
+        // The typed plan behind the list answer: the count sentence plus
+        // each cited item and why it matched. A model may rephrase these
+        // and nothing else (HallieGroundedComposer); the basis line stays
+        // deterministic.
+        let plan: HallieAnswerPlan? = result.conclusion == .present
+            ? HallieAnswerPlan.presenceList(
+                route: route,
+                prose: prose,
+                totalMatchCount: total,
+                shownCount: shown,
+                citations: citations)
+            : nil
         return Result(
             route: route,
             outcome: result.conclusion == .present ? .answered : .declined,
             prose: prose,
             basisLine: basis,
             queryDescription: result.interpretedQuery,
-            citations: normalize(result.evidence.citations),
+            citations: citations,
             catalogPersonName: nil,
-            matchCount: result.conclusion == .present ? total : 0)
+            matchCount: result.conclusion == .present ? total : 0,
+            answerPlan: plan)
     }
 
     /// One vouched birth year for a typed name, or nil when nobody knows it or
