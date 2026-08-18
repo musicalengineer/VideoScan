@@ -119,7 +119,7 @@ struct DuplicateKeeperElectionTests {
         let scores = expected.map { policy.precedenceScore(forPath: "/Volumes/\($0)/x.mov", facts: nil) }
         #expect(scores == scores.sorted(by: >), "list order must be strictly decreasing precedence")
         let unlisted = policy.precedenceScore(forPath: "/Volumes/SomeOtherDrive/x.mov", facts: nil)
-        #expect(unlisted < scores.last!)
+        #expect(unlisted < (scores.last ?? Int.min))
         let home = policy.precedenceScore(forPath: "/Users/rickb/Movies/x.mov", facts: nil)
         #expect(home < unlisted, "home folder ranks after named volumes unless listed")
     }
@@ -273,7 +273,7 @@ struct DuplicateKeeperSettingsTests {
 
     private func scratchDefaults() -> UserDefaults {
         let name = "DupKeeperSettingsTests-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: name)!
+        let d = UserDefaults(suiteName: name) ?? .standard
         d.removePersistentDomain(forName: name)
         return d
     }

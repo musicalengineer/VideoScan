@@ -333,12 +333,15 @@ enum DuplicateDetector {
     /// comparator, so a 100k-record catalog adds no quadratic work.
     static func electKeeper(from component: [VideoRecord],
                             policy: DuplicateKeeperPolicy) -> VideoRecord? {
-        var best: (record: VideoRecord, key: DuplicateKeeperPolicy.ElectionKey)?
+        var bestRecord: VideoRecord?
+        var bestKey: DuplicateKeeperPolicy.ElectionKey?
         for record in component {
             let key = policy.electionKey(for: record, technicalScore: keeperScore(record))
-            if best == nil || key > best!.key { best = (record, key) }
+            if let current = bestKey, !(key > current) { continue }
+            bestRecord = record
+            bestKey = key
         }
-        return best?.record
+        return bestRecord
     }
 
     // MARK: - Scoring rules

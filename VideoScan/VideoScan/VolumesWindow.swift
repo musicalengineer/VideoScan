@@ -46,7 +46,9 @@ struct VolumesWindow: View {
     /// "Which copy do we keep?" — duplicate keeper precedence sheet
     /// (2026-08-18). A volumes-level preference, so it lives here rather
     /// than in the Catalog toolbar.
-    @State private var showKeeperPrecedence: Bool = false
+    /// `.sheet(item:)` (not isPresented) — project_chained_sheet_antipattern.
+    @State private var keeperPrecedenceSheet: KeeperPrecedenceSheetToken?
+    private struct KeeperPrecedenceSheetToken: Identifiable { let id = 0 }
 
     /// Drive Health — standalone sheet target. Lives at the window
     /// level (not the row) so the sheet inherits the parent's
@@ -201,7 +203,7 @@ struct VolumesWindow: View {
                 .environmentObject(model)
         }
         // Duplicate keeper precedence (2026-08-18).
-        .sheet(isPresented: $showKeeperPrecedence) {
+        .sheet(item: $keeperPrecedenceSheet) { _ in
             DuplicateKeeperPrecedenceSheet()
                 .environmentObject(model)
         }
@@ -296,7 +298,7 @@ struct VolumesWindow: View {
             // when the same video is on several (2026-08-18).
             ToolbarItem(placement: .automatic) {
                 Button {
-                    showKeeperPrecedence = true
+                    keeperPrecedenceSheet = KeeperPrecedenceSheetToken()
                 } label: {
                     Label("Which copy to keep", systemImage: "list.number")
                 }

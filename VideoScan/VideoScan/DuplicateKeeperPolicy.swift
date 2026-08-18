@@ -158,7 +158,7 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
         // unassigned volume; anything under /Users is the home folder,
         // which Rick wants AFTER named volumes unless listed.
         if path.hasPrefix("/Users/") { return Self.homeFolderScore }
-        return Self.unlistedRoleScore[.unassigned]!
+        return Self.unlistedRoleScore[.unassigned] ?? 0
     }
 
     /// Position of the record's volume in the precedence list, or nil.
@@ -179,11 +179,13 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
     /// Longest-prefix scan-target match. Linear in the number of targets
     /// (tens), not records.
     func facts(forPath path: String) -> VolumeFacts? {
-        var best: (len: Int, facts: VolumeFacts)?
-        for (root, f) in facts where PathScope.contains(path, within: root) {
-            if best == nil || root.count > best!.len { best = (root.count, f) }
+        var bestLen = -1
+        var bestFacts: VolumeFacts?
+        for (root, f) in facts where PathScope.contains(path, within: root) && root.count > bestLen {
+            bestLen = root.count
+            bestFacts = f
         }
-        return best?.facts
+        return bestFacts
     }
 
     /// "/Volumes/LaCieWorkspace/2009/x.mxf" → "LaCieWorkspace"; nil for
