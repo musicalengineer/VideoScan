@@ -304,6 +304,11 @@ struct CatalogView: View {
     @State private var showClearRecorrelateConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
+    /// Confirmation body built once at click time from
+    /// `duplicateDeletionSelection` (2026-08-18, "Also clean up working
+    /// copies" mode) — see WorkingCopyCleanupText.confirmation.
+    @State private var deleteTargetSummary: String = ""
+    @State private var deleteTargetCrossMode: Bool = false
     // showVolumeCompare retired 2026-06-07 — Compare moved from a
     // modal sheet to its own Window scene (id: "compare") to eliminate
     // beachballing during multi-hour rescue copies. Button now calls
@@ -503,6 +508,12 @@ struct CatalogView: View {
                 onDeleteDuplicates: { path, count in
                     deleteTargetVolume = path
                     deleteTargetCount = count
+                    // One O(records) pass at click time (not in a body) so
+                    // the alert can state the mode and the split honestly.
+                    let selection = model.duplicateDeletionSelection(onVolume: path)
+                    deleteTargetSummary = selection.confirmationText(
+                        volumeName: URL(fileURLWithPath: path).lastPathComponent)
+                    deleteTargetCrossMode = selection.crossVolumeMode
                     showDeleteDuplicatesConfirm = true
                 },
                 onClearResults: { model.clearResults() },
@@ -824,7 +835,7 @@ struct CatalogView: View {
             .disabled(model.isReadOnly || model.isDeletingDuplicates)
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\nOnly duplicates whose keeper is also on this same volume will be deleted. Cross-volume duplicates are never touched.\n\nAre you sure? Do you have backups and/or are these really junk or duplicates?")
+            Text(deleteDuplicatesConfirmMessage)
         }
         .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
             Button("Clear All Pairs & Re-correlate", role: .destructive) {
@@ -1355,5 +1366,26 @@ struct CatalogView: View {
             lines.append("  … and \(failedRecs.count - 5) more")
         }
         return lines
+    }
+}
+
+
+// MARK: - Delete Duplicates confirmation copy (2026-08-18)
+
+extension CatalogView {
+    /// The alert body states the MODE ("Also clean up working copies"
+    /// on/off) and the split so nobody is surprised by a cross-drive
+    /// removal. Off = the pre-existing same-drive-only wording.
+    var deleteDuplicatesConfirmMessage: String {
+        let volume = URL(fileURLWithPath: deleteTargetVolume).lastPathComponent
+        var text = "This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\n"
+        if deleteTargetCrossMode {
+            text += "\(deleteTargetSummary)\n\n"
+            text += "\"\(WorkingCopyCleanupText.toggleLabel)\" is ON. Every file is checked byte-for-byte against its master first, and stars, people and notes move to the master.\n\n"
+        } else {
+            text += "Only duplicates whose master is also on \(volume) will be deleted. Copies whose master is on another drive are never touched (turn on \"\(WorkingCopyCleanupText.toggleLabel)\" in Volumes to change that).\n\n"
+        }
+        text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
+        return text
     }
 }

@@ -87,6 +87,29 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
     /// "greater == better keeper". `Comparable` conformance is
     /// lexicographic over the stored fields in declaration order — the
     /// Swift analogue of C++ `std::tie(a, b, c) < std::tie(...)`.
+    /// The VOLUME component of the election — availability then
+    /// precedence — on its own, so working-copy cleanup ("Also clean up
+    /// working copies", 2026-08-18) can ask "does the
+    /// keeper's drive rank strictly higher than this one?" with the SAME
+    /// ordering the election used, never a second implementation.
+    struct VolumeRank: Comparable, Sendable, Equatable {
+        /// 2 online, 1 offline (unmounted, not retired), 0 retired.
+        let availability: Int
+        /// Master Archive › listed (in list order) › unlisted by role.
+        let precedence: Int
+        /// True when the drive is neither in the precedence list nor a
+        /// known scan target — we know nothing about it.
+        let isUnknown: Bool
+
+        var isOnline: Bool { availability == 2 }
+        var isRetired: Bool { availability == 0 }
+
+        static func < (lhs: VolumeRank, rhs: VolumeRank) -> Bool {
+            if lhs.availability != rhs.availability { return lhs.availability < rhs.availability }
+            return lhs.precedence < rhs.precedence
+        }
+    }
+
     struct ElectionKey: Comparable, Sendable, Equatable {
         /// 2 online, 1 offline (unmounted, not retired), 0 retired.
         let availability: Int
@@ -114,6 +137,18 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
 
     func electionKey(for record: VideoRecord, technicalScore: Int) -> ElectionKey {
         let path = record.fullPath
+        let rank = volumeRank(forPath: path)
+        return ElectionKey(
+            availability: rank.availability,
+            precedence: rank.precedence,
+            humanMetadata: Self.humanMetadataScore(record),
+            technical: technicalScore,
+            path: path
+        )
+    }
+
+    /// The volume component of the election for any path.
+    func volumeRank(forPath path: String) -> VolumeRank {
         let facts = facts(forPath: path)
         let availability: Int
         if facts?.isRetired == true {
@@ -123,13 +158,56 @@ struct DuplicateKeeperPolicy: Sendable, Equatable {
         } else {
             availability = 2
         }
-        return ElectionKey(
+        return VolumeRank(
             availability: availability,
             precedence: precedenceScore(forPath: path, facts: facts),
-            humanMetadata: Self.humanMetadataScore(record),
-            technical: technicalScore,
-            path: path
-        )
+            isUnknown: facts == nil && listIndex(forPath: path) == nil)
+    }
+
+    // MARK: Working-copy cleanup eligibility (2026-08-18)
+
+    /// Why a copy on the chosen drive may / may not be removed when its
+    /// master (the elected keeper) lives on ANOTHER drive ("Also clean up
+    /// working copies" mode). `reason` is the WorkingCopyCleanupText
+    /// skipped-reason string the log shows.
+    enum CrossVolumeVerdict: Equatable, Sendable {
+        case eligible
+        case sameVolume
+        case keeperOffline
+        case keeperRetired
+        case keeperNotHigherRanked
+        case keeperVolumeUnknown
+
+        var isEligible: Bool { self == .eligible }
+
+        var reason: String {
+            switch self {
+            case .eligible:              return WorkingCopyCleanupText.reasonEligible
+            case .sameVolume:            return WorkingCopyCleanupText.reasonSameDrive
+            case .keeperOffline:         return WorkingCopyCleanupText.reasonMasterOffline
+            case .keeperRetired:         return WorkingCopyCleanupText.reasonMasterRetired
+            case .keeperNotHigherRanked: return WorkingCopyCleanupText.reasonMasterNotMoreReliable
+            case .keeperVolumeUnknown:   return WorkingCopyCleanupText.reasonMasterUnknownDrive
+            }
+        }
+    }
+
+    /// Eligibility of removing the copy at `extraPath` (on the chosen drive
+    /// `volumeRoot`) when its master is at `keeperPath` on `keeperRoot`.
+    /// Conservative by construction: the keeper's drive must be ONLINE,
+    /// not retired, KNOWN (listed or a scan target) whenever the chosen
+    /// drive is listed, and rank STRICTLY higher than the chosen drive in
+    /// the same VolumeRank order the election used.
+    func crossVolumeVerdict(extraPath: String, volumeRoot: String,
+                            keeperPath: String, keeperRoot: String) -> CrossVolumeVerdict {
+        if PathScope.normalize(keeperRoot) == PathScope.normalize(volumeRoot) { return .sameVolume }
+        let keeperRank = volumeRank(forPath: keeperPath)
+        if keeperRank.isRetired { return .keeperRetired }
+        if !keeperRank.isOnline { return .keeperOffline }
+        let hereRank = volumeRank(forPath: extraPath)
+        if keeperRank.isUnknown && listIndex(forPath: extraPath) != nil { return .keeperVolumeUnknown }
+        guard keeperRank > hereRank else { return .keeperNotHigherRanked }
+        return .eligible
     }
 
     // MARK: Volume precedence
@@ -263,7 +341,19 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
 
     var volumePrecedence: [String] = DuplicateKeeperSettings.defaultPrecedence
 
+    /// "Also clean up working copies" (Rick approved 2026-08-18; reframed
+    /// per AMPAS Digital Dilemma / NDSA / PBCore: copies are instantiations
+    /// of one asset — working-library copies are ephemeral, masters are
+    /// not). DEFAULT OFF. Off: Delete Duplicates on <volume> removes only
+    /// extras whose master is also on <volume> (the pre-existing rule).
+    /// On: also removes working copies on <volume> whose master is on a
+    /// strictly higher-ranked, online, non-retired, known drive
+    /// (DuplicateKeeperPolicy.crossVolumeVerdict). Byte-verify and
+    /// carry-over are unchanged either way. Strings: WorkingCopyCleanupText.
+    var alsoCleanUpWorkingCopies: Bool = false
+
     static let precedenceKey = "dupKeep_volumePrecedence"
+    static let workingCopyCleanupKey = "dupKeep_alsoCleanUpWorkingCopies"
 
     static func restored(from defaults: UserDefaults) -> DuplicateKeeperSettings {
         var s = DuplicateKeeperSettings()
@@ -272,10 +362,64 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
         if let stored = defaults.object(forKey: precedenceKey) as? [String] {
             s.volumePrecedence = stored
         }
+        if defaults.object(forKey: workingCopyCleanupKey) != nil {
+            s.alsoCleanUpWorkingCopies = defaults.bool(forKey: workingCopyCleanupKey)
+        }
         return s
     }
 
     func save(to defaults: UserDefaults) {
         defaults.set(volumePrecedence, forKey: Self.precedenceKey)
+        defaults.set(alsoCleanUpWorkingCopies, forKey: Self.workingCopyCleanupKey)
     }
+}
+
+// MARK: - Working-copy cleanup — every user-facing string (2026-08-18)
+
+/// ONE place for the words of the "Also clean up working copies" mode, so
+/// a rename is a one-file change. Vocabulary (Rick, after an AMPAS Digital
+/// Dilemma / NDSA / PBCore check): an ASSET has several COPIES; the copy
+/// on the most reliable drive is its MASTER; copies on the working tier
+/// are WORKING COPIES and are ephemeral. Masters are never touched.
+enum WorkingCopyCleanupText {
+    static let toggleLabel = "Also clean up working copies"
+
+    static let captionTemplate =
+        "Removes copies on <volume> whose asset already has a verified master on a more reliable drive. "
+        + "Files must match byte-for-byte; stars, people and notes move to the master."
+
+    static func caption(volume: String) -> String {
+        captionTemplate.replacingOccurrences(of: "<volume>", with: volume)
+    }
+
+    /// Confirmation-alert body line.
+    static func confirmation(total: Int, volume: String, sameDrive: Int,
+                             workingCopies: Int, masterVolumes: [String]) -> String {
+        let vols = masterVolumes.isEmpty ? "another drive" : masterVolumes.joined(separator: ", ")
+        return "Remove \(total) extra cop\(total == 1 ? "y" : "ies") on \(volume): "
+            + "\(sameDrive) same-drive extra\(sameDrive == 1 ? "" : "s") + "
+            + "\(workingCopies) working cop\(workingCopies == 1 ? "y" : "ies") whose master is on \(vols). "
+            + "Masters are never touched."
+    }
+
+    /// Log summary line prefix: "Working-copy cleanup on <volume>: …".
+    static func logSummary(volume: String, detail: String) -> String {
+        "Working-copy cleanup on \(volume): \(detail)"
+    }
+
+    /// Per-file line for a removed working copy.
+    static func logRemoved(path: String, masterPath: String) -> String {
+        "[WORKING-COPY] removed \(path) — master \(masterPath)"
+    }
+
+    // Skipped reasons (family language, short).
+    static let reasonEligible = "master on a more reliable drive that's plugged in"
+    static let reasonSameDrive = "master on this same drive"
+    static let reasonMasterOnAnotherDrive = "master on another drive"      // toggle OFF legacy reason
+    static let reasonMasterOffline = "master offline"
+    static let reasonMasterRetired = "master retired"
+    static let reasonMasterNotMoreReliable = "master not more reliable"
+    static let reasonMasterUnknownDrive = "master on a drive that isn't in your list"
+    static let reasonMasterArchiveFile = "Master Archive file"
+    static let reasonNoMaster = "no master to verify against"
 }

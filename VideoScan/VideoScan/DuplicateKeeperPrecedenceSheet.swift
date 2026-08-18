@@ -26,10 +26,11 @@ struct DuplicateKeeperPrecedenceSheet: View {
             header
             list
             addAndResetBar
+            crossVolumeToggle
             footer
         }
         .padding(22)
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 460)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 560)
     }
 
     // MARK: Header
@@ -133,6 +134,30 @@ struct DuplicateKeeperPrecedenceSheet: View {
             }
             .accessibilityIdentifier("dupKeeper.reset")
         }
+    }
+
+    // MARK: Working-copy cleanup toggle ("Also clean up working copies")
+
+    private var crossVolumeToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { model.duplicateKeeperSettings.alsoCleanUpWorkingCopies },
+                set: { on in
+                    model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
+                    model.saveDuplicateKeeperSettings()
+                    // The Duplicates menu counts depend on the mode.
+                    model.refreshDossierCountsNow()
+                })) {
+                Text(WorkingCopyCleanupText.toggleLabel)
+            }
+            .accessibilityIdentifier("dupKeeper.workingCopyCleanupToggle")
+            Text(WorkingCopyCleanupText.caption(volume: "the drive you pick"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: Footer

@@ -335,6 +335,19 @@ struct CatalogToolbar<Dashboard: View>: View {
                             }
                         }
                     }
+                    if !model.isReadOnly {
+                        Divider()
+                        // "Also clean up working copies" (2026-08-18) —
+                        // same persisted setting as the Volumes sheet; the
+                        // caption lives there. Default OFF.
+                        Toggle(WorkingCopyCleanupText.toggleLabel, isOn: Binding(
+                            get: { model.duplicateKeeperSettings.alsoCleanUpWorkingCopies },
+                            set: { on in
+                                model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
+                                model.saveDuplicateKeeperSettings()
+                                model.refreshDossierCountsNow()
+                            }))
+                    }
                 } label: {
                     if isAnalyzingDuplicates || model.isDeletingDuplicates {
                         HStack(spacing: 4) {
