@@ -196,6 +196,26 @@ struct HallieGroundedCompositionTests {
         #expect(fine.kept.count == 1)
     }
 
+    @Test func verifierExpandsMonthsAndChecksSpelledOutNumbers() {
+        let plan = biographyPlan()
+        // "12 MAR 1920" vouches for "March 12, 1920" (live smoke 2026-08-17).
+        let month = HallieCompositionVerifier.verify(
+            "Ellen Breen was born on March 12, 1920 [c1].", plan: plan, personaName: "Hallie Mae")
+        #expect(month.kept.count == 1)
+        // A spelled-out count with no digit or word in the cited claim leaks.
+        let word = HallieCompositionVerifier.verify(
+            "Ellen Breen had seven children [c3].", plan: plan, personaName: "Hallie Mae")
+        #expect(word.dropped.first?.reason == .leakedNumber)
+        // "one" is exempt (pronoun), and a digit in the claim vouches for its word.
+        let list = HallieAnswerPlan(
+            route: .presence, shape: .list,
+            claims: [.init(id: "c1", text: "I found 2 catalog items matching that.")],
+            fallbackText: "I found 2 catalog items matching that.")
+        let two = HallieCompositionVerifier.verify(
+            "There are two, and one of them is below [c1].", plan: list, personaName: "Hallie")
+        #expect(two.kept.count == 1)
+    }
+
     @Test func verifierEnforcesSentenceBudgetAndHandlesTagVariants() {
         let plan = HallieAnswerPlan(
             route: .presence, shape: .list,

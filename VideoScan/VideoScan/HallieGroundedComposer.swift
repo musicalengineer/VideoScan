@@ -176,6 +176,11 @@ struct HallieGroundedComposer: Sendable {
             lines.append("Subject: \(subject)")
         }
         lines.append("Answer shape: \(plan.shape.rawValue) (at most \(plan.maxSentences) sentences)")
+        if plan.shape == .list {
+            lines.append("The items are shown to the reader as a list under your answer, "
+                         + "so do not enumerate them; give the count and mention at most "
+                         + "two by name.")
+        }
         if !plan.counts.isEmpty {
             lines.append("Numbers: " + plan.counts.map { "\($0.label) = \($0.value)" }
                 .joined(separator: "; "))

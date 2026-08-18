@@ -49,13 +49,50 @@ enum HallieCompositionVerifier {
         "i", "i'm", "i've", "i'd", "i'll", "ok", "okay",
     ]
 
+    /// GEDCOM dates come as "12 MAR 1920"; a warm voice says "March 12,
+    /// 1920". A month named in a cited claim vouches for both spellings —
+    /// nothing new is asserted, only the abbreviation expanded.
+    private static let monthPairs: [(short: String, long: String)] = [
+        ("jan", "january"), ("feb", "february"), ("mar", "march"),
+        ("apr", "april"), ("may", "may"), ("jun", "june"), ("jul", "july"),
+        ("aug", "august"), ("sep", "september"), ("sept", "september"),
+        ("oct", "october"), ("nov", "november"), ("dec", "december"),
+    ]
+
+    /// Spelled-out numbers are numbers: "seven children" must be vouched
+    /// for by a "7" or "seven" in the cited claims. "one" is exempt — it is
+    /// far more often a pronoun ("one of them") than a count.
+    private static let numberWords: [String: String] = [
+        "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+        "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
+        "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15",
+        "sixteen": "16", "seventeen": "17", "eighteen": "18", "nineteen": "19",
+        "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+        "sixty": "60", "seventy": "70", "eighty": "80", "ninety": "90",
+        "hundred": "100", "thousand": "1000", "million": "1000000",
+    ]
+
+    /// The vouched-for token set for a sentence: every token of its cited
+    /// claims, plus month spellings and digit/word forms those tokens imply.
+    static func allowedTokens(claims: [HallieAnswerPlan.Claim], personaName: String) -> Set<String> {
+        var allowed = Set(claims.flatMap { tokens(of: $0.text) })
+        allowed.formUnion(tokens(of: personaName))
+        for pair in monthPairs {
+            if allowed.contains(pair.short) { allowed.insert(pair.long) }
+            if allowed.contains(pair.long) { allowed.insert(pair.short) }
+        }
+        for (word, digits) in numberWords where allowed.contains(digits) {
+            allowed.insert(word)
+        }
+        return allowed
+    }
+
     static func verify(
         _ composed: String,
         plan: HallieAnswerPlan,
         personaName: String
     ) -> Verification {
         let known = Dictionary(uniqueKeysWithValues: plan.claims.map { ($0.id, $0) })
-        let personaTokens = Set(tokens(of: personaName))
         var kept: [Sentence] = []
         var dropped: [Dropped] = []
 
@@ -71,8 +108,7 @@ enum HallieCompositionVerifier {
                 continue
             }
             let display = stripTags(raw)
-            let allowedTokens = Set(claims.flatMap { tokens(of: $0.text) })
-                .union(personaTokens)
+            let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
             if let reason = leak(in: display, allowed: allowedTokens) {
                 dropped.append(Dropped(text: raw, reason: reason))
                 continue
@@ -231,6 +267,9 @@ enum HallieCompositionVerifier {
                 if piece.allSatisfy(\.isNumber) {
                     if allowed.contains(lowered) { continue }
                     return piece.count == 4 ? .leakedYear : .leakedNumber
+                }
+                if numberWords[lowered] != nil, !allowed.contains(lowered) {
+                    return .leakedNumber
                 }
                 guard let first = piece.first, first.isUppercase else { continue }
                 if position == 0 { continue }          // sentence-initial word
