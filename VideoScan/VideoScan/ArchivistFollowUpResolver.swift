@@ -627,55 +627,118 @@ enum ArchivistFollowUpResolver {
     /// query.
     private static let maxChainTerms = ArchivistQueryAST.maxListItems
 
-    private static func refinementResolution(
-        _ rawWords: [String], snapshot: Snapshot?, isKnownPerson: (String) -> Bool
-    ) -> Resolution? {
-        let original = rawWords.joined(separator: " ")
-        // Politeness only — "and", "then", "just" are leads with meaning here.
-        var residual = Array(rawWords.drop { politeness.contains($0) })
+    /// The leads peeled off the front of a fragment and what is left.
+    private struct LeadScan {
+        var residual: [String]
         var kind: LeadKind?
-        var explicitLead = false
-        var softLead = false
-        // Peel leads while they keep matching ("and with donna").
+        var explicit = false
+        var soft = false
+        var hadLead: Bool { explicit || soft }
+    }
+
+    /// Peel leads while they keep matching ("and with donna"). Comparative
+    /// and subtractive leads beat additive ones.
+    private static func scanLeads(_ rawWords: [String]) -> LeadScan {
+        // Politeness only — "and", "then", "just" are leads with meaning here.
+        var scan = LeadScan(residual: Array(rawWords.drop { politeness.contains($0) }))
         var progressed = true
         while progressed {
             progressed = false
             for lead in leads.sorted(by: { $0.phrase.count > $1.phrase.count }) {
                 let leadWords = lead.phrase.split(separator: " ").map(String.init)
-                guard Array(residual.prefix(leadWords.count)) == leadWords,
-                      residual.count > leadWords.count else { continue }
-                residual = Array(residual.dropFirst(leadWords.count))
-                if lead.soft { softLead = true } else { explicitLead = true }
-                // Comparative / subtractive beat additive.
-                switch (kind, lead.kind) {
-                case (nil, let new): kind = new
-                case (.additive?, let new): kind = new
+                guard Array(scan.residual.prefix(leadWords.count)) == leadWords,
+                      scan.residual.count > leadWords.count else { continue }
+                scan.residual = Array(scan.residual.dropFirst(leadWords.count))
+                if lead.soft { scan.soft = true } else { scan.explicit = true }
+                switch (scan.kind, lead.kind) {
+                case (nil, let new), (.additive?, let new): scan.kind = new
                 default: break
                 }
                 progressed = true
                 break
             }
         }
-        let hadLead = explicitLead || softLead
+        return scan
+    }
+
+    /// A sentence of its own — verbs, kinship possessives, too long, or
+    /// asking FOR media ("videos of nobody", "christmas videos") without a
+    /// continuation lead.
+    private static func readsAsSentence(_ scan: LeadScan) -> Bool {
+        let residual = scan.residual
+        if residual.contains(where: { sentenceVerbs.contains($0) }) { return true }
+        if residual.contains(where: { $0.hasSuffix("'s") }) { return true }
+        if residual.count > (scan.hadLead ? 6 : 4) { return true }
+        if !scan.explicit, residual.contains(where: { mediaNouns.contains($0) }) { return true }
+        return false
+    }
+
+    /// Content groups split at filler boundaries: "with donna at the cape"
+    /// → [donna] [cape]; "playing guitar" → [guitar]; "red bike" → [red bike].
+    private static func contentGroups(_ words: [String]) -> [[String]] {
+        var groups: [[String]] = []
+        var current: [String] = []
+        for word in words {
+            if fragmentFiller.contains(word) {
+                if !current.isEmpty { groups.append(current); current = [] }
+            } else {
+                current.append(word)
+            }
+        }
+        if !current.isEmpty { groups.append(current) }
+        return groups
+    }
+
+    /// "matt instead of donna" / "instead of donna" / "donna instead" →
+    /// (new person words, old person words), or nil when there is no
+    /// "instead". Consumes the whole remainder.
+    private static func splitInstead(_ rest: inout [String]) -> (new: [String], old: [String])? {
+        guard let index = rest.firstIndex(of: "instead") else { return nil }
+        let new = Array(rest[..<index]).filter { !fragmentFiller.contains($0) }
+        var after = Array(rest[(index + 1)...])
+        if after.first == "of" { after.removeFirst() }
+        let old = after.filter { !fragmentFiller.contains($0) }
+        rest = []
+        return (new, old)
+    }
+
+    private static func insteadChange(
+        new: [String], old: [String], isKnownPerson: (String) -> Bool
+    ) -> Change? {
+        let newName = new.joined(separator: " ")
+        let oldName = old.joined(separator: " ")
+        let newKnown = !newName.isEmpty && isKnownPerson(newName)
+        let oldKnown = !oldName.isEmpty && isKnownPerson(oldName)
+        if newKnown { return .replacePerson(newName, of: oldKnown ? oldName : nil) }
+        if oldKnown, newName.isEmpty { return .removePerson(oldName) }
+        if !newName.isEmpty { return .replaceKeyword(newName) }
+        return nil
+    }
+
+    private static func personChange(_ name: String, kind: LeadKind?) -> Change {
+        switch kind {
+        case .comparative?: return .replacePerson(name, of: nil)
+        case .subtractive?: return .removePerson(name)
+        default: return .addPerson(name)
+        }
+    }
+
+    private static func refinementResolution(
+        _ rawWords: [String], snapshot: Snapshot?, isKnownPerson: (String) -> Bool
+    ) -> Resolution? {
+        let original = rawWords.joined(separator: " ")
+        let scan = scanLeads(rawWords)
 
         // Nothing but filler ("ok", "and", "hmm?"): not a question at all.
-        let contentAtAll = residual.filter { !fragmentFiller.contains($0) }
-        if contentAtAll.isEmpty {
+        if scan.residual.allSatisfy({ fragmentFiller.contains($0) }) {
             return snapshot?.ast == nil ? .none : .declineUninterpretable(original)
         }
-        // A sentence of its own — verbs, kinship possessives, or too long.
-        if residual.contains(where: { sentenceVerbs.contains($0) }) { return nil }
-        if residual.contains(where: { $0.hasSuffix("'s") }) { return nil }
-        guard residual.count <= (hadLead ? 6 : 4) else { return nil }
-        // "videos of nobody" / "christmas videos": asking FOR media is a
-        // fresh question, not a narrowing of the last one — unless a
-        // continuation lead says otherwise ("and the christmas videos").
-        if !explicitLead, residual.contains(where: { mediaNouns.contains($0) }) { return nil }
+        if readsAsSentence(scan) { return nil }
 
         // Years first ("around 2005", "in the 90s", "1990 to 1995"), then an
-        // age band ("as a baby"), then whatever content is left.
+        // age band ("as a baby"), then "instead", then whatever is left.
         var changes: [Change] = []
-        var rest = residual
+        var rest = scan.residual
         if let extracted = extractYears(from: rest) {
             changes.append(.years(extracted.range, label: extracted.label))
             rest = extracted.remaining
@@ -684,39 +747,15 @@ enum ArchivistFollowUpResolver {
             changes.append(.ageBand(keyword: band.keyword))
             rest = band.remaining
         }
-
-        // "matt instead of donna" / "instead of donna" / "donna instead".
-        var insteadNew: [String] = []
-        var insteadOld: [String] = []
-        var hadInstead = false
-        if let index = rest.firstIndex(of: "instead") {
-            hadInstead = true
-            insteadNew = Array(rest[..<index]).filter { !fragmentFiller.contains($0) }
-            var after = Array(rest[(index + 1)...])
-            if after.first == "of" { after.removeFirst() }
-            insteadOld = after.filter { !fragmentFiller.contains($0) }
-            rest = []
-        }
-
-        // Content groups split at filler boundaries: "with donna at the cape"
-        // → [donna] [cape]; "playing guitar" → [guitar]; "red bike" → [red bike].
-        var groups: [[String]] = []
-        var current: [String] = []
-        for word in rest {
-            if fragmentFiller.contains(word) {
-                if !current.isEmpty { groups.append(current); current = [] }
-            } else {
-                current.append(word)
-            }
-        }
-        if !current.isEmpty { groups.append(current) }
+        let instead = splitInstead(&rest)
+        let groups = contentGroups(rest)
 
         // No previous question: a year alone or a bare topic word may still
         // be a fresh question for the translator; an explicit continuation
         // lead ("and …") is an honest decline. Name lookups cost identity
         // sources, so nothing below runs without something to refine.
         guard let snapshot, let ast = snapshot.ast else {
-            return explicitLead ? .declineNoPriorResult(nil) : .none
+            return scan.explicit ? .declineNoPriorResult(nil) : .none
         }
         let listShape: Bool
         switch ast {
@@ -724,51 +763,31 @@ enum ArchivistFollowUpResolver {
         default: listShape = false
         }
 
-        if hadInstead {
-            let newName = insteadNew.joined(separator: " ")
-            let oldName = insteadOld.joined(separator: " ")
-            let newKnown = !newName.isEmpty && isKnownPerson(newName)
-            let oldKnown = !oldName.isEmpty && isKnownPerson(oldName)
-            if newKnown {
-                changes.append(.replacePerson(newName, of: oldKnown ? oldName : nil))
-            } else if oldKnown, newName.isEmpty {
-                changes.append(.removePerson(oldName))
-            } else if !newName.isEmpty {
-                changes.append(.replaceKeyword(newName))
-            } else {
-                return .declineUninterpretable(original)
-            }
+        if let instead {
+            guard let change = insteadChange(
+                new: instead.new, old: instead.old, isKnownPerson: isKnownPerson)
+            else { return .declineUninterpretable(original) }
+            changes.append(change)
         }
 
         // People and topics. Without any lead, a person plus anything else
         // ("donna at christmas", "matt in 2005") is a fresh question.
-        var personGroups: [String] = []
-        var topicGroups: [String] = []
+        var people: [String] = []
+        var topics: [String] = []
         for group in groups {
             let phrase = group.joined(separator: " ")
-            if isKnownPerson(phrase) {
-                personGroups.append(phrase)
-            } else {
-                topicGroups.append(phrase)
-            }
+            if isKnownPerson(phrase) { people.append(phrase) } else { topics.append(phrase) }
         }
-        if !hadLead, !personGroups.isEmpty,
-           personGroups.count + topicGroups.count + changes.count > 1 {
+        if !scan.hadLead, !people.isEmpty, people.count + topics.count + changes.count > 1 {
             return nil
         }
         // For non-list shapes an unknown bare word without a lead is not
         // confidently a refinement (old behavior: let the translator decide).
-        if !listShape, !hadLead, !topicGroups.isEmpty { return nil }
+        if !listShape, !scan.hadLead, !topics.isEmpty { return nil }
 
-        for name in personGroups {
-            switch kind {
-            case .comparative?: changes.append(.replacePerson(name, of: nil))
-            case .subtractive?: changes.append(.removePerson(name))
-            default: changes.append(.addPerson(name))
-            }
-        }
-        for topic in topicGroups {
-            switch kind {
+        changes.append(contentsOf: people.map { personChange($0, kind: scan.kind) })
+        for topic in topics {
+            switch scan.kind {
             case .comparative?: changes.append(.replaceKeyword(topic))
             case .subtractive?:
                 return .declineNotRefinable(
@@ -926,24 +945,61 @@ enum ArchivistFollowUpResolver {
     /// Cumulative apply for list shapes. Adds AND onto the previous
     /// constraints; comparative changes swap the like field; the chain and
     /// the "what changed" lead are rebuilt so the answer can say so.
-    static func applyCumulative(
-        _ changes: [Change], to ast: ArchivistQueryAST, previousChain: Chain?
-    ) -> Resolution {
+    /// The fields the list shapes share, lifted out so the cumulative apply
+    /// is one loop over changes rather than three copies of it.
+    private struct ListFields {
         var people: [String]
         var keywords: [String]
         var yearStart: Int?
         var yearEnd: Int?
-        switch ast {
-        case .presence(let p):
-            people = p.people ?? []; keywords = p.keywords ?? []
-            yearStart = p.yearStart; yearEnd = p.yearEnd
-        case .cross(let p):
-            people = p.people ?? []; keywords = p.keywords ?? []
-            yearStart = p.yearStart; yearEnd = p.yearEnd
-        case .event(let p):
-            people = p.people ?? []; keywords = p.keywords ?? []
-            yearStart = p.yearStart; yearEnd = p.yearEnd
-        default:
+
+        init?(_ ast: ArchivistQueryAST) {
+            switch ast {
+            case .presence(let p):
+                self.init(p.people, p.keywords, p.yearStart, p.yearEnd)
+            case .cross(let p):
+                self.init(p.people, p.keywords, p.yearStart, p.yearEnd)
+            case .event(let p):
+                self.init(p.people, p.keywords, p.yearStart, p.yearEnd)
+            default:
+                return nil
+            }
+        }
+
+        private init(_ people: [String]?, _ keywords: [String]?, _ start: Int?, _ end: Int?) {
+            self.people = people ?? []
+            self.keywords = keywords ?? []
+            self.yearStart = start
+            self.yearEnd = end
+        }
+
+        /// The same shape as `ast` with these fields written back.
+        func written(into ast: ArchivistQueryAST) -> ArchivistQueryAST {
+            let people = self.people.isEmpty ? nil : self.people
+            let keywords = self.keywords.isEmpty ? nil : self.keywords
+            switch ast {
+            case .presence(var p):
+                p.people = people; p.keywords = keywords
+                p.yearStart = yearStart; p.yearEnd = yearEnd
+                return .presence(p)
+            case .cross(var p):
+                p.people = people; p.keywords = keywords
+                p.yearStart = yearStart; p.yearEnd = yearEnd
+                return .cross(p)
+            case .event(var p):
+                p.people = people; p.keywords = keywords
+                p.yearStart = yearStart; p.yearEnd = yearEnd
+                return .event(p)
+            default:
+                return ast
+            }
+        }
+    }
+
+    static func applyCumulative(
+        _ changes: [Change], to ast: ArchivistQueryAST, previousChain: Chain?
+    ) -> Resolution {
+        guard var fields = ListFields(ast) else {
             return applyReplacement(changes[0], to: ast)
         }
         var yearLabel: String? = previousChain?.yearLabel ?? Chain.base(for: ast).yearLabel
@@ -951,81 +1007,64 @@ enum ArchivistFollowUpResolver {
         for change in changes {
             switch change {
             case .years(let range, let label):
-                yearStart = range.lowerBound; yearEnd = range.upperBound
+                fields.yearStart = range.lowerBound; fields.yearEnd = range.upperBound
                 yearLabel = label
                 // An explicit year replaces an earlier age band.
-                keywords.removeAll { ArchivistAgePhrase.detect(in: [$0]) != nil }
+                fields.keywords.removeAll { ArchivistAgePhrase.detect(in: [$0]) != nil }
             case .ageBand(let keyword):
-                yearStart = nil; yearEnd = nil
+                fields.yearStart = nil; fields.yearEnd = nil
                 yearLabel = keyword
-                keywords.removeAll { ArchivistAgePhrase.detect(in: [$0]) != nil }
-                keywords.append(keyword)
+                fields.keywords.removeAll { ArchivistAgePhrase.detect(in: [$0]) != nil }
+                fields.keywords.append(keyword)
             case .addPerson(let name):
-                if people.contains(where: { sameName($0, name) }) {
+                if fields.people.contains(where: { sameName($0, name) }) {
                     return .declineNotRefinable(
                         reason: "\(Chain.capitalized(name)) is already part of the question")
                 }
-                people.append(name)
+                fields.people.append(name)
             case .replacePerson(let name, let old):
-                if let old, let index = people.firstIndex(where: { sameName($0, old) }) {
-                    people[index] = name
+                if let old, let index = fields.people.firstIndex(where: { sameName($0, old) }) {
+                    fields.people[index] = name
                 } else {
-                    people = [name]
+                    fields.people = [name]
                 }
             case .removePerson(let name):
-                guard people.contains(where: { sameName($0, name) }) else {
+                guard fields.people.contains(where: { sameName($0, name) }) else {
                     return .declineNotRefinable(
                         reason: "\(Chain.capitalized(name)) isn't part of the question")
                 }
-                people.removeAll { sameName($0, name) }
+                fields.people.removeAll { sameName($0, name) }
             case .addKeyword(let word):
-                if keywords.contains(where: { sameName($0, word) }) {
+                if fields.keywords.contains(where: { sameName($0, word) }) {
                     return .declineNotRefinable(
                         reason: "“\(word)” is already part of the question")
                 }
-                keywords.append(word)
+                fields.keywords.append(word)
             case .replaceKeyword(let word):
-                keywords = [word]
+                fields.keywords = [word]
             }
         }
-        if people.count > maxChainTerms || keywords.count > maxChainTerms {
+        if fields.people.count > maxChainTerms || fields.keywords.count > maxChainTerms {
             return .declineNotRefinable(
                 reason: "I can hold at most \(maxChainTerms) people and \(maxChainTerms) topics "
                 + "in one question — say “start over” to begin again")
         }
-        if people.isEmpty, keywords.isEmpty, yearStart == nil, yearEnd == nil {
+        if fields.people.isEmpty, fields.keywords.isEmpty, fields.yearStart == nil, fields.yearEnd == nil {
             return .declineNotRefinable(reason: "that would leave nothing to search for")
         }
-        if yearStart == nil, yearEnd == nil, !keywords.contains(where: { ArchivistAgePhrase.detect(in: [$0]) != nil }) {
+        let hasAgeBand = fields.keywords.contains { ArchivistAgePhrase.detect(in: [$0]) != nil }
+        if fields.yearStart == nil, fields.yearEnd == nil, !hasAgeBand {
             yearLabel = nil
         }
 
-        let refined: ArchivistQueryAST
-        switch ast {
-        case .presence(var p):
-            p.people = people.isEmpty ? nil : people
-            p.keywords = keywords.isEmpty ? nil : keywords
-            p.yearStart = yearStart; p.yearEnd = yearEnd
-            refined = .presence(p)
-        case .cross(var p):
-            p.people = people.isEmpty ? nil : people
-            p.keywords = keywords.isEmpty ? nil : keywords
-            p.yearStart = yearStart; p.yearEnd = yearEnd
-            refined = .cross(p)
-        case .event(var p):
-            p.people = people.isEmpty ? nil : people
-            p.keywords = keywords.isEmpty ? nil : keywords
-            p.yearStart = yearStart; p.yearEnd = yearEnd
-            refined = .event(p)
-        default:
-            fatalError("unreachable: list shapes only")
-        }
+        let refined = fields.written(into: ast)
 
         // Chain: previous terms that survived, in the order they were said,
         // then the new ones. Age keywords live in the year label, not terms.
         var spoken: [String] = []
         if case .cross(let p) = ast { spoken = p.transcript ?? [] }
-        let live = (people + keywords + spoken).filter { ArchivistAgePhrase.detect(in: [$0]) == nil }
+        let live = (fields.people + fields.keywords + spoken)
+            .filter { ArchivistAgePhrase.detect(in: [$0]) == nil }
         var terms = (previousChain?.terms ?? Chain.base(for: ast).terms).filter { term in
             live.contains { sameName($0, term) }
         }
