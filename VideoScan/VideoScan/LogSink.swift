@@ -42,6 +42,14 @@ protocol LogSink: AnyObject, Sendable {
     /// timestamp and trailing newline (PersistentLog does both).
     func write(_ line: String)
 
+    /// Append many lines in one call, in order. PersistentLog turns this
+    /// into ONE lock / ONE FileHandle.write / ONE fsync (GH #162); the
+    /// protocol default (below) is a plain loop over `write(_:)`, so
+    /// in-memory and null sinks need nothing extra. Callers use it where
+    /// per-line fsync from the main actor is the beachball (GH #163: the
+    /// per-file "NOT CATALOGED" lines during a scan).
+    func writeBatch(_ lines: [String])
+
     /// Force any buffered output to its backing store. PersistentLog
     /// already flushes on every write — flush is a no-op for it — but
     /// custom sinks (or a future buffered impl) may use it.
@@ -50,6 +58,14 @@ protocol LogSink: AnyObject, Sendable {
     /// Tear down. After close(), writes should be discarded or queued
     /// per the implementation's contract.
     func close()
+}
+
+extension LogSink {
+    /// Default: N ordered single writes. PersistentLog overrides with a
+    /// real batched write (one fsync for the whole batch).
+    func writeBatch(_ lines: [String]) {
+        for line in lines { write(line) }
+    }
 }
 
 // MARK: - NullLogSink (production-side)

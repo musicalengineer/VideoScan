@@ -556,6 +556,20 @@ final class VideoScanModel: ObservableObject {
     /// starts (tests).
     nonisolated(unsafe) var ffprobePath = ToolLocator.ffprobePath
 
+    /// Test seam (GH #163 scale tests): when set, `probeFileOutcome` /
+    /// `probeFileWithTimeoutOutcome` return `stub(url)` instead of running
+    /// ffprobe, so a 100k-file synthetic scan exercises the REAL walk →
+    /// task-group → drain pipeline without 100k subprocesses. Consulted
+    /// off the main actor (same read discipline as `ffprobePath`); written
+    /// only before a scan starts (tests). Production never sets it.
+    nonisolated(unsafe) var probeOutcomeStub: (@Sendable (URL) async -> ProbeOutcome)?
+
+    /// Test seam (GH #163): observes the probe task groups' LIVE child
+    /// count (children added minus outcomes drained) after every change,
+    /// so a test can pin `max ≤ probeGroupLiveChildBound`. Nil in
+    /// production — one optional check per enqueue/drain, no other cost.
+    var probeGroupLiveChildrenGauge: ProbeGroupLiveChildrenGauge?
+
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
         "m2v", "vob", "wmv", "asf", "webm", "ogv", "ogg", "rm", "rmvb", "divx", "flv",

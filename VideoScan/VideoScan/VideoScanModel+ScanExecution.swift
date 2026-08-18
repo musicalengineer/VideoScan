@@ -135,6 +135,14 @@ extension VideoScanModel {
     ///   quieter appLog "NOT CATALOGED" line at the drain point still records
     ///   each one. "File not found" failures ALWAYS log and count: they are
     ///   the volume-unmount trail the abort diagnostic depends on.
+    /// - Parameter discoveryFinal: false while the streaming walk is still
+    ///   running (GH #163: outcomes are now drained DURING the walk, so
+    ///   `totalFiles` is the running discovered count, not the final
+    ///   denominator). In that phase only the every-20 progress line
+    ///   fires, worded as "still finding files", and NO milestone is
+    ///   consumed — the 10/25/50/…% lines stay reserved for the real
+    ///   percentages once discovery is final. Default true = the pre-#163
+    ///   behaviour, byte-identical.
     func processTargetProbeResult(
         outcome: ProbeOutcome,
         volName: String,
@@ -145,7 +153,8 @@ extension VideoScanModel {
         consecutiveNotAccessible: inout Int,
         loggedMilestones: inout Set<Int>,
         milestones: Set<Int>,
-        abortAfter: Int
+        abortAfter: Int,
+        discoveryFinal: Bool = true
     ) -> Bool {
         if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
             let notFound = outcome.probe.isPlayable == "File not found"
@@ -164,6 +173,16 @@ extension VideoScanModel {
             }
         } else {
             consecutiveNotAccessible = 0
+        }
+        guard discoveryFinal else {
+            // Walk still running: denominator is provisional. Keep the UI
+            // counter fresh every 20 completions and say so honestly; no
+            // milestone/percent bookkeeping against a moving total.
+            if completedCount % 20 == 0 {
+                target.filesScanned = completedCount
+                log("  [\(volName)] \(completedCount)/\(totalFiles)+ — still finding files")
+            }
+            return false
         }
         let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
         let shouldUpdate = completedCount % 20 == 0 || completedCount == totalFiles

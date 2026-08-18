@@ -49,15 +49,8 @@ extension VideoScanModel {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
         let skipHashingCaptured = scanOptions.skipChecksums
-        var targetRecords: [VideoRecord] = []
-        let milestones = Set([10, 25, 50, 75, 90, 100])
-        var loggedMilestones: Set<Int> = []
-        var completedCount = 0
         var discoveredCount = 0
-        var consecutiveNotAccessible = 0
-        let abortAfter = rootIsNetwork ? 100 : 50
         var allDiscoveredPaths: [String] = []
-        let knownMediaExtensions = videoExtensions.union(audioExtensions)
         // Counter-integrity stamp (2026-07-03): captured ONCE, on the main
         // actor, before any probe is enqueued. Every discovery increment and
         // every completion from this scan carries it; if the user stops this
@@ -74,6 +67,36 @@ extension VideoScanModel {
         let catalogedPaths = Set(records.lazy
             .map(\.fullPath)
             .filter { PathScope.contains($0, within: root) })
+
+        // Everything the per-outcome handler needs that is constant for
+        // this target (see handleProbeOutcome). The gated-outcome log
+        // batcher (GH #163 secondary) lives here too — one per run,
+        // finished on EVERY exit path below.
+        let ctx = ProbeDrainContext(
+            target: target,
+            volName: volName,
+            keepalive: keepalive,
+            audit: audit,
+            knownMediaExtensions: videoExtensions.union(audioExtensions),
+            abortAfter: rootIsNetwork ? 100 : 50,
+            gatedLog: GatedOutcomeLogBatcher(sink: appLog)
+        )
+        var state = ProbeDrainState()
+
+        // GH #163 — bounded LIVE children. Pre-fix this group grew one child
+        // per discovered file (≈400k on Projects) and the runtime's child
+        // bookkeeping is O(children) per removal → O(n²) on cancel/drain,
+        // all on the main actor (minutes-long beachball on Stop). Now at
+        // most `liveBound` children exist at once; discovered-but-not-yet-
+        // enqueued URLs wait in `pending` (a plain array — cheap, and the
+        // network checkpoint already holds every path anyway).
+        let liveBound = Self.probeGroupLiveChildBound(probesLimit: probesLimit)
+        let completions = ProbeChildCompletionCounter()
+        var live = 0            // children added − outcomes drained
+        var drained = 0         // outcomes drained (pairs with completions)
+        var pending: [URL] = []
+        var pendingHead = 0     // pending[pendingHead...] is the FIFO tail
+        var abortedDuringWalk = false
 
         let stream = walkDirectoryStream(
             root: root,
@@ -94,7 +117,7 @@ extension VideoScanModel {
         }
 
         await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
-            for await url in stream {
+            walk: for await url in stream {
                 if Task.isCancelled { break }
                 discoveredCount += 1
                 allDiscoveredPaths.append(url.path)
@@ -103,28 +126,48 @@ extension VideoScanModel {
                 // hop (the old `await MainActor.run` here suspended between
                 // the increment and the enqueue) and no probe can possibly
                 // complete before its discovery is visible. The invariant
-                // completed ≤ discovered is structural from here on.
+                // completed ≤ discovered is structural from here on — a
+                // URL parked in `pending` was discovered strictly before
+                // it is ever enqueued.
                 dashboard.recordFileDiscovered(volumeRoot: root, generation: scanGen)
-                probeGroup.addTask { [self] in
-                    await target.pauseGate.waitIfPaused()
-                    do {
-                        return try await sem.withPermit {
-                            await self.probeAndRecord(
-                                url: url,
-                                volName: volName,
-                                root: root,
-                                rootIsNetwork: rootIsNetwork,
-                                ramMountPoint: ramMountPoint,
-                                skipHashing: skipHashingCaptured,
-                                useTimeout: true,
-                                echoFilename: false,
-                                catalogedPaths: catalogedPaths,
-                                scanGeneration: scanGen
-                            )
-                        }
-                    } catch {
-                        return self.cancelledProbeOutcome(url: url)
+
+                // Opportunistic drain: children that have ALREADY finished
+                // are pulled out now (next() returns immediately for them)
+                // so the group never sits at the bound with finished
+                // children waiting for the walk to end. Never blocks on an
+                // unfinished probe — the walk keeps its own pace, exactly
+                // as before ("Found N files", the network checkpoint and
+                // the isWalking → percentage flip all land when the walk
+                // ends, not when probing does).
+                while completions.value > drained {
+                    guard let outcome = await probeGroup.next() else { break }
+                    drained += 1
+                    live -= 1
+                    probeGroupLiveChildrenGauge?.observe(live)
+                    // Denominator during the walk is the running discovered
+                    // count (the same number the dashboard shows while
+                    // isWalking) — the final total does not exist yet, so
+                    // the handler is told discovery is NOT final.
+                    if await handleProbeOutcome(outcome, totalFiles: discoveredCount, discoveryFinal: false,
+                                                ctx: ctx, state: &state) {
+                        probeGroup.cancelAll()
+                        abortedDuringWalk = true
+                        break walk
                     }
+                }
+
+                if live < liveBound {
+                    live += 1
+                    probeGroupLiveChildrenGauge?.observe(live)
+                    probeGroup.addTask { [self] in
+                        await self.runProbeChild(
+                            url: url, target: target, sem: sem, completions: completions,
+                            volName: volName, root: root, rootIsNetwork: rootIsNetwork,
+                            ramMountPoint: ramMountPoint, skipHashing: skipHashingCaptured,
+                            catalogedPaths: catalogedPaths, scanGeneration: scanGen)
+                    }
+                } else {
+                    pending.append(url)
                 }
             }
 
@@ -138,7 +181,10 @@ extension VideoScanModel {
 
             // Save checkpoint after walk completes so a crash during probing
             // can resume without re-walking the entire directory tree.
-            if rootIsNetwork {
+            // (Not after an abort that cut the walk short — a checkpoint
+            // from a partial walk would resume as if discovery were
+            // complete and feed the prune chain.)
+            if rootIsNetwork && !abortedDuringWalk {
                 // Checkpoint honesty (QA 2026-07-02): if the walk hit
                 // enumeration errors, the checkpoint must say so — a resume
                 // completes only the ADMITTED paths, and without the flag it
@@ -156,70 +202,194 @@ extension VideoScanModel {
                 log("  💾 Checkpoint saved (\(totalFiles) files) — scan is resumable if interrupted")
             }
 
-            for await outcome in probeGroup {
-                completedCount += 1
-
-                // Scan-health accounting runs for EVERY outcome — BEFORE the
-                // catalog-admission gate below. The gate decides what enters
-                // the catalog, never whether the volume-unmount abort counter
-                // or filesScanned tick. (Regression: gated-out extensionless
-                // + ffprobeFailed outcomes used to `continue` past this, so a
-                // mid-scan unmount in an Avid extensionless tree never
-                // tripped the consecutive-failures abort and the scan ground
-                // through the whole dead volume.)
-                await resetAbortStreakIfVolumeRecovered(
-                    keepalive: keepalive, outcome: outcome,
-                    consecutiveNotAccessible: &consecutiveNotAccessible)
-
-                // Catalog-admission gate — the SAME junk gate as the
-                // network-resume path (runResumedProbeGroup). Computed ONCE
-                // here: the accounting call below needs it too (gated-out
-                // failures on a healthy volume keep the quieter appLog-only
-                // treatment instead of a console FAILED line per junk blob).
-                let shouldCatalog = Self.shouldCatalogProbeResult(
-                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
-                    knownMediaExtensions: knownMediaExtensions)
-
-                let shouldAbort = processTargetProbeResult(
-                    outcome: outcome,
-                    volName: volName,
-                    completedCount: completedCount,
-                    totalFiles: totalFiles,
-                    target: target,
-                    catalogGated: !shouldCatalog,
-                    consecutiveNotAccessible: &consecutiveNotAccessible,
-                    loggedMilestones: &loggedMilestones,
-                    milestones: milestones,
-                    abortAfter: abortAfter
-                )
-
-                // Drop pre-construction so we never build a VideoRecord for a
-                // file we're about to discard (extensionless + ffprobe-
-                // unidentified). The two paths must gate identically.
-                if shouldCatalog {
-                    // MainActor drain point: this loop is @MainActor-isolated,
-                    // so the VideoRecord is constructed HERE — the off-actor
-                    // probe pipeline only ever produced the Sendable
-                    // ProbeOutcome carrier.
-                    let rec = VideoRecord()
-                    rec.apply(outcome)
-                    targetRecords.append(rec)
-                } else {
-                    recordGatedOutcome(outcome, audit: audit)
-                }
-
-                if shouldAbort {
-                    probeGroup.cancelAll()
-                    break
+            // Drain: every outcome goes through the SAME handler as the
+            // opportunistic drain above; each drained slot is refilled from
+            // `pending` (FIFO) until the queue is empty. On cancel nothing
+            // new is enqueued — at most `liveBound` children exist to tear
+            // down, which is the whole point of the fix.
+            if !abortedDuringWalk {
+                while let outcome = await probeGroup.next() {
+                    drained += 1
+                    live -= 1
+                    probeGroupLiveChildrenGauge?.observe(live)
+                    if await handleProbeOutcome(outcome, totalFiles: totalFiles, ctx: ctx, state: &state) {
+                        probeGroup.cancelAll()
+                        break
+                    }
+                    if pendingHead < pending.count, !Task.isCancelled {
+                        let url = pending[pendingHead]
+                        pendingHead += 1
+                        live += 1
+                        probeGroupLiveChildrenGauge?.observe(live)
+                        probeGroup.addTask { [self] in
+                            await self.runProbeChild(
+                                url: url, target: target, sem: sem, completions: completions,
+                                volName: volName, root: root, rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint, skipHashing: skipHashingCaptured,
+                                catalogedPaths: catalogedPaths, scanGeneration: scanGen)
+                        }
+                    }
                 }
             }
         }
+        // Every gated-outcome line is on disk before we return — finalize's
+        // own appLog lines (discovery audit, "Cancelled catalog scan …")
+        // must follow them, as they always did.
+        await ctx.gatedLog.finish()
         // Deterministic final flush: the batched counters must be fully
         // published the moment the probe group returns (finalize and tests
         // read them synchronously; the trailing-timer flush alone would
         // leave up to one throttle window of lag).
         dashboard.flushScanProgress()
-        return (targetRecords, discoveredCount, completedCount)
+        return (state.targetRecords, discoveredCount, state.completedCount)
+    }
+
+    /// Bound on LIVE children in a probe task group (GH #163): 4× the
+    /// per-volume ffprobe permit count, never below 16. Enough that the
+    /// semaphore always has runnable work queued behind it; small enough
+    /// that the runtime's O(children) child bookkeeping (and a cancel) is
+    /// trivial.
+    nonisolated static func probeGroupLiveChildBound(probesLimit: Int) -> Int {
+        max(16, 4 * max(1, probesLimit))
+    }
+
+    /// The body of one probe child task, shared by both probe groups and
+    /// both enqueue sites (fill + refill). Waits out a pause, takes a
+    /// permit, probes; a cancellation while waiting for the permit yields
+    /// the cancelled sentinel. Signals `completions` on EVERY exit so the
+    /// main-actor loop knows a finished child is waiting to be drained.
+    /// Runs on the child task's (nonisolated) context — probeAndRecord
+    /// hops to the main actor for its bookkeeping and `@concurrent`
+    /// probeFile* hops back off, exactly as before.
+    nonisolated func runProbeChild(
+        url: URL,
+        target: CatalogScanTarget,
+        sem: AsyncSemaphore,
+        completions: ProbeChildCompletionCounter,
+        volName: String,
+        root: String,
+        rootIsNetwork: Bool,
+        ramMountPoint: String?,
+        skipHashing: Bool,
+        catalogedPaths: Set<String>,
+        scanGeneration: UInt64
+    ) async -> ProbeOutcome {
+        defer { completions.signal() }
+        await target.pauseGate.waitIfPaused()
+        do {
+            return try await sem.withPermit {
+                await self.probeAndRecord(
+                    url: url,
+                    volName: volName,
+                    root: root,
+                    rootIsNetwork: rootIsNetwork,
+                    ramMountPoint: ramMountPoint,
+                    skipHashing: skipHashing,
+                    useTimeout: true,
+                    echoFilename: false,
+                    catalogedPaths: catalogedPaths,
+                    scanGeneration: scanGeneration
+                )
+            }
+        } catch {
+            return self.cancelledProbeOutcome(url: url)
+        }
+    }
+
+    /// Per-target constants for the drain handler (see handleProbeOutcome).
+    struct ProbeDrainContext {
+        let target: CatalogScanTarget
+        let volName: String
+        let keepalive: VolumeKeepalive?
+        let audit: DiscoveryAuditCollector?
+        let knownMediaExtensions: Set<String>
+        let milestones: Set<Int> = [10, 25, 50, 75, 90, 100]
+        let abortAfter: Int
+        let gatedLog: GatedOutcomeLogBatcher
+    }
+
+    /// Per-target mutable accounting for the drain handler. One instance
+    /// per probe-group run; only ever touched on the main actor.
+    struct ProbeDrainState {
+        var targetRecords: [VideoRecord] = []
+        var completedCount = 0
+        var consecutiveNotAccessible = 0
+        var loggedMilestones: Set<Int> = []
+    }
+
+    /// The per-outcome drain body — the ONE place an outcome is accounted,
+    /// gated, materialized or logged. Both probe groups call it from both
+    /// their fill-phase drains and their final drains (GH #163), so there is
+    /// exactly one copy of this bookkeeping. Returns true when the
+    /// consecutive-not-accessible abort threshold tripped (caller cancels
+    /// the group and stops enqueueing).
+    ///
+    /// - Parameter totalFiles: the denominator for progress lines — the
+    ///   final discovered total once the walk has ended, the running
+    ///   discovered count while it is still going.
+    /// - Parameter discoveryFinal: false only from the walk-phase drain
+    ///   (see processTargetProbeResult — no milestone/percent lines
+    ///   against a provisional total).
+    func handleProbeOutcome(
+        _ outcome: ProbeOutcome,
+        totalFiles: Int,
+        discoveryFinal: Bool = true,
+        ctx: ProbeDrainContext,
+        state: inout ProbeDrainState
+    ) async -> Bool {
+        state.completedCount += 1
+
+        // Scan-health accounting runs for EVERY outcome — BEFORE the
+        // catalog-admission gate below. The gate decides what enters
+        // the catalog, never whether the volume-unmount abort counter
+        // or filesScanned tick. (Regression: gated-out extensionless
+        // + ffprobeFailed outcomes used to `continue` past this, so a
+        // mid-scan unmount in an Avid extensionless tree never
+        // tripped the consecutive-failures abort and the scan ground
+        // through the whole dead volume.)
+        await resetAbortStreakIfVolumeRecovered(
+            keepalive: ctx.keepalive, outcome: outcome,
+            consecutiveNotAccessible: &state.consecutiveNotAccessible)
+
+        // Catalog-admission gate — the SAME junk gate for the streaming
+        // path and the network-resume path. Computed ONCE here: the
+        // accounting call below needs it too (gated-out failures on a
+        // healthy volume keep the quieter appLog-only treatment instead
+        // of a console FAILED line per junk blob).
+        let shouldCatalog = Self.shouldCatalogProbeResult(
+            ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
+            knownMediaExtensions: ctx.knownMediaExtensions)
+
+        let shouldAbort = processTargetProbeResult(
+            outcome: outcome,
+            volName: ctx.volName,
+            completedCount: state.completedCount,
+            totalFiles: totalFiles,
+            target: ctx.target,
+            catalogGated: !shouldCatalog,
+            consecutiveNotAccessible: &state.consecutiveNotAccessible,
+            loggedMilestones: &state.loggedMilestones,
+            milestones: ctx.milestones,
+            abortAfter: ctx.abortAfter,
+            discoveryFinal: discoveryFinal
+        )
+
+        // Drop pre-construction so we never build a VideoRecord for a
+        // file we're about to discard (extensionless + ffprobe-
+        // unidentified). The two paths must gate identically.
+        if shouldCatalog {
+            // MainActor drain point: this method is @MainActor-isolated,
+            // so the VideoRecord is constructed HERE — the off-actor
+            // probe pipeline only ever produced the Sendable
+            // ProbeOutcome carrier.
+            let rec = VideoRecord()
+            rec.apply(outcome)
+            state.targetRecords.append(rec)
+        } else {
+            recordGatedOutcome(outcome, audit: ctx.audit, gatedLog: ctx.gatedLog)
+        }
+
+        return shouldAbort
     }
 
     /// If keepalive reports the volume healthy again, clear the consecutive
@@ -273,13 +443,25 @@ extension VideoScanModel {
     /// outcome: the quiet appLog line (fa24921 etiquette — file log, not
     /// console) plus the discovery-audit entry, classified by whether the
     /// content sniff or ffprobe did the rejecting.
-    func recordGatedOutcome(_ outcome: ProbeOutcome, audit: DiscoveryAuditCollector?) {
+    ///
+    /// - Parameter gatedLog: when the caller runs inside a probe group, the
+    ///   line goes through the run's GatedOutcomeLogBatcher (GH #163: same
+    ///   text, batched writes off the main actor). Nil (default) writes
+    ///   straight to appLog as before — for one-off callers and tests.
+    func recordGatedOutcome(_ outcome: ProbeOutcome, audit: DiscoveryAuditCollector?,
+                            gatedLog: GatedOutcomeLogBatcher? = nil) {
+        let line: String
         if outcome.sniffRejected {
-            appLog.write("NOT CATALOGED — no media signature in file header (ffprobe skipped): \(outcome.fullPath)")
+            line = "NOT CATALOGED — no media signature in file header (ffprobe skipped): \(outcome.fullPath)"
             audit?.sniffRejected(path: outcome.fullPath)
         } else {
-            appLog.write("NOT CATALOGED — extension can't vouch for it and ffprobe could not identify as media: \(outcome.fullPath)")
+            line = "NOT CATALOGED — extension can't vouch for it and ffprobe could not identify as media: \(outcome.fullPath)"
             audit?.probeRejected(path: outcome.fullPath)
+        }
+        if let gatedLog {
+            gatedLog.append(line)
+        } else {
+            appLog.write(line)
         }
     }
 
@@ -298,14 +480,7 @@ extension VideoScanModel {
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
-        var targetRecords: [VideoRecord] = []
-        let milestones = Set([10, 25, 50, 75, 90, 100])
-        var loggedMilestones: Set<Int> = []
-        var completedCount = 0
-        var consecutiveNotAccessible = 0
-        let abortAfter = rootIsNetwork ? 100 : 50
         let totalFiles = filePaths.count
-        let knownMediaExtensions = videoExtensions.union(audioExtensions)
         // Sniff-gate exemption — same per-target context as
         // runTargetProbeGroup (see the comment there).
         let catalogedPaths = Set(records.lazy
@@ -313,6 +488,17 @@ extension VideoScanModel {
             .filter { PathScope.contains($0, within: root) })
         // Counter-integrity stamp — same contract as runTargetProbeGroup.
         let scanGen = dashboard.scanGeneration
+
+        let ctx = ProbeDrainContext(
+            target: target,
+            volName: volName,
+            keepalive: keepalive,
+            audit: audit,
+            knownMediaExtensions: videoExtensions.union(audioExtensions),
+            abortAfter: rootIsNetwork ? 100 : 50,
+            gatedLog: GatedOutcomeLogBatcher(sink: appLog)
+        )
+        var state = ProbeDrainState()
 
         target.filesFound = totalFiles
         // Resumed scans have no walk: the checkpoint list IS the final
@@ -322,90 +508,69 @@ extension VideoScanModel {
         dashboard.beginVolumeWalk(volumeRoot: root, volumeName: volName,
                                   generation: scanGen, knownTotal: totalFiles)
 
-        await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
-            for path in filePaths {
-                if Task.isCancelled { break }
-                let url = URL(fileURLWithPath: path)
-                // Strictly before the enqueue — same invariant as the
-                // streaming walk path.
-                dashboard.recordFileDiscovered(volumeRoot: root, generation: scanGen)
+        // GH #163 — same bounded-live-children shape as runTargetProbeGroup.
+        // The checkpoint list is already in memory, so "pending" is simply
+        // an index into it.
+        let liveBound = Self.probeGroupLiveChildBound(probesLimit: probesLimit)
+        let completions = ProbeChildCompletionCounter()
+        var live = 0
+        var nextIndex = 0
 
-                probeGroup.addTask { [self] in
-                    await target.pauseGate.waitIfPaused()
-                    do {
-                        return try await sem.withPermit {
-                            await self.probeAndRecord(
-                                url: url,
-                                volName: volName,
-                                root: root,
-                                rootIsNetwork: rootIsNetwork,
-                                ramMountPoint: ramMountPoint,
-                                skipHashing: skipChecksums,
-                                useTimeout: true,
-                                echoFilename: false,
-                                catalogedPaths: catalogedPaths,
-                                scanGeneration: scanGen
-                            )
-                        }
-                    } catch {
-                        return self.cancelledProbeOutcome(url: url)
-                    }
-                }
+        await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
+            // Discovery increments for the WHOLE list, strictly before any
+            // enqueue — same invariant (completed ≤ discovered) and same
+            // published counts as before, when every path was enqueued
+            // up front.
+            for _ in filePaths {
+                dashboard.recordFileDiscovered(volumeRoot: root, generation: scanGen)
             }
             // Publish the final discovered total for this root right away.
             dashboard.markVolumeWalkComplete(volumeRoot: root, totalFiles: totalFiles, generation: scanGen)
 
-            for await outcome in probeGroup {
-                completedCount += 1
-
-                // Scan-health accounting BEFORE the catalog gate — see the
-                // matching comment in runTargetProbeGroup. The gate controls
-                // catalog admission only; the not-accessible abort counter
-                // and filesScanned must tick for gated-out outcomes too.
-                await resetAbortStreakIfVolumeRecovered(
-                    keepalive: keepalive, outcome: outcome,
-                    consecutiveNotAccessible: &consecutiveNotAccessible)
-
-                // Catalog-admission gate — computed ONCE (see the matching
-                // comment in runTargetProbeGroup); also feeds the accounting
-                // call so healthy-volume gated-out junk stays off the console.
-                let shouldCatalog = Self.shouldCatalogProbeResult(
-                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
-                    knownMediaExtensions: knownMediaExtensions)
-
-                let shouldAbort = processTargetProbeResult(
-                    outcome: outcome,
-                    volName: volName,
-                    completedCount: completedCount,
-                    totalFiles: totalFiles,
-                    target: target,
-                    catalogGated: !shouldCatalog,
-                    consecutiveNotAccessible: &consecutiveNotAccessible,
-                    loggedMilestones: &loggedMilestones,
-                    milestones: milestones,
-                    abortAfter: abortAfter
-                )
-
-                // Drop pre-construction so we never build a VideoRecord for a
-                // file we're about to discard (extensionless + unidentified).
-                if shouldCatalog {
-                    // MainActor drain point — construct the VideoRecord here.
-                    let rec = VideoRecord()
-                    rec.apply(outcome)
-                    targetRecords.append(rec)
-                } else {
-                    recordGatedOutcome(outcome, audit: audit)
+            // Fill to the bound.
+            while nextIndex < filePaths.count, live < liveBound {
+                if Task.isCancelled { break }
+                let url = URL(fileURLWithPath: filePaths[nextIndex])
+                nextIndex += 1
+                live += 1
+                probeGroupLiveChildrenGauge?.observe(live)
+                probeGroup.addTask { [self] in
+                    await self.runProbeChild(
+                        url: url, target: target, sem: sem, completions: completions,
+                        volName: volName, root: root, rootIsNetwork: rootIsNetwork,
+                        ramMountPoint: ramMountPoint, skipHashing: skipChecksums,
+                        catalogedPaths: catalogedPaths, scanGeneration: scanGen)
                 }
+            }
 
-                if shouldAbort {
+            // Drain + refill — the same handler as the streaming path.
+            while let outcome = await probeGroup.next() {
+                live -= 1
+                probeGroupLiveChildrenGauge?.observe(live)
+                if await handleProbeOutcome(outcome, totalFiles: totalFiles, ctx: ctx, state: &state) {
                     probeGroup.cancelAll()
                     break
                 }
+                if nextIndex < filePaths.count, !Task.isCancelled {
+                    let url = URL(fileURLWithPath: filePaths[nextIndex])
+                    nextIndex += 1
+                    live += 1
+                    probeGroupLiveChildrenGauge?.observe(live)
+                    probeGroup.addTask { [self] in
+                        await self.runProbeChild(
+                            url: url, target: target, sem: sem, completions: completions,
+                            volName: volName, root: root, rootIsNetwork: rootIsNetwork,
+                            ramMountPoint: ramMountPoint, skipHashing: skipChecksums,
+                            catalogedPaths: catalogedPaths, scanGeneration: scanGen)
+                    }
+                }
             }
         }
+        // Gated lines on disk before finalize writes its trailing lines.
+        await ctx.gatedLog.finish()
         // Deterministic final flush — same contract as runTargetProbeGroup.
         dashboard.flushScanProgress()
-        return (targetRecords, totalFiles, completedCount)
+        return (state.targetRecords, totalFiles, state.completedCount)
     }
 
     /// Walk a directory tree and yield video file URLs as they are discovered
@@ -494,6 +659,8 @@ extension VideoScanModel {
     @concurrent
     #endif
     nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
+        // Test seam (GH #163) — synthetic scans at scale, no ffprobe.
+        if let stub = probeOutcomeStub { return await stub(url) }
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
         // to populate the timeout record; probeFileOutcome re-fetches on its
@@ -583,6 +750,8 @@ extension VideoScanModel {
     @concurrent
     #endif
     nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
+        // Test seam (GH #163) — synthetic scans at scale, no ffprobe.
+        if let stub = probeOutcomeStub { return await stub(url) }
         let fm = FileManager.default
         let path = url.path
 
