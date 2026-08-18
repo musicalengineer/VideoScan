@@ -169,6 +169,7 @@ struct ArchivistChatWindow: View {
     @State private var pendingHallieClarification:
         HallieAppTurnCoordinator.PendingClarification?
     @FocusState private var inputFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The last filter's matches — "play the first one" needs a
     /// referent (class refs, not copies).
@@ -322,7 +323,14 @@ struct ArchivistChatWindow: View {
                         // nowhere, that's the computer's job). GIFs go
                         // through NSImageView, the only view that
                         // animates them, and keep proportional fit.
-                        if archivistPhotoPath.lowercased().hasSuffix(".gif") {
+                        let loops = ArchivistPortraitLoops.discover(besideImageAt: archivistPhotoPath)
+                        if loops.hasVideo && !reduceMotion {
+                            // Outsourced "librarian at her desk" loops:
+                            // idle / listening / thinking, seamless, muted.
+                            ArchivistVideoPortrait(
+                                loops: loops,
+                                state: isThinking ? .thinking : (inputFocused ? .listening : .idle))
+                        } else if archivistPhotoPath.lowercased().hasSuffix(".gif") {
                             AnimatablePortrait(path: archivistPhotoPath)
                         } else if let image = NSImage(contentsOfFile: archivistPhotoPath) {
                             // She lives a little: breathing, drifting tilt,
