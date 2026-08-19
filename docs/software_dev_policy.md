@@ -74,6 +74,12 @@ verdicts in the branch, PR, or tracked documentation as appropriate.
   4. Isolation — reads global state? add a poisoned-state test (never write
      to real prefs/paths in tests)
   5. Sensor — leave a regression sensor pinning the behavior at scale
+- **Reviewers author the RED test for any reproducible finding** (Rick,
+  2026-08-19): when a review finds a bug that can be demonstrated, the
+  reviewer writes the failing sensor with the finding (on the branch or as a
+  patch in the channel message) rather than describing it in prose. The
+  author's fix then turns it green. A finding without a red test is a
+  hypothesis; a red test is a fact, and it becomes the regression sensor.
 - **Full unit suite green before requesting merge review.**
 - Don't test other people's code (Vision, ffmpeg, AVFoundation) or SwiftUI
   layout. Test our logic: parsers, scoring, correlation, state machines,
