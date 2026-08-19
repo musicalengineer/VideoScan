@@ -10,6 +10,7 @@ struct CatalogAuditSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var report: CatalogAuditReport? = nil
     @State private var task: Task<Void, Never>? = nil
+    @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -82,6 +83,20 @@ struct CatalogAuditSheet: View {
                 }
             }
             Spacer(minLength: 0)
+            // "Show me" — takes you to the place you can fix it (Rick
+            // 2026-08-19). Findings without a destination rely on the
+            // detail line as the advice bubble.
+            if f.status != .pass, f.action != .none {
+                Button {
+                    perform(f.action)
+                } label: {
+                    Label(showMeTitle(f.action), systemImage: "arrow.right.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(showMeHelp(f.action))
+                .accessibilityIdentifier("catalogAudit.showMe.\(f.check)")
+            }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(color(f.status).opacity(f.status == .pass ? 0.05 : 0.10)))
@@ -111,6 +126,38 @@ struct CatalogAuditSheet: View {
             report = r
             model.log("Catalog audit: \(r.overall.rawValue.uppercased()) — \(r.failCount) fail, \(r.warnCount) warn over \(r.activeRecords) present records")
         }
+    }
+
+    private func showMeTitle(_ a: CatalogAuditAction) -> String {
+        switch a {
+        case .focusRecords(let ids, _): return "Show \(ids.count.formatted()) in Catalog"
+        case .selectVolume:             return "Show drive"
+        case .none:                     return ""
+        }
+    }
+    private func showMeHelp(_ a: CatalogAuditAction) -> String {
+        switch a {
+        case .focusRecords: return "Opens the Catalog tab filtered to just these records, so you can Update Catalog, Unpair, or delete them."
+        case .selectVolume: return "Selects that drive in the Storage sidebar — right-click it for Delete from list / Update Catalog."
+        case .none:         return ""
+        }
+    }
+    private func perform(_ a: CatalogAuditAction) {
+        switch a {
+        case .focusRecords(let ids, let label):
+            model.pendingCatalogSelection = nil
+            model.pendingFocusLabel = label
+            model.focusedMediaIDs = Set(ids)
+            selectedTab = 1                      // Catalog
+            MainWindowHelper.shared.openMainWindow()
+        case .selectVolume(let path):
+            if let t = model.scanTargets.first(where: { $0.searchPath == path }) {
+                model.pendingVolumesSelectionID = t.id
+            }
+        case .none:
+            return
+        }
+        dismiss()
     }
 
     private func glyph(_ s: CatalogAuditStatus?) -> String {

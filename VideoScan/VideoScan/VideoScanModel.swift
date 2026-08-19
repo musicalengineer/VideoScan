@@ -132,6 +132,10 @@ final class VideoScanModel: ObservableObject {
     /// switches so both Catalog and Archive highlight the same set. Includes
     /// the primary record plus any duplicate-group members.
     @Published var focusedMediaIDs: Set<UUID> = []
+    /// Caption for the Catalog focus banner the next time `focusedMediaIDs`
+    /// is restored (nil → the default "A/V Pair focus"). Set by the
+    /// catalog audit's "Show me" (2026-08-19); consumed once.
+    @Published var pendingFocusLabel: String?
     /// Set when the user selects a record whose source volume isn't currently
     /// mounted. CatalogContent renders an "Volume Offline" placeholder
     /// instead of trying to load a thumbnail.

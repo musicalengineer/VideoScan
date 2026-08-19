@@ -57,6 +57,16 @@ enum CatalogAuditStatus: String, Sendable, Equatable {
     case pass, warn, fail
 }
 
+/// Where "Show me" takes you for a finding. `.none` → the detail text is
+/// the advice ("go here, do this").
+enum CatalogAuditAction: Sendable, Equatable {
+    case none
+    /// Open the Catalog tab filtered to these records (focus banner = label).
+    case focusRecords(ids: [UUID], label: String)
+    /// Select this scan target in the Storage sidebar.
+    case selectVolume(searchPath: String)
+}
+
 struct CatalogAuditFinding: Identifiable, Sendable, Equatable {
     var id: String { check }
     var check: String
@@ -65,6 +75,7 @@ struct CatalogAuditFinding: Identifiable, Sendable, Equatable {
     var detail: String
     /// Up to a handful of example paths/ids for the report.
     var examples: [String] = []
+    var action: CatalogAuditAction = .none
 }
 
 struct CatalogAuditReport: Sendable, Equatable {
@@ -202,16 +213,23 @@ enum CatalogAuditor {
             headline: orphans.isEmpty ? "Every present record sits under a known drive"
                                       : "\(orphans.count.formatted()) present records are under no scan target (\(CatalogStorageTotals.displaySize(orphans.reduce(0) { $0 + max(0, $1.sizeBytes) })))",
             detail: orphans.isEmpty ? "" : "They still count in the catalog but no drive's dashboard shows them. Add the drive, or Update Catalog to relink.",
-            examples: orphans.prefix(maxExamples).map(\.fullPath)))
+            examples: orphans.prefix(maxExamples).map(\.fullPath),
+            action: orphans.isEmpty ? .none : .focusRecords(ids: orphans.map(\.id), label: "Audit: unplaced records")))
 
-        // 3. Double-claimed
+        // 3. Double-claimed — point at the INNER target (the one whose root
+        // sits under another target's root).
+        let nestedTarget: String? = inputs.targets.first { t in
+            let r = VolumeDashboardCalculator.normalizedRoot(t.searchPath)
+            return roots.contains { other in other != r && VolumeDashboardCalculator.isUnder(r, root: other) }
+        }?.searchPath
         report.findings.append(CatalogAuditFinding(
             check: "Nested scan targets",
             status: doubleClaimed.isEmpty ? .pass : .warn,
             headline: doubleClaimed.isEmpty ? "No record is claimed by two drives"
                                             : "\(doubleClaimed.count.formatted()) records fall under two scan targets",
-            detail: doubleClaimed.isEmpty ? "" : "One scan path is inside another; per-drive totals double-count these.",
-            examples: doubleClaimed.prefix(maxExamples).map(\.fullPath)))
+            detail: doubleClaimed.isEmpty ? "" : "One scan path is inside another; per-drive totals double-count these. Delete the inner target from the list (right-click it) or keep it knowingly.",
+            examples: doubleClaimed.prefix(maxExamples).map(\.fullPath),
+            action: nestedTarget.map { .selectVolume(searchPath: $0) } ?? .none))
 
         // 4. Empty targets
         let empties = zip(inputs.targets, perTarget).filter { !$0.0.isRetired && $0.1 == 0 }.map { $0.0.searchPath }
@@ -220,8 +238,9 @@ enum CatalogAuditor {
             status: empties.isEmpty ? .pass : .warn,
             headline: empties.isEmpty ? "Every active drive has records"
                                       : "\(empties.count) active scan target\(empties.count == 1 ? "" : "s") with zero records",
-            detail: empties.isEmpty ? "" : "Typo, unmounted-at-scan, or a drive that should be deleted from the list.",
-            examples: Array(empties.prefix(maxExamples))))
+            detail: empties.isEmpty ? "" : "Typo, unmounted-at-scan, or a drive that should be deleted from the list (right-click ▸ Delete from list).",
+            examples: Array(empties.prefix(maxExamples)),
+            action: empties.first.map { .selectVolume(searchPath: $0) } ?? .none))
 
         // 5. Bad sizes
         report.findings.append(CatalogAuditFinding(
@@ -229,25 +248,33 @@ enum CatalogAuditor {
             status: badSizes.isEmpty ? .pass : .warn,
             headline: badSizes.isEmpty ? "Every present record has a positive size"
                                        : "\(badSizes.count.formatted()) present records have size ≤ 0",
-            detail: badSizes.isEmpty ? "" : "Zero/negative sizes are excluded from every byte total — a rescan fixes them.",
-            examples: badSizes.prefix(maxExamples).map(\.fullPath)))
+            detail: badSizes.isEmpty ? "" : "Zero/negative sizes are excluded from every byte total — Update Catalog on that drive fixes them.",
+            examples: badSizes.prefix(maxExamples).map(\.fullPath),
+            action: badSizes.isEmpty ? .none : .focusRecords(ids: badSizes.map(\.id), label: "Audit: size unknown")))
 
         // 6. Duplicate group counts
         var dupIssues: [String] = []
+        var staleGroups = Set<UUID>()
         for (g, members) in groupMembers {
             if let claimed = groupClaims[g], claimed != members {
                 dupIssues.append("group \(g.uuidString.prefix(8)): \(members) members, records say \(claimed)")
+                staleGroups.insert(g)
             } else if groupClaimMismatch[g] != nil {
                 dupIssues.append("group \(g.uuidString.prefix(8)): members disagree on the count")
+                staleGroups.insert(g)
             }
         }
+        let staleGroupMembers = staleGroups.isEmpty ? [] : inputs.records
+            .filter { $0.isActive && $0.duplicateGroupID.map(staleGroups.contains) == true }
+            .map(\.id)
         report.findings.append(CatalogAuditFinding(
             check: "Duplicate groups",
             status: dupIssues.isEmpty ? .pass : .warn,
             headline: dupIssues.isEmpty ? "\(groupMembers.count.formatted()) duplicate groups, counts agree"
                                         : "\(dupIssues.count.formatted()) of \(groupMembers.count.formatted()) duplicate groups have a stale count",
-            detail: dupIssues.isEmpty ? "" : "duplicateGroupCount drifted from the live membership (a member was deleted or purged). Re-run duplicate analysis.",
-            examples: Array(dupIssues.prefix(maxExamples))))
+            detail: dupIssues.isEmpty ? "" : "duplicateGroupCount drifted from the live membership (a member was deleted or purged). Catalog tab ▸ Analyze ▸ Duplicates re-scores them.",
+            examples: Array(dupIssues.prefix(maxExamples)),
+            action: staleGroupMembers.isEmpty ? .none : .focusRecords(ids: staleGroupMembers, label: "Audit: stale duplicate groups")))
 
         // 7. Dangling pairs
         report.findings.append(CatalogAuditFinding(
@@ -255,8 +282,9 @@ enum CatalogAuditor {
             status: danglingPairs.isEmpty ? .pass : .warn,
             headline: danglingPairs.isEmpty ? "Every pair link points at a live record"
                                             : "\(danglingPairs.count.formatted()) records are paired with a purged or missing record",
-            detail: "",
-            examples: danglingPairs.prefix(maxExamples).map(\.fullPath)))
+            detail: danglingPairs.isEmpty ? "" : "Right-click the record in the Catalog ▸ Unpair, or re-run Correlate.",
+            examples: danglingPairs.prefix(maxExamples).map(\.fullPath),
+            action: danglingPairs.isEmpty ? .none : .focusRecords(ids: danglingPairs.map(\.id), label: "Audit: dangling A/V pairs")))
 
         // 8. Purged but staged
         report.findings.append(CatalogAuditFinding(

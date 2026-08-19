@@ -1093,7 +1093,8 @@ struct CatalogView: View {
         showPairsOnly = false
         filterByIDs = model.focusedMediaIDs
         focusMatchScore = nil
-        focusLabel = "A/V Pair focus"
+        focusLabel = model.pendingFocusLabel ?? "A/V Pair focus"
+        model.pendingFocusLabel = nil
         selectedIDs = model.focusedMediaIDs
     }
 

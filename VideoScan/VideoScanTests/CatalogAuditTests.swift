@@ -78,3 +78,21 @@ struct CatalogAuditTests {
         #expect(r.overall == .pass, "\(r.text)")
     }
 }
+
+@Suite("Catalog audit — Show me actions")
+struct CatalogAuditActionTests {
+    @Test func actionableFindingsCarryDestinations() {
+        let r = CatalogAuditor.run(CatalogAuditInputs(records: [
+            rec("/Volumes/Nowhere/z.mov"),
+            rec("/Volumes/A/sub/y.mov"),
+            rec("/Volumes/A/x.mov", bytes: 0),
+        ], targets: [tgt("/Volumes/A"), tgt("/Volumes/A/sub"), tgt("/Volumes/Empty")], archiveIndexPromoted: 0))
+        func action(_ c: String) -> CatalogAuditAction { r.findings.first { $0.check == c }!.action }
+        if case .focusRecords(let ids, _) = action("Unplaced records") { #expect(ids.count == 1) } else { Issue.record("no focus action") }
+        #expect(action("Nested scan targets") == .selectVolume(searchPath: "/Volumes/A/sub"))
+        #expect(action("Empty drives") == .selectVolume(searchPath: "/Volumes/Empty"))
+        if case .focusRecords(let ids, let label) = action("Sizes") { #expect(ids.count == 1); #expect(label.contains("size")) } else { Issue.record("no focus action") }
+        #expect(action("Master Archive index") == .none)       // advice-only
+        #expect(action("Per-drive cache") == .none)
+    }
+}
