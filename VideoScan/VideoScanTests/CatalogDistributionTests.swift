@@ -61,3 +61,38 @@ struct CatalogDistributionCalculatorTests {
         #expect(s.tier(of: x9) == .ssd)
     }
 }
+
+@Suite("Catalog verdict phrases")
+struct CatalogVerdictTests {
+    private func stats(shares: [Int64], safe: Int64, risk: Int64, singleCopyPct: Int64 = 0) -> CatalogDistributionStats {
+        var s = CatalogDistributionStats()
+        s.byDrive.slices = shares.enumerated().map { i, b in
+            MediaDistributionSlice(name: "D\(i)", bytes: b, files: 1, isOther: false, colorSlot: i, isReachable: true)
+        }
+        s.totalBytes = shares.reduce(0, +)
+        s.driveCount = shares.count
+        s.tierBytes = [.safe: safe, .atRisk: risk, .ssd: max(0, s.totalBytes - safe - risk)]
+        s.copies = VolumeDashboardSeries(slices: [
+            VolumeDashboardSlice(name: VolumeDashboardCalculator.copiesLabel(0), bytes: s.totalBytes * singleCopyPct / 100, files: 1, colorSlot: nil, fixedColor: .red),
+            VolumeDashboardSlice(name: VolumeDashboardCalculator.copiesLabel(2), bytes: s.totalBytes * (100 - singleCopyPct) / 100, files: 1, colorSlot: nil, fixedColor: .green),
+        ], totalBytes: s.totalBytes, totalFiles: 2)
+        return s
+    }
+
+    @Test func phrases() {
+        let concentrated = CatalogVerdict.make(stats(shares: [90, 5, 5], safe: 90, risk: 0))
+        #expect(concentrated.distribution == "Most of it on one drive")
+        #expect(concentrated.safety == "Mostly safe")
+        #expect(concentrated.suggestion.hasPrefix("Nothing urgent"))
+
+        let two = CatalogVerdict.make(stats(shares: [50, 35, 15], safe: 50, risk: 15))
+        #expect(two.distribution == "Mostly on two drives")
+        #expect(two.safety == "Partially safe")
+        #expect(two.suggestion.hasPrefix("Move the"))           // risk ≥ 10 wins
+
+        let spread = CatalogVerdict.make(stats(shares: [30, 30, 20, 20], safe: 20, risk: 0, singleCopyPct: 40))
+        #expect(spread.distribution == "Well spread across 4 drives")
+        #expect(spread.safety == "Mostly unprotected")
+        #expect(spread.suggestion.contains("only one place"))
+    }
+}

@@ -154,6 +154,63 @@ enum CatalogDistributionCalculator {
     }
 }
 
+// MARK: - Verdict
+
+/// The two canned phrases + one suggestion in the header (Rick
+/// 2026-08-19): "an overview and a suggestion from the app based on the
+/// catalog's distribution, safety, efficiency". Pure, by bytes, so it
+/// can be pinned by tests. Thresholds are policy — tune here.
+struct CatalogVerdict: Equatable {
+    var distribution: String      // {Well spread…, Mostly on two drives, Most of it on one drive}
+    var safety: String            // {Mostly safe, Partially safe, Mostly unprotected}
+    var safetyTier: StorageTier   // drives the dot color next to `safety`
+    var suggestion: String        // one sentence the app recommends
+
+    static func make(_ s: CatalogDistributionStats) -> CatalogVerdict {
+        let total = Double(max(1, s.totalBytes))
+        let shares = s.byDrive.slices.map { Double($0.bytes) / total * 100 }
+        let top = shares.first ?? 0
+        let top2 = shares.prefix(2).reduce(0, +)
+        let distribution: String
+        if s.driveCount <= 1 {
+            distribution = "All on one drive"
+        } else if top >= 80 {
+            distribution = "Most of it on one drive"
+        } else if top2 >= 80 {
+            distribution = "Mostly on two drives"
+        } else {
+            distribution = "Well spread across \(s.driveCount) drives"
+        }
+
+        let safe = s.tierPercent(.safe, by: .size)
+        let risk = s.tierPercent(.atRisk, by: .size)
+        let safety: String
+        let tier: StorageTier
+        if safe >= 75 { safety = "Mostly safe"; tier = .safe }
+        else if safe >= 40 { safety = "Partially safe"; tier = .hdd }
+        else { safety = "Mostly unprotected"; tier = .atRisk }
+
+        let singleCopy = s.copies.slices.first.map { slice -> Double in
+            slice.name == VolumeDashboardCalculator.copiesLabel(0) ? s.copies.percent(of: slice, by: .size) : 0
+        } ?? 0
+        let riskBytes = s.tierBytes[.atRisk] ?? 0
+        let suggestion: String
+        if risk >= 10 {
+            suggestion = "Move the \(CatalogStorageTotals.displaySize(riskBytes)) on at-risk drives to the Master Archive or a RAID first."
+        } else if singleCopy >= 25 {
+            suggestion = "\(MediaDistributionFormat.percentString(singleCopy)) of the library exists in only one place — make a second copy."
+        } else if safe < 75 {
+            suggestion = "Promote more to the Master Archive to grow the green."
+        } else if risk > 0 {
+            suggestion = "Nearly there — a little still sits on at-risk drives."
+        } else {
+            suggestion = "Nothing urgent — keep the master and its backups in sync."
+        }
+        return CatalogVerdict(distribution: distribution, safety: safety,
+                              safetyTier: tier, suggestion: suggestion)
+    }
+}
+
 // MARK: - View
 
 struct CatalogDistributionPane: View {
@@ -235,7 +292,9 @@ struct CatalogDistributionPane: View {
                     .foregroundColor(.secondary)
                     .monospacedDigit()
             }
-            Spacer()
+            Spacer(minLength: 16)
+            verdictView(CatalogVerdict.make(s))
+            Spacer(minLength: 16)
             Picker("Color by", selection: lens) {
                 ForEach(Lens.allCases) { l in Text(l.rawValue).tag(l) }
             }
@@ -252,6 +311,31 @@ struct CatalogDistributionPane: View {
             .frame(width: 150)
             .accessibilityIdentifier("storage.measurePicker")
         }
+    }
+
+    /// Two phrases with colored dots on one line, the suggestion under them.
+    private func verdictView(_ v: CatalogVerdict) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.accentColor).frame(width: 9, height: 9)
+                    Text(v.distribution)
+                }
+                HStack(spacing: 6) {
+                    Circle().fill(v.safetyTier.color).frame(width: 9, height: 9)
+                    Text(v.safety)
+                }
+            }
+            .font(.system(size: 17, weight: .semibold))
+            .lineLimit(1)
+            Text(v.suggestion)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+        .accessibilityIdentifier("storage.catalogVerdict")
     }
 
     // MARK: Big donut + legend
