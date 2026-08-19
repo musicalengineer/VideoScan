@@ -40,12 +40,8 @@ struct VolumeDashboardView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Donut card grid: as many ~380pt columns as fit (two on a normal
-    /// pane). Rick 2026-08-19 iteration 2: fewer, bigger pies with
-    /// readable text — Streams dropped, Folders moved below the grid.
-    private let gridColumns = [GridItem(.adaptive(minimum: 330, maximum: 620), spacing: 14, alignment: .top)]
     /// Donut diameter and the legend/center type sizes — the RD knobs.
-    static let donutSize: CGFloat = 210
+    static let donutSize: CGFloat = 230
     static let legendFont: Font = .system(size: 14)
     static let centerFont: Font = .system(size: 22, weight: .semibold, design: .rounded)
     static let sectorLabelFont: Font = .system(size: 13, weight: .semibold)
@@ -57,10 +53,12 @@ struct VolumeDashboardView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         header(s)
                         topRow(s)
-                        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 14) {
-                            // Three pies (Rick 2026-08-19 iteration 3):
-                            // what it is, how safe it is, how far along
-                            // the archive road it is.
+                        // Three pies (Rick 2026-08-19 iteration 3): what it
+                        // is, how safe it is, how far along the archive road
+                        // it is. Equal-width cards filling the row; legend
+                        // sits UNDER the pie so names never truncate
+                        // (iteration 4, from the screenshot).
+                        HStack(alignment: .top, spacing: 14) {
                             donutCard("Kind", subtitle: "container / extension", series: s.kind)
                             donutCard("Copies", subtitle: "known copies on other drives", series: s.copies)
                             donutCard("Archive", subtitle: "reviewed and archived so far", series: s.archive)
@@ -250,9 +248,10 @@ struct VolumeDashboardView: View {
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140)
             } else {
-                HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     donut(series)
-                        .frame(width: Self.donutSize, height: Self.donutSize)
+                        .frame(height: Self.donutSize)
+                        .frame(maxWidth: .infinity)
                     compactLegend(series)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -287,7 +286,7 @@ struct VolumeDashboardView: View {
             content()
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color(NSColor.controlBackgroundColor))
