@@ -632,7 +632,9 @@ struct VideoScanApp: App {
                 .environmentObject(catalogModel)
                 .environmentObject(catalogModel.dashboard)
         }
-        .windowResizability(.contentSize)
+        // Rick 2026-08-19: more volumes than the fixed window could show —
+        // let both dashboards grow past their ideal size (content scrolls).
+        .windowResizability(.contentMinSize)
         .defaultPosition(.topTrailing)
 
         Window("Analyze Dashboard", id: "dossier") {
@@ -645,7 +647,7 @@ struct VideoScanApp: App {
             DossierDashboardView(model: catalogModel,
                                  orchestrator: captionOrchestrator)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .defaultPosition(.topTrailing)
 
         // Compare Volumes — independent NSWindow rather than a modal sheet.

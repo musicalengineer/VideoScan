@@ -18,7 +18,7 @@ struct DashboardWindow: View {
                 isCombining: model.isCombining
             )
         }
-        .frame(minWidth: 600, idealWidth: 600, minHeight: 380, idealHeight: 560, maxHeight: 800)
+        .frame(minWidth: 600, idealWidth: 600, minHeight: 380, idealHeight: 640)  // maxHeight dropped 2026-08-19: window is resizable, content scrolls
         .onAppear {
             // Set window to float above other windows
             DispatchQueue.main.async {

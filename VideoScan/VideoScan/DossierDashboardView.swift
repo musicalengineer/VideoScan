@@ -129,6 +129,10 @@ struct DossierDashboardView: View {
     @State private var selectedVolumePath: String?
 
     var body: some View {
+        // Rick 2026-08-19: with 8 reachable volumes the rows outgrew the
+        // window and there was no scroll bar — the root is a ScrollView now
+        // and the window is resizable beyond content (.contentMinSize).
+        ScrollView(.vertical) {
         VStack(alignment: .center, spacing: 14) {
 
             // Title
@@ -363,10 +367,12 @@ struct DossierDashboardView: View {
             }
         }
         .padding(20)
+        }
         // minHeight grew 700 → 760: the two activity sections can run
         // taller than the 3-row fleet panel they replaced (2 lanes +
-        // up to 8 history rows).
-        .frame(minWidth: 700, minHeight: 760)
+        // up to 8 history rows). Ideal height leaves room for ~8 volume
+        // rows; anything more scrolls.
+        .frame(minWidth: 700, idealWidth: 760, minHeight: 760, idealHeight: 900)
         .onAppear {
             dossierWindowLog.info("dossier dashboard body appeared")
             refreshCounts()
