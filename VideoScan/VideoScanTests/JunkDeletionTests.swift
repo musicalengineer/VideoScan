@@ -205,7 +205,7 @@ struct JunkDeletionTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(CatalogSnapshotDTO(snap))
+        let data = try CatalogSnapshotDTO(snap).encoded(using: encoder)
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

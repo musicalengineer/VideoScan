@@ -52,7 +52,7 @@ extension VideoScanModel {
         // Encode through the Sendable DTO — VideoRecord is Decodable-only
         // (step 5b); CatalogSnapshotDTO owns the single encoder and is
         // byte-identical to the former CatalogSnapshot encoding.
-        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
+        let data = try CatalogSnapshotDTO(snapshot).encoded(using: encoder)
         try data.write(to: url, options: .atomic)
         if purgedExcluded > 0 {
             // The excluded set is exactly the purged records now — the log

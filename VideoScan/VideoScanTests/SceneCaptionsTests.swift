@@ -114,7 +114,7 @@ struct SceneCaptionsTests {
         r.sceneCaptionDate = Date(timeIntervalSince1970: 1_716_000_000)
         let snap = CatalogSnapshot(records: [r])
 
-        let data = try JSONEncoder().encode(CatalogSnapshotDTO(snap))
+        let data = try CatalogSnapshotDTO(snap).encoded(using: JSONEncoder())
         let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
 
         #expect(decoded.version == 6)

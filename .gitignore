@@ -111,3 +111,6 @@ vault/
 # Personal media never in git (8/03 privacy scrub) — Hallie portraits live on disk only
 assets/Hallie/
 assets/hallie/
+
+# Per-worktree DerivedData (agents build with -derivedDataPath <worktree>/.build-dd)
+.build-dd/

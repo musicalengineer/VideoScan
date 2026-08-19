@@ -288,7 +288,7 @@ struct CatalogPurgeTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
+        let data = try CatalogSnapshotDTO(snapshot).encoded(using: encoder)
 
         // Decode via the same configuration CatalogStore.load uses.
         let decoder = JSONDecoder()
@@ -575,9 +575,9 @@ struct CatalogPurgeGapTests {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        let pass1Data = try encoder.encode(CatalogSnapshotDTO(originalSnapshot))
+        let pass1Data = try CatalogSnapshotDTO(originalSnapshot).encoded(using: encoder)
         let pass1Loaded = try decoder.decode(CatalogSnapshot.self, from: pass1Data)
-        let pass2Data = try encoder.encode(CatalogSnapshotDTO(pass1Loaded))
+        let pass2Data = try CatalogSnapshotDTO(pass1Loaded).encoded(using: encoder)
         #expect(pass1Data == pass2Data,
                 "Encode is deterministic — second pass produces identical bytes")
 
@@ -670,7 +670,7 @@ struct CatalogPurgeGapTests {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let catalogURL = tmpBundle.appendingPathComponent("catalog.json")
-        try encoder.encode(CatalogSnapshotDTO(snapshot)).write(to: catalogURL, options: .atomic)
+        try CatalogSnapshotDTO(snapshot).encoded(using: encoder).write(to: catalogURL, options: .atomic)
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -958,7 +958,7 @@ struct CatalogPurgeGapTests {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let catalogURL = tmpBundle.appendingPathComponent("catalog.json")
-        try encoder.encode(CatalogSnapshotDTO(snapshot)).write(to: catalogURL, options: .atomic)
+        try CatalogSnapshotDTO(snapshot).encoded(using: encoder).write(to: catalogURL, options: .atomic)
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

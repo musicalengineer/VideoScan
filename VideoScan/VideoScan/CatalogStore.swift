@@ -90,10 +90,10 @@ struct CatalogSnapshot: Decodable {
     var savedFromHost: String = ""
     /// Master Archive designation (docs/archive_promotion_workflow.md §3).
     /// ADDITIVE + optional: absent in every pre-8/15 catalog and decodes
-    /// as nil; encoded only when set (encodeIfPresent), so a catalog with
-    /// no master archive is byte-identical to before. No version bump.
-    /// Placed AFTER `records` in key order so the 4 KB header probe
-    /// (version/generation) is unaffected.
+    /// as nil; emitted only when set, so a catalog with no master archive
+    /// carries no key. No version bump. On disk it sits in the hand-built
+    /// header BEFORE `records` (it is a few hundred bytes), see
+    /// `CatalogSnapshotDTO.encoded(using:)`.
     var masterArchive: MasterArchiveDesignation?
 
     private enum CodingKeys: String, CodingKey {
@@ -124,31 +124,76 @@ struct CatalogSnapshot: Decodable {
         masterArchive = try c.decodeIfPresent(MasterArchiveDesignation.self, forKey: .masterArchive)
     }
 
-    /// Cheap header read: extract version + generation from the first few
-    /// KB of the file WITHOUT decoding 41 MB of records. Works because the
-    /// encoder emits these keys first (see CatalogSnapshotDTO.CodingKeys).
-    /// Falls back to nil (not 0) when the file is missing or unparseable so
-    /// callers can distinguish "no file" from "generation 0".
+    /// Bytes read from each end of the file by `headerProbe`. The header
+    /// keys (`version`, `generation`, `savedAt`, `savedFromHost`,
+    /// `masterArchive`) total well under 1 KB, so whichever side of the
+    /// records array they land on, a 4 KB window sees them.
+    static let probeWindowBytes = 4096
+
+    /// Cheap OCC read: extract version + generation WITHOUT decoding 36+ MB
+    /// of records. Reads the first 4 KB and, if either key is missing
+    /// there, the last 4 KB.
+    ///
+    /// Why both ends (GH #165): JSONEncoder on this OS builds keyed objects
+    /// in a Dictionary, so key order is per-process random — CodingKeys
+    /// order is NOT honoured. Every catalog file written before the fix is
+    /// some permutation of the six top-level keys around the records
+    /// array: keys that sorted before `records` are in the head, the rest
+    /// are in the tail. The app's own writer now emits a hand-built header
+    /// (`CatalogSnapshotDTO.encoded(using:)`) with `version` and
+    /// `generation` first, so new files always hit the head path; the tail
+    /// path is for history and for foreign writers (python json.dump of a
+    /// pre-generation file appends `generation` at the END).
+    ///
+    /// Falls back to nil (not 0) when the file is missing or carries
+    /// NEITHER key in either window, so callers can distinguish "no file /
+    /// pre-generation" from "generation 0". A file whose keys are more
+    /// than 4 KB from both ends (only a hand-made pathological layout can
+    /// do that) reads as nil here; `CatalogStore.load()` then trusts the
+    /// full decode and logs the anomaly rather than silently downgrading.
     static func headerProbe(at url: URL) -> (version: Int, generation: Int)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        guard let head = try? handle.read(upToCount: 4096),
-              let text = String(data: head, encoding: .utf8) else { return nil }
-        func intAfter(_ key: String) -> Int? {
-            guard let r = text.range(of: "\"\(key)\":") else { return nil }
-            let tail = text[r.upperBound...].drop(while: { $0 == " " })
-            let digits = tail.prefix(while: { $0.isNumber })
-            return Int(digits)
+        guard let head = try? handle.read(upToCount: probeWindowBytes) else { return nil }
+        // Lossy decode on purpose: a 4 KB cut can split a multibyte UTF-8
+        // sequence, and String(data:encoding:) would return nil for the
+        // WHOLE window. The keys we search for are ASCII.
+        let headText = String(decoding: head, as: UTF8.self)
+        var v = Self.intValue(forKey: "version", in: headText, last: false)
+        var g = Self.intValue(forKey: "generation", in: headText, last: false)
+        if v == nil || g == nil,
+           let size = try? handle.seekToEnd(), size > UInt64(head.count) {
+            let start = size > UInt64(probeWindowBytes) ? size - UInt64(probeWindowBytes) : 0
+            if (try? handle.seek(toOffset: start)) != nil,
+               let tail = try? handle.readToEnd() {
+                let tailText = String(decoding: tail, as: UTF8.self)
+                // LAST occurrence in the tail: the top-level keys come after
+                // the records array, so anything earlier in the window is
+                // record content (which cannot contain a bare `"key":` —
+                // quotes inside JSON strings are always escaped).
+                if v == nil { v = Self.intValue(forKey: "version", in: tailText, last: true) }
+                if g == nil { g = Self.intValue(forKey: "generation", in: tailText, last: true) }
+            }
         }
-        // EITHER key in the head is enough. A sorted-keys encoder puts
-        // "version" alphabetically LAST — after 41 MB of records — while
-        // "generation" still lands in the head (g < r). Requiring version
-        // here would silently disable OCC for any sorted-keys writer.
-        // Only a file with NEITHER key in its head reads as "no header".
-        let v = intAfter("version")
-        let g = intAfter("generation")
+        // EITHER key is enough. Only a file with NEITHER key in either
+        // window reads as "no header".
         guard v != nil || g != nil else { return nil }
         return (v ?? 0, g ?? 0)
+    }
+
+    /// Parse `"key" : 123` (whitespace optional — pretty-printed files have
+    /// it, compact ones do not). `last` picks the final occurrence in
+    /// `text` instead of the first.
+    private static func intValue(forKey key: String, in text: String, last: Bool) -> Int? {
+        let needle = "\"\(key)\""
+        guard let r = last ? text.range(of: needle, options: .backwards) : text.range(of: needle) else {
+            return nil
+        }
+        var rest = text[r.upperBound...].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" })
+        guard rest.first == ":" else { return nil }
+        rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" })
+        let digits = rest.prefix(while: { $0.isNumber })
+        return Int(digits)
     }
 }
 
@@ -276,13 +321,37 @@ final class CatalogStore {
     /// gaps (a failed write) are harmless because the OCC check is `>`.
     private var claimedGeneration: Int = 0
 
+    /// Highest generation EVER observed for this catalog on this machine
+    /// — the `catalog.generation.max` sidecar (GH #165), loaded by
+    /// `load()`, advanced by every successful write. It is a FLOOR for
+    /// allocation, not the OCC comparison value: `loadedGeneration` stays
+    /// at what is really on disk so a foreign writer bumping the file is
+    /// still detected as stale, while the next stamp is guaranteed to land
+    /// above anything this catalog has ever carried. That is what turns a
+    /// silent 248 → 1 reset into a logged anomaly followed by 249.
+    private(set) var generationFloor: Int = 0
+
+    /// Human-readable note about the most recent generation anomaly seen
+    /// by `load()` (probe miss on a file that decodes with a generation, or
+    /// an on-disk generation below the sidecar). nil when the last load was
+    /// clean. Inspectable by tests and a future diagnostics panel; the same
+    /// text is logged at error/fault level when it is set.
+    private(set) var lastGenerationAnomaly: String?
+
     /// The generation the next write will stamp. Always strictly greater
-    /// than anything this session has loaded or claimed.
+    /// than anything this session has loaded or claimed AND than the
+    /// sidecar's high-water mark.
     private func allocateGeneration() -> Int {
-        let next = max(loadedGeneration, claimedGeneration) + 1
+        let next = max(loadedGeneration, claimedGeneration, generationFloor) + 1
         claimedGeneration = next
         return next
     }
+
+    /// The generation the in-memory records are known to derive from: the
+    /// last generation this session loaded or durably wrote. Stamped into
+    /// safety snapshots (`writeSnapshot*`) so forensics can tie a
+    /// `catalog.pre-*.json` back to the catalog.json it was cut from.
+    var currentGeneration: Int { loadedGeneration }
 
     /// Non-nil when load() refused the on-disk catalog (written by a NEWER
     /// build). While set, EVERY write path refuses — otherwise the
@@ -359,6 +428,12 @@ final class CatalogStore {
             // next save see its own predecessor as a foreign, newer write.
             loadedGeneration = max(loadedGeneration, wroteGeneration)
             lastWriteError = nil
+            // High-water mark (GH #165). One tiny atomic write per save;
+            // never decrements. Skipped when nothing advanced.
+            if wroteGeneration > generationFloor {
+                generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
+                                                                     besideCatalogAt: fileURL)
+            }
         } else if lastWriteError == nil {
             lastWriteError = .writeFailed("encode or atomic write failed")
         }
@@ -379,6 +454,9 @@ final class CatalogStore {
         if onDisk > loadedGeneration {
             catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
             loadedGeneration = onDisk
+            if onDisk > generationFloor {
+                generationFloor = CatalogGenerationSidecar.recordMax(onDisk, besideCatalogAt: fileURL)
+            }
         }
     }
 
@@ -442,19 +520,28 @@ final class CatalogStore {
             lastLoadOutcome = .missing
             return []
         }
+        lastGenerationAnomaly = nil
+        // High-water mark from the sidecar (bootstrapped from sibling
+        // catalog files on first run). Read BEFORE decode so the floor is
+        // known even if decode falls back to .prev — and even if there is
+        // no catalog.json at all: a catalog that carried generation N
+        // before must not restart at 1 just because the file was removed.
+        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
             lastLoadOutcome = .missing
             return []
         }
-        // Baseline for the lost-update guard: the generation of the file we
-        // are about to read (design doc §4.1). Captured BEFORE decoding so
-        // a slow decode cannot let another writer slip in unnoticed. Absent
-        // header (pre-generation catalog) baselines at 0.
-        loadedGeneration = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
-
-        // Try primary first.
-        if let (records, version, master) = decode(url: fileURL) {
+        // Try primary first. The OCC baseline (`loadedGeneration`) is the
+        // generation of the file we DECODED — the records we actually hold
+        // — never the cheap probe's (codex #500): catalog.json can be
+        // atomically replaced between the probe and Data(contentsOf:), and
+        // baselining on the older probe would let a later foreign bump of
+        // the replacement slip under the staleness check. The probe is
+        // taken before AND after the decode purely to make that race
+        // visible: a disagreement means the file moved under us, and we
+        // reload once.
+        if let (records, version, master, decodedGeneration) = decodePrimaryStable() {
             if version > CatalogSnapshot.currentVersion {
                 NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — refusing to load; not overwriting on next save",
                       version, CatalogSnapshot.currentVersion)
@@ -467,6 +554,9 @@ final class CatalogStore {
                 writesDisabledReason = "catalog.json was written by a newer build (v\(version) > v\(CatalogSnapshot.currentVersion))"
                 return []
             }
+            reconcileLoadedGeneration(decoded: decodedGeneration,
+                                      probed: lastPrimaryProbe,
+                                      source: fileURL.lastPathComponent)
             // Rotate primary → .prev on every successful load. Copy (not move)
             // so primary stays in place; replace any stale .prev.
             rotateBackup()
@@ -477,9 +567,14 @@ final class CatalogStore {
         // Primary unreadable — try .prev.
         NSLog("VideoScan: primary catalog.json unreadable; trying %@", backupURL.path)
         if FileManager.default.fileExists(atPath: backupURL.path),
-           let (records, version, master) = decode(url: backupURL),
+           let (records, version, master, decodedGeneration) = decode(url: backupURL),
            version <= CatalogSnapshot.currentVersion {
             NSLog("VideoScan: recovered catalog from %@ (%d records)", backupURL.path, records.count)
+            // The records we hold are .prev's; baseline on ITS generation
+            // (probe of the corrupt primary may well have been nil).
+            reconcileLoadedGeneration(decoded: decodedGeneration,
+                                      probed: CatalogSnapshot.headerProbe(at: backupURL)?.generation,
+                                      source: backupURL.lastPathComponent)
             masterArchive = master
             lastLoadOutcome = .loaded(fromBackup: true)
             return records
@@ -489,11 +584,101 @@ final class CatalogStore {
         return []
     }
 
-    /// Decode helper — returns (records, version, masterArchive) on
-    /// success, nil on any failure (missing file, malformed JSON, malformed
-    /// snapshot). Resolves `pairedWith` references against the decoded
-    /// array.
-    private func decode(url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?)? {
+    /// Test seam (codex #500): runs between the pre-decode probe and the
+    /// decode, so a test can atomically replace catalog.json in exactly the
+    /// window the race lives in. Always nil in production.
+    internal var testBetweenProbeAndDecode: (() -> Void)?
+
+    /// Probe value that accompanied the decode `load()` accepted (the
+    /// post-decode probe of the final attempt). nil when the probe found no
+    /// stamp. Diagnostic only — never an OCC input.
+    private var lastPrimaryProbe: Int?
+
+    /// How many times `decodePrimaryStable` will re-read when the file
+    /// visibly changed during the decode. One retry is enough to turn a
+    /// single concurrent replacement into a clean read; a file that keeps
+    /// changing is accepted as-is (decoded values win) and logged.
+    static let loadRetryLimit = 1
+
+    /// Decode catalog.json, probing the header before and after. If the
+    /// two probes disagree the file was replaced mid-read — log it and read
+    /// again (once). Returns the decode result; `lastPrimaryProbe` is left
+    /// at the post-decode probe of the accepted read.
+    private func decodePrimaryStable() -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
+        var attempt = 0
+        var before = CatalogSnapshot.headerProbe(at: fileURL)?.generation
+        while true {
+            testBetweenProbeAndDecode?()
+            let result = decode(url: fileURL)
+            let after = CatalogSnapshot.headerProbe(at: fileURL)?.generation
+            lastPrimaryProbe = after
+            // Only a CHANGE between the two probes signals a move; a probe
+            // that is nil both times (pre-generation / pathological layout)
+            // is handled by reconcileLoadedGeneration, not here.
+            if before == after || attempt >= Self.loadRetryLimit {
+                if before != after {
+                    let msg = "catalog OCC: \(fileURL.lastPathComponent) kept changing during load (probe \(String(describing: before)) → \(String(describing: after))); accepting the decoded read as-is (#165/#500)"
+                    lastGenerationAnomaly = msg
+                    NSLog("VideoScan: %@", msg)
+                    catalogStoreLog.error("\(msg, privacy: .public)")
+                }
+                return result
+            }
+            attempt += 1
+            let msg = "catalog OCC: \(fileURL.lastPathComponent) changed during load (probe \(String(describing: before)) → \(String(describing: after))); re-reading (#165/#500)"
+            NSLog("VideoScan: %@", msg)
+            catalogStoreLog.notice("\(msg, privacy: .public)")
+            before = after
+        }
+    }
+
+    /// Settle `loadedGeneration` once the full decode has spoken, and
+    /// refuse to silently downgrade (GH #165):
+    ///
+    ///  - `loadedGeneration` IS the decoded generation — the records we
+    ///    hold — full stop. The probe is a diagnostic here, never an input
+    ///    (codex #500: a probe-before-decode baseline can exceed what was
+    ///    actually read if the file is replaced mid-load, and then a later
+    ///    foreign bump is not seen as stale).
+    ///  - Probe found nothing but the file DECODES with a generation → log
+    ///    at error level (a layout the head+tail probe cannot see is worth
+    ///    knowing about).
+    ///  - On-disk generation is BELOW the sidecar's high-water mark → the
+    ///    counter regressed (the 8/18 incident). Log at fault level and
+    ///    leave `generationFloor` in charge of ALLOCATION only: the next
+    ///    write stamps max(seen, onDisk)+1, so the sequence resumes above
+    ///    the old maximum instead of restarting at 1, while staleness is
+    ///    still judged against the true on-disk value.
+    ///  - Otherwise advance the sidecar to what we loaded.
+    private func reconcileLoadedGeneration(decoded: Int, probed: Int?, source: String) {
+        if probed == nil, decoded > 0 {
+            let msg = "catalog OCC: header probe found no generation in the head or tail of \(source) but the file decodes with generation \(decoded) — using the decoded value (#165)"
+            lastGenerationAnomaly = msg
+            NSLog("VideoScan: %@", msg)
+            catalogStoreLog.error("\(msg, privacy: .public)")
+        } else if let probed, probed != decoded {
+            let msg = "catalog OCC: header probe of \(source) read generation \(probed) but the decode read \(decoded) — trusting the decode"
+            lastGenerationAnomaly = msg
+            NSLog("VideoScan: %@", msg)
+            catalogStoreLog.error("\(msg, privacy: .public)")
+        }
+        loadedGeneration = decoded
+
+        if loadedGeneration < generationFloor {
+            let msg = "catalog OCC: \(source) is at generation \(loadedGeneration) but this catalog has carried generation \(generationFloor) before (\(CatalogGenerationSidecar.fileName)) — the counter regressed; re-seeding so the next write stamps \(generationFloor + 1) (#165)"
+            lastGenerationAnomaly = msg
+            NSLog("VideoScan: %@", msg)
+            catalogStoreLog.fault("\(msg, privacy: .public)")
+        } else if loadedGeneration > generationFloor {
+            generationFloor = CatalogGenerationSidecar.recordMax(loadedGeneration, besideCatalogAt: fileURL)
+        }
+    }
+
+    /// Decode helper — returns (records, version, masterArchive,
+    /// generation) on success, nil on any failure (missing file, malformed
+    /// JSON, malformed snapshot). Resolves `pairedWith` references against
+    /// the decoded array.
+    private func decode(url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
         do {
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
@@ -526,7 +711,7 @@ final class CatalogStore {
                 NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
                       cleared, url.lastPathComponent)
             }
-            return (records, snapshot.version, snapshot.masterArchive)
+            return (records, snapshot.version, snapshot.masterArchive, snapshot.generation)
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
             return nil
@@ -572,7 +757,7 @@ final class CatalogStore {
     /// protect). Returns nil on any failure or a newer-version snapshot.
     /// Used by the volume-rename Undo to restore the pre-migration catalog.
     func loadRecords(fromSnapshotAtPath path: String) -> [VideoRecord]? {
-        guard let (records, version, _) = decode(url: URL(fileURLWithPath: path)),
+        guard let (records, version, _, _) = decode(url: URL(fileURLWithPath: path)),
               version <= CatalogSnapshot.currentVersion else { return nil }
         return records
     }
@@ -752,7 +937,10 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshot refused — read-only viewer mode")
             return false
         }
+        // Real generation, never 0 (GH #165): the snapshot records which
+        // catalog.json generation its contents derive from.
         return Self.encodeAndWrite(payload: Self.makePayload(records: records,
+                                                             generation: currentGeneration,
                                                              masterArchive: masterArchive),
                                    to: URL(fileURLWithPath: path))
     }
@@ -767,7 +955,8 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshotAsync refused — read-only viewer mode")
             return false
         }
-        let payload = Self.makePayload(records: records, masterArchive: masterArchive)
+        let payload = Self.makePayload(records: records, generation: currentGeneration,
+                                       masterArchive: masterArchive)
         let url = URL(fileURLWithPath: path)
         return await Task.detached(priority: .userInitiated) {
             Self.encodeAndWrite(payload: payload, to: url)
@@ -875,7 +1064,7 @@ final class CatalogStore {
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(payload)
+            let data = try payload.encoded(using: encoder)
             // Atomic write so a crash mid-write doesn't truncate the file.
             // Foundation implements this as: write to a sibling tmp file,
             // fsync, then `rename(2)` into place — POSIX rename is atomic
@@ -925,40 +1114,83 @@ final class CatalogStore {
     }
 }
 
-/// Sendable, encode-only mirror of `CatalogSnapshot` used solely by the
-/// off-main save path (`makePayload` → `encodeAndWrite`). It replaces the
+/// Sendable, encode-only mirror of `CatalogSnapshot` used by the off-main
+/// save path (`makePayload` → `encodeAndWrite`) AND by every other catalog
+/// writer (snapshots, catalog export, bundle export). It replaces the
 /// former `SnapshotBox: @unchecked Sendable` transport: because every field
 /// is a value type (and `records` is `[VideoRecordDTO]`, itself Sendable),
 /// the whole payload crosses to the write queue as a TRUE value type — no
 /// unsafe hatch, and no live VideoRecord off the main actor.
 ///
-/// BYTE-IDENTITY: its keys, order, and per-field encoding mirror
-/// `CatalogSnapshot` exactly — same CodingKeys (`version`, `savedAt`,
-/// `records`, `savedFromHost`), same property order, all unconditional —
-/// and each `VideoRecordDTO` encodes byte-identically to its `VideoRecord`
-/// (the class delegates its encoder to the DTO). The on-disk catalog.json
-/// is therefore unchanged. Pinned by CatalogStoreAsyncSaveTests'
-/// byte-identity regression test.
+/// DELIBERATELY NOT `Encodable` (GH #165). JSONEncoder on this OS stores
+/// keyed objects in a Dictionary and emits them in per-process-random
+/// order — the `CodingKeys` order was never honoured, which is how
+/// `generation` ended up 36 MB deep and the OCC probe reset 248 → 1. The
+/// ONLY way to turn this DTO into bytes is `encoded(using:)`, which
+/// hand-builds the top-level object in a FIXED order:
+///
+///     {"version":V,"generation":G,"savedAt":…,"savedFromHost":…
+///      [,"masterArchive":{…}],"records":[…]}
+///
+/// so `CatalogSnapshot.headerProbe` always finds both stamps in the first
+/// 4 KB, whoever the writer was. Removing the conformance is what makes
+/// "all catalog writers agree" a compile-time fact rather than a review
+/// checklist item. (`// For Rick: the class has no operator<<; there is
+/// one named serialize() and the header is written by hand.`)
+///
+/// BYTE-IDENTITY: each `VideoRecordDTO` still encodes through the
+/// caller's JSONEncoder (honouring its date strategy / sortedKeys /
+/// prettyPrinted), byte-identical to its `VideoRecord` (the class
+/// delegates its encoder to the DTO). Pinned by CatalogStoreAsyncSaveTests'
+/// golden tests. `masterArchive` is emitted only when set, so a catalog
+/// with no designation is unchanged apart from the header order.
 ///
 /// Decode still goes through `CatalogSnapshot` / `VideoRecord` on the main
 /// actor (see `CatalogStore.decode(url:)`), so there is no DTO decoder.
-struct CatalogSnapshotDTO: Sendable, Encodable {
+struct CatalogSnapshotDTO: Sendable {
     var version: Int = CatalogSnapshot.currentVersion
-    /// OCC stamp (design doc §4.1). Encoded SECOND, before the 41 MB of
-    /// records, so `CatalogSnapshot.headerProbe` can read it from the
-    /// file's first 4 KB. JSONEncoder emits keys in CodingKeys order.
+    /// OCC stamp (design doc §4.1). Emitted SECOND, right after `version`,
+    /// so `CatalogSnapshot.headerProbe` reads it from the file's first 4 KB.
     var generation: Int = 0
     var savedAt: Date = Date()
     var records: [VideoRecordDTO] = []
     var savedFromHost: String = ""
-    /// Master Archive designation — additive optional. Synthesized
-    /// Encodable uses encodeIfPresent for optionals, so a nil value emits
-    /// NO key and the on-disk bytes are unchanged for every catalog that
-    /// has no master archive (byte-identity test still holds).
+    /// Master Archive designation — additive optional. Emitted only when
+    /// set, so a catalog with no master archive carries no key.
     var masterArchive: MasterArchiveDesignation? = nil
 
-    private enum CodingKeys: String, CodingKey {
-        case version, generation, savedAt, records, savedFromHost, masterArchive
+    /// THE catalog.json serializer — the single place catalog bytes are
+    /// produced. Top-level key order is fixed (see the type comment); the
+    /// scalar header values and the records array are encoded through
+    /// `encoder` so its strategies apply uniformly.
+    ///
+    /// Memory: the records array is encoded once (the big allocation) and
+    /// appended into a pre-sized buffer — one extra copy of the records
+    /// bytes, no intermediate String of the whole file.
+    func encoded(using encoder: JSONEncoder) throws -> Data {
+        // Scalars as top-level JSON fragments (supported since macOS 10.15),
+        // so `savedAt` follows the encoder's dateEncodingStrategy exactly as
+        // it would nested, and `savedFromHost` is escaped by the encoder.
+        func fragment<T: Encodable>(_ value: T) throws -> Data { try encoder.encode(value) }
+
+        var header = Data()
+        header.append(contentsOf: Array("{\"version\":\(version),\"generation\":\(generation),\"savedAt\":".utf8))
+        header.append(try fragment(savedAt))
+        header.append(contentsOf: Array(",\"savedFromHost\":".utf8))
+        header.append(try fragment(savedFromHost))
+        if let masterArchive {
+            header.append(contentsOf: Array(",\"masterArchive\":".utf8))
+            header.append(try fragment(masterArchive))
+        }
+        header.append(contentsOf: Array(",\"records\":".utf8))
+
+        let body = try encoder.encode(records)
+
+        var out = Data(capacity: header.count + body.count + 1)
+        out.append(header)
+        out.append(body)
+        out.append(UInt8(ascii: "}"))
+        return out
     }
 }
 

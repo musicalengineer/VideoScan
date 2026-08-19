@@ -136,7 +136,7 @@ enum BundleExporter {
         )
         // Encode through the Sendable DTO — VideoRecord is Decodable-only
         // (step 5b); CatalogSnapshotDTO owns the single encoder.
-        try encoder.encode(CatalogSnapshotDTO(catalogSnapshot))
+        try CatalogSnapshotDTO(catalogSnapshot).encoded(using: encoder)
             .write(to: bundleURL.appendingPathComponent("catalog.json"), options: .atomic)
 
         // 2. Volumes — exclude the RAM scratch volume (it's plumbing, not
