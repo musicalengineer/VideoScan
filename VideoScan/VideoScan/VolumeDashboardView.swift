@@ -9,9 +9,10 @@
 //   ┌ Space ──────────────┐ ┌ Eras ──────────────────────────────────┐
 //   │ ███████░░░░░░ 62%   │ │ ▂▅█▇▃  bars by decade                   │
 //   └─────────────────────┘ └────────────────────────────────────────┘
-//   ┌ Kind (donut) ┐ ┌ Streams (donut) ┐ ┌ Review (donut) ┐
-//   ┌ Copies (donut)┐ ┌ Stars (donut)  ┐ ┌ Folders (bars) ┐
-//   ┌ Years (bars, Master Archive) ┐ ┌ Archive fixity (donut) ┐
+//   ┌ Kind (donut)   ┐ ┌ Review (donut) ┐      ← bigger pies, 2 across
+//   ┌ Copies (donut) ┐ ┌ Stars (donut)  ┐      (+ Archive fixity on the master)
+//   ┌ Years (bars, Master Archive only) ───────────────────────────┐
+//   ┌ Folders (horizontal bars, full width) ───────────────────────┐
 //
 // Every card is the same frame — title · chart · compact legend — and
 // every angle/height flips with the ONE Size ⇄ Files control. Colors:
@@ -39,8 +40,15 @@ struct VolumeDashboardView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Card grid: as many ~300pt columns as fit.
-    private let gridColumns = [GridItem(.adaptive(minimum: 290, maximum: 460), spacing: 14, alignment: .top)]
+    /// Donut card grid: as many ~380pt columns as fit (two on a normal
+    /// pane). Rick 2026-08-19 iteration 2: fewer, bigger pies with
+    /// readable text — Streams dropped, Folders moved below the grid.
+    private let gridColumns = [GridItem(.adaptive(minimum: 380, maximum: 620), spacing: 14, alignment: .top)]
+    /// Donut diameter and the legend/center type sizes — the RD knobs.
+    static let donutSize: CGFloat = 210
+    static let legendFont: Font = .system(size: 14)
+    static let centerFont: Font = .system(size: 22, weight: .semibold, design: .rounded)
+    static let sectorLabelFont: Font = .system(size: 13, weight: .semibold)
 
     var body: some View {
         Group {
@@ -51,17 +59,18 @@ struct VolumeDashboardView: View {
                         topRow(s)
                         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 14) {
                             donutCard("Kind", subtitle: "container / extension", series: s.kind)
-                            donutCard("Streams", subtitle: "what each file carries", series: s.streams)
                             donutCard("Review", subtitle: "triage verdicts so far", series: s.review)
                             donutCard("Copies", subtitle: "known copies on other drives", series: s.copies)
                             donutCard("Stars", subtitle: "good · better · best", series: s.stars)
-                            foldersCard(s)
                             if isMasterArchive {
-                                yearsCard(s)
                                 donutCard("Archive fixity", subtitle: "promoted copies verified",
                                           series: s.archive)
                             }
                         }
+                        if isMasterArchive {
+                            yearsCard(s)
+                        }
+                        foldersCard(s)
                         footer(s)
                     }
                     .padding(18)
@@ -239,9 +248,9 @@ struct VolumeDashboardView: View {
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140)
             } else {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: 16) {
                     donut(series)
-                        .frame(width: 140, height: 140)
+                        .frame(width: Self.donutSize, height: Self.donutSize)
                     compactLegend(series)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -252,7 +261,7 @@ struct VolumeDashboardView: View {
     private func foldersCard(_ s: VolumeDashboardStats) -> some View {
         card("Folders", subtitle: "top-level folders, largest first") {
             barChart(s.folders, horizontal: true)
-                .frame(height: max(120, CGFloat(s.folders.slices.count) * 22 + 16))
+                .frame(height: max(140, CGFloat(s.folders.slices.count) * 26 + 16))
         }
     }
 
@@ -328,7 +337,7 @@ struct VolumeDashboardView: View {
             .cornerRadius(3)
             .foregroundStyle(by: .value("Category", slice.name))
             .annotation(position: .overlay) {
-                MediaDistributionSectorLabel(percent: series.percent(of: slice, by: measure))
+                sectorLabel(series.percent(of: slice, by: measure))
             }
         }
         .chartForegroundStyleScale(
@@ -340,14 +349,14 @@ struct VolumeDashboardView: View {
             GeometryReader { geo in
                 if let anchor = proxy.plotFrame {
                     let frame = geo[anchor]
-                    VStack(spacing: 0) {
+                    VStack(spacing: 1) {
                         Text(measure == .size
                              ? CatalogStorageTotals.displaySize(series.totalBytes)
                              : series.totalFiles.formatted())
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .font(Self.centerFont)
                             .monospacedDigit()
                         Text(measure == .size ? "total" : "files")
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     .position(x: frame.midX, y: frame.midY)
@@ -361,28 +370,41 @@ struct VolumeDashboardView: View {
         }.joined(separator: ", "))
     }
 
+    /// Percent capsule on a sector — only when the slice can carry it.
+    @ViewBuilder
+    private func sectorLabel(_ percent: Double) -> some View {
+        if percent >= MediaDistributionDonut.directLabelThresholdPercent {
+            Text(MediaDistributionFormat.percentString(percent))
+                .font(Self.sectorLabelFont)
+                .foregroundColor(.primary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.thinMaterial, in: Capsule())
+        }
+    }
+
     /// Swatch · name · value · %, one line per slice.
     private func compactLegend(_ series: VolumeDashboardSeries) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 7) {
             ForEach(series.slices) { slice in
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 2)
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(color(for: slice))
-                        .frame(width: 10, height: 10)
+                        .frame(width: 13, height: 13)
                     Text(slice.name)
-                        .font(.caption)
+                        .font(Self.legendFont)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 4)
                     Text(measure == .size
                          ? CatalogStorageTotals.displaySize(slice.bytes)
                          : slice.files.formatted())
-                        .font(.caption.monospacedDigit())
+                        .font(Self.legendFont.monospacedDigit())
                         .foregroundColor(.primary)
                     Text(MediaDistributionFormat.percentString(series.percent(of: slice, by: measure)))
-                        .font(.caption.monospacedDigit())
+                        .font(Self.legendFont.monospacedDigit())
                         .foregroundColor(.secondary)
-                        .frame(width: 36, alignment: .trailing)
+                        .frame(width: 44, alignment: .trailing)
                 }
                 .help("\(slice.name): \(CatalogStorageTotals.displaySize(slice.bytes)), \(slice.files.formatted()) files")
             }
