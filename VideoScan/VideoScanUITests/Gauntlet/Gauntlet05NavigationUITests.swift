@@ -22,7 +22,8 @@ final class Gauntlet05NavigationUITests: GauntletTestCase {
 
         // 1. Tabs — click through all six; each must exist and stay
         //    hittable after the switch (a crash mid-switch fails here).
-        for label in ["People", "Catalog", "Triage", "Workbench",
+        //    (Workbench merged into Triage; Storage added — 2026-08-19.)
+        for label in ["People", "Catalog", "Storage", "Triage",
                       "Archive", "Family Tree"] {
             openTab(app, label)
             XCTAssertTrue(app.buttons["tab.\(label)"].isHittable,

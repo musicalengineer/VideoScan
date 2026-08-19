@@ -443,10 +443,10 @@ struct RepairLifecycleBatchUndoTests {
 @Suite("RepairLifecycle — superseded visibility audit")
 struct SupersededVisibilityAuditTests {
 
-    /// The 8 pfActiveRecords call sites documented in PLAN-132 §1.
+    /// The pfActiveRecords call sites documented in PLAN-132 §1.
     /// Correlator + DuplicateDetector have functional sensors
     /// (RepairLifecycleFilterTests); TriageView / ArchiveView /
-    /// WorkbenchView / VolumeCompare consume it inside private SwiftUI
+    /// VolumeCompare consume it (WorkbenchView merged into TriageView 2026-08-19) inside private SwiftUI
     /// computed vars with no headless seam — for those this source-scan
     /// sensor pins that the surface still routes through the ONE
     /// predicate whose superseded-exclusion is unit-tested. If a site is
@@ -457,7 +457,6 @@ struct SupersededVisibilityAuditTests {
         ("DuplicateDetector.swift", 1),
         ("TriageView.swift", 1),
         ("ArchiveView+Categories.swift", 1),   // 2026-08-17: the Archive tab's pfActiveRecords call moved here (memoized snapshot)
-        ("WorkbenchView.swift", 1),
         ("VolumeCompare.swift", 2),     // per-record backups + runCompare
         ("VideoScanModel+Duplicates.swift", 1),
         ("VideoScanModel+VolumeLifecycle.swift", 1),

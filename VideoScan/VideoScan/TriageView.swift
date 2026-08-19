@@ -15,6 +15,11 @@ enum TriageFilter: String, CaseIterable {
     // AND workspace-active. Lives in its own sidebar section so the
     // user reads it as "workflow state" rather than "disposition pick."
     case workspace    = "In Workspace"
+    // Workbench merged into Triage (Rick 2026-08-19): files a pipeline
+    // PRODUCED (Combine / Repair / Transcode output) are "under
+    // construction" — review, then Promote / Drop to Catalog / Discard.
+    // `lifecycleStage == .workbench`, a workflow flag, not a disposition.
+    case underConstruction = "Under Construction"
     // Cleaned-filter pass (Rick 2026-07-08) — DERIVED filter, not a
     // stored tag: a record is "Cleaned up" iff CleanupJob stamped
     // provenance on it (cleanupRecipeID != nil). Like .workspace it's
@@ -30,7 +35,8 @@ enum TriageFilter: String, CaseIterable {
         case .suspectedJunk: return "exclamationmark.triangle"
         case .confirmedJunk: return "xmark.circle.fill"
         case .recoverable:   return "wrench.and.screwdriver.fill"
-        case .workspace:     return "hammer.fill"
+        case .workspace:     return "shippingbox.fill"
+        case .underConstruction: return "hammer.fill"
         case .cleaned:       return "sparkles"
         }
     }
@@ -44,6 +50,7 @@ enum TriageFilter: String, CaseIterable {
         case .confirmedJunk: return .red
         case .recoverable:   return .teal
         case .workspace:     return .mint
+        case .underConstruction: return .orange
         case .cleaned:       return .purple
         }
     }
@@ -64,6 +71,7 @@ enum TriageFilter: String, CaseIterable {
         case .confirmedJunk: return record.mediaDisposition == .confirmedJunk
         case .recoverable:   return record.mediaDisposition == .recoverable
         case .workspace:     return record.workspaceActive
+        case .underConstruction: return record.lifecycleStage == .workbench
         // Derived provenance: cleanupRecipeID is the stamp CleanupJob
         // writes when it catalogs a recipe's output file.
         case .cleaned:       return record.cleanupRecipeID != nil
@@ -227,6 +235,7 @@ struct TriageView: View {
                     // prevents the user from misreading "In Workspace"
                     // as an alternative to Important / Suspected Junk.
                     sidebarSection("WORKFLOW") {
+                        filterRow(.underConstruction)
                         filterRow(.workspace)
                         // Derived from cleanup provenance (recipeID
                         // stamp), so it sits with the workflow flags —
@@ -448,6 +457,11 @@ struct TriageView: View {
 
             Spacer()
 
+            if selectedFilter == .underConstruction {
+                underConstructionButtons
+                Divider().frame(height: 18)
+            }
+
             triageButtons
 
             // Delete Junk — only visible when there's confirmed junk to act on.
@@ -571,13 +585,71 @@ struct TriageView: View {
         }
     }
 
+    /// Under Construction bulk actions (ex-Workbench toolbar, merged
+    /// 2026-08-19): Promote / Drop to Catalog / Discard over the selection.
+    private var underConstructionButtons: some View {
+        HStack(spacing: 6) {
+            Button {
+                let recs = selectedRecords
+                model.promoteWorkbenchToArchive(recs)
+                selectedIDs = []
+            } label: {
+                Label("Promote", systemImage: "archivebox.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selectedIDs.isEmpty)
+            .help("Promote selected files to the Archive tab")
+
+            Button {
+                let recs = selectedRecords
+                model.dropWorkbenchToCatalog(recs)
+                selectedIDs = []
+            } label: {
+                Label("Drop to Catalog", systemImage: "tray.and.arrow.down.fill")
+            }
+            .buttonStyle(.bordered)
+            .disabled(selectedIDs.isEmpty)
+            .help("Treat as ordinary media — moves off Under Construction but keeps the file")
+
+            Button(role: .destructive) {
+                discardUnderConstruction(selectedRecords)
+            } label: {
+                Label("Discard", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .disabled(selectedIDs.isEmpty)
+            .help("Move the file to Trash and remove the record (recoverable from Finder until emptied)")
+        }
+    }
+
+    private var selectedRecords: [VideoRecord] {
+        selectedIDs.compactMap { id in model.records.first { $0.id == id } }
+    }
+
+    private func discardUnderConstruction(_ recs: [VideoRecord]) {
+        let n = model.discardWorkbench(recs)
+        selectedIDs = []
+        if n > 0 {
+            model.log("Under Construction: discarded \(n) file\(n == 1 ? "" : "s") to Trash")
+        }
+    }
+
     // MARK: - Table
 
     private func fileTable(rows: [VideoRecord]) -> some View {
         Table(rows, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("") { rec in
-                Image(systemName: rec.mediaDisposition.icon)
-                    .foregroundColor(rec.mediaDisposition.color)
+                // Under-construction rows wear the hammer instead of the
+                // disposition glyph — they're work in progress, not a
+                // review verdict (Workbench merge 2026-08-19).
+                if rec.lifecycleStage == .workbench {
+                    Image(systemName: "hammer.fill")
+                        .foregroundColor(.orange)
+                        .help("Under construction — produced by a Combine / Repair / Transcode run; Promote, Drop to Catalog, or Discard")
+                } else {
+                    Image(systemName: rec.mediaDisposition.icon)
+                        .foregroundColor(rec.mediaDisposition.color)
+                }
             }
             .width(30)
 
@@ -706,6 +778,32 @@ struct TriageView: View {
             }
         }
 
+        // Under Construction verbs (ex-Workbench, merged 2026-08-19) —
+        // only when the selection contains produced-file rows.
+        let ucRecs = ids.compactMap { id in model.records.first { $0.id == id } }
+            .filter { $0.lifecycleStage == .workbench }
+        if !ucRecs.isEmpty {
+            Section("Under Construction (\(ucRecs.count))") {
+                Button {
+                    model.promoteWorkbenchToArchive(ucRecs)
+                    selectedIDs = []
+                } label: {
+                    Label("Promote to Archive", systemImage: "archivebox.fill")
+                }
+                Button {
+                    model.dropWorkbenchToCatalog(ucRecs)
+                    selectedIDs = []
+                } label: {
+                    Label("Drop to Catalog", systemImage: "tray.and.arrow.down.fill")
+                }
+                Button(role: .destructive) {
+                    discardUnderConstruction(ucRecs)
+                } label: {
+                    Label("Discard (move to Trash)", systemImage: "trash")
+                }
+            }
+        }
+
         Divider()
 
         // Transcode — Pass C (Rick 2026-06-14). MFO verbs work from
@@ -786,13 +884,15 @@ struct TriageView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle")
+            Image(systemName: selectedFilter == .underConstruction ? "hammer" : "checkmark.circle")
                 .font(.system(size: 40))
-                .foregroundColor(.green)
-            Text("Nothing to triage")
+                .foregroundColor(selectedFilter == .underConstruction ? .secondary : .green)
+            Text(selectedFilter == .underConstruction ? "No work in progress" : "Nothing to triage")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("All media has been reviewed or archived. Scan more volumes in the Catalog tab to populate this list.")
+            Text(selectedFilter == .underConstruction
+                 ? "Run a Combine batch from the Catalog tab — new files land here for review before you promote them to the Archive."
+                 : "All media has been reviewed or archived. Scan more volumes in the Catalog tab to populate this list.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

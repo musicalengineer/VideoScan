@@ -18,8 +18,9 @@ struct ContentView: View {
         // (MAM convention). Tag 6 so saved `selectedTab` values keep their
         // meaning; the ⌘⇧V window still exists for badge click-through.
         ("Storage", "externaldrive.fill", 6),
+        // Workbench merged into Triage as the "Under Construction" filter
+        // (Rick 2026-08-19); tag 3 falls through to Triage below.
         ("Triage", "checklist", 2),
-        ("Workbench", "hammer.fill", 3),
         ("Archive", "archivebox.fill", 4),
         ("Family Tree", "person.3.fill", 5)
     ]
@@ -95,7 +96,7 @@ struct ContentView: View {
                 case 2:
                     TriageView()
                 case 3:
-                    WorkbenchView()
+                    TriageView()   // legacy Workbench selection
                 case 4:
                     ArchiveView()
                 case 5:
