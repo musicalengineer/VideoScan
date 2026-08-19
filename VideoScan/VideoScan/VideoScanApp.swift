@@ -815,13 +815,22 @@ final class MainWindowHelper {
     /// Captured from a View's @Environment(\.openWindow)
     var openWindowAction: OpenWindowAction?
 
-    /// Known auxiliary window titles — anything else is the main window.
-    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime", "Media File Operations"]
+    /// Known auxiliary window titles — the FALLBACK filter when the
+    /// identifier probe below finds nothing. Kept current is a losing
+    /// game (Volumes, Family Archivist, Settings… kept arriving), which
+    /// is why identity now comes first: 2026-08-19 Rick launched Promote
+    /// from the MFO window and the sheet attached to a main window BURIED
+    /// behind it — this helper had "raised" some other window, so the app
+    /// looked hung.
+    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime",
+                                   "Media File Operations", "Volumes", "Family Archivist",
+                                   "Settings", "Compare Volumes", "Catalog Info", "Analyze"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window
         if let w = findMainWindow() {
             w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: false)
             return
         }
         // Otherwise ask SwiftUI to create a new one
@@ -829,7 +838,16 @@ final class MainWindowHelper {
     }
 
     private func findMainWindow() -> NSWindow? {
-        NSApp.windows.first { w in
+        // SwiftUI stamps a WindowGroup window's identifier with its scene
+        // id ("main-AppWindow-1" for WindowGroup(id: "main")) — the ONLY
+        // positive identity we have. Title heuristics are the fallback.
+        if let byID = NSApp.windows.first(where: { w in
+            (w.identifier?.rawValue.hasPrefix("main") ?? false)
+                && w.contentView != nil && w.frame.width > 200
+        }) {
+            return byID
+        }
+        return NSApp.windows.first { w in
             // Skip known auxiliary windows and tiny/invisible ones
             !auxiliaryTitles.contains(where: { w.title.contains($0) })
             && w.contentView != nil

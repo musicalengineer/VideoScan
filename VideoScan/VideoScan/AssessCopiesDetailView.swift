@@ -301,8 +301,11 @@ struct AssessCopiesDetailView: View {
             roles[id] = roleLabel(forInstance: id, in: a)
             if let t = VideoScanModel.normalizedTitle(names[id]) { titles[id] = t }
         }
+        // Raise the main window FIRST so the confirmation sheet animates
+        // in front of the MFO window rather than opening buried behind it
+        // (Rick 2026-08-19: "I thought it was hung").
+        MainWindowHelper.shared.openMainWindow()
         model.requestPromote(recordIDs: ids, archiveTitles: titles, roleLabels: roles)
-        MainWindowHelper.shared.openMainWindow()   // the Promote sheet attaches to the main window root
     }
 
     /// The naming row's label for one instance: its representation's role,
