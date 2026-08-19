@@ -20,6 +20,13 @@ struct PromoteToArchiveSheet: View {
     /// un-probeable files (the ONE blocking readiness state).
     @State var overrideUnprobeable = false
 
+    /// Archive-name overrides per entry (Promote-Helper, Rick 2026-08-19):
+    /// a vertical list — Original / Lossless edition / Edit copy — each
+    /// with its own name; empty = keep that file's stem. Seeded from the
+    /// request (Assess pre-fills suggestions); editable for plain
+    /// right-click Promotes too. Slugified at destination time.
+    @State private var archiveTitles: [UUID: String] = [:]
+
     private var plan: ArchivePromotePlan { request.plan }
 
     /// Confirm is blocked ONLY by un-probeable files without the override
@@ -66,6 +73,8 @@ struct PromoteToArchiveSheet: View {
                     .padding(.vertical, 4)
                 }
             }
+
+            archiveNameSection
 
             readinessSection
 
@@ -147,9 +156,87 @@ struct PromoteToArchiveSheet: View {
             .foregroundColor(color)
     }
 
+    /// How many entries get an editable name row. A huge batch promote is
+    /// about moving bytes, not christening — the fields would be noise.
+    private static let maxNamingRows = 6
+
+    /// "Names in the archive" — a vertical list, one row per file: role
+    /// label (from Assess) or the filename, then the name to use. Empty =
+    /// keep that file's own name. Masters on disk are never renamed.
+    @ViewBuilder
+    private var archiveNameSection: some View {
+        if plan.entries.count <= Self.maxNamingRows {
+            GroupBox("Names in the archive") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(plan.entries) { entry in
+                        namingRow(entry)
+                    }
+                    if genericNameWarning {
+                        Label("A generic filename tells the archive nothing — name it for the people, place, or occasion. The original file is never renamed.",
+                              systemImage: "character.cursor.ibeam")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+            .onAppear { archiveTitles = plan.archiveTitles }
+        }
+    }
+
+    private func namingRow(_ entry: ArchivePromotePlan.Entry) -> some View {
+        let stem = (entry.filename as NSString).deletingPathExtension
+        let role = plan.roleLabels[entry.recordID]
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(role ?? stem)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 130, alignment: .trailing)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(entry.filename)
+                TextField("keep “\(stem)”", text: titleBinding(entry.recordID))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("promoteSheet.archiveName.\(role ?? stem)")
+            }
+            Text(namePreview(entry))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.leading, 138)
+        }
+    }
+
+    private func titleBinding(_ id: UUID) -> Binding<String> {
+        Binding(get: { archiveTitles[id] ?? "" },
+                set: { archiveTitles[id] = $0 })
+    }
+
+    /// Live preview of this entry's destination filename.
+    private func namePreview(_ e: ArchivePromotePlan.Entry) -> String {
+        let title = VideoScanModel.normalizedTitle(archiveTitles[e.recordID])
+        let stemSource = title ?? (e.filename as NSString).deletingPathExtension
+        let ext = (e.filename as NSString).pathExtension
+        let stem = "\(e.dateHint.filenamePrefix)_\(ArchivePathResolver.slug(from: stemSource))"
+        let name = ext.isEmpty ? stem : "\(stem).\(ext.lowercased())"
+        return "→ \(e.folder)/\(name)"
+    }
+
+    private var genericNameWarning: Bool {
+        plan.entries.contains { e in
+            VideoScanModel.normalizedTitle(archiveTitles[e.recordID]) == nil
+                && ArchiveNameAdvisor.isGenericStem((e.filename as NSString).deletingPathExtension)
+        }
+    }
+
     private func confirm() {
         var confirmed = plan
         confirmed.allowUnprobeable = overrideUnprobeable
+        confirmed.archiveTitles = archiveTitles.compactMapValues { VideoScanModel.normalizedTitle($0) }
         fileOpsCenter.startPromote(plan: confirmed, model: model)
         dismiss()
         openWindow(id: "combine")   // Media File Operations window (legacy id)

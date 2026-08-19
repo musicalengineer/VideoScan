@@ -191,3 +191,40 @@ struct AssessCopiesFamilyTests {
         #expect(a.representations.contains { $0.role == .accessCopy })
     }
 }
+
+@Suite("Archive name advisor")
+struct ArchiveNameAdvisorTests {
+    @Test func genericStems() {
+        for s in ["clip 01", "Clip_01", "IMG_1234", "MVI0042", "00005", "untitled",
+                  "Sequence 1", "tape-3", "capture07", "20040704", "1997-07-04 12.30.45", "DSC_0001a", ""] {
+            #expect(ArchiveNameAdvisor.isGenericStem(s), "\(s) should be generic")
+        }
+        for s in ["CapeCodVacation", "Donna_wedding", "Timmy first steps", "Christmas 1997 at Grandmas",
+                  "clip of the boat"] {
+            #expect(!ArchiveNameAdvisor.isGenericStem(s), "\(s) should NOT be generic")
+        }
+    }
+
+    @Test func suggestions() {
+        #expect(ArchiveNameAdvisor.suggestedTitle(people: ["Donna", "Timmy"], tags: ["cape cod"])
+                == "Donna_Timmy_CapeCod")
+        #expect(ArchiveNameAdvisor.suggestedTitle(people: [], tags: []) == nil)
+        #expect(ArchiveNameAdvisor.suggestedTitle(people: ["donna", "Donna"], tags: []) == "Donna")
+    }
+}
+
+@Suite("Promote plan — archive titles")
+@MainActor
+struct ArchiveTitleThreadingTests {
+    @Test func perRecordTitleReachesTheDestinationStem() {
+        // Pure resolver check: the title replaces the stem, date prefix and
+        // extension survive.
+        let facts = ArchivePathResolver.RecordFacts(
+            streamType: .videoAndAudio, filename: "Clip 01.dv", ext: "DV",
+            dateHint: .year(1997), dateIsLowConfidence: false)
+        let base = ArchivePathResolver.baseRelativePath(facts: facts, title: "CapeCodVacation")
+        #expect(base.hasSuffix("/1997-xx-xx_CapeCodVacation.dv"), "got \(base)")
+        let keep = ArchivePathResolver.baseRelativePath(facts: facts, title: nil)
+        #expect(keep.hasSuffix("/1997-xx-xx_Clip-01.dv"), "got \(keep)")
+    }
+}

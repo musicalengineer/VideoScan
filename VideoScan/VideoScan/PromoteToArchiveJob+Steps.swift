@@ -261,7 +261,8 @@ extension PromoteToArchiveJob {
                              bytesDone: Int64) async throws -> FileResult {
         let facts = ArchivePathResolver.facts(for: source)
         let choice = try await Self.chooseDestinationOffMain(
-            facts: facts, root: ctx.root, sourcePath: source.fullPath,
+            facts: facts, title: plan.archiveTitles[source.id],
+            root: ctx.root, sourcePath: source.fullPath,
             sourceSize: source.sizeBytes, claimed: claimedNames)
         let destURL = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(choice.relPath).standardizedFileURL
@@ -448,12 +449,13 @@ extension PromoteToArchiveJob {
     @concurrent
     #endif
     static func chooseDestinationOffMain(facts: ArchivePathResolver.RecordFacts,
+                                         title: String? = nil,
                                          root: String,
                                          sourcePath: String,
                                          sourceSize: Int64,
                                          claimed: Set<String>) async throws -> DestinationChoice {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true)
-        let base = ArchivePathResolver.baseRelativePath(facts: facts)
+        let base = ArchivePathResolver.baseRelativePath(facts: facts, title: title)
         let ext = (base as NSString).pathExtension
         let stemPath = (base as NSString).deletingPathExtension
         var cachedSourceSHA: String?

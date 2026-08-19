@@ -89,6 +89,16 @@ struct ArchivePromotePlan: Sendable {
         case offline
         case purged
     }
+    /// Archive-name overrides per record (Promote-Helper, Rick 2026-08-19):
+    /// the slug used in that entry's destination filename in place of the
+    /// original stem — "rename on the way to the archive; the master on
+    /// disk is never touched". Absent/empty = keep the file's own stem.
+    /// The date prefix and _NN collision suffix still apply.
+    var archiveTitles: [UUID: String] = [:]
+    /// Display-only role labels ("Original", "Lossless edition"…) for the
+    /// naming rows in the confirmation sheet, set when the promote was
+    /// launched from Assess Copies. Absent = the sheet shows filenames.
+    var roleLabels: [UUID: String] = [:]
     let rootPath: String
     let entries: [Entry]
     let skipped: [(id: UUID, filename: String, reason: Skip)]
@@ -638,7 +648,9 @@ extension VideoScanModel {
 
     /// Entry point for every "Promote to Archive" gesture: no master →
     /// the alert with the fix-it button; master → the confirmation sheet.
-    func requestPromote(recordIDs ids: [UUID]) {
+    func requestPromote(recordIDs ids: [UUID],
+                        archiveTitles: [UUID: String] = [:],
+                        roleLabels: [UUID: String] = [:]) {
         guard !ids.isEmpty else { return }
         if isReadOnly {
             log("Promote refused — this Mac is a read-only viewer of the catalog.")
@@ -653,9 +665,18 @@ extension VideoScanModel {
             log("Promote refused — \(refusal)")
             return
         }
-        guard let plan = buildPromotePlan(recordIDs: ids) else { return }
+        guard var plan = buildPromotePlan(recordIDs: ids) else { return }
+        plan.archiveTitles = archiveTitles.compactMapValues { Self.normalizedTitle($0) }
+        plan.roleLabels = roleLabels
         recordPromoteSkips(plan)
         pendingPromoteRequest = ArchivePromoteRequest(plan: plan)
+    }
+
+    /// Trim + nil-out an empty archive-name override.
+    nonisolated static func normalizedTitle(_ t: String?) -> String? {
+        guard let t else { return nil }
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// statfs-style free space for the volume holding `path`; nil when
