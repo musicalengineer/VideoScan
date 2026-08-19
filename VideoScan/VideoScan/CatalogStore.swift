@@ -532,16 +532,16 @@ final class CatalogStore {
             lastLoadOutcome = .missing
             return []
         }
-        // Baseline for the lost-update guard: the generation of the file we
-        // are about to read (design doc §4.1). Captured BEFORE decoding so
-        // a slow decode cannot let another writer slip in unnoticed. Absent
-        // header (pre-generation catalog) baselines at 0; the full decode
-        // gets the last word in reconcileLoadedGeneration.
-        let probedGeneration = CatalogSnapshot.headerProbe(at: fileURL)?.generation
-        loadedGeneration = probedGeneration ?? 0
-
-        // Try primary first.
-        if let (records, version, master, decodedGeneration) = decode(url: fileURL) {
+        // Try primary first. The OCC baseline (`loadedGeneration`) is the
+        // generation of the file we DECODED — the records we actually hold
+        // — never the cheap probe's (codex #500): catalog.json can be
+        // atomically replaced between the probe and Data(contentsOf:), and
+        // baselining on the older probe would let a later foreign bump of
+        // the replacement slip under the staleness check. The probe is
+        // taken before AND after the decode purely to make that race
+        // visible: a disagreement means the file moved under us, and we
+        // reload once.
+        if let (records, version, master, decodedGeneration) = decodePrimaryStable() {
             if version > CatalogSnapshot.currentVersion {
                 NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — refusing to load; not overwriting on next save",
                       version, CatalogSnapshot.currentVersion)
@@ -554,7 +554,8 @@ final class CatalogStore {
                 writesDisabledReason = "catalog.json was written by a newer build (v\(version) > v\(CatalogSnapshot.currentVersion))"
                 return []
             }
-            reconcileLoadedGeneration(decoded: decodedGeneration, probed: probedGeneration,
+            reconcileLoadedGeneration(decoded: decodedGeneration,
+                                      probed: lastPrimaryProbe,
                                       source: fileURL.lastPathComponent)
             // Rotate primary → .prev on every successful load. Copy (not move)
             // so primary stays in place; replace any stale .prev.
@@ -583,17 +584,71 @@ final class CatalogStore {
         return []
     }
 
+    /// Test seam (codex #500): runs between the pre-decode probe and the
+    /// decode, so a test can atomically replace catalog.json in exactly the
+    /// window the race lives in. Always nil in production.
+    internal var testBetweenProbeAndDecode: (() -> Void)?
+
+    /// Probe value that accompanied the decode `load()` accepted (the
+    /// post-decode probe of the final attempt). nil when the probe found no
+    /// stamp. Diagnostic only — never an OCC input.
+    private var lastPrimaryProbe: Int?
+
+    /// How many times `decodePrimaryStable` will re-read when the file
+    /// visibly changed during the decode. One retry is enough to turn a
+    /// single concurrent replacement into a clean read; a file that keeps
+    /// changing is accepted as-is (decoded values win) and logged.
+    static let loadRetryLimit = 1
+
+    /// Decode catalog.json, probing the header before and after. If the
+    /// two probes disagree the file was replaced mid-read — log it and read
+    /// again (once). Returns the decode result; `lastPrimaryProbe` is left
+    /// at the post-decode probe of the accepted read.
+    private func decodePrimaryStable() -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
+        var attempt = 0
+        var before = CatalogSnapshot.headerProbe(at: fileURL)?.generation
+        while true {
+            testBetweenProbeAndDecode?()
+            let result = decode(url: fileURL)
+            let after = CatalogSnapshot.headerProbe(at: fileURL)?.generation
+            lastPrimaryProbe = after
+            // Only a CHANGE between the two probes signals a move; a probe
+            // that is nil both times (pre-generation / pathological layout)
+            // is handled by reconcileLoadedGeneration, not here.
+            if before == after || attempt >= Self.loadRetryLimit {
+                if before != after {
+                    let msg = "catalog OCC: \(fileURL.lastPathComponent) kept changing during load (probe \(String(describing: before)) → \(String(describing: after))); accepting the decoded read as-is (#165/#500)"
+                    lastGenerationAnomaly = msg
+                    NSLog("VideoScan: %@", msg)
+                    catalogStoreLog.error("\(msg, privacy: .public)")
+                }
+                return result
+            }
+            attempt += 1
+            let msg = "catalog OCC: \(fileURL.lastPathComponent) changed during load (probe \(String(describing: before)) → \(String(describing: after))); re-reading (#165/#500)"
+            NSLog("VideoScan: %@", msg)
+            catalogStoreLog.notice("\(msg, privacy: .public)")
+            before = after
+        }
+    }
+
     /// Settle `loadedGeneration` once the full decode has spoken, and
     /// refuse to silently downgrade (GH #165):
     ///
-    ///  - Probe found nothing but the file DECODES with a generation → the
-    ///    decoded value is the truth; log at error level (a layout the
-    ///    head+tail probe cannot see is worth knowing about).
+    ///  - `loadedGeneration` IS the decoded generation — the records we
+    ///    hold — full stop. The probe is a diagnostic here, never an input
+    ///    (codex #500: a probe-before-decode baseline can exceed what was
+    ///    actually read if the file is replaced mid-load, and then a later
+    ///    foreign bump is not seen as stale).
+    ///  - Probe found nothing but the file DECODES with a generation → log
+    ///    at error level (a layout the head+tail probe cannot see is worth
+    ///    knowing about).
     ///  - On-disk generation is BELOW the sidecar's high-water mark → the
     ///    counter regressed (the 8/18 incident). Log at fault level and
-    ///    leave `generationFloor` in charge: the next write stamps
-    ///    max(seen, onDisk)+1, so the sequence resumes above the old
-    ///    maximum instead of restarting at 1.
+    ///    leave `generationFloor` in charge of ALLOCATION only: the next
+    ///    write stamps max(seen, onDisk)+1, so the sequence resumes above
+    ///    the old maximum instead of restarting at 1, while staleness is
+    ///    still judged against the true on-disk value.
     ///  - Otherwise advance the sidecar to what we loaded.
     private func reconcileLoadedGeneration(decoded: Int, probed: Int?, source: String) {
         if probed == nil, decoded > 0 {
@@ -602,12 +657,12 @@ final class CatalogStore {
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.error("\(msg, privacy: .public)")
         } else if let probed, probed != decoded {
-            let msg = "catalog OCC: header probe of \(source) read generation \(probed) but the decode read \(decoded) — using the higher"
+            let msg = "catalog OCC: header probe of \(source) read generation \(probed) but the decode read \(decoded) — trusting the decode"
             lastGenerationAnomaly = msg
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.error("\(msg, privacy: .public)")
         }
-        loadedGeneration = max(loadedGeneration, decoded)
+        loadedGeneration = decoded
 
         if loadedGeneration < generationFloor {
             let msg = "catalog OCC: \(source) is at generation \(loadedGeneration) but this catalog has carried generation \(generationFloor) before (\(CatalogGenerationSidecar.fileName)) — the counter regressed; re-seeding so the next write stamps \(generationFloor + 1) (#165)"

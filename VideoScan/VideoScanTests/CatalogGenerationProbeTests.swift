@@ -220,6 +220,73 @@ final class CatalogGenerationProbeTests: XCTestCase {
         XCTAssertEqual(s2.lastWriteError?.kind, "stale")
     }
 
+    /// codex #500 sensor: catalog.json is atomically replaced by a LOWER
+    /// generation between the pre-decode probe and the decode. The OCC
+    /// baseline must be the DECODED generation (the records we hold), never
+    /// the probe's — otherwise a foreign writer advancing the replacement
+    /// 3 → 4 is not seen as stale (4 > 248 is false) and gets overwritten.
+    @MainActor
+    func testLoadRaceProbeHighDecodeLow_baselinesOnDecodedAndStillRefusesForeignBump() throws {
+        try Data("{\"version\":6,\"generation\":248,\"records\":[]}".utf8).write(to: catalogURL)
+        let store = CatalogStore(directory: dir)
+        var replaced = false
+        store.testBetweenProbeAndDecode = { [catalogURL] in
+            guard !replaced else { return }
+            replaced = true
+            try? Data("{\"version\":6,\"generation\":3,\"records\":[]}".utf8)
+                .write(to: catalogURL!, options: .atomic)
+        }
+        _ = store.load()
+        XCTAssertTrue(replaced, "seam must have fired")
+        XCTAssertEqual(store.loadedGeneration, 3, "baseline = what was DECODED, not the stale probe")
+        XCTAssertEqual(store.generationFloor, 248, "the sidecar still remembers the high-water mark")
+
+        // Foreign writer advances the (lower) file 3 → 4.
+        try Data("{\"version\":6,\"generation\":4,\"records\":[]}".utf8).write(to: catalogURL)
+        XCTAssertFalse(store.saveNow(records: []), "must be refused as stale — this is the codex #500 clobber")
+        XCTAssertEqual(store.lastWriteError?.kind, "stale")
+
+        // Proper reload, then the allocation resumes ABOVE the floor.
+        let store2 = CatalogStore(directory: dir)
+        _ = store2.load()
+        XCTAssertEqual(store2.loadedGeneration, 4)
+        XCTAssertTrue(store2.saveNow(records: []))
+        XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 249,
+                       "max(loaded 4, floor 248) + 1")
+    }
+
+    /// The retry seam: a single mid-load replacement is re-read cleanly (no
+    /// anomaly), a file that keeps changing is accepted as decoded + logged.
+    @MainActor
+    func testLoadRereadsOnceWhenTheFileChangesUnderIt() throws {
+        try Data("{\"version\":6,\"generation\":10,\"records\":[]}".utf8).write(to: catalogURL)
+        let store = CatalogStore(directory: dir)
+        var fires = 0
+        store.testBetweenProbeAndDecode = { [catalogURL] in
+            fires += 1
+            try? Data("{\"version\":6,\"generation\":\(10 + fires),\"records\":[]}".utf8)
+                .write(to: catalogURL!, options: .atomic)
+        }
+        _ = store.load()
+        XCTAssertEqual(fires, 1 + CatalogStore.loadRetryLimit, "one initial read + the retry budget")
+        XCTAssertEqual(store.loadedGeneration, 10 + fires, "the last decode wins")
+        let anomaly = try XCTUnwrap(store.lastGenerationAnomaly)
+        XCTAssertTrue(anomaly.contains("kept changing"), anomaly)
+
+        // A single replacement: retried, clean.
+        let store2 = CatalogStore(directory: dir)
+        var once = false
+        store2.testBetweenProbeAndDecode = { [catalogURL] in
+            guard !once else { return }
+            once = true
+            try? Data("{\"version\":6,\"generation\":20,\"records\":[]}".utf8)
+                .write(to: catalogURL!, options: .atomic)
+        }
+        _ = store2.load()
+        XCTAssertEqual(store2.loadedGeneration, 20)
+        XCTAssertNil(store2.lastGenerationAnomaly, "a single mid-load replacement is absorbed by the re-read")
+    }
+
     @MainActor
     func testSidecarBootstrapsFromSiblingCatalogFilesOnFirstRun() throws {
         // No sidecar yet; catalog.json says 2 but a safety copy in the same
