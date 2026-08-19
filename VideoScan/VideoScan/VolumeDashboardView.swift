@@ -7,8 +7,9 @@
 //
 //   What's on this drive                        [ Size | Files ]  3:14 PM
 //   ┌ Space ──────────────┐ ┌ Eras ──────────────────────────────────┐
-//   │ ███████░░░░░░ 62%   │ │ ▂▅█▇▃  bars by decade                   │
-//   └─────────────────────┘ └────────────────────────────────────────┘
+//   │ ███████░░░░░░ 62%   │ │ 1990s ████████ 24 GB   (horizontal bars │
+//   └─────────────────────┘ │ 2000s ███ 11 GB          by decade)     │
+//                           └────────────────────────────────────────┘
 //   ┌ Kind (donut) ┐ ┌ Copies (donut) ┐ ┌ Archive (donut) ┐   ← 3 across when
 //   (+ Fixity on the Master Archive)                             the pane allows
 //   ┌ Years (bars, Master Archive only) ───────────────────────────┐
@@ -234,11 +235,13 @@ struct VolumeDashboardView: View {
         }
     }
 
-    /// Eras: one bar per decade, chronological, palette ramp.
+    /// Eras: one horizontal bar per decade, chronological top-to-bottom,
+    /// palette ramp — same idiom as Folders (iteration 6: the vertical
+    /// bars read tall-and-thin on a wide pane).
     private func erasCard(_ s: VolumeDashboardStats) -> some View {
         card("Eras", subtitle: "by decade of the footage") {
-            barChart(s.decade, horizontal: false)
-                .frame(height: 180)
+            barChart(s.decade, horizontal: true)
+                .frame(height: max(120, CGFloat(s.decade.slices.count) * 30 + 16))
         }
     }
 
