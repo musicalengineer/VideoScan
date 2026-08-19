@@ -154,3 +154,40 @@ struct CopyFamilyRules {
         #expect(a.recommendedRepresentation?.instances.count == 1000)
     }
 }
+
+@Suite("Assess copies — family discovery")
+@MainActor
+struct AssessCopiesFamilyTests {
+    private func vr(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.fullPath = path
+        r.sizeBytes = 10
+        r.videoCodec = "dvvideo"; r.audioCodec = "pcm_s16le"; r.durationSeconds = 60
+        return r
+    }
+
+    @Test func familyFollowsGroupLineageAndSignature() {
+        let model = VideoScanModel()
+        let g = UUID()
+        let seed = vr("/Volumes/A/seed.dv"); seed.duplicateGroupID = g; seed.contentHash = "v1:abc"
+        let twin = vr("/Volumes/B/twin.dv"); twin.duplicateGroupID = g
+        let child = vr("/Volumes/A/seed_access.mov"); child.derivedFrom = twin.id; child.videoCodec = "hevc"; child.audioCodec = "aac"
+        let grandchild = vr("/Volumes/A/seed_access_clip.mov"); grandchild.derivedFrom = child.id; grandchild.videoCodec = "hevc"; grandchild.audioCodec = "aac"
+        let hashTwin = vr("/Volumes/C/other name.dv"); hashTwin.contentHash = "v1:abc"
+        let stranger = vr("/Volumes/C/stranger.dv")
+        let purged = vr("/Volumes/C/purged.dv"); purged.duplicateGroupID = g; purged.purgedAt = Date()
+        model.records = [seed, twin, child, grandchild, hashTwin, stranger, purged]
+        model.scanTargets = [CatalogScanTarget(searchPath: "/Volumes/A"), CatalogScanTarget(searchPath: "/Volumes/B"), CatalogScanTarget(searchPath: "/Volumes/C")]
+
+        let family = AssessCopiesJob.collectFamily(seed: seed, model: model)
+        #expect(Set(family.map(\.id)) == [seed.id, twin.id, child.id, grandchild.id, hashTwin.id])
+
+        let inputs = AssessCopiesJob.projectInputs(family, model: model)
+        #expect(inputs.count == 5)
+        let a = CopyFamilyAssessor.assess(inputs)
+        #expect(a.recommendedRepresentation?.instances.count == 3)          // seed, twin, hashTwin
+        #expect(a.representations.contains { $0.role == .accessCopy })
+    }
+}

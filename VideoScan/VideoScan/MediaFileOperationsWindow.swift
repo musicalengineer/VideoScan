@@ -25,6 +25,10 @@ struct MediaFileOperationsWindow: View {
 
     /// Compare rows the user expanded for the verdict + metadata diff.
     @State private var expandedJobIDs: Set<UUID> = []
+    /// Assess Copies rows open expanded on arrival — the panel IS the
+    /// result (Promote-Helper, 2026-08-19). Remembered so a user collapse
+    /// sticks.
+    @State private var autoExpandedAssessIDs: Set<UUID> = []
 
     private var combineSectionVisible: Bool {
         !dashboard.combineJobs.isEmpty || model.isCombining
@@ -161,6 +165,15 @@ struct MediaFileOperationsWindow: View {
                 }
             }
             .padding(.vertical, 4)
+        }
+        .onChange(of: center.jobs.count) { _, _ in autoExpandNewAssessRows() }
+        .onAppear { autoExpandNewAssessRows() }
+    }
+
+    private func autoExpandNewAssessRows() {
+        for job in center.jobs where job is AssessCopiesJob && !autoExpandedAssessIDs.contains(job.id) {
+            autoExpandedAssessIDs.insert(job.id)
+            expandedJobIDs.insert(job.id)
         }
     }
 
@@ -328,13 +341,19 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
+
+            if isExpanded, let assess = job as? AssessCopiesJob {
+                AssessCopiesDetailView(job: assess)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
         }
         .background(rowBackground)
         .contentShape(Rectangle())
         .onTapGesture {
             // Rows with a detail view expand on click (compare's
             // pattern, extended to Find & Tag — Rick 2026-08-04).
-            if job is PairCompareJob || job is FindPersonJob { onToggleExpand() }
+            if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob { onToggleExpand() }
         }
         .onReceive(job.objectWillChange) { _ in
             heartbeat.toggle()
@@ -649,6 +668,10 @@ extension MediaFileOperationKind {
         // like the retire/archivebox family, darker than rebuild's brown,
         // and clearly apart from extract's burnt orange.
         case .promote: return Color(red: 0.55, green: 0.36, blue: 0.10)
+        // Assess Copies (Promote-Helper, 2026-08-19) — dark plum: sits
+        // beside Promote's bronze as "the thinking before the copying",
+        // apart from trim's indigo and findPerson's slate.
+        case .assessCopies: return Color(red: 0.45, green: 0.16, blue: 0.45)
         }
     }
 }

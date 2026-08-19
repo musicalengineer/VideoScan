@@ -105,6 +105,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// row → linked catalog record. Never a move; never a re-encode.
     /// docs/archive_promotion_workflow.md, Rick 2026-08-15.
     case promote
+    /// "Assess Copies for Archive…" — Promote-Helper (2026-08-19): one
+    /// copy family → distinct representations, the recommended original,
+    /// and the actions. Reads catalog metadata only (no media I/O) so it
+    /// finishes instantly; it is an MFO job for the expandable result
+    /// panel and the action buttons that launch Promote / Transcode /
+    /// Verify Audio from it. docs/promote_helper_plan.md.
+    case assessCopies
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -126,6 +133,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyAudio: return "Verify"
         case .findPerson: return "Find"
         case .promote: return "Promote"
+        case .assessCopies: return "Assess"
         }
     }
 
@@ -150,6 +158,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyAudio: return "verify audio"
         case .findPerson: return "find person"
         case .promote: return "promote"
+        case .assessCopies: return "assess copies"
         }
     }
 }
