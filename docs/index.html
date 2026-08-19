@@ -258,6 +258,17 @@
   </div>
 </div>
 
+<!-- ============ NATURAL LANGUAGE CATALOG SEARCH QUALITY ============ -->
+<h3 class="section-heading">Natural Language Catalog Search &mdash; pass/fail numbers</h3>
+<div class="cards" id="hallie-cards"></div>
+<div class="charts">
+  <div class="chart-box">
+    <h2>Hallie question testbed &mdash; pass/fail trend</h2>
+    <canvas id="chart-hallie-pass-fail"></canvas>
+    <div id="chart-hallie-note" class="chart-note hidden"></div>
+  </div>
+</div>
+
 <!-- ============ PERSON RECOGNITION QUALITY SECTION ============ -->
 <h3 class="section-heading">Person Recognition &mdash; benchmark readiness and measured quality</h3>
 
@@ -351,6 +362,7 @@ const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
 const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
 const SEARCH_BENCHMARKS_LOCAL = `./search_benchmarks.jsonl?${CACHE_BUSTER}`;
+const HALLIE_TESTBED_LOCAL = `./hallie_testbed.jsonl?${CACHE_BUSTER}`;
 const EXPECTED_SEARCH_QUERIES = [
   "d", "don", "donna", "xylotheremin", "zzqx", "donna christmas 1997",
   "1990s", "people:donna", '"cape cod"', "pelicanwharf sunsetreel",
@@ -716,6 +728,43 @@ async function loadData() {
       <div class="label">No catalog-search benchmark data</div>
       <div class="value" style="font-size: 14px;">Run the fixed 100k synthetic Release benchmark on an available M1 or M5.</div>
     </div>`;
+  }
+
+  // ---- Hallie natural-language question testbed ----
+  const hallieText = await fetchText(rawUrl("hallie_testbed.jsonl"), HALLIE_TESTBED_LOCAL);
+  const hallieRows = (hallieText ? parseJsonl(hallieText) : [])
+    .filter(row => row.schemaVersion === 1 && row.source === "hallie-question-testbed")
+    .sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const hallieCards = document.getElementById("hallie-cards");
+  const hallieCanvas = document.getElementById("chart-hallie-pass-fail");
+  const hallieNote = document.getElementById("chart-hallie-note");
+  if (hallieRows.length) {
+    const hLast = hallieRows[hallieRows.length - 1];
+    const hPrev = hallieRows.length > 1 ? hallieRows[hallieRows.length - 2] : {};
+    const hallieRate = hLast.pass_rate_pct == null ? "N/A" : `${Number(hLast.pass_rate_pct).toFixed(1)}%`;
+    hallieCards.appendChild(card("Pass rate", hallieRate, hPrev.pass_rate_pct, hLast.pass_rate_pct, false, "var(--good)"));
+    hallieCards.appendChild(card("Passed", hLast.passed, hPrev.passed, hLast.passed, false, "var(--good)"));
+    hallieCards.appendChild(card("Failed", hLast.failed, hPrev.failed, hLast.failed, true, "var(--bad)"));
+    hallieCards.appendChild(card("Ungraded", hLast.ungraded, hPrev.ungraded, hLast.ungraded, true, "var(--warn)"));
+    hallieCards.appendChild(card("Questions", hLast.cases, hPrev.cases, hLast.cases, false, "var(--accent)"));
+    hallieCards.appendChild(card("Baseline date", new Date(hLast.ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }), null, null, false, "var(--purple)"));
+    drawLine("chart-hallie-pass-fail", dateLabels(hallieRows), [
+      { label: "pass %", data: hallieRows.map(row => row.pass_rate_pct), ...lineStyle("#3fb950") },
+      { label: "passed", data: hallieRows.map(row => row.passed), ...lineStyle("#58a6ff") },
+      { label: "failed", data: hallieRows.map(row => row.failed), ...lineStyle("#f85149") },
+      { label: "ungraded", data: hallieRows.map(row => row.ungraded), ...lineStyle("#d29922") },
+    ]);
+    hallieNote.textContent = hLast.note || "Historical replay baseline; semantic grading is still manual.";
+    hallieNote.classList.remove("hidden");
+  } else {
+    hallieCards.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
+      <div class="indicator" style="background: var(--muted)"></div>
+      <div class="label">No Hallie testbed data</div>
+      <div class="value" style="font-size: 14px;">Run scripts/hallie_question_testbed.py grade to publish a baseline.</div>
+    </div>`;
+    hallieCanvas.classList.add("hidden");
+    hallieNote.textContent = "No Hallie question replay has been published yet.";
+    hallieNote.classList.remove("hidden");
   }
 
   const coverageCanvas = document.getElementById("chart-coverage");

@@ -80,3 +80,30 @@ still returns success as long as the runnable cases pass.
 2. Add calibrated regression cases around known fixtures once outputs stabilize.
 3. Have Xcode test targets invoke this same harness if you want one-button runs.
 4. Keep long-running fixture tests out of release UI code.
+
+## Hallie question testbed
+
+`hallie_question_testbed.py` turns each user turn in a Hallie JSONL log into a
+separate replay case. The captured response is a baseline, not unquestionable
+truth; edit `humanGrade` and `reviewNotes` when a historical answer was wrong.
+
+Extract a new corpus:
+
+```bash
+python3 scripts/hallie_question_testbed.py extract \
+  ~/Library/Logs/VideoScan/Hallie/hallie-conversation-2026-08-17.jsonl \
+  ~/Library/Logs/VideoScan/Hallie/hallie-conversation-2026-08-18.jsonl \
+  -o tests/hallie_question_testbed.json
+```
+
+Grade a later Hallie replay (also a JSONL log) with per-case regression-match
+diagnostics for response presence, outcome, route, query shape, and evidence
+shape. These diagnostics are not semantic passes. Set each case's
+`humanGrade` to `"pass"` or `"fail"` only after reviewing the answer; until
+then the summary reports the case as `ungraded`:
+
+```bash
+python3 scripts/hallie_question_testbed.py grade \
+  tests/hallie_question_testbed.json new-hallie-run.jsonl \
+  -o hallie-grade.json
+```

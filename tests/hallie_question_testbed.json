@@ -1,0 +1,1350 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-18T22:26:13.411227+00:00",
+  "sourceLogs": [
+    "hallie-conversation-2026-08-17.jsonl",
+    "hallie-conversation-2026-08-18.jsonl"
+  ],
+  "cases": [
+    {
+      "id": "2026-08-17-E058E909-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 2,
+      "timestamp": "2026-08-17T00:56:31Z",
+      "question": "show me Donna down the cape in the early 90s",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1994 keyword=down the cape",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 4,
+      "timestamp": "2026-08-17T00:58:30Z",
+      "question": "how many videos of Donna do we have?",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"presence\",\n  \"payload\": {\n    \"people\": [\n      \"donna\"\n    ],\n    \"mediaKind\": \"video\",\n    \"limit\": 1\n  ",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q6",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 6,
+      "timestamp": "2026-08-17T00:58:33Z",
+      "question": "Christmas videos from 2006",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence year=2006 mediaKind=video keyword=christmas",
+        "answerText": "I found 26 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 26 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q8",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 8,
+      "timestamp": "2026-08-17T00:58:38Z",
+      "question": "show me Donna down the cape in the early 90s",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1994 keyword=down the cape",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q10",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 10,
+      "timestamp": "2026-08-17T00:58:48Z",
+      "question": "who is rick's dad?",
+      "reference": {
+        "outcome": "declined",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=kinship person=rick",
+        "answerText": "I don't find “rick” in the family tree — try a fuller name.",
+        "basisLine": "Checked: People profile identity route “rick” → “Rick”; imported family tree (GEDCOM), but no unique GEDCOM identity was resolved.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q12",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 12,
+      "timestamp": "2026-08-17T00:58:55Z",
+      "question": "Richard",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=richard",
+        "answerText": "Here is what the family archive currently supports about Rick Breen. The imported family tree records 4 Mar 1959 as Rick Breen's birth date. The imported family tree records Rick Breen's parents as Eileen Marie Latta, Richard Harding Breen Sr. The imported family tree records Rick Breen's spouse as Donna Elaine Hudson. Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music, Bose, and FLIR, with specialties spanning audio-oriented, safety-critical, and medical software. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. Rick is a musician and amateur astronomer, and he returned to coding after retiring in 2024 to continue work on family-media preservation. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q14",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 14,
+      "timestamp": "2026-08-17T00:59:38Z",
+      "question": "who is donna?",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-E058E909-q16",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "E058E909-6EDC-4643-A52F-20022297E32A",
+      "sequence": 16,
+      "timestamp": "2026-08-17T00:59:48Z",
+      "question": "tell me about thankful pratt",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=thankful pratt",
+        "answerText": "Thankful Pratt — born 06 Oct 1761; resting in peace since 1 Nov 1849; child of Abigail Mixer and ELNATHAN PRATT; married to Caleb Parker; parent of Nathaniel Parker.",
+        "basisLine": "Basis: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 2,
+      "timestamp": "2026-08-17T01:07:49Z",
+      "question": "who is rick",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=rick",
+        "answerText": "Here is what the family archive currently supports about Rick Breen. The imported family tree records 4 Mar 1959 as Rick Breen's birth date. The imported family tree records Rick Breen's parents as Eileen Marie Latta, Richard Harding Breen Sr. The imported family tree records Rick Breen's spouse as Donna Elaine Hudson. Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music, Bose, and FLIR, with specialties spanning audio-oriented, safety-critical, and medical software. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. Rick is a musician and amateur astronomer, and he returned to coding after retiring in 2024 to continue work on family-media preservation. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 4,
+      "timestamp": "2026-08-17T01:08:07Z",
+      "question": "show me videos of rick",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=rick mediaKind=video",
+        "answerText": "I found 8 catalog items matching that.",
+        "basisLine": "Basis: 8 cited of 8 matching catalog items.",
+        "mediaEvidenceCount": 8,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q7",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 7,
+      "timestamp": "2026-08-17T01:19:09Z",
+      "question": "show videos of donna down the cape",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video keyword=down the cape",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q9",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 9,
+      "timestamp": "2026-08-17T01:19:32Z",
+      "question": "show videos of donna down the cape in the 90s",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1999 mediaKind=video keyword=down the cape",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q11",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 11,
+      "timestamp": "2026-08-17T01:21:44Z",
+      "question": "show matt",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=matt",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q13",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 13,
+      "timestamp": "2026-08-17T01:21:57Z",
+      "question": "show timmy as a baby video saying peekaboo",
+      "reference": {
+        "outcome": "unsupported",
+        "route": "unsupported-cross",
+        "queryDescription": null,
+        "answerText": "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
+        "basisLine": "Basis: QueryAST shape=cross has no deterministic executor.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q15",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 15,
+      "timestamp": "2026-08-17T01:22:08Z",
+      "question": "find timmy saying peekaboo",
+      "reference": {
+        "outcome": "unsupported",
+        "route": "unsupported-cross",
+        "queryDescription": null,
+        "answerText": "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
+        "basisLine": "Basis: QueryAST shape=cross has no deterministic executor.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q17",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 17,
+      "timestamp": "2026-08-17T01:22:20Z",
+      "question": "find timmy",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=timmy",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q19",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 19,
+      "timestamp": "2026-08-17T01:22:31Z",
+      "question": "find timmy down the cape",
+      "reference": {
+        "outcome": "unsupported",
+        "route": "unsupported-cross",
+        "queryDescription": null,
+        "answerText": "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
+        "basisLine": "Basis: QueryAST shape=cross has no deterministic executor.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-079B9485-q21",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "079B9485-CCA8-4A48-9B9C-10C825DD209A",
+      "sequence": 21,
+      "timestamp": "2026-08-17T01:22:48Z",
+      "question": "find timmy saying peekaboo",
+      "reference": {
+        "outcome": "unsupported",
+        "route": "unsupported-cross",
+        "queryDescription": null,
+        "answerText": "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
+        "basisLine": "Basis: QueryAST shape=cross has no deterministic executor.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 2,
+      "timestamp": "2026-08-17T16:15:02Z",
+      "question": "who is hallie mae?",
+      "reference": {
+        "outcome": "declined",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=hallie mae",
+        "answerText": "I don't find “hallie mae” in the family tree — try a fuller name.",
+        "basisLine": "Checked: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 4,
+      "timestamp": "2026-08-17T16:15:16Z",
+      "question": "who is donna",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q6",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 6,
+      "timestamp": "2026-08-17T16:15:29Z",
+      "question": "show videos of donna down the cape",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video keyword=down the cape",
+        "answerText": "I found 15 catalog items matching that.",
+        "basisLine": "Basis: 15 cited of 15 matching catalog items.",
+        "mediaEvidenceCount": 15,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q9",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 9,
+      "timestamp": "2026-08-17T16:20:03Z",
+      "question": "show videos of donna down the cape in 1990s",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1999 mediaKind=video keyword=down the cape",
+        "answerText": "I found 6 catalog items matching that.",
+        "basisLine": "Basis: 6 cited of 6 matching catalog items.",
+        "mediaEvidenceCount": 6,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q11",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 11,
+      "timestamp": "2026-08-17T16:21:00Z",
+      "question": "how many children did rick and donna have and what are their names?",
+      "reference": {
+        "outcome": "declined",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=kinship person=rick,donna",
+        "answerText": "A family-tree question must identify exactly one person.",
+        "basisLine": "Checked: graph-query validation only; no family source was consulted.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q13",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 13,
+      "timestamp": "2026-08-17T16:21:08Z",
+      "question": "tell us about rick",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=rick",
+        "answerText": "Here is what the family archive currently supports about Rick Breen. The imported family tree records 4 Mar 1959 as Rick Breen's birth date. The imported family tree records Rick Breen's parents as Eileen Marie Latta, Richard Harding Breen Sr. The imported family tree records Rick Breen's spouse as Donna Elaine Hudson. Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music, Bose, and FLIR, with specialties spanning audio-oriented, safety-critical, and medical software. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. Rick is a musician and amateur astronomer, and he returned to coding after retiring in 2024 to continue work on family-media preservation. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q15",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 15,
+      "timestamp": "2026-08-17T16:22:57Z",
+      "question": "hallie, where did you get the biography info of rick?",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=rick",
+        "answerText": "Here is what the family archive currently supports about Rick Breen. The imported family tree records 4 Mar 1959 as Rick Breen's birth date. The imported family tree records Rick Breen's parents as Eileen Marie Latta, Richard Harding Breen Sr. The imported family tree records Rick Breen's spouse as Donna Elaine Hudson. Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music, Bose, and FLIR, with specialties spanning audio-oriented, safety-critical, and medical software. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. Rick is a musician and amateur astronomer, and he returned to coding after retiring in 2024 to continue work on family-media preservation. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-1608B659-q17",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "1608B659-A969-43AD-B158-625446D96F58",
+      "sequence": 17,
+      "timestamp": "2026-08-17T16:23:28Z",
+      "question": "can we edit the biographies?",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence keyword=edit keyword=biographies",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-674A5A47-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "674A5A47-4C93-47B9-96AF-4EE39EE22423",
+      "sequence": 2,
+      "timestamp": "2026-08-17T18:37:43Z",
+      "question": "Hi hallie - find me movies of rick playing guitar",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"cross\",\n  \"payload\": {\n    \"people\": [\n      \"rick\"\n    ],\n    \"keywords\": [\n      \"playing guitar\"\n    ],",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-674A5A47-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "674A5A47-4C93-47B9-96AF-4EE39EE22423",
+      "sequence": 4,
+      "timestamp": "2026-08-17T18:37:59Z",
+      "question": "how many videos of Donna do we have?",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video",
+        "answerText": "I found 52 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 52 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-674A5A47-q6",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "674A5A47-4C93-47B9-96AF-4EE39EE22423",
+      "sequence": 6,
+      "timestamp": "2026-08-17T18:38:07Z",
+      "question": "Christmas videos from 2006",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence year=2006 mediaKind=video keyword=christmas",
+        "answerText": "I found 26 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 26 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 2,
+      "timestamp": "2026-08-17T19:04:55Z",
+      "question": "Hi Hallie - count how many videos of donna we have?",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video",
+        "answerText": "I found 52 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 52 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 4,
+      "timestamp": "2026-08-17T19:06:17Z",
+      "question": "play one of them, say the first one",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no executable presence constraints.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q5",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 5,
+      "timestamp": "2026-08-17T19:06:17Z",
+      "question": "one of them, say the first one",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no executable presence constraints.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q7",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 7,
+      "timestamp": "2026-08-17T19:06:26Z",
+      "question": "play me a video of donna",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video",
+        "answerText": "I found 52 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 52 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q8",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 8,
+      "timestamp": "2026-08-17T19:06:26Z",
+      "question": "me a video of donna",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna mediaKind=video",
+        "answerText": "I found 52 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 52 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q11",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 11,
+      "timestamp": "2026-08-17T19:10:45Z",
+      "question": "tell me about Thankful Pratt",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=thankful pratt",
+        "answerText": "Thankful Pratt — born 06 Oct 1761; resting in peace since 1 Nov 1849; child of Abigail Mixer and ELNATHAN PRATT; married to Caleb Parker; parent of Nathaniel Parker.",
+        "basisLine": "Basis: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q13",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 13,
+      "timestamp": "2026-08-17T19:10:58Z",
+      "question": "Tell me about Donna Breen",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna breen",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q15",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 15,
+      "timestamp": "2026-08-17T19:12:18Z",
+      "question": "can we change donna's biography?",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q17",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 17,
+      "timestamp": "2026-08-17T19:12:39Z",
+      "question": "show timmy as a baby saying peekaboo",
+      "reference": {
+        "outcome": "unsupported",
+        "route": "unsupported-cross",
+        "queryDescription": null,
+        "answerText": "Cross-evidence queries are not supported yet; I did not coerce this into presence search.",
+        "basisLine": "Basis: QueryAST shape=cross has no deterministic executor.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q19",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 19,
+      "timestamp": "2026-08-17T19:12:50Z",
+      "question": "show me videos of timmy as a baby",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=timmy mediaKind=video keyword=baby",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q22",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 22,
+      "timestamp": "2026-08-17T19:13:30Z",
+      "question": "show me videos of timmy",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=timmy mediaKind=video",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q24",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 24,
+      "timestamp": "2026-08-17T19:13:36Z",
+      "question": "show me videos of matt",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=matt mediaKind=video",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q27",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 27,
+      "timestamp": "2026-08-17T19:18:15Z",
+      "question": "show me christmas videos",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence mediaKind=video keyword=christmas",
+        "answerText": "I found 989 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 989 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q29",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 29,
+      "timestamp": "2026-08-17T19:20:26Z",
+      "question": "who was donna's great grandmother on her maternal side?",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"people\": [\n      \"donna\"\n    ],\n    \"operation\": \"kinship\",\n    \"relation\": \"g",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q31",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 31,
+      "timestamp": "2026-08-17T19:20:36Z",
+      "question": "show donna's family tree",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q33",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 33,
+      "timestamp": "2026-08-17T19:20:46Z",
+      "question": "show ricks family tree",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"people\": [\n      \"ricks\"\n    ],\n    \"operation\": \"kinship\"\n  }\n}",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q35",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 35,
+      "timestamp": "2026-08-17T19:20:54Z",
+      "question": "show family tree",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it is missing.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"operation\": \"kinship\"\n  }\n}",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-AD99FE56-q37",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "AD99FE56-0EDA-4D53-A7A0-3F6A22A01B90",
+      "sequence": 37,
+      "timestamp": "2026-08-17T19:21:10Z",
+      "question": "hallie - get me the family tree for the breens",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"people\": [\n      \"hallie\"\n    ],\n    \"operation\": \"kinship\",\n    \"relation\": \"",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-55EB0264-q2",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "55EB0264-DC6C-4622-A312-9B888AAFD646",
+      "sequence": 2,
+      "timestamp": "2026-08-17T22:15:07Z",
+      "question": "find videos of dad",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=dad mediaKind=video",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-17-55EB0264-q4",
+      "source": "hallie-conversation-2026-08-17.jsonl",
+      "sessionID": "55EB0264-DC6C-4622-A312-9B888AAFD646",
+      "sequence": 4,
+      "timestamp": "2026-08-17T22:19:46Z",
+      "question": "tell me about yourself hallie",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=hallie",
+        "answerText": "Hallie May McGill — born 20 Mar 1876; resting in peace since 4 Jan 1907; child of David Thomas McGill Sr and Harriet Merron Waters; married to William Love Latta; parent of David Latta.",
+        "basisLine": "Basis: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-D20496B3-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "D20496B3-1EB5-41B9-991B-3E08E290CADA",
+      "sequence": 2,
+      "timestamp": "2026-08-18T00:57:23Z",
+      "question": "hi hallie",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=hallie",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-D20496B3-q4",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "D20496B3-1EB5-41B9-991B-3E08E290CADA",
+      "sequence": 4,
+      "timestamp": "2026-08-18T00:57:52Z",
+      "question": "show me videos of donna down the cape in the 1990s",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1999 mediaKind=video keyword=down the cape",
+        "answerText": "I found 5 catalog items matching that.",
+        "basisLine": "Basis: 5 cited of 5 matching catalog items.",
+        "mediaEvidenceCount": 5,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 2,
+      "timestamp": "2026-08-18T01:30:39Z",
+      "question": "show me donna videos from the cape in the 90s",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1999 mediaKind=video keyword=cape",
+        "answerText": "I found 5 catalog items matching that.",
+        "basisLine": "Basis: 5 cited of 5 matching catalog items.",
+        "mediaEvidenceCount": 5,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q6",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 6,
+      "timestamp": "2026-08-18T01:31:26Z",
+      "question": "help",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no executable presence constraints.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q8",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 8,
+      "timestamp": "2026-08-18T01:32:48Z",
+      "question": "tell me about hallie mae mcgill",
+      "reference": {
+        "outcome": "declined",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=hallie mae mcgill",
+        "answerText": "I don't find “hallie mae mcgill” in the family tree — try a fuller name.",
+        "basisLine": "Checked: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q10",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 10,
+      "timestamp": "2026-08-18T01:33:02Z",
+      "question": "tell me about donna breen",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=donna",
+        "answerText": "Here is what the family archive currently supports about Donna Breen. The imported family tree records 4 Aug 1959 as Donna Breen's birth date. The imported family tree records Donna Breen's parents as Elaine Bowser, Richard Charles Hudson. The imported family tree records Donna Breen's spouse as Richard Harding Breen Jr. Donna Breen worked in computing and later became a teacher. She lives with Rick in Middlefield, Massachusetts. Rick and Donna have four adult sons: two work in software development, one is a therapy counselor at a Boston-area hospital, and one is a bartender. This account is supported by 2 sources, which I can show you.",
+        "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 2,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q12",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 12,
+      "timestamp": "2026-08-18T01:33:11Z",
+      "question": "list videos of rick",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=rick mediaKind=video",
+        "answerText": "I found 8 catalog items matching that.",
+        "basisLine": "Basis: 8 cited of 8 matching catalog items.",
+        "mediaEvidenceCount": 8,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q14",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 14,
+      "timestamp": "2026-08-18T01:33:18Z",
+      "question": "playing guitar",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=tim mediaKind=video",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q16",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 16,
+      "timestamp": "2026-08-18T01:35:37Z",
+      "question": "how do I find videos of tim",
+      "reference": {
+        "outcome": "declined",
+        "route": "presence",
+        "queryDescription": "shape=presence person=tim mediaKind=video",
+        "answerText": "I don't have evidence for that.",
+        "basisLine": "Basis: no matching catalog evidence.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-1E906ACC-q18",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "1E906ACC-C00A-4825-8255-EB7A2A50C771",
+      "sequence": 18,
+      "timestamp": "2026-08-18T01:35:44Z",
+      "question": "or timmy",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=timmy mediaKind=video",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: refining your last question (person → timmy); 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-2542083C-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "2542083C-AC84-497B-B3A3-E11CA719FD7B",
+      "sequence": 2,
+      "timestamp": "2026-08-18T16:36:56Z",
+      "question": "show me Donna down the cape in the early 90s",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1994 keyword=down the cape",
+        "answerText": "I found 5 catalog items matching that.",
+        "basisLine": "Basis: 5 cited of 5 matching catalog items.",
+        "mediaEvidenceCount": 5,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-90D09808-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "90D09808-B0AD-45DE-860F-E2B0910CADC0",
+      "sequence": 2,
+      "timestamp": "2026-08-18T16:38:12Z",
+      "question": "show me Donna down the cape in the early 90s",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=donna years=1990...1994 keyword=down the cape",
+        "answerText": "I found 5 catalog items matching that.",
+        "basisLine": "Basis: 5 cited of 5 matching catalog items.",
+        "mediaEvidenceCount": 5,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-D64D82AB-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "D64D82AB-AB5B-4246-A934-ABACA6C8F84F",
+      "sequence": 2,
+      "timestamp": "2026-08-18T20:03:09Z",
+      "question": "how many christmas videos do we have",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence mediaKind=video keyword=christmas",
+        "answerText": "I found 588 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 588 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-D64D82AB-q5",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "D64D82AB-AB5B-4246-A934-ABACA6C8F84F",
+      "sequence": 5,
+      "timestamp": "2026-08-18T20:04:16Z",
+      "question": "make sure any videos you give me have sound",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence mediaKind=video",
+        "answerText": "I found 6360 catalog items matching that.",
+        "basisLine": "Basis: 25 cited of 6360 matching catalog items.",
+        "mediaEvidenceCount": 25,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-C09DDE8A-q2",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "C09DDE8A-A4C0-4B69-929B-AEBF1FA49427",
+      "sequence": 2,
+      "timestamp": "2026-08-18T22:00:33Z",
+      "question": "tell me about yourself Hallie",
+      "reference": {
+        "outcome": "answered",
+        "route": "graph",
+        "queryDescription": "shape=graph operation=biography person=hallie",
+        "answerText": "Hallie May McGill — born 20 Mar 1876; resting in peace since 4 Jan 1907; child of David Thomas McGill Sr and Harriet Merron Waters; married to William Love Latta; parent of David Latta.",
+        "basisLine": "Basis: imported family tree (GEDCOM).",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-C09DDE8A-q4",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "C09DDE8A-A4C0-4B69-929B-AEBF1FA49427",
+      "sequence": 4,
+      "timestamp": "2026-08-18T22:17:14Z",
+      "question": "how many videos of matt?",
+      "reference": {
+        "outcome": "answered",
+        "route": "presence",
+        "queryDescription": "shape=presence person=matt mediaKind=video",
+        "answerText": "I found 2 catalog items matching that.",
+        "basisLine": "Basis: 2 cited of 2 matching catalog items.",
+        "mediaEvidenceCount": 2,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-C09DDE8A-q6",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "C09DDE8A-A4C0-4B69-929B-AEBF1FA49427",
+      "sequence": 6,
+      "timestamp": "2026-08-18T22:19:37Z",
+      "question": "how am I related to you hallie?",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"people\": [\n      \"hallie\"\n    ],\n    \"operation\": \"kinship\",\n    \"relation\": \"",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    },
+    {
+      "id": "2026-08-18-C09DDE8A-q8",
+      "source": "hallie-conversation-2026-08-18.jsonl",
+      "sessionID": "C09DDE8A-A4C0-4B69-929B-AEBF1FA49427",
+      "sequence": 8,
+      "timestamp": "2026-08-18T22:20:32Z",
+      "question": "how am I related to you?",
+      "reference": {
+        "outcome": null,
+        "route": null,
+        "queryDescription": null,
+        "answerText": "I couldn't safely interpret that question: translator returned unusable output: content is not a strict ArchivistQueryAST (The data couldn’t be read because it isn’t in the correct format.): {\n  \"shape\": \"graph\",\n  \"payload\": {\n    \"people\": [\n      \"you\"\n    ],\n    \"operation\": \"kinship\",\n    \"relation\": \"sel",
+        "basisLine": "No catalog query or media action was performed.",
+        "mediaEvidenceCount": 0,
+        "knowledgeEvidenceCount": 0,
+        "offeredActions": []
+      },
+      "humanGrade": null,
+      "reviewNotes": ""
+    }
+  ]
+}
