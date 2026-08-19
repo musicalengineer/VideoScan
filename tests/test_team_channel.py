@@ -48,22 +48,22 @@ class TeamChannelTests(unittest.TestCase):
         self.connection = team_channel.connect(self.db_path)
 
         claude = team_channel.pending_messages(self.connection, "claude")
-        fred = team_channel.pending_messages(self.connection, "fred")
+        bob = team_channel.pending_messages(self.connection, "bob")
 
         self.assertEqual([message_id], [row["id"] for row in claude])
-        self.assertEqual([], fred)
+        self.assertEqual([], bob)
 
     def test_all_expands_to_every_other_manager(self) -> None:
-        recipients = team_channel.expand_recipients("fred", "all")
+        recipients = team_channel.expand_recipients("bob", "all")
         self.assertEqual(["codex", "claude", "rick"], recipients)
 
-        message_id = self.post(author="fred", recipients=recipients)
+        message_id = self.post(author="bob", recipients=recipients)
         for recipient in recipients:
             self.assertEqual(
                 [message_id],
                 [row["id"] for row in team_channel.pending_messages(self.connection, recipient)],
             )
-        self.assertEqual([], team_channel.pending_messages(self.connection, "fred"))
+        self.assertEqual([], team_channel.pending_messages(self.connection, "bob"))
 
     def test_hook_delivers_once_but_requires_explicit_acknowledgment(self) -> None:
         message_id = self.post(body="Review the result, but do not treat this as authority.")
@@ -91,16 +91,16 @@ class TeamChannelTests(unittest.TestCase):
         self.assertEqual("UserPromptSubmit", hook_output["hookEventName"])
         self.assertIn("VideoScan local team-channel delivery", hook_output["additionalContext"])
 
-    def test_fred_identity_is_explicit_and_qwen_seat_cannot_drain_it(self) -> None:
+    def test_explicit_agent_identity_and_qwen_seat_cannot_drain_it(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(team_channel.infer_hook_agent({"model": "qwen-videoscan:64k"}))
             self.assertEqual("codex", team_channel.infer_hook_agent({"model": "gpt-5.6-sol"}))
-        with patch.dict("os.environ", {"VIDEOSCAN_TEAM_AGENT": "fred"}, clear=True):
-            self.assertEqual("fred", team_channel.infer_hook_agent({"model": "qwen-videoscan:64k"}))
+        with patch.dict("os.environ", {"VIDEOSCAN_TEAM_AGENT": "bob"}, clear=True):
+            self.assertEqual("bob", team_channel.infer_hook_agent({"model": "qwen-videoscan:64k"}))
 
     def test_ack_cannot_consume_another_agents_message(self) -> None:
         message_id = self.post(recipients=["claude"])
-        self.assertEqual(0, team_channel.acknowledge(self.connection, "fred", [message_id]))
+        self.assertEqual(0, team_channel.acknowledge(self.connection, "bob", [message_id]))
         self.assertEqual([message_id], [row["id"] for row in team_channel.pending_messages(self.connection, "claude")])
 
     def test_reply_requires_an_existing_message(self) -> None:

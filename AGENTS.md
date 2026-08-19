@@ -136,6 +136,7 @@ Subagent definitions are in `.Codex/agents/`. The Manager protocol is in `.Codex
   M5 through the `ricks-m5-qwen` provider. “Codex” is Fred's harness and Qwen
   is Fred's model; use **Fred** as the agent name in team discussion so he is
   never confused with Codex Manager.
+- **Bob** — Rick's Antigravity (Gemini) pairing and review agent.
 
 Engineering Room and transcript internals may retain the stable participant ID
 `qwen`, but human-facing attribution should identify that participant as
