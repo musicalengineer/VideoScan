@@ -148,7 +148,7 @@ struct CatalogSyncManifestStressTests {
         let snapshot = CatalogSnapshot(records: records, savedFromHost: "stress-master-\(iteration)")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
+        let data = try CatalogSnapshotDTO(snapshot).encoded(using: encoder)
         try data.write(to: paths.liveDir.appendingPathComponent("catalog.json"), options: .atomic)
         try Data("previous-\(iteration)".utf8)
             .write(to: paths.liveDir.appendingPathComponent("catalog.json.prev"), options: .atomic)

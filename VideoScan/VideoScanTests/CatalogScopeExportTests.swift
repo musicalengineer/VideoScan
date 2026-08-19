@@ -96,7 +96,7 @@ struct CatalogScopeExportTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
+        let data = try CatalogSnapshotDTO(snapshot).encoded(using: encoder)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let loaded = try decoder.decode(CatalogSnapshot.self, from: data)

@@ -145,6 +145,33 @@ check therefore costs one short read, not a full decode.
 Schema note: `generation` is **additive and optional** on read (absent ⇒ 0),
 so older builds and existing catalogs load unchanged. No version bump needed.
 
+**Amendment 2026-08-19 (GH #165 — the 248 → 1 reset).** "First two keys" was
+a promise the encoder did not keep: `JSONEncoder` on this OS emits keyed
+objects in per-process-random order (`CodingKeys` order is *not* honoured), so
+the live file was written `{"records":[…36 MB…],"generation":248,…}`, the
+head-only probe returned nil, load baselined at 0 and the next save stamped 1.
+Three changes, all in `CatalogStore.swift` / `CatalogGenerationSidecar.swift`:
+
+1. **The header is hand-built.** `CatalogSnapshotDTO` is no longer `Encodable`;
+   the only way to bytes is `encoded(using:)`, which writes
+   `{"version":V,"generation":G,"savedAt":…,"savedFromHost":…[,"masterArchive":…],"records":[…]}`
+   itself and lets the encoder handle only the scalars and the records array.
+   Every writer (saveNow, saveAsync, writeSnapshot, writeSnapshotAsync,
+   exportCatalog, bundle export) therefore agrees by construction. Snapshots
+   carry the real current generation, never 0.
+2. **The probe reads both ends.** `headerProbe` reads the first 4 KB and, if a
+   stamp is missing, the last 4 KB (lossy UTF-8 so a split multibyte
+   character cannot blank the window). Every historical layout — any
+   permutation of the six top-level keys around `records` — is covered.
+3. **No silent downgrade.** `catalog.generation.max` beside catalog.json
+   remembers the highest generation ever seen (bootstrapped once from every
+   `catalog*.json` sibling). A load whose on-disk generation is *below* that
+   mark logs at fault level and the next write stamps `max(seen, onDisk)+1`;
+   a probe miss on a file that decodes with a generation logs at error level
+   and uses the decoded value. The OCC comparison still uses the true on-disk
+   value, so a foreign writer bumping a regressed file is still caught.
+   The sidecar is a one-line text file: an operator can seed it by hand.
+
 ### 4.2 Per-write lock, not process-lifetime
 
 The current implementation holds the lock for the app's whole session. That is

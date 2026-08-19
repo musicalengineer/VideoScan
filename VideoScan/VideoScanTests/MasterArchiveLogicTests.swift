@@ -270,7 +270,7 @@ struct MasterArchiveDesignationPersistenceTests {
 
         let bare = CatalogSnapshotDTO(version: CatalogSnapshot.currentVersion, generation: 7,
                                       savedAt: Date(), records: [], savedFromHost: "h")
-        let bareData = try enc.encode(bare)
+        let bareData = try bare.encoded(using: enc)
         #expect(!(String(data: bareData, encoding: .utf8) ?? "").contains("masterArchive"),
                 "nil designation emits NO key — byte-identity for every existing catalog")
 
@@ -280,7 +280,7 @@ struct MasterArchiveDesignationPersistenceTests {
         #expect(d.targetPath == "/Volumes/FamilyArchive", "canonical: no trailing slash")
         var withDesignation = bare
         withDesignation.masterArchive = d
-        let data = try enc.encode(withDesignation)
+        let data = try withDesignation.encoded(using: enc)
         let back = try dec.decode(CatalogSnapshot.self, from: data)
         #expect(back.masterArchive?.targetPath == d.targetPath && back.masterArchive?.rootPath == d.rootPath && back.masterArchive?.volumeUUID == d.volumeUUID)
         #expect(abs((back.masterArchive?.designatedAt.timeIntervalSince(d.designatedAt)) ?? 99) < 1, "ISO8601 keeps whole seconds")
