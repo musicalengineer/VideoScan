@@ -623,6 +623,7 @@ struct CatalogContent: View {
             if showInspector {
                 InspectorPanel(
                     record: selectedRecord,
+                    onRecordEdited: { model.saveCatalogDebounced() },
                     duplicateGroupMembers: duplicateGroupMembers,
                     previewImage: previewImage,
                     previewOfflineVolumeName: previewOfflineVolumeName,

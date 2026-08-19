@@ -702,7 +702,7 @@ struct TriageView: View {
                 StarRatingView(rating: Binding(
                     get: { rec.starRating },
                     set: { rec.starRating = $0 }
-                ))
+                ), onCommit: { model.saveCatalogDebounced() })
             }
             .width(min: 60, ideal: 70)
 

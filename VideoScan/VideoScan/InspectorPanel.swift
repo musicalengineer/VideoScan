@@ -9,6 +9,10 @@ import SwiftUI
 
 struct InspectorPanel: View {
     let record: VideoRecord?
+    /// Persistence hook for edits made INSIDE the inspector (star rating):
+    /// the panel has no model access by design; the host passes
+    /// `model.saveCatalogDebounced`. Defaulted for previews.
+    var onRecordEdited: () -> Void = {}
     let duplicateGroupMembers: [VideoRecord]
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
@@ -86,7 +90,7 @@ struct InspectorPanel: View {
                             StarRatingView(rating: Binding(
                                 get: { rec.starRating },
                                 set: { rec.starRating = $0 }
-                            ))
+                            ), onCommit: onRecordEdited)
                         }
                         // Volume name — prominent.
                         // Use `displayVolumeLabel` so folder scans show as
@@ -1005,18 +1009,38 @@ struct InspectorPanel: View {
 
 struct StarRatingView: View {
     @Binding var rating: Int
+    /// Fired after a tap changes the rating — hosts hang persistence here
+    /// (`model.saveCatalogDebounced()`). Defaulted so previews stay simple.
+    var onCommit: () -> Void = {}
     let maxStars: Int = 3
+
+    /// Local mirror of the bound value (Rick 2026-08-19: "the stars don't
+    /// turn on — sometimes they do"). `VideoRecord` is a plain class, so
+    /// writing `rec.starRating` through the binding never invalidates the
+    /// host view — the control repainted only when something ELSE
+    /// re-rendered it. The tap drives THIS @State (always repaints), and
+    /// the binding write follows for the model.
+    @State private var shown: Int = 0
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(1...maxStars, id: \.self) { star in
-                Image(systemName: star <= rating ? "star.fill" : "star")
+                Image(systemName: star <= shown ? "star.fill" : "star")
                     .font(.system(size: 14))
-                    .foregroundColor(star <= rating ? .yellow : .secondary.opacity(0.4))
+                    .foregroundColor(star <= shown ? .yellow : .secondary.opacity(0.4))
+                    .contentShape(Rectangle())
                     .onTapGesture {
-                        rating = (rating == star) ? 0 : star
+                        let new = (shown == star) ? 0 : star
+                        shown = new
+                        rating = new
+                        onCommit()
                     }
+                    .accessibilityIdentifier("starRating.\(star)")
             }
         }
+        .onAppear { shown = rating }
+        // Row reuse / selection change / external edits (Promote sets ★★★):
+        // the bound value re-reads each render; follow it when it moves.
+        .onChange(of: rating) { _, new in shown = new }
     }
 }
