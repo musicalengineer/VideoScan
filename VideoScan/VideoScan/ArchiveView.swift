@@ -37,7 +37,9 @@ struct ArchiveView: View {
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 200, idealWidth: 220, maxWidth: 280)
+                // Rick 2026-08-19: "plenty of room in this window" — wider
+                // sidebar so MASTER ARCHIVE and the stage rows breathe.
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
             fileList
                 .frame(minWidth: 500)
         }
@@ -117,19 +119,24 @@ struct ArchiveView: View {
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 6) {
                     masterArchivePanel
-                        .padding(.horizontal, 6)
-                        .padding(.bottom, 6)
-
-                    Divider().padding(.vertical, 4)
-
-                    sidebarRow(.archived)
-                    sidebarRow(.notYetArchived)
-                    sidebarRow(.needsDate)
-                        .padding(.leading, 12)
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 12)
 
                     Divider().padding(.vertical, 8)
+
+                    // Stage rows — the two most important lines in this
+                    // sidebar (Rick 2026-08-19): give them air.
+                    VStack(alignment: .leading, spacing: 6) {
+                        sidebarRow(.archived)
+                        sidebarRow(.notYetArchived)
+                        sidebarRow(.needsDate)
+                            .padding(.leading, 14)
+                    }
+                    .padding(.horizontal, 4)
+
+                    Divider().padding(.vertical, 12)
 
                     sidebarSection("VOLUMES") {
                         // Screen the RAM-disk scratch volume — plumbing,
@@ -173,22 +180,25 @@ struct ArchiveView: View {
     // the sidebar" — it should be discoverable without knowing the menu.
     @ViewBuilder
     private var masterArchivePanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("MASTER ARCHIVE")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 8)
+                .padding(.bottom, 2)
             if let designation = model.masterArchive {
                 let reachable = FileManager.default.fileExists(atPath: designation.rootPath)
                 // Green = designated and reachable; yellow = designated
                 // but offline; the "none" state below is yellow too —
                 // attention, not alarm (Rick 2026-08-16).
-                HStack(spacing: 6) {
+                HStack(alignment: .top, spacing: 10) {
                     Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(reachable ? Color.green : Color.yellow)
-                    VStack(alignment: .leading, spacing: 1) {
+                        .font(.system(size: 18))
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(VolumeReachability.displayLabel(forPath: designation.targetPath))
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(size: 17, weight: .semibold))
                         Text(reachable ? "Breen_Family_Archive" : "offline")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
@@ -197,10 +207,11 @@ struct ArchiveView: View {
                 }
                 .padding(.horizontal, 8)
                 let totals = model.masterArchiveTotals
-                HStack(spacing: 4) {
+                HStack(spacing: 8) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(totals.verified > 0 ? Color.green : Color.secondary)
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
+                        .frame(width: 18)
                     Text("\(totals.verified) verified · \(MediaBytes.display(totals.verifiedBytes))")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
@@ -213,14 +224,15 @@ struct ArchiveView: View {
                 }
                 .padding(.leading, 8)
                 .help("Every promoted file is byte-verified: copied, then re-read and its SHA-256 compared before it is recorded. This count is those files.")
-                HStack(spacing: 8) {
+                HStack(spacing: 14) {
                     Button("Reveal") { model.revealMasterArchiveInFinder() }
                     Button("Manifest") { model.openMasterArchiveManifest() }
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 13))
                 .disabled(!reachable)
-                .padding(.leading, 8)
+                .padding(.leading, 34)   // aligns under the volume name, not the icon
+                .padding(.top, 2)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -240,7 +252,7 @@ struct ArchiveView: View {
                 .help("Choose the volume that will hold the family's master archive; the app creates the Breen_Family_Archive tree, manifest and README.")
             }
         }
-        .padding(.top, 8)
+        .padding(.top, 12)
     }
 
     @ViewBuilder
@@ -263,19 +275,21 @@ struct ArchiveView: View {
             selectedIDs = []
             model.focusedMediaIDs = []
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: category.icon)
                     .foregroundColor(category.color)
-                    .frame(width: 18)
+                    .font(.system(size: 15))
+                    .frame(width: 20)
                 Text(category.label)
+                    .font(.system(size: 15))
                     .lineLimit(1)
                 Spacer()
                 Text("\(count)")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
             .background(
                 selectedCategory == category
