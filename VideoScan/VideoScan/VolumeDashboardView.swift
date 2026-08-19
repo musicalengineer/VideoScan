@@ -41,16 +41,20 @@ struct VolumeDashboardView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     /// Donut diameter and the legend/center type sizes — the RD knobs.
-    static let donutSize: CGFloat = 230
-    static let legendFont: Font = .system(size: 14)
-    static let centerFont: Font = .system(size: 22, weight: .semibold, design: .rounded)
-    static let sectorLabelFont: Font = .system(size: 13, weight: .semibold)
+    static let donutSize: CGFloat = 280
+    static let legendFont: Font = .system(size: 15)
+    static let centerFont: Font = .system(size: 26, weight: .semibold, design: .rounded)
+    static let sectorLabelFont: Font = .system(size: 14, weight: .semibold)
+    /// Breathing room between and inside cards (iteration 5: "too
+    /// scrunched even on a 32-inch monitor").
+    static let gap: CGFloat = 20
+    static let cardPadding: CGFloat = 18
 
     var body: some View {
         Group {
             if let s = stats, !s.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: Self.gap) {
                         header(s)
                         topRow(s)
                         // Three pies (Rick 2026-08-19 iteration 3): what it
@@ -58,7 +62,7 @@ struct VolumeDashboardView: View {
                         // it is. Equal-width cards filling the row; legend
                         // sits UNDER the pie so names never truncate
                         // (iteration 4, from the screenshot).
-                        HStack(alignment: .top, spacing: 14) {
+                        HStack(alignment: .top, spacing: Self.gap) {
                             donutCard("Kind", subtitle: "container / extension", series: s.kind)
                             donutCard("Copies", subtitle: "known copies on other drives", series: s.copies)
                             donutCard("Archive", subtitle: "reviewed and archived so far", series: s.archive)
@@ -73,7 +77,7 @@ struct VolumeDashboardView: View {
                         foldersCard(s)
                         footer(s)
                     }
-                    .padding(18)
+                    .padding(Self.gap)
                 }
             } else if stats == nil || isComputing {
                 ProgressView("Reading the catalog…")
@@ -144,9 +148,9 @@ struct VolumeDashboardView: View {
     // MARK: - Top row: space + eras
 
     private func topRow(_ s: VolumeDashboardStats) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: Self.gap) {
             spaceCard(s)
-                .frame(minWidth: 240, maxWidth: 320)
+                .frame(minWidth: 260, maxWidth: 340)
             erasCard(s)
                 .frame(maxWidth: .infinity)
         }
@@ -234,7 +238,7 @@ struct VolumeDashboardView: View {
     private func erasCard(_ s: VolumeDashboardStats) -> some View {
         card("Eras", subtitle: "by decade of the footage") {
             barChart(s.decade, horizontal: false)
-                .frame(height: 150)
+                .frame(height: 180)
         }
     }
 
@@ -248,7 +252,7 @@ struct VolumeDashboardView: View {
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140)
             } else {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 18) {
                     donut(series)
                         .frame(height: Self.donutSize)
                         .frame(maxWidth: .infinity)
@@ -262,7 +266,7 @@ struct VolumeDashboardView: View {
     private func foldersCard(_ s: VolumeDashboardStats) -> some View {
         card("Folders", subtitle: "top-level folders, largest first") {
             barChart(s.folders, horizontal: true)
-                .frame(height: max(140, CGFloat(s.folders.slices.count) * 26 + 16))
+                .frame(height: max(160, CGFloat(s.folders.slices.count) * 30 + 16))
         }
     }
 
@@ -275,17 +279,17 @@ struct VolumeDashboardView: View {
 
     private func card<Content: View>(_ title: String, subtitle: String,
                                      @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundColor(.secondary)
             }
             content()
         }
-        .padding(14)
+        .padding(Self.cardPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -386,12 +390,12 @@ struct VolumeDashboardView: View {
 
     /// Swatch · name · value · %, one line per slice.
     private func compactLegend(_ series: VolumeDashboardSeries) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 9) {
             ForEach(series.slices) { slice in
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(color(for: slice))
-                        .frame(width: 13, height: 13)
+                        .frame(width: 14, height: 14)
                     Text(slice.name)
                         .font(Self.legendFont)
                         .lineLimit(1)
