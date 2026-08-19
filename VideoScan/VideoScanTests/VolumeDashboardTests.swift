@@ -33,12 +33,15 @@ private func row(_ path: String, _ bytes: Int64,
                  copies: Int = 0,
                  stars: Int = 0,
                  promoted: Bool = false,
-                 verified: Bool = false) -> VolumeDashboardInput {
+                 verified: Bool = false,
+                 archived: Bool = false,
+                 reviewed: Bool = false) -> VolumeDashboardInput {
     VolumeDashboardInput(fullPath: path, sizeBytes: bytes, isManuallyDeleted: deleted,
                          ext: ext ?? (path as NSString).pathExtension.uppercased(),
                          streamType: stream, bestDate: date, disposition: disposition,
                          copiesElsewhere: copies, starRating: stars,
-                         isPromotedCopy: promoted, fixityVerified: verified)
+                         isPromotedCopy: promoted, fixityVerified: verified,
+                         isArchived: archived, isReviewed: reviewed)
 }
 
 private func rec(_ path: String, _ bytes: Int64, purged: Bool = false) -> VideoRecord {
@@ -152,14 +155,26 @@ struct VolumeDashboardSeriesTests {
         #expect(s.stars.slices.map(\.name) == ["Unrated", "★", "★★★"])
     }
 
-    @Test func archiveSeriesOnlyCountsPromotedCopies() {
+    @Test func fixitySeriesOnlyCountsPromotedCopies() {
         let s = VolumeDashboardCalculator.compute(inputs: [
             row("/Volumes/Drive/a.mov", 1 * GB, promoted: true, verified: true),
             row("/Volumes/Drive/b.mov", 1 * GB, promoted: true, verified: false),
             row("/Volumes/Drive/c.mov", 1 * GB, promoted: false, verified: false),
         ], root: root)
-        #expect(s.archive.slices.map(\.name) == ["Verified", "Not yet verified"])
-        #expect(s.archive.totalFiles == 2)
+        #expect(s.fixity.slices.map(\.name) == ["Verified", "Not yet verified"])
+        #expect(s.fixity.totalFiles == 2)
+    }
+
+    @Test func archiveSeriesLaddersArchivedReviewedNotYet() {
+        let s = VolumeDashboardCalculator.compute(inputs: [
+            row("/Volumes/Drive/a.mov", 1 * GB, archived: true, reviewed: true),
+            row("/Volumes/Drive/b.mov", 1 * GB, archived: true, reviewed: false),   // archived wins
+            row("/Volumes/Drive/c.mov", 1 * GB, reviewed: true),
+            row("/Volumes/Drive/d.mov", 1 * GB),
+        ], root: root)
+        #expect(s.archive.slices.map(\.name) == ["Archived", "Reviewed, not archived", "Not yet reviewed"])
+        #expect(s.archive.slices.map(\.files) == [2, 1, 1])
+        #expect(s.archive.slices.map(\.fixedColor) == [.green, .blue, .secondary])
     }
 
     @Test func foldersFoldPastEightIntoOther() {

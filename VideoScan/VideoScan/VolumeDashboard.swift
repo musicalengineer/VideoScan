@@ -10,7 +10,8 @@
 //   * streams   — video+audio / video-only / …  (donut)
 //   * decade    — by best date                  (bars, chronological)
 //   * year      — by best date                  (bars; Master Archive)
-//   * review    — MediaDisposition              (donut, fixed order/colors)
+//   * review    — MediaDisposition              (computed; not drawn today)
+//   * archive   — archived / reviewed / not yet  (donut, fixed order/colors)
 //   * copies    — copies known elsewhere        (donut: none / 1 / 2+)
 //   * folders   — top-level folders by size     (horizontal bars, top 8)
 //   * capacity  — cataloged bytes vs the volume's capacity (gauge)
@@ -46,6 +47,10 @@ struct VolumeDashboardInput: Sendable, Equatable {
     /// verified (`archiveFixity != nil`).
     var isPromotedCopy: Bool
     var fixityVerified: Bool
+    /// Archive progress for THIS file: promoted to the Master Archive (or
+    /// the archived copy itself), or at least reviewed in Triage.
+    var isArchived: Bool
+    var isReviewed: Bool
 
     var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
     var disposition: MediaDisposition { MediaDisposition(rawValue: dispositionRaw) ?? .unreviewed }
@@ -60,7 +65,9 @@ struct VolumeDashboardInput: Sendable, Equatable {
          copiesElsewhere: Int = 0,
          starRating: Int = 0,
          isPromotedCopy: Bool = false,
-         fixityVerified: Bool = false) {
+         fixityVerified: Bool = false,
+         isArchived: Bool = false,
+         isReviewed: Bool = false) {
         self.fullPath = fullPath
         self.sizeBytes = sizeBytes
         self.isManuallyDeleted = isManuallyDeleted
@@ -72,6 +79,8 @@ struct VolumeDashboardInput: Sendable, Equatable {
         self.starRating = starRating
         self.isPromotedCopy = isPromotedCopy
         self.fixityVerified = fixityVerified
+        self.isArchived = isArchived
+        self.isReviewed = isReviewed
     }
 }
 
@@ -130,8 +139,10 @@ struct VolumeDashboardStats: Sendable, Equatable {
     var copies = VolumeDashboardSeries()
     var folders = VolumeDashboardSeries()
     var stars = VolumeDashboardSeries()
-    /// Master Archive only: promoted copies, verified vs not yet verified.
+    /// Archive progress: Archived / Reviewed, not archived / Not yet reviewed.
     var archive = VolumeDashboardSeries()
+    /// Master Archive only: promoted copies, verified vs not yet verified.
+    var fixity = VolumeDashboardSeries()
     /// Records that are gone from every drive (`manuallyDeleted`) —
     /// excluded from the charts, reported in the footer.
     var deletedFiles: Int = 0
@@ -176,7 +187,13 @@ enum VolumeDashboardCalculator {
                 copiesElsewhere: max(r.backupDestinations.count, dupSiblings),
                 starRating: r.starRating,
                 isPromotedCopy: r.derivationKind == ArchivePromotion.derivationKind,
-                fixityVerified: r.archiveFixity != nil))
+                fixityVerified: r.archiveFixity != nil,
+                // Promote stamps the SOURCE `.masterAssigned` and the copy
+                // `.archived`; the Triage "Archive" button sets `.archived`.
+                isArchived: r.lifecycleStage == .archived
+                    || r.archiveStage == .masterAssigned
+                    || r.archiveStage == .archived,
+                isReviewed: r.mediaDisposition != .unreviewed))
         }
         return out
     }
@@ -234,7 +251,8 @@ enum VolumeDashboardCalculator {
         var copies: [Int: Acc] = [:]      // 0, 1, 2 (= 2+)
         var folders: [String: Acc] = [:]
         var stars: [Int: Acc] = [:]       // 0…3
-        var archive: [Bool: Acc] = [:]    // fixityVerified
+        var fixity: [Bool: Acc] = [:]     // fixityVerified
+        var archive: [Int: Acc] = [:]     // 0 archived, 1 reviewed, 2 not yet
 
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -256,7 +274,8 @@ enum VolumeDashboardCalculator {
             bump(&copies[min(2, max(0, row.copiesElsewhere)), default: Acc()], bytes)
             bump(&folders[topFolder(of: row.fullPath, root: root), default: Acc()], bytes)
             bump(&stars[min(3, max(0, row.starRating)), default: Acc()], bytes)
-            if row.isPromotedCopy { bump(&archive[row.fixityVerified, default: Acc()], bytes) }
+            if row.isPromotedCopy { bump(&fixity[row.fixityVerified, default: Acc()], bytes) }
+            bump(&archive[row.isArchived ? 0 : (row.isReviewed ? 1 : 2), default: Acc()], bytes)
         }
 
         s.kind = paletteSeries(kind.map { ($0.key, $0.value.bytes, $0.value.files) }, maxSlices: maxSlices)
@@ -283,8 +302,13 @@ enum VolumeDashboardCalculator {
             return VolumeDashboardSlice(name: starsLabel(n), bytes: acc.bytes, files: acc.files,
                                         colorSlot: nil, fixedColor: starsColor(n))
         })
-        s.archive = fixedSeries([true, false].compactMap { v -> VolumeDashboardSlice? in
-            guard let acc = archive[v] else { return nil }
+        s.archive = fixedSeries([0, 1, 2].compactMap { n -> VolumeDashboardSlice? in
+            guard let acc = archive[n] else { return nil }
+            return VolumeDashboardSlice(name: archiveLabel(n), bytes: acc.bytes, files: acc.files,
+                                        colorSlot: nil, fixedColor: archiveColor(n))
+        })
+        s.fixity = fixedSeries([true, false].compactMap { v -> VolumeDashboardSlice? in
+            guard let acc = fixity[v] else { return nil }
             return VolumeDashboardSlice(name: v ? "Verified" : "Not yet verified",
                                         bytes: acc.bytes, files: acc.files,
                                         colorSlot: nil, fixedColor: v ? .green : .orange)
@@ -380,6 +404,20 @@ enum VolumeDashboardCalculator {
         case 0:  return .red
         case 1:  return .orange
         default: return .green
+        }
+    }
+    static func archiveLabel(_ n: Int) -> String {
+        switch n {
+        case 0:  return "Archived"
+        case 1:  return "Reviewed, not archived"
+        default: return "Not yet reviewed"
+        }
+    }
+    static func archiveColor(_ n: Int) -> VolumeDashboardColor {
+        switch n {
+        case 0:  return .green
+        case 1:  return .blue
+        default: return .secondary
         }
     }
     static func starsLabel(_ n: Int) -> String {

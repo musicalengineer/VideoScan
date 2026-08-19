@@ -9,8 +9,8 @@
 //   ┌ Space ──────────────┐ ┌ Eras ──────────────────────────────────┐
 //   │ ███████░░░░░░ 62%   │ │ ▂▅█▇▃  bars by decade                   │
 //   └─────────────────────┘ └────────────────────────────────────────┘
-//   ┌ Kind (donut)   ┐ ┌ Review (donut) ┐      ← bigger pies, 2 across
-//   ┌ Copies (donut) ┐ ┌ Stars (donut)  ┐      (+ Archive fixity on the master)
+//   ┌ Kind (donut) ┐ ┌ Copies (donut) ┐ ┌ Archive (donut) ┐   ← 3 across when
+//   (+ Fixity on the Master Archive)                             the pane allows
 //   ┌ Years (bars, Master Archive only) ───────────────────────────┐
 //   ┌ Folders (horizontal bars, full width) ───────────────────────┐
 //
@@ -43,7 +43,7 @@ struct VolumeDashboardView: View {
     /// Donut card grid: as many ~380pt columns as fit (two on a normal
     /// pane). Rick 2026-08-19 iteration 2: fewer, bigger pies with
     /// readable text — Streams dropped, Folders moved below the grid.
-    private let gridColumns = [GridItem(.adaptive(minimum: 380, maximum: 620), spacing: 14, alignment: .top)]
+    private let gridColumns = [GridItem(.adaptive(minimum: 330, maximum: 620), spacing: 14, alignment: .top)]
     /// Donut diameter and the legend/center type sizes — the RD knobs.
     static let donutSize: CGFloat = 210
     static let legendFont: Font = .system(size: 14)
@@ -58,13 +58,15 @@ struct VolumeDashboardView: View {
                         header(s)
                         topRow(s)
                         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 14) {
+                            // Three pies (Rick 2026-08-19 iteration 3):
+                            // what it is, how safe it is, how far along
+                            // the archive road it is.
                             donutCard("Kind", subtitle: "container / extension", series: s.kind)
-                            donutCard("Review", subtitle: "triage verdicts so far", series: s.review)
                             donutCard("Copies", subtitle: "known copies on other drives", series: s.copies)
-                            donutCard("Stars", subtitle: "good · better · best", series: s.stars)
+                            donutCard("Archive", subtitle: "reviewed and archived so far", series: s.archive)
                             if isMasterArchive {
-                                donutCard("Archive fixity", subtitle: "promoted copies verified",
-                                          series: s.archive)
+                                donutCard("Fixity", subtitle: "promoted copies verified",
+                                          series: s.fixity)
                             }
                         }
                         if isMasterArchive {
