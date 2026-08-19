@@ -12,6 +12,12 @@ import SwiftUI
 
 struct VolumesWindow: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Storage tab (2026-08-19): the same editor hosted inside the main
+    /// window as a top-tier tab. When embedded, the window-toolbar actions
+    /// render as an in-content header bar instead (the main window has no
+    /// NSToolbar — its tab strip is custom — so `.toolbar` would grow a
+    /// second title bar). The standalone ⌘⇧V window keeps the real toolbar.
+    var embedded: Bool = false
     @State private var selectedID: UUID?
     @State private var sidebarWidth: CGFloat = 320
     /// §1B — toggle to surface retired volumes in this editor. Default
@@ -154,6 +160,31 @@ struct VolumesWindow: View {
     }
 
     var body: some View {
+        attachSheets(to: hostedContent)
+    }
+
+    /// Header-bar-or-not + editor, with the selection/reclassification
+    /// plumbing. Sheets attach in `attachSheets` so both hosts share them.
+    private var hostedContent: some View {
+        VStack(spacing: 0) {
+            if embedded {
+                embeddedHeaderBar
+                Divider()
+            }
+            splitView
+        }
+        .onAppear {
+            honorPendingSelection()
+            showRoleReclassification = !model.pendingRoleReclassifications.isEmpty
+        }
+        .onChange(of: model.pendingVolumesSelectionID) { honorPendingSelection() }
+        .onChange(of: model.pendingRoleReclassifications.count) { _, count in
+            if count > 0 { showRoleReclassification = true }
+        }
+    }
+
+    /// The editor proper — sidebar + detail. Shared by both hosts.
+    private var splitView: some View {
         HSplitView {
             volumeList
                 .frame(minWidth: 280, idealWidth: 360, maxWidth: 600)
@@ -174,14 +205,12 @@ struct VolumesWindow: View {
             }
         }
         .frame(minWidth: 820, minHeight: 540)
-        .onAppear {
-            honorPendingSelection()
-            showRoleReclassification = !model.pendingRoleReclassifications.isEmpty
-        }
-        .onChange(of: model.pendingVolumesSelectionID) { honorPendingSelection() }
-        .onChange(of: model.pendingRoleReclassifications.count) { _, count in
-            if count > 0 { showRoleReclassification = true }
-        }
+    }
+
+    /// Sheet + alert attachments, hoisted out of `body` so the embedded and
+    /// standalone hosts share one chain.
+    private func attachSheets<C: View>(to content: C) -> some View {
+        content
         // Role taxonomy migration — legacy non-master "Archive" targets.
         .sheet(isPresented: $showRoleReclassification) {
             RoleReclassificationSheet()
@@ -239,6 +268,97 @@ struct VolumesWindow: View {
         }
     }
 
+    // MARK: - Actions (shared by the toolbar and the embedded header bar)
+
+    /// Show retired toggle — always reachable without scrolling.
+    private var showRetiredToggle: some View {
+        Toggle(isOn: $showRetired) {
+            Label("Show retired", systemImage: "archivebox")
+        }
+        .toggleStyle(.button)
+        .help("Surface retired volumes in this list so you can reinstate them.")
+        .accessibilityIdentifier("volumesWindow.showRetired")
+    }
+
+    /// §2 Provenance & Audit Trail — Migration Overview entry. Builds
+    /// the overview payload on click; the sheet binding tears down the
+    /// value when the sheet dismisses.
+    private var migrationOverviewButton: some View {
+        Button {
+            migrationOverview = model.makeMigrationOverview()
+        } label: {
+            Label("Migration Overview", systemImage: "chart.bar.doc.horizontal")
+        }
+        .help("From aging drives to safe homes — a snapshot of where your library lives now.")
+        .accessibilityIdentifier("volumesWindow.migrationOverview")
+    }
+
+    /// §3 Relocate Job Queue — entry point for the Jobs panel. The
+    /// queued-count overlay only renders when there's something to see.
+    private var relocateJobsButton: some View {
+        Button {
+            showRelocateJobsPanel = true
+        } label: {
+            RelocateJobsBadge(activeCount: model.activeJobCount,
+                              runningCount: model.runningCount)
+        }
+        .help("Queue of Migrate runs — kick off several and walk away. A running job stays here after you Hide its progress; cancel or monitor it from this panel.")
+        .accessibilityIdentifier("volumesWindow.relocateJobs")
+    }
+
+    /// Duplicate keeper precedence — which drive's copy we keep when the
+    /// same video is on several (2026-08-18).
+    private var keeperPrecedenceButton: some View {
+        Button {
+            keeperPrecedenceSheet = KeeperPrecedenceSheetToken()
+        } label: {
+            Label("Which copy to keep", systemImage: "list.number")
+        }
+        .help("Order your drives so duplicate cleanup keeps the copy on the drive you trust most.")
+        .accessibilityIdentifier("volumesWindow.keeperPrecedence")
+    }
+
+    /// Where media lives — donut of the catalog by volume, non-retired
+    /// drives only (2026-08-18).
+    private var mediaDistributionButton: some View {
+        Button {
+            mediaDistributionSheet = MediaDistributionSheetToken()
+        } label: {
+            Label("Where media lives", systemImage: "chart.pie")
+        }
+        .help("A picture of how your library is spread across your drives right now.")
+        .accessibilityIdentifier("volumesWindow.mediaDistribution")
+    }
+
+    /// Storage tab header (2026-08-19): title on the left, the toolbar
+    /// actions on the right, as labeled bordered buttons so they read as
+    /// a control strip rather than a bare icon row. Rick tunes the look
+    /// in RD mode — keep this one place.
+    private var embeddedHeaderBar: some View {
+        HStack(spacing: 10) {
+            Label("Storage", systemImage: "externaldrive.fill")
+                .font(.title2.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+            Text("\(sortedTargets.filter { !$0.isRetired }.count) active · \(model.scanTargets.filter(\.isRetired).count) retired")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            Spacer()
+            Group {
+                showRetiredToggle
+                migrationOverviewButton
+                relocateJobsButton
+                keeperPrecedenceButton
+                mediaDistributionButton
+            }
+            .labelStyle(.titleAndIcon)
+            .controlSize(.regular)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
     private func honorPendingSelection() {
         if let pending = model.pendingVolumesSelectionID {
             selectedID = pending
@@ -268,64 +388,15 @@ struct VolumesWindow: View {
             }
         }
         .listStyle(.sidebar)
+        // Standalone window: real NSToolbar. Embedded (Storage tab): the
+        // same actions render in `embeddedHeaderBar` above the split view.
         .toolbar {
-            // Show retired toggle — pinned to the toolbar so it's always
-            // reachable without scrolling.
-            ToolbarItem(placement: .automatic) {
-                Toggle(isOn: $showRetired) {
-                    Label("Show retired", systemImage: "archivebox")
-                }
-                .toggleStyle(.button)
-                .help("Surface retired volumes in this list so you can reinstate them.")
-                .accessibilityIdentifier("volumesWindow.showRetired")
-            }
-            // §2 Provenance & Audit Trail — Migration Overview entry.
-            // Builds the overview payload on click; the sheet binding
-            // tears down the value when the sheet dismisses.
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    migrationOverview = model.makeMigrationOverview()
-                } label: {
-                    Label("Migration Overview", systemImage: "chart.bar.doc.horizontal")
-                }
-                .help("From aging drives to safe homes — a snapshot of where your library lives now.")
-                .accessibilityIdentifier("volumesWindow.migrationOverview")
-            }
-            // §3 Relocate Job Queue — entry point for the Jobs panel.
-            // Badge mirrors the Migration Overview button style; the
-            // queued-count overlay only renders when there's something
-            // to see, so the everyday "no jobs" toolbar stays clean.
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    showRelocateJobsPanel = true
-                } label: {
-                    RelocateJobsBadge(activeCount: model.activeJobCount,
-                                      runningCount: model.runningCount)
-                }
-                .help("Queue of Migrate runs — kick off several and walk away. A running job stays here after you Hide its progress; cancel or monitor it from this panel.")
-                .accessibilityIdentifier("volumesWindow.relocateJobs")
-            }
-            // Duplicate keeper precedence — which drive's copy we keep
-            // when the same video is on several (2026-08-18).
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    keeperPrecedenceSheet = KeeperPrecedenceSheetToken()
-                } label: {
-                    Label("Which copy to keep", systemImage: "list.number")
-                }
-                .help("Order your drives so duplicate cleanup keeps the copy on the drive you trust most.")
-                .accessibilityIdentifier("volumesWindow.keeperPrecedence")
-            }
-            // Where media lives — donut of the catalog by volume, non-
-            // retired drives only (2026-08-18).
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    mediaDistributionSheet = MediaDistributionSheetToken()
-                } label: {
-                    Label("Where media lives", systemImage: "chart.pie")
-                }
-                .help("A picture of how your library is spread across your drives right now.")
-                .accessibilityIdentifier("volumesWindow.mediaDistribution")
+            if !embedded {
+                ToolbarItem(placement: .automatic) { showRetiredToggle }
+                ToolbarItem(placement: .automatic) { migrationOverviewButton }
+                ToolbarItem(placement: .automatic) { relocateJobsButton }
+                ToolbarItem(placement: .automatic) { keeperPrecedenceButton }
+                ToolbarItem(placement: .automatic) { mediaDistributionButton }
             }
         }
         .alert(item: $reinstateTarget) { tgt in

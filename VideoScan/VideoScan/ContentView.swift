@@ -13,6 +13,11 @@ struct ContentView: View {
     private let tabs: [(label: String, icon: String, tag: Int)] = [
         ("People", "person.2.fill", 0),
         ("Catalog", "film.stack", 1),
+        // Storage (2026-08-19): the Volumes editor promoted to a top-tier
+        // tab — drives, roles, tiers, migrations are peers of the catalog
+        // (MAM convention). Tag 6 so saved `selectedTab` values keep their
+        // meaning; the ⌘⇧V window still exists for badge click-through.
+        ("Storage", "externaldrive.fill", 6),
         ("Triage", "checklist", 2),
         ("Workbench", "hammer.fill", 3),
         ("Archive", "archivebox.fill", 4),
@@ -95,6 +100,8 @@ struct ContentView: View {
                     ArchiveView()
                 case 5:
                     FamilyTreeDemoView()
+                case 6:
+                    VolumesWindow(embedded: true)
                 default:
                     PeopleTabView()
                         .environmentObject(personFinderModel)
