@@ -100,7 +100,7 @@ struct VolumesWindow: View {
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
     private var sidebarScale: CGFloat {
-        let base: CGFloat = 320
+        let base: CGFloat = 270
         let max: CGFloat = 540
         let raw = (sidebarWidth - base) / (max - base)
         return 1.0 + (Swift.max(0, Swift.min(1, raw)) * 0.5)
@@ -187,7 +187,9 @@ struct VolumesWindow: View {
     private var splitView: some View {
         HSplitView {
             volumeList
-                .frame(minWidth: 280, idealWidth: 360, maxWidth: 600)
+                // Narrower by default so the dashboard pies get the room
+                // (Rick 2026-08-19); still draggable out to 480.
+                .frame(minWidth: 230, idealWidth: 270, maxWidth: 480)
                 .background(
                     GeometryReader { geo in
                         Color.clear
