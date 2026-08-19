@@ -216,6 +216,17 @@ extension ArchiveView {
         }
         .disabled(count != 1)
 
+        // File Journey (Rick 2026-08-19): in the archive the journey IS
+        // the provenance — origin, repairs, promote, rename — so the
+        // timeline belongs on this menu too.
+        Button {
+            if let rec = recs.first { fileJourneyPayload = model.makeFileJourney(for: rec) }
+        } label: {
+            Label("Show this file's journey", systemImage: "mappin.and.ellipse")
+        }
+        .disabled(count != 1)
+        .accessibilityIdentifier("archive.row.showJourney")
+
         Button {
             if let rec = recs.first {
                 showInCatalog(rec)

@@ -19,6 +19,9 @@ struct ArchiveView: View {
     @State var searchText: String = ""
     @State var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State var archiveDetailRecord: VideoRecord?
+    /// "Show this file's journey" from the Archive tab (Rick 2026-08-19)
+    /// — same FileJourneySheet the catalog uses.
+    @State var fileJourneyPayload: FileJourney?
     /// Retired volumes are noise in the archive sidebar by default — same
     /// convention as the Volumes window's "show retired" (Rick 2026-08-16).
     @AppStorage("archive.sidebar.showRetired") private var showRetiredVolumes = false
@@ -49,6 +52,9 @@ struct ArchiveView: View {
             restoreFocusedMedia()
         }
         .onChange(of: model.pendingArchiveSelection) { handlePendingArchiveNavigation() }
+        .sheet(item: $fileJourneyPayload) { payload in
+            FileJourneySheet(journey: payload)
+        }
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }

@@ -278,6 +278,16 @@ enum CopyFamilyAssessor {
         // the modal (most common) duration among playable members.
         let referenceDuration = modalDuration(inputs)
 
+        // Repair anchors: the instances the user's repairs were MADE FROM.
+        // 2026-08-19 incident: Rick balanced LaCie's Clip 01.dv, but rule 6
+        // promoted the Projects twin (better drive, unproven audio) — the
+        // copy he had prepared lost to the copy he had never even played.
+        // The anchor is the prepared copy; it wins the instance election.
+        let repairAnchors: Set<UUID> = Set(inputs.compactMap { m -> UUID? in
+            guard let dk = m.derivationKind, Self.repairDerivationKinds.contains(dk) else { return nil }
+            return m.derivedFrom
+        })
+
         // Collapse into representations by encoding signature. Damaged or
         // duration-off INSTANCES are split out of their encoding's group
         // (rules 1/3 are per copy, not per encoding) so a truncated DV does
@@ -388,7 +398,8 @@ enum CopyFamilyAssessor {
                 // signature matched the original's) — the corrected master.
                 role = .repairedCopy
                 reason = "Repair of the original (corrected audio/picture) — the playable master. Promote it WITH the original; Confirm Repair retires the original from everyday views."
-                reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason))
+                reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason,
+                                               anchors: repairAnchors))
                 continue
             } else {
                 switch d.cls {
@@ -415,7 +426,8 @@ enum CopyFamilyAssessor {
                     reason = d.derivedFromSig != nil ? "Derived from another copy in this family." : "Encoding could not be classified."
                 }
             }
-            reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason))
+            reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason,
+                                           anchors: repairAnchors))
         }
         reps.sort { a, b in
             if a.role.rank != b.role.rank { return a.role.rank < b.role.rank }
@@ -430,6 +442,20 @@ enum CopyFamilyAssessor {
             out.recommendedInstanceID = reps.first { $0.id == sig }?.recommendedInstanceID
         }
         out.headline = "\(inputs.count) location\(inputs.count == 1 ? "" : "s") → \(reps.count) distinct representation\(reps.count == 1 ? "" : "s")"
+
+        // Unproven equivalence caution: promoting one of several copies
+        // that are NOT all proven byte-identical is a leap of faith —
+        // Pair Compare is the proof (and would have caught the
+        // left-channel-only twin).
+        if let oi = originalIndex {
+            let m = drafts[oi].members
+            if m.count > 1 {
+                let hashes = Set(m.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
+                if hashes.count > 1 || m.contains(where: { $0.contentHash.isEmpty }) {
+                    out.cautions.append("The original's copies are NOT all proven byte-identical (missing or differing content signatures) — they can differ in audio even when the picture matches. Run Compare These Two Files… on the copy you intend to promote before trusting a twin.")
+                }
+            }
+        }
 
         // Audio caution (rule 1 includes audio). A repair derivative in the
         // family answers it: the audio problem was already handled — the
@@ -523,7 +549,8 @@ enum CopyFamilyAssessor {
         return "interlaced"
     }
 
-    static func makeRepresentation(_ sig: String, members: [CopyFamilyInput], role: CopyRole, reason: String) -> CopyRepresentation {
+    static func makeRepresentation(_ sig: String, members: [CopyFamilyInput], role: CopyRole,
+                                   reason: String, anchors: Set<UUID> = []) -> CopyRepresentation {
         // Byte clusters by contentHash; rule 6 picks the instance.
         let instances = members.map { m in
             CopyInstance(id: m.id, fullPath: m.fullPath, filename: m.filename, sizeBytes: m.sizeBytes,
@@ -534,7 +561,7 @@ enum CopyFamilyAssessor {
         let rep = members[0]
         return CopyRepresentation(
             signature: sig, role: role, instances: instances,
-            recommendedInstanceID: recommendedInstance(members)?.id,
+            recommendedInstanceID: recommendedInstance(members, anchors: anchors)?.id,
             reason: reason,
             videoCodec: rep.videoCodec, audioCodec: rep.audioCodec, container: rep.container,
             resolution: rep.resolution, frameRate: rep.frameRate,
@@ -543,15 +570,30 @@ enum CopyFamilyAssessor {
     }
 
     /// Rule 6 — among instances of ONE representation: online › not
-    /// retired › not already an archive copy (promote the source, not the
-    /// copy) › volume reliability › human metadata › path.
-    static func recommendedInstance(_ members: [CopyFamilyInput]) -> CopyFamilyInput? {
-        members.max { a, b in
+    /// retired › not already an archive copy › the REPAIR ANCHOR (the copy
+    /// the user's repairs were made from) › verified audio › then, ONLY
+    /// when every instance is proven byte-identical, drive reliability
+    /// before human metadata — otherwise the copies may differ in content
+    /// (left-channel-only twin, 2026-08-19), so EVIDENCE outranks the
+    /// drive: human metadata › audio state › volume.
+    static func recommendedInstance(_ members: [CopyFamilyInput], anchors: Set<UUID> = []) -> CopyFamilyInput? {
+        let hashes = Set(members.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
+        let provenIdentical = hashes.count == 1 && members.allSatisfy { !$0.contentHash.isEmpty }
+        return members.max { a, b in
             if a.isReachable != b.isReachable { return !a.isReachable }
             if a.isRetired != b.isRetired { return a.isRetired }
             if a.isArchiveCopy != b.isArchiveCopy { return a.isArchiveCopy }
-            if a.volumeScore != b.volumeScore { return a.volumeScore < b.volumeScore }
-            if a.humanScore != b.humanScore { return a.humanScore < b.humanScore }
+            let aAnchor = anchors.contains(a.id), bAnchor = anchors.contains(b.id)
+            if aAnchor != bAnchor { return !aAnchor }
+            let aAudio = a.audioVerifyStatus == "ok", bAudio = b.audioVerifyStatus == "ok"
+            if aAudio != bAudio { return !aAudio }
+            if provenIdentical {
+                if a.volumeScore != b.volumeScore { return a.volumeScore < b.volumeScore }
+                if a.humanScore != b.humanScore { return a.humanScore < b.humanScore }
+            } else {
+                if a.humanScore != b.humanScore { return a.humanScore < b.humanScore }
+                if a.volumeScore != b.volumeScore { return a.volumeScore < b.volumeScore }
+            }
             return a.fullPath > b.fullPath
         }
     }

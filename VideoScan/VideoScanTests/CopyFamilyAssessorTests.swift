@@ -229,6 +229,40 @@ struct ArchiveTitleThreadingTests {
     }
 }
 
+@Suite("Copy family assessor — instance election evidence")
+struct CopyFamilyEvidenceTests {
+    @Test func preparedAnchorBeatsBetterDriveWhenNotProvenIdentical() {
+        // The 2026-08-19 incident: LaCie Clip 01.dv (balanced by Rick →
+        // repaired child; analyzed) vs Projects CapeCod twin (better
+        // drive, DIFFERENT content hash, never verified).
+        let clipID = UUID()
+        var clip = dv("/Volumes/LaCieWorkspace/Clip 01.dv", hash: "v1:clip", vol: 10, human: 50, id: clipID)
+        let twin = dv("/Volumes/Projects/CapeCod_2000-something.dv", hash: "v1:DIFFERENT", vol: 90, human: 0)
+        let balanced = CopyFamilyInput(fullPath: "/Volumes/LaCieWorkspace/Clip 01_balanced.mov",
+                                       sizeBytes: 1, durationSeconds: 3604,
+                                       videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",
+                                       resolution: "720x480", frameRate: "29.97",
+                                       audioChannels: "2", audioSampleRate: "48000",
+                                       derivedFrom: clipID, derivationKind: "balanceAudio",
+                                       audioVerifyStatus: "ok")
+        let a = CopyFamilyAssessor.assess([clip, twin, balanced])
+        #expect(a.recommendedInstanceID == clipID, "the prepared copy must win over the better drive")
+        #expect(a.cautions.contains { $0.contains("NOT all proven byte-identical") })
+        #expect(a.actions.first == .promoteOriginalAndRepaired)
+        _ = clip
+    }
+
+    @Test func provenIdenticalStillPrefersReliableDrive() {
+        let a = CopyFamilyAssessor.assess([
+            dv("/Volumes/SSD/x.dv", hash: "v1:same", vol: 10, human: 100),
+            dv("/Volumes/RAID/x.dv", hash: "v1:same", vol: 90, human: 0),
+        ])
+        let rec = a.recommendedRepresentation?.instances.first { $0.id == a.recommendedInstanceID }
+        #expect(rec?.fullPath == "/Volumes/RAID/x.dv")
+        #expect(!a.cautions.contains { $0.contains("NOT all proven byte-identical") })
+    }
+}
+
 @Suite("Copy family assessor — repaired copies")
 struct CopyFamilyRepairTests {
     @Test func balancedDerivativeIsTheRepairedCopyAndAnswersTheAudioCaution() {
