@@ -12,6 +12,10 @@ import SwiftUI
 
 struct VolumesWindow: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Sidebar sentinel for the pinned "Catalog" row (Rick 2026-08-19):
+    /// selecting it shows the catalog-wide distribution pane instead of a
+    /// single drive. Stable so `List(selection:)` can round-trip it.
+    static let catalogRowID = UUID(uuidString: "0000C0DE-0000-4000-8000-00000000CA7A")!
     /// Storage tab (2026-08-19): the same editor hosted inside the main
     /// window as a top-tier tab. When embedded, the window-toolbar actions
     /// render as an in-content header bar instead (the main window has no
@@ -151,13 +155,13 @@ struct VolumesWindow: View {
         let volumeKey: String
     }
 
+    /// nil while the Catalog row is selected (or nothing is selected yet
+    /// → Catalog is the default view).
     private var selectedTarget: CatalogScanTarget? {
-        if let id = selectedID,
-           let t = sortedTargets.first(where: { $0.id == id }) {
-            return t
-        }
-        return sortedTargets.first
+        guard let id = selectedID, id != Self.catalogRowID else { return nil }
+        return sortedTargets.first(where: { $0.id == id })
     }
+    private var isCatalogSelected: Bool { selectedTarget == nil }
 
     var body: some View {
         attachSheets(to: hostedContent)
@@ -202,6 +206,10 @@ struct VolumesWindow: View {
                 // below — VolumeDetailPane (Storage tab, 2026-08-19).
                 VolumeDetailPane(target: target)
                     .id(target.id)
+                    .frame(minWidth: 460)
+            } else if !sortedTargets.isEmpty {
+                // Pinned Catalog row: the whole library by drive + safety.
+                CatalogDistributionPane()
                     .frame(minWidth: 460)
             } else {
                 placeholder
@@ -367,11 +375,32 @@ struct VolumesWindow: View {
         if let pending = model.pendingVolumesSelectionID {
             selectedID = pending
             model.pendingVolumesSelectionID = nil
+        } else if selectedID == nil {
+            selectedID = Self.catalogRowID     // default view: the whole catalog
         }
     }
 
     private var volumeList: some View {
         List(selection: $selectedID) {
+            // Pinned: the catalog as a whole — where it lives, how safely.
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "chart.pie.fill")
+                        .foregroundColor(.accentColor)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Catalog")
+                            .font(.system(size: 13 * sidebarScale, weight: .semibold))
+                        Text("where it all lives")
+                            .font(.system(size: 11 * sidebarScale))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+                .tag(Optional(Self.catalogRowID))
+                .accessibilityIdentifier("volumeRow.catalog")
+            }
             Section("Volumes") {
                 ForEach(sortedTargets) { target in
                     VolumeListRow(target: target,
