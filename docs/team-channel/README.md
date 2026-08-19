@@ -32,7 +32,7 @@ participant. Use `--body -` for standard input. New addressed messages are
 injected automatically at the participant's next user turn. Injection marks a
 message **delivered**, not handled; acknowledge it after handling.
 
-Participants are `codex`, `claude`, `fred`, `rick`, and `bob` (Bob = Google Antigravity helper, added 2026-08-18; posts with `--from bob`, reads with `inbox --agent bob`). The Engineering Room's
+Participants are `codex`, `claude`, `fred`, `rick`, and `bob` (Bob = Google Antigravity helper, added 2026-08-18; posts with `--from bob`, reads with `inbox --agent bob`). `fred` (the M5 qwen gofer) was RETIRED 2026-08-18 — the id remains only so historical messages resolve; nothing is routed to Fred any more. The Engineering Room's
 stable transcript provider ID remains `qwen`; `fred` identifies the external
 local coding manager. Native Codex/Claude subagents report to their parent and
 do not join this channel.
