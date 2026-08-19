@@ -121,6 +121,11 @@ struct CopyFamilyInput: Sendable, Equatable, Identifiable {
 enum CopyRole: String, Sendable, Equatable, CaseIterable {
     case originalSource        = "Original source master"
     case presumedOriginal      = "Presumed original (unconfirmed)"
+    /// A repair derivative of the original (Balance/Rebuild Audio, external
+    /// repair, Clean Up): the PLAYABLE master — corrected audio/picture —
+    /// while the original stays the untouched source. Both belong in the
+    /// archive (2026-08-19, the Clip 01_balanced.mov case).
+    case repairedCopy          = "Repaired copy"
     case preservationCompanion = "Preservation companion"
     case editingDerivative     = "Editing derivative"
     case accessCopy            = "Access copy"
@@ -131,10 +136,11 @@ enum CopyRole: String, Sendable, Equatable, CaseIterable {
         switch self {
         case .originalSource: return 0
         case .presumedOriginal: return 1
-        case .preservationCompanion: return 2
-        case .editingDerivative: return 3
-        case .accessCopy: return 4
-        case .unconfirmedVariant: return 5
+        case .repairedCopy: return 2
+        case .preservationCompanion: return 3
+        case .editingDerivative: return 4
+        case .accessCopy: return 5
+        case .unconfirmedVariant: return 6
         }
     }
     var isOriginal: Bool { self == .originalSource || self == .presumedOriginal }
@@ -183,6 +189,7 @@ struct CopyRepresentation: Sendable, Equatable, Identifiable {
 
 enum CopyFamilyAction: String, Sendable, Equatable, CaseIterable {
     case promoteRecommendedOriginal     = "Promote Recommended Original"
+    case promoteOriginalAndRepaired     = "Promote Original + Repaired Copy"
     case chooseAnotherEquivalent        = "Choose Another Equivalent Copy…"
     case createAndPromoteCompanion      = "Create + Promote Lossless Companion"
     case promoteOriginalAndCompanion    = "Promote Original + Companion"
@@ -231,6 +238,12 @@ enum CopyFamilyAssessor {
     static let accessVideoCodecs: Set<String> = ["hevc", "h265", "h264", "avc1", "vp9", "av1", "mpeg4", "wmv3", "vc1"]
 
     enum CodecClass: Sendable, Equatable { case native, preservation, editing, access, unknown }
+
+    /// derivationKind values that mean "a REPAIR of the source" — the
+    /// output is the same recording with a defect corrected, not a
+    /// quality-reduced derivative. Balance/Rebuild write these; Clean Up
+    /// stamps cleanupRecipeID instead (checked separately).
+    static let repairDerivationKinds: Set<String> = ["balanceAudio", "rebuildAudio", "externalRepair"]
 
     static func codecClass(videoCodec: String, audioCodec: String, container: String, originMake: String?) -> CodecClass {
         let v = videoCodec.lowercased()
@@ -365,6 +378,18 @@ enum CopyFamilyAssessor {
                 role = .unconfirmedVariant
                 reason = String(format: "Duration %.1f s differs from the family's %.1f s — truncated, extended, or a different cut.",
                                 d.members[0].durationSeconds, referenceDuration)
+            } else if let oi = originalIndex,
+                      d.members.contains(where: { m in
+                          guard let dk = m.derivationKind else { return m.cleanupRecipeID != nil && m.derivedFrom != nil }
+                          return Self.repairDerivationKinds.contains(dk)
+                      }),
+                      d.derivedFromSig == drafts[oi].sig || d.derivedFromSig == nil {
+                // Repair derivative of the original (or of a member whose
+                // signature matched the original's) — the corrected master.
+                role = .repairedCopy
+                reason = "Repair of the original (corrected audio/picture) — the playable master. Promote it WITH the original; Confirm Repair retires the original from everyday views."
+                reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason))
+                continue
             } else {
                 switch d.cls {
                 case .preservation:
@@ -406,15 +431,24 @@ enum CopyFamilyAssessor {
         }
         out.headline = "\(inputs.count) location\(inputs.count == 1 ? "" : "s") → \(reps.count) distinct representation\(reps.count == 1 ? "" : "s")"
 
-        // Audio caution (rule 1 includes audio).
+        // Audio caution (rule 1 includes audio). A repair derivative in the
+        // family answers it: the audio problem was already handled — the
+        // repaired copy is the playable master (2026-08-19: the helper told
+        // Rick to fix audio he had ALREADY balanced).
+        var audioNeedsWork = false
         if let oi = originalIndex {
             let m = drafts[oi].members
             let hasAudio = m.contains { $0.streamType == .videoAndAudio || $0.streamType == .audioOnly }
             let verified = m.contains { $0.audioVerifyStatus == "ok" }
             let damagedAudio = m.contains { $0.audioVerifyStatus == "damaged" }
-            if damagedAudio {
+            let repaired = reps.first { $0.role == .repairedCopy }
+            if let repaired {
+                out.cautions.append("Audio was already repaired into \(repaired.instances.first?.filename ?? "a repaired copy") — promote it together with the original (the original keeps its history; the repaired copy is the one to watch).")
+            } else if damagedAudio {
+                audioNeedsWork = true
                 out.cautions.append("Verify Audio reported a problem on the recommended original — fix or choose another equivalent copy before promoting.")
             } else if hasAudio && !verified {
+                audioNeedsWork = true
                 out.cautions.append("Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper).")
             }
         }
@@ -422,9 +456,14 @@ enum CopyFamilyAssessor {
         // Actions.
         var actions: [CopyFamilyAction] = []
         if let rec = out.recommendedRepresentation {
-            actions.append(.promoteRecommendedOriginal)
+            let hasRepaired = reps.contains { $0.role == .repairedCopy }
+            if hasRepaired {
+                actions.append(.promoteOriginalAndRepaired)
+            } else {
+                actions.append(.promoteRecommendedOriginal)
+            }
             if rec.instances.count > 1 { actions.append(.chooseAnotherEquivalent) }
-            if out.cautions.contains(where: { $0.hasPrefix("Audio on the recommended") || $0.hasPrefix("Verify Audio reported") }) {
+            if audioNeedsWork {
                 actions.insert(.verifyAudioFirst, at: 0)
             }
             let hasCompanion = reps.contains { $0.role == .preservationCompanion }

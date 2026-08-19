@@ -108,6 +108,7 @@ struct AssessCopiesDetailView: View {
         switch r {
         case .originalSource:        return Color(red: 0.26, green: 0.22, blue: 0.62)  // deep indigo
         case .presumedOriginal:      return Color(red: 0.42, green: 0.20, blue: 0.58)  // dark violet
+        case .repairedCopy:          return Color(red: 0.55, green: 0.30, blue: 0.05)  // dark amber
         case .preservationCompanion: return Color(red: 0.05, green: 0.42, blue: 0.22)  // forest green
         case .editingDerivative:     return Color(red: 0.00, green: 0.40, blue: 0.44)  // dark teal
         case .accessCopy:            return Color(red: 0.08, green: 0.32, blue: 0.72)  // cobalt
@@ -205,6 +206,7 @@ struct AssessCopiesDetailView: View {
         var recID: UUID?
         var recRecord: VideoRecord?
         var companion: CopyRepresentation?
+        var repaired: CopyRepresentation?
         var needsAudio: Bool
         var readOnly: Bool
         var recReachable: Bool { recRecord.map { VolumeReachability.isReachable(path: $0.fullPath) } ?? false }
@@ -216,6 +218,7 @@ struct AssessCopiesDetailView: View {
                                 recID: recID,
                                 recRecord: recID.flatMap { job.record(for: $0) },
                                 companion: a.representations.first { $0.role == .preservationCompanion },
+                                repaired: a.representations.first { $0.role == .repairedCopy },
                                 needsAudio: a.actions.contains(.verifyAudioFirst),
                                 readOnly: model.isReadOnly)
         return HStack(spacing: 8) {
@@ -243,6 +246,15 @@ struct AssessCopiesDetailView: View {
             } label: { Label("Promote Recommended Original", systemImage: "archivebox.fill") }
             .disabled(c.recID == nil || c.readOnly)
             .help("Hands the recommended copy to Promote — verified byte-for-byte into the Master Archive; the original is never moved or changed.")
+        case .promoteOriginalAndRepaired:
+            Button {
+                var ids: [UUID] = []
+                if let id = c.recID { ids.append(id) }
+                if let rid = c.repaired?.recommendedInstanceID { ids.append(rid) }
+                promote(ids)
+            } label: { Label("Promote Original + Repaired Copy", systemImage: "archivebox.fill") }
+            .disabled(c.recID == nil || c.readOnly)
+            .help("The repaired copy is the playable master; the untouched original is the source of record. Both go in, both verified.")
         case .chooseAnotherEquivalent:
             Menu {
                 ForEach(c.rec?.instances ?? []) { inst in
@@ -300,6 +312,7 @@ struct AssessCopiesDetailView: View {
         else { return "File" }
         switch rep.role {
         case .originalSource, .presumedOriginal: return "Original"
+        case .repairedCopy:                      return "Repaired copy"
         case .preservationCompanion:             return "Lossless edition"
         case .editingDerivative:                 return "Edit copy"
         case .accessCopy:                        return "Access copy"
@@ -373,6 +386,8 @@ struct AssessCopiesDetailView: View {
         for rep in a.representations {
             guard let iid = rep.recommendedInstanceID, let r = job.record(for: iid) else { continue }
             switch rep.role {
+            case .repairedCopy:
+                rows.append(WorksheetRow(id: iid, label: "Repaired Copy", record: r, isOriginal: false))
             case .preservationCompanion:
                 rows.append(WorksheetRow(id: iid, label: "Modern Lossless Copy", record: r, isOriginal: false))
             case .editingDerivative:
@@ -431,9 +446,11 @@ struct AssessCopiesDetailView: View {
         let year = Calendar.current.component(.year, from: Date())
         for row in worksheetRows(a) where !row.isOriginal && !userTouched.contains(row.id) {
             if trimmed.isEmpty { names[row.id] = "" ; continue }
-            names[row.id] = row.label == "Modern Lossless Copy"
-                ? "\(trimmed)_modernized_\(year)"
-                : "\(trimmed)_edit"
+            switch row.label {
+            case "Modern Lossless Copy": names[row.id] = "\(trimmed)_modernized_\(year)"
+            case "Repaired Copy":        names[row.id] = "\(trimmed)_repaired"
+            default:                     names[row.id] = "\(trimmed)_edit"
+            }
         }
     }
 

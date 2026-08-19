@@ -228,3 +228,46 @@ struct ArchiveTitleThreadingTests {
         #expect(keep.hasSuffix("/1997-xx-xx_Clip-01.dv"), "got \(keep)")
     }
 }
+
+@Suite("Copy family assessor — repaired copies")
+struct CopyFamilyRepairTests {
+    @Test func balancedDerivativeIsTheRepairedCopyAndAnswersTheAudioCaution() {
+        let dvID = UUID()
+        var original = dv("/Volumes/LaCie/Clip 01.dv", id: dvID)     // audio never verified
+        // Balanced output: DV essence in a .mov wrapper (raw-DV container
+        // can't hold the repaired audio — BalanceAudioJob rule).
+        var balanced = CopyFamilyInput(fullPath: "/Volumes/LaCie/Clip 01_balanced.mov",
+                                       sizeBytes: 13_000_000_000, durationSeconds: 3604,
+                                       videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",
+                                       resolution: "720x480", frameRate: "29.97",
+                                       audioChannels: "2", audioSampleRate: "48000",
+                                       derivedFrom: dvID, derivationKind: "balanceAudio",
+                                       audioVerifyStatus: "ok")
+        let a = CopyFamilyAssessor.assess([original, balanced])
+        #expect(a.recommendedRepresentation?.role == .originalSource)
+        let repaired = a.representations.first { $0.role == .repairedCopy }
+        #expect(repaired != nil, "\(a.representations.map(\.role))")
+        // No "verify audio" nag — the repair answers it.
+        #expect(!a.actions.contains(.verifyAudioFirst), "\(a.actions)")
+        #expect(a.actions.contains(.promoteOriginalAndRepaired))
+        #expect(!a.actions.contains(.promoteRecommendedOriginal))
+        #expect(a.cautions.contains { $0.contains("already repaired into Clip 01_balanced.mov") })
+        _ = original; _ = balanced
+    }
+
+    @Test func repairOfADamagedOriginalStillFlagsNothingExtra() {
+        let dvID = UUID()
+        var original = dv("/Volumes/A/tape.dv", audio: "damaged", id: dvID)
+        let rebuilt = CopyFamilyInput(fullPath: "/Volumes/A/tape_rebuilt.mov",
+                                      sizeBytes: 1, durationSeconds: 3604,
+                                      videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",
+                                      resolution: "720x480", frameRate: "29.97",
+                                      audioChannels: "2", audioSampleRate: "48000",
+                                      derivedFrom: dvID, derivationKind: "rebuildAudio",
+                                      audioVerifyStatus: "ok")
+        let a = CopyFamilyAssessor.assess([original, rebuilt])
+        #expect(a.actions.first == .promoteOriginalAndRepaired)
+        #expect(!a.actions.contains(.verifyAudioFirst))
+        _ = original
+    }
+}
