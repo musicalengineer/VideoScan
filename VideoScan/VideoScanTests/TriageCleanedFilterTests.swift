@@ -111,6 +111,7 @@ struct TriageCleanedFilterTests {
         case .confirmedJunk: expected = { $0.mediaDisposition == .confirmedJunk }
         case .recoverable:   expected = { $0.mediaDisposition == .recoverable }
         case .workspace:     expected = { $0.workspaceActive }
+        case .underConstruction: expected = { $0.lifecycleStage == .workbench }   // Workbench merge 2026-08-19
         case .cleaned:       expected = { $0.cleanupRecipeID != nil }
         }
 

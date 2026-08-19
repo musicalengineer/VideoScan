@@ -19,6 +19,9 @@ import SwiftUI
 struct VolumeEditor: View {
     @EnvironmentObject var model: VideoScanModel
     @ObservedObject var target: CatalogScanTarget
+    /// Storage tab (2026-08-19): the detail pane already shows the
+    /// identity card above this editor, so it hides the duplicate header.
+    var showHeader: Bool = true
 
     @State private var purchaseYearText: String = ""
     @State private var capacityTBText: String = ""
@@ -26,7 +29,7 @@ struct VolumeEditor: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                header
+                if showHeader { header }
                 // 2026-05-31: "Relocated to" indicator. Sits between the
                 // Volume ID header and the Workflow picker so users see
                 // at a glance that the catalog for this drive now lives
@@ -35,7 +38,7 @@ struct VolumeEditor: View {
                 if let summary = relocatedSummary {
                     relocatedBanner(summary)
                 }
-                Divider()
+                if showHeader { Divider() }
                 workflowSection
                 Divider()
                 hardwareSection

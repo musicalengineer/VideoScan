@@ -196,7 +196,9 @@ struct VolumesWindow: View {
                 )
                 .onPreferenceChange(SidebarWidthKey.self) { sidebarWidth = $0 }
             if let target = selectedTarget {
-                VolumeEditor(target: target)
+                // Info card on top, dashboard charts (or the editor)
+                // below — VolumeDetailPane (Storage tab, 2026-08-19).
+                VolumeDetailPane(target: target)
                     .id(target.id)
                     .frame(minWidth: 460)
             } else {
