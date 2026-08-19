@@ -384,20 +384,31 @@ struct VolumesWindow: View {
         List(selection: $selectedID) {
             // Pinned: the catalog as a whole — where it lives, how safely.
             Section {
-                HStack(spacing: 8) {
-                    Image(systemName: "chart.pie.fill")
-                        .foregroundColor(.accentColor)
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Catalog")
-                            .font(.system(size: 13 * sidebarScale, weight: .semibold))
-                        Text("where it all lives")
-                            .font(.system(size: 11 * sidebarScale))
-                            .foregroundColor(.secondary)
+                // A bare (non-ForEach) row's `.tag` is not reliably
+                // selectable on macOS once another row has been chosen
+                // (Rick 2026-08-19: "can't get back to the catalog
+                // summary") — so the row is a Button that sets the
+                // selection itself; the tag keeps the highlight in sync.
+                Button {
+                    selectedID = Self.catalogRowID
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chart.pie.fill")
+                            .foregroundColor(.accentColor)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Catalog")
+                                .font(.system(size: 13 * sidebarScale, weight: .semibold))
+                            Text("where it all lives")
+                                .font(.system(size: 11 * sidebarScale))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
                     }
-                    Spacer()
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, 2)
+                .buttonStyle(.plain)
                 .tag(Optional(Self.catalogRowID))
                 .accessibilityIdentifier("volumeRow.catalog")
             }
