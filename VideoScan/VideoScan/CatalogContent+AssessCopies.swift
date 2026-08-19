@@ -12,15 +12,15 @@ extension CatalogContent {
     /// ∪ lineage ∪ archive links ∪ same content signature).
     @ViewBuilder
     func assessCopiesMenuItem(activeRecs: [VideoRecord], pureActive: Bool) -> some View {
-        Button("Assess Copies for Archive…") {
+        Button("Archive Helper…") {
             guard let seed = activeRecs.first else { return }
             fileOpsCenter.startAssessCopies(seed: seed, model: model)
             openWindow(id: "combine")
         }
         .disabled(!pureActive || activeRecs.count != 1)
         .help(activeRecs.count == 1
-              ? "Which of this recording's copies is the original source master? Collapses every copy into distinct representations, names the one to promote, and offers the next steps — Promote, companion, access copy."
-              : "Assess works on one recording at a time — select a single row.")
+              ? "Which of this recording's copies is the original? The Archive Helper names the one to promote, checks date/audio/name, and walks it into the Master Archive — companion and editing copies included."
+              : "The Archive Helper works on one recording at a time — select a single row.")
         .accessibilityIdentifier("catalog.row.assessCopies")
     }
 }

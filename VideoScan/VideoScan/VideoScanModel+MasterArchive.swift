@@ -756,7 +756,23 @@ extension VideoScanModel {
         let stamp = ISO8601DateFormatter().string(from: promotedAt)
         let sourceNote = "Promote \(stamp): promoted to Master Archive as \(relativePath)"
         let readinessNote = readiness.map { " · readiness: \($0.summary)" } ?? ""
-        let copyNote = "Promote \(stamp): promoted from \(source.fullPath) · sha256 \(sha256)\(readinessNote)"
+        // Rename provenance (Archive Helper, Rick 2026-08-19): when the
+        // archive copy carries a NEW name, the old one — worthless as a
+        // label, priceless as provenance — is recorded on the copy, with
+        // whatever origin hints the probe captured ("appears to be from
+        // iMovie"). The master on disk keeps its name.
+        var renameNote = ""
+        let copyStem = ((relativePath as NSString).lastPathComponent as NSString).deletingPathExtension
+        let sourceStem = (source.filename as NSString).deletingPathExtension
+        if !copyStem.hasSuffix(ArchivePathResolver.slug(from: sourceStem)) {
+            renameNote = " · original filename: \(source.filename)"
+            let origin = [source.originEncoder, source.originMake, source.originModel]
+                .compactMap { $0 }.filter { !$0.isEmpty }
+            if !origin.isEmpty {
+                renameNote += " · appears to be from \(origin.joined(separator: " "))"
+            }
+        }
+        let copyNote = "Promote \(stamp): promoted from \(source.fullPath) · sha256 \(sha256)\(readinessNote)\(renameNote)"
         source.notes = source.notes.isEmpty ? sourceNote : "\(source.notes)\n\(sourceNote)"
         copy.notes = copy.notes.isEmpty ? copyNote : "\(copy.notes)\n\(copyNote)"
 

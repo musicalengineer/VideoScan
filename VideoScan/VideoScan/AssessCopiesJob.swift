@@ -35,7 +35,7 @@ final class AssessCopiesJob: @MainActor MediaFileOperationJob {
     @Published private(set) var finishedAt: Date?
     private(set) var task: Task<Void, Never>?
 
-    var title: String { "Assess copies: \(seed.filename)" }
+    var title: String { "Archive Helper: \(seed.filename)" }
     var subtitle: String {
         if let a = assessment { return a.headline }
         return "Collecting this recording's copies…"

@@ -15,24 +15,37 @@ struct AssessCopiesDetailView: View {
 
     @State private var transcodeRequest: TranscodeRequest?
     @State private var expandedReps: Set<String> = []
-    /// Prepare-strip archive name for the ORIGINAL (Rick 2026-08-19):
-    /// renames the copy ON THE WAY to the archive; master untouched. The
-    /// Promote sheet shows the full vertical naming list (Original /
-    /// Lossless edition / …) seeded from this + suggestions.
-    @State private var archiveTitle: String = ""
+    /// TO BE ARCHIVED worksheet (Rick 2026-08-19): archive names per
+    /// role row. Editing the Original auto-derives the companion/edit
+    /// names (base_modernized_YYYY / base_edit) until the user touches
+    /// those fields themselves. Renames apply to the ARCHIVE COPY only.
+    @State private var names: [UUID: String] = [:]
+    @State private var userTouched: Set<UUID> = []
+    /// The info cards are the reference, not the focus — collapsed by
+    /// default so the worksheet leads (Rick: "a bit busy").
+    @State private var showDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let a = job.assessment {
                 summary(a)
                 if !a.cautions.isEmpty { cautions(a) }
-                ForEach(a.representations) { rep in
-                    representationCard(rep, assessment: a)
-                }
                 if a.recommendedInstanceID != nil {
                     prepareStrip(a)
                 }
                 actions(a)
+                DisclosureGroup(isExpanded: $showDetails) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(a.representations) { rep in
+                            representationCard(rep, assessment: a)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("All copies found (\(a.representations.count) representations, \(a.locationCount) locations)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -88,14 +101,17 @@ struct AssessCopiesDetailView: View {
 
     // MARK: Representation cards
 
+    /// Role chip fills — dark enough to carry white small-caps text
+    /// (Rick 2026-08-19: "I can barely read the words"; same luminance
+    /// bar as the MFO badge palette).
     private func roleColor(_ r: CopyRole) -> Color {
         switch r {
-        case .originalSource: return .indigo
-        case .presumedOriginal: return .purple
-        case .preservationCompanion: return .green
-        case .editingDerivative: return .teal
-        case .accessCopy: return .blue
-        case .unconfirmedVariant: return .orange
+        case .originalSource:        return Color(red: 0.26, green: 0.22, blue: 0.62)  // deep indigo
+        case .presumedOriginal:      return Color(red: 0.42, green: 0.20, blue: 0.58)  // dark violet
+        case .preservationCompanion: return Color(red: 0.05, green: 0.42, blue: 0.22)  // forest green
+        case .editingDerivative:     return Color(red: 0.00, green: 0.40, blue: 0.44)  // dark teal
+        case .accessCopy:            return Color(red: 0.08, green: 0.32, blue: 0.72)  // cobalt
+        case .unconfirmedVariant:    return Color(red: 0.72, green: 0.36, blue: 0.00)  // burnt orange
         }
     }
 
@@ -271,14 +287,7 @@ struct AssessCopiesDetailView: View {
             guard let r = job.record(for: id) else { continue }
             model.noteMissingFileForUserAction(r)
             roles[id] = roleLabel(forInstance: id, in: a)
-            // The prepare-strip name applies to the ORIGINAL row; the
-            // companion/edit rows start empty (= keep) unless generic.
-            if id == a?.recommendedInstanceID {
-                if let t = VideoScanModel.normalizedTitle(archiveTitle) { titles[id] = t }
-            } else if ArchiveNameAdvisor.isGenericStem((r.filename as NSString).deletingPathExtension),
-                      let t = VideoScanModel.normalizedTitle(archiveTitle) {
-                titles[id] = t          // inherit the family name when its own is noise
-            }
+            if let t = VideoScanModel.normalizedTitle(names[id]) { titles[id] = t }
         }
         model.requestPromote(recordIDs: ids, archiveTitles: titles, roleLabels: roles)
         MainWindowHelper.shared.openMainWindow()   // the Promote sheet attaches to the main window root
@@ -298,38 +307,147 @@ struct AssessCopiesDetailView: View {
         }
     }
 
-    // MARK: Prepare for archive (Rick 2026-08-19)
+    // MARK: TO BE ARCHIVED (Rick 2026-08-19)
 
-    /// Three checks before the buttons: date · audio · name. Green when
-    /// good; orange with the fix path when not. The name field renames the
-    /// ARCHIVE COPY only, and every entry of the same promote inherits it.
+    /// One row per file headed to the archive: Original · Modern Lossless
+    /// Copy · Copy for Editing — each with the name its ARCHIVE COPY will
+    /// carry (masters on disk never renamed; the old name is recorded as
+    /// provenance on the copy). Date and audio checks sit on top: the
+    /// three things to settle before promoting.
     private func prepareStrip(_ a: CopyFamilyAssessment) -> some View {
+        let rows = worksheetRows(a)
         let recRecord = a.recommendedInstanceID.flatMap { job.record(for: $0) }
         let readiness = recRecord.map { ArchiveReadiness.assess(record: $0) }
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("PREPARE FOR ARCHIVE")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: 10) {
+            Label("TO BE ARCHIVED", systemImage: "archivebox.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.accentColor)
                 .tracking(0.5)
             if let readiness, let rec = recRecord {
                 let hint = ArchivePathResolver.facts(for: rec).dateHint
                 let dateText = hint.manifestDate.isEmpty ? "unknown" : hint.manifestDate
-                checkRow(ok: readiness.date == .known,
-                         okText: "Date: \(dateText)",
-                         fixText: readiness.date == .undated
-                            ? "Date: unknown — it will file under Undated/ (set a date in the Inspector to place it in its decade)"
-                            : "Date: \(dateText) (low confidence — confirm it in the Inspector)")
-                checkRow(ok: readiness.audio == .verifiedOK || readiness.audio == .noAudioTrack,
-                         okText: readiness.audio == .noAudioTrack ? "Audio: none (video-only)" : "Audio: verified OK",
-                         fixText: {
-                             if case .verifiedProblem(let note) = readiness.audio { return "Audio: problem — \(note)" }
-                             return "Audio: not verified yet — use Verify Audio First below"
-                         }())
-                nameRow(rec)
+                HStack(spacing: 16) {
+                    checkRow(ok: readiness.date == .known,
+                             okText: "Date \(dateText)",
+                             fixText: readiness.date == .undated
+                                ? "Date unknown — files under Undated/ (set it in the Inspector)"
+                                : "Date \(dateText) — low confidence, confirm in the Inspector")
+                    checkRow(ok: readiness.audio == .verifiedOK || readiness.audio == .noAudioTrack,
+                             okText: readiness.audio == .noAudioTrack ? "No audio track" : "Audio verified",
+                             fixText: {
+                                 if case .verifiedProblem(let note) = readiness.audio { return "Audio problem — \(note)" }
+                                 return "Audio not verified — Verify Audio First below"
+                             }())
+                }
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(rows, id: \.id) { row in
+                    worksheetRow(row)
+                }
+            }
+            Text("Masters on disk are never renamed — the name applies to the verified archive copy, and the original filename is recorded on it as provenance.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor.opacity(0.35), lineWidth: 1))
+        .onAppear { seedNames(rows) }
+    }
+
+    private struct WorksheetRow: Identifiable {
+        let id: UUID          // record id
+        let label: String     // Original / Modern Lossless Copy / Copy for Editing
+        let record: VideoRecord
+        let isOriginal: Bool
+    }
+
+    /// The rows: the recommended original, then its companion and editing
+    /// derivative when the family has them.
+    private func worksheetRows(_ a: CopyFamilyAssessment) -> [WorksheetRow] {
+        var rows: [WorksheetRow] = []
+        if let id = a.recommendedInstanceID, let r = job.record(for: id) {
+            rows.append(WorksheetRow(id: id, label: "Original", record: r, isOriginal: true))
+        }
+        for rep in a.representations {
+            guard let iid = rep.recommendedInstanceID, let r = job.record(for: iid) else { continue }
+            switch rep.role {
+            case .preservationCompanion:
+                rows.append(WorksheetRow(id: iid, label: "Modern Lossless Copy", record: r, isOriginal: false))
+            case .editingDerivative:
+                rows.append(WorksheetRow(id: iid, label: "Copy for Editing", record: r, isOriginal: false))
+            default: break
             }
         }
-        .padding(8)
-        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+        return rows
+    }
+
+    private func worksheetRow(_ row: WorksheetRow) -> some View {
+        let stem = (row.record.filename as NSString).deletingPathExtension
+        let generic = ArchiveNameAdvisor.isGenericStem(stem)
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 8) {
+                Text(row.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 150, alignment: .trailing)
+                TextField(generic ? "name it — “\(stem)” tells the archive nothing" : "keep “\(stem)”",
+                          text: nameBinding(row))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("archiveHelper.name.\(row.label)")
+                if generic && VideoScanModel.normalizedTitle(names[row.id]) == nil {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                        .help("Generic filename — a meaningful name (people, place, occasion) makes the archive browsable.")
+                }
+            }
+            Text(namePreview(row.record, title: VideoScanModel.normalizedTitle(names[row.id])))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+                .padding(.leading, 158)
+        }
+    }
+
+    /// Editing the Original re-derives the untouched companion rows:
+    /// base → base_modernized_YYYY / base_edit (Rick's naming scheme).
+    private func nameBinding(_ row: WorksheetRow) -> Binding<String> {
+        Binding(
+            get: { names[row.id] ?? "" },
+            set: { new in
+                names[row.id] = new
+                if row.isOriginal {
+                    deriveCompanionNames(from: new)
+                } else {
+                    userTouched.insert(row.id)
+                }
+            })
+    }
+
+    private func deriveCompanionNames(from base: String) {
+        guard let a = job.assessment else { return }
+        let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let year = Calendar.current.component(.year, from: Date())
+        for row in worksheetRows(a) where !row.isOriginal && !userTouched.contains(row.id) {
+            if trimmed.isEmpty { names[row.id] = "" ; continue }
+            names[row.id] = row.label == "Modern Lossless Copy"
+                ? "\(trimmed)_modernized_\(year)"
+                : "\(trimmed)_edit"
+        }
+    }
+
+    /// Seed once per assessment: suggestion from people/tags when the
+    /// original's stem is generic; companions derive from it.
+    private func seedNames(_ rows: [WorksheetRow]) {
+        guard names.isEmpty, let original = rows.first(where: \.isOriginal) else { return }
+        let stem = (original.record.filename as NSString).deletingPathExtension
+        if ArchiveNameAdvisor.isGenericStem(stem),
+           let s = ArchiveNameAdvisor.suggestedTitle(people: original.record.taggedPeople,
+                                                     tags: original.record.tags) {
+            names[original.id] = s
+            deriveCompanionNames(from: s)
+        }
     }
 
     private func checkRow(ok: Bool, okText: String, fixText: String) -> some View {
@@ -344,44 +462,9 @@ struct AssessCopiesDetailView: View {
         }
     }
 
-    private func nameRow(_ rec: VideoRecord) -> some View {
-        let stem = (rec.filename as NSString).deletingPathExtension
-        let generic = ArchiveNameAdvisor.isGenericStem(stem)
-        let titled = VideoScanModel.normalizedTitle(archiveTitle) != nil
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 6) {
-                Image(systemName: (!generic || titled) ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle((!generic || titled) ? Color.green : Color.orange)
-                    .font(.system(size: 12))
-                Text(generic ? "Name: “\(stem)” is generic — name it for the archive:"
-                             : "Name: “\(stem)”  ·  rename on the way (optional):")
-                    .font(.system(size: 12))
-                TextField("e.g. CapeCodVacation", text: $archiveTitle)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
-                    .frame(maxWidth: 240)
-                    .accessibilityIdentifier("assessCopies.archiveName")
-            }
-            Text(namePreview(rec))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-                .padding(.leading, 18)
-        }
-        .onAppear {
-            if archiveTitle.isEmpty, generic,
-               let s = ArchiveNameAdvisor.suggestedTitle(people: rec.taggedPeople, tags: rec.tags) {
-                archiveTitle = s
-            }
-        }
-    }
-
-    /// Live preview of the archive filename this record would get. The
-    /// master keeps its name; only the verified copy is named this.
-    private func namePreview(_ rec: VideoRecord) -> String {
+    /// Live preview of the archive filename a record gets with `title`.
+    private func namePreview(_ rec: VideoRecord, title: String?) -> String {
         let facts = ArchivePathResolver.facts(for: rec)
-        let rel = ArchivePathResolver.baseRelativePath(
-            facts: facts, title: VideoScanModel.normalizedTitle(archiveTitle))
-        return "archive copy → \(rel)   (the original file is never renamed)"
+        return "→ " + ArchivePathResolver.baseRelativePath(facts: facts, title: title)
     }
 }
