@@ -67,6 +67,45 @@ enum CatalogAuditAction: Sendable, Equatable {
     case selectVolume(searchPath: String)
 }
 
+/// A deterministic in-app repair the audit can offer ("Fix it for me",
+/// Rick 2026-08-19). Applied by `CatalogAuditFixer` through the model —
+/// never by a script against catalog.json, which would fight the
+/// single-writer/OCC discipline. Judgment calls (unplaced records, which
+/// nested target to keep) stay "Show me".
+enum CatalogAuditFix: Sendable, Equatable {
+    /// Purged records whose lifecycle still says active → Trashed.
+    case setPurgedStages(ids: [UUID])
+    /// Break pair links that point at purged/missing records.
+    case unpair(ids: [UUID])
+    /// Recount duplicate groups whose stored count drifted; singleton
+    /// groups dissolve.
+    case recountDuplicateGroups(groupIDs: [UUID])
+    /// Delete zero-record, non-retired scan targets from the list.
+    case deleteEmptyTargets(searchPaths: [String])
+
+    /// Plan sentence shown before applying.
+    var plan: String {
+        switch self {
+        case .setPurgedStages(let ids):
+            return "Set the lifecycle stage to Trashed on \(ids.count.formatted()) purged record\(ids.count == 1 ? "" : "s"). Display is unchanged (they are already hidden)."
+        case .unpair(let ids):
+            return "Remove the A/V pair link from \(ids.count.formatted()) record\(ids.count == 1 ? "" : "s") whose partner is purged or missing. Re-run Correlate later to pair them afresh."
+        case .recountDuplicateGroups(let g):
+            return "Recount \(g.count.formatted()) duplicate group\(g.count == 1 ? "" : "s") from their live members; groups left with one member dissolve. Nothing is deleted."
+        case .deleteEmptyTargets(let p):
+            return "Delete \(p.count) empty scan target\(p.count == 1 ? "" : "s") from the Volumes list: \(p.joined(separator: ", ")). No catalog records are affected (there are none under them)."
+        }
+    }
+    var buttonTitle: String {
+        switch self {
+        case .setPurgedStages:        return "Fix stages"
+        case .unpair:                 return "Unpair them"
+        case .recountDuplicateGroups: return "Recount groups"
+        case .deleteEmptyTargets:     return "Delete from list"
+        }
+    }
+}
+
 struct CatalogAuditFinding: Identifiable, Sendable, Equatable {
     var id: String { check }
     var check: String
@@ -76,6 +115,7 @@ struct CatalogAuditFinding: Identifiable, Sendable, Equatable {
     /// Up to a handful of example paths/ids for the report.
     var examples: [String] = []
     var action: CatalogAuditAction = .none
+    var fix: CatalogAuditFix? = nil
 }
 
 struct CatalogAuditReport: Sendable, Equatable {
@@ -240,7 +280,8 @@ enum CatalogAuditor {
                                       : "\(empties.count) active scan target\(empties.count == 1 ? "" : "s") with zero records",
             detail: empties.isEmpty ? "" : "Typo, unmounted-at-scan, or a drive that should be deleted from the list (right-click ▸ Delete from list).",
             examples: Array(empties.prefix(maxExamples)),
-            action: empties.first.map { .selectVolume(searchPath: $0) } ?? .none))
+            action: empties.first.map { .selectVolume(searchPath: $0) } ?? .none,
+            fix: empties.isEmpty ? nil : .deleteEmptyTargets(searchPaths: empties)))
 
         // 5. Bad sizes
         report.findings.append(CatalogAuditFinding(
@@ -274,7 +315,8 @@ enum CatalogAuditor {
                                         : "\(dupIssues.count.formatted()) of \(groupMembers.count.formatted()) duplicate groups have a stale count",
             detail: dupIssues.isEmpty ? "" : "duplicateGroupCount drifted from the live membership (a member was deleted or purged). Catalog tab ▸ Analyze ▸ Duplicates re-scores them.",
             examples: Array(dupIssues.prefix(maxExamples)),
-            action: staleGroupMembers.isEmpty ? .none : .focusRecords(ids: staleGroupMembers, label: "Audit: stale duplicate groups")))
+            action: staleGroupMembers.isEmpty ? .none : .focusRecords(ids: staleGroupMembers, label: "Audit: stale duplicate groups"),
+            fix: staleGroups.isEmpty ? nil : .recountDuplicateGroups(groupIDs: Array(staleGroups))))
 
         // 7. Dangling pairs
         report.findings.append(CatalogAuditFinding(
@@ -284,7 +326,8 @@ enum CatalogAuditor {
                                             : "\(danglingPairs.count.formatted()) records are paired with a purged or missing record",
             detail: danglingPairs.isEmpty ? "" : "Right-click the record in the Catalog ▸ Unpair, or re-run Correlate.",
             examples: danglingPairs.prefix(maxExamples).map(\.fullPath),
-            action: danglingPairs.isEmpty ? .none : .focusRecords(ids: danglingPairs.map(\.id), label: "Audit: dangling A/V pairs")))
+            action: danglingPairs.isEmpty ? .none : .focusRecords(ids: danglingPairs.map(\.id), label: "Audit: dangling A/V pairs"),
+            fix: danglingPairs.isEmpty ? nil : .unpair(ids: danglingPairs.map(\.id))))
 
         // 8. Purged but staged
         report.findings.append(CatalogAuditFinding(
@@ -293,7 +336,8 @@ enum CatalogAuditor {
             headline: purgedButStaged.isEmpty ? "Purged records all carry a terminal lifecycle stage"
                                               : "\(purgedButStaged.count.formatted()) purged records still say \"\(purgedButStaged.first?.lifecycleRaw ?? "")\"",
             detail: purgedButStaged.isEmpty ? "" : "Harmless for display (pfActiveRecords hides them) but the stage should be Trashed/Deleted.",
-            examples: purgedButStaged.prefix(maxExamples).map(\.fullPath)))
+            examples: purgedButStaged.prefix(maxExamples).map(\.fullPath),
+            fix: purgedButStaged.isEmpty ? nil : .setPurgedStages(ids: purgedButStaged.map(\.id))))
 
         // 9. Master archive index
         if let idx = inputs.archiveIndexPromoted {

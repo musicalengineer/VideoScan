@@ -96,3 +96,47 @@ struct CatalogAuditActionTests {
         #expect(action("Per-drive cache") == .none)
     }
 }
+
+@Suite("Catalog audit — Fix it for me")
+@MainActor
+struct CatalogAuditFixerTests {
+    private func vr(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.fullPath = path
+        r.sizeBytes = 10
+        return r
+    }
+
+    @Test func fixesEachDeterministicDefectAndAuditThenPasses() {
+        let model = VideoScanModel()
+        let a = vr("/Volumes/A/a.mov"), b = vr("/Volumes/A/b.mov"), c = vr("/Volumes/A/c.mov")
+        let d1 = vr("/Volumes/A/d1.mov"), d2 = vr("/Volumes/A/d2.mov"), d3 = vr("/Volumes/A/d3.mov")
+        let purged = vr("/Volumes/A/p.mov")
+        let g = UUID()
+        // purged but staged
+        purged.purgedAt = Date(); purged.lifecycleStage = .cataloged
+        // dangling pair: a ↔ purged
+        a.pairedWith = purged; purged.pairedWith = a
+        // stale dup group: 3 members claim 4; d3 is purged → live members 2
+        for r in [d1, d2, d3] { r.duplicateGroupID = g; r.duplicateGroupCount = 4 }
+        d3.purgedAt = Date(); d3.lifecycleStage = .trashed
+        model.records = [a, b, c, d1, d2, d3, purged]
+        model.scanTargets = [CatalogScanTarget(searchPath: "/Volumes/A"), CatalogScanTarget(searchPath: "/Volumes/Empty")]
+
+        let before = CatalogAuditor.run(CatalogAuditor.project(model: model))
+        #expect(before.overall != .pass)
+        for f in before.findings {
+            if let fix = f.fix { _ = CatalogAuditFixer.apply(fix, model: model) }
+        }
+        #expect(purged.lifecycleStage == .trashed)
+        #expect(a.pairedWith == nil && purged.pairedWith == nil)
+        #expect(d1.duplicateGroupCount == 2 && d2.duplicateGroupCount == 2)
+        #expect(model.scanTargets.count == 1)
+
+        let after = CatalogAuditor.run(CatalogAuditor.project(model: model))
+        let remaining = after.findings.filter { $0.status != .pass && $0.check != "Per-drive cache" }
+        #expect(remaining.isEmpty, "\(after.text)")
+    }
+}

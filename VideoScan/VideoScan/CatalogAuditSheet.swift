@@ -11,6 +11,11 @@ struct CatalogAuditSheet: View {
     @State private var report: CatalogAuditReport? = nil
     @State private var task: Task<Void, Never>? = nil
     @AppStorage("selectedTab") private var selectedTab: Int = 0
+    /// "Fix it for me" confirmation — `.alert(item:)` so the plan text
+    /// travels with the presentation (chained-sheet antipattern memo).
+    @State private var pendingFix: PendingFix? = nil
+    private struct PendingFix: Identifiable { let id = UUID(); let fix: CatalogAuditFix; let check: String }
+    @State private var lastFixSummary: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -34,6 +39,19 @@ struct CatalogAuditSheet: View {
         .frame(minWidth: 640, idealWidth: 760, minHeight: 460, idealHeight: 600)
         .task { run() }
         .onDisappear { task?.cancel() }
+        .alert(item: $pendingFix) { p in
+            Alert(
+                title: Text("Fix \"\(p.check)\"?"),
+                message: Text(p.fix.plan + "\n\nThe catalog is saved afterwards and the audit re-runs."),
+                primaryButton: .default(Text(p.fix.buttonTitle)) {
+                    let outcome = CatalogAuditFixer.apply(p.fix, model: model)
+                    lastFixSummary = outcome.summary
+                    report = nil
+                    run()
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private var header: some View {
@@ -51,6 +69,12 @@ struct CatalogAuditSheet: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            if let s = lastFixSummary {
+                Label(s, systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundColor(.green)
+                    .lineLimit(1)
+            }
             Button {
                 report = nil
                 run()
@@ -86,16 +110,33 @@ struct CatalogAuditSheet: View {
             // "Show me" — takes you to the place you can fix it (Rick
             // 2026-08-19). Findings without a destination rely on the
             // detail line as the advice bubble.
-            if f.status != .pass, f.action != .none {
-                Button {
-                    perform(f.action)
-                } label: {
-                    Label(showMeTitle(f.action), systemImage: "arrow.right.circle")
+            if f.status != .pass {
+                VStack(alignment: .trailing, spacing: 6) {
+                    // "Fix it for me" — deterministic in-app repair with a
+                    // plan + confirmation (Rick 2026-08-19).
+                    if let fix = f.fix {
+                        Button {
+                            pendingFix = PendingFix(fix: fix, check: f.check)
+                        } label: {
+                            Label("Fix it for me", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help(fix.plan)
+                        .accessibilityIdentifier("catalogAudit.fix.\(f.check)")
+                    }
+                    if f.action != .none {
+                        Button {
+                            perform(f.action)
+                        } label: {
+                            Label(showMeTitle(f.action), systemImage: "arrow.right.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help(showMeHelp(f.action))
+                        .accessibilityIdentifier("catalogAudit.showMe.\(f.check)")
+                    }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(showMeHelp(f.action))
-                .accessibilityIdentifier("catalogAudit.showMe.\(f.check)")
             }
         }
         .padding(10)
