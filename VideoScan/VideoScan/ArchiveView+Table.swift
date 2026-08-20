@@ -21,6 +21,22 @@ extension ArchiveView {
 
                 Spacer()
 
+                // Timeline ⇄ Files — the Archived shelf's two readings:
+                // the story over time, or the archivist's bench
+                // (docs/archive-view.md). Other categories are table-only.
+                if selectedCategory == .archived {
+                    Picker("", selection: $archiveViewMode) {
+                        Label("Timeline", systemImage: "calendar.day.timeline.left")
+                            .tag("timeline")
+                        Label("Files", systemImage: "tablecells")
+                            .tag("files")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 200)
+                    .help("Timeline: the archive as a story by decade and year. Files: the table with paths and status.")
+                }
+
                 TextField("Search", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 180)
@@ -30,12 +46,16 @@ extension ArchiveView {
 
             Divider()
 
-            // File table
-            let rows = filteredRecords
-            if rows.isEmpty {
-                emptyState
+            if selectedCategory == .archived && archiveViewMode == "timeline" {
+                timelinePane
             } else {
-                fileTable(rows: rows)
+                // File table
+                let rows = filteredRecords
+                if rows.isEmpty {
+                    emptyState
+                } else {
+                    fileTable(rows: rows)
+                }
             }
         }
     }

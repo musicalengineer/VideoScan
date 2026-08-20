@@ -29,6 +29,13 @@ struct ArchiveView: View {
     /// (see ArchiveCategorySnapshot). A class held by @State: mutating it
     /// during body does not re-render.
     @State private var categoryMemo = RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>()
+    /// Timeline items (ArchiveView+Timeline.swift), memoized per records
+    /// version — same discipline as categoryMemo. Not private: the
+    /// Timeline extension lives in its own file.
+    @State var timelineItemMemo = RenderMemo<RecordsVersion, [ArchiveTimelineItem]>()
+    /// "timeline" | "files" — the Archived category's view switch.
+    /// Timeline is the default: the archive is the story, Files the bench.
+    @AppStorage("archive.viewMode") var archiveViewMode: String = "timeline"
     /// First-appearance default: Not Yet Archived when the archive is
     /// empty, else Archived. Applied once so a user's click sticks.
     @State private var didPickDefaultCategory = false
