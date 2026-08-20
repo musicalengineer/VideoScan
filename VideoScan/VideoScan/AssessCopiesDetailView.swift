@@ -309,16 +309,18 @@ struct AssessCopiesDetailView: View {
     }
 
     /// The naming row's label for one instance: its representation's role,
-    /// worded the way Rick asked (Original / Lossless edition / Edit copy).
+    /// worded as Rick's ledger (2026-08-20): Master / Lossless Copy /
+    /// Access Copy — same vocabulary as the worksheet, one language
+    /// everywhere.
     private func roleLabel(forInstance id: UUID, in a: CopyFamilyAssessment?) -> String {
         guard let a, let rep = a.representations.first(where: { r in r.instances.contains { $0.id == id } })
         else { return "File" }
         switch rep.role {
-        case .originalSource, .presumedOriginal: return "Original"
-        case .repairedCopy:                      return "Repaired copy"
-        case .preservationCompanion:             return "Lossless edition"
-        case .editingDerivative:                 return "Edit copy"
-        case .accessCopy:                        return "Access copy"
+        case .originalSource, .presumedOriginal: return "Master"
+        case .repairedCopy:                      return "Repaired Copy"
+        case .preservationCompanion:             return "Lossless Copy"
+        case .editingDerivative:                 return "Edit Copy"
+        case .accessCopy:                        return "Access Copy"
         case .unconfirmedVariant:                return "Variant"
         }
     }
@@ -332,7 +334,13 @@ struct AssessCopiesDetailView: View {
     /// three things to settle before promoting.
     private func prepareStrip(_ a: CopyFamilyAssessment) -> some View {
         let rows = worksheetRows(a)
-        let recRecord = a.recommendedInstanceID.flatMap { job.record(for: $0) }
+        // LIVE record first, captured instance as fallback: the job's
+        // familyByID is a start-time snapshot, so an Inspector edit made
+        // while this panel is open (Rick set the date, panel kept
+        // complaining — 2026-08-20) must be re-read from the model.
+        let recRecord = a.recommendedInstanceID.flatMap { id in
+            model.record(forID: id) ?? job.record(for: id)
+        }
         let readiness = recRecord.map { ArchiveReadiness.assess(record: $0) }
         return VStack(alignment: .leading, spacing: 10) {
             Label("TO BE ARCHIVED", systemImage: "archivebox.fill")
@@ -341,7 +349,10 @@ struct AssessCopiesDetailView: View {
                 .tracking(0.5)
             if let readiness, let rec = recRecord {
                 let hint = ArchivePathResolver.facts(for: rec).dateHint
-                let dateText = hint.manifestDate.isEmpty ? "unknown" : hint.manifestDate
+                // Human surface → friendly form ("November 1984", "14 Nov
+                // 1984"); the manifest and on-disk names stay ISO.
+                let dateText = hint.manifestDate.isEmpty
+                    ? "unknown" : UserDateEntry.friendlyDisplay(hint.manifestDate)
                 HStack(spacing: 16) {
                     checkRow(ok: readiness.date == .known,
                              okText: "Date \(dateText)",
@@ -374,27 +385,40 @@ struct AssessCopiesDetailView: View {
 
     private struct WorksheetRow: Identifiable {
         let id: UUID          // record id
-        let label: String     // Original / Modern Lossless Copy / Copy for Editing
+        let label: String     // Master / Repaired Copy / Lossless Copy / Edit Copy
+        /// What this copy is FOR — "which one is for editing and
+        /// playback" must be readable at a glance (Rick 2026-08-20).
+        let purpose: String
         let record: VideoRecord
         let isOriginal: Bool
     }
 
-    /// The rows: the recommended original, then its companion and editing
-    /// derivative when the family has them.
+    /// The ledger Rick asked for: Master, then each companion with its
+    /// purpose spelled out. LIVE records first (the job's map is a
+    /// start-time snapshot; see prepareStrip).
     private func worksheetRows(_ a: CopyFamilyAssessment) -> [WorksheetRow] {
+        func live(_ id: UUID) -> VideoRecord? { model.record(forID: id) ?? job.record(for: id) }
         var rows: [WorksheetRow] = []
-        if let id = a.recommendedInstanceID, let r = job.record(for: id) {
-            rows.append(WorksheetRow(id: id, label: "Original", record: r, isOriginal: true))
+        if let id = a.recommendedInstanceID, let r = live(id) {
+            rows.append(WorksheetRow(id: id, label: "Master",
+                                     purpose: "the original — preserved untouched",
+                                     record: r, isOriginal: true))
         }
         for rep in a.representations {
-            guard let iid = rep.recommendedInstanceID, let r = job.record(for: iid) else { continue }
+            guard let iid = rep.recommendedInstanceID, let r = live(iid) else { continue }
             switch rep.role {
             case .repairedCopy:
-                rows.append(WorksheetRow(id: iid, label: "Repaired Copy", record: r, isOriginal: false))
+                rows.append(WorksheetRow(id: iid, label: "Repaired Copy",
+                                         purpose: "corrected audio/picture — the playable master",
+                                         record: r, isOriginal: false))
             case .preservationCompanion:
-                rows.append(WorksheetRow(id: iid, label: "Modern Lossless Copy", record: r, isOriginal: false))
+                rows.append(WorksheetRow(id: iid, label: "Lossless Copy",
+                                         purpose: "modern lossless, full quality — for editing",
+                                         record: r, isOriginal: false))
             case .editingDerivative:
-                rows.append(WorksheetRow(id: iid, label: "Copy for Editing", record: r, isOriginal: false))
+                rows.append(WorksheetRow(id: iid, label: "Edit Copy",
+                                         purpose: "mezzanine — for editing",
+                                         record: r, isOriginal: false))
             default: break
             }
         }
@@ -406,9 +430,15 @@ struct AssessCopiesDetailView: View {
         let generic = ArchiveNameAdvisor.isGenericStem(stem)
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 8) {
-                Text(row.label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 150, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(row.label)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(row.purpose)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+                .frame(width: 150, alignment: .trailing)
                 TextField(generic ? "name it — “\(stem)” tells the archive nothing" : "keep “\(stem)”",
                           text: nameBinding(row))
                     .textFieldStyle(.roundedBorder)

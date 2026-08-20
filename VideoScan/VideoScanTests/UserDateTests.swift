@@ -24,6 +24,18 @@ import Foundation
 
 @Suite struct UserDateParserTests {
 
+    @Test("friendly display — day-month-name-year, never ambiguous numerics",
+          arguments: [
+            ("1984-11-14", "14 Nov 1984"),      // full date, medical style
+            ("1984-11",    "November 1984"),    // month+year (Rick's Mark_Bday case)
+            ("1984",       "1984"),             // year only stays bare
+            ("1949-12-31", "31 Dec 1949"),
+            ("garbage",    "garbage"),          // non-canonical passes through
+          ])
+    func friendlyDisplay(canonical: String, expected: String) {
+        #expect(UserDateEntry.friendlyDisplay(canonical) == expected)
+    }
+
     // MARK: Logic — acceptance table
 
     @Test("lenient entry forms normalize to canonical reduced ISO",

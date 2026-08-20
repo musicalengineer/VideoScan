@@ -21,7 +21,7 @@ struct PromoteToArchiveSheet: View {
     @State var overrideUnprobeable = false
 
     /// Archive-name overrides per entry (Promote-Helper, Rick 2026-08-19):
-    /// a vertical list — Original / Lossless edition / Edit copy — each
+    /// a vertical list — Master / Lossless Copy / Edit Copy — each
     /// with its own name; empty = keep that file's stem. Seeded from the
     /// request (Assess pre-fills suggestions); editable for plain
     /// right-click Promotes too. Slugified at destination time.

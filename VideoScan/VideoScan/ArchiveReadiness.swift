@@ -209,7 +209,7 @@ struct ArchiveReadiness: Equatable, Sendable {
             // Placed on a weak signal (a year in the filename): say WHERE
             // it will land so a wrong guess is a visible refile, not a surprise.
             let from = resolution.source == .filename ? "from the filename" : "from a weak signal"
-            warnings.append("Date \(resolution.isoString) is a low-confidence guess \(from) — filed under it; confirm or correct it in the inspector")
+            warnings.append("Date \(UserDateEntry.friendlyDisplay(resolution.isoString)) is a low-confidence guess \(from) — filed under it; confirm or correct it in the inspector")
         case .lowConfidence:
             warnings.append("Date is a low-confidence guess — filed as undated until you confirm it")
         case .undated: warnings.append("Undated — will land in Undated/ (refile later once the date is known)")

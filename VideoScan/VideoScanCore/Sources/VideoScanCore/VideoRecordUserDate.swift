@@ -151,6 +151,26 @@ public enum UserDateEntry {
         return (y, month, day)
     }
 
+    /// Friendly DISPLAY form of a canonical reduced-precision ISO date
+    /// (Rick 2026-08-20: "1984-11" in the Helper "is not sure what or
+    /// who's format that is"): "1984-11-14" → "14 Nov 1984", "1984-11" →
+    /// "November 1984", "1984" → "1984". Day-month-NAME-year on purpose —
+    /// the unambiguous archival/medical convention; numeric day-month
+    /// ("14-11" vs "11-14") reads differently on each side of the
+    /// Atlantic. Storage, manifests and on-disk names stay canonical ISO;
+    /// this is for human surfaces only. Non-canonical input is returned
+    /// unchanged — never hide data behind a formatter.
+    public static func friendlyDisplay(_ canonical: String) -> String {
+        guard let (y, month, day) = components(of: canonical) else { return canonical }
+        guard let m = month, (1...12).contains(m) else { return String(y) }
+        let short = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        let full = ["January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"]
+        guard let d = day else { return "\(full[m - 1]) \(y)" }
+        return "\(d) \(short[m - 1]) \(y)"
+    }
+
     /// The START of the period a canonical user date names, as a UTC
     /// Date — "1992" → 1992-01-01T00:00Z, "1992-06" → 1992-06-01T00:00Z.
     /// Used as the table sort key, so it must be CHEAP: this is the

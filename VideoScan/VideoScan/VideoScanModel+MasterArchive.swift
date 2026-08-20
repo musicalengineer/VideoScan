@@ -95,7 +95,7 @@ struct ArchivePromotePlan: Sendable {
     /// disk is never touched". Absent/empty = keep the file's own stem.
     /// The date prefix and _NN collision suffix still apply.
     var archiveTitles: [UUID: String] = [:]
-    /// Display-only role labels ("Original", "Lossless edition"…) for the
+    /// Display-only role labels ("Master", "Lossless Copy"…) for the
     /// naming rows in the confirmation sheet, set when the promote was
     /// launched from Assess Copies. Absent = the sheet shows filenames.
     var roleLabels: [UUID: String] = [:]
