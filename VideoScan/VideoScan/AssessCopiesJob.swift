@@ -23,6 +23,12 @@ final class AssessCopiesJob: @MainActor MediaFileOperationJob {
     let kind: MediaFileOperationKind = .assessCopies
     let startedAt = Date()
     let canPause = false
+    /// Lifecycle rule 2 (Rick 2026-08-20): a cancelled Helper session
+    /// disappears from the MFO list completely and immediately — the
+    /// panel is a workspace, and a cancelled workspace is not a result
+    /// worth a "Stopped" row. The Center enforces this via its terminal
+    /// watcher (removeIfCancellationVanishes).
+    let vanishesWhenCancelled = true
 
     /// The record the user right-clicked.
     let seed: VideoRecord
@@ -166,9 +172,17 @@ final class AssessCopiesJob: @MainActor MediaFileOperationJob {
 extension MediaFileOperationsCenter {
     /// Start an assessment for the seed's copy family. Metadata only —
     /// no volume gates. Returns the job so the caller can expand its row.
+    ///
+    /// ONE listed session per recording (lifecycle rule 3, Rick
+    /// 2026-08-20): re-running the Helper while an earlier session for
+    /// the same recording is still listed REPLACES it — never a pile.
+    /// Replace (not focus) on purpose: the new job re-reads the catalog,
+    /// so a promote/repair/date-fix since the last run shows up fresh.
     @discardableResult
     func startAssessCopies(seed: VideoRecord, model: VideoScanModel) -> AssessCopiesJob {
         let family = AssessCopiesJob.collectFamily(seed: seed, model: model)
+        replaceEarlierAssessSessions(seed: seed,
+                                     familyIDs: Set(family.map(\.id)))
         let inputs = AssessCopiesJob.projectInputs(family, model: model)
         let job = AssessCopiesJob(seed: seed, family: family, inputs: inputs)
         add(job)
@@ -176,5 +190,26 @@ extension MediaFileOperationsCenter {
         fileOpsLog.info("assess copies started: \(seed.filename, privacy: .public) (\(family.count) in family)")
         model.log("assess copies START: \(seed.filename) — \(family.count) copies → representations")
         return job
+    }
+
+    /// Drop every listed Assess session about the SAME RECORDING as the
+    /// new seed. "Same recording" is membership in either direction —
+    /// the old session's family contains the new seed, or the new seed's
+    /// family contains the old session's seed — so re-running from a
+    /// different copy of the family (the balanced .mov instead of the
+    /// .dv) still replaces rather than stacks. Active stragglers are
+    /// cancelled first (assess finishes in ms; this is belt-and-braces).
+    /// Split out of startAssessCopies so tests can drive it with
+    /// directly-constructed jobs.
+    func replaceEarlierAssessSessions(seed: VideoRecord, familyIDs: Set<UUID>) {
+        let stale = jobs.compactMap { $0 as? AssessCopiesJob }.filter { old in
+            old.seed.id == seed.id
+                || old.familyByID[seed.id] != nil
+                || familyIDs.contains(old.seed.id)
+        }
+        guard !stale.isEmpty else { return }
+        for old in stale where old.state.isActive { old.cancel() }
+        fileOpsLog.info("assess copies: replacing \(stale.count) earlier session(s) for \(seed.filename, privacy: .public)")
+        removeJobs(withIDs: Set(stale.map(\.id)))
     }
 }

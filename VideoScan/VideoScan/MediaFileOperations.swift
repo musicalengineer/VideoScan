@@ -285,6 +285,15 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     /// tell "the operation broke" from "the guard said no". Defaulted
     /// false below; conformers with refusal paths set it.
     var wasRefused: Bool { get }
+
+    /// True for jobs whose CANCELLED row should not linger in the list:
+    /// the Center removes them the moment the terminal transition lands
+    /// (still writing the one "<verb> cancelled:" OUTCOME line first, so
+    /// the log trail survives). Rick 2026-08-20, Archive Helper
+    /// lifecycle: a cancelled Helper session must disappear completely —
+    /// its row is a workspace, not a record of work done. Defaulted
+    /// false below; ordinary verbs keep their "Stopped" row.
+    var vanishesWhenCancelled: Bool { get }
 }
 
 /// Pause is opt-in; jobs whose work is an ffmpeg child adopt it via
@@ -296,6 +305,7 @@ extension MediaFileOperationJob {
     func pause() {}
     func resume() {}
     var wasRefused: Bool { false }
+    var vanishesWhenCancelled: Bool { false }
 }
 
 /// Shared pause plumbing for ffmpeg-backed jobs (GH #150 — MFO Pause All).
@@ -584,6 +594,30 @@ final class MediaFileOperationsCenter: ObservableObject {
         fileOpsLog.info("cleared \(removed.count) finished operation(s)")
     }
 
+    /// Remove specific jobs from the list regardless of state, releasing
+    /// their subscriptions/bookkeeping (OUTCOME line written first if the
+    /// job is terminal and unlogged). Used by the Archive Helper's
+    /// replace policy (AssessCopiesJob.swift) and the vanish-on-cancel
+    /// path below — NOT a user-facing bulk verb.
+    func removeJobs(withIDs ids: Set<UUID>) {
+        let removed = jobs.filter { ids.contains($0.id) }
+        guard !removed.isEmpty else { return }
+        jobs.removeAll { ids.contains($0.id) }
+        for job in removed { releaseLogBookkeeping(for: job) }
+    }
+
+    /// Vanish-on-cancel (Rick 2026-08-20, Archive Helper lifecycle rule
+    /// 2): a cancelled job that opts in via `vanishesWhenCancelled`
+    /// leaves the list the moment its `.cancelled` state lands — no
+    /// "Stopped" row to Clear later. Called from the deferred terminal
+    /// check, AFTER the OUTCOME line is written. Idempotent.
+    private func removeIfCancellationVanishes(_ job: any MediaFileOperationJob) {
+        guard job.state == .cancelled, job.vanishesWhenCancelled else { return }
+        guard jobs.contains(where: { $0.id == job.id }) else { return }
+        fileOpsLog.info("removing cancelled \(job.kind.rawValue, privacy: .public) row (vanishes on cancel): \(job.title, privacy: .public)")
+        removeJobs(withIDs: [job.id])
+    }
+
     /// Ask every live job to stop. Used by the quit guard so ffmpeg
     /// children die before the process exits, and by the window
     /// header's "Cancel All" (Rick 2026-07-31).
@@ -674,6 +708,7 @@ final class MediaFileOperationsCenter: ObservableObject {
             self.terminalCheckScheduled.remove(id)
             guard let job else { return }
             self.logTerminalIfNeeded(job)
+            self.removeIfCancellationVanishes(job)
         }
     }
 

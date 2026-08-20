@@ -166,7 +166,11 @@ struct MediaFileOperationsWindow: View {
             }
             .padding(.vertical, 4)
         }
-        .onChange(of: center.jobs.count) { _, _ in autoExpandNewAssessRows() }
+        // Keyed on the ID LIST, not the count: the Archive Helper's
+        // replace policy (Bug B, 2026-08-20) swaps an old session for a
+        // new one in the same turn — count unchanged, ids changed — and
+        // the fresh session must still arrive expanded.
+        .onChange(of: center.jobs.map(\.id)) { _, _ in autoExpandNewAssessRows() }
         .onAppear { autoExpandNewAssessRows() }
     }
 
@@ -285,49 +289,64 @@ struct MediaFileOperationRow: View {
         let _ = heartbeat
 
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                MediaFileOperationBadge(
-                    kind: job.kind,
-                    textOverride: (job as? AnalyzeJob)?.displayBadge
-                )
+            // Summary area — badge/title/status plus the progress bar.
+            // ONLY this area toggles expansion (Bug A, Rick 2026-08-20:
+            // the tap gesture used to sit on the whole row INCLUDING the
+            // expanded detail panel, so clicking any non-control content
+            // inside the panel — a role chip, a file row — collapsed it).
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    MediaFileOperationBadge(
+                        kind: job.kind,
+                        textOverride: (job as? AnalyzeJob)?.displayBadge
+                    )
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(job.title)
-                        .font(.system(size: 13, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        // Gauntlet flow 4 matches the balanced file's row
-                        // by this title text. Test-only.
-                        .accessibilityIdentifier("mfo.row.title")
-                    Text(job.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .accessibilityIdentifier("mfo.row.subtitle")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(job.title)
+                            .font(.system(size: 13, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            // Gauntlet flow 4 matches the balanced file's row
+                            // by this title text. Test-only.
+                            .accessibilityIdentifier("mfo.row.title")
+                        Text(job.subtitle)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .accessibilityIdentifier("mfo.row.subtitle")
+                    }
+
+                    Spacer()
+
+                    trailingStatus
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
 
-                Spacer()
-
-                trailingStatus
+                if job.state == .running || job.state == .cancelling {
+                    // A paused verb must LOOK paused (Rick 2026-08-04): a
+                    // suspended child emits no progress, so the bar freezes
+                    // at its last fraction — never the indeterminate bounce,
+                    // which reads as work happening — and dims to gray.
+                    ProgressView(value: job.isPaused
+                        ? job.fraction
+                        : (job.isIndeterminate ? nil : job.fraction))
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                        .tint(job.state == .cancelling ? .orange
+                              : (job.isPaused ? .gray : .blue))
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 4)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            if job.state == .running || job.state == .cancelling {
-                // A paused verb must LOOK paused (Rick 2026-08-04): a
-                // suspended child emits no progress, so the bar freezes
-                // at its last fraction — never the indeterminate bounce,
-                // which reads as work happening — and dims to gray.
-                ProgressView(value: job.isPaused
-                    ? job.fraction
-                    : (job.isIndeterminate ? nil : job.fraction))
-                    .progressViewStyle(.linear)
-                    .controlSize(.small)
-                    .tint(job.state == .cancelling ? .orange
-                          : (job.isPaused ? .gray : .blue))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 4)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Rows with a detail view expand on a summary click
+                // (compare's pattern, extended to Find & Tag — Rick
+                // 2026-08-04). Clicks INSIDE the expanded detail below
+                // must never reach here (Bug A).
+                if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob { onToggleExpand() }
             }
 
             if isExpanded, let compare = job as? PairCompareJob {
@@ -349,12 +368,6 @@ struct MediaFileOperationRow: View {
             }
         }
         .background(rowBackground)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // Rows with a detail view expand on click (compare's
-            // pattern, extended to Find & Tag — Rick 2026-08-04).
-            if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob { onToggleExpand() }
-        }
         .onReceive(job.objectWillChange) { _ in
             heartbeat.toggle()
         }
