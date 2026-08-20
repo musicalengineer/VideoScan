@@ -252,6 +252,29 @@ struct CopyFamilyEvidenceTests {
         _ = clip
     }
 
+    @Test func cleanUpRepairAnchorsItsSourceLikeBalanceDoes() {
+        // codex QA 2026-08-20: a Clean Up output (cleanupRecipeID, no
+        // derivationKind) classified as a Repaired copy but did NOT anchor
+        // its source — the prepared original could still lose the
+        // election to an unproven better-drive twin (the CapeCod trap,
+        // via the other repair door).
+        let clipID = UUID()
+        let clip = dv("/Volumes/LaCieWorkspace/Clip 02.dv", hash: "v1:clip2", vol: 10, human: 50, id: clipID)
+        let twin = dv("/Volumes/Projects/Clip02_twin.dv", hash: "v1:DIFFERENT", vol: 90, human: 0)
+        var cleaned = CopyFamilyInput(fullPath: "/Volumes/LaCieWorkspace/Clip 02_cleaned.mov",
+                                      sizeBytes: 1, durationSeconds: 3604,
+                                      videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",
+                                      resolution: "720x480", frameRate: "29.97",
+                                      audioChannels: "2", audioSampleRate: "48000",
+                                      derivedFrom: clipID)
+        cleaned.cleanupRecipeID = "declick+denoise"
+        #expect(CopyFamilyAssessor.isRepairDerivative(cleaned))
+        let a = CopyFamilyAssessor.assess([clip, twin, cleaned])
+        #expect(a.recommendedInstanceID == clipID, "the Clean Up anchor must win over the better drive")
+        #expect(a.representations.contains { $0.role == .repairedCopy },
+                "the cleaned output still classifies as the repaired copy")
+    }
+
     @Test func provenIdenticalStillPrefersReliableDrive() {
         let a = CopyFamilyAssessor.assess([
             dv("/Volumes/SSD/x.dv", hash: "v1:same", vol: 10, human: 100),

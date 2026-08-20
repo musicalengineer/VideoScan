@@ -242,8 +242,19 @@ enum CopyFamilyAssessor {
     /// derivationKind values that mean "a REPAIR of the source" — the
     /// output is the same recording with a defect corrected, not a
     /// quality-reduced derivative. Balance/Rebuild write these; Clean Up
-    /// stamps cleanupRecipeID instead (checked separately).
+    /// stamps cleanupRecipeID instead (see isRepairDerivative).
     static let repairDerivationKinds: Set<String> = ["balanceAudio", "rebuildAudio", "externalRepair"]
+
+    /// ONE predicate for "this member is a repair made from another copy",
+    /// used by BOTH the repairedCopy classifier and the anchor election.
+    /// The two used to disagree: a Clean Up output (no derivationKind,
+    /// cleanupRecipeID stamped) classified as a Repaired copy but did not
+    /// anchor its source, so the prepared original could still lose the
+    /// election to an unproven better-drive twin (codex QA, 2026-08-20).
+    static func isRepairDerivative(_ m: CopyFamilyInput) -> Bool {
+        if let dk = m.derivationKind { return repairDerivationKinds.contains(dk) }
+        return m.cleanupRecipeID != nil && m.derivedFrom != nil
+    }
 
     static func codecClass(videoCodec: String, audioCodec: String, container: String, originMake: String?) -> CodecClass {
         let v = videoCodec.lowercased()
@@ -284,8 +295,7 @@ enum CopyFamilyAssessor {
         // copy he had prepared lost to the copy he had never even played.
         // The anchor is the prepared copy; it wins the instance election.
         let repairAnchors: Set<UUID> = Set(inputs.compactMap { m -> UUID? in
-            guard let dk = m.derivationKind, Self.repairDerivationKinds.contains(dk) else { return nil }
-            return m.derivedFrom
+            Self.isRepairDerivative(m) ? m.derivedFrom : nil
         })
 
         // Collapse into representations by encoding signature. Damaged or
@@ -389,10 +399,7 @@ enum CopyFamilyAssessor {
                 reason = String(format: "Duration %.1f s differs from the family's %.1f s — truncated, extended, or a different cut.",
                                 d.members[0].durationSeconds, referenceDuration)
             } else if let oi = originalIndex,
-                      d.members.contains(where: { m in
-                          guard let dk = m.derivationKind else { return m.cleanupRecipeID != nil && m.derivedFrom != nil }
-                          return Self.repairDerivationKinds.contains(dk)
-                      }),
+                      d.members.contains(where: Self.isRepairDerivative),
                       d.derivedFromSig == drafts[oi].sig || d.derivedFromSig == nil {
                 // Repair derivative of the original (or of a member whose
                 // signature matched the original's) — the corrected master.

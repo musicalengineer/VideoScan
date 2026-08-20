@@ -109,8 +109,8 @@ struct ArchiveCategorySnapshot {
     /// not a second asset).
     var activeAssetCount: Int = 0
     /// Sidebar VOLUMES row counts, keyed by CatalogScanTarget.searchPath.
-    /// Counts ALL catalog records under the path (parity with the old
-    /// per-row filter), one pass instead of one pass per row per render.
+    /// Counts ALL catalog records under the path (component-boundary
+    /// containment), one pass instead of one pass per row per render.
     var volumeFileCounts: [String: Int] = [:]
 
     func records(for category: ArchiveCategory) -> [VideoRecord] {
@@ -159,11 +159,18 @@ struct ArchiveCategorySnapshot {
             }
         }
         // Volume counts: O(records × targets); targets are a handful.
+        // Component-boundary containment, not bare string prefix —
+        // "/Volumes/A" must not also swallow "/Volumes/AB" (codex QA
+        // 2026-08-20; the old per-row filter had the same defect).
         var counts: [String: Int] = [:]
+        let roots = volumeSearchPaths.map { path -> (key: String, exact: String, prefix: String) in
+            let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+            return (path, trimmed, trimmed + "/")
+        }
         for path in volumeSearchPaths { counts[path] = 0 }
         for rec in allRecords {
-            for path in volumeSearchPaths where rec.fullPath.hasPrefix(path) {
-                counts[path, default: 0] += 1
+            for r in roots where rec.fullPath == r.exact || rec.fullPath.hasPrefix(r.prefix) {
+                counts[r.key, default: 0] += 1
             }
         }
         snap.volumeFileCounts = counts

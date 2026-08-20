@@ -211,7 +211,7 @@ struct ArchiveCategoryTests {
         #expect(text.hasPrefix("1 of 4 media files archived · "), "got: \(text)")
         #expect(text.hasSuffix(" verified"))
         #expect(text.contains("2 MB") || text.contains("2,0") || text.contains("2.0"), "bytes = the copy's size, got: \(text)")
-        #expect(snap.volumeFileCounts["/Volumes/A"] == 3, "hasPrefix parity with the old per-row filter: /Volumes/A also matches /Volumes/AB")
+        #expect(snap.volumeFileCounts["/Volumes/A"] == 2, "component boundary: /Volumes/A must NOT swallow /Volumes/AB (codex QA 2026-08-20)")
         #expect(snap.volumeFileCounts["/Volumes/B"] == 1)
         #expect(snap.volumeFileCounts["/Volumes/TestArchive"] == 1)
     }
