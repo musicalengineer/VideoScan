@@ -321,9 +321,14 @@ enum HallieShellCLI {
     static func run(
         options: Options,
         input: @escaping () -> String? = { readLine() },
-        output: @escaping (String) -> Void = { print($0) },
+        output: @escaping (String) -> Void = {
+            print($0)
+            fflush(stdout)
+        },
         dependencies: Dependencies = .production
     ) async -> Int32 {
+        output("Hallie Mae — headless read-only shell")
+        output("opening catalog read-only: \(options.catalogURL.path)")
         guard let records = dependencies.loadCatalog(options.catalogURL) else {
             output("error: cannot read catalog at \(options.catalogURL.path)")
             return ExitCode.catalogUnavailable.rawValue
@@ -342,7 +347,6 @@ enum HallieShellCLI {
             cyberBrain: cyberBrain,
             model: options.model)
 
-        output("Hallie Mae — headless read-only shell")
         output("catalog: \(records.count) records · \(options.catalogURL.path)")
         if let once = options.once {
             let outcome = await answer(
@@ -466,6 +470,7 @@ enum HallieShellCLI {
                 // Anti-hallucination boundary: the translator receives exactly
                 // the user's question. Catalog, profile, GEDCOM, and citations
                 // stay local.
+                output("Hallie is interpreting that question…")
                 let translation = try await dependencies.translateAST(
                     effectiveQuestion, options)
                 state.lastResponder = translation.responderHost

@@ -1,27 +1,61 @@
 #!/bin/zsh
 set -eu
+setopt null_glob
 
 script_dir=${0:A:h}
 repo_dir=${script_dir:h}
 
-if [[ -n ${VIDEOSCAN_APP_BIN:-} && -x ${VIDEOSCAN_APP_BIN} ]]; then
-  exec "${VIDEOSCAN_APP_BIN}" --hallie "$@"
+if [[ -n ${VIDEOSCAN_APP_BIN:-} ]]; then
+  if [[ ! -f ${VIDEOSCAN_APP_BIN} || ! -x ${VIDEOSCAN_APP_BIN} ]]; then
+    print -u2 "hallie: VIDEOSCAN_APP_BIN is not an executable file: ${VIDEOSCAN_APP_BIN}"
+    exit 127
+  fi
+  selected_binary=${VIDEOSCAN_APP_BIN:A}
+  selected_source="VIDEOSCAN_APP_BIN override"
+else
+  # Xcode can place the product in the repo, its default DerivedData,
+  # Rick's XcodeRAM volume, or an isolated agent worktree.  Do not rely on
+  # array order: Debug and Release are both valid, and the newest executable
+  # is the build that reflects the newest source work.
+  candidates=(
+    ${repo_dir}/VideoScan/build/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    ${repo_dir}/.derivedData/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    ${repo_dir}/VideoScan/.derivedData/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    ${repo_dir}/.claude/worktrees/*/DerivedData/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    ${repo_dir}/.claude/worktrees/*/.derivedData/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    /Volumes/XcodeRAM/**/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    /Applications/VideoScan.app/Contents/MacOS/VideoScan(N)
+  )
+
+  selected_binary=""
+  selected_mtime=0
+  for candidate in "${candidates[@]}"; do
+    [[ -f ${candidate} && -x ${candidate} ]] || continue
+    candidate_mtime=$(stat -f %m "${candidate}" 2>/dev/null || print 0)
+    if (( candidate_mtime > selected_mtime )); then
+      selected_binary=${candidate:A}
+      selected_mtime=${candidate_mtime}
+    fi
+  done
+  selected_source="newest discovered Debug/Release build"
 fi
 
-candidates=(
-  "${repo_dir}/VideoScan/build/Debug/VideoScan.app/Contents/MacOS/VideoScan"
-  ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan(Nom)
-  "${repo_dir}/VideoScan/build/Release/VideoScan.app/Contents/MacOS/VideoScan"
-  ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/Release/VideoScan.app/Contents/MacOS/VideoScan(Nom)
-  "/Applications/VideoScan.app/Contents/MacOS/VideoScan"
-)
+if [[ -z ${selected_binary} ]]; then
+  print -u2 "hallie: no Debug or Release VideoScan executable found"
+  print -u2 "Searched repo builds, .derivedData, Xcode DerivedData, XcodeRAM, agent worktrees, and /Applications."
+  print -u2 "Build VideoScan once, or set VIDEOSCAN_APP_BIN to VideoScan.app/Contents/MacOS/VideoScan."
+  exit 127
+fi
 
-for candidate in "${candidates[@]}"; do
-  if [[ -x ${candidate} ]]; then
-    exec "${candidate}" --hallie "$@"
-  fi
-done
+selected_time=$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "${selected_binary}" 2>/dev/null || print unknown)
+print -u2 "hallie: using ${selected_source}"
+print -u2 "hallie: ${selected_binary}"
+print -u2 "hallie: built ${selected_time}"
+print -u2 "hallie: standalone read-only session; the VideoScan app may remain running"
+print -u2 "hallie: press Control-C or enter :quit to leave"
 
-print -u2 "hallie: no built VideoScan executable found"
-print -u2 "Build VideoScan once, or set VIDEOSCAN_APP_BIN to VideoScan.app/Contents/MacOS/VideoScan."
-exit 127
+# NSUnbufferedIO makes startup/progress and answers visible immediately even
+# when this launcher is invoked through another terminal or logging wrapper.
+export NSUnbufferedIO=YES
+exec "${selected_binary}" --hallie "$@"

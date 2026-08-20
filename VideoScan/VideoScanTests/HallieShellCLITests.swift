@@ -274,6 +274,9 @@ struct HallieShellCLITests {
         #expect(harness.output.contains { $0.hasPrefix("session: 0 citations") })
         #expect(harness.output.contains("Goodbye."))
         #expect(harness.output.contains { $0.contains("headless read-only shell") })
+        #expect(harness.output.contains {
+            $0 == "opening catalog read-only: /isolated/catalog.json"
+        })
     }
 
     @Test func onceTranslatesExactlyOnceAndNeverReadsInteractiveInput() async throws {
@@ -294,6 +297,7 @@ struct HallieShellCLITests {
         #expect(harness.readCount == 0)
         #expect(harness.inputs == ["this must remain unread"])
         #expect(harness.mediaActions.isEmpty)
+        #expect(harness.output.contains("Hallie is interpreting that question…"))
     }
 
     @Test func onceRecordsExactQuestionAndBoundedAnswerEvidence() async throws {

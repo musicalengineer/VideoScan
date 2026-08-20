@@ -56,6 +56,19 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         if resetPhrases.contains(phrase) { return .reset }
         if let smalltalk = smalltalkPhrases[phrase] { return .smalltalk(smalltalk) }
 
+        // Family members naturally combine a salutation and a social
+        // question: "Hi Hallie, how are you today?" Hallie's name has
+        // already been stripped above, leaving "hi how are you today".
+        // Peel only a known leading salutation, then require that the rest
+        // is itself an exact small-talk phrase. This keeps "hello Donna"
+        // and actual catalog questions on the ordinary query path.
+        if let first = words.first, leadingSalutations.contains(first) {
+            let remainder = words.dropFirst().joined(separator: " ")
+            if let smalltalk = smalltalkPhrases[remainder] {
+                return .smalltalk(smalltalk)
+            }
+        }
+
         // "how do i …" / "how can we …" is a how-to question about Hallie
         // herself; the help card answers it with worked examples. Capability
         // questions ("how do i change donna's bio") are classified BEFORE
@@ -80,6 +93,10 @@ enum ArchivistConversationCommand: Equatable, Sendable {
 
     private static let addressWords: Set<String> = [
         "hallie", "please", "hey", "ok", "okay", "oh", "well",
+    ]
+
+    private static let leadingSalutations: Set<String> = [
+        "hi", "hello", "hiya", "howdy", "yo",
     ]
 
     private static let helpPhrases: Set<String> = [

@@ -29,6 +29,7 @@ struct ArchivistConversationCommandTests {
         ("hi", .greeting), ("Hello", .greeting), ("hey hallie", .greeting),
         ("good morning", .greeting), ("Good morning Hallie", .greeting),
         ("good evening", .greeting), ("how are you?", .greeting),
+        ("Hi Hallie, how are you today?", .greeting),
         ("bye", .farewell), ("goodbye", .farewell), ("good night", .farewell),
         ("that's all for now", .farewell),
         ("great", .affirmation), ("wonderful!", .affirmation), ("nice work", .affirmation),
@@ -138,6 +139,16 @@ struct ArchivistConversationCommandTests {
         #expect(reset.outcome == .answered)
         #expect(HallieTurnExecutor.label(reset.route) == "reset")
         #expect(reset.prose == Command.resetReply)
+    }
+
+    @Test func compoundGreetingNeverReachesTheEvidencePipeline() throws {
+        guard case .answer(let result) = pre("Hi Hallie, how are you today?") else {
+            Issue.record("compound greeting must answer locally"); return
+        }
+        #expect(result.route == .smalltalk)
+        #expect(result.outcome == .answered)
+        #expect(result.citations.isEmpty)
+        #expect(result.basisLine.contains("no model call"))
     }
 
     @Test func resetClearsConversationMemory() throws {
