@@ -265,3 +265,35 @@ struct ArchiveReadinessPromoteTests {
         #expect(copy.fullPath.hasPrefix(sb.archiveRoot.path))
     }
 }
+
+// MARK: - Family user date (Rick's Mark_Bday case, 2026-08-20)
+
+@Suite("Archive readiness — family user date")
+@MainActor
+struct ArchiveReadinessFamilyDateTests {
+    /// The election can recommend a twin the user never dated; the
+    /// family's hand-entered date stands in, and the record's OWN date
+    /// always wins over the family's.
+    @Test func familyDateStandsInForAnUndatedTwin() {
+        let r = VideoRecord()
+        r.filename = "Mark_Bday_Thanksgiving_1984.mkv"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.videoCodec = "ffv1"
+        r.audioCodec = "pcm_s32le"
+
+        let bare = ArchiveReadiness.assess(record: r)
+        #expect(bare.date != .known, "no date signal anywhere → not known")
+
+        let famed = ArchiveReadiness.assess(
+            record: r,
+            familyUserDate: ("1984-11", UserDateConfidence.known.rawValue))
+        #expect(famed.date == .known, "the family's known date is the recording's date")
+
+        r.userDate = "1985"
+        r.userDateConfidence = UserDateConfidence.estimated.rawValue
+        let own = ArchiveReadiness.assess(
+            record: r,
+            familyUserDate: ("1984-11", UserDateConfidence.known.rawValue))
+        #expect(own.date == .known, "own user date (any confidence) outranks the family's")
+    }
+}

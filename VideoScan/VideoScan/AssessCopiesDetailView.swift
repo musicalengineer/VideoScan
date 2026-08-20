@@ -292,11 +292,12 @@ struct AssessCopiesDetailView: View {
     /// each row editable, empty = keep that file's name (Rick 2026-08-19).
     private func promote(_ ids: [UUID]) {
         guard !ids.isEmpty else { return }
+        stampFamilyUserDateIfMissing(ids)
         var titles: [UUID: String] = [:]
         var roles: [UUID: String] = [:]
         let a = job.assessment
         for id in ids {
-            guard let r = job.record(for: id) else { continue }
+            guard let r = model.record(forID: id) ?? job.record(for: id) else { continue }
             model.noteMissingFileForUserAction(r)
             roles[id] = roleLabel(forInstance: id, in: a)
             if let t = VideoScanModel.normalizedTitle(names[id]) { titles[id] = t }
@@ -306,6 +307,47 @@ struct AssessCopiesDetailView: View {
         // (Rick 2026-08-19: "I thought it was hung").
         MainWindowHelper.shared.openMainWindow()
         model.requestPromote(recordIDs: ids, archiveTitles: titles, roleLabels: roles)
+    }
+
+    /// The copy family's best hand-entered date, from LIVE records.
+    /// Known beats estimated; more precise (longer canonical) beats less;
+    /// remaining ties resolve lexicographically so the answer is stable.
+    private func familyBestUserDate() -> (date: String, confidence: String)? {
+        var best: (date: String, confidence: String)?
+        for id in job.familyByID.keys {
+            guard let r = model.record(forID: id) ?? job.record(for: id),
+                  let d = r.userDate else { continue }
+            let cand = (date: d,
+                        confidence: r.userDateConfidence ?? UserDateConfidence.estimated.rawValue)
+            guard let b = best else { best = cand; continue }
+            let candKnown = cand.confidence == UserDateConfidence.known.rawValue
+            let bestKnown = b.confidence == UserDateConfidence.known.rawValue
+            if candKnown != bestKnown { if candKnown { best = cand }; continue }
+            if cand.date.count != b.date.count {
+                if cand.date.count > b.date.count { best = cand }; continue
+            }
+            if cand.date < b.date { best = cand }
+        }
+        return best
+    }
+
+    /// The recording's date rides the promote: records being promoted
+    /// that lack a user date inherit the family's best one (same direct-
+    /// mutation + mutated-notification write path as InspectorDateView),
+    /// so the check row, the destination folder and the timeline agree.
+    private func stampFamilyUserDateIfMissing(_ ids: [UUID]) {
+        guard let fam = familyBestUserDate() else { return }
+        var stamped = false
+        for id in ids {
+            guard let r = model.record(forID: id) ?? job.record(for: id),
+                  r.userDate == nil else { continue }
+            r.userDate = fam.date
+            r.userDateConfidence = fam.confidence
+            stamped = true
+        }
+        if stamped {
+            NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        }
     }
 
     /// The naming row's label for one instance: its representation's role,
@@ -341,7 +383,10 @@ struct AssessCopiesDetailView: View {
         let recRecord = a.recommendedInstanceID.flatMap { id in
             model.record(forID: id) ?? job.record(for: id)
         }
-        let readiness = recRecord.map { ArchiveReadiness.assess(record: $0) }
+        // A hand-entered date anywhere in the family is the RECORDING's
+        // date — the election may recommend a twin Rick never dated.
+        let familyDate = recRecord?.userDate == nil ? familyBestUserDate() : nil
+        let readiness = recRecord.map { ArchiveReadiness.assess(record: $0, familyUserDate: familyDate) }
         return VStack(alignment: .leading, spacing: 10) {
             Label("TO BE ARCHIVED", systemImage: "archivebox.fill")
                 .font(.system(size: 13, weight: .bold))
@@ -350,9 +395,14 @@ struct AssessCopiesDetailView: View {
             if let readiness, let rec = recRecord {
                 let hint = ArchivePathResolver.facts(for: rec).dateHint
                 // Human surface → friendly form ("November 1984", "14 Nov
-                // 1984"); the manifest and on-disk names stay ISO.
-                let dateText = hint.manifestDate.isEmpty
-                    ? "unknown" : UserDateEntry.friendlyDisplay(hint.manifestDate)
+                // 1984"); the manifest and on-disk names stay ISO. The
+                // family's date shows when the recommended twin has none —
+                // promote stamps it (see promote(_:)) so disk agrees.
+                let dateText: String = {
+                    if let fam = familyDate { return UserDateEntry.friendlyDisplay(fam.date) }
+                    return hint.manifestDate.isEmpty
+                        ? "unknown" : UserDateEntry.friendlyDisplay(hint.manifestDate)
+                }()
                 HStack(spacing: 16) {
                     checkRow(ok: readiness.date == .known,
                              okText: "Date \(dateText)",

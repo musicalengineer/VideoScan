@@ -313,8 +313,14 @@ struct ArchiveReadiness: Equatable, Sendable {
 
 extension ArchiveReadiness {
     /// Snapshot the fields from a live record (main actor) and assess.
+    /// `familyUserDate`: the copy family's best hand-entered date — a
+    /// user date is a fact about the RECORDING, not the one file it was
+    /// typed on, so when THIS record has none the family's stands in
+    /// (Mark_Bday 2026-08-20: date on the MediaExpansion copy, election
+    /// recommended the staging twin, readiness nagged low-confidence).
     @MainActor
-    static func assess(record r: VideoRecord) -> ArchiveReadiness {
+    static func assess(record r: VideoRecord,
+                       familyUserDate: (date: String, confidence: String)? = nil) -> ArchiveReadiness {
         var i = Inputs()
         i.isPlayable = r.isPlayable
         i.streamTypeRaw = r.streamTypeRaw
@@ -329,8 +335,10 @@ extension ArchiveReadiness {
         i.durationSeconds = r.durationSeconds
         i.inferredRecordDate = r.inferredRecordDate
         i.inferredDateConfidence = r.inferredDateConfidence
-        i.userDate = r.userDate
-        i.userDateConfidence = r.userDateConfidence
+        i.userDate = r.userDate ?? familyUserDate?.date
+        i.userDateConfidence = r.userDate == nil
+            ? (familyUserDate?.confidence ?? r.userDateConfidence)
+            : r.userDateConfidence
         i.embeddedCreationDate = r.embeddedCreationDate
         i.originMake = r.originMake
         i.originModel = r.originModel
