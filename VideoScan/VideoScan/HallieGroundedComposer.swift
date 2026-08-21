@@ -128,12 +128,35 @@ struct HallieGroundedComposer: Sendable {
         guard !verification.kept.isEmpty else {
             return .template(plan, note: "template: no sentence survived verification")
         }
+        let restored = Self.restoringCountSentence(verification, plan: plan)
         return Outcome(
-            displayText: verification.displayText,
-            transcriptText: verification.transcriptText,
+            displayText: restored.displayText,
+            transcriptText: restored.transcriptText,
             composedBy: .model,
-            dropped: verification.dropped,
-            note: "model")
+            dropped: restored.dropped,
+            note: restored.kept.count == verification.kept.count ? "model" : "model (count sentence restored)")
+    }
+
+    /// A list answer must say how many. The model sometimes phrases only
+    /// the examples ("Two examples are Clip 01.dv and MyGirl.mov") and the
+    /// verifier, which only removes, cannot notice what is MISSING — so
+    /// "How many videos include Donna?" came back without a number (codex
+    /// corpus, 2026-08-21). When no kept sentence rests on the count claim
+    /// c1, the template's own count sentence is put back in front,
+    /// tagged, exactly as a claim. Nothing is invented: c1 is the plan.
+    static func restoringCountSentence(
+        _ verification: HallieCompositionVerifier.Verification,
+        plan: HallieAnswerPlan
+    ) -> HallieCompositionVerifier.Verification {
+        guard plan.shape == .list,
+              let count = plan.claims.first, count.id == "c1",
+              !verification.kept.contains(where: { $0.claimIDs.contains("c1") }) else {
+            return verification
+        }
+        let sentence = HallieCompositionVerifier.Sentence(
+            display: count.text, tagged: count.text + " [c1]", claimIDs: ["c1"])
+        return HallieCompositionVerifier.Verification(
+            kept: [sentence] + verification.kept, dropped: verification.dropped)
     }
 
     // MARK: - Prompts

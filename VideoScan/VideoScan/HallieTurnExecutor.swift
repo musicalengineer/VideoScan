@@ -1103,7 +1103,7 @@ enum HallieTurnExecutor {
             basis = prefix + bridge + basis.dropFirst(prefix.count)
             break
         }
-        return Result(
+        let base = Result(
             route: .graph,
             outcome: result.conclusion == .answered ? .answered : .declined,
             prose: result.prose,
@@ -1112,6 +1112,11 @@ enum HallieTurnExecutor {
             citations: [],
             catalogPersonName: result.catalogPersonName,
             offeredActions: familyTreeOffers(result.familyTreeFocus))
+        // "who are Rick's sons" arrives here (CyberBrain knows "rick"); the
+        // tree stops in 1959, but the family has told Hallie about the sons.
+        return FamilyKnowledgeSupplement.apply(
+            to: base, payload: payload, graphResult: result,
+            graph: graph, context: context)
     }
 
     static func graphQueryDescription(_ payload: ArchivistQueryAST.Graph) -> String {

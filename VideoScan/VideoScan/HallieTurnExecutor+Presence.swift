@@ -26,6 +26,28 @@ extension HallieTurnExecutor {
         var effective = payload
         var notes: [String] = []
 
+        // "videos of my dad": a first-person relative is resolved through the
+        // speaker and the family tree, or declined by name (+SpeakerKinship).
+        let kin = SpeakerKinship.rebind(
+            people: payload.people ?? [],
+            question: request.intent.originalQuestion,
+            speakers: context.speakers,
+            graph: context.graph)
+        if let failure = kin.failure {
+            return Result(
+                route: route,
+                outcome: .declined,
+                prose: failure,
+                basisLine: "Basis: the question names a relative of the speaker that the family tree could not resolve; no catalog query was performed.",
+                queryDescription: description(of: request.intent.ast),
+                citations: [],
+                catalogPersonName: nil)
+        }
+        if !kin.notes.isEmpty {
+            effective.people = kin.people
+            notes.append(contentsOf: kin.notes)
+        }
+
         // "as a baby" / "as a kid" / "as a teenager" → a year band from the
         // FIRST named person's birth year. Only when the AST has no explicit
         // years (an explicit year is the user's word and wins) and only when

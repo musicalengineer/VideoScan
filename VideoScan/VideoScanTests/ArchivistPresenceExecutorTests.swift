@@ -170,7 +170,7 @@ struct ArchivistPresenceExecutorTests {
         let empty = await execute(.init(), records: records)
         #expect(empty.conclusion == .insufficientConstraints)
         #expect(ArchivistPresenceAnswerComposer.compose(empty).prose
-                == ArchivistPresenceAnswerComposer.noEvidenceProse)
+                == "I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”.")
 
         let absent = await execute(.init(people: ["Ellen"]), records: records)
         #expect(absent.conclusion == .noEvidence)

@@ -865,3 +865,42 @@ struct HalliePresenceRelaxTests {
         #expect(result.conclusion == .noEvidence)
     }
 }
+
+/// A list answer must say how many (codex corpus 2026-08-21: "How many
+/// videos include Donna?" → "Two examples are Clip 01.dv and MyGirl.mov").
+struct HallieCompositionCountSentenceTests {
+    private func citation(_ file: String) -> HallieTurnExecutor.Citation {
+        .init(recordID: UUID(), fullPath: "/v/\(file)", filename: file,
+              playbackSeconds: nil,
+              bases: [.humanPersonTag(queryIdentity: "donna", taggedName: "Donna",
+                                      confirmedAt: Date(timeIntervalSince1970: 1_700_000_000))])
+    }
+
+    @Test func aListAnswerThatLostItsCountGetsTheTemplateCountBack() async {
+        let plan = HallieAnswerPlan.presenceList(
+            route: .presence, prose: "I found 7 catalog items matching that.",
+            totalMatchCount: 7, shownCount: 2,
+            citations: [citation("Clip 01.dv"), citation("MyGirl.mov")])
+        let composer = HallieGroundedComposer(personaName: "Hallie Mae") { _, _ in
+            "Two examples are Clip 01.dv and MyGirl.mov [c3][c4]."
+        }
+        let outcome = await composer.compose(plan: plan, history: [])
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.displayText.hasPrefix("I found 7 catalog items matching that. Two examples are"),
+                Comment(rawValue: outcome.displayText))
+        #expect(outcome.transcriptText.hasPrefix("I found 7 catalog items matching that. [c1]"))
+        #expect(outcome.note == "model (count sentence restored)")
+    }
+
+    @Test func aListAnswerThatKeptItsCountIsUntouched() async {
+        let plan = HallieAnswerPlan.presenceList(
+            route: .presence, prose: "I found 7 catalog items matching that.",
+            totalMatchCount: 7, shownCount: 1, citations: [citation("Clip 01.dv")])
+        let composer = HallieGroundedComposer(personaName: "Hallie Mae") { _, _ in
+            "There are 7 of them [c1]. One is Clip 01.dv [c3]."
+        }
+        let outcome = await composer.compose(plan: plan, history: [])
+        #expect(outcome.displayText == "There are 7 of them. One is Clip 01.dv.")
+        #expect(outcome.note == "model")
+    }
+}

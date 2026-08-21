@@ -810,7 +810,7 @@ enum ArchivistPresenceAnswerComposer {
                 evidence: result.evidence)
         case .insufficientConstraints:
             return ArchivistFactualAnswer(
-                prose: noEvidenceProse,
+                prose: "I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”.",
                 basisLine: "Basis: no executable presence constraints.",
                 evidence: result.evidence)
         case .noEvidenceButRelaxed(let dropped):
