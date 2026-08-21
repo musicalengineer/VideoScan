@@ -57,6 +57,26 @@ extension ArchivistFollowUpResolver {
         .init(phrase: "except", kind: .subtractive, soft: false),
         .init(phrase: "drop", kind: .subtractive, soft: false),
         .init(phrase: "remove", kind: .subtractive, soft: false),
+        // Narrowing verbs people actually type ("narrow that to winter",
+        // "filter to 1994"). Without these the VERB itself became a search
+        // keyword and the answer read "Narrowed to Narrow, Winter — nothing
+        // matched" (eval 2026-08-21). Longest form first so "narrow it down
+        // to" is consumed whole.
+        .init(phrase: "narrow it down to", kind: .comparative, soft: false),
+        .init(phrase: "narrow that down to", kind: .comparative, soft: false),
+        .init(phrase: "narrow it down", kind: .comparative, soft: false),
+        .init(phrase: "narrow that down", kind: .comparative, soft: false),
+        .init(phrase: "narrow it to", kind: .comparative, soft: false),
+        .init(phrase: "narrow that to", kind: .comparative, soft: false),
+        .init(phrase: "narrow down to", kind: .comparative, soft: false),
+        .init(phrase: "narrow to", kind: .comparative, soft: false),
+        .init(phrase: "narrow", kind: .comparative, soft: false),
+        .init(phrase: "filter to", kind: .comparative, soft: false),
+        .init(phrase: "filter", kind: .comparative, soft: false),
+        .init(phrase: "limit to", kind: .comparative, soft: false),
+        .init(phrase: "limit", kind: .comparative, soft: false),
+        .init(phrase: "restrict to", kind: .comparative, soft: false),
+        .init(phrase: "refine to", kind: .comparative, soft: false),
         // Additive — keep everything and add.
         .init(phrase: "and also", kind: .additive, soft: false),
         .init(phrase: "and now", kind: .additive, soft: false),

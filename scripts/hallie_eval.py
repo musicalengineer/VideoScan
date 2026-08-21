@@ -205,6 +205,8 @@ DECLINE_PAT = re.compile(
 # A sentence that starts mid-thought — the fragment bug class.
 FRAGMENT_PAT = re.compile(r"^\s*(?:'s|s |and |but |or |of |in |at |the |a )", re.I)
 HEDGE_PAT = re.compile(r"as an ai|i am an ai|language model", re.I)
+# The relax-and-explain shape: names what it set aside, then offers what exists.
+RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)", re.I | re.S)
 
 
 def grade_record(r):
@@ -220,7 +222,16 @@ def grade_record(r):
     if r.get("route") in (None, "") and outcome is None:
         flags.append("no_route")
 
-    declined = outcome == "declined" or bool(DECLINE_PAT.search(a))
+    # A relax-and-explain offer ("Nothing matches all of that. Setting aside
+    # the years you asked for, I do have 34 items. Want those?") IS the
+    # intended good answer for a near miss — it names what it set aside and
+    # offers what exists. Grading it as a failed answer would penalise the
+    # very behaviour the feature adds, so it counts as helpful and is
+    # reported separately.
+    relaxed_offer = bool(RELAXED_PAT.search(a))
+    declined = (outcome == "declined" or bool(DECLINE_PAT.search(a))) and not relaxed_offer
+    if relaxed_offer:
+        flags.append("~relaxed_offer")
 
     # Expectation mismatches
     if expect in ("catalog", "kinship", "biography") and declined:
@@ -259,9 +270,11 @@ def grade(args):
     for r in recs:
         flags = grade_record(r)
         r["flags"] = flags
+        # Flags starting with "~" are informational, not defects.
+        defects = [f for f in flags if not f.startswith("~")]
         c = by_cat.setdefault(r.get("category", "?"), {"n": 0, "clean": 0})
         c["n"] += 1
-        if not flags:
+        if not defects:
             c["clean"] += 1
         else:
             flagged.append(r)
@@ -299,7 +312,8 @@ def grade(args):
             f.readline()
             for line in f:
                 prev.append(json.loads(line))
-        pclean = sum(1 for r in prev if not grade_record(r))
+        pclean = sum(1 for r in prev
+                     if not [f for f in grade_record(r) if not f.startswith("~")])
         print(f"\ncompare {args.compare}: {pclean}/{len(prev)} "
               f"({100*pclean/max(len(prev),1):.0f}%) → this run "
               f"{clean}/{total} ({100*clean/max(total,1):.0f}%)  "
