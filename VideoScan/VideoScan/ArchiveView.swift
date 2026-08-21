@@ -13,6 +13,8 @@ import SwiftUI
 
 struct ArchiveView: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Verify copies… dispatches a VerifyArchiveCopiesJob (GH #167).
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
 
     @State var selectedCategory: ArchiveCategory = .archived
     @State var selectedIDs: Set<UUID> = []
@@ -240,6 +242,16 @@ struct ArchiveView: View {
                 HStack(spacing: 14) {
                     Button("Reveal") { model.revealMasterArchiveInFinder() }
                     Button("Manifest") { model.openMasterArchiveManifest() }
+                    // GH #167: manifest-driven fixity audit + recovery —
+                    // re-reads every archive copy, restores archiveFixity
+                    // on a manifest match, flags mismatches loudly. The
+                    // '· N unverified' count above is what it repairs.
+                    Button("Verify copies…") {
+                        fileOpsCenter.startVerifyArchiveCopies(model: model)
+                        openWindow(id: "combine")   // Media File Operations window (legacy id)
+                    }
+                    .disabled(model.isReadOnly)
+                    .help("Re-read every Master Archive copy end to end and compare its SHA-256 against the manifest. Matches restore the catalog's fixity record; a mismatch is flagged and never papered over.")
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 13))

@@ -112,6 +112,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// panel and the action buttons that launch Promote / Transcode /
     /// Verify Audio from it. docs/promote_helper_plan.md.
     case assessCopies
+    /// "Verify Archive Copies" — the manifest-driven fixity audit +
+    /// recovery pass (GH #167, 2026-08-20): re-read every Master
+    /// Archive copy end to end, compare its SHA-256 against the
+    /// 00_Index manifest, restore `archiveFixity` on a match and flag
+    /// a mismatch LOUDLY (never restored — potential corruption).
+    /// Read-only on media; catalog writes only. VerifyArchiveCopiesJob.
+    case verifyArchive
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -134,6 +141,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .findPerson: return "Find"
         case .promote: return "Promote"
         case .assessCopies: return "Assess"
+        case .verifyArchive: return "Fixity"
         }
     }
 
@@ -159,6 +167,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .findPerson: return "find person"
         case .promote: return "promote"
         case .assessCopies: return "assess copies"
+        case .verifyArchive: return "verify archive"
         }
     }
 }

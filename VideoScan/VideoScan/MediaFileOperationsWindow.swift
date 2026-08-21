@@ -346,7 +346,8 @@ struct MediaFileOperationRow: View {
                 // (compare's pattern, extended to Find & Tag — Rick
                 // 2026-08-04). Clicks INSIDE the expanded detail below
                 // must never reach here (Bug A).
-                if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob { onToggleExpand() }
+                if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob
+                    || job is VerifyArchiveCopiesJob { onToggleExpand() }
             }
 
             if isExpanded, let compare = job as? PairCompareJob {
@@ -363,6 +364,12 @@ struct MediaFileOperationRow: View {
 
             if isExpanded, let assess = job as? AssessCopiesJob {
                 AssessCopiesDetailView(job: assess)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
+            if isExpanded, let verify = job as? VerifyArchiveCopiesJob {
+                VerifyArchiveDetailView(job: verify)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -685,6 +692,11 @@ extension MediaFileOperationKind {
         // beside Promote's bronze as "the thinking before the copying",
         // apart from trim's indigo and findPerson's slate.
         case .assessCopies: return Color(red: 0.45, green: 0.16, blue: 0.45)
+        // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
+        // cooler and grayer than trim's indigo and findPerson's slate
+        // blue; reads as "the auditor", apart from verifyAudio's
+        // goldenrod despite sharing the verb.
+        case .verifyArchive: return Color(red: 0.36, green: 0.42, blue: 0.60)
         }
     }
 }
