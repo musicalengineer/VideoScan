@@ -689,7 +689,7 @@ enum HallieAppTurnCoordinator {
                 graph: graph,
                 cyberBrain: cyberBrain,
                 selectedTemporalDate: selectedDate,
-                speakers: route == .graph ? dependencies.loadSpeakers() : .none)
+                speakers: dependencies.loadSpeakers())
             try Task.checkCancellation()
             return context
         }

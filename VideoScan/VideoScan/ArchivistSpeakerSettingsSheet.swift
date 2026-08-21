@@ -8,6 +8,7 @@
 // ("Hallie May McGill"). Both persist as `archivist.*` @AppStorage keys,
 // read back by `HallieTurnExecutor.Speakers.fromDefaults()`.
 
+import AppKit
 import SwiftUI
 
 struct ArchivistSpeakerSettingsSheet: View {
@@ -50,6 +51,9 @@ struct ArchivistSpeakerSettingsSheet: View {
                 }
             }
 
+            Divider().padding(.vertical, 4)
+            HallieWebAccessSettings()
+
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }
@@ -58,5 +62,61 @@ struct ArchivistSpeakerSettingsSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+/// "Hallie on the home network": one switch, the address to type on the
+/// iPad, an optional passphrase. Rick 2026-08-21: "a mini app my wife can
+/// use on her iPad" — Safari's Add to Home Screen is the app.
+struct HallieWebAccessSettings: View {
+    @AppStorage(HallieWebAccess.enabledKey) private var enabled = false
+    @AppStorage(HallieWebAccess.portKey) private var port = HallieWebAccess.defaultPort
+    @AppStorage(HallieWebAccess.passphraseKey) private var passphrase = ""
+    @ObservedObject private var access = HallieWebAccess.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Let the family talk to her from the iPad / laptop", isOn: $enabled)
+                .onChange(of: enabled) { _, _ in access.apply() }
+            if enabled {
+                HStack(spacing: 8) {
+                    Text("On their device, open")
+                    Text(HallieWebAccess.url(port: port))
+                        .font(.system(size: 13, design: .monospaced))
+                        .textSelection(.enabled)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(HallieWebAccess.url(port: port), forType: .string)
+                    }
+                    .controlSize(.small)
+                }
+                .font(.system(size: 13))
+                Text("Then Share → Add to Home Screen. It only works on the home network; nothing is opened to the internet.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Text("Family passphrase")
+                    TextField("optional", text: $passphrase)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                    Text("Port")
+                    TextField("8765", value: $port, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 64)
+                        .onSubmit { access.apply() }
+                }
+                .font(.system(size: 13))
+                if let error = access.lastError {
+                    Text("Couldn't start: \(error)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                } else if access.isRunning {
+                    Text("Listening.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

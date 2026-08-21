@@ -417,6 +417,9 @@ struct VideoScanApp: App {
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
+                        // Hallie on the home network (iPad / MBP) — starts
+                        // only if enabled in Hallie's settings.
+                        HallieWebAccess.shared.attach(model: catalogModel)
                         // Quit path drains in-flight VLM inference —
                         // see AppDelegate.applicationShouldTerminate.
                         appDelegate.captionOrchestrator = captionOrchestrator
