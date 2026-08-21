@@ -639,7 +639,7 @@
           "local": true,
           "expectedRoute": "smalltalk",
           "expectedOutcome": "answered",
-          "expectedProseContains": "Hi! I'm Hallie Mae"
+          "expectedProseContains": "It's good to see you"
         },
         {
           "input": "hello",
