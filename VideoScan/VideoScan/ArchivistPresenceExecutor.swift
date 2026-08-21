@@ -83,6 +83,33 @@ enum ArchivistPresenceConclusion: Sendable, Equatable {
     case present
     case noEvidence
     case insufficientConstraints
+    /// Nothing matched every facet, but dropping ONE named facet does match.
+    /// The evidence set belongs to the relaxed query — labelled as such, never
+    /// presented as an answer to what was asked (Rick 2026-08-21).
+    case noEvidenceButRelaxed(dropped: RelaxedFacet)
+}
+
+/// The facet a relaxed retry gave up, in the order the ladder tries them.
+///
+/// PEOPLE ARE NEVER RELAXED. Dropping the person answers a different question
+/// and would let a machine-detected or untagged record stand in for someone
+/// the user named — exactly what
+/// `familySearchConvenienceDoesNotBecomePresenceEvidence` has always
+/// forbidden. Every relaxed answer therefore still carries that person's
+/// confirmed tag; only the circumstances around them widen.
+enum RelaxedFacet: String, Sendable, Equatable, CaseIterable {
+    case years
+    case keywords
+    case mediaKind
+
+    /// How the answer names what it set aside.
+    var phrase: String {
+        switch self {
+        case .years:     return "the years you asked for"
+        case .keywords:  return "that wording"
+        case .mediaKind: return "that kind of media"
+        }
+    }
 }
 
 struct ArchivistPresenceResult: Sendable, Equatable {
@@ -129,6 +156,32 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     /// exact count is still computed over every record.
     let citationOffset: Int
 
+    /// Copy of this query with one facet removed — the relax-and-explain
+    /// ladder (Rick 2026-08-21: a dead-end "I don't have evidence for that"
+    /// is the worst answer she gives; "nothing with all three, but I do have
+    /// 34 of Donna at the Cape" is the useful one).
+    func dropping(_ facet: RelaxedFacet) -> ArchivistPresenceQuery {
+        ArchivistPresenceQuery(
+            people: people,
+            years: facet == .years ? nil : years,
+            mediaKind: facet == .mediaKind ? nil : mediaKind,
+            keywords: facet == .keywords ? [] : keywords,
+            keywordQueries: facet == .keywords ? [] : keywordQueries,
+            citationOffset: 0)
+    }
+
+    private init(people: [Identity], years: ClosedRange<Int>?, mediaKind: String?,
+                 keywords: [String], keywordQueries: [ArchivistKeywordQuery],
+                 citationOffset: Int) {
+        self.people = people
+        self.years = years
+        self.mediaKind = mediaKind
+        self.keywords = keywords
+        self.keywordQueries = keywordQueries
+        self.citationOffset = citationOffset
+        self.hasInvalidYearRange = false
+    }
+
     init(_ payload: ArchivistQueryAST.Presence, citationOffset: Int = 0) {
         self.citationOffset = max(0, citationOffset)
         people = (payload.people ?? []).map(Identity.init)
@@ -152,6 +205,21 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
 
     var isEmpty: Bool {
         people.isEmpty && years == nil && mediaKind == nil && keywords.isEmpty
+    }
+
+    /// How many facets this query constrains on (the relax ladder only runs
+    /// when there are at least two).
+    var facetCount: Int {
+        (people.isEmpty ? 0 : 1) + (years == nil ? 0 : 1)
+            + (mediaKind == nil ? 0 : 1) + (keywords.isEmpty ? 0 : 1)
+    }
+
+    func has(_ facet: RelaxedFacet) -> Bool {
+        switch facet {
+        case .years:     return years != nil
+        case .keywords:  return !keywords.isEmpty
+        case .mediaKind: return mediaKind != nil
+        }
     }
 
     var description: String {
@@ -329,7 +397,7 @@ enum ArchivistPresenceExecutor {
         }
 
         guard provenMatchCount > 0 else {
-            return emptyResult(.noEvidence, query: query)
+            return relaxedResult(for: query, records: records)
         }
         return ArchivistPresenceResult(
             conclusion: .present,
@@ -339,6 +407,38 @@ enum ArchivistPresenceExecutor {
                 totalMatchCount: provenMatchCount,
                 isCitationListTruncated:
                     query.citationOffset + citations.count < provenMatchCount))
+    }
+
+    /// The relax-and-explain ladder: when the full AND finds nothing, retry
+    /// once per facet in a fixed order and keep the FIRST that matches, so
+    /// the answer can say what it set aside and offer what it does have.
+    /// Only queries with two or more facets relax — dropping the only facet
+    /// would "answer" a different question entirely.
+    static func relaxedResult(
+        for query: ArchivistPresenceQuery,
+        records: [ArchivistPresenceRecordSnapshot]
+    ) -> ArchivistPresenceResult {
+        guard query.facetCount >= 2 else { return emptyResult(.noEvidence, query: query) }
+        for facet in RelaxedFacet.allCases where query.has(facet) {
+            let relaxed = query.dropping(facet)
+            guard !relaxed.isEmpty else { continue }
+            var citations: [ArchivistEvidenceCitation] = []
+            var count = 0
+            for record in records {
+                guard let citation = citation(for: record, query: relaxed) else { continue }
+                count += 1
+                if citations.count < maxCitations { citations.append(citation) }
+            }
+            guard count > 0 else { continue }
+            return ArchivistPresenceResult(
+                conclusion: .noEvidenceButRelaxed(dropped: facet),
+                interpretedQuery: query.description,
+                evidence: ArchivistEvidenceSet(
+                    citations: citations,
+                    totalMatchCount: count,
+                    isCitationListTruncated: count > citations.count))
+        }
+        return emptyResult(.noEvidence, query: query)
     }
 
     private static func emptyResult(
@@ -639,6 +739,18 @@ enum ArchivistPresenceAnswerComposer {
             return ArchivistFactualAnswer(
                 prose: noEvidenceProse,
                 basisLine: "Basis: no executable presence constraints.",
+                evidence: result.evidence)
+        case .noEvidenceButRelaxed(let dropped):
+            // Honest shape: nothing for what was ASKED, here is the nearest
+            // thing I do have, and it is clearly labelled as the near miss.
+            let count = result.evidence.totalMatchCount
+            let items = count == 1 ? "1 item" : "\(count) items"
+            return ArchivistFactualAnswer(
+                prose: "Nothing matches all of that. Setting aside \(dropped.phrase), "
+                    + "I do have \(items). Want those?",
+                basisLine: "Basis: no evidence for the full request; "
+                    + "\(result.evidence.citations.count) cited of \(count) "
+                    + "after setting aside \(dropped.rawValue).",
                 evidence: result.evidence)
         }
     }

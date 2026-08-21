@@ -222,6 +222,36 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         }
     }
 
+    /// Classify one turn into the archive-only AST lane or the separately
+    /// bounded conversation lane. Archive shapes use the exact established
+    /// decoder and repair path; `conversation` is never an ArchivistQueryAST.
+    func interpretTurn(_ text: String) async throws -> HallieTurnInterpretation {
+        let (content, data) = try await requestContent(
+            text, schema: Self.interpretationResponseSchema,
+            systemPrompt: Self.interpretationSystemPrompt)
+        do {
+            let object = try JSONSerialization.jsonObject(with: data)
+            let shape = (object as? [String: Any])?["shape"] as? String
+            if shape == "conversation" {
+                return .conversation(
+                    try HallieTurnInterpretation.decodeConversation(data))
+            }
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(data)
+            if !decoded.notes.isEmpty {
+                translatorLog.notice(
+                    "turn interpretation normalized: \(decoded.notes.joined(separator: "; "), privacy: .public)")
+            }
+            return .archive(Self.repairPossessiveSpeakerPronoun(
+                in: decoded.ast, originalQuestion: text))
+        } catch let error as NLTranslatorError {
+            throw error
+        } catch {
+            throw NLTranslatorError.badResponse(
+                "content is not a strict Hallie turn interpretation "
+                    + "(\(error.localizedDescription)): \(content.prefix(120))")
+        }
+    }
+
     /// Structured output prevents malformed fields, but it cannot prevent a
     /// semantically inverted pronoun. In the 2026-08-21 transcript the model
     /// read the request-form "tell me" as the subject of "your father" and
@@ -430,6 +460,24 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             astBranch("cross", payload: astTextPayload),
         ],
     ]
+
+    static var interpretationResponseSchema: [String: Any] {
+        let archiveBranches = astResponseSchema["oneOf"] as? [[String: Any]] ?? []
+        let conversationPayload: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "kind": [
+                    "type": "string",
+                    "enum": HallieConversationKind.allCases.map(\.rawValue),
+                ],
+            ],
+            "required": ["kind"],
+        ]
+        return ["oneOf": archiveBranches + [
+            astBranch("conversation", payload: conversationPayload),
+        ]]
+    }
 
     private static let astStringList: [String: Any] = [
         "type": "array",
@@ -698,6 +746,55 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     Use lowercase extracted terms. The payload belongs only to its selected \
     shape. Output JSON only.
     """
+
+    static var interpretationSystemPrompt: String {
+        astSystemPrompt
+            .replacingOccurrences(
+                of: "Convert ONE natural-language family-archive question into exactly one QueryAST-v2 JSON object matching the supplied schema.",
+                with: "Classify ONE user turn and emit exactly one JSON object matching the supplied schema. Archive, family, biography, provenance, and media questions become an archive QueryAST-v2 shape. Only genuinely non-archive conversation becomes the conversation shape.")
+            .replacingOccurrences(
+                of: "Choose exactly one shape:",
+                with: """
+                Choose exactly one shape:
+                - conversation: ONLY ordinary social talk, timeless public general knowledge, language help, harmless advice, or creativity that needs no family/archive fact. payload.kind is casual or generalKnowledge. Questions inviting the archivist to pretend she remembers a historical childhood or life use personaPast. Direct sourceable questions such as "when were you born?", "who were your parents?", "did you have children?", and "how are you related to me?" remain graph questions. Any named private person, kinship, biography, birth/death, family tree, provenance/source, catalog, media, video, count, search, play, reveal, or archive-context follow-up MUST use an archive shape.
+                  A turn is conversation, NOT archive, when it names no person, place, year, event, or media and is any of: a greeting or farewell; thanks, praise, apology, or sympathy; a remark about how either of you is doing; a question about the archivist herself (what she is, who made her, how she works, what she remembers, whether she is an AI, where her information comes from); a filler or abandoned turn ("um", "ok", "never mind", "hold on"). These are never catalog searches, however they are worded.
+                  When uncertain ABOUT A FAMILY OR ARCHIVE REFERENT — a name that might be a relative, a place that might be theirs, an ambiguous follow-up — choose archive. Uncertainty about pleasantries is not that: plain social talk is conversation.
+                """)
+            .replacingOccurrences(
+                of: "Legal examples:",
+                with: """
+                Conversation examples:
+                "thanks, that's kind of you" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "why do leaves change color?" ->
+                {"shape":"conversation","payload":{"kind":"generalKnowledge"}}
+                "tell me a short clean joke" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "what games did you play as a child?" ->
+                {"shape":"conversation","payload":{"kind":"personaPast"}}
+                "what did your mother cook for dinner?" ->
+                {"shape":"conversation","payload":{"kind":"personaPast"}}
+                "I appreciate you." ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "You're helpful, you know that?" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "how's your day going" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "who made you" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "where does your information come from?" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "never mind" ->
+                {"shape":"conversation","payload":{"kind":"casual"}}
+                "what was your first car?" ->
+                {"shape":"conversation","payload":{"kind":"personaPast"}}
+                "who was your mother?" remains graph kinship.
+                "tell me about Donna" remains graph biography.
+                "what do you know about our videos?" remains an archive count.
+
+                Legal archive examples:
+                """)
+    }
 
     /// The whole job description. Extraction only — the sin is inventing.
     static let systemPrompt = """

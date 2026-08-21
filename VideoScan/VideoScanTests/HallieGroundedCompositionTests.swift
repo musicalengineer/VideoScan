@@ -741,3 +741,97 @@ struct HallieCompositionNoiseTests {
         #expect(!plan.claims.map(\.text).contains { $0.hasPrefix("These run from") })
     }
 }
+
+// MARK: - Relax-and-explain (Rick 2026-08-21: dead-end declines are the worst answer)
+
+@Suite("Hallie presence — relax and explain")
+struct HalliePresenceRelaxTests {
+    private let confirmedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func rec(_ path: String, people: [String] = []) -> ArchivistPresenceRecordSnapshot {
+        ArchivistPresenceRecordSnapshot(
+            fullPath: path,
+            confirmedPeople: people.map { ConfirmedTag(name: $0, confirmedAt: confirmedAt) })
+    }
+
+    private func query(people: [String] = [], yearStart: Int? = nil, yearEnd: Int? = nil,
+                       keywords: [String] = []) -> ArchivistPresenceQuery {
+        ArchivistPresenceQuery(.init(people: people.isEmpty ? nil : people,
+                                     yearStart: yearStart, yearEnd: yearEnd,
+                                     keywords: keywords.isEmpty ? nil : keywords))
+    }
+
+    /// Rick's motivating case: Donna at the Cape exists, but not in 1990-94.
+    /// The old answer was "I don't have evidence for that."
+    @Test func droppingTheYearOffersTheNearMiss() {
+        let records = [
+            rec("/v/2001/cape_trip.mov", people: ["Donna"]),
+            rec("/v/2003/cape_again.mov", people: ["Donna"]),
+        ]
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Donna"], yearStart: 1990, yearEnd: 1994, keywords: ["cape"]),
+            records: records)
+        #expect(result.conclusion == .noEvidenceButRelaxed(dropped: .years))
+        #expect(result.evidence.totalMatchCount == 2)
+        let answer = ArchivistPresenceAnswerComposer.compose(result)
+        #expect(answer.prose.contains("Nothing matches all of that"))
+        #expect(answer.prose.contains("the years you asked for"))
+        #expect(answer.prose.contains("2 items"))
+        // The basis line names what was set aside — no silent substitution.
+        #expect(answer.basisLine.contains("setting aside years"))
+    }
+
+    /// When nothing matches at any relaxation, the honest decline stands.
+    @Test func trulyAbsentStaysADecline() {
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Napoleon"], yearStart: 1800, yearEnd: 1810),
+            records: [rec("/v/2001/x.mov", people: ["Donna"])])
+        #expect(result.conclusion == .noEvidence)
+        #expect(ArchivistPresenceAnswerComposer.compose(result).prose
+            == ArchivistPresenceAnswerComposer.noEvidenceProse)
+    }
+
+    /// A single-facet query must never relax — dropping the only constraint
+    /// would answer a different question.
+    @Test func singleFacetQueriesNeverRelax() {
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Napoleon"]),
+            records: [rec("/v/2001/x.mov", people: ["Donna"])])
+        #expect(result.conclusion == .noEvidence)
+    }
+
+    /// A real match never takes the relaxed path.
+    @Test func exactMatchesAreUnaffected() {
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Donna"], yearStart: 2001, yearEnd: 2001),
+            records: [rec("/v/2001/cape.mov", people: ["Donna"])])
+        #expect(result.conclusion == .present)
+        #expect(result.evidence.totalMatchCount == 1)
+    }
+
+    /// The person is NEVER relaxed: a relaxed answer still carries that
+    /// person's confirmed tag, so a wrong-person record can never stand in
+    /// (the invariant familySearchConvenienceDoesNotBecomePresenceEvidence
+    /// has always held).
+    @Test func peopleAreNeverRelaxedAway() {
+        let records = [
+            rec("/v/1992/cape.mov", people: ["Rick"]),     // right years, wrong person
+            rec("/v/2001/cape.mov", people: ["Donna"]),    // right person, wrong years
+        ]
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Donna"], yearStart: 1990, yearEnd: 1994), records: records)
+        #expect(result.conclusion == .noEvidenceButRelaxed(dropped: .years))
+        // The one offered item is Donna's, not Rick's.
+        #expect(result.evidence.totalMatchCount == 1)
+        #expect(result.evidence.citations.first?.filename == "cape.mov")
+        #expect(result.evidence.citations.first?.fullPath.contains("2001") == true)
+    }
+
+    /// Only a person named with no other facet stays a plain decline.
+    @Test func personOnlyMissIsStillADecline() {
+        let result = ArchivistPresenceExecutor.execute(
+            query(people: ["Napoleon"], keywords: ["beach"]),
+            records: [rec("/v/2001/beach.mov", people: ["Donna"])])
+        #expect(result.conclusion == .noEvidence)
+    }
+}
