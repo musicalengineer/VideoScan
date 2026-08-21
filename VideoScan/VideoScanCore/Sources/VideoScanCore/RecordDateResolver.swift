@@ -14,6 +14,12 @@
 //      (day precision). Confidence by ORIGIN: a named camera/phone
 //      make/model 0.95, a transcoder encoder string only 0.80 (it may
 //      be the re-encode date), neither 0.85.
+//      GH #166 exception: an inferred date whose confidence marks
+//      CONTENT evidence agreeing with itself (≥ 0.85 — multi-frame OCR
+//      consensus, or OCR corroborated by transcript/caption) OUTVOTES
+//      the stamp when it contradicts it by more than 2 years. On old
+//      tape rewrapped by a later copy, the container stamp IS the copy
+//      date; what's burned into the frames beats what a muxer wrote.
 //   3. `inferredRecordDate` (dossier OCR / speech) at ≥ 0.6 confidence.
 //   4. A date pattern in the FILENAME: YYYY-MM-DD, MM-DD-YYYY (US;
 //      DD-MM-YYYY when the first number cannot be a month), YYYYMMDD,
@@ -89,6 +95,16 @@ public enum RecordDateResolver {
 
     /// The confidence floor for trusting a dossier-inferred date.
     public static let inferredConfidenceFloor: Float = 0.6
+
+    // GH #166 — content evidence vs copy-era stamps.
+    /// An inferred confidence at/above this marks CONTENT evidence that
+    /// agrees with itself (pfInferRecordDate: 0.95 = ≥3 OCR frames,
+    /// 0.85 = 2 frames, 0.90 = 1 frame + agreeing transcript/caption).
+    public static let contentAgreementFloor: Float = 0.85
+    /// A content-backed inferred date must contradict the embedded stamp
+    /// by MORE than this many years to outvote it (±2 years could be a
+    /// camera clock set sloppily; a decade is a copy date).
+    public static let contentStampToleranceYears: Int = 2
 
     // Embedded-date confidence tiers by origin (Rick 2026-08-16).
     public static let embeddedConfidenceDevice: Float = 0.95      // make/model names a camera/phone
@@ -170,7 +186,20 @@ public enum RecordDateResolver {
         }
 
         // ---- 2–4. Machine signals.
-        if let e = embedded() { return e }
+        if let e = embedded() {
+            // GH #166: agreeing content evidence outvotes a copy-era
+            // stamp it contradicts by > 2 years (the DV-rewrapped-in-
+            // 2007 case: burn-in + transcript say 1997, the muxer's
+            // stamp says 2007). Applies regardless of stamp origin —
+            // the burn-in came from the ORIGINAL camera even when the
+            // current container names a device.
+            if let i = inferred(), i.confidence >= contentAgreementFloor,
+               let iy = i.year, let ey = e.year,
+               abs(iy - ey) > contentStampToleranceYears {
+                return i
+            }
+            return e
+        }
         if let i = inferred() { return i }
         if let f = fromFilename() {
             return RecordDateResolution(year: f.year, month: f.month, day: f.day, precision: f.precision,

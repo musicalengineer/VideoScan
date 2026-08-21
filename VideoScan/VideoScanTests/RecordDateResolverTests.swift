@@ -51,10 +51,13 @@ struct RecordDateResolverPrecedenceTests {
         #expect(est.confidence == 0.8, "best guess is still ≥ 0.6 → known for readiness")
     }
 
-    @Test("embedded beats inferred (even at 0.99) and filename; confidence by origin: device 0.95 / none 0.85 / encoder-only 0.80")
+    @Test("embedded beats a NON-agreeing inferred (< 0.85) and filename; confidence by origin: device 0.95 / none 0.85 / encoder-only 0.80")
     func embeddedTiers() {
+        // 0.75 = a single uncorroborated OCR frame — not "content
+        // agreeing with itself", so the stamp still wins (pre-#166 this
+        // pinned "embedded beats inferred even at 0.99"; that changed).
         let dev = resolve(embedded: utc(2025, 6, 15, 22, 47, 45), make: "Canon", model: "Canon EOS R6m2", encoder: "Lavf63",
-                          inferred: utc(2010, 1, 1), inferredConf: 0.99, filename: "Rick-and-Matt-Podcast-11-19-2005.m4v")
+                          inferred: utc(2010, 1, 1), inferredConf: 0.75, filename: "Rick-and-Matt-Podcast-11-19-2005.m4v")
         #expect(dev.isoString == "2025-06-15"); #expect(dev.source == .embedded); #expect(dev.precision == .day)
         #expect(dev.confidence == 0.95)
         #expect(resolve(embedded: utc(2025, 6, 15), model: "iPhone 15 Pro").confidence == 0.95)
@@ -74,6 +77,42 @@ struct RecordDateResolverPrecedenceTests {
         #expect(none.precision == .unknown); #expect(none.hadRejectedSignal); #expect(none.date == nil)
         let nothing = resolve(filename: "tape7.dv")
         #expect(nothing == .unknown()); #expect(!nothing.hadRejectedSignal)
+    }
+
+    @Test("GH #166: agreeing content evidence (inferred ≥ 0.85) outvotes a copy-era stamp it contradicts by > 2 years")
+    func contentOutvotesCopyEraStamp() {
+        // A DV file rewrapped in 2007: the container stamp IS the copy
+        // date. OCR burn-in + transcript agree on 1997 (conf 0.90).
+        let r = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+                        inferred: utc(1997, 6, 21), inferredConf: 0.90)
+        #expect(r.isoString == "1997-06-21", "content evidence must win, got \(r.isoString)")
+        #expect(r.source == .inferred)
+        // Even a device-named stamp: the burn-in came from the ORIGINAL
+        // camera; a make/model on the current container just names the
+        // rewrapper's hardware.
+        let dev = resolve(embedded: utc(2007, 12, 6), make: "Apple", model: "Mac mini",
+                          inferred: utc(1997, 6, 21), inferredConf: 0.95)
+        #expect(dev.isoString == "1997-06-21"); #expect(dev.source == .inferred)
+    }
+
+    @Test("GH #166 boundaries: < 0.85 never outvotes; ≤ 2 years of disagreement is camera-clock slop (stamp wins); user date stays on top")
+    func contentOutvoteBoundaries() {
+        // 0.84 — just under the content-agreement tier → stamp wins.
+        let under = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+                            inferred: utc(1997, 6, 21), inferredConf: 0.84)
+        #expect(under.source == .embedded); #expect(under.isoString == "2007-12-06")
+        // 2 years apart — within camera-clock tolerance → stamp wins.
+        let close = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+                            inferred: utc(2005, 6, 21), inferredConf: 0.95)
+        #expect(close.source == .embedded)
+        // 3 years apart → content wins.
+        let past = resolve(embedded: utc(2007, 12, 6), encoder: "Lavf57",
+                           inferred: utc(2004, 6, 21), inferredConf: 0.95)
+        #expect(past.source == .inferred); #expect(past.isoString == "2004-06-21")
+        // Rick's date still outranks BOTH machine dates.
+        let user = resolve(user: "1992", userConf: "known", embedded: utc(2007, 12, 6),
+                           inferred: utc(1997, 6, 21), inferredConf: 0.95)
+        #expect(user.isoString == "1992"); #expect(user.source == .userDate)
     }
 
     @Test("a year-only / month-only user date is REFINED by an agreeing finer machine date, never overruled by a disagreeing one")

@@ -84,6 +84,7 @@ extension VideoScanModel {
         let inferred = pfInferRecordDate(
             ocrDateCandidates:      ocrStrings,
             audioTranscript:        transcript,
+            sceneCaptionTexts:      extraction.scenes.map(\.text),
             pathYearHints:          yearHints,
             fileMtime:              record.dateModifiedRaw,
             containerCreationTime:  record.dateCreatedRaw
