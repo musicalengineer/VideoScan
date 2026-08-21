@@ -102,7 +102,8 @@ struct HallieFamilyKnowledgeSupplementTests {
                 + "But Rick Breen told me: “Rick and Donna have four adult sons: two work in software development, one is a therapy counselor, and one is a bartender.”")
         #expect(enriched.knowledgeCitations.map(\.id) == ["source.rick"])
         #expect(enriched.basisLine.contains("Family knowledge: bio.sons."))
-        #expect(enriched.answerPlan == nil, "the composer must not re-phrase a quoted passage")
+        #expect(enriched.answerPlan?.shape == .fixed, "the composer must not re-phrase a quoted passage")
+        #expect(enriched.answerPlan?.isComposable == false)
     }
 
     @Test func nothingIsAddedWhenTheFamilyHasNotSaid() throws {

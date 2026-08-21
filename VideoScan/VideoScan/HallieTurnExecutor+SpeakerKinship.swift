@@ -51,7 +51,8 @@ extension HallieTurnExecutor {
             people: [String],
             question: String,
             speakers: Speakers,
-            graph: GedcomFamilyGraph?
+            graph: GedcomFamilyGraph?,
+            cyberBrain: CyberBrainIndex? = nil
         ) -> Rebinding {
             var result = Rebinding(people: people)
             guard let (phrase, relation) = kinshipPhrase(in: question) else { return result }
@@ -73,7 +74,17 @@ extension HallieTurnExecutor {
                 result.failure = "I can't work out who “\(phrase)” is without the family tree, and no family tree is loaded."
                 return result
             }
-            let owners = graph.people(matching: owner)
+            // The owner's configured name ("Rick Breen") is usually a
+            // CyberBrain alias whose GEDCOM pointer names the tree person
+            // ("Richard Harding Breen Jr"); fall back to the tree's own
+            // name match.
+            var owners: [GedcomFamilyGraph.Person] = []
+            if let cyberBrain, case .resolved(let person) = cyberBrain.resolve(owner),
+               let gedcomID = person.gedcomPersonID, let treePerson = graph.people[gedcomID] {
+                owners = [treePerson]
+            } else {
+                owners = graph.people(matching: owner)
+            }
             guard owners.count == 1 else {
                 result.failure = owners.isEmpty
                     ? "I don't find you (\(owner)) in the family tree, so I can't work out who “\(phrase)” is."

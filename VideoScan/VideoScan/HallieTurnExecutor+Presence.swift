@@ -32,7 +32,8 @@ extension HallieTurnExecutor {
             people: payload.people ?? [],
             question: request.intent.originalQuestion,
             speakers: context.speakers,
-            graph: context.graph)
+            graph: context.graph,
+            cyberBrain: context.cyberBrain)
         if let failure = kin.failure {
             return Result(
                 route: route,

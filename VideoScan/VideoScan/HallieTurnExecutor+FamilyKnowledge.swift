@@ -174,10 +174,11 @@ extension HallieTurnExecutor {
             if answered {
                 basis += " Family knowledge: " + itemIDs.joined(separator: ", ") + "."
             }
+            let prose = sentences.joined(separator: " ")
             return Result(
                 route: result.route,
                 outcome: answered ? .answered : result.outcome,
-                prose: sentences.joined(separator: " "),
+                prose: prose,
                 basisLine: basis,
                 queryDescription: result.queryDescription,
                 citations: result.citations,
@@ -187,7 +188,10 @@ extension HallieTurnExecutor {
                 matchCount: result.matchCount,
                 mediaAction: result.mediaAction,
                 offeredActions: result.offeredActions,
-                answerPlan: nil,
+                // Fixed text: a quoted family passage and a statement about
+                // the tree's reach must not be re-phrased (eval pass 2: the
+                // composer turned the coverage note into "it likely stops…").
+                answerPlan: HallieAnswerPlan(route: result.route, shape: .fixed, fallbackText: prose),
                 composedBy: result.composedBy,
                 transcriptText: nil)
         }

@@ -57,6 +57,34 @@ struct HallieSpeakerKinshipTests {
         }
     }
 
+    @Test func theOwnerIsFoundThroughTheCyberBrainAliasWhenTheTreeSpellsHimDifferently() throws {
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 FAMS @F1@
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 CHIL @I1@
+        0 TRLR
+        """)
+        let index = try CyberBrainIndex(archive: CyberBrainArchive(
+            archiveID: "x", displayName: "x",
+            people: [CyberBrainPerson(id: "person.rick", gedcomPersonID: "@I1@",
+                                      canonicalName: "Rick Breen", aliases: ["Dicky"])],
+            sources: []))
+        let bound = Kin.rebind(people: ["me"], question: "videos of my dad",
+                               speakers: rick, graph: tree, cyberBrain: index)
+        #expect(bound.failure == nil, Comment(rawValue: bound.failure ?? ""))
+        #expect(bound.people == ["Richard Harding Breen Sr"])
+        let withoutBrain = Kin.rebind(people: ["me"], question: "videos of my dad",
+                                      speakers: rick, graph: tree)
+        #expect(withoutBrain.failure?.hasPrefix("I don't find you (Rick Breen) in the family tree") == true)
+    }
+
     @Test func myWifeAndOtherNamesStayInPlace() {
         let bound = Kin.rebind(people: ["Timmy", "me"], question: "Timmy with my wife at the cape",
                                speakers: rick, graph: graph())
