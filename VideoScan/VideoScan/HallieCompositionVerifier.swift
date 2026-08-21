@@ -33,6 +33,10 @@ enum HallieCompositionVerifier {
             /// answers: "I found 5877 catalog items matching that [c1]. I
             /// don't have evidence for that [c10]." (eval 2026-08-21).
             case falseNoEvidence
+            /// A kept sentence that opens the answer but reads as the middle
+            /// of one ("The other is …", "It was filmed in …") because the
+            /// sentence it continued was dropped (eval 2026-08-21).
+            case orphanedContinuation
             /// A sentence about the conversation rather than the claims —
             /// the model summarizing earlier turns from the history block:
             /// "I do not have evidence for how many videos you have or if you
@@ -135,6 +139,15 @@ enum HallieCompositionVerifier {
             }
             if isAboutTheConversation(display) {
                 dropped.append(Dropped(text: raw, reason: .metaConversation))
+                continue
+            }
+            // An answer may not OPEN mid-thought. When sentence one is
+            // dropped, sentence two ("The other is videocomplement…") is
+            // left as the whole answer and reads as a non-sequitur
+            // (eval 2026-08-21). Only the first kept sentence is checked;
+            // later ones are legitimate continuations.
+            if kept.isEmpty, isOrphanedContinuation(display) {
+                dropped.append(Dropped(text: raw, reason: .orphanedContinuation))
                 continue
             }
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
@@ -326,6 +339,18 @@ enum HallieCompositionVerifier {
     static func isAboutTheConversation(_ sentence: String) -> Bool {
         let s = sentence.lowercased()
         return metaConversationPatterns.contains { s.contains($0) }
+    }
+
+    /// Openings that only make sense after a preceding sentence.
+    static let continuationOpenings = [
+        "the other", "the second", "the third", "the last", "the first is",
+        "another", "also,", "it is", "it was", "they are", "they were",
+        "these are from", "both", "the rest",
+    ]
+
+    static func isOrphanedContinuation(_ sentence: String) -> Bool {
+        let s = sentence.lowercased().trimmingCharacters(in: .whitespaces)
+        return continuationOpenings.contains { s.hasPrefix($0) }
     }
 
     /// The first leak found in a display sentence, or nil when every year,

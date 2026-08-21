@@ -429,7 +429,7 @@ enum ArchivistPresenceExecutor {
                 count += 1
                 if citations.count < maxCitations { citations.append(citation) }
             }
-            guard count > 0 else { continue }
+            guard count > 0, isUsefulNearMiss(count: count, of: records.count) else { continue }
             return ArchivistPresenceResult(
                 conclusion: .noEvidenceButRelaxed(dropped: facet),
                 interpretedQuery: query.description,
@@ -439,6 +439,26 @@ enum ArchivistPresenceExecutor {
                     isCitationListTruncated: count > citations.count))
         }
         return emptyResult(.noEvidence, query: query)
+    }
+
+    /// The largest relaxed offer worth making at all.
+    static let relaxedOfferLimit = 200
+
+    /// A relaxed answer is only worth offering when it is a NEAR miss. Eval
+    /// 2026-08-21: "find videos shot on the old camcorder" dropped the only
+    /// keyword and cheerfully offered "5877 items" — the entire catalog,
+    /// which answers nothing and reads as a non-sequitur. An offer must be
+    /// bounded absolutely AND be a small share of what was searched.
+    /// A handful is always worth offering, whatever share of the corpus it
+    /// happens to be — "I do have 2" is helpful even in a tiny catalog. The
+    /// share test only guards against offering a large slab of everything.
+    static let alwaysUsefulOfferCount = 25
+
+    static func isUsefulNearMiss(count: Int, of searched: Int) -> Bool {
+        guard count <= relaxedOfferLimit else { return false }
+        if count <= alwaysUsefulOfferCount { return true }
+        guard searched > 0 else { return true }
+        return count * 4 < searched
     }
 
     private static func emptyResult(
