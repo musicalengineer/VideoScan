@@ -16,6 +16,12 @@ enum HallieShellCLI {
         /// facts locked). OFF by default in the shell — it is a diagnostic
         /// surface and the templated wording is the reference output.
         var compose = false
+        /// `--remember`: let "let me tell you about …" write attributed,
+        /// unverified passages to the family's CyberBrain. OFF by default:
+        /// the shell is a read-only diagnostic surface and unattended
+        /// evaluation corpora must never write into Rick's real knowledge
+        /// file. Hallie still listens without it and says so at the end.
+        var remember = false
         /// Hard safety gate for unattended evaluation. Answers still report
         /// the requested action, but no file is opened or revealed.
         var allowActions = true
@@ -41,7 +47,7 @@ enum HallieShellCLI {
         case presence, temporal, aggregate, graph, cross
         case unsupportedEvent
         case followUp, capability
-        case help, smalltalk, conversation, reset
+        case help, smalltalk, conversation, telling, reset
     }
 
     enum MediaAction: Equatable {
@@ -58,7 +64,7 @@ enum HallieShellCLI {
         case mediaUnavailable = 6
     }
 
-    private enum AnswerOutcome {
+    enum AnswerOutcome {
         case answered, declined, unsupported, interpretationFailed
 
         var exitCode: Int32 {
@@ -153,6 +159,13 @@ enum HallieShellCLI {
         var composeAnswer: @Sendable (
             HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], Options
         ) async -> HallieGroundedComposer.Outcome
+        /// Durably record one told passage and return the refreshed index.
+        /// The default records nothing (nil) so tests and evaluation runs
+        /// never touch the real CyberBrain; production writes through
+        /// CyberBrainWriter only when `--remember` was given.
+        var recordTestimony: (CyberBrainWriter.Testimony) throws -> CyberBrainIndex?
+        /// Who "I" is, for attribution. Injected so tests never read prefs.
+        var speakers: () -> HallieTurnExecutor.Speakers
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -188,8 +201,14 @@ enum HallieShellCLI {
                 HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], Options
             ) async -> HallieGroundedComposer.Outcome = { plan, _, _ in
                 .template(plan, note: "template: no composer configured")
+            },
+            recordTestimony: @escaping (CyberBrainWriter.Testimony) throws -> CyberBrainIndex? = { _ in nil },
+            speakers: @escaping () -> HallieTurnExecutor.Speakers = {
+                HallieTurnExecutor.Speakers.fromDefaults()
             }
         ) {
+            self.recordTestimony = recordTestimony
+            self.speakers = speakers
             self.loadCatalog = loadCatalog
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
@@ -352,6 +371,16 @@ enum HallieShellCLI {
                             try await fleet.composePlainText(system: system, user: user)
                         })
                     return await composer.compose(plan: plan, history: history)
+                },
+                recordTestimony: { testimony in
+                    guard let root = FileManager.default.urls(
+                        for: .applicationSupportDirectory,
+                        in: .userDomainMask).first?.appendingPathComponent(
+                            "VideoScan/cyberbrain", isDirectory: true) else {
+                        throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
+                    }
+                    let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+                    return try CyberBrainIndex(archive: receipt.archive)
                 })
         }
     }
@@ -366,13 +395,15 @@ enum HallieShellCLI {
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
-                     [--no-actions] [--log-run-id ID]
+                     [--no-actions] [--log-run-id ID] [--remember]
     """
 
     static let help = """
     Commands: :help, :quit, :cancel, :reset, :session, :list, :select N, :play N, :reveal N,
               :photo, :open-photo, :reveal-photo
     :reset forgets the current conversation and starts a new logged session.
+    Say "let me tell you about <someone>" and Hallie listens and remembers
+    (saved to the family CyberBrain only with --remember).
     """
 
     static func parse(arguments: [String]) throws -> Options {
@@ -387,6 +418,7 @@ enum HallieShellCLI {
                 index += 1
                 continue
             }
+            if argument == "--remember" { result.remember = true; index += 1; continue }
             guard ["--catalog", "--host", "--model", "--gedcom", "--once",
                    "--log-run-id"]
                 .contains(argument) else { throw ParseError.unknownOption(argument) }
@@ -426,6 +458,7 @@ enum HallieShellCLI {
         case .help: return .help
         case .smalltalk: return .smalltalk
         case .conversation: return .conversation
+        case .telling: return .telling
         case .reset: return .reset
         }
     }
@@ -504,7 +537,9 @@ enum HallieShellCLI {
         let records: [VideoRecord]
         let profiles: [POIProfile]?
         let graph: GedcomFamilyGraph?
-        let cyberBrain: CyberBrainIndex?
+        /// Rebuilt after every testimony write so "tell me about Dad Breen"
+        /// answers from what was just said.
+        var cyberBrain: CyberBrainIndex?
         let model: String
         var runID: String?
         var transcriptSessionID = UUID()
@@ -517,6 +552,8 @@ enum HallieShellCLI {
         var biographyPhoto: ArchivistBiographyPhoto?
         var lastResponder = "none"
         var pendingClarification: PendingClarification?
+        /// Non-nil while a family member is telling Hallie about someone.
+        var telling: HallieTellingMode.Session?
         /// Conversation memory: the last result set / AST for follow-ups
         /// ("play the first one", "show more", "and in the 90s?").
         var memory = HallieTurnExecutor.ConversationMemory()
@@ -567,6 +604,22 @@ enum HallieShellCLI {
         let userEvent = transcriptEvent(
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
+        // Listening comes first: while someone is telling Hallie about a
+        // person, every turn is theirs to classify (a statement to keep,
+        // "that's all", or a question that ends the telling). An explicit
+        // "let me tell you about …" also wins over a pending clarification.
+        if state.telling != nil,
+           let outcome = await continueTelling(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
+        if let opening = HallieTellingMode.detectOpening(question) {
+            state.pendingClarification = nil
+            return await beginTelling(
+                opening, options: options, state: &state,
+                output: output, dependencies: dependencies)
+        }
         if let pending = state.pendingClarification {
             // A clarifying question must expire when the person changes the
             // subject. Before this, a pending clarification was cleared only
@@ -714,7 +767,7 @@ enum HallieShellCLI {
                         .capture(state.records)
                 }
             case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
-                 .help, .smalltalk, .conversation, .reset:
+                 .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
 

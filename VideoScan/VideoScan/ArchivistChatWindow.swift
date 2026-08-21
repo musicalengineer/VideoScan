@@ -184,6 +184,8 @@ struct ArchivistChatWindow: View {
     /// result set and AST, so "play one of them", "show more", and "and in
     /// the 90s?" resolve deterministically before any translation.
     @State private var hallieMemory = HallieTurnExecutor.ConversationMemory()
+    /// Non-nil while a family member is telling Hallie about someone.
+    @State private var hallieTelling: HallieTellingMode.Session?
     /// Set by "play <something>": after the filter answer lands, the
     /// first match auto-plays.
     @State private var playAfterAnswer = false
@@ -876,6 +878,7 @@ struct ArchivistChatWindow: View {
         let wantsPlayAfter = playAfterAnswer
         playAfterAnswer = false
         let memory = hallieMemory
+        let telling = hallieTelling
         let history = recentHistory()
         let compose = composeWithModel
         let requestID = UUID()
@@ -903,7 +906,8 @@ struct ArchivistChatWindow: View {
                     playAfterAnswer: wantsPlayAfter,
                     memory: memory,
                     composeWithModel: compose,
-                    history: history)
+                    history: history,
+                    telling: telling)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response)
@@ -980,6 +984,7 @@ struct ArchivistChatWindow: View {
     private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
         lastResponder = response.responderHost
         pendingHallieClarification = response.pendingClarification
+        hallieTelling = response.telling
         hallieMemory.record(intent: response.executedIntent,
                             result: response.result)
         let citations = response.citations

@@ -334,7 +334,7 @@ enum ArchivistTemporalExecutor {
         let basis: String
         switch reason {
         case .missingSubject:
-            prose = "I don't have a resolved person for that question."
+            prose = "I need to know who you mean — and which video. Select a video in the Catalog and ask, for example, “how old was Donna in this video?”"
             basis = "Basis: no canonical subject was resolved."
         case .ambiguousSubject(let candidates):
             prose = "I can't determine which person you mean."
@@ -352,7 +352,7 @@ enum ArchivistTemporalExecutor {
             prose = "I don't have a birthdate for \(name ?? "that person")."
             basis = "Basis: the canonical POI profile has no birthdate."
         case .missingReference:
-            prose = "I don't have a usable date for the current selection."
+            prose = "I need a dated video to count from — select one in the Catalog and ask again, or give me a year (“how old was \(name ?? "Donna") in 1995?”)."
             basis = "Basis: the selected catalog record has no dated evidence."
         case .referenceBeforeBirth:
             prose = "I can't calculate that age because the reference is before "

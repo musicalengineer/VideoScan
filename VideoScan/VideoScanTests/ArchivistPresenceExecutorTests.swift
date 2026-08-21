@@ -147,7 +147,7 @@ struct ArchivistPresenceExecutorTests {
         #expect(result.evidence.totalMatchCount == 0)
         #expect(result.evidence.citations.isEmpty)
         #expect(ArchivistPresenceAnswerComposer.compose(result).prose
-                == ArchivistPresenceAnswerComposer.noEvidenceProse)
+                == "I don't have any videos tagged with Donna yet. Try another spelling or a nickname — or tell me about Donna and I'll remember it.")
     }
 
     @Test func keywordCitationReportsTranscriptRatherThanGenericMetadata() async throws {
@@ -176,7 +176,7 @@ struct ArchivistPresenceExecutorTests {
         #expect(absent.conclusion == .noEvidence)
         #expect(absent.evidence.citations.isEmpty)
         #expect(ArchivistPresenceAnswerComposer.compose(absent).prose
-                == ArchivistPresenceAnswerComposer.noEvidenceProse)
+                == "I don't have any videos tagged with Ellen yet. Try another spelling or a nickname — or tell me about Ellen and I'll remember it.")
     }
 
     /// Production sensor: snapshots extracted from real VideoRecord fields

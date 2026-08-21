@@ -740,6 +740,58 @@ enum ArchivistPresenceAnswerComposer {
     static let noEvidenceProse = "I didn't find a match for that in the archive. "
         + "Try removing a name, place, or year, and I'll look again."
 
+    /// A no-evidence answer that says what was looked for and offers a next
+    /// step (Rick 2026-08-21: a bare "I don't have evidence for that" is
+    /// the worst answer she gives — it reads as a shrug). Built only from
+    /// the executed query's own description, so it can never name a fact.
+    static func noEvidenceAnswer(for interpretedQuery: String) -> String {
+        var people: [String] = []
+        var years: String?
+        var mediaKind: String?
+        var keywords: [String] = []
+        for part in interpretedQuery.split(separator: " ") {
+            let pair = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { continue }
+            switch pair[0] {
+            case "person": people.append(pair[1])
+            case "year": years = "from \(pair[1])"
+            case "years": years = "from " + pair[1].replacingOccurrences(of: "...", with: "–")
+            case "mediaKind": mediaKind = pair[1]
+            case "keyword": keywords.append(pair[1])
+            default: break
+            }
+        }
+        var phrase = people.isEmpty
+            ? (mediaKind.map { "\($0)s" } ?? "videos")
+            : (mediaKind.map { "\($0)s" } ?? "videos") + " of " + joinNames(people)
+        if let years { phrase += " " + years }
+        if !keywords.isEmpty {
+            phrase += " with “" + keywords.joined(separator: "”, “") + "”"
+        }
+        guard !(people.isEmpty && years == nil && keywords.isEmpty && mediaKind == nil) else {
+            return "I need something to look for — a person, a year, a place, or a word. Try “show me Donna in the 90s”."
+        }
+        let offer: String
+        if people.isEmpty {
+            offer = "I search by the people tagged in each video, by year, and by words in file names and transcripts — try a name or a year, or a different word."
+        } else if years == nil && keywords.isEmpty {
+            // Person only: the useful sentence IS the offer.
+            return "I don't have any videos tagged with \(joinNames(people)) yet. Try another spelling or a nickname — or tell me about \(joinNames(people)) and I'll remember it."
+        } else {
+            offer = "Want me to try without the \(keywords.isEmpty ? "year" : "words"), or with a different name?"
+        }
+        return "I looked for \(phrase) and found nothing in the catalog. " + offer
+    }
+
+    private static func joinNames(_ names: [String]) -> String {
+        switch names.count {
+        case 0: return ""
+        case 1: return names[0]
+        case 2: return names[0] + " and " + names[1]
+        default: return names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
+        }
+    }
+
     static func compose(_ result: ArchivistPresenceResult) -> ArchivistFactualAnswer {
         switch result.conclusion {
         case .present:
@@ -753,7 +805,7 @@ enum ArchivistPresenceAnswerComposer {
                 evidence: result.evidence)
         case .noEvidence:
             return ArchivistFactualAnswer(
-                prose: noEvidenceProse,
+                prose: noEvidenceAnswer(for: result.interpretedQuery),
                 basisLine: "Basis: no matching catalog evidence.",
                 evidence: result.evidence)
         case .insufficientConstraints:

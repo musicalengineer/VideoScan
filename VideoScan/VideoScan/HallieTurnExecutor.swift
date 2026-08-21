@@ -27,6 +27,9 @@ enum HallieTurnExecutor {
         case smalltalk
         /// Bounded ordinary conversation that receives no archive evidence.
         case conversation
+        /// A family member telling Hallie about someone (HallieTellingMode):
+        /// she listens, asks, and records attributed testimony. No AST.
+        case telling
         /// "start over" — conversation memory cleared.
         case reset
     }
@@ -492,6 +495,7 @@ enum HallieTurnExecutor {
         case .help: return "help"
         case .smalltalk: return "smalltalk"
         case .conversation: return "conversation"
+        case .telling: return "telling"
         case .reset: return "reset"
         }
     }
@@ -511,6 +515,7 @@ enum HallieTurnExecutor {
         case .help: return "help"
         case .smalltalk: return "smalltalk"
         case .conversation: return "conversation"
+        case .telling: return "telling"
         case .reset: return "reset"
         }
     }
@@ -840,7 +845,7 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil,
                 clarification: clarification)
         }
-        return Result(
+        let base = Result(
             route: .graph,
             outcome: result.conclusion == .answered ? .answered : .declined,
             prose: result.prose,
@@ -849,6 +854,14 @@ enum HallieTurnExecutor {
             citations: [],
             catalogPersonName: result.catalogPersonName,
             offeredActions: familyTreeOffers(result.familyTreeFocus))
+        // Where the tree falls short, say how far it reaches and what the
+        // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
+        if result.conclusion == .personNotFound, let typed = payload.people.first {
+            return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
+        }
+        return FamilyKnowledgeSupplement.apply(
+            to: base, payload: payload, graphResult: result,
+            graph: graph, context: context)
     }
 
     /// The privacy ceiling the app grants its own Family Archivist. Every

@@ -817,8 +817,8 @@ struct HalliePresenceRelaxTests {
             query(people: ["Napoleon"], yearStart: 1800, yearEnd: 1810),
             records: [rec("/v/2001/x.mov", people: ["Donna"])])
         #expect(result.conclusion == .noEvidence)
-        #expect(ArchivistPresenceAnswerComposer.compose(result).prose
-            == ArchivistPresenceAnswerComposer.noEvidenceProse)
+        let prose = ArchivistPresenceAnswerComposer.compose(result).prose
+        #expect(prose == "I looked for videos of Napoleon from 1800–1810 and found nothing in the catalog. Want me to try without the year, or with a different name?")
     }
 
     /// A single-facet query must never relax — dropping the only constraint

@@ -171,11 +171,13 @@ extension HallieTurnExecutor {
                     basisLine: ArchivistBiographyPolicy.gedcomCheck,
                     queryDescription: queryDescription, citations: [],
                     catalogPersonName: nil)
+                let offered = FamilyKnowledgeSupplement.notFoundOffer(
+                    answer, typed: typed, graph: context.graph)
                 if spellings.count > 1 {
-                    return answer.prefixingBasis(
+                    return offered.prefixingBasis(
                         "tried “" + spellings.joined(separator: "”, “") + "”")
                 }
-                return answer
+                return offered
             case .answer(let result)?:
                 return result
             }

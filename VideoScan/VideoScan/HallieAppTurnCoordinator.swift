@@ -71,6 +71,9 @@ enum HallieAppTurnCoordinator {
         /// answers that ran no query (capability, follow-up media action,
         /// follow-up declines).
         let executedIntent: HallieTurnExecutor.Intent?
+        /// The listening session to carry into the next turn while a family
+        /// member is telling Hallie about someone; nil otherwise.
+        var telling: HallieTellingMode.Session? = nil
     }
 
     /// The responder label for turns that never reached a model.
@@ -97,6 +100,10 @@ enum HallieAppTurnCoordinator {
         let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
         let loadCyberBrain: @Sendable () -> CyberBrainIndex?
+        /// Durably record one told passage (HallieTellingMode). The default
+        /// records nothing so tests never touch the real CyberBrain; live
+        /// writes through CyberBrainWriter.
+        let recordTestimony: @Sendable (CyberBrainWriter.Testimony) throws -> Void
         /// Who "I" and "you" are (2026-08-18): the owner's name and the
         /// archivist's name from the `archivist.*` settings.
         let loadSpeakers: @Sendable () -> HallieTurnExecutor.Speakers
@@ -134,6 +141,7 @@ enum HallieAppTurnCoordinator {
             loadProfiles: @escaping @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?,
             loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
+            recordTestimony: @escaping @Sendable (CyberBrainWriter.Testimony) throws -> Void = { _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
             },
@@ -173,6 +181,7 @@ enum HallieAppTurnCoordinator {
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
+            self.recordTestimony = recordTestimony
             self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
             self.continueTurn = continueTurn
@@ -275,6 +284,16 @@ enum HallieAppTurnCoordinator {
                     return nil
                 }
             },
+            recordTestimony: { testimony in
+                guard let root = FileManager.default.urls(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask).first?.appendingPathComponent(
+                        "VideoScan/cyberbrain", isDirectory: true) else {
+                    throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
+                }
+                let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+                appLog.write("Hallie: kept testimony \(receipt.itemID) about \(receipt.canonicalName) (told by \(testimony.speakerName))")
+            },
             executeRequest: { request, context in
                 try await HallieTurnExecutor.execute(request, context: context)
             },
@@ -340,9 +359,19 @@ enum HallieAppTurnCoordinator {
         memory: HallieTurnExecutor.ConversationMemory = .init(),
         composeWithModel: Bool = false,
         history: [HallieGroundedComposer.HistoryTurn] = [],
+        telling: HallieTellingMode.Session? = nil,
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
+
+        // Listening comes first: while a family member is telling Hallie
+        // about someone, the turn is theirs to classify; a question ends
+        // the telling and falls through to ordinary answering.
+        if let handled = tellingResponse(
+            question: question, telling: telling,
+            referent: referent, dependencies: dependencies) {
+            return handled
+        }
 
         // Identity sources are loaded lazily and off-main, only if the
         // resolver actually needs to ask "is 'matt' a person?".
@@ -613,7 +642,7 @@ enum HallieAppTurnCoordinator {
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
         case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
-             .help, .smalltalk, .conversation, .reset:
+             .help, .smalltalk, .conversation, .telling, .reset:
             presenceRecords = []
             aggregateRecords = []
         }
@@ -648,7 +677,7 @@ enum HallieAppTurnCoordinator {
                     cyberBrain = nil
                 }
             case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
-                 .conversation, .reset:
+                 .conversation, .telling, .reset:
                 profiles = []
                 graph = nil
                 cyberBrain = nil

@@ -89,7 +89,14 @@ def build_stdin(questions):
     lines = []
     previous_scenario = None
     for q in questions:
-        scenario = q.get("scenarioID", q["id"])
+        # A flat corpus marks chains with followsPrevious; a scenario corpus
+        # shares a scenarioID. Either way a follow-up must NOT be preceded by
+        # :reset, or every "and the newest?" is graded against a blank slate
+        # (7 false failures in the 2026-08-21 baseline).
+        if q.get("followsPrevious") and previous_scenario is not None:
+            scenario = previous_scenario
+        else:
+            scenario = q.get("scenarioID", q["id"])
         if scenario != previous_scenario:
             lines.append(":reset")
         lines.append(q["text"].replace("\n", " "))

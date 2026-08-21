@@ -110,7 +110,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         let fixed = HallieAnswerPlan(
             route: result.route, shape: .fixed, fallbackText: result.prose)
         switch result.route {
-        case .capability, .help, .smalltalk, .conversation, .reset,
+        case .capability, .help, .smalltalk, .conversation, .telling, .reset,
              .followUp, .unsupportedEvent:
             return fixed
         case .presence, .cross, .temporal, .aggregate, .graph:

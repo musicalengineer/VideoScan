@@ -210,7 +210,7 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(invocation.graphWasInjected)
             case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
-                 .conversation, .reset:
+                 .conversation, .telling, .reset:
                 #expect(invocation.presenceCount == 0)
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.isEmpty == true)

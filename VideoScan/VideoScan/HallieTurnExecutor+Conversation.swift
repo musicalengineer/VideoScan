@@ -71,7 +71,7 @@ extension HallieTurnExecutor {
                     lastResultSet = nil
                 }
             case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
-                 .help, .smalltalk, .conversation, .reset:
+                 .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
         }

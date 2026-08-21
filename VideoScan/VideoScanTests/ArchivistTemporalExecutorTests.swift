@@ -110,7 +110,7 @@ struct ArchivistTemporalExecutorTests {
         #expect(missing.decline == .missingSubject)
         #expect(missing.evidence == nil)
         #expect(missing.prose
-                == "I don't have a resolved person for that question.")
+                .hasPrefix("I need to know who you mean — and which video."))
 
         let candidates = [
             ArchivistTemporalSubjectResolution.Candidate(

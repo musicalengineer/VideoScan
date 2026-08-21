@@ -56,7 +56,8 @@ struct HallieTurnExecutorTests {
         #expect(cross.route == .cross)
         #expect(cross.outcome == .declined)
         #expect(cross.citations.isEmpty)
-        #expect(cross.prose == ArchivistPresenceAnswerComposer.noEvidenceProse)
+        #expect(cross.prose.hasPrefix("I looked for videos of "), Comment(rawValue: cross.prose))
+        #expect(cross.prose.contains("found nothing in the catalog"))
     }
 
     @Test func crossAndsPersonWithSpokenWordAndCitesBothBases() async throws {
