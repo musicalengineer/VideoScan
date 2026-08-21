@@ -29,7 +29,20 @@
 //     O_CREAT: it must already be a regular file carrying the header;
 //     missing/replaced ⇒ refuse (Initialize owns creation).
 //
-// Memory: one 1 MB chunk buffer per pass; nothing grows with file size.
+// Memory: the streaming passes (copy + verify) each hold pipelineDepth ×
+// pipelineChunkSize = 3 × 8 MiB = 24 MiB of reusable chunk buffers
+// (worst case, freed when the pass ends); index-file reads use one 1 MiB
+// chunk. Nothing grows with file size.
+//
+// Pipelining (perf/promote-copy-pipeline, 2026-08-20): the copy and
+// verify passes overlap disk reads with hashing/writing — a dedicated
+// reader thread preads the NEXT chunks into a small bounded ring of
+// buffers while the calling thread hashes (and, in the copy pass, writes)
+// the CURRENT chunk. Bytes are consumed strictly in file order, so the
+// SHA-256 is bit-identical to the old serial loop; progress callbacks,
+// per-chunk cancellation, EINTR handling and every error surface are
+// unchanged. All durability / TOCTOU / O_NOFOLLOW contracts above are
+// untouched — only the read scheduling changed.
 
 import CryptoKit
 import Darwin
@@ -37,7 +50,19 @@ import Foundation
 
 enum ArchivePromoteEngine {
 
+    /// Chunk for index-file reads (readAll). The streaming passes use
+    /// pipelineChunkSize below.
     static let chunkSize = 1 << 20
+
+    /// Chunk size for the pipelined copy/verify passes. 8 MiB measured
+    /// fastest on APFS/SSD (see perf/promote-copy-pipeline benchmark);
+    /// 1 MiB read(2) calls were syscall-bound.
+    static let pipelineChunkSize = 8 << 20
+
+    /// Buffers in flight between the reader thread and the consumer:
+    /// one being read, one being hashed/written, one of slack.
+    /// Worst-case buffer memory per pass = 3 × 8 MiB = 24 MiB.
+    static let pipelineDepth = 3
 
     // MARK: Barrier seam
 
@@ -166,25 +191,25 @@ enum ArchivePromoteEngine {
 
     /// Streamed SHA-256 through an already-open descriptor, from offset 0.
     /// `shouldCancel` is polled per chunk. Returns nil on cancel.
+    /// Pipelined: a reader thread preads ahead while this thread hashes;
+    /// byte order, digest, progress and error surfaces are identical to
+    /// the old serial loop (lseek guard kept as the same fd-validity
+    /// check and error even though pread no longer needs the offset).
     static func sha256(fd: Int32, shouldCancel: () -> Bool = { false },
                        progress: (Int64) -> Void = { _ in }) throws -> String? {
         guard lseek(fd, 0, SEEK_SET) == 0 else { throw Failure.writeFailed("lseek") }
         var hasher = SHA256()
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
-        defer { buffer.deallocate() }
         var seen: Int64 = 0
-        while true {
-            if shouldCancel() { return nil }
-            let n = read(fd, buffer, chunkSize)
-            if n > 0 {
-                hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buffer, count: n))
+        do {
+            _ = try pipelinedRead(fd: fd,
+                                  onReadError: { e in Failure.writeFailed("read errno \(e)") },
+                                  shouldCancel: shouldCancel) { buf, n in
+                hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
                 seen += Int64(n)
                 progress(seen)
-            } else if n == 0 {
-                break
-            } else if errno != EINTR {
-                throw Failure.writeFailed("read errno \(errno)")
             }
+        } catch Failure.cancelled {
+            return nil   // this function's contract: nil on cancel, not a throw
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
@@ -358,9 +383,17 @@ enum ArchivePromoteEngine {
     /// "stuck" during the verify read-back).
     enum ProgressPhase: Sendable { case copying, verifying }
 
+    /// `verifyBypassesPageCache` (default OFF — perf/promote-copy-pipeline,
+    /// measured ~2× slower verify): sets F_NOCACHE on the destination fd
+    /// right after creation, so the copy's writes are not left in the
+    /// unified buffer cache and the verify re-read demonstrably comes from
+    /// the device, not from RAM. Strictly STRONGER verification (it can
+    /// catch a device that lied about the write), never weaker; every
+    /// other contract is identical.
     static func copyVerifyPublish(source: SourceHandle,
                                   root: String,
                                   relativePath: String,
+                                  verifyBypassesPageCache: Bool = false,
                                   progress: (Int64) -> Void = { _ in },
                                   phaseProgress: (ProgressPhase, Int64) -> Void = { _, _ in },
                                   shouldCancel: () -> Bool = { false }) throws -> PublishResult {
@@ -385,6 +418,9 @@ enum ArchivePromoteEngine {
             Darwin.close(dfd)
             if !published { unlinkat(dirfd, partialName, 0) }
         }
+        // Best-effort hint; correctness never depends on it (the verify
+        // digest is compared either way).
+        if verifyBypassesPageCache { _ = fcntl(dfd, F_NOCACHE, 1) }
 
         // ---- 1. Copy pass (source fd → dest fd, hashing source bytes).
         let (sourceSHA, copied) = try copyPass(source: source, dfd: dfd, partialPath: destURL.path,
@@ -435,8 +471,14 @@ enum ArchivePromoteEngine {
         return PublishResult(sha256: sourceSHA, sizeBytes: copied)
     }
 
-    /// The chunked read/write loop. Returns (sha256 of the bytes read,
-    /// bytes copied). Throws `.cancelled` when `shouldCancel` fires.
+    /// The chunked read/hash/write loop. Returns (sha256 of the bytes
+    /// read, bytes copied). Throws `.cancelled` when `shouldCancel` fires.
+    /// Pipelined: the reader thread preads chunk N+1/N+2 while this
+    /// thread hashes and writes chunk N — the source drive no longer
+    /// idles during hash+write. Chunks are consumed strictly in file
+    /// order so the digest, the write pattern (sequential, in-order
+    /// EINTR-safe writeAll through the SAME dfd), monotonic progress and
+    /// per-chunk cancellation are identical to the old serial loop.
     private static func copyPass(source: SourceHandle,
                                  dfd: Int32,
                                  partialPath: String,
@@ -444,24 +486,147 @@ enum ArchivePromoteEngine {
                                  shouldCancel: () -> Bool) throws -> (String, Int64) {
         guard lseek(source.fd, 0, SEEK_SET) == 0 else { throw Failure.sourceUnreadable(source.path) }
         var hasher = SHA256()
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
-        defer { buffer.deallocate() }
         var copied: Int64 = 0
-        while true {
-            if shouldCancel() { throw Failure.cancelled }
-            let n = read(source.fd, buffer, chunkSize)
-            if n > 0 {
-                hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buffer, count: n))
-                try writeAll(dfd, UnsafeRawPointer(buffer), n, label: partialPath)
-                copied += Int64(n)
-                progress(copied)
-            } else if n == 0 {
-                break
-            } else if errno != EINTR {
-                throw Failure.sourceUnreadable(source.path)
-            }
+        _ = try pipelinedRead(fd: source.fd,
+                              onReadError: { _ in Failure.sourceUnreadable(source.path) },
+                              shouldCancel: shouldCancel) { buf, n in
+            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
+            try writeAll(dfd, buf, n, label: partialPath)
+            copied += Int64(n)
+            progress(copied)
         }
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), copied)
+    }
+
+    // MARK: Pipelined reads (perf/promote-copy-pipeline)
+
+    /// A bounded ring of reusable chunk buffers connecting ONE reader
+    /// thread to ONE consumer (the calling thread). Slot ownership is
+    /// handed back and forth by two counting semaphores — `free` credits
+    /// the reader to fill a slot, `filled` credits the consumer to drain
+    /// it — so a slot is never touched by both threads at once, and the
+    /// semaphore wait/signal pair gives the memory ordering (happens-
+    /// before) for the slot's buffer, count and errno.
+    /// (For Rick: this is the classic C++ SPSC bounded buffer with two
+    /// counting semaphores; `@unchecked Sendable` ≈ "I certify the
+    /// thread-safety myself", like passing a raw pointer to a pthread —
+    /// the compiler can't prove it, the semaphore protocol does. Raw
+    /// malloc'd arrays are used instead of Swift Arrays deliberately:
+    /// Swift's runtime exclusivity checker treats a whole Array as one
+    /// variable, so two threads touching DIFFERENT indices could trap.)
+    private final class ChunkRing: @unchecked Sendable {
+        let depth: Int
+        let slotSize: Int
+        let buffers: UnsafeMutablePointer<UnsafeMutableRawPointer>
+        let counts: UnsafeMutablePointer<Int>     // bytes in slot; 0 = EOF, <0 = read error
+        let errnos: UnsafeMutablePointer<Int32>
+        // Both start at 0 and are credited explicitly (a DispatchSemaphore
+        // must never be destroyed below its creation value).
+        let free = DispatchSemaphore(value: 0)
+        let filled = DispatchSemaphore(value: 0)
+        private let readerExited = DispatchSemaphore(value: 0)
+        private let stopLock = NSLock()
+        private var stopped = false
+        private var didShutdown = false
+
+        init(depth: Int, slotSize: Int) {
+            self.depth = depth
+            self.slotSize = slotSize
+            buffers = .allocate(capacity: depth)
+            counts = .allocate(capacity: depth)
+            errnos = .allocate(capacity: depth)
+            for i in 0..<depth {
+                buffers[i] = UnsafeMutableRawPointer.allocate(byteCount: slotSize, alignment: 1 << 12)
+                counts[i] = 0
+                errnos[i] = 0
+            }
+            for _ in 0..<depth { free.signal() }
+        }
+
+        private var isStopped: Bool {
+            stopLock.lock(); defer { stopLock.unlock() }
+            return stopped
+        }
+
+        /// Start the reader: sequential preads from offset 0, filling
+        /// slots round-robin. EINTR is retried here (same policy as the
+        /// old serial loop). EOF (0) or a hard error (<0, errno captured)
+        /// is posted as the final slot and the reader exits. pread never
+        /// moves the fd's file offset, so the consumer-side descriptor
+        /// state is untouched.
+        func startReader(fd: Int32) {
+            let thread = Thread { [self] in
+                var offset: off_t = 0
+                var slot = 0
+                while true {
+                    free.wait()
+                    if isStopped { break }
+                    var n = pread(fd, buffers[slot], slotSize, offset)
+                    while n < 0 && errno == EINTR { n = pread(fd, buffers[slot], slotSize, offset) }
+                    counts[slot] = n
+                    errnos[slot] = n < 0 ? errno : 0
+                    filled.signal()
+                    if n <= 0 { break }        // EOF or error: this reader is done
+                    offset += off_t(n)
+                    slot = (slot + 1) % depth
+                }
+                readerExited.signal()
+            }
+            thread.name = "ArchivePromoteEngine.reader"
+            thread.qualityOfService = .userInitiated
+            thread.start()
+        }
+
+        /// Stop the reader (if still running) and JOIN it before the
+        /// buffers can be freed — called from the consumer's defer on
+        /// every exit path (EOF, error, cancel).
+        func shutdown() {
+            stopLock.lock()
+            let already = didShutdown
+            didShutdown = true
+            stopped = true
+            stopLock.unlock()
+            guard !already else { return }
+            for _ in 0..<depth { free.signal() }   // unblock free.wait() if parked
+            readerExited.wait()                    // ≈ pthread_join
+        }
+
+        deinit {
+            // shutdown() must have run (consumer defer guarantees it).
+            for i in 0..<depth { buffers[i].deallocate() }
+            buffers.deallocate(); counts.deallocate(); errnos.deallocate()
+        }
+    }
+
+    /// Drive one full sequential read of `fd` through a ChunkRing,
+    /// calling `consume` once per chunk IN FILE ORDER on the calling
+    /// thread. `shouldCancel` is polled once per chunk (same granularity
+    /// as the old serial loops) and surfaces as `Failure.cancelled`;
+    /// a read error surfaces as `onReadError(errno)` — callers keep
+    /// their historical error types. Returns total bytes consumed.
+    /// F_RDAHEAD is a best-effort hint; failure is ignored.
+    private static func pipelinedRead(fd: Int32,
+                                      onReadError: (Int32) -> Failure,
+                                      shouldCancel: () -> Bool,
+                                      consume: (UnsafeRawPointer, Int) throws -> Void) throws -> Int64 {
+        _ = fcntl(fd, F_RDAHEAD, 1)
+        let ring = ChunkRing(depth: pipelineDepth, slotSize: pipelineChunkSize)
+        ring.startReader(fd: fd)
+        defer { ring.shutdown() }
+        var total: Int64 = 0
+        var slot = 0
+        while true {
+            if shouldCancel() { throw Failure.cancelled }
+            ring.filled.wait()
+            let n = ring.counts[slot]
+            if n == 0 { break }
+            if n < 0 { throw onReadError(ring.errnos[slot]) }
+            try consume(ring.buffers[slot], n)
+            total += Int64(n)
+            ring.free.signal()
+            slot = (slot + 1) % ring.depth
+        }
+        return total
     }
 
     /// write(2) until every byte of the buffer is out (EINTR-safe).
