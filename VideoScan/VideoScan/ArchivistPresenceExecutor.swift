@@ -749,9 +749,16 @@ enum ArchivistPresenceAnswerComposer {
         var years: String?
         var mediaKind: String?
         var keywords: [String] = []
-        for part in interpretedQuery.split(separator: " ") {
-            let pair = part.split(separator: "=", maxSplits: 1).map(String.init)
-            guard pair.count == 2 else { continue }
+        // "person=Richard Harding Breen Sr year=1995": a value runs until the
+        // next key, so multi-word names survive.
+        let pattern = #"(person|year|years|mediaKind|keyword)=(.*?)(?=\s+(?:person|year|years|mediaKind|keyword)=|$)"#
+        let regex = try? NSRegularExpression(pattern: pattern)
+        let whole = NSRange(interpretedQuery.startIndex..., in: interpretedQuery)
+        for match in regex?.matches(in: interpretedQuery, range: whole) ?? [] {
+            guard let keyRange = Range(match.range(at: 1), in: interpretedQuery),
+                  let valueRange = Range(match.range(at: 2), in: interpretedQuery) else { continue }
+            let pair = [String(interpretedQuery[keyRange]),
+                        String(interpretedQuery[valueRange]).trimmingCharacters(in: .whitespaces)]
             switch pair[0] {
             case "person": people.append(pair[1])
             case "year": years = "from \(pair[1])"

@@ -344,4 +344,13 @@ struct ArchivistPresenceExecutorTests {
         #expect(elapsed < .seconds(2),
                 "detached presence execution took \(elapsed) over 100k snapshots")
     }
+
+    @Test func noEvidenceWordingKeepsMultiWordNamesAndYearSpans() {
+        #expect(ArchivistPresenceAnswerComposer.noEvidenceAnswer(
+            for: "shape=presence person=Richard Harding Breen Sr")
+            == "I don't have any videos tagged with Richard Harding Breen Sr yet. Try another spelling or a nickname — or tell me about Richard Harding Breen Sr and I'll remember it.")
+        #expect(ArchivistPresenceAnswerComposer.noEvidenceAnswer(
+            for: "shape=presence person=Donna Breen years=1990...1995 keyword=cape cod")
+            == "I looked for videos of Donna Breen from 1990–1995 with “cape cod” and found nothing in the catalog. Want me to try without the words, or with a different name?")
+    }
 }
