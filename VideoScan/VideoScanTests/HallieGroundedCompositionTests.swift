@@ -222,6 +222,36 @@ struct HallieGroundedCompositionTests {
         #expect(fine.kept.count == 1)
     }
 
+    @Test func verifierRequiresExactEvidenceFilenames() {
+        let plan = HallieAnswerPlan(
+            route: .presence, shape: .list,
+            claims: [
+                .init(id: "c1", text: "Item 1: 2006-xx-xx_Rick-Donna.mov"),
+                .init(id: "c2", text: "Item 2: DonnaRock&Piano.mov"),
+            ],
+            fallbackText: "Two matching items.")
+        let altered = HallieCompositionVerifier.verify(
+            "The files are Rick-Donna.mov and DonnaRock&Piano.mov [c1][c2].",
+            plan: plan, personaName: "Hallie")
+        #expect(altered.kept.isEmpty)
+        #expect(altered.dropped.first?.reason == .alteredFilename)
+
+        let exact = HallieCompositionVerifier.verify(
+            "The files are 2006-xx-xx_Rick-Donna.mov and DonnaRock&Piano.mov [c1][c2].",
+            plan: plan, personaName: "Hallie")
+        #expect(exact.kept.count == 1)
+
+        let transportPlan = HallieAnswerPlan(
+            route: .presence, shape: .list,
+            claims: [.init(id: "c1", text: "Item 1: Cape_trip_full.m2ts")],
+            fallbackText: "One matching item.")
+        let shortenedTransport = HallieCompositionVerifier.verify(
+            "The clip is Cape_trip.m2ts [c1].",
+            plan: transportPlan, personaName: "Hallie")
+        #expect(shortenedTransport.kept.isEmpty)
+        #expect(shortenedTransport.dropped.first?.reason == .alteredFilename)
+    }
+
     @Test func verifierExpandsMonthsAndChecksSpelledOutNumbers() {
         let plan = biographyPlan()
         // "12 MAR 1920" vouches for "March 12, 1920" (live smoke 2026-08-17).
@@ -467,7 +497,7 @@ struct HallieGroundedCompositionClientTests {
                 composeCalls.append(plan)
                 #expect(hosts == ["fixture.invalid"])
                 #expect(model == "fixture-model")
-                #expect(history.map(\.user) == ["earlier question"])
+                #expect(history.isEmpty)
                 let composer = HallieGroundedComposer(personaName: "Hallie Mae") { _, _ in reply }
                 return await composer.compose(plan: plan, history: history)
             })

@@ -737,7 +737,8 @@ enum ArchivistPresenceExecutor {
 }
 
 enum ArchivistPresenceAnswerComposer {
-    static let noEvidenceProse = "I don't have evidence for that."
+    static let noEvidenceProse = "I didn't find a match for that in the archive. "
+        + "Try removing a name, place, or year, and I'll look again."
 
     static func compose(_ result: ArchivistPresenceResult) -> ArchivistFactualAnswer {
         switch result.conclusion {

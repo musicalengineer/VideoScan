@@ -222,7 +222,7 @@ struct ArchivistAggregateExecutorTests {
         ])
 
         #expect(result.conclusion == .noEvidence)
-        #expect(result.factualAnswer.prose == "I don't have evidence for that.")
+        #expect(result.factualAnswer.prose == ArchivistAggregateAnswerComposer.noEvidenceProse)
         #expect(result.factualAnswer.rankings.isEmpty)
     }
 

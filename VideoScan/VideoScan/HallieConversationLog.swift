@@ -38,6 +38,9 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     let version: Int
     let timestamp: Date
     let sessionID: UUID
+    /// Optional batch label (`--log-run-id`) used to isolate headless eval
+    /// events from the app's concurrent development transcript.
+    let runID: String?
     let eventID: UUID
     let sequence: UInt64
     let client: Client
@@ -60,6 +63,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     init(
         timestamp: Date = Date(),
         sessionID: UUID,
+        runID: String? = nil,
         eventID: UUID = UUID(),
         sequence: UInt64,
         client: Client,
@@ -79,6 +83,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.version = Self.schemaVersion
         self.timestamp = timestamp
         self.sessionID = sessionID
+        self.runID = runID
         self.eventID = eventID
         self.sequence = sequence
         self.client = client

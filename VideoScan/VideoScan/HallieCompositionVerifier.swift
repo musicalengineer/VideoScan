@@ -24,6 +24,9 @@ enum HallieCompositionVerifier {
             case leakedYear
             case leakedNumber
             case leakedName
+            /// A composed filename was shortened, embellished, or invented.
+            /// File identity is exact evidence and may never be paraphrased.
+            case alteredFilename
             case sentenceFragment
             case overSentenceBudget
             /// A sentence asserting she has no evidence/knowledge, inside a
@@ -150,6 +153,10 @@ enum HallieCompositionVerifier {
                 dropped.append(Dropped(text: raw, reason: .orphanedContinuation))
                 continue
             }
+            if containsUnvouchedFilename(display, claims: claims) {
+                dropped.append(Dropped(text: raw, reason: .alteredFilename))
+                continue
+            }
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
             if let reason = leak(in: display, allowed: allowedTokens) {
                 dropped.append(Dropped(text: raw, reason: reason))
@@ -163,6 +170,54 @@ enum HallieCompositionVerifier {
         }
         return Verification(kept: kept, dropped: dropped)
     }
+
+    /// Remove every exact item filename vouched for by this sentence's
+    /// claims, then reject any file-looking token left behind. This catches
+    /// omission as well as invention: `2006-xx-xx_Rick.mov` may not become
+    /// `Rick.mov`, even though all remaining word tokens were present.
+    private static func containsUnvouchedFilename(
+        _ display: String,
+        claims: [HallieAnswerPlan.Claim]
+    ) -> Bool {
+        var remainder = display.lowercased()
+        for claim in claims {
+            guard claim.text.hasPrefix("Item "),
+                  let colon = claim.text.firstIndex(of: ":") else { continue }
+            var tail = String(claim.text[claim.text.index(after: colon)...])
+                .trimmingCharacters(in: .whitespaces)
+            if let separator = tail.range(of: " — ") {
+                tail = String(tail[..<separator.lowerBound])
+            }
+            if let time = tail.range(
+                of: #" at [0-9]+(?:\.[0-9]+)?s$"#,
+                options: .regularExpression) {
+                tail = String(tail[..<time.lowerBound])
+            }
+            guard !tail.isEmpty else { continue }
+            remainder = remainder.replacingOccurrences(
+                of: tail.lowercased(), with: "")
+        }
+        return remainder.range(
+            of: mediaFilenamePattern,
+            options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Keep this aligned with VideoScanModel's cataloged video and optional
+    /// standalone-audio extensions. A shortened M2TS/MTS filename is just as
+    /// much an invented evidence label as a shortened MOV filename.
+    private static let mediaFilenamePattern: String = {
+        let extensions = [
+            "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts",
+            "ts", "mpg", "mpeg", "m2v", "vob", "wmv", "asf", "webm",
+            "ogv", "ogg", "rm", "rmvb", "divx", "flv", "f4v", "3gp",
+            "3g2", "dv", "dif", "braw", "r3d", "vro", "mod", "tod",
+            "wav", "aif", "aiff", "mp3", "mp2", "m4a", "aac", "flac",
+            "caf", "wma", "ac3", "oga", "opus", "alac", "amr", "au",
+            "snd",
+        ]
+        return "\\b[^\\s,;()]+\\.(?:"
+            + extensions.joined(separator: "|") + ")\\b"
+    }()
 
     // MARK: - Sentences
 

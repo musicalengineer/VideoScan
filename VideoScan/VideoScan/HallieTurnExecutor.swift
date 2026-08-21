@@ -25,6 +25,8 @@ enum HallieTurnExecutor {
         case help
         /// A one-line friendly reply ("thanks", "hi", "good morning").
         case smalltalk
+        /// Bounded ordinary conversation that receives no archive evidence.
+        case conversation
         /// "start over" — conversation memory cleared.
         case reset
     }
@@ -489,6 +491,7 @@ enum HallieTurnExecutor {
         case .capability: return "capability"
         case .help: return "help"
         case .smalltalk: return "smalltalk"
+        case .conversation: return "conversation"
         case .reset: return "reset"
         }
     }
@@ -507,6 +510,7 @@ enum HallieTurnExecutor {
         case .capability: return "capability"
         case .help: return "help"
         case .smalltalk: return "smalltalk"
+        case .conversation: return "conversation"
         case .reset: return "reset"
         }
     }

@@ -97,6 +97,7 @@ struct ArchivistFollowUpResolverTests {
     @Test(arguments: [
         "show more", "more", "more please", "next", "the rest", "show me the rest",
         "any more?", "what else", "keep going", "show me more",
+        "show more results",
     ])
     func pagingPhrasesPageWhenThereIsMore(text: String) {
         #expect(resolve(text, snapshot: Self.withMoreResults) == .nextPage, Comment(rawValue: text))

@@ -16,6 +16,11 @@ enum HallieShellCLI {
         /// facts locked). OFF by default in the shell — it is a diagnostic
         /// surface and the templated wording is the reference output.
         var compose = false
+        /// Hard safety gate for unattended evaluation. Answers still report
+        /// the requested action, but no file is opened or revealed.
+        var allowActions = true
+        /// Optional label stamped onto every transcript event from this shell.
+        var logRunID: String?
     }
 
     enum ParseError: LocalizedError, Equatable {
@@ -36,7 +41,7 @@ enum HallieShellCLI {
         case presence, temporal, aggregate, graph, cross
         case unsupportedEvent
         case followUp, capability
-        case help, smalltalk, reset
+        case help, smalltalk, conversation, reset
     }
 
     enum MediaAction: Equatable {
@@ -77,6 +82,16 @@ enum HallieShellCLI {
         let responderHost: String
     }
 
+    struct TurnInterpretation {
+        let value: HallieTurnInterpretation
+        let responderHost: String
+    }
+
+    struct SocialReply {
+        let value: HallieSocialConversation.Reply
+        let responderHost: String
+    }
+
     enum ProfileLoadFailure: LocalizedError, Sendable, Equatable {
         case applicationSupportUnavailable
         case directoryUnreadable(String)
@@ -108,6 +123,13 @@ enum HallieShellCLI {
         var loadGraph: (URL?) -> GedcomFamilyGraph?
         var loadCyberBrain: () -> CyberBrainIndex?
         var translateAST: (String, Options) async throws -> Translation
+        var interpretTurn: (String, Options) async throws -> TurnInterpretation
+        var composeConversation: @Sendable (
+            HallieConversationKind,
+            String,
+            [HallieGroundedComposer.HistoryTurn],
+            Options
+        ) async -> SocialReply
         var executeTurn: @Sendable (
             ArchivistQueryAST,
             HallieTurnExecutor.Context
@@ -138,6 +160,13 @@ enum HallieShellCLI {
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping () -> CyberBrainIndex? = { nil },
             translateAST: @escaping (String, Options) async throws -> Translation,
+            interpretTurn: ((String, Options) async throws -> TurnInterpretation)? = nil,
+            composeConversation: (@Sendable (
+                HallieConversationKind,
+                String,
+                [HallieGroundedComposer.HistoryTurn],
+                Options
+            ) async -> SocialReply)? = nil,
             executeTurn: @escaping @Sendable (
                 ArchivistQueryAST,
                 HallieTurnExecutor.Context
@@ -166,6 +195,22 @@ enum HallieShellCLI {
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
             self.translateAST = translateAST
+            self.interpretTurn = interpretTurn ?? { question, options in
+                let translation = try await translateAST(question, options)
+                return TurnInterpretation(
+                    value: .archive(translation.ast),
+                    responderHost: translation.responderHost)
+            }
+            self.composeConversation = composeConversation ?? {
+                kind, question, history, _ in
+                let reply = await HallieSocialConversation.reply(
+                    kind: kind, question: question, history: history,
+                    modelCall: { _, _ in
+                        throw NLTranslatorError.unreachable(
+                            "no social conversation model configured")
+                    })
+                return SocialReply(value: reply, responderHost: "local")
+            }
             self.executeTurn = executeTurn
             self.executeRequest = executeRequest ?? { request, context in
                 try await executeTurn(request.intent.ast, context)
@@ -226,6 +271,38 @@ enum HallieShellCLI {
                     let ast = try await translator.translateAST(question)
                     return Translation(ast: ast,
                                        responderHost: responder.value ?? "unknown")
+                },
+                interpretTurn: { question, options in
+                    let responder = LockedString()
+                    var template = OllamaQueryTranslator()
+                    template.model = options.model
+                    let translator = OllamaFailoverTranslator(
+                        hosts: options.hosts,
+                        template: template,
+                        onResponder: { responder.set($0) })
+                    let value = try await translator.interpretTurn(question)
+                    return TurnInterpretation(
+                        value: value,
+                        responderHost: responder.value ?? "unknown")
+                },
+                composeConversation: { kind, question, history, options in
+                    let responder = LockedString()
+                    var template = OllamaQueryTranslator()
+                    template.model = options.model
+                    let fleet = OllamaFailoverTranslator(
+                        hosts: options.hosts,
+                        template: template,
+                        onResponder: { responder.set($0) })
+                    let reply = await HallieSocialConversation.reply(
+                        kind: kind, question: question, history: history,
+                        modelCall: { system, user in
+                            try await fleet.composePlainText(
+                                system: system, user: user)
+                        })
+                    return SocialReply(
+                        value: reply,
+                        responderHost: reply.composedByModel
+                            ? (responder.value ?? "unknown") : "local")
                 },
                 executeTurn: HallieTurnExecutor.execute,
                 executeRequest: { request, context in
@@ -289,12 +366,13 @@ enum HallieShellCLI {
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
+                     [--no-actions] [--log-run-id ID]
     """
 
     static let help = """
-    Commands: :help, :quit, :cancel, :session, :list, :select N, :play N, :reveal N,
+    Commands: :help, :quit, :cancel, :reset, :session, :list, :select N, :play N, :reveal N,
               :photo, :open-photo, :reveal-photo
-    Media opens only after an explicit :play or :reveal command.
+    :reset forgets the current conversation and starts a new logged session.
     """
 
     static func parse(arguments: [String]) throws -> Options {
@@ -304,7 +382,13 @@ enum HallieShellCLI {
             let argument = arguments[index]
             if argument == "--hallie" { index += 1; continue }
             if argument == "--compose" { result.compose = true; index += 1; continue }
-            guard ["--catalog", "--host", "--model", "--gedcom", "--once"]
+            if argument == "--no-actions" {
+                result.allowActions = false
+                index += 1
+                continue
+            }
+            guard ["--catalog", "--host", "--model", "--gedcom", "--once",
+                   "--log-run-id"]
                 .contains(argument) else { throw ParseError.unknownOption(argument) }
             guard index + 1 < arguments.count else {
                 throw ParseError.missingValue(argument)
@@ -321,6 +405,7 @@ enum HallieShellCLI {
             case "--model": result.model = value
             case "--gedcom": result.gedcomURL = URL(fileURLWithPath: value)
             case "--once": result.once = value
+            case "--log-run-id": result.logRunID = value
             default: break
             }
             index += 2
@@ -340,6 +425,7 @@ enum HallieShellCLI {
         case .capability: return .capability
         case .help: return .help
         case .smalltalk: return .smalltalk
+        case .conversation: return .conversation
         case .reset: return .reset
         }
     }
@@ -373,9 +459,15 @@ enum HallieShellCLI {
             profiles: profiles,
             graph: graph,
             cyberBrain: cyberBrain,
-            model: options.model)
+            model: options.model,
+            runID: options.logRunID)
 
         output("catalog: \(records.count) records · \(options.catalogURL.path)")
+        if let runID = state.runID { output("run-id: \(runID)") }
+        output("session-id: \(state.transcriptSessionID.uuidString)")
+        if !options.allowActions {
+            output("actions: disabled (--no-actions); no media will be opened or revealed")
+        }
         if let once = options.once {
             let outcome = await answer(
                 once, options: options, state: &state,
@@ -389,8 +481,8 @@ enum HallieShellCLI {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { continue }
             if line.hasPrefix(":") {
-                switch handleCommand(
-                    line, state: &state, output: output,
+                switch await handleCommand(
+                    line, options: options, state: &state, output: output,
                     dependencies: dependencies) {
                 case .continueSession: break
                 case .quit: return ExitCode.success.rawValue
@@ -414,7 +506,8 @@ enum HallieShellCLI {
         let graph: GedcomFamilyGraph?
         let cyberBrain: CyberBrainIndex?
         let model: String
-        let transcriptSessionID = UUID()
+        var runID: String?
+        var transcriptSessionID = UUID()
         var transcriptSequence: UInt64 = 0
         var presenceSnapshots: [ArchivistPresenceRecordSnapshot]?
         var aggregateSnapshots: [ArchivistAggregateRecordSnapshot]?
@@ -430,11 +523,23 @@ enum HallieShellCLI {
         /// Recent (question, displayed answer) pairs offered to the composer
         /// for continuity — text only, bounded.
         var history: [HallieGroundedComposer.HistoryTurn] = []
+        /// Only conversation-lane turns. Archive answers never enter the
+        /// free-text social prompt, and social text never enters a factual
+        /// composition prompt.
+        var socialHistory: [HallieGroundedComposer.HistoryTurn] = []
 
         mutating func remember(question: String, answer: String) {
             history.append(.init(user: question, assistant: answer))
             if history.count > HallieGroundedComposer.historyTurns {
                 history.removeFirst(history.count - HallieGroundedComposer.historyTurns)
+            }
+        }
+
+        mutating func rememberSocial(question: String, answer: String) {
+            socialHistory.append(.init(user: question, assistant: answer))
+            if socialHistory.count > HallieSocialConversation.maximumHistoryTurns {
+                socialHistory.removeFirst(
+                    socialHistory.count - HallieSocialConversation.maximumHistoryTurns)
             }
         }
 
@@ -463,13 +568,32 @@ enum HallieShellCLI {
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
         if let pending = state.pendingClarification {
-            return await continueClarification(
-                question,
-                pending: pending,
-                options: options,
-                state: &state,
-                output: output,
-                dependencies: dependencies)
+            // A clarifying question must expire when the person changes the
+            // subject. Before this, a pending clarification was cleared only
+            // by :cancel, so one "which Tim did you mean?" swallowed every
+            // later turn — 25 in a row in the 2026-08-21 eval. The selector
+            // below is still THE selector; the policy only decides what a
+            // NON-selection means (ask again vs follow the person).
+            let decision = HallieClarificationPolicy.decide(
+                reply: question,
+                candidates: pending.value.candidates.map(\.label),
+                select: { reply in
+                    clarificationSelection(reply, from: pending.value.candidates)
+                        .map(String.init(describing:))
+                })
+            if decision == .abandon {
+                state.pendingClarification = nil
+                output(HallieClarificationPolicy.abandonNote)
+                // fall through: answer THIS question as a fresh turn
+            } else {
+                return await continueClarification(
+                    question,
+                    pending: pending,
+                    options: options,
+                    state: &state,
+                    output: output,
+                    dependencies: dependencies)
+            }
         }
         do {
             state.biographyPhoto = nil
@@ -491,8 +615,14 @@ enum HallieShellCLI {
                 render(result, ast: nil, context: identity, state: &state,
                        output: output)
                 state.remember(question: question, answer: result.prose)
+                if result.route == .smalltalk || result.route == .conversation {
+                    state.rememberSocial(question: question, answer: result.prose)
+                }
+                if result.route == .reset { clearConversation(&state) }
                 let outcome = performMediaAction(
-                    result.mediaAction, output: output, dependencies: dependencies)
+                    result.mediaAction, output: output,
+                    dependencies: dependencies,
+                    allowActions: options.allowActions)
                 let event = transcriptEvent(
                     result: result, responder: "local", state: &state)
                 await dependencies.recordTranscript([event])
@@ -511,14 +641,65 @@ enum HallieShellCLI {
                 // the user's question. Catalog, profile, GEDCOM, and citations
                 // stay local.
                 output("Hallie is interpreting that question…")
-                let translation = try await dependencies.translateAST(
-                    effectiveQuestion, options)
-                state.lastResponder = translation.responderHost
-                output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
-                intent = HallieTurnExecutor.Intent(
-                    originalQuestion: question,
-                    ast: translation.ast,
-                    playAfterAnswer: wantsPlay)
+                let interpretation: TurnInterpretation
+                if let kind = HallieConversationGuard.definitelyGeneral(
+                    effectiveQuestion,
+                    isKnownPerson: {
+                        HallieTurnExecutor.isKnownPerson($0, context: identity)
+                    }) {
+                    interpretation = TurnInterpretation(
+                        value: .conversation(kind), responderHost: "local")
+                } else {
+                    interpretation = try await dependencies.interpretTurn(
+                        effectiveQuestion, options)
+                }
+                switch interpretation.value {
+                case .archive(let ast):
+                    state.lastResponder = interpretation.responderHost
+                    output("interpreted: \(HallieTurnExecutor.description(of: ast))")
+                    intent = HallieTurnExecutor.Intent(
+                        originalQuestion: question,
+                        ast: ast,
+                        playAfterAnswer: wantsPlay)
+
+                case .conversation(let kind):
+                    // A model classification never gets the last word on the
+                    // safety boundary. Known people and archive language are
+                    // retranslated with the archive-only schema.
+                    if HallieConversationGuard.requiresArchive(
+                        effectiveQuestion,
+                        kind: kind,
+                        isKnownPerson: {
+                            HallieTurnExecutor.isKnownPerson($0, context: identity)
+                        }) {
+                        let translation = try await dependencies.translateAST(
+                            effectiveQuestion, options)
+                        state.lastResponder = translation.responderHost
+                        output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
+                        intent = HallieTurnExecutor.Intent(
+                            originalQuestion: question,
+                            ast: translation.ast,
+                            playAfterAnswer: wantsPlay)
+                    } else {
+                        let social = await dependencies.composeConversation(
+                            kind, question, state.socialHistory, options)
+                        state.lastResponder = social.responderHost
+                        let result = HallieSocialConversation.result(for: social.value)
+                        state.memory.record(intent: nil, result: result)
+                        output("interpreted: conversation")
+                        render(result, ast: nil, context: identity, state: &state,
+                               output: output)
+                        output("interpreted by \(state.lastResponder)")
+                        state.rememberSocial(
+                            question: question, answer: result.prose)
+                        let event = transcriptEvent(
+                            result: result,
+                            responder: state.lastResponder,
+                            state: &state)
+                        await dependencies.recordTranscript([event])
+                        return .answered
+                    }
+                }
             }
 
             switch HallieTurnExecutor.route(intent.ast) {
@@ -532,7 +713,8 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
+            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+                 .help, .smalltalk, .conversation, .reset:
                 break
             }
 
@@ -579,7 +761,8 @@ enum HallieShellCLI {
                result.clarification == nil, !result.citations.isEmpty {
                 _ = performMediaAction(
                     .init(kind: .play, citations: result.citations),
-                    output: output, dependencies: dependencies)
+                    output: output, dependencies: dependencies,
+                    allowActions: options.allowActions)
             }
             switch result.outcome {
             case .answered: return .answered
@@ -589,12 +772,17 @@ enum HallieShellCLI {
             }
         } catch {
             state.citations = []
-            output("I couldn't safely interpret that question: \(error.localizedDescription)")
-            output("No catalog query or media action was performed.")
+            let diagnostic = String(reflecting: error)
+            appLog.write("Hallie shell interpretation failed — \(diagnostic)")
+            let message = "I'm having trouble reaching my language helper just now. "
+                + "I didn't search the archive or open anything; please try that again in a moment."
+            output(message)
+            if ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
+                output("diagnostic: \(diagnostic)")
+            }
             let event = transcriptEvent(
                 kind: .error,
-                text: "I couldn't safely interpret that question: "
-                    + error.localizedDescription,
+                text: message,
                 basisLine: "No catalog query or media action was performed.",
                 outcome: "interpretation-failed",
                 state: &state)
@@ -615,7 +803,10 @@ enum HallieShellCLI {
         guard options.compose else { return result }
         let plan = HallieAnswerPlan.derive(from: result)
         guard plan.isComposable else { return result }
-        let outcome = await dependencies.composeAnswer(plan, state.history, options)
+        // The typed plan is the complete factual context. Conversation
+        // history is intentionally excluded so uncited social prose cannot
+        // bleed into a catalog/tree answer.
+        let outcome = await dependencies.composeAnswer(plan, [], options)
         return result.applying(outcome)
     }
 
@@ -700,14 +891,20 @@ enum HallieShellCLI {
 
     private static func handleCommand(
         _ line: String,
+        options: Options,
         state: inout Session,
         output: (String) -> Void,
         dependencies: Dependencies
-    ) -> CommandOutcome {
+    ) async -> CommandOutcome {
         let parts = line.split(whereSeparator: \.isWhitespace).map(String.init)
         switch parts.first?.lowercased() {
         case ":quit", ":q": output("Goodbye."); return .quit
         case ":help": output(help)
+        case ":reset":
+            let event = resetSession(&state)
+            output("reset: conversation forgotten")
+            output("session-id: \(state.transcriptSessionID.uuidString)")
+            await dependencies.recordTranscript([event])
         case ":cancel":
             if state.pendingClarification != nil {
                 state.pendingClarification = nil
@@ -718,7 +915,7 @@ enum HallieShellCLI {
         case ":session":
             let selected = state.selectedRecordID?.uuidString ?? "none"
             let pending = state.pendingClarification == nil ? "none" : "identity"
-            output("session: \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending)")
+            output("session: \(state.transcriptSessionID.uuidString) · \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending)")
         case ":photo":
             if let photo = state.biographyPhoto {
                 output("photo: \(photo.fileURL.path)")
@@ -726,6 +923,10 @@ enum HallieShellCLI {
                 output("No biography photo is available for the last answer.")
             }
         case ":open-photo", ":reveal-photo":
+            guard options.allowActions else {
+                output(actionsDisabledNotice)
+                return .continueSession
+            }
             guard let photo = state.biographyPhoto else {
                 output("No biography photo is available for the last answer.")
                 return .mediaFailure
@@ -759,6 +960,8 @@ enum HallieShellCLI {
             if parts[0].lowercased() == ":select" {
                 state.selectedRecordID = citation.recordID
                 output("selected \(number): \(citation.filename)")
+            } else if !options.allowActions {
+                output("\(actionsDisabledNotice) (\(citation.filename))")
             } else {
                 let url = URL(fileURLWithPath: citation.fullPath)
                 guard dependencies.mediaURLIsAvailable(url) else {
@@ -778,6 +981,32 @@ enum HallieShellCLI {
         default: output("Unknown command. Type :help.")
         }
         return .continueSession
+    }
+
+    static let actionsDisabledNotice =
+        "media actions are disabled (--no-actions); nothing was opened"
+
+    static func clearConversation(_ state: inout Session) {
+        state.citations = []
+        state.knowledgeCitations = []
+        state.selectedRecordID = nil
+        state.biographyPhoto = nil
+        state.pendingClarification = nil
+        state.memory.reset()
+        state.history = []
+        state.socialHistory = []
+        state.lastResponder = "none"
+    }
+
+    static func resetSession(_ state: inout Session) -> HallieTranscriptEvent {
+        clearConversation(&state)
+        state.transcriptSessionID = UUID()
+        state.transcriptSequence = 0
+        return transcriptEvent(
+            kind: .system,
+            text: ":reset",
+            basisLine: "Conversation memory, citations, and history cleared.",
+            state: &state)
     }
 
     private static func temporalSelectionDate(

@@ -11,6 +11,16 @@ enum HallieAppTurnCoordinator {
         let responderHost: String
     }
 
+    struct TurnInterpretation: Sendable {
+        let value: HallieTurnInterpretation
+        let responderHost: String
+    }
+
+    struct SocialReply: Sendable {
+        let value: HallieSocialConversation.Reply
+        let responderHost: String
+    }
+
     struct CapturedReferent: Sendable {
         let recordID: UUID?
         let temporalDate: ArchivistTemporalSelectionDateSnapshot?
@@ -74,6 +84,16 @@ enum HallieAppTurnCoordinator {
         let translateAST: @Sendable (
             String, [String], String
         ) async throws -> Translation
+        let interpretTurn: @Sendable (
+            String, [String], String
+        ) async throws -> TurnInterpretation
+        let composeConversation: @Sendable (
+            HallieConversationKind,
+            String,
+            [HallieGroundedComposer.HistoryTurn],
+            [String],
+            String
+        ) async -> SocialReply
         let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
         let loadCyberBrain: @Sendable () -> CyberBrainIndex?
@@ -101,6 +121,16 @@ enum HallieAppTurnCoordinator {
         init(
             startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
             translateAST: @escaping @Sendable (String, [String], String) async throws -> Translation,
+            interpretTurn: (@Sendable (
+                String, [String], String
+            ) async throws -> TurnInterpretation)? = nil,
+            composeConversation: (@Sendable (
+                HallieConversationKind,
+                String,
+                [HallieGroundedComposer.HistoryTurn],
+                [String],
+                String
+            ) async -> SocialReply)? = nil,
             loadProfiles: @escaping @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?,
             loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
@@ -124,6 +154,22 @@ enum HallieAppTurnCoordinator {
         ) {
             self.startLocalBrain = startLocalBrain
             self.translateAST = translateAST
+            self.interpretTurn = interpretTurn ?? { question, hosts, model in
+                let translation = try await translateAST(question, hosts, model)
+                return TurnInterpretation(
+                    value: .archive(translation.ast),
+                    responderHost: translation.responderHost)
+            }
+            self.composeConversation = composeConversation ?? {
+                kind, question, history, _, _ in
+                let reply = await HallieSocialConversation.reply(
+                    kind: kind, question: question, history: history,
+                    modelCall: { _, _ in
+                        throw NLTranslatorError.unreachable(
+                            "no social conversation model configured")
+                    })
+                return SocialReply(value: reply, responderHost: localResponder)
+            }
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
@@ -153,6 +199,39 @@ enum HallieAppTurnCoordinator {
                 return Translation(
                     ast: ast,
                     responderHost: responder.value ?? "unknown")
+            },
+            interpretTurn: { question, hosts, modelName in
+                let responder = ResponderBox()
+                var template = OllamaQueryTranslator()
+                template.model = modelName
+                let translator = OllamaFailoverTranslator(
+                    hosts: hosts,
+                    template: template,
+                    onResponder: { responder.set($0) })
+                let value = try await translator.interpretTurn(question)
+                return TurnInterpretation(
+                    value: value,
+                    responderHost: responder.value ?? "unknown")
+            },
+            composeConversation: { kind, question, history, hosts, modelName in
+                let responder = ResponderBox()
+                var template = OllamaQueryTranslator()
+                template.model = modelName
+                let fleet = OllamaFailoverTranslator(
+                    hosts: OllamaLocalServerBootstrap
+                        .routeLocalEndpointsToLoopback(hosts),
+                    template: template,
+                    onResponder: { responder.set($0) })
+                let reply = await HallieSocialConversation.reply(
+                    kind: kind, question: question, history: history,
+                    modelCall: { system, user in
+                        try await fleet.composePlainText(
+                            system: system, user: user)
+                    })
+                return SocialReply(
+                    value: reply,
+                    responderHost: reply.composedByModel
+                        ? (responder.value ?? "unknown") : localResponder)
             },
             loadProfiles: {
                 switch HallieShellCLI.loadProfilesReadOnly() {
@@ -312,20 +391,67 @@ enum HallieAppTurnCoordinator {
             }
             composeHosts = effectiveHosts
             try Task.checkCancellation()
-            let translation = try await dependencies.translateAST(
-                effectiveQuestion, effectiveHosts, modelName)
+            let certainConversation = try await definitelyGeneralOffMain(
+                question: effectiveQuestion, dependencies: dependencies)
+            let interpretation: TurnInterpretation
+            if let kind = certainConversation {
+                interpretation = TurnInterpretation(
+                    value: .conversation(kind), responderHost: localResponder)
+            } else {
+                interpretation = try await dependencies.interpretTurn(
+                    effectiveQuestion, effectiveHosts, modelName)
+            }
             try Task.checkCancellation()
-            intent = HallieTurnExecutor.Intent(
-                originalQuestion: question,
-                ast: translation.ast,
-                playAfterAnswer: wantsPlay)
-            responderHost = translation.responderHost
+            switch interpretation.value {
+            case .archive(let ast):
+                intent = HallieTurnExecutor.Intent(
+                    originalQuestion: question,
+                    ast: ast,
+                    playAfterAnswer: wantsPlay)
+                responderHost = interpretation.responderHost
+
+            case .conversation(let kind):
+                let requiresArchive = try await conversationRequiresArchiveOffMain(
+                    question: effectiveQuestion,
+                    kind: kind,
+                    dependencies: dependencies)
+                try Task.checkCancellation()
+                if requiresArchive {
+                    // False-social is the dangerous direction. Retry with the
+                    // archive-only schema rather than letting free text answer
+                    // a private-person or evidence question.
+                    let translation = try await dependencies.translateAST(
+                        effectiveQuestion, effectiveHosts, modelName)
+                    intent = HallieTurnExecutor.Intent(
+                        originalQuestion: question,
+                        ast: translation.ast,
+                        playAfterAnswer: wantsPlay)
+                    responderHost = translation.responderHost
+                } else {
+                    let social = await dependencies.composeConversation(
+                        kind, question, history, effectiveHosts, modelName)
+                    try Task.checkCancellation()
+                    let result = HallieSocialConversation.result(for: social.value)
+                    return Response(
+                        result: result,
+                        responderHost: social.responderHost,
+                        biographyPhoto: nil,
+                        capturedReferentID: referent.recordID,
+                        citations: [],
+                        pendingClarification: nil,
+                        playAfterAnswer: false,
+                        executedIntent: nil)
+                }
+            }
         }
         let composition = Composition(
             enabled: composeWithModel,
             hosts: composeHosts,
             modelName: modelName,
-            history: history)
+            // Factual phrasing gets the current typed plan only. Social
+            // history belongs exclusively to composeConversation above; it
+            // must never bleed an uncited chat sentence into archive prose.
+            history: [])
 
         let context = try await captureContext(
             ast: intent.ast,
@@ -411,6 +537,62 @@ enum HallieAppTurnCoordinator {
         }
     }
 
+    private static func conversationRequiresArchiveOffMain(
+        question: String,
+        kind: HallieConversationKind,
+        dependencies: Dependencies
+    ) async throws -> Bool {
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> Bool in
+            try Task.checkCancellation()
+            let context = HallieTurnExecutor.Context(
+                profiles: dependencies.loadProfiles(),
+                graph: dependencies.loadGraph(),
+                cyberBrain: dependencies.loadCyberBrain())
+            return HallieConversationGuard.requiresArchive(
+                question,
+                kind: kind,
+                isKnownPerson: {
+                    HallieTurnExecutor.isKnownPerson($0, context: context)
+                })
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    private static func definitelyGeneralOffMain(
+        question: String,
+        dependencies: Dependencies
+    ) async throws -> HallieConversationKind? {
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> HallieConversationKind? in
+            try Task.checkCancellation()
+            var loaded: HallieTurnExecutor.Context?
+            func sources() -> HallieTurnExecutor.Context {
+                if let loaded { return loaded }
+                let context = HallieTurnExecutor.Context(
+                    profiles: dependencies.loadProfiles(),
+                    graph: dependencies.loadGraph(),
+                    cyberBrain: dependencies.loadCyberBrain())
+                loaded = context
+                return context
+            }
+            return HallieConversationGuard.definitelyGeneral(
+                question,
+                isKnownPerson: {
+                    HallieTurnExecutor.isKnownPerson($0, context: sources())
+                })
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     @MainActor
     private static func captureContext(
         ast: ArchivistQueryAST,
@@ -430,7 +612,8 @@ enum HallieAppTurnCoordinator {
             presenceRecords = []
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
-        case .temporal, .graph, .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
+        case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+             .help, .smalltalk, .conversation, .reset:
             presenceRecords = []
             aggregateRecords = []
         }
@@ -464,7 +647,8 @@ enum HallieAppTurnCoordinator {
                     graph = nil
                     cyberBrain = nil
                 }
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
+            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+                 .conversation, .reset:
                 profiles = []
                 graph = nil
                 cyberBrain = nil

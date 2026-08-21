@@ -23,12 +23,18 @@ import re
 import subprocess
 import sys
 import time
-from datetime import date
+import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 LOG_DIR = Path.home() / "Library/Logs/VideoScan/Hallie"
 HALLIE = REPO / "scripts/hallie"
+MEDIA_FILENAME_EXTENSIONS = (
+    "mov|mp4|m4v|avi|mkv|mxf|mts|m2ts|ts|mpg|mpeg|m2v|vob|wmv|asf|"
+    "webm|ogv|ogg|rm|rmvb|divx|flv|f4v|3gp|3g2|dv|dif|braw|r3d|vro|"
+    "mod|tod|wav|aif|aiff|mp3|mp2|m4a|aac|flac|caf|wma|ac3|oga|opus|"
+    "alac|amr|au|snd"
+)
 
 # ---------------------------------------------------------------- run
 
@@ -36,19 +42,58 @@ HALLIE = REPO / "scripts/hallie"
 def load_corpus(path):
     with open(path) as f:
         data = json.load(f)
-    qs = data["questions"] if isinstance(data, dict) else data
-    return qs
+    if isinstance(data, list):
+        return data
+    if "questions" in data:
+        return data["questions"]
+
+    questions = []
+    for category in data.get("categories", []):
+        inherited = {
+            key: value for key, value in category.items()
+            if key not in ("id", "prompts", "sessions")
+        }
+        category_id = category["id"]
+        for index, prompt in enumerate(category.get("prompts", []), 1):
+            turn = dict(prompt) if isinstance(prompt, dict) else {"text": prompt}
+            turn = inherited | turn
+            turn.setdefault("id", f"{category_id}-{index:03d}")
+            turn["category"] = category_id
+            turn["scenarioID"] = turn["id"]
+            turn["followsPrevious"] = False
+            questions.append(turn)
+        for session in category.get("sessions", []):
+            scenario = f"{category_id}-{session['id']}"
+            for index, prompt in enumerate(session.get("turns", []), 1):
+                turn = dict(prompt) if isinstance(prompt, dict) else {"text": prompt}
+                turn = inherited | turn
+                turn.setdefault("id", f"{scenario}-t{index}")
+                turn["category"] = category_id
+                turn["scenarioID"] = scenario
+                turn["followsPrevious"] = index > 1
+                questions.append(turn)
+
+    declared = data.get("turnCount")
+    if declared is not None and declared != len(questions):
+        raise ValueError(
+            f"corpus declares {declared} turns but expands to {len(questions)}")
+    ids = [q["id"] for q in questions]
+    if len(ids) != len(set(ids)):
+        raise ValueError("corpus turn IDs are not unique")
+    return questions
 
 
-def build_stdin(questions, reset_between=True):
-    """One line per turn. `:reset` before every non-follow-up so an unrelated
-    question never inherits the previous referent, while marked follow-up
-    chains keep their context (that continuity is itself under test)."""
+def build_stdin(questions):
+    """Use one real `:reset` at each scenario boundary. Multi-turn scenarios
+    retain their context; unrelated prompts never share a referent."""
     lines = []
+    previous_scenario = None
     for q in questions:
-        if reset_between and not q.get("followsPrevious"):
+        scenario = q.get("scenarioID", q["id"])
+        if scenario != previous_scenario:
             lines.append(":reset")
         lines.append(q["text"].replace("\n", " "))
+        previous_scenario = scenario
     lines.append(":quit")
     return "\n".join(lines) + "\n"
 
@@ -66,6 +111,7 @@ def newest_build():
         str(REPO / ".build-dd/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan"),
         "/Volumes/XcodeRAM/VideoScan-*/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan",
         str(Path.home() / "Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan"),
+        "/private/tmp/VideoScan-*/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan",
         "/private/tmp/claude-501/**/scratchpad/dd/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan",
     ]
     found = []
@@ -76,38 +122,35 @@ def newest_build():
     return max(found, key=os.path.getmtime)
 
 
-def todays_log():
-    return LOG_DIR / f"hallie-conversation-{date.today().isoformat()}.jsonl"
-
-
-def read_log_turns(path, since_seq_marker):
-    """Return the assistant turns written after our marker line count."""
+def read_run_turns(run_id):
+    """Read only this process's events across every UTC-rotated log file.
+    The app may append concurrently; its events have no matching runID."""
     turns = []
-    if not path.exists():
-        return turns
-    with open(path) as f:
-        for i, line in enumerate(f):
-            if i < since_seq_marker:
-                continue
-            try:
-                turns.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return turns
+    for filename in sorted(LOG_DIR.glob("hallie-conversation-*.jsonl")):
+        with open(filename) as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("runID") == run_id:
+                    turns.append(event)
+    return sorted(turns, key=lambda event: event.get("timestamp", ""))
 
 
 def run(args):
     questions = load_corpus(args.corpus)
     if args.limit:
         questions = questions[: args.limit]
-    log = todays_log()
-    before = sum(1 for _ in open(log)) if log.exists() else 0
+    run_id = f"hallie-eval-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
-    cmd = [str(HALLIE)]
+    cmd = [str(HALLIE), "--no-actions", "--log-run-id", run_id]
     if not args.no_compose:
         cmd.append("--compose")
     if args.host:
         cmd += ["--host", args.host]
+    if args.model:
+        cmd += ["--model", args.model]
 
     # PIN THE BINARY. The launcher otherwise picks the newest build it can
     # DISCOVER, which is not necessarily the one carrying the change under
@@ -121,7 +164,7 @@ def run(args):
         built = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
         print(f"[eval] binary: {binary} (built {built})", flush=True)
     else:
-        print("[eval] WARNING: no binary pinned; the launcher will guess", flush=True)
+        raise RuntimeError("no built VideoScan executable found; build once before eval")
 
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
@@ -138,15 +181,19 @@ def run(args):
     print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
 
     unmatched = []
-    turns = read_log_turns(log, before)
+    turns = read_run_turns(run_id)
     # Pair: assistant turns carry `outcome`; user turns don't. Walk in order.
     pairs, pending = [], None
     for t in turns:
-        if t.get("kind") == "user" or ("outcome" not in t and "route" not in t):
+        if t.get("kind") == "system":
+            pending = None
+            continue
+        if t.get("kind") == "user":
             pending = t.get("text", "")
             continue
-        pairs.append((pending, t))
-        pending = None
+        if t.get("kind") in ("assistant", "error") and pending is not None:
+            pairs.append((pending, t))
+            pending = None
 
     # Align by the QUESTION TEXT the log recorded, never by position: a turn
     # that logs nothing (or twice) used to shift every later label, which
@@ -173,8 +220,18 @@ def run(args):
         records.append(
             {
                 "id": q.get("id"),
+                "scenarioID": q.get("scenarioID"),
                 "category": q.get("category"),
                 "expect": q.get("expect"),
+                "expectedRoutes": q.get("expectedRoutes"),
+                "expectedOutcome": q.get("expectedOutcome"),
+                "expectedOutcomes": q.get("expectedOutcomes"),
+                "mustContain": q.get("mustContain", []),
+                "mustNotContain": q.get("mustNotContain", []),
+                "noFabricatedPersonalMemory": bool(
+                    q.get("noFabricatedPersonalMemory")),
+                "currentEvidenceOnly": bool(q.get("currentEvidenceOnly")),
+                "forbidRawInternals": bool(q.get("forbidRawInternals")),
                 "followsPrevious": bool(q.get("followsPrevious")),
                 "question": asked if asked is not None else q["text"],
                 "answer": ans.get("text", ""),
@@ -182,9 +239,12 @@ def run(args):
                 "outcome": ans.get("outcome"),
                 "composedBy": ans.get("composedBy"),
                 "basis": ans.get("basisLine"),
-                "mediaEvidence": len(ans.get("mediaEvidence") or []),
-                "knowledgeEvidence": len(ans.get("knowledgeEvidence") or []),
+                "mediaEvidence": ans.get("mediaEvidence") or [],
+                "knowledgeEvidence": ans.get("knowledgeEvidence") or [],
                 "responder": ans.get("responder"),
+                "model": ans.get("model"),
+                "sessionID": ans.get("sessionID"),
+                "eventID": ans.get("eventID"),
             }
         )
 
@@ -195,6 +255,7 @@ def run(args):
             "questions": len(questions), "paired": len(records),
             "elapsed_s": round(elapsed), "compose": not args.no_compose,
             "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "runID": run_id,
             "binary": binary,
             "binary_built": time.strftime("%Y-%m-%dT%H:%M:%S",
                                           time.localtime(os.path.getmtime(binary)))
@@ -226,8 +287,18 @@ DECLINE_PAT = re.compile(
     re.I,
 )
 # A sentence that starts mid-thought — the fragment bug class.
-FRAGMENT_PAT = re.compile(r"^\s*(?:'s|s |and |but |or |of |in |at |the |a )", re.I)
+FRAGMENT_PAT = re.compile(r"^\s*(?:'s|s |and |but |or )", re.I)
 HEDGE_PAT = re.compile(r"as an ai|i am an ai|language model", re.I)
+PERSONAL_MEMORY_PAT = re.compile(
+    r"\bi remember\b|\bwhen i was\b|\bi used to\b|\bmy childhood\b|"
+    r"\bi grew up\b|\bmy (?:mother|father|parents)\b",
+    re.I,
+)
+RAW_INTERNAL_PAT = re.compile(
+    r"strict ast|queryast|decoder|json schema|ollama|endpoint|hostname|"
+    r"stack trace|localizeddescription|swift|http \d{3}",
+    re.I,
+)
 # The relax-and-explain shape: names what it set aside, then offers what exists.
 RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)", re.I | re.S)
 
@@ -273,11 +344,60 @@ def grade_record(r):
         flags.append("lowercase_start")
     if HEDGE_PAT.search(a):
         flags.append("ai_disclaimer")
-    if len(a.split()) <= 3 and expect != "social":
+    if len(a.split()) <= 3 and expect != "social" and r.get("category") != "smalltalk":
         flags.append("terse")
     # Warmth proxy: a decline that offers nothing is a dead end.
     if declined and not re.search(r"\?|would you|want|try|i do have|i can", a, re.I):
         flags.append("dead_end_decline")
+
+    expected_routes = r.get("expectedRoutes") or []
+    if expected_routes and r.get("route") not in expected_routes:
+        flags.append("route_mismatch")
+    expected_outcomes = r.get("expectedOutcomes") or []
+    if r.get("expectedOutcome"):
+        expected_outcomes = [r["expectedOutcome"]]
+    normalized_outcome = "needsClarification" if outcome == "needs-clarification" else outcome
+    if expected_outcomes and normalized_outcome not in expected_outcomes:
+        flags.append("outcome_mismatch")
+
+    lowered = a.lower()
+    for forbidden in r.get("mustNotContain") or []:
+        if forbidden.lower() in lowered:
+            flags.append("forbidden_text")
+            break
+    for required in r.get("mustContain") or []:
+        if required.lower() not in lowered:
+            flags.append("missing_required_text")
+            break
+    if r.get("noFabricatedPersonalMemory") and PERSONAL_MEMORY_PAT.search(a):
+        flags.append("fabricated_personal_memory")
+    if r.get("forbidRawInternals") and RAW_INTERNAL_PAT.search(a):
+        flags.append("raw_internal_error")
+
+    # Any filename printed in prose must be present in this turn's evidence.
+    # This catches the observed previous-result leakage without pretending to
+    # semantically grade every ordinary noun.
+    if r.get("currentEvidenceOnly"):
+        remainder = a.lower()
+        cited = [
+            (item.get("filename") or "").lower()
+            for item in (r.get("mediaEvidence") or [])
+            if item.get("filename")
+        ]
+        # Remove exact evidence names first. Tokenizing a filename with spaces
+        # turned "Clip 01.dv" into the false unknown name "01.dv".
+        for filename in sorted(cited, key=len, reverse=True):
+            remainder = remainder.replace(filename, "")
+        mentioned = {
+            match.group(0).lower()
+            for match in re.finditer(
+                rf"\b[^\s,;()]+\.(?:{MEDIA_FILENAME_EXTENSIONS})\b",
+                remainder,
+                re.I,
+            )
+        }
+        if mentioned:
+            flags.append("named_item_not_in_current_evidence")
 
     return flags
 
@@ -355,10 +475,14 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("run")
-    pr.add_argument("--corpus", default=str(REPO / "tests/hallie_eval_corpus.json"))
+    pr.add_argument(
+        "--corpus",
+        default=str(REPO / "tests/hallie_interaction_corpus.json"),
+    )
     pr.add_argument("--out", required=True)
     pr.add_argument("--limit", type=int)
     pr.add_argument("--host")
+    pr.add_argument("--model", default="qwen3.6:35b-a3b-nvfp4")
     pr.add_argument("--no-compose", action="store_true")
     pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
     pr.add_argument("--timeout", type=int, default=5400)

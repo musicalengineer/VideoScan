@@ -25,6 +25,8 @@ else
     ${repo_dir}/.claude/worktrees/*/.derivedData/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
     ${HOME}/Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
     /Volumes/XcodeRAM/**/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    /private/tmp/VideoScan-*/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
+    /private/tmp/VideoScan-*/**/Build/Products/{Debug,Release}/VideoScan.app/Contents/MacOS/VideoScan(N)
     /Applications/VideoScan.app/Contents/MacOS/VideoScan(N)
   )
 
@@ -43,7 +45,7 @@ fi
 
 if [[ -z ${selected_binary} ]]; then
   print -u2 "hallie: no Debug or Release VideoScan executable found"
-  print -u2 "Searched repo builds, .derivedData, Xcode DerivedData, XcodeRAM, agent worktrees, and /Applications."
+  print -u2 "Searched repo builds, .derivedData, Xcode DerivedData, XcodeRAM, temporary builds, agent worktrees, and /Applications."
   print -u2 "Build VideoScan once, or set VIDEOSCAN_APP_BIN to VideoScan.app/Contents/MacOS/VideoScan."
   exit 127
 fi

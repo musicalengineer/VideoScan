@@ -18,9 +18,13 @@ extension ArchivistGraphExecutor {
             for: person, relation: graphRelation, relatives: relatives,
             identityBridge: identityBridge)
         guard !relatives.isEmpty else {
+            let relation = graphRelation.rawValue
+            let quantifier = ["parents", "siblings", "children"].contains(relation)
+                ? "any" : "a"
             return ArchivistGraphResult(
                 conclusion: .missingFact,
-                prose: "The family tree doesn't record a \(graphRelation.rawValue) for \(person.name).",
+                prose: "The family tree doesn't record \(quantifier) \(relation) for \(person.name). "
+                    + "You can try another relationship or ask for the family tree.",
                 basisLine: factualBasis(identityBridge),
                 evidence: evidence,
                 candidates: [],

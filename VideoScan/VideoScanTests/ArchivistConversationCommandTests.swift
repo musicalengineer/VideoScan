@@ -32,6 +32,16 @@ struct ArchivistConversationCommandTests {
         ("Hi Hallie, how are you today?", .wellbeing),
         ("how re you hallie?", .wellbeing), ("how r you?", .wellbeing),
         ("I'm good", .userDoingWell), ("I had a rough day", .userHavingHardTime),
+        ("I'm doing well, thanks.", .userDoingWell),
+        ("I'm a little tired today.", .userHavingHardTime),
+        ("It's nice to talk with you.", .affirmation),
+        ("Thanks, that's kind of you.", .thanks),
+        ("Thank you for helping me.", .thanks),
+        ("That was helpful.", .affirmation),
+        ("Okay, that makes sense.", .affirmation),
+        ("You're welcome.", .affirmation),
+        ("Is it morning or afternoon?", .timeOfDay),
+        ("I'll talk with you later.", .farewell),
         ("what is the date?", .date), ("what is the daye?", .date),
         ("what time is it?", .time),
         ("bye", .farewell), ("goodbye", .farewell), ("good night", .farewell),
@@ -50,6 +60,8 @@ struct ArchivistConversationCommandTests {
             == "Today is Friday, August 21, 2026.")
         #expect(Command.smalltalkReply(.time, now: instant, timeZone: zone)
             == "It's 12:00 PM.")
+        #expect(Command.smalltalkReply(.timeOfDay, now: instant, timeZone: zone)
+            == "It's afternoon.")
     }
 
     @Test(arguments: [

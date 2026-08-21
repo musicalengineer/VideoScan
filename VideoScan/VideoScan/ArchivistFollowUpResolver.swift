@@ -221,6 +221,7 @@ enum ArchivistFollowUpResolver {
         "what else", "others", "the others", "show others", "keep going",
         "continue", "go on", "and the rest", "more of them", "show more of them",
         "the next page", "next batch", "another page", "give me more",
+        "more results", "show more results", "show me more results",
     ]
 
     private static func pagingResolution(

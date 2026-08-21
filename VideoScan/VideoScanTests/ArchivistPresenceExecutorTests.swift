@@ -147,7 +147,7 @@ struct ArchivistPresenceExecutorTests {
         #expect(result.evidence.totalMatchCount == 0)
         #expect(result.evidence.citations.isEmpty)
         #expect(ArchivistPresenceAnswerComposer.compose(result).prose
-                == "I don't have evidence for that.")
+                == ArchivistPresenceAnswerComposer.noEvidenceProse)
     }
 
     @Test func keywordCitationReportsTranscriptRatherThanGenericMetadata() async throws {
@@ -170,13 +170,13 @@ struct ArchivistPresenceExecutorTests {
         let empty = await execute(.init(), records: records)
         #expect(empty.conclusion == .insufficientConstraints)
         #expect(ArchivistPresenceAnswerComposer.compose(empty).prose
-                == "I don't have evidence for that.")
+                == ArchivistPresenceAnswerComposer.noEvidenceProse)
 
         let absent = await execute(.init(people: ["Ellen"]), records: records)
         #expect(absent.conclusion == .noEvidence)
         #expect(absent.evidence.citations.isEmpty)
         #expect(ArchivistPresenceAnswerComposer.compose(absent).prose
-                == "I don't have evidence for that.")
+                == ArchivistPresenceAnswerComposer.noEvidenceProse)
     }
 
     /// Production sensor: snapshots extracted from real VideoRecord fields

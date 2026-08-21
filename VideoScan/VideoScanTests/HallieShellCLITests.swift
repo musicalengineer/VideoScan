@@ -227,7 +227,8 @@ struct HallieShellCLITests {
             "--hallie", "--catalog", "/tmp/hallie-catalog.json",
             "--host", "ollama-one.local,ollama-two.local",
             "--model", "fixture-model", "--gedcom", "/tmp/family.ged",
-            "--once", "Was Donna there?",
+            "--once", "Was Donna there?", "--no-actions",
+            "--log-run-id", "fixture-run",
         ])
 
         #expect(options.catalogURL.path == "/tmp/hallie-catalog.json")
@@ -237,6 +238,8 @@ struct HallieShellCLITests {
         #expect(options.model == "fixture-model")
         #expect(options.gedcomURL?.path == "/tmp/family.ged")
         #expect(options.once == "Was Donna there?")
+        #expect(!options.allowActions)
+        #expect(options.logRunID == "fixture-run")
     }
 
     @Test func rejectsUnknownMissingAndEmptyOptions() {
@@ -271,7 +274,8 @@ struct HallieShellCLITests {
         #expect(harness.translatedQuestions.isEmpty)
         #expect(harness.mediaActions.isEmpty)
         #expect(harness.output.contains(HallieShellCLI.help))
-        #expect(harness.output.contains { $0.hasPrefix("session: 0 citations") })
+        #expect(harness.output.contains { $0.hasPrefix("session: ")
+            && $0.contains("· 0 citations") })
         #expect(harness.output.contains("Goodbye."))
         #expect(harness.output.contains { $0.contains("headless read-only shell") })
         #expect(harness.output.contains {
@@ -298,6 +302,54 @@ struct HallieShellCLITests {
         #expect(harness.inputs == ["this must remain unread"])
         #expect(harness.mediaActions.isEmpty)
         #expect(harness.output.contains("Hallie is interpreting that question…"))
+    }
+
+    @Test func noActionsBlocksRequestedPlaybackAndStampsTheRunID() async throws {
+        let item = record("/isolated/Donna/Cape.mov", confirmed: ["Donna"])
+        let harness = Harness(
+            records: [item],
+            translations: [.presence(.init(people: ["Donna"]))])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", "play videos of Donna", "--no-actions",
+            "--log-run-id", "safe-eval-run",
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.mediaActions.isEmpty)
+        #expect(harness.output.contains { $0.contains("actions: disabled") })
+        #expect(harness.transcriptEvents.allSatisfy {
+            $0.runID == "safe-eval-run"
+        })
+    }
+
+    @Test func colonResetStartsANewLoggedSessionAndClearsSequence() async throws {
+        let item = record("/isolated/Donna/Cape.mov", confirmed: ["Donna"])
+        let harness = Harness(
+            inputs: ["Was Donna there?", ":reset", ":quit"],
+            records: [item],
+            translations: [.presence(.init(people: ["Donna"]))])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--log-run-id", "reset-run",
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.transcriptEvents.count == 3)
+        let firstSession = harness.transcriptEvents[0].sessionID
+        let reset = harness.transcriptEvents[2]
+        #expect(reset.kind == .system)
+        #expect(reset.text == ":reset")
+        #expect(reset.sessionID != firstSession)
+        #expect(reset.sequence == 1)
+        #expect(reset.runID == "reset-run")
     }
 
     @Test func onceRecordsExactQuestionAndBoundedAnswerEvidence() async throws {
@@ -343,7 +395,7 @@ struct HallieShellCLITests {
             dependencies: harness.dependencies())
 
         #expect(harness.output.contains {
-            $0 == "No catalog query or media action was performed."
+            $0.contains("I didn't search the archive or open anything")
         })
         #expect(!harness.output.contains { $0.contains("I found") })
         #expect(harness.mediaActions.isEmpty)

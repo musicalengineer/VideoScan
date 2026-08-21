@@ -23,6 +23,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         case userHavingHardTime
         case date
         case time
+        case timeOfDay
         case thanks
         case farewell
         case affirmation
@@ -47,7 +48,14 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
             .map(String.init)
         let addressedOnly = !words.isEmpty && words.allSatisfy { addressWords.contains($0) }
-        words.removeAll { addressWords.contains($0) }
+        // Hallie's name and "please" may naturally appear at either edge.
+        // Conversational fillers are leading words only: removing every
+        // occurrence turned "I'm doing well, thanks" into "I'm doing thanks".
+        words.removeAll { $0 == "hallie" || $0 == "please" }
+        while let first = words.first,
+              leadingAddressWords.contains(first) {
+            words.removeFirst()
+        }
         guard !words.isEmpty else {
             // "hey hallie" / "hallie?" is a greeting; "ok" / "please" alone is
             // nothing (the follow-up resolver says so honestly).
@@ -80,7 +88,9 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         // this by ArchivistCapabilityQuestion, so only genuine how-to reaches
         // here.
         for lead in howToLeads where phrase == lead || phrase.hasPrefix(lead + " ") {
-            return .help
+            if phrase == lead || words.allSatisfy({ helpVocabulary.contains($0) }) {
+                return .help
+            }
         }
         // "what can you do", "what can i ask you about", "what do you know
         // how to do", "what kinds of things can i ask" — any what-can/what-do
@@ -100,6 +110,10 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "hallie", "please", "hey", "ok", "okay", "oh", "well",
     ]
 
+    private static let leadingAddressWords: Set<String> = [
+        "hey", "ok", "okay", "oh", "well",
+    ]
+
     private static let leadingSalutations: Set<String> = [
         "hi", "hello", "hiya", "howdy", "yo",
     ]
@@ -110,6 +124,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "examples", "example", "example questions", "some examples",
         "show examples", "show me examples", "give me examples",
         "give me some examples", "show me some examples",
+        "give me a few examples of things i can ask",
         "what can you do", "what can you do for me", "what do you do",
         "what can i ask", "what can i ask you", "what can i ask you about",
         "what can we ask", "what can we ask you", "what should i ask",
@@ -177,6 +192,11 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "i am good": .userDoingWell, "i'm well": .userDoingWell,
         "im well": .userDoingWell, "i am well": .userDoingWell,
         "doing well": .userDoingWell, "pretty good": .userDoingWell,
+        "i'm doing well": .userDoingWell, "im doing well": .userDoingWell,
+        "i am doing well": .userDoingWell,
+        "i'm doing well thanks": .userDoingWell,
+        "im doing well thanks": .userDoingWell,
+        "i am doing well thanks": .userDoingWell,
         "not bad": .userDoingWell, "i'm okay": .userDoingWell,
         "im okay": .userDoingWell, "i am okay": .userDoingWell,
         "i'm tired": .userHavingHardTime, "im tired": .userHavingHardTime,
@@ -184,6 +204,9 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "i had a rough day": .userHavingHardTime,
         "i'm having a rough day": .userHavingHardTime,
         "im having a rough day": .userHavingHardTime,
+        "i'm a little tired today": .userHavingHardTime,
+        "im a little tired today": .userHavingHardTime,
+        "i am a little tired today": .userHavingHardTime,
         "not great": .userHavingHardTime, "could be better": .userHavingHardTime,
         // Local clock questions are not archive searches.
         "what is the date": .date, "what's the date": .date,
@@ -195,6 +218,8 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "what time is it": .time, "what's the time": .time,
         "whats the time": .time, "what is the time": .time,
         "do you know what time it is": .time, "current time": .time,
+        "is it morning or afternoon": .timeOfDay,
+        "is it morning afternoon or evening": .timeOfDay,
         // Thanks
         "thanks": .thanks, "thank you": .thanks, "thank you very much": .thanks,
         "thanks very much": .thanks, "thanks so much": .thanks, "thanks a lot": .thanks,
@@ -202,6 +227,8 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "thanks a million": .thanks, "thank u": .thanks, "thx": .thanks, "ty": .thanks,
         "cheers": .thanks, "much appreciated": .thanks, "appreciate it": .thanks,
         "i appreciate it": .thanks, "thanks that's great": .thanks,
+        "thanks that's kind of you": .thanks, "thanks thats kind of you": .thanks,
+        "thank you for helping me": .thanks,
         "thanks thats great": .thanks, "great thanks": .thanks, "perfect thanks": .thanks,
         "great thank you": .thanks, "perfect thank you": .thanks, "wonderful thanks": .thanks,
         "awesome thanks": .thanks, "nice thanks": .thanks, "cool thanks": .thanks,
@@ -214,6 +241,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "thats all for now": .farewell, "all done": .farewell, "done": .farewell,
         "im done": .farewell, "i'm done": .farewell, "that's it": .farewell,
         "thats it": .farewell, "that's it for now": .farewell, "thats it for now": .farewell,
+        "i'll talk with you later": .farewell, "ill talk with you later": .farewell,
         // Affirmations that need no action
         "great": .affirmation, "perfect": .affirmation, "wonderful": .affirmation,
         "awesome": .affirmation, "nice": .affirmation, "cool": .affirmation,
@@ -223,6 +251,11 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "youre the best": .affirmation, "love it": .affirmation, "i love it": .affirmation,
         "yay": .affirmation, "wow": .affirmation, "neat": .affirmation, "sweet": .affirmation,
         "fantastic": .affirmation, "amazing": .affirmation, "brilliant": .affirmation,
+        "that makes sense": .affirmation, "you're welcome": .affirmation,
+        "youre welcome": .affirmation,
+        "it's nice to talk with you": .affirmation,
+        "its nice to talk with you": .affirmation,
+        "that was helpful": .affirmation,
     ]
 
     // MARK: - Replies
@@ -289,6 +322,14 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             formatter.timeZone = timeZone
             formatter.dateFormat = "h:mm a"
             return "It's \(formatter.string(from: now))."
+        case .timeOfDay:
+            let hour = Calendar(identifier: .gregorian)
+                .dateComponents(in: timeZone, from: now).hour ?? 12
+            switch hour {
+            case 5..<12: return "It's morning."
+            case 12..<17: return "It's afternoon."
+            default: return "It's evening."
+            }
         case .thanks:
             return "You're very welcome. I'm glad I could help."
         case .farewell:

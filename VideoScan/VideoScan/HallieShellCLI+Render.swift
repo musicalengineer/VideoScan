@@ -48,6 +48,7 @@ extension HallieShellCLI {
         state.transcriptSequence += 1
         return HallieTranscriptEvent(
             sessionID: state.transcriptSessionID,
+            runID: state.runID,
             sequence: state.transcriptSequence,
             client: .shell,
             kind: kind,
@@ -87,9 +88,16 @@ extension HallieShellCLI {
     static func performMediaAction(
         _ action: HallieTurnExecutor.MediaActionRequest?,
         output: (String) -> Void,
-        dependencies: Dependencies
+        dependencies: Dependencies,
+        allowActions: Bool = true
     ) -> CommandOutcome {
         guard let action else { return .continueSession }
+        guard allowActions else {
+            let names = action.citations.map(\.filename).joined(separator: ", ")
+            output("\(actionsDisabledNotice); requested \(action.kind.rawValue)"
+                   + (names.isEmpty ? "" : " \(names)"))
+            return .continueSession
+        }
         switch action.kind {
         case .show:
             for citation in action.citations {

@@ -87,6 +87,12 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
         }
     }
 
+    func interpretTurn(_ text: String) async throws -> HallieTurnInterpretation {
+        try await walkHosts { attempt in
+            try await attempt.interpretTurn(text)
+        }
+    }
+
     /// Plain-text phrasing for the grounded composer, walking the same host
     /// order with the same probe / retry policy as translation.
     func composePlainText(system: String, user: String) async throws -> String {

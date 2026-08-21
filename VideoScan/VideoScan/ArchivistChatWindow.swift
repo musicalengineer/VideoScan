@@ -910,11 +910,12 @@ struct ArchivistChatWindow: View {
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
+                appLog.write("Hallie interpretation failed — \(error.localizedDescription)")
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,
-                    text: "I couldn't safely interpret that question: "
-                        + error.localizedDescription,
+                    text: "I'm having trouble reaching my language helper just now. "
+                        + "I didn't search the archive or open anything; please try that again in a moment.",
                     basisLine: "No catalog query or media action was performed."))
             }
         }
@@ -1058,9 +1059,9 @@ struct ArchivistChatWindow: View {
         HallieTurnExecutor.label(route)
     }
 
-    /// The last few (question, shown answer) pairs for the composer — the
-    /// bubbles as displayed, nothing hidden. Bounded so the prompt stays
-    /// small regardless of conversation length.
+    /// The last few SOCIAL (question, shown answer) pairs. Archive answers
+    /// and evidence never enter free-form conversation history; this also
+    /// prevents an ordinary chat sentence from leaking into factual prose.
     private func recentHistory() -> [HallieGroundedComposer.HistoryTurn] {
         var turns: [HallieGroundedComposer.HistoryTurn] = []
         var pendingUser: String?
@@ -1069,13 +1070,14 @@ struct ArchivistChatWindow: View {
             case .user:
                 pendingUser = message.text
             case .assistant:
-                if let user = pendingUser {
+                if let user = pendingUser,
+                   message.route == "conversation" || message.route == "smalltalk" {
                     turns.append(.init(user: user, assistant: message.text))
-                    pendingUser = nil
                 }
+                pendingUser = nil
             }
         }
-        return Array(turns.suffix(HallieGroundedComposer.historyTurns))
+        return Array(turns.suffix(HallieSocialConversation.maximumHistoryTurns))
     }
 
     private static func transcriptLabel(_ outcome: HallieTurnExecutor.Outcome) -> String {

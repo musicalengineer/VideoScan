@@ -209,7 +209,8 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(invocation.graphWasInjected)
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk, .reset:
+            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+                 .conversation, .reset:
                 #expect(invocation.presenceCount == 0)
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.isEmpty == true)
@@ -774,7 +775,7 @@ struct HallieAppV2IntegrationTests {
                             through: "// MARK: Play")
         let coordinator = try productionSource("HallieAppTurnCoordinator.swift")
 
-        #expect(ask.contains("I couldn't safely interpret that question"))
+        #expect(ask.contains("I'm having trouble reaching my language helper"))
         #expect(ask.contains("No catalog query or media action was performed."))
         #expect(ask.contains("lastMatches = []"))
         #expect(!ask.contains("archivistSearchRequest"))

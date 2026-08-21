@@ -699,6 +699,8 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"presence","payload":{"people":["donna"],"yearStart":1994,"yearEnd":1994}}
     "show me Christmas videos from the 1990s" -> \
     {"shape":"presence","payload":{"yearStart":1990,"yearEnd":1999,"mediaKind":"video","keywords":["christmas"]}}
+    "how many clips have both Rick and Donna?" -> \
+    {"shape":"presence","payload":{"people":["rick","donna"]}}
     "how old was Timmy here?" -> \
     {"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":{"kind":"currentSelection"}}}
     "who appears with Donna?" -> \
@@ -767,6 +769,8 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 "thanks, that's kind of you" ->
                 {"shape":"conversation","payload":{"kind":"casual"}}
                 "why do leaves change color?" ->
+                {"shape":"conversation","payload":{"kind":"generalKnowledge"}}
+                "what is the difference between a planet and a star?" ->
                 {"shape":"conversation","payload":{"kind":"generalKnowledge"}}
                 "tell me a short clean joke" ->
                 {"shape":"conversation","payload":{"kind":"casual"}}
