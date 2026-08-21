@@ -213,12 +213,56 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 translatorLog.notice(
                     "translator output normalized: \(notes, privacy: .public)")
             }
-            return decoded.ast
+            return Self.repairPossessiveSpeakerPronoun(
+                in: decoded.ast, originalQuestion: text)
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict ArchivistQueryAST "
                     + "(\(error.localizedDescription)): \(content.prefix(120))")
         }
+    }
+
+    /// Structured output prevents malformed fields, but it cannot prevent a
+    /// semantically inverted pronoun. In the 2026-08-21 transcript the model
+    /// read the request-form "tell me" as the subject of "your father" and
+    /// emitted people=["me"]. The executor then correctly bound that bad AST
+    /// to Rick. Repair only the unambiguous surface form: one kinship noun in
+    /// the question, immediately owned by "my" or "your". Multiple mentions
+    /// ("that is my father; who was Hallie's father?") are left untouched.
+    static func repairPossessiveSpeakerPronoun(
+        in ast: ArchivistQueryAST,
+        originalQuestion: String
+    ) -> ArchivistQueryAST {
+        guard case .graph(var graph) = ast,
+              graph.operation == .kinship,
+              graph.people.count == 1,
+              let relation = graph.relation else { return ast }
+
+        let words = originalQuestion.lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        let relationWords = relation.rawValue
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        guard let anchor = relationWords.last,
+              words.filter({ $0 == anchor }).count == 1 else { return ast }
+
+        func contains(_ phrase: [String]) -> Bool {
+            guard !phrase.isEmpty, phrase.count <= words.count else { return false }
+            return (0...(words.count - phrase.count)).contains { offset in
+                Array(words[offset..<(offset + phrase.count)]) == phrase
+            }
+        }
+        let ownsMine = contains(["my"] + relationWords)
+        let ownsYours = contains(["your"] + relationWords)
+        guard ownsMine != ownsYours else { return ast }
+        let repaired = ownsMine ? "me" : "you"
+        guard graph.people[0].lowercased() != repaired else { return ast }
+        translatorLog.notice(
+            "repaired kinship speaker pronoun to \(repaired, privacy: .public)")
+        graph.people[0] = repaired
+        return .graph(graph)
     }
 
     /// Plain-text generation for Hallie's grounded composer: the SAME
@@ -628,6 +672,8 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"graph","payload":{"people":["rick"],"operation":"kinship","relation":"cousins"}}
     "who is my father?" -> \
     {"shape":"graph","payload":{"people":["me"],"operation":"kinship","relation":"father"}}
+    "tell me about your father" -> \
+    {"shape":"graph","payload":{"people":["you"],"operation":"kinship","relation":"father"}}
     "how am I related to you?" -> \
     {"shape":"graph","payload":{"people":["me","you"],"operation":"relationship"}}
     "how is Donna related to Thankful Pratt?" -> \

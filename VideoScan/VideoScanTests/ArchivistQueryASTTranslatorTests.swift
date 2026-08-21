@@ -40,6 +40,34 @@ private final class ASTResponderBox: @unchecked Sendable {
 
 @Suite("Family Archivist QueryAST translator")
 struct ArchivistQueryASTTranslatorTests {
+    @Test func possessiveSpeakerPronounsOverrideRequestFormMe() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            // Reproduces the live 2026-08-21 mistranslation: "tell me" won
+            // over the actual possessive subject "your father".
+            astReply(#"{"shape":"graph","payload":{"people":["me"],"operation":"kinship","relation":"father"}}"#)
+        }
+        let yours = try await translator.translateAST("tell me about your father")
+        #expect(yours == .graph(.init(
+            people: ["you"], operation: .kinship, relation: .father)))
+
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"graph","payload":{"people":["you"],"operation":"kinship","relation":"father"}}"#)
+        }
+        let mine = try await translator.translateAST("tell me about my father")
+        #expect(mine == .graph(.init(
+            people: ["me"], operation: .kinship, relation: .father)))
+    }
+
+    @Test func possessiveRepairDoesNotRewriteMultiSubjectCorrection() {
+        let ast = ArchivistQueryAST.graph(.init(
+            people: ["hallie may"], operation: .kinship, relation: .father))
+        let repaired = OllamaQueryTranslator.repairPossessiveSpeakerPronoun(
+            in: ast,
+            originalQuestion: "that is my father, who was Hallie May's father?")
+        #expect(repaired == ast)
+    }
+
     @Test func v2RequestCarriesTypedSchemaAndTranslatorOnlyPrompt() async throws {
         let recorder = ASTRequestRecorder()
         var translator = OllamaQueryTranslator()

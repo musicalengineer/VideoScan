@@ -174,6 +174,26 @@ struct HallieGroundedCompositionTests {
         #expect(v.dropped.first?.reason == .unknownClaimID)
     }
 
+    @Test func verifierDropsSentenceFragmentsAndComposerUsesTemplate() async {
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [.init(
+                id: "c1",
+                text: "Rick Breen's father is Richard Harding Breen Sr.")],
+            fallbackText: "Rick Breen's father is Richard Harding Breen Sr.")
+        let verification = HallieCompositionVerifier.verify(
+            "s father is Richard Harding Breen Sr. [c1]",
+            plan: plan, personaName: "Hallie Mae")
+        #expect(verification.kept.isEmpty)
+        #expect(verification.dropped.first?.reason == .sentenceFragment)
+
+        let outcome = await composer { _, _ in
+            "s father is Richard Harding Breen Sr. [c1]"
+        }.compose(plan: plan, history: [])
+        #expect(outcome.composedBy == .template)
+        #expect(outcome.displayText == plan.fallbackText)
+    }
+
     @Test func verifierDropsLeakedYearNumberAndName() {
         let plan = biographyPlan()
         let year = HallieCompositionVerifier.verify(

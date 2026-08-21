@@ -24,6 +24,7 @@ enum HallieCompositionVerifier {
             case leakedYear
             case leakedNumber
             case leakedName
+            case sentenceFragment
             case overSentenceBudget
         }
         let text: String
@@ -108,6 +109,10 @@ enum HallieCompositionVerifier {
                 continue
             }
             let display = stripTags(raw)
+            guard !isSentenceFragment(display) else {
+                dropped.append(Dropped(text: raw, reason: .sentenceFragment))
+                continue
+            }
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
             if let reason = leak(in: display, allowed: allowedTokens) {
                 dropped.append(Dropped(text: raw, reason: reason))
@@ -237,6 +242,18 @@ enum HallieCompositionVerifier {
             collapsed.append(character)
         }
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A composed answer must be usable prose, not merely a fact-token
+    /// subset. The verifier already blocks invented facts; this catches the
+    /// complementary live failure where the model omitted the subject and
+    /// returned "s father was …". Falling back to the complete deterministic
+    /// sentence is safer than displaying a grammatically broken fragment.
+    static func isSentenceFragment(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return true }
+        if trimmed.hasPrefix("'s ") || trimmed.hasPrefix("’s ") { return true }
+        return first.isLowercase
     }
 
     // MARK: - Fact leak check

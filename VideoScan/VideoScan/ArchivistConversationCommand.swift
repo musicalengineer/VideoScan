@@ -18,6 +18,11 @@ enum ArchivistConversationCommand: Equatable, Sendable {
 
     enum Smalltalk: Equatable, Sendable {
         case greeting
+        case wellbeing
+        case userDoingWell
+        case userHavingHardTime
+        case date
+        case time
         case thanks
         case farewell
         case affirmation
@@ -156,10 +161,40 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "hello there": .greeting, "howdy": .greeting, "good morning": .greeting,
         "good afternoon": .greeting, "good evening": .greeting, "morning": .greeting,
         "afternoon": .greeting, "evening": .greeting, "yo": .greeting,
-        "how are you": .greeting, "how are you doing": .greeting,
-        "how are you today": .greeting, "hows it going": .greeting,
-        "how's it going": .greeting, "hi hallie": .greeting, "are you there": .greeting,
+        "hi hallie": .greeting, "are you there": .greeting,
         "you there": .greeting, "anyone there": .greeting, "hello hallie": .greeting,
+        // Wellbeing. Keep a few common speech-to-text / typing variants here:
+        // the 2026-08-20 transcript turned "how re you hallie?" into a family
+        // relationship query, which is both unfriendly and factually dangerous.
+        "how are you": .wellbeing, "how are you doing": .wellbeing,
+        "how are you today": .wellbeing, "how is your day": .wellbeing,
+        "how's your day": .wellbeing, "hows it going": .wellbeing,
+        "how's it going": .wellbeing, "how r you": .wellbeing,
+        "how re you": .wellbeing,
+        // A small conversational second turn. These are deliberately about
+        // the speaker's mood, not catalog facts, and therefore stay local.
+        "i'm good": .userDoingWell, "im good": .userDoingWell,
+        "i am good": .userDoingWell, "i'm well": .userDoingWell,
+        "im well": .userDoingWell, "i am well": .userDoingWell,
+        "doing well": .userDoingWell, "pretty good": .userDoingWell,
+        "not bad": .userDoingWell, "i'm okay": .userDoingWell,
+        "im okay": .userDoingWell, "i am okay": .userDoingWell,
+        "i'm tired": .userHavingHardTime, "im tired": .userHavingHardTime,
+        "i am tired": .userHavingHardTime, "rough day": .userHavingHardTime,
+        "i had a rough day": .userHavingHardTime,
+        "i'm having a rough day": .userHavingHardTime,
+        "im having a rough day": .userHavingHardTime,
+        "not great": .userHavingHardTime, "could be better": .userHavingHardTime,
+        // Local clock questions are not archive searches.
+        "what is the date": .date, "what's the date": .date,
+        "whats the date": .date, "what is today's date": .date,
+        "what's today's date": .date, "whats todays date": .date,
+        "what day is it": .date, "what is the day": .date,
+        "what is the daye": .date, "today's date": .date,
+        "todays date": .date,
+        "what time is it": .time, "what's the time": .time,
+        "whats the time": .time, "what is the time": .time,
+        "do you know what time it is": .time, "current time": .time,
         // Thanks
         "thanks": .thanks, "thank you": .thanks, "thank you very much": .thanks,
         "thanks very much": .thanks, "thanks so much": .thanks, "thanks a lot": .thanks,
@@ -228,14 +263,34 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         ("show Donna's family tree", "Try: show Donna's family tree"),
     ]
 
-    static func smalltalkReply(_ kind: Smalltalk) -> String {
+    static func smalltalkReply(
+        _ kind: Smalltalk,
+        now: Date = Date(),
+        timeZone: TimeZone = .current
+    ) -> String {
         switch kind {
         case .greeting:
-            return "Hi! I'm Hallie Mae, the family archivist. Ask me about the family "
-                + "videos or the family tree — or say “help” for some examples."
+            return "Hello! It's good to see you. How can I help?"
+        case .wellbeing:
+            return "I'm doing well, thank you. It's good to see you. How are you doing?"
+        case .userDoingWell:
+            return "I'm glad to hear that. What would you like to talk about?"
+        case .userHavingHardTime:
+            return "I'm sorry to hear that. We can take things at an easy pace. What would be helpful right now?"
+        case .date:
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "EEEE, MMMM d, yyyy"
+            return "Today is \(formatter.string(from: now))."
+        case .time:
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "h:mm a"
+            return "It's \(formatter.string(from: now))."
         case .thanks:
-            return "You're very welcome — ask me anything about the family videos "
-                + "whenever you like."
+            return "You're very welcome. I'm glad I could help."
         case .farewell:
             return "Bye for now — I'll be right here when you want to look through more."
         case .affirmation:

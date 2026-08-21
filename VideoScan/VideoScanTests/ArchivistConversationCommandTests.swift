@@ -28,8 +28,12 @@ struct ArchivistConversationCommandTests {
         ("thanks so much hallie", .thanks), ("thx", .thanks), ("perfect, thanks", .thanks),
         ("hi", .greeting), ("Hello", .greeting), ("hey hallie", .greeting),
         ("good morning", .greeting), ("Good morning Hallie", .greeting),
-        ("good evening", .greeting), ("how are you?", .greeting),
-        ("Hi Hallie, how are you today?", .greeting),
+        ("good evening", .greeting), ("how are you?", .wellbeing),
+        ("Hi Hallie, how are you today?", .wellbeing),
+        ("how re you hallie?", .wellbeing), ("how r you?", .wellbeing),
+        ("I'm good", .userDoingWell), ("I had a rough day", .userHavingHardTime),
+        ("what is the date?", .date), ("what is the daye?", .date),
+        ("what time is it?", .time),
         ("bye", .farewell), ("goodbye", .farewell), ("good night", .farewell),
         ("that's all for now", .farewell),
         ("great", .affirmation), ("wonderful!", .affirmation), ("nice work", .affirmation),
@@ -37,6 +41,15 @@ struct ArchivistConversationCommandTests {
     func smalltalkGetsAFriendlyReply(text: String, kind: Command.Smalltalk) {
         #expect(Command.detect(text) == .smalltalk(kind), Comment(rawValue: text))
         #expect(!Command.smalltalkReply(kind).isEmpty)
+    }
+
+    @Test func localDateAndTimeRepliesUseTheSuppliedClock() throws {
+        let instant = Date(timeIntervalSince1970: 1_787_328_000) // 2026-08-21 16:00Z
+        let zone = try #require(TimeZone(secondsFromGMT: -4 * 60 * 60))
+        #expect(Command.smalltalkReply(.date, now: instant, timeZone: zone)
+            == "Today is Friday, August 21, 2026.")
+        #expect(Command.smalltalkReply(.time, now: instant, timeZone: zone)
+            == "It's 12:00 PM.")
     }
 
     @Test(arguments: [
