@@ -24,6 +24,29 @@ enum HallieAppTurnCoordinator {
         let context: HallieTurnExecutor.Context
         let responderHost: String
         let capturedReferentID: UUID?
+        /// The phrasing settings of the original turn, so a continued
+        /// answer is phrased (or not) exactly as the first would have been.
+        let composition: Composition
+    }
+
+    /// Whether and with what this turn's answer may be phrased by the model.
+    /// `enabled == false` (the default) never calls the composer.
+    struct Composition: Sendable {
+        let enabled: Bool
+        let hosts: [String]
+        let modelName: String
+        let history: [HallieGroundedComposer.HistoryTurn]
+
+        static let off = Composition(
+            enabled: false, hosts: [], modelName: "", history: [])
+
+        init(enabled: Bool, hosts: [String], modelName: String,
+             history: [HallieGroundedComposer.HistoryTurn]) {
+            self.enabled = enabled
+            self.hosts = hosts
+            self.modelName = modelName
+            self.history = history
+        }
     }
 
     struct Response: Sendable {
@@ -66,6 +89,14 @@ enum HallieAppTurnCoordinator {
             HallieTurnExecutor.Context
         ) async throws -> HallieTurnExecutor.Result
         let resolveBiographyPhoto: @Sendable (String) -> ArchivistBiographyPhoto?
+        /// Phrase an approved plan (plan, history, hosts, model) → outcome.
+        /// The default never phrases; production wires HallieGroundedComposer
+        /// over the translator's Ollama transport. Only called for
+        /// composable plans (never help / capability / small talk / reset /
+        /// declines / clarifications).
+        let composeAnswer: @Sendable (
+            HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], [String], String
+        ) async -> HallieGroundedComposer.Outcome
 
         init(
             startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
@@ -84,7 +115,12 @@ enum HallieAppTurnCoordinator {
                 HallieTurnExecutor.CandidateID,
                 HallieTurnExecutor.Context
             ) async throws -> HallieTurnExecutor.Result,
-            resolveBiographyPhoto: @escaping @Sendable (String) -> ArchivistBiographyPhoto?
+            resolveBiographyPhoto: @escaping @Sendable (String) -> ArchivistBiographyPhoto?,
+            composeAnswer: @escaping @Sendable (
+                HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], [String], String
+            ) async -> HallieGroundedComposer.Outcome = { plan, _, _, _ in
+                .template(plan, note: "template: no composer configured")
+            }
         ) {
             self.startLocalBrain = startLocalBrain
             self.translateAST = translateAST
@@ -95,6 +131,7 @@ enum HallieAppTurnCoordinator {
             self.executeRequest = executeRequest
             self.continueTurn = continueTurn
             self.resolveBiographyPhoto = resolveBiographyPhoto
+            self.composeAnswer = composeAnswer
         }
 
         static let live = Dependencies(
@@ -174,6 +211,23 @@ enum HallieAppTurnCoordinator {
                 return ArchivistBiographyPhoto.resolve(
                     personName: canonicalName,
                     profiles: profiles)
+            },
+            composeAnswer: { plan, history, hosts, modelName in
+                // Same fleet, same model, same probe/failover walk as
+                // translation; loopback-routed so an already-running local
+                // Ollama is reused without a demand-start.
+                var template = OllamaQueryTranslator()
+                template.model = modelName
+                let fleet = OllamaFailoverTranslator(
+                    hosts: OllamaLocalServerBootstrap
+                        .routeLocalEndpointsToLoopback(hosts),
+                    template: template)
+                let composer = HallieGroundedComposer(
+                    personaName: HallieCompositionSettings.personaName(),
+                    modelCall: { system, user in
+                        try await fleet.composePlainText(system: system, user: user)
+                    })
+                return await composer.compose(plan: plan, history: history)
             })
     }
 
@@ -205,6 +259,8 @@ enum HallieAppTurnCoordinator {
         modelName: String,
         playAfterAnswer: Bool = false,
         memory: HallieTurnExecutor.ConversationMemory = .init(),
+        composeWithModel: Bool = false,
+        history: [HallieGroundedComposer.HistoryTurn] = [],
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
@@ -218,8 +274,14 @@ enum HallieAppTurnCoordinator {
 
         let intent: HallieTurnExecutor.Intent
         let responderHost: String
+        // Phrasing rides on the fleet the turn used: the demand-started /
+        // loopback-routed hosts after a translation, the configured list for
+        // a locally-resolved turn.
+        var composeHosts = hosts
         switch preTranslation {
         case .answer(let result):
+            // Help, capability, small talk, reset, follow-up actions and
+            // declines: fixed wording by design; the composer is never asked.
             return Response(
                 result: result,
                 responderHost: localResponder,
@@ -248,6 +310,7 @@ enum HallieAppTurnCoordinator {
                 appLog.write("Hallie: local Ollama demand-start failed; trying configured fleet — \(error.localizedDescription)")
                 effectiveHosts = hosts
             }
+            composeHosts = effectiveHosts
             try Task.checkCancellation()
             let translation = try await dependencies.translateAST(
                 effectiveQuestion, effectiveHosts, modelName)
@@ -258,6 +321,11 @@ enum HallieAppTurnCoordinator {
                 playAfterAnswer: wantsPlay)
             responderHost = translation.responderHost
         }
+        let composition = Composition(
+            enabled: composeWithModel,
+            hosts: composeHosts,
+            modelName: modelName,
+            history: history)
 
         let context = try await captureContext(
             ast: intent.ast,
@@ -271,6 +339,7 @@ enum HallieAppTurnCoordinator {
             capturedReferentID: referent.recordID,
             context: context,
             playAfterAnswer: intent.playAfterAnswer,
+            composition: composition,
             dependencies: dependencies) {
                 try await dependencies.executeRequest(request, context)
             }
@@ -282,14 +351,22 @@ enum HallieAppTurnCoordinator {
     static func `continue`(
         pending: PendingClarification,
         selecting candidateID: HallieTurnExecutor.CandidateID,
+        history: [HallieGroundedComposer.HistoryTurn]? = nil,
         dependencies: Dependencies = .live
     ) async throws -> Response {
-        try await runOffMain(
+        let composition = history.map {
+            Composition(enabled: pending.composition.enabled,
+                        hosts: pending.composition.hosts,
+                        modelName: pending.composition.modelName,
+                        history: $0)
+        } ?? pending.composition
+        return try await runOffMain(
             intent: pending.clarification.intent,
             responderHost: pending.responderHost,
             capturedReferentID: pending.capturedReferentID,
             context: pending.context,
             playAfterAnswer: pending.clarification.intent.playAfterAnswer,
+            composition: composition,
             dependencies: dependencies) {
                 try await dependencies.continueTurn(
                     pending.clarification,
@@ -416,6 +493,7 @@ enum HallieAppTurnCoordinator {
         capturedReferentID: UUID?,
         context: HallieTurnExecutor.Context,
         playAfterAnswer: Bool,
+        composition: Composition,
         dependencies: Dependencies,
         operation: @escaping @Sendable () async throws
             -> HallieTurnExecutor.Result
@@ -424,7 +502,23 @@ enum HallieAppTurnCoordinator {
         let worker = Task.detached(priority: .userInitiated) {
             () async throws -> Response in
             try Task.checkCancellation()
-            let result = try await operation()
+            var result = try await operation()
+            try Task.checkCancellation()
+
+            // Plan → phrase → verify, only after the deterministic answer is
+            // complete and only for composable plans. The composer bounds its
+            // own latency and returns the template on any failure, so this
+            // await never blocks a ready answer past the budget.
+            if composition.enabled {
+                let plan = HallieAnswerPlan.derive(from: result)
+                if plan.isComposable {
+                    let outcome = await dependencies.composeAnswer(
+                        plan, composition.history,
+                        composition.hosts, composition.modelName)
+                    result = result.applying(outcome)
+                    appLog.write("Hallie: phrased \(HallieTurnExecutor.label(result.route))/\(HallieTurnExecutor.label(result.outcome)) by \(outcome.composedBy.rawValue) (\(outcome.note); dropped \(outcome.dropped.count))")
+                }
+            }
             try Task.checkCancellation()
 
             let photo: ArchivistBiographyPhoto?
@@ -442,7 +536,8 @@ enum HallieAppTurnCoordinator {
                     clarification: $0,
                     context: context,
                     responderHost: responderHost,
-                    capturedReferentID: capturedReferentID)
+                    capturedReferentID: capturedReferentID,
+                    composition: composition)
             }
             return Response(
                 result: result,

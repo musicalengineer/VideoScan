@@ -12,6 +12,10 @@ enum HallieShellCLI {
         var model = "qwen3.6:35b-a3b-nvfp4"
         var gedcomURL: URL?
         var once: String?
+        /// `--compose`: let the model phrase composable answers (verified,
+        /// facts locked). OFF by default in the shell — it is a diagnostic
+        /// surface and the templated wording is the reference output.
+        var compose = false
     }
 
     enum ParseError: LocalizedError, Equatable {
@@ -122,6 +126,11 @@ enum HallieShellCLI {
         var performMediaAction: (MediaAction) -> Void
         /// Injected as a no-op so unit tests never touch Rick's real log.
         var recordTranscript: ([HallieTranscriptEvent]) async -> Void
+        /// Phrase an approved plan; only consulted with `--compose` and only
+        /// for composable plans. The default returns the template.
+        var composeAnswer: @Sendable (
+            HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], Options
+        ) async -> HallieGroundedComposer.Outcome
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -145,7 +154,12 @@ enum HallieShellCLI {
             mediaURLIsAvailable: @escaping (URL) -> Bool = { _ in true },
             tryPerformMediaAction: ((MediaAction) -> Bool)? = nil,
             performMediaAction: @escaping (MediaAction) -> Void,
-            recordTranscript: @escaping ([HallieTranscriptEvent]) async -> Void = { _ in }
+            recordTranscript: @escaping ([HallieTranscriptEvent]) async -> Void = { _ in },
+            composeAnswer: @escaping @Sendable (
+                HallieAnswerPlan, [HallieGroundedComposer.HistoryTurn], Options
+            ) async -> HallieGroundedComposer.Outcome = { plan, _, _ in
+                .template(plan, note: "template: no composer configured")
+            }
         ) {
             self.loadCatalog = loadCatalog
             self.loadProfiles = loadProfiles
@@ -167,6 +181,7 @@ enum HallieShellCLI {
             }
             self.performMediaAction = performMediaAction
             self.recordTranscript = recordTranscript
+            self.composeAnswer = composeAnswer
         }
 
         static var production: Dependencies {
@@ -248,6 +263,18 @@ enum HallieShellCLI {
                 },
                 recordTranscript: { events in
                     await HallieConversationRecorder.shared.append(events)
+                },
+                composeAnswer: { plan, history, options in
+                    var template = OllamaQueryTranslator()
+                    template.model = options.model
+                    let fleet = OllamaFailoverTranslator(
+                        hosts: options.hosts, template: template)
+                    let composer = HallieGroundedComposer(
+                        personaName: HallieCompositionSettings.personaName(),
+                        modelCall: { system, user in
+                            try await fleet.composePlainText(system: system, user: user)
+                        })
+                    return await composer.compose(plan: plan, history: history)
                 })
         }
     }
@@ -261,7 +288,7 @@ enum HallieShellCLI {
 
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
-                     [--model MODEL] [--gedcom PATH] [--once QUESTION]
+                     [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
     """
 
     static let help = """
@@ -276,6 +303,7 @@ enum HallieShellCLI {
         while index < arguments.count {
             let argument = arguments[index]
             if argument == "--hallie" { index += 1; continue }
+            if argument == "--compose" { result.compose = true; index += 1; continue }
             guard ["--catalog", "--host", "--model", "--gedcom", "--once"]
                 .contains(argument) else { throw ParseError.unknownOption(argument) }
             guard index + 1 < arguments.count else {
@@ -399,6 +427,16 @@ enum HallieShellCLI {
         /// Conversation memory: the last result set / AST for follow-ups
         /// ("play the first one", "show more", "and in the 90s?").
         var memory = HallieTurnExecutor.ConversationMemory()
+        /// Recent (question, displayed answer) pairs offered to the composer
+        /// for continuity — text only, bounded.
+        var history: [HallieGroundedComposer.HistoryTurn] = []
+
+        mutating func remember(question: String, answer: String) {
+            history.append(.init(user: question, assistant: answer))
+            if history.count > HallieGroundedComposer.historyTurns {
+                history.removeFirst(history.count - HallieGroundedComposer.historyTurns)
+            }
+        }
 
         func record(_ id: UUID) -> VideoRecord? { records.first { $0.id == id } }
 
@@ -428,6 +466,7 @@ enum HallieShellCLI {
             return await continueClarification(
                 question,
                 pending: pending,
+                options: options,
                 state: &state,
                 output: output,
                 dependencies: dependencies)
@@ -451,6 +490,7 @@ enum HallieShellCLI {
                 output("interpreted: \(HallieTurnExecutor.label(result.route))")
                 render(result, ast: nil, context: identity, state: &state,
                        output: output)
+                state.remember(question: question, answer: result.prose)
                 let outcome = performMediaAction(
                     result.mediaAction, output: output, dependencies: dependencies)
                 let event = transcriptEvent(
@@ -515,8 +555,10 @@ enum HallieShellCLI {
                 selectedTemporalDate: selectedDate,
                 speakers: HallieTurnExecutor.Speakers.fromDefaults())
             let request = HallieTurnExecutor.Request(intent: intent)
-            let result = try await dependencies.executeRequest(request, context)
+            var result = try await dependencies.executeRequest(request, context)
             state.memory.record(intent: intent, result: result)
+            result = await phrase(result, question: question, options: options,
+                                  state: &state, dependencies: dependencies)
 
             render(
                 result,
@@ -525,6 +567,7 @@ enum HallieShellCLI {
                 state: &state,
                 output: output)
             output("interpreted by \(state.lastResponder)")
+            state.remember(question: question, answer: result.prose)
             let assistantEvent = transcriptEvent(
                 result: result,
                 responder: state.lastResponder,
@@ -560,9 +603,26 @@ enum HallieShellCLI {
         }
     }
 
+    /// Plan → phrase → verify for the shell, only with `--compose` and only
+    /// for composable plans; prints who phrased the answer.
+    private static func phrase(
+        _ result: HallieTurnExecutor.Result,
+        question: String,
+        options: Options,
+        state: inout Session,
+        dependencies: Dependencies
+    ) async -> HallieTurnExecutor.Result {
+        guard options.compose else { return result }
+        let plan = HallieAnswerPlan.derive(from: result)
+        guard plan.isComposable else { return result }
+        let outcome = await dependencies.composeAnswer(plan, state.history, options)
+        return result.applying(outcome)
+    }
+
     private static func continueClarification(
         _ reply: String,
         pending: Session.PendingClarification,
+        options: Options,
         state: inout Session,
         output: (String) -> Void,
         dependencies: Dependencies
@@ -583,9 +643,12 @@ enum HallieShellCLI {
         }
         do {
             state.pendingClarification = nil
-            let result = try await dependencies.continueTurn(
+            var result = try await dependencies.continueTurn(
                 pending.value, selectedID, pending.context)
             state.memory.record(intent: pending.value.intent, result: result)
+            result = await phrase(result, question: reply, options: options,
+                                  state: &state, dependencies: dependencies)
+            state.remember(question: reply, answer: result.prose)
             render(
                 result,
                 ast: pending.value.intent.ast,

@@ -32,6 +32,9 @@ struct ArchivistEndpointSettings: View {
     /// green here, that host is the one that will answer.
     @State private var status: [String: Liveness] = [:]
     @State private var checking = false
+    /// "Let Hallie phrase answers in her own words (facts stay locked)".
+    /// Persisted explicitly on toggle, like every other setting here.
+    @State private var composeWithModel = true
 
     enum Liveness: Equatable {
         case unknown, online, idle(String), offline(String)
@@ -134,6 +137,27 @@ struct ArchivistEndpointSettings: View {
                     .disabled(OllamaEndpoints.normalize(newHost) == nil)
             }
 
+            Divider()
+                .padding(.vertical, 2)
+
+            Toggle(isOn: $composeWithModel) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Let Hallie phrase answers in her own words (facts stay locked)")
+                        .font(.system(size: 12))
+                    Text("One extra local-model call rewrites only the approved facts; "
+                         + "anything it adds is dropped before you see it. Off = "
+                         + "the plain templated wording.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .accessibilityIdentifier("archivist.composeWithModel")
+            .onChange(of: composeWithModel) { _, enabled in
+                HallieCompositionSettings.setEnabled(enabled, defaultsStore)
+            }
+
             HStack(spacing: 10) {
                 Button("Restore Defaults") {
                     hosts = OllamaEndpoints.defaultHosts
@@ -156,6 +180,7 @@ struct ArchivistEndpointSettings: View {
             // in-progress edit if the pane redrew.
             if !loaded {
                 hosts = OllamaEndpoints.resolved(from: defaultsStore)
+                composeWithModel = HallieCompositionSettings.isEnabled(defaultsStore)
                 loaded = true
             }
             // Lights refresh every time the pane appears — a stale green
