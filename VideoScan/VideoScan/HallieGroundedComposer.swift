@@ -154,7 +154,15 @@ struct HallieGroundedComposer: Sendable {
         - Every sentence must end with the claim IDs it rests on, in square \
         brackets, like [c1] or [c2][c3]. A sentence with no tag will be discarded.
         - Do not mention the IDs any other way; the bracket tags are enough.
-        - If the claims say there is no evidence, say so plainly.
+        - Answer ONLY the current question from the claims below. Never restate, \
+        summarize, or refer back to earlier turns — the recent conversation is \
+        there for context (who "he" or "there" means), never as material to \
+        repeat.
+        - Never say you lack evidence or don't know: you are only asked to \
+        phrase claims that are already established.
+        - Speak about the family plainly, the way a person would: prefer "there \
+        are 21 clips of Donna at the Cape" over "I found 21 catalog items \
+        matching that".
         - Keep it short: at most 3 sentences for a list of items, at most 6 for \
         a biography.
         - Plain text only. No headings, bullets, markdown, or preamble.

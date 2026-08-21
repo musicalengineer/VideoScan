@@ -63,9 +63,15 @@ struct HallieGroundedCompositionTests {
         #expect(plan.claims.first?.text == result.prose)
         #expect(plan.fallbackText == result.prose)
         // Item claims are bounded, name the file, and carry the record ID.
-        #expect(plan.claims.count == 1 + min(result.citations.count, HallieAnswerPlan.maxItemClaims))
-        #expect(plan.claims[1].text.contains("donna_1.mov"))
-        #expect(plan.claims[1].evidenceIDs == [result.citations[0].recordID.uuidString])
+        // Since 2026-08-21 the plan also carries derived span/people claims
+        // between the count and the items, so locate the items by prefix
+        // rather than by a fixed index.
+        let itemClaims = plan.claims.filter { $0.text.hasPrefix("Item ") }
+        #expect(itemClaims.count == min(result.citations.count, HallieAnswerPlan.maxItemClaims))
+        #expect(itemClaims[0].text.contains("donna_1.mov"))
+        #expect(itemClaims[0].evidenceIDs == [result.citations[0].recordID.uuidString])
+        // Claim IDs stay dense and ordered whatever the mix.
+        #expect(plan.claimIDs == (1...plan.claims.count).map { "c\($0)" })
         #expect(plan.counts.contains(.init(label: "matching catalog items", value: 12)))
         // derive() prefers the executor's own plan.
         #expect(HallieAnswerPlan.derive(from: result) == plan)
@@ -623,5 +629,115 @@ struct HallieGroundedCompositionClientTests {
         #expect(assistant?.composedBy == "model")
         #expect(assistant?.text == "Just one, donna_cape.mov [c2].")
         #expect(assistant?.basisLine == "Basis: 1 cited of 1 matching catalog items.")
+    }
+}
+
+// MARK: - Eval-driven hardening (Rick's 2026-08-21 conversational-quality pass)
+
+@Suite("Hallie composition — noise rejection and richer list claims")
+struct HallieCompositionNoiseTests {
+
+    private func listPlan() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .cross, shape: .list,
+            claims: [
+                .init(id: "c1", text: "I found 21 catalog items matching that."),
+                .init(id: "c2", text: "Item 1: Clip 01.dv — confirmed person tag Donna proves donna"),
+            ],
+            counts: [.init(label: "matching catalog items", value: 21)],
+            fallbackText: "I found 21 catalog items matching that.")
+    }
+
+    /// The live bug: a good answer with a bogus "no evidence" sentence welded
+    /// on. Composition only runs on ANSWERED turns, so that sentence is noise.
+    @Test func falseNoEvidenceSentenceIsDropped() {
+        let v = HallieCompositionVerifier.verify(
+            "There are 21 clips of Donna here [c1][c2]. I don't have evidence for that [c2].",
+            plan: listPlan(), personaName: "Hallie")
+        #expect(v.kept.count == 1)
+        #expect(v.displayText == "There are 21 clips of Donna here.")
+        #expect(v.dropped.contains { $0.reason == .falseNoEvidence })
+    }
+
+    /// History narration bleeding into an answer (the "who did Rick marry?"
+    /// turn that recited two earlier questions).
+    @Test func conversationNarrationIsDropped() {
+        let v = HallieCompositionVerifier.verify(
+            "You asked about that [c1]. There are 21 clips [c1].",
+            plan: listPlan(), personaName: "Hallie")
+        #expect(v.kept.count == 1)
+        #expect(v.displayText == "There are 21 clips.")
+        #expect(v.dropped.contains { $0.reason == .metaConversation })
+    }
+
+    /// A plan that legitimately voices an absence may still be phrased that
+    /// way — the rule keys on the PLAN, not on the words alone.
+    @Test func genuineNoEvidencePlanMayStillSayIt() {
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [.init(id: "c1", text: "The family tree has no evidence of a second marriage.")],
+            fallbackText: "no evidence")
+        let v = HallieCompositionVerifier.verify(
+            "The family tree has no evidence of a second marriage [c1].",
+            plan: plan, personaName: "Hallie")
+        #expect(v.kept.count == 1)
+        #expect(v.dropped.isEmpty)
+    }
+
+    @Test func ordinaryAnswersSurviveBothRules() {
+        // Both sentences cite the claims that vouch for their facts — the
+        // pre-existing leak rules still apply on top of the new ones.
+        let v = HallieCompositionVerifier.verify(
+            "There are 21 clips of Donna here [c1][c2]. The earliest is Clip 01.dv [c2].",
+            plan: listPlan(), personaName: "Hallie")
+        #expect(v.kept.count == 2)
+        #expect(v.dropped.isEmpty)
+    }
+
+    // MARK: richer list claims
+
+    private func citation(_ name: String, year: Int?, person: String?) -> HallieTurnExecutor.Citation {
+        var bases: [ArchivistEvidenceBasis] = []
+        if let year { bases.append(.pathYear(year: year, fullPath: "/x/\(year)/\(name)")) }
+        if let person {
+            bases.append(.humanPersonTag(queryIdentity: person.lowercased(),
+                                         taggedName: person,
+                                         confirmedAt: Date(timeIntervalSince1970: 1_700_000_000)))
+        }
+        return .init(recordID: UUID(), fullPath: "/x/\(name)", filename: name,
+                     playbackSeconds: nil, bases: bases)
+    }
+
+    /// Without these the composer can only re-say "I found N catalog items".
+    @Test func listPlanCarriesSpanAndPeopleClaims() {
+        let cites = [
+            citation("a.mov", year: 1993, person: "Donna"),
+            citation("b.mov", year: 2011, person: "Donna"),
+            citation("c.mov", year: 1998, person: "Rick"),
+        ]
+        let plan = HallieAnswerPlan.presenceList(
+            route: .cross, prose: "I found 3 catalog items matching that.",
+            totalMatchCount: 3, shownCount: 3, citations: cites)
+        let texts = plan.claims.map(\.text)
+        #expect(texts.contains { $0.contains("1993") && $0.contains("2011") })
+        #expect(texts.contains { $0.contains("Donna") && $0.contains("2 of them") })
+        #expect(plan.claims.first?.text == "I found 3 catalog items matching that.")
+        // Item claims still present and last.
+        #expect(texts.contains { $0.hasPrefix("Item 1:") })
+    }
+
+    @Test func spanClaimReadsSinglyWhenOneYear() {
+        let plan = HallieAnswerPlan.presenceList(
+            route: .presence, prose: "p", totalMatchCount: 1, shownCount: 1,
+            citations: [citation("a.mov", year: 1984, person: nil)])
+        #expect(plan.claims.map(\.text).contains { $0 == "These are from 1984." })
+    }
+
+    @Test func undatedCitationsProduceNoSpanClaim() {
+        let plan = HallieAnswerPlan.presenceList(
+            route: .presence, prose: "p", totalMatchCount: 1, shownCount: 1,
+            citations: [citation("a.mov", year: nil, person: nil)])
+        #expect(!plan.claims.map(\.text).contains { $0.hasPrefix("These are from") })
+        #expect(!plan.claims.map(\.text).contains { $0.hasPrefix("These run from") })
     }
 }

@@ -110,7 +110,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
         let fixed = HallieAnswerPlan(
             route: result.route, shape: .fixed, fallbackText: result.prose)
         switch result.route {
-        case .capability, .help, .smalltalk, .reset, .followUp, .unsupportedEvent:
+        case .capability, .help, .smalltalk, .conversation, .reset,
+             .followUp, .unsupportedEvent:
             return fixed
         case .presence, .cross, .temporal, .aggregate, .graph:
             break
@@ -152,11 +153,30 @@ struct HallieAnswerPlan: Sendable, Equatable {
         citations: [HallieTurnExecutor.Citation]
     ) -> HallieAnswerPlan {
         var claims = [Claim(id: "c1", text: prose)]
+        // Facts the reader actually cares about, derived from the SAME
+        // citations already approved — a span and the people in them. Without
+        // these the composer can only re-say "I found 21 catalog items
+        // matching that", because that is the only claim it has (Rick's eval,
+        // 2026-08-21: "make her sound like she knows this family").
+        if let span = yearSpan(of: citations) {
+            claims.append(Claim(
+                id: "c\(claims.count + 1)",
+                text: span.lower == span.upper
+                    ? "These are from \(span.lower)."
+                    : "These run from \(span.lower) to \(span.upper).",
+                evidenceIDs: citations.map(\.recordID.uuidString)))
+        }
+        for name in confirmedPeople(in: citations).prefix(maxPeopleClaims) {
+            claims.append(Claim(
+                id: "c\(claims.count + 1)",
+                text: "\(name.name) is confirmed in \(name.count) of them.",
+                evidenceIDs: citations.map(\.recordID.uuidString)))
+        }
         for (index, citation) in citations.prefix(maxItemClaims).enumerated() {
             let at = citation.playbackSeconds.map { String(format: " at %.1fs", $0) } ?? ""
             let why = citation.bases.map(\.summary).joined(separator: "; ")
             claims.append(Claim(
-                id: "c\(index + 2)",
+                id: "c\(claims.count + 1)",
                 text: "Item \(index + 1): \(citation.filename)\(at)"
                     + (why.isEmpty ? "" : " — \(why)"),
                 evidenceIDs: [citation.recordID.uuidString]))
@@ -170,6 +190,46 @@ struct HallieAnswerPlan: Sendable, Equatable {
                 Count(label: "items listed here", value: shownCount),
             ],
             fallbackText: prose)
+    }
+
+    /// At most this many "X is confirmed in N of them" claims.
+    static let maxPeopleClaims = 2
+
+    /// Earliest/latest year vouched for by the citations' OWN date evidence.
+    /// Only dated bases count — a span must be as citable as any other fact.
+    static func yearSpan(of citations: [HallieTurnExecutor.Citation]) -> (lower: Int, upper: Int)? {
+        var years: [Int] = []
+        for citation in citations {
+            for basis in citation.bases {
+                switch basis {
+                case .inferredDate(let year, _), .fileDate(_, let year, _), .pathYear(let year, _):
+                    years.append(year)
+                default: continue
+                }
+            }
+        }
+        guard let lower = years.min(), let upper = years.max() else { return nil }
+        return (lower, upper)
+    }
+
+    /// Human-confirmed person tags across the citations, most-cited first.
+    /// Machine detections are deliberately excluded — a confirmed tag is the
+    /// only person evidence this plan will state as fact.
+    static func confirmedPeople(
+        in citations: [HallieTurnExecutor.Citation]
+    ) -> [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for citation in citations {
+            var seen: Set<String> = []
+            for basis in citation.bases {
+                if case .humanPersonTag(_, let taggedName, _) = basis,
+                   seen.insert(taggedName.lowercased()).inserted {
+                    counts[taggedName, default: 0] += 1
+                }
+            }
+        }
+        return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+            .map { (name: $0.key, count: $0.value) }
     }
 
     /// CyberBrain biography plan: the approved AnswerPlan claims become

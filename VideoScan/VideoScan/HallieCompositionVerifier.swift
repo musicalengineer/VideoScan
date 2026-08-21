@@ -26,6 +26,18 @@ enum HallieCompositionVerifier {
             case leakedName
             case sentenceFragment
             case overSentenceBudget
+            /// A sentence asserting she has no evidence/knowledge, inside a
+            /// composition for an ANSWERED turn. Declines never reach the
+            /// composer (HallieAnswerPlan.derive returns .fixed for them), so
+            /// such a sentence is always noise — and it was landing in real
+            /// answers: "I found 5877 catalog items matching that [c1]. I
+            /// don't have evidence for that [c10]." (eval 2026-08-21).
+            case falseNoEvidence
+            /// A sentence about the conversation rather than the claims —
+            /// the model summarizing earlier turns from the history block:
+            /// "I do not have evidence for how many videos you have or if you
+            /// had cars when you were young [c1]." (eval 2026-08-21).
+            case metaConversation
         }
         let text: String
         let reason: Reason
@@ -111,6 +123,18 @@ enum HallieCompositionVerifier {
             let display = stripTags(raw)
             guard !isSentenceFragment(display) else {
                 dropped.append(Dropped(text: raw, reason: .sentenceFragment))
+                continue
+            }
+            // Composition only ever runs on ANSWERED turns, so a sentence
+            // pleading ignorance cannot be a phrasing of an approved claim —
+            // it is the model padding, or narrating the history block. Both
+            // were observed corrupting good answers (eval 2026-08-21).
+            if assertsNoEvidence(display), !planClaimsAssertNoEvidence(plan) {
+                dropped.append(Dropped(text: raw, reason: .falseNoEvidence))
+                continue
+            }
+            if isAboutTheConversation(display) {
+                dropped.append(Dropped(text: raw, reason: .metaConversation))
                 continue
             }
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
@@ -267,6 +291,41 @@ enum HallieCompositionVerifier {
             .replacingOccurrences(of: "'s", with: "")
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
+    }
+
+    // MARK: - Noise checks (eval 2026-08-21)
+
+    /// "I don't have evidence for that", "I do not know", "I couldn't find
+    /// anything" — an assertion that she lacks knowledge.
+    static let noEvidencePatterns = [
+        "don't have evidence", "do not have evidence", "dont have evidence",
+        "have no evidence", "don't know", "do not know", "dont know",
+        "couldn't find", "could not find", "don't have any", "do not have any",
+        "no information", "not sure about that", "cannot answer",
+    ]
+
+    static func assertsNoEvidence(_ sentence: String) -> Bool {
+        let s = sentence.lowercased()
+        return noEvidencePatterns.contains { s.contains($0) }
+    }
+
+    /// True when the PLAN itself is voicing an absence (a legitimate "I have
+    /// nothing on that" claim the composer may faithfully phrase).
+    static func planClaimsAssertNoEvidence(_ plan: HallieAnswerPlan) -> Bool {
+        plan.claims.contains { assertsNoEvidence($0.text) }
+    }
+
+    /// Sentences that talk ABOUT the exchange instead of answering it —
+    /// history narration ("earlier you asked", "your question", "as I said").
+    static let metaConversationPatterns = [
+        "you asked", "your question", "as i said", "as i mentioned",
+        "earlier you", "you mentioned earlier", "in your previous",
+        "the previous question", "you just asked", "going back to",
+    ]
+
+    static func isAboutTheConversation(_ sentence: String) -> Bool {
+        let s = sentence.lowercased()
+        return metaConversationPatterns.contains { s.contains($0) }
     }
 
     /// The first leak found in a display sentence, or nil when every year,
