@@ -53,6 +53,24 @@ def build_stdin(questions, reset_between=True):
     return "\n".join(lines) + "\n"
 
 
+def newest_build():
+    """The most recently built VideoScan binary among the places this repo
+    builds to. Newest wins; None when nothing is built."""
+    import glob
+    roots = [
+        str(REPO / ".build-dd/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan"),
+        "/Volumes/XcodeRAM/VideoScan-*/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan",
+        str(Path.home() / "Library/Developer/Xcode/DerivedData/VideoScan-*/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan"),
+        "/private/tmp/claude-501/**/scratchpad/dd/Build/Products/*/VideoScan.app/Contents/MacOS/VideoScan",
+    ]
+    found = []
+    for pattern in roots:
+        found.extend(glob.glob(pattern, recursive=True))
+    if not found:
+        return None
+    return max(found, key=os.path.getmtime)
+
+
 def todays_log():
     return LOG_DIR / f"hallie-conversation-{date.today().isoformat()}.jsonl"
 
@@ -86,6 +104,20 @@ def run(args):
     if args.host:
         cmd += ["--host", args.host]
 
+    # PIN THE BINARY. The launcher otherwise picks the newest build it can
+    # DISCOVER, which is not necessarily the one carrying the change under
+    # test — on 2026-08-21 two full passes silently measured a stale XcodeRAM
+    # build and read as "no improvement". A run that cannot name its binary
+    # is not a measurement.
+    env = dict(os.environ)
+    binary = args.bin or newest_build()
+    if binary:
+        env["VIDEOSCAN_APP_BIN"] = binary
+        built = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
+        print(f"[eval] binary: {binary} (built {built})", flush=True)
+    else:
+        print("[eval] WARNING: no binary pinned; the launcher will guess", flush=True)
+
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
     proc = subprocess.run(
@@ -95,6 +127,7 @@ def run(args):
         text=True,
         timeout=args.timeout,
         cwd=str(REPO),
+        env=env,
     )
     elapsed = time.time() - t0
     print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
@@ -140,9 +173,18 @@ def run(args):
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
-        f.write(json.dumps({"meta": {"questions": len(questions), "paired": len(records),
-                                     "elapsed_s": round(elapsed), "compose": not args.no_compose,
-                                     "when": time.strftime("%Y-%m-%dT%H:%M:%S")}}) + "\n")
+        f.write(json.dumps({"meta": {
+            "questions": len(questions), "paired": len(records),
+            "elapsed_s": round(elapsed), "compose": not args.no_compose,
+            "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "binary": binary,
+            "binary_built": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                          time.localtime(os.path.getmtime(binary)))
+            if binary else None,
+            "git": subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                  capture_output=True, text=True,
+                                  cwd=str(REPO)).stdout.strip(),
+        }}) + "\n")
         for r in records:
             f.write(json.dumps(r) + "\n")
     print(f"[eval] wrote {len(records)} paired turns → {out}")
@@ -228,9 +270,11 @@ def grade(args):
 
     total = len(recs)
     clean = sum(c["clean"] for c in by_cat.values())
+    m = meta.get("meta", {})
     print(f"\n=== Hallie eval: {args.run}")
     print(f"turns: {total}   clean: {clean} ({100*clean/max(total,1):.0f}%)   "
-          f"elapsed: {meta.get('meta',{}).get('elapsed_s','?')}s\n")
+          f"elapsed: {m.get('elapsed_s','?')}s")
+    print(f"git {m.get('git','?')}   binary built {m.get('binary_built','?')}\n")
 
     print(f"{'category':22} {'n':>4} {'clean':>6} {'%':>5}")
     for cat in sorted(by_cat):
@@ -279,6 +323,7 @@ def main():
     pr.add_argument("--limit", type=int)
     pr.add_argument("--host")
     pr.add_argument("--no-compose", action="store_true")
+    pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
     pr.add_argument("--timeout", type=int, default=5400)
     pr.set_defaults(func=run)
 
