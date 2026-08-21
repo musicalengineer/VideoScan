@@ -4,6 +4,13 @@ setopt null_glob
 
 script_dir=${0:A:h}
 repo_dir=${script_dir:h}
+show_diagnostics=0
+for argument in "$@"; do
+  if [[ ${argument} == "--diagnostics" ]]; then
+    show_diagnostics=1
+    break
+  fi
+done
 
 if [[ -n ${VIDEOSCAN_APP_BIN:-} ]]; then
   if [[ ! -f ${VIDEOSCAN_APP_BIN} || ! -x ${VIDEOSCAN_APP_BIN} ]]; then
@@ -51,11 +58,13 @@ if [[ -z ${selected_binary} ]]; then
 fi
 
 selected_time=$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "${selected_binary}" 2>/dev/null || print unknown)
-print -u2 "hallie: using ${selected_source}"
-print -u2 "hallie: ${selected_binary}"
-print -u2 "hallie: built ${selected_time}"
-print -u2 "hallie: standalone read-only session; the VideoScan app may remain running"
-print -u2 "hallie: press Control-C or enter :quit to leave"
+if (( show_diagnostics )); then
+  print -u2 "hallie: using ${selected_source}"
+  print -u2 "hallie: ${selected_binary}"
+  print -u2 "hallie: built ${selected_time}"
+  print -u2 "hallie: standalone read-only session; the VideoScan app may remain running"
+  print -u2 "hallie: press Control-C or enter :quit to leave"
+fi
 
 # NSUnbufferedIO makes startup/progress and answers visible immediately even
 # when this launcher is invoked through another terminal or logging wrapper.

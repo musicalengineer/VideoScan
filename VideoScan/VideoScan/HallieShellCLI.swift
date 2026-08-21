@@ -16,6 +16,9 @@ enum HallieShellCLI {
         /// facts locked). OFF by default in the shell — it is a diagnostic
         /// surface and the templated wording is the reference output.
         var compose = false
+        /// Print routes, evidence bases, responder hosts, full paths, and
+        /// other QA metadata. Normal conversation keeps these in the log.
+        var diagnostics = false
         /// `--remember`: let "let me tell you about …" write attributed,
         /// unverified passages to the family's CyberBrain. OFF by default:
         /// the shell is a read-only diagnostic surface and unattended
@@ -395,7 +398,7 @@ enum HallieShellCLI {
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
-                     [--no-actions] [--log-run-id ID] [--remember]
+                     [--no-actions] [--log-run-id ID] [--remember] [--diagnostics]
     """
 
     static let help = """
@@ -413,6 +416,11 @@ enum HallieShellCLI {
             let argument = arguments[index]
             if argument == "--hallie" { index += 1; continue }
             if argument == "--compose" { result.compose = true; index += 1; continue }
+            if argument == "--diagnostics" {
+                result.diagnostics = true
+                index += 1
+                continue
+            }
             if argument == "--no-actions" {
                 result.allowActions = false
                 index += 1
@@ -474,8 +482,12 @@ enum HallieShellCLI {
         },
         dependencies: Dependencies = .production
     ) async -> Int32 {
-        output("Hallie Mae — headless read-only shell")
-        output("opening catalog read-only: \(options.catalogURL.path)")
+        output(options.diagnostics
+            ? "Hallie Mae — headless read-only shell"
+            : "Hallie Mae — standalone family librarian")
+        if options.diagnostics {
+            output("opening catalog read-only: \(options.catalogURL.path)")
+        }
         guard let records = dependencies.loadCatalog(options.catalogURL) else {
             output("error: cannot read catalog at \(options.catalogURL.path)")
             return ExitCode.catalogUnavailable.rawValue
@@ -495,11 +507,17 @@ enum HallieShellCLI {
             model: options.model,
             runID: options.logRunID)
 
-        output("catalog: \(records.count) records · \(options.catalogURL.path)")
-        if let runID = state.runID { output("run-id: \(runID)") }
-        output("session-id: \(state.transcriptSessionID.uuidString)")
+        if options.diagnostics {
+            output("catalog: \(records.count) records · \(options.catalogURL.path)")
+            if let runID = state.runID { output("run-id: \(runID)") }
+            output("session-id: \(state.transcriptSessionID.uuidString)")
+        } else {
+            output("Archive ready — \(records.count) catalog items, read-only.")
+        }
         if !options.allowActions {
-            output("actions: disabled (--no-actions); no media will be opened or revealed")
+            output(options.diagnostics
+                ? "actions: disabled (--no-actions); no media will be opened or revealed"
+                : "Media actions are off.")
         }
         if let once = options.once {
             let outcome = await answer(
@@ -507,7 +525,9 @@ enum HallieShellCLI {
                 output: output, dependencies: dependencies)
             return outcome.exitCode
         }
-        output(help)
+        output(options.diagnostics
+            ? help
+            : "Type :help for commands; :quit to leave.")
         while true {
             output("hallie> ")
             guard let raw = input() else { return 0 }
@@ -664,9 +684,11 @@ enum HallieShellCLI {
                 state.lastResponder = "local"
                 // "start over" clears memory; other local answers leave it.
                 state.memory.record(intent: nil, result: result)
-                output("interpreted: \(HallieTurnExecutor.label(result.route))")
+                if options.diagnostics {
+                    output("interpreted: \(HallieTurnExecutor.label(result.route))")
+                }
                 render(result, ast: nil, context: identity, state: &state,
-                       output: output)
+                       diagnostics: options.diagnostics, output: output)
                 state.remember(question: question, answer: result.prose)
                 if result.route == .smalltalk || result.route == .conversation {
                     state.rememberSocial(question: question, answer: result.prose)
@@ -688,12 +710,16 @@ enum HallieShellCLI {
             case .run(let local):
                 state.lastResponder = "local"
                 intent = local
-                output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
+                if options.diagnostics {
+                    output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
+                }
             case .translate(let effectiveQuestion, let wantsPlay):
                 // Anti-hallucination boundary: the translator receives exactly
                 // the user's question. Catalog, profile, GEDCOM, and citations
                 // stay local.
-                output("Hallie is interpreting that question…")
+                output(options.diagnostics
+                    ? "Hallie is interpreting that question…"
+                    : "Hallie is thinking…")
                 let interpretation: TurnInterpretation
                 if let kind = HallieConversationGuard.definitelyGeneral(
                     effectiveQuestion,
@@ -709,7 +735,9 @@ enum HallieShellCLI {
                 switch interpretation.value {
                 case .archive(let ast):
                     state.lastResponder = interpretation.responderHost
-                    output("interpreted: \(HallieTurnExecutor.description(of: ast))")
+                    if options.diagnostics {
+                        output("interpreted: \(HallieTurnExecutor.description(of: ast))")
+                    }
                     intent = HallieTurnExecutor.Intent(
                         originalQuestion: question,
                         ast: ast,
@@ -728,7 +756,9 @@ enum HallieShellCLI {
                         let translation = try await dependencies.translateAST(
                             effectiveQuestion, options)
                         state.lastResponder = translation.responderHost
-                        output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
+                        if options.diagnostics {
+                            output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
+                        }
                         intent = HallieTurnExecutor.Intent(
                             originalQuestion: question,
                             ast: translation.ast,
@@ -739,10 +769,12 @@ enum HallieShellCLI {
                         state.lastResponder = social.responderHost
                         let result = HallieSocialConversation.result(for: social.value)
                         state.memory.record(intent: nil, result: result)
-                        output("interpreted: conversation")
+                        if options.diagnostics { output("interpreted: conversation") }
                         render(result, ast: nil, context: identity, state: &state,
-                               output: output)
-                        output("interpreted by \(state.lastResponder)")
+                               diagnostics: options.diagnostics, output: output)
+                        if options.diagnostics {
+                            output("interpreted by \(state.lastResponder)")
+                        }
                         state.rememberSocial(
                             question: question, answer: result.prose)
                         let event = transcriptEvent(
@@ -800,8 +832,11 @@ enum HallieShellCLI {
                 ast: intent.ast,
                 context: context,
                 state: &state,
+                diagnostics: options.diagnostics,
                 output: output)
-            output("interpreted by \(state.lastResponder)")
+            if options.diagnostics {
+                output("interpreted by \(state.lastResponder)")
+            }
             state.remember(question: question, answer: result.prose)
             let assistantEvent = transcriptEvent(
                 result: result,
@@ -830,7 +865,8 @@ enum HallieShellCLI {
             let message = "I'm having trouble reaching my language helper just now. "
                 + "I didn't search the archive or open anything; please try that again in a moment."
             output(message)
-            if ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
+            if options.diagnostics
+                || ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
                 output("diagnostic: \(diagnostic)")
             }
             let event = transcriptEvent(
@@ -898,6 +934,7 @@ enum HallieShellCLI {
                 ast: pending.value.intent.ast,
                 context: pending.context,
                 state: &state,
+                diagnostics: options.diagnostics,
                 output: output)
             let event = transcriptEvent(
                 result: result,
@@ -911,12 +948,16 @@ enum HallieShellCLI {
             }
         } catch {
             state.citations = []
-            output("I couldn't continue that identity choice: \(error.localizedDescription)")
-            output("No catalog query or media action was performed.")
+            let diagnostic = String(reflecting: error)
+            appLog.write("Hallie shell continuation failed — \(diagnostic)")
+            output("I couldn't continue that choice just now. Please try again.")
+            if options.diagnostics
+                || ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
+                output("diagnostic: \(diagnostic)")
+            }
             let event = transcriptEvent(
                 kind: .error,
-                text: "I couldn't continue that identity choice: "
-                    + error.localizedDescription,
+                text: "I couldn't continue that choice just now. Please try again.",
                 basisLine: "No catalog query or media action was performed.",
                 outcome: "interpretation-failed",
                 state: &state)
@@ -956,7 +997,9 @@ enum HallieShellCLI {
         case ":reset":
             let event = resetSession(&state)
             output("reset: conversation forgotten")
-            output("session-id: \(state.transcriptSessionID.uuidString)")
+            if options.diagnostics {
+                output("session-id: \(state.transcriptSessionID.uuidString)")
+            }
             await dependencies.recordTranscript([event])
         case ":cancel":
             if state.pendingClarification != nil {

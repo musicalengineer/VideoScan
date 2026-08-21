@@ -137,6 +137,7 @@ extension HallieShellCLI {
         ast: ArchivistQueryAST?,
         context: HallieTurnExecutor.Context,
         state: inout Session,
+        diagnostics: Bool = false,
         output: (String) -> Void
     ) {
         // A follow-up media action keeps the previous citation list numbered
@@ -157,26 +158,30 @@ extension HallieShellCLI {
                 personName: canonical, profiles: state.profiles ?? [])
         }
         output(result.prose)
-        if result.composedBy == .model { output("phrased by: model (facts verified against the plan)") }
-        output(result.basisLine)
-        if result.route == .graph, let photo = state.biographyPhoto {
-            output("photo: \(photo.fileURL.path)")
-        }
-        if let queryDescription = result.queryDescription {
-            output("query: \(queryDescription)")
-        }
-        if result.route != .followUp || result.mediaAction == nil {
-            printCitations(state.citations, output: output)
-        }
-        printKnowledgeCitations(state.knowledgeCitations, output: output)
-        for action in result.offeredActions {
-            switch action {
-            case .openFamilyTree(let name):
-                output("offer: open the Family Tree tab focused on \(name) (app only)")
-            case .openFamilyTreeSurname(let surname):
-                output("offer: open the Family Tree tab filtered to \(surname) (app only)")
-            case .ask(let question, _):
-                output("offer: ask “\(question)”")
+        if diagnostics {
+            if result.composedBy == .model {
+                output("phrased by: model (facts verified against the plan)")
+            }
+            output(result.basisLine)
+            if result.route == .graph, let photo = state.biographyPhoto {
+                output("photo: \(photo.fileURL.path)")
+            }
+            if let queryDescription = result.queryDescription {
+                output("query: \(queryDescription)")
+            }
+            if result.route != .followUp || result.mediaAction == nil {
+                printCitations(state.citations, output: output)
+            }
+            printKnowledgeCitations(state.knowledgeCitations, output: output)
+            for action in result.offeredActions {
+                switch action {
+                case .openFamilyTree(let name):
+                    output("offer: open the Family Tree tab focused on \(name) (app only)")
+                case .openFamilyTreeSurname(let surname):
+                    output("offer: open the Family Tree tab filtered to \(surname) (app only)")
+                case .ask(let question, _):
+                    output("offer: ask “\(question)”")
+                }
             }
         }
         if let clarification = result.clarification {

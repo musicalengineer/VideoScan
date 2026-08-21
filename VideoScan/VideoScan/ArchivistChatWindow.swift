@@ -228,6 +228,10 @@ struct ArchivistChatWindow: View {
     /// `HallieTurnExecutor.Speakers.fromDefaults()`.
     @AppStorage("archivist.ownerPersonName") private var ownerPersonName = "Rick Breen"
     @AppStorage("archivist.personName") private var archivistPersonName = ""
+    /// Human conversation is the default. Query ASTs, basis strings,
+    /// responder hosts, and per-citation matching reasons remain available
+    /// for QA and are always retained in the structured transcript.
+    @AppStorage("archivist.showTechnicalDetails") private var showTechnicalDetails = false
     @State private var showSpeakerSettings = false
 
     var body: some View {
@@ -249,7 +253,8 @@ struct ArchivistChatWindow: View {
                                     .foregroundStyle(.secondary)
                             }
                             .id("thinking")
-                        } else if let responder = lastResponder {
+                        } else if showTechnicalDetails,
+                                  let responder = lastResponder {
                             // RENDER the responder, don't just record it
                             // (codex #315). With a fallback list, "the
                             // Archivist feels slow" and "the primary is
@@ -473,6 +478,7 @@ struct ArchivistChatWindow: View {
                 // Rick 2026-08-18: prefer the slow walk through her angle
                 // stills even when video loops sit beside the portrait.
                 Toggle("Cycle through her angles", isOn: $cycleAngles)
+                Toggle("Show technical details", isOn: $showTechnicalDetails)
                 Divider()
                 // "how am I related to you?" needs to know who "I" is.
                 Button("Who is talking to her… (\(ownerPersonName.isEmpty ? "not set" : ownerPersonName))") {
@@ -549,13 +555,13 @@ struct ArchivistChatWindow: View {
                 Text(message.text)
                     .font(.system(size: 17))
                     .textSelection(.enabled)
-                if let query = message.queryLine {
+                if showTechnicalDetails, let query = message.queryLine {
                     Text(query)
                         .font(.system(size: 15).monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                if let basis = message.basisLine {
+                if showTechnicalDetails, let basis = message.basisLine {
                     Text(basis)
                         .font(.system(size: 15))
                         .foregroundStyle(.secondary)
@@ -600,7 +606,8 @@ struct ArchivistChatWindow: View {
                     index: index,
                     citation: citation,
                     timestampSuffix: citationTimestamp(citation),
-                    basisLines: citation.bases.map(citationBasis),
+                    basisLines: showTechnicalDetails
+                        ? citation.bases.map(citationBasis) : [],
                     record: model.record(forID: citation.recordID),
                     onPlay: { playCitation(citation) },
                     onReveal: { revealCitation(citation) },
@@ -971,11 +978,11 @@ struct ArchivistChatWindow: View {
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
+                appLog.write("Hallie continuation failed — \(error.localizedDescription)")
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,
-                    text: "I couldn't continue that identity choice: "
-                        + error.localizedDescription,
+                    text: "I couldn't continue that choice just now. Please try again.",
                     basisLine: "No catalog query or media action was performed."))
             }
         }

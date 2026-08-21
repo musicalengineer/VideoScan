@@ -228,7 +228,7 @@ struct HallieShellCLITests {
             "--host", "ollama-one.local,ollama-two.local",
             "--model", "fixture-model", "--gedcom", "/tmp/family.ged",
             "--once", "Was Donna there?", "--no-actions",
-            "--log-run-id", "fixture-run",
+            "--log-run-id", "fixture-run", "--diagnostics",
         ])
 
         #expect(options.catalogURL.path == "/tmp/hallie-catalog.json")
@@ -239,6 +239,7 @@ struct HallieShellCLITests {
         #expect(options.gedcomURL?.path == "/tmp/family.ged")
         #expect(options.once == "Was Donna there?")
         #expect(!options.allowActions)
+        #expect(options.diagnostics)
         #expect(options.logRunID == "fixture-run")
     }
 
@@ -277,10 +278,11 @@ struct HallieShellCLITests {
         #expect(harness.output.contains { $0.hasPrefix("session: ")
             && $0.contains("· 0 citations") })
         #expect(harness.output.contains("Goodbye."))
-        #expect(harness.output.contains { $0.contains("headless read-only shell") })
+        #expect(harness.output.contains { $0.contains("standalone family librarian") })
         #expect(harness.output.contains {
-            $0 == "opening catalog read-only: /isolated/catalog.json"
+            $0 == "Archive ready — 0 catalog items, read-only."
         })
+        #expect(!harness.output.contains { $0.contains("/isolated/catalog.json") })
     }
 
     @Test func onceTranslatesExactlyOnceAndNeverReadsInteractiveInput() async throws {
@@ -301,7 +303,33 @@ struct HallieShellCLITests {
         #expect(harness.readCount == 0)
         #expect(harness.inputs == ["this must remain unread"])
         #expect(harness.mediaActions.isEmpty)
-        #expect(harness.output.contains("Hallie is interpreting that question…"))
+        #expect(harness.output.contains("Hallie is thinking…"))
+    }
+
+    @Test func normalConversationHidesDiagnosticsButLogRetainsThem() async throws {
+        for diagnostics in [false, true] {
+            let path = "/isolated/archive/Donna-Cape.mov"
+            let harness = Harness(
+                translations: [.presence(.init(people: ["Donna"]))])
+            let answer = citedAnswer(path: path)
+            harness.executeTurn = { _, _ in answer }
+            var arguments = ["--hallie", "--once", "Show me Donna"]
+            if diagnostics { arguments.append("--diagnostics") }
+            let options = try HallieShellCLI.parse(arguments: arguments)
+
+            _ = await HallieShellCLI.run(
+                options: options, output: { harness.output.append($0) },
+                dependencies: harness.dependencies())
+
+            #expect(harness.output.contains("fixture answer"))
+            #expect(harness.output.contains("fixture basis") == diagnostics)
+            #expect(harness.output.contains("query: shape=presence") == diagnostics)
+            #expect(harness.output.contains { $0.contains(path) } == diagnostics)
+            let transcriptAnswer = try #require(harness.transcriptEvents.last)
+            #expect(transcriptAnswer.basisLine == "fixture basis")
+            #expect(transcriptAnswer.queryDescription == "shape=presence")
+            #expect(transcriptAnswer.mediaEvidence.first?.fullPath == path)
+        }
     }
 
     @Test func noActionsBlocksRequestedPlaybackAndStampsTheRunID() async throws {
@@ -320,7 +348,7 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         #expect(harness.mediaActions.isEmpty)
-        #expect(harness.output.contains { $0.contains("actions: disabled") })
+        #expect(harness.output.contains("Media actions are off."))
         #expect(harness.transcriptEvents.allSatisfy {
             $0.runID == "safe-eval-run"
         })
@@ -527,7 +555,7 @@ struct HallieShellCLITests {
         for (ast, shape) in cases {
             let harness = Harness(graph: graph, translations: [ast])
             let options = try HallieShellCLI.parse(arguments: [
-                "--hallie", "--once", "fixture question",
+                "--hallie", "--once", "fixture question", "--diagnostics",
             ])
             _ = await HallieShellCLI.run(
                 options: options, output: { harness.output.append($0) },
@@ -544,7 +572,7 @@ struct HallieShellCLITests {
         let ast = ArchivistQueryAST.event(.init(keywords: ["first birthday"]))
         let harness = Harness(translations: [ast])
         let options = try HallieShellCLI.parse(arguments: [
-            "--hallie", "--once", "fixture question",
+            "--hallie", "--once", "fixture question", "--diagnostics",
         ])
         let code = await HallieShellCLI.run(
             options: options, output: { harness.output.append($0) },
@@ -564,7 +592,7 @@ struct HallieShellCLITests {
         let ast = ArchivistQueryAST.cross(.init(people: ["Donna"], keywords: ["red bike"]))
         let harness = Harness(translations: [ast])
         let options = try HallieShellCLI.parse(arguments: [
-            "--hallie", "--once", "fixture question",
+            "--hallie", "--once", "fixture question", "--diagnostics",
         ])
         let code = await HallieShellCLI.run(
             options: options, output: { harness.output.append($0) },
@@ -593,7 +621,7 @@ struct HallieShellCLITests {
                     catalogPersonName: nil)
             }
             let options = try HallieShellCLI.parse(arguments: [
-                "--hallie", "--once", "fixture question",
+                "--hallie", "--once", "fixture question", "--diagnostics",
             ])
 
             let code = await HallieShellCLI.run(
@@ -624,7 +652,7 @@ struct HallieShellCLITests {
             records: records,
             translations: [.presence(.init(people: ["Donna"], keywords: ["waves"]))])
         let options = try HallieShellCLI.parse(arguments: [
-            "--hallie", "--once", "Where is Donna waving?",
+            "--hallie", "--diagnostics", "--once", "Where is Donna waving?",
         ])
 
         _ = await HallieShellCLI.run(
@@ -790,7 +818,7 @@ struct HallieShellCLITests {
             sources: [source]))
 
         let code = await HallieShellCLI.run(
-            options: .init(once: "Tell me about Donna"),
+            options: .init(once: "Tell me about Donna", diagnostics: true),
             output: { harness.output.append($0) },
             dependencies: harness.dependencies())
 
@@ -836,8 +864,8 @@ struct HallieShellCLITests {
             output: { harness.output.append($0) },
             dependencies: harness.dependencies())
 
-        #expect(harness.output.filter { $0 == "photo: \(photo.path)" }.count == 2,
-                "the biography and :photo must expose the same verified attachment")
+        #expect(harness.output.filter { $0 == "photo: \(photo.path)" }.count == 1,
+                "the attachment path appears only after the explicit :photo command")
         #expect(harness.mediaActions == [.play(photo), .reveal(photo)],
                 "answering and :photo are presentation-only; only explicit open commands act")
     }
@@ -945,7 +973,7 @@ struct HallieShellCLITests {
         let elapsed = ContinuousClock.now - started
 
         #expect(code == HallieShellCLI.ExitCode.noEvidence.rawValue)
-        #expect(harness.output.contains { $0.contains("catalog: 100000 records") })
+        #expect(harness.output.contains("Archive ready — 100000 catalog items, read-only."))
         #expect(elapsed < .seconds(4),
                 "shell snapshot + typed dispatch took \(elapsed) for 100k records")
     }
@@ -1068,7 +1096,7 @@ struct HallieShellCLITests {
             reference: .explicitYear(2000)))])
         harness.profileLoadResult = corrupt
         let options = try HallieShellCLI.parse(arguments: [
-            "--hallie", "--once", "How old was Donna in 2000?",
+            "--hallie", "--diagnostics", "--once", "How old was Donna in 2000?",
         ])
         let code = await HallieShellCLI.run(
             options: options, output: { harness.output.append($0) },
