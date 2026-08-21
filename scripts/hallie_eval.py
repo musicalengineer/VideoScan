@@ -53,6 +53,11 @@ def build_stdin(questions, reset_between=True):
     return "\n".join(lines) + "\n"
 
 
+def normalize_question(text):
+    """Loose key for pairing a logged turn back to its corpus entry."""
+    return " ".join((text or "").lower().split())
+
+
 def newest_build():
     """The most recently built VideoScan binary among the places this repo
     builds to. Newest wins; None when nothing is built."""
@@ -132,6 +137,7 @@ def run(args):
     elapsed = time.time() - t0
     print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
 
+    unmatched = []
     turns = read_log_turns(log, before)
     # Pair: assistant turns carry `outcome`; user turns don't. Walk in order.
     pairs, pending = [], None
@@ -142,16 +148,28 @@ def run(args):
         pairs.append((pending, t))
         pending = None
 
-    # Align to corpus by order, skipping the :reset/:quit meta turns.
+    # Align by the QUESTION TEXT the log recorded, never by position: a turn
+    # that logs nothing (or twice) used to shift every later label, which
+    # attributed "Have a good night." to the temporal category and made
+    # per-category numbers untrustworthy (2026-08-21). Duplicate texts are
+    # consumed in order, so repeated phrasings still line up.
+    by_text = {}
+    for index, q in enumerate(questions):
+        by_text.setdefault(normalize_question(q["text"]), []).append(index)
+    used = set()
+
     records = []
-    qi = 0
     for asked, ans in pairs:
         if asked is not None and asked.strip().startswith(":"):
             continue
-        if qi >= len(questions):
-            break
+        key = normalize_question(asked or "")
+        candidates = [i for i in by_text.get(key, []) if i not in used]
+        if not candidates:
+            unmatched.append(asked)
+            continue
+        qi = candidates[0]
+        used.add(qi)
         q = questions[qi]
-        qi += 1
         records.append(
             {
                 "id": q.get("id"),
@@ -189,7 +207,12 @@ def run(args):
             f.write(json.dumps(r) + "\n")
     print(f"[eval] wrote {len(records)} paired turns → {out}")
     if len(records) < len(questions):
-        print(f"[eval] WARNING: {len(questions) - len(records)} questions produced no logged turn")
+        missing = [q["id"] for i, q in enumerate(questions) if i not in used]
+        print(f"[eval] WARNING: {len(questions) - len(records)} questions produced no "
+              f"matched turn: {', '.join(missing[:12])}"
+              + (" …" if len(missing) > 12 else ""))
+    if unmatched:
+        print(f"[eval] WARNING: {len(unmatched)} logged turns matched no corpus question")
     if proc.returncode != 0:
         print(proc.stderr[-2000:], file=sys.stderr)
     return 0
