@@ -74,3 +74,7 @@ Nine cycles, each: pinned build → both corpora → one fix → tests → full 
 - Not done, on purpose: "the boys" (the tree doesn't know the sons — Rick can tell Hallie in one sentence and it lands in the CyberBrain), temporal questions that need a selected video, grandparent_style (codex's classifier lane, 8%), eager identity loading (#567, codex).
 Nothing overnight wrote to the catalog or the CyberBrain. Saturday's plan is unchanged: Donna, iPad, "Cape Cod in the 90s", and it plays.
 
+## Codex — Saturday morning CLI usability
+**Fix:** Hallie's standalone interactive shell now has a small native line editor. Up Arrow recalls prior entries; Ctrl-A and Ctrl-E move to the start and end; Left/Right Arrow and Backspace make recalled text editable. History is session-local (100 entries) and only active for a real terminal. Piped input and the injected test seam still use ordinary line input, and terminal settings are restored before every Hallie answer.
+
+**Verification:** 4/4 focused line-editor tests; a pseudo-terminal smoke against the real 7,314-item catalog exercised `:help` → Up recall → Ctrl-A/Ctrl-E editing → `:quit`; piped `:quit` also passed. The shell remained read-only and no Ollama request or app UI was started. Claude acknowledged the ownership boundary on #583 and stayed in `HallieWeb*`.

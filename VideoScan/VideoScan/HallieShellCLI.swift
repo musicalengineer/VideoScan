@@ -475,7 +475,7 @@ enum HallieShellCLI {
     /// scene. The catalog is decoded once and never mutated or saved.
     static func run(
         options: Options,
-        input: @escaping () -> String? = { readLine() },
+        input: (() -> String?)? = nil,
         output: @escaping (String) -> Void = {
             print($0)
             fflush(stdout)
@@ -528,9 +528,16 @@ enum HallieShellCLI {
         output(options.diagnostics
             ? help
             : "Type :help for commands; :quit to leave.")
+        var terminalInput = HallieTerminalLineReader()
         while true {
-            output("hallie> ")
-            guard let raw = input() else { return 0 }
+            let raw: String?
+            if let input {
+                output("hallie> ")
+                raw = input()
+            } else {
+                raw = terminalInput.readLine(prompt: "hallie> ")
+            }
+            guard let raw else { return 0 }
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { continue }
             if line.hasPrefix(":") {
