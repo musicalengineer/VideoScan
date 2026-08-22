@@ -169,6 +169,7 @@ struct ArchivistChatWindow: View {
     @State private var transcriptSequence: UInt64 = 0
     @State private var loggedMessageIDs: Set<UUID> = []
     @State private var input = ""
+    @State private var inputHistory = ArchivistChatInputHistory()
     @State private var isThinking = false
     @State private var activeRequestID: UUID?
     @State private var activeRequestTask: Task<Void, Never>?
@@ -285,6 +286,9 @@ struct ArchivistChatWindow: View {
                     .controlSize(.large)
                     .focused($inputFocused)
                     .onSubmit(send)
+                    .onKeyPress(keys: [.upArrow, .downArrow]) {
+                        handleInputHistoryKey($0)
+                    }
                     .disabled(isThinking)
                     .accessibilityIdentifier("archivist.chatInput")
                 Button("Ask", action: send)
@@ -792,8 +796,25 @@ struct ArchivistChatWindow: View {
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isThinking else { return }
+        inputHistory.record(text)
         input = ""
         ask(text)
+    }
+
+    private func handleInputHistoryKey(
+        _ press: KeyPress
+    ) -> KeyPress.Result {
+        let recalled: String?
+        if press.key == .upArrow {
+            recalled = inputHistory.previous(current: input)
+        } else if press.key == .downArrow {
+            recalled = inputHistory.next()
+        } else {
+            return .ignored
+        }
+        guard let recalled else { return .ignored }
+        input = recalled
+        return .handled
     }
 
     private func handle(chip: ArchivistMessage.Chip) {
