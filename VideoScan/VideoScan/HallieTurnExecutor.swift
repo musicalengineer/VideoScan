@@ -684,6 +684,16 @@ enum HallieTurnExecutor {
             // continuation reads them the same way. Fresh turns only — a
             // continuation's intent already carries bound names.
             if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty {
+                // A bare "they"/"he"/"she" that nothing stood for must never
+                // be looked up as a name (cycle 5: "tell me about They").
+                if let pronoun = rawPayload.people.first(where: HalliePronounContinuity.isThirdPersonPronoun) {
+                    return Result(
+                        route: .graph, outcome: .declined,
+                        prose: HalliePronounContinuity.whoDoYouMean(pronoun),
+                        basisLine: "Basis: a pronoun with no previous answer to refer to; no family fact was looked up.",
+                        queryDescription: graphQueryDescription(rawPayload),
+                        citations: [], catalogPersonName: nil)
+                }
                 // "did my dad have brothers or sisters": the relative must
                 // be resolved BEFORE "my" is bound to the owner, or the
                 // answer is about the wrong person (cycle 4: it reported

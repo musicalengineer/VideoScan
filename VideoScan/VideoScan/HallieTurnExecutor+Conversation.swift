@@ -194,6 +194,12 @@ extension HallieTurnExecutor {
             isKnownPerson: isKnownPerson)
         switch resolution {
         case .none:
+            // "when did they get married" after "who did Rick marry": the
+            // pronoun stands for the last answer's people; say so to the
+            // translator instead of letting it guess (HalliePronounContinuity).
+            if let rewrite = HalliePronounContinuity.rewrite(question, lastPeople: memory.lastPeople) {
+                return .translate(question: rewrite.question, playAfterAnswer: playAfterAnswer)
+            }
             return .translate(question: question, playAfterAnswer: playAfterAnswer)
 
         case .searchThenPlay(let remainder):
