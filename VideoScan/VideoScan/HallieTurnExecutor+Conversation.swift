@@ -24,6 +24,11 @@ extension HallieTurnExecutor {
 
         /// The last answered result set (nil until a list answer lands).
         private(set) var lastResultSet: ResultSet?
+        /// Where the last ARCHIVE answer came from, for "where did that
+        /// come from?" / "how sure are you?" (HallieProvenanceFollowUp).
+        /// Kept across follow-ups so the question can be asked after
+        /// "play the first one" too.
+        private(set) var lastProvenance: HallieProvenanceFollowUp.Provenance?
         /// The last executed AST, list or not — the thing "and in the 90s?"
         /// refines.
         private(set) var lastAST: ArchivistQueryAST?
@@ -49,6 +54,12 @@ extension HallieTurnExecutor {
             if result.route == .reset {
                 reset()
                 return
+            }
+            switch result.route {
+            case .presence, .cross, .aggregate, .temporal, .graph, .telling:
+                lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
+            default:
+                break
             }
             guard let intent else { return }
             let ast = intent.ast
@@ -165,6 +176,11 @@ extension HallieTurnExecutor {
         }
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
+        }
+        // "Where did that come from?" — answered from the last answer's own
+        // trail, never by the model.
+        if let kind = HallieProvenanceFollowUp.detect(question) {
+            return .answer(HallieProvenanceFollowUp.answer(kind, provenance: memory.lastProvenance))
         }
         let resolution = ArchivistFollowUpResolver.resolve(
             question, snapshot: memory.followUpSnapshot,
