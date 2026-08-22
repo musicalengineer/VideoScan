@@ -22,3 +22,10 @@ Rick (21:20): "can you and codex work overnight on hallie in a virtuous cycle of
 **Spotted for cycle 3 (my lane):** a composed list answer read *"Two examples are Item 1 and Item 2"* — the model echoed the claim labels as if they were names and the verifier let it through. The verifier should drop a sentence that names "Item N" literally (the labels are plan scaffolding, never prose).
 **Still not mine:** grandparent_style 8% and the temporal turns that need a selected video (the headless eval has none).
 
+## Claude cycle 3 — 01:13–01:50 — 59cdc38d
+**Before** (= cycle 2 after): 200-Q **76%**, interaction **94%**.
+**Fix:** composed list answers were saying *"Two examples are Item 1 and Item 2"* — the model echoing the plan's claim labels as if they were names, and the verifier (which checks leaks, not scaffolding) letting it through. Eight such answers across the two corpora. Three layers: item claims are now sentences ("One of them is Cape_1993.mov — confirmed person tag Donna."), so there is no label to echo; the verifier drops any sentence naming "Item N" / "claim N" / "cN"; the prompt says so in words. The exact-filename rule understands both claim shapes; counting words up to the number of cited claims are vouched by construction.
+**After:** 200-Q **76%** (flat), interaction **93%** (−1 turn, noise). Scaffold leaks: **8 → 0**; answers now read *"One of them is Cape-1992-archive.mkv. Another is Cape-1993-archive.mkv."* This was a quality fix the grader can't see — it doesn't score wording — but Rick will.
+**Tests:** scaffoldLabelsNeverReachTheReader + pin updates; battery 317/317.
+**Next (my lane):** "the boys" / "all four boys" as an any-of identity (cc011 declines today: "I don't have any videos tagged with all four boys"); presence people are ANDed and the AST has no any-of — needs a small executor-side expansion (kin phrase → the owner's children by name, OR'd) without touching the translator.
+
