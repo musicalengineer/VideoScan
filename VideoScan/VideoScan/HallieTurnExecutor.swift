@@ -684,6 +684,15 @@ enum HallieTurnExecutor {
             // continuation reads them the same way. Fresh turns only — a
             // continuation's intent already carries bound names.
             if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty {
+                // "when did Rick get married": the tree shape has no marriage
+                // operation, so the translator reaches for birth — and the
+                // answer was a BIRTH date (cycle 6). Answer the wedding date
+                // from the tree, or decline honestly; never a birth date.
+                if let wedding = HallieMarriageDate.answer(
+                    question: request.intent.originalQuestion,
+                    payload: rawPayload, context: context) {
+                    return wedding
+                }
                 // A bare "they"/"he"/"she" that nothing stood for must never
                 // be looked up as a name (cycle 5: "tell me about They").
                 if let pronoun = rawPayload.people.first(where: HalliePronounContinuity.isThirdPersonPronoun) {

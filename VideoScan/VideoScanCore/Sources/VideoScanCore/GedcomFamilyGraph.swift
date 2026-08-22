@@ -48,6 +48,16 @@ public struct GedcomFamilyGraph: Sendable {
         var husband: String?
         var wife: String?
         var children: [String] = []
+        /// Raw GEDCOM "1 MARR / 2 DATE" text, displayed verbatim like
+        /// birth/death dates (overnight cycle 6, 2026-08-22).
+        var marriageDate: String?
+    }
+
+    /// One marriage a person is recorded in: the spouse (when the tree has
+    /// them) and the raw date string (when the family has a MARR date).
+    public struct Marriage: Sendable, Equatable {
+        public let spouse: Person?
+        public let date: String?
     }
 
     public private(set) var people: [String: Person] = [:]
@@ -60,6 +70,8 @@ public struct GedcomFamilyGraph: Sendable {
         var currentFam: (id: String, family: Family)?
         /// Which level-1 event (BIRT/DEAT) a level-2 DATE belongs to.
         var pendingEvent: String?
+        /// Same for a family record: MARR.
+        var pendingFamilyEvent: String?
 
         func flush() {
             if let person = currentIndi { people[person.id] = person }
@@ -125,10 +137,13 @@ public struct GedcomFamilyGraph: Sendable {
                 }
                 currentIndi = person
             } else if var fam = currentFam {
+                if level == 1 { pendingFamilyEvent = tag == "MARR" ? tag : nil }
                 switch (level, tag) {
                 case (1, "HUSB"): fam.family.husband = value
                 case (1, "WIFE"): fam.family.wife = value
                 case (1, "CHIL"): fam.family.children.append(value)
+                case (2, "DATE") where pendingFamilyEvent == "MARR" && fam.family.marriageDate == nil:
+                    fam.family.marriageDate = value
                 default: break
                 }
                 currentFam = fam
@@ -215,6 +230,15 @@ public struct GedcomFamilyGraph: Sendable {
     /// Resolve "<relation> of <person>" → the related people. Empty
     /// when the graph simply doesn't record it — the archivist answers
     /// honestly rather than guessing.
+    /// Every marriage the tree records for a person, in file order.
+    public func marriages(of person: Person) -> [Marriage] {
+        person.spouseOfFamilies.compactMap { id -> Marriage? in
+            guard let family = families[id] else { return nil }
+            let spouseID = [family.husband, family.wife].compactMap { $0 }.first { $0 != person.id }
+            return Marriage(spouse: spouseID.flatMap { people[$0] }, date: family.marriageDate)
+        }
+    }
+
     public func relatives(_ relation: Relation, of person: Person) -> [Person] {
         func lookup(_ id: String?) -> Person? {
             guard let id else { return nil }
