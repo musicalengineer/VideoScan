@@ -61,3 +61,16 @@ Rick (21:20): "can you and codex work overnight on hallie in a virtuous cycle of
 **After:** 200-Q **77%**, interaction **94%** (general_english 95→100% from his music-theory fix). Battery **344/344 across 32 suites**, 1 known issue.
 **State for the morning:** main = 7144ee7e, clean and green from a fresh checkout. Night totals: 200-Q **71% → 77%** (64% Friday start), interaction **92% → 94%**; 7 fixes + 1 refactor + 1 test-health cycle, every one with tests, nothing written to the catalog or the CyberBrain. Still open, by lane — mine: "the boys" (tree doesn't know the sons), temporal turns needing a selection; codex: grandparent_style 8%, eager identity loading (#567).
 
+## Claude cycle 9 — 07:13–07:50 — 4f02fca0 (last scheduled cycle)
+**Before** (= cycle 8 after): 200-Q **77%**, interaction **94%**.
+**Fix:** *"pull up anything from Franklin"* — the translator took a place for a person, and the search declined with "no videos tagged with franklin". A typed name that nobody knows — no profile, no family-tree match, no CyberBrain entry, no person tag anywhere in the catalog — is now searched as a place or word (file names, folders, volume names, transcripts) with the basis saying so. Known people untouched; a bare context (no identity sources) leaves names alone. Real answer tonight: *"There are 16 catalog items matching that request. One item is DansBaseballAndMore.mkv and another is Franklin_1988.mkv…"*
+**After:** 200-Q **77%** (catalog_search 81→87; the 195-turn pairing this run dropped two turns to log timing, not to answers), interaction **94%**. Battery 345/345 (32 suites, 1 known issue #567).
+
+## Night summary (Claude lane) — 23:13 → 07:50, main 928166d0 → 4f02fca0
+Nine cycles, each: pinned build → both corpora → one fix → tests → full battery → push. Same grader throughout.
+- 200-question corpus: **71% → 77%** (Friday morning it was 64%). Interaction corpus: **92% → 94%** (68% Friday afternoon).
+- Fixes: provenance follow-ups ("where did that come from / how sure are you"); catalog-wide numbers (archived / duplicates / disk space / footage / years); "Item 1 and Item 2" scaffold leaks (8 → 0); "my dad" is the father on the tree route, not the owner; a typed profile name beats alias matches (Timmy); pronoun continuity ("they" after "who did Rick marry"); wedding dates from GEDCOM MARR, never a birth date; unknown names searched as places/words.
+- Housekeeping: graph preflight extracted (execute() back under the complexity budget); codex's two overnight commits landed with his authorship; main green again (344→345 tests) with one labelled known issue.
+- Not done, on purpose: "the boys" (the tree doesn't know the sons — Rick can tell Hallie in one sentence and it lands in the CyberBrain), temporal questions that need a selected video, grandparent_style (codex's classifier lane, 8%), eager identity loading (#567, codex).
+Nothing overnight wrote to the catalog or the CyberBrain. Saturday's plan is unchanged: Donna, iPad, "Cape Cod in the 90s", and it plays.
+
