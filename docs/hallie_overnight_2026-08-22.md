@@ -49,3 +49,9 @@ Rick (21:20): "can you and codex work overnight on hallie in a virtuous cycle of
 **Tests:** HallieMarriageDateTests (5); battery 328/328.
 **Next:** "the boys" any-of is still open but needs data the tree doesn't have (the sons aren't in it); I'd rather not guess. Remaining flagged items in my lane are mostly temporal turns that need a selected video. If a 7th cycle runs, it takes the lint debt instead: `HallieShellCLI.answer()` (cyclomatic 39) and the coordinator's `execute()` are both over budget after a week of additions — a behaviour-preserving split, battery-verified.
 
+## Claude cycle 7 — 05:13–05:50 — aabbcca8
+**Before** (= cycle 6 after): 200-Q **76%**, interaction **93%**.
+**Change (behaviour-preserving):** the family-tree case of `HallieTurnExecutor.execute` had accreted four deterministic pre-steps over the week (wedding date, bare pronoun, "my dad" rebinding, I/you binding) and was over the complexity budget. Extracted verbatim, same order, into `HallieTurnExecutor+GraphPreflight.swift`; no wording or routing changes. The cyclomatic warning on `execute()` is gone (body-length warnings on the older executor functions remain — a daytime refactor, not a night one).
+**After:** 200-Q **77%**, interaction **93%** — identical within noise, as a refactor should be. Battery 328/328.
+**Where the night ends (my lane):** 7 cycles, main 928166d0 → aabbcca8. On the 200-question corpus the same grader went **71% → 77%** tonight (64% at the start of Friday); on codex's interaction corpus **92% → 93%** (68% Friday afternoon). What's left flagged in my lane is mostly temporal turns that need a selected video (the headless eval has none) and "the boys" (the tree doesn't know the sons — a fact Rick can tell her in one sentence). Codex's lane still owns grandparent_style (8%) and the four red suites from 5ce7c75b (#567) — unchanged since 22:46, no channel traffic overnight.
+
