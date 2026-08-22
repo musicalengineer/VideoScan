@@ -139,11 +139,36 @@ enum HallieWebPage {
           }
           function playInline(container, c) {
             var old = container.querySelector('video'); if (old) old.remove();
-            var v = document.createElement('video');
-            v.controls = true; v.playsInline = true; v.src = c.url + (key ? ('?key=' + encodeURIComponent(key)) : '');
-            container.appendChild(v);
-            v.play().catch(function () {});
-            log.scrollTop = log.scrollHeight;
+            var oldNote = container.querySelector('.preparing'); if (oldNote) oldNote.remove();
+            var src = c.url + (key ? ('?key=' + encodeURIComponent(key)) : '');
+            function start() {
+              var v = document.createElement('video');
+              v.controls = true; v.playsInline = true; v.src = src;
+              container.appendChild(v);
+              v.play().catch(function () {});
+              log.scrollTop = log.scrollHeight;
+            }
+            if (c.native) { start(); return; }
+            // A tape Safari can't decode: the Mac prepares an access copy once.
+            var note = document.createElement('div'); note.className = 'tiny preparing';
+            note.textContent = 'Preparing this one for the iPad…'; container.appendChild(note);
+            var ticks = 0;
+            function poll() {
+              fetch(c.url + '/status' + (key ? ('?key=' + encodeURIComponent(key)) : ''), { headers: { 'X-Hallie-Key': key } })
+                .then(function (r) { return r.json(); })
+                .then(function (s) {
+                  if (s.state === 'ready') { note.remove(); start(); return; }
+                  if (s.state === 'failed' || s.state === 'unavailable') { note.textContent = "I couldn't prepare that one for the iPad" + (s.reason ? ' — ' + s.reason : '') + '.'; return; }
+                  ticks += 1;
+                  note.textContent = 'Preparing this one for the iPad… ' + (s.seconds ? s.seconds + 's' : '') + (ticks > 60 ? ' (a long tape takes a few minutes)' : '');
+                  setTimeout(poll, 2000);
+                })
+                .catch(function () { setTimeout(poll, 4000); });
+            }
+            // Kick the encode, then poll.
+            fetch(src, { headers: { 'X-Hallie-Key': key, 'Range': 'bytes=0-0' } }).then(function (r) {
+              if (r.status === 200 || r.status === 206) { note.remove(); start(); } else { poll(); }
+            }).catch(poll);
           }
           var busy = false;
           function send(payload) {

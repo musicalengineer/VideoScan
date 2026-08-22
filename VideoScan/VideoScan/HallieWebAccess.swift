@@ -35,6 +35,13 @@ final class HallieWebAccess: ObservableObject {
         let port = UInt16(clamping: defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort)
         stop()
         guard enabled, let model else { return }
+        // Access copies for tapes Safari can't decode (HallieWebProxy):
+        // 720p H.264 by default, in Application Support unless Rick points
+        // them elsewhere; the HDD one-reader rule comes from the catalog's
+        // volume roles, same rule the file-operations gate uses.
+        let proxyCache = HallieWebProxyCache(
+            directory: HallieWebProxyPlan.directory(defaults),
+            height: HallieWebProxyPlan.height(defaults))
         let bridge = HallieWebBridge(
             records: { [weak model] in model?.records ?? [] },
             record: { [weak model] id in model?.record(forID: id) },
@@ -49,10 +56,19 @@ final class HallieWebAccess: ObservableObject {
                     hosts: OllamaEndpoints.resolved(from: d),
                     modelName: d.string(forKey: "archivist.ollamaModel") ?? "qwen3.6:35b-a3b-nvfp4",
                     composeWithModel: HallieCompositionSettings.isEnabled(d))
+            },
+            proxy: proxyCache,
+            isSpinningDisk: { [weak model] path in
+                guard let model else { return false }
+                return model.scanTargets
+                    .filter { !$0.searchPath.isEmpty && path.hasPrefix($0.searchPath) }
+                    .max(by: { $0.searchPath.count < $1.searchPath.count })?
+                    .mediaTech == .hdd
             })
         let server = HallieWebServer { request, peer in
             await bridge.handle(request, peer: peer)
         }
+
         do {
             try server.start(port: port)
             self.server = server

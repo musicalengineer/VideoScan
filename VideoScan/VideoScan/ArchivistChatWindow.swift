@@ -291,6 +291,17 @@ struct ArchivistChatWindow: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(isThinking
                               || input.trimmingCharacters(in: .whitespaces).isEmpty)
+                // Rick 2026-08-22: "don't see a speaker setting in hallie" —
+                // the sheet was only reachable by right-clicking the portrait.
+                Button {
+                    showSpeakerSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Who is talking to her, and letting the family use her from the iPad or laptop")
+                .accessibilityLabel("Hallie settings")
             }
             .padding(10)
         }

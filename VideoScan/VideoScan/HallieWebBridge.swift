@@ -33,10 +33,17 @@ final class HallieWebBridge {
         var composeWithModel: Bool
     }
 
-    /// Safari can play these straight from the Mac. Everything else is
-    /// offered honestly as "plays on the Mac only" — no transcoding.
+    /// Safari plays these straight from the Mac; anything else that is
+    /// video goes through the proxy cache (HallieWebProxy) when one is
+    /// attached, and is "plays on the Mac only" otherwise.
     static let browserPlayableExtensions: Set<String> = [
-        "mp4", "m4v", "mov", "mp3", "m4a", "aac", "wav", "aif", "aiff",
+        "mp4", "m4v", "mp3", "m4a", "aac", "wav", "aif", "aiff",
+    ]
+    /// .mov is native ONLY when its codec is H.264/HEVC; ProRes/DV-in-MOV
+    /// must go through the proxy like any other tape.
+    static let nativeMovCodecs: Set<String> = ["h264", "avc1", "hevc", "hvc1", "h265", "avc"]
+    static let proxyableExtensions: Set<String> = [
+        "mov", "mxf", "dv", "avi", "mkv", "mts", "m2ts", "ts", "mpg", "mpeg", "wmv", "vob", "3gp", "flv", "webm", "m2v",
     ]
 
     private var sessions: [String: Session] = [:]
@@ -44,18 +51,26 @@ final class HallieWebBridge {
     private let record: @MainActor (UUID) -> VideoRecord?
     private let configuration: @MainActor () -> Configuration
     private let dependencies: HallieAppTurnCoordinator.Dependencies
+    /// Access copies for tapes Safari can't decode; nil = no proxies.
+    private let proxy: HallieWebProxyCache?
+    /// The HDD one-reader rule, answered by the catalog's volume roles.
+    private let isSpinningDisk: @MainActor (String) -> Bool
     static let sessionIdleLimit: TimeInterval = 6 * 60 * 60
 
     init(
         records: @escaping @MainActor () -> [VideoRecord],
         record: @escaping @MainActor (UUID) -> VideoRecord?,
         configuration: @escaping @MainActor () -> Configuration,
-        dependencies: HallieAppTurnCoordinator.Dependencies = .live
+        dependencies: HallieAppTurnCoordinator.Dependencies = .live,
+        proxy: HallieWebProxyCache? = nil,
+        isSpinningDisk: @escaping @MainActor (String) -> Bool = { _ in false }
     ) {
         self.records = records
         self.record = record
         self.configuration = configuration
         self.dependencies = dependencies
+        self.proxy = proxy
+        self.isSpinningDisk = isSpinningDisk
     }
 
     // MARK: - Routing
@@ -68,9 +83,13 @@ final class HallieWebBridge {
         case ("POST", "/api/ask"):
             guard authorized(request, config) else { return .text(401, "passphrase") }
             return await ask(request, config: config)
+        case ("GET", let path) where path.hasPrefix("/api/media/") && path.hasSuffix("/status"):
+            guard authorized(request, config) else { return .text(401, "passphrase") }
+            let id = String(path.dropFirst("/api/media/".count).dropLast("/status".count))
+            return await mediaStatus(recordID: id)
         case ("GET", let path) where path.hasPrefix("/api/media/"):
             guard authorized(request, config) else { return .text(401, "passphrase") }
-            return media(request, recordID: String(path.dropFirst("/api/media/".count)))
+            return await media(request, recordID: String(path.dropFirst("/api/media/".count)))
         case ("GET", "/api/ping"):
             return .json(["ok": true, "name": config.archivistName])
         default:
@@ -227,28 +246,91 @@ final class HallieWebBridge {
         ]
     }
 
+    /// How a record can reach the page: straight from the Mac, through a
+    /// proxy, or not at all.
+    enum Delivery: Equatable { case native, proxy, none }
+
+    func delivery(for record: VideoRecord) -> Delivery {
+        let ext = (record.fullPath as NSString).pathExtension.lowercased()
+        guard record.isPlayable != "No" else { return .none }
+        if Self.browserPlayableExtensions.contains(ext) { return .native }
+        if ext == "mov", Self.nativeMovCodecs.contains(record.videoCodec.lowercased()) { return .native }
+        if proxy != nil, Self.proxyableExtensions.contains(ext) || ext == "mov" { return .proxy }
+        return .none
+    }
+
+    /// Delivery judged from the filename alone — for a citation whose
+    /// record is not loadable right now (tests, or a row that vanished).
+    func delivery(forFilename filename: String) -> Delivery {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        if Self.browserPlayableExtensions.contains(ext) { return .native }
+        if proxy != nil, Self.proxyableExtensions.contains(ext) || ext == "mov" { return .proxy }
+        return ext == "mov" ? .native : .none
+    }
+
     private func citationJSON(_ citation: HallieTurnExecutor.Citation) -> [String: Any] {
-        let ext = (citation.filename as NSString).pathExtension.lowercased()
-        let playable = Self.browserPlayableExtensions.contains(ext)
-            && (record(citation.recordID)?.isPlayable ?? "") != "No"
+        let how = record(citation.recordID).map(delivery(for:)) ?? delivery(forFilename: citation.filename)
         return [
             "id": citation.recordID.uuidString,
             "filename": citation.filename,
-            "playable": playable,
+            "playable": how != .none,
+            "native": how == .native,
             "url": "/api/media/\(citation.recordID.uuidString)",
         ]
     }
 
     // MARK: - Media
 
-    private func media(_ request: HallieHTTPRequest, recordID: String) -> HallieHTTPResponse {
+    /// JSON for the page's "preparing…" poll.
+    private func mediaStatus(recordID: String) async -> HallieHTTPResponse {
         guard let id = UUID(uuidString: recordID), let record = record(id) else {
             return .text(404, "no such item")
         }
-        let url = URL(fileURLWithPath: record.fullPath)
-        let ext = url.pathExtension.lowercased()
-        guard Self.browserPlayableExtensions.contains(ext) else {
+        switch delivery(for: record) {
+        case .native: return .json(["state": "ready", "native": true])
+        case .none: return .json(["state": "unavailable", "reason": "plays on the Mac only"])
+        case .proxy:
+            guard let proxy else { return .json(["state": "unavailable"]) }
+            switch await proxy.status(for: id) {
+            case .ready: return .json(["state": "ready", "native": false])
+            case .preparing(let started):
+                return .json(["state": "preparing", "seconds": Int(Date().timeIntervalSince(started))])
+            case .failed(let why): return .json(["state": "failed", "reason": why])
+            case .notStarted: return .json(["state": "notStarted"])
+            }
+        }
+    }
+
+    private func media(_ request: HallieHTTPRequest, recordID: String) async -> HallieHTTPResponse {
+        guard let id = UUID(uuidString: recordID), let record = record(id) else {
+            return .text(404, "no such item")
+        }
+        var url = URL(fileURLWithPath: record.fullPath)
+        var ext = url.pathExtension.lowercased()
+        switch delivery(for: record) {
+        case .none:
             return .text(415, "this one plays on the Mac only")
+        case .proxy:
+            guard let proxy else { return .text(415, "this one plays on the Mac only") }
+            guard FileManager.default.fileExists(atPath: record.fullPath) else {
+                return .text(404, "that file isn't reachable right now (volume offline?)")
+            }
+            let root = MediaVolumeGatePolicy.volumeRoot(forPath: record.fullPath)
+            let spinning = isSpinningDisk(record.fullPath)
+            switch await proxy.ensure(recordID: id, sourcePath: record.fullPath,
+                                      volumeRoot: root, volumeIsSpinningDisk: spinning) {
+            case .ready(let proxyURL):
+                url = proxyURL
+                ext = "mp4"
+            case .preparing(let started):
+                return .json(["state": "preparing", "seconds": Int(Date().timeIntervalSince(started))], status: 202)
+            case .failed(let why):
+                return .text(415, "I couldn't prepare that one for the iPad: \(why)")
+            case .notStarted:
+                return .json(["state": "preparing", "seconds": 0], status: 202)
+            }
+        case .native:
+            break
         }
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = (attributes[.size] as? NSNumber)?.int64Value, size > 0 else {
