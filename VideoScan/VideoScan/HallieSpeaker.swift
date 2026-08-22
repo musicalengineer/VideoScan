@@ -27,6 +27,11 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     @Published private(set) var isSpeaking = false
     private let synthesizer = AVSpeechSynthesizer()
+    private var neuralTask: Task<Void, Never>?
+    private var neuralJob: HallieNeuralSpeechJob?
+    private var neuralPlayer: AVAudioPlayer?
+    private var neuralAudioURL: URL?
+    private var speechGeneration: UInt = 0
 
     override private init() {
         super.init()
@@ -105,8 +110,20 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     func speak(_ text: String) {
         stop()
+        let sentences = Self.sentences(text)
+        guard !sentences.isEmpty else { return }
+
+        if let voice = HallieNeuralVoice.selected(UserDefaults.standard.string(forKey: Self.voiceKey)),
+           HallieNeuralSpeech.isInstalled {
+            speakNeural(sentences.joined(separator: " "), voice: voice)
+        } else {
+            speakWithApple(sentences)
+        }
+    }
+
+    private func speakWithApple(_ sentences: [String]) {
         let voice = Self.bestVoice()
-        for sentence in Self.sentences(text) {
+        for sentence in sentences {
             let utterance = AVSpeechUtterance(string: sentence)
             utterance.voice = voice
             utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Self.rateFactor
@@ -114,10 +131,51 @@ final class HallieSpeaker: NSObject, ObservableObject {
             utterance.postUtteranceDelay = 0.18
             synthesizer.speak(utterance)
         }
-        isSpeaking = !Self.sentences(text).isEmpty
+        isSpeaking = true
+    }
+
+    private func speakNeural(_ text: String, voice: HallieNeuralVoice) {
+        isSpeaking = true
+        let generation = speechGeneration
+        let job = HallieNeuralSpeech.job(for: text, voice: voice)
+        neuralJob = job
+        neuralTask = Task { [weak self] in
+            do {
+                let audioURL = try await job.synthesize()
+                guard let self, generation == self.speechGeneration, !Task.isCancelled else {
+                    HallieNeuralSpeech.removeTemporaryAudio(audioURL)
+                    return
+                }
+                let player = try AVAudioPlayer(contentsOf: audioURL)
+                player.delegate = self
+                player.prepareToPlay()
+                self.neuralAudioURL = audioURL
+                self.neuralPlayer = player
+                self.neuralJob = nil
+                if !player.play() {
+                    throw HallieNeuralSpeech.Failure.missingOutput
+                }
+            } catch {
+                guard let self, generation == self.speechGeneration, !Task.isCancelled else { return }
+                NSLog("VideoScan: Hallie neural voice unavailable; using Apple speech: %@",
+                      error.localizedDescription)
+                self.neuralTask = nil
+                self.neuralJob = nil
+                self.speakWithApple(Self.sentences(text))
+            }
+        }
     }
 
     func stop() {
+        speechGeneration &+= 1
+        neuralTask?.cancel()
+        neuralTask = nil
+        neuralJob?.cancel()
+        neuralJob = nil
+        neuralPlayer?.stop()
+        neuralPlayer = nil
+        HallieNeuralSpeech.removeTemporaryAudio(neuralAudioURL)
+        neuralAudioURL = nil
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         isSpeaking = false
     }
@@ -136,5 +194,33 @@ extension HallieSpeaker: AVSpeechSynthesizerDelegate {
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in self.isSpeaking = false }
+    }
+}
+
+extension HallieSpeaker: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            guard player === self.neuralPlayer else { return }
+            self.neuralPlayer = nil
+            self.neuralTask = nil
+            self.neuralJob = nil
+            HallieNeuralSpeech.removeTemporaryAudio(self.neuralAudioURL)
+            self.neuralAudioURL = nil
+            self.isSpeaking = false
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            guard player === self.neuralPlayer else { return }
+            NSLog("VideoScan: Hallie neural audio playback failed: %@",
+                  error?.localizedDescription ?? "unknown playback error")
+            self.neuralPlayer = nil
+            self.neuralTask = nil
+            self.neuralJob = nil
+            HallieNeuralSpeech.removeTemporaryAudio(self.neuralAudioURL)
+            self.neuralAudioURL = nil
+            self.isSpeaking = false
+        }
     }
 }

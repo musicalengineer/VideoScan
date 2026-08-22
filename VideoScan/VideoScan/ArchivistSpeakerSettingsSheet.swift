@@ -142,9 +142,18 @@ struct HallieReadAloudSettings: View {
                     Text("Voice")
                     Picker("", selection: $voiceID) {
                         Text("Best installed (\(voices.first?.name ?? "system"))").tag("")
-                        ForEach(voices, id: \.identifier) { voice in
-                            Text(voice.name + (voice.quality == .premium ? " ★★" : voice.quality == .enhanced ? " ★" : ""))
-                                .tag(voice.identifier)
+                        if HallieNeuralSpeech.isInstalled {
+                            Section("Local neural voices") {
+                                ForEach(HallieNeuralVoice.choices) { voice in
+                                    Text(voice.displayName + " ✦").tag(voice.id)
+                                }
+                            }
+                        }
+                        Section("Apple voices") {
+                            ForEach(voices, id: \.identifier) { voice in
+                                Text(voice.name + (voice.quality == .premium ? " ★★" : voice.quality == .enhanced ? " ★" : ""))
+                                    .tag(voice.identifier)
+                            }
                         }
                     }
                     .labelsHidden()
@@ -154,7 +163,9 @@ struct HallieReadAloudSettings: View {
                         .controlSize(.small)
                 }
                 .font(.system(size: 13))
-                Text("★★ premium and ★ enhanced voices sound far more natural. Download them in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices… (Ava, Zoe, Allison are the softest).")
+                Text(HallieNeuralSpeech.isInstalled
+                     ? "✦ voices are private, local neural speech. ★★ premium and ★ enhanced voices are Apple's installed alternatives."
+                     : "★★ premium and ★ enhanced voices sound far more natural. Download them in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices… (Ava, Zoe, Allison are the softest).")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

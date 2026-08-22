@@ -28,7 +28,10 @@ struct HallieSpeakerTests {
     }
 
     @Test func theChosenVoiceWinsWhenInstalledAndSpeakingIsOnByDefault() {
-        let defaults = UserDefaults(suiteName: "HallieSpeakerTests.\(UUID().uuidString)")!
+        guard let defaults = UserDefaults(suiteName: "HallieSpeakerTests.\(UUID().uuidString)") else {
+            Issue.record("Could not create isolated user defaults")
+            return
+        }
         #expect(HallieSpeaker.isEnabled(defaults), "seniors shouldn't have to find a switch to hear her")
         defaults.set(false, forKey: HallieSpeaker.enabledKey)
         #expect(!HallieSpeaker.isEnabled(defaults))
@@ -39,5 +42,21 @@ struct HallieSpeakerTests {
         defaults.set("com.apple.nonexistent.voice", forKey: HallieSpeaker.voiceKey)
         #expect(HallieSpeaker.bestVoice(defaults)?.identifier == HallieSpeaker.englishVoices().first?.identifier,
                 "an uninstalled choice falls back to the best installed")
+    }
+
+    @Test func neuralVoiceIdentifiersAreStableAndDoNotMasqueradeAsAppleVoices() {
+        #expect(HallieNeuralVoice.choices.map(\.id) == [
+            "kokoro:af_heart", "kokoro:af_bella", "kokoro:af_sarah", "kokoro:bf_emma",
+        ])
+        #expect(HallieNeuralVoice.selected("kokoro:af_heart")?.modelName == "af_heart")
+        #expect(HallieNeuralVoice.selected("com.apple.voice.premium.en-US.Ava") == nil)
+
+        guard let defaults = UserDefaults(suiteName: "HallieSpeakerTests.\(UUID().uuidString)") else {
+            Issue.record("Could not create isolated user defaults")
+            return
+        }
+        defaults.set("kokoro:af_heart", forKey: HallieSpeaker.voiceKey)
+        #expect(HallieSpeaker.bestVoice(defaults)?.identifier == HallieSpeaker.englishVoices().first?.identifier,
+                "Apple speech remains the fallback when the neural helper is unavailable")
     }
 }
