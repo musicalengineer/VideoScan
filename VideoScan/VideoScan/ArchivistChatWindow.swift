@@ -400,28 +400,6 @@ struct ArchivistChatWindow: View {
     /// from the archive; the name edits in place.
     private var identityHeader: some View {
         HStack(spacing: 10) {
-            // Rick 2026-08-22: "the settings button should be upper left…
-            // a larger icon — we're dealing with senior citizens."
-            VStack(spacing: 3) {
-                Button {
-                    showSpeakerSettings = true
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 30, weight: .regular))
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(Color.secondary.opacity(0.12)))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Settings — who is talking, read aloud, and letting the family use her from the iPad or laptop")
-                .accessibilityLabel("Hallie settings")
-                Text("Settings")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.trailing, 18)
-            .frame(maxHeight: .infinity, alignment: .top)
-
             Button(action: choosePhoto) {
                 Group {
                     if !archivistPhotoPath.isEmpty,
@@ -526,9 +504,29 @@ struct ArchivistChatWindow: View {
                 }
             }
             Spacer()
+            // Rick 2026-08-22: Hallie on the left, settings far right by
+            // the sparkle — large, labelled, for older eyes.
+            VStack(spacing: 4) {
+                Button {
+                    showSpeakerSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 26, weight: .regular))
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.secondary.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Settings — who is talking, read aloud, and letting the family use her from the iPad or laptop")
+                .accessibilityLabel("Hallie settings")
+                Text("Settings")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
             Image(systemName: "sparkles")
                 .font(.title3)
                 .foregroundStyle(.purple)
+                .padding(.leading, 6)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1860,24 +1858,58 @@ private struct FlowChips: View {
     let onTap: (ArchivistMessage.Chip) -> Void
 
     var body: some View {
-        // Simple vertical stack of wrapping HStacks is overkill here —
-        // chips are few (≤4 refinements / ≤4 names); one wrapping grid
-        // row does the job.
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), alignment: .leading)],
-                  alignment: .leading, spacing: 4) {
+        // Rick 2026-08-22 (screenshot): the adaptive grid squeezed every
+        // chip into ~90 pt — "show m…", "how ma…". A real flow layout sizes
+        // each chip to its whole label and wraps to the next line.
+        ChipFlow(spacing: 8) {
             ForEach(chips) { chip in
                 Button {
                     onTap(chip)
                 } label: {
                     Text(chip.label)
-                        .font(.system(size: 16))
-                        .lineLimit(1)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .font(.system(size: 17))
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
                         .background(Capsule().fill(Color.accentColor.opacity(0.14)))
                 }
                 .buttonStyle(.plain)
+                .help(chip.label)
             }
+        }
+    }
+}
+
+/// Left-to-right, wrapping at the container's width; every subview keeps
+/// its natural size (no truncation). macOS 13+ `Layout`.
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0; y += rowHeight + spacing; rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return CGSize(width: width == .infinity ? maxX : min(width, max(maxX, 0)), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX; y += rowHeight + spacing; rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
