@@ -373,10 +373,18 @@ enum HallieAppTurnCoordinator {
             return handled
         }
 
+        let repair = HallieSpellingRecovery.repairRequestOpener(question)
+        let routingQuestion = repair.text
+        if let original = repair.originalWord,
+           let replacement = repair.replacementWord {
+            appLog.write(
+                "Hallie: repaired request opener “\(original)” → “\(replacement)”")
+        }
+
         // Identity sources are loaded lazily and off-main, only if the
         // resolver actually needs to ask "is 'matt' a person?".
         let preTranslation = try await preTranslationOffMain(
-            question: question, playAfterAnswer: playAfterAnswer,
+            question: routingQuestion, playAfterAnswer: playAfterAnswer,
             memory: memory, dependencies: dependencies)
         try Task.checkCancellation()
 
@@ -458,7 +466,7 @@ enum HallieAppTurnCoordinator {
                     responderHost = translation.responderHost
                 } else {
                     let social = await dependencies.composeConversation(
-                        kind, question, history, effectiveHosts, modelName)
+                        kind, routingQuestion, history, effectiveHosts, modelName)
                     try Task.checkCancellation()
                     let result = HallieSocialConversation.result(for: social.value)
                     return Response(
@@ -667,15 +675,12 @@ enum HallieAppTurnCoordinator {
                 graph = dependencies.loadGraph()
                 cyberBrain = dependencies.loadCyberBrain()
             case .presence, .cross:
-                if needsBirthYear {
-                    profiles = dependencies.loadProfiles()
-                    graph = dependencies.loadGraph()
-                    cyberBrain = dependencies.loadCyberBrain()
-                } else {
-                    profiles = []
-                    graph = nil
-                    cyberBrain = nil
-                }
+                // People + CyberBrain provide the closed vocabulary for safe
+                // spelling recovery ("rick brren" → profile tag "Rick").
+                // GEDCOM is larger and remains age-phrase-only here.
+                profiles = dependencies.loadProfiles()
+                graph = needsBirthYear ? dependencies.loadGraph() : nil
+                cyberBrain = dependencies.loadCyberBrain()
             case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
                 profiles = []

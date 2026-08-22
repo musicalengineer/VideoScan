@@ -48,7 +48,11 @@ extension ArchivistGraphExecutor {
         }
 
         var floating = floatingSelection
-        var resolved: [(GedcomFamilyGraph.Person, ArchivistGraphEvidence.IdentityBridge?)] = []
+        var resolved: [(
+            GedcomFamilyGraph.Person,
+            ArchivistGraphEvidence.IdentityBridge?,
+            String?
+        )] = []
         for index in 0..<2 {
             var selection = subjects.indices.contains(index) ? subjects[index] : .unresolved
             var outcome = resolveSubject(names[index], selection: selection,
@@ -66,14 +70,19 @@ extension ArchivistGraphExecutor {
             switch outcome {
             case .result(let result):
                 return result.taggingSubject(index)
-            case .person(let person, let bridge):
-                resolved.append((person, bridge))
+            case .person(let person, let bridge, let correction):
+                resolved.append((person, bridge, correction))
             }
         }
-        return describeRelationship(
+        var result = describeRelationship(
             from: resolved[0].0, to: resolved[1].0,
             bridges: [resolved[0].1, resolved[1].1],
             voices: query.voices, graph: inputs.graph)
+        for item in resolved {
+            result = applyingSpellingCorrection(
+                item.2, canonicalName: item.0.name, to: result)
+        }
+        return result
     }
 
     /// Compose the answer for two resolved people. Pure: same tree, same

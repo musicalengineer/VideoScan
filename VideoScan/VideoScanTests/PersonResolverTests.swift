@@ -44,6 +44,34 @@ struct PersonResolverTests {
         #expect(resolver.resolve("   ") == .unknown)
     }
 
+    @Test func conservativeMisspellingsRecoverButTiesAndShortNamesDoNotGuess() {
+        let names = PersonResolver(people: [
+            ResolvablePerson(canonicalName: "Rick Breen", aliases: []),
+            ResolvablePerson(canonicalName: "Mary", aliases: []),
+            ResolvablePerson(canonicalName: "Mark", aliases: []),
+            ResolvablePerson(canonicalName: "Tim", aliases: []),
+        ])
+
+        #expect(names.resolve("Rick Brren")
+                == .resolved(canonicalName: "Rick Breen"))
+        #expect(names.resolve("Mara")
+                == .ambiguous(candidates: ["Mark", "Mary"]))
+        #expect(names.resolve("Tin") == .unknown)
+    }
+
+    @Test func requestOpenerRecoveryIsNarrowAndDeterministic() {
+        #expect(HallieSpellingRecovery.repairRequestOpener(
+            "shxw me videos of Donna").text == "show me videos of Donna")
+        #expect(HallieSpellingRecovery.repairRequestOpener(
+            "shwo me videos of Donna").text == "show me videos of Donna")
+        #expect(HallieSpellingRecovery.repairRequestOpener(
+            "yell me about yourself").text == "tell me about yourself")
+        #expect(HallieSpellingRecovery.repairRequestOpener(
+            "hello Hallie").text == "hello Hallie")
+        #expect(HallieSpellingRecovery.repairRequestOpener(
+            "hell Hallie").text == "hell Hallie")
+    }
+
     @Test func diacriticsFold() {
         let r = PersonResolver(people: [
             ResolvablePerson(canonicalName: "Renée", aliases: [])])

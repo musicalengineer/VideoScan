@@ -187,12 +187,12 @@ struct HallieAppV2IntegrationTests {
             switch HallieTurnExecutor.route(ast) {
             case .presence, .cross:
                 // Cross runs on the presence executor (person + spoken words
-                // ANDed), so it captures presence snapshots too. Neither
-                // loads identity sources unless an age phrase needs a birth
-                // year.
+                // ANDed), so it captures presence snapshots too. People and
+                // CyberBrain provide the bounded spelling vocabulary; GEDCOM
+                // remains unloaded unless an age phrase needs a birth year.
                 #expect(invocation.presenceCount == 1)
                 #expect(invocation.aggregateCount == 0)
-                #expect(invocation.profiles?.isEmpty == true)
+                #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(!invocation.graphWasInjected)
             case .aggregate:
                 #expect(invocation.presenceCount == 0)
@@ -219,7 +219,7 @@ struct HallieAppV2IntegrationTests {
         }
     }
 
-    @Test func graphRouteCapturesCyberBrainButOtherRoutesDoNot() async throws {
+    @Test func graphAndPresenceRoutesCaptureCyberBrainIdentityVocabulary() async throws {
         let index = try CyberBrainIndex(archive: .init(
             archiveID: "fixture",
             displayName: "Fixture CyberBrain",
@@ -242,8 +242,7 @@ struct HallieAppV2IntegrationTests {
                     recorder: recorder,
                     cyberBrain: index))
             let invocation = try #require(recorder.values.first)
-            #expect(invocation.cyberBrainWasInjected
-                    == (HallieTurnExecutor.route(ast) == .graph))
+            #expect(invocation.cyberBrainWasInjected)
         }
     }
 

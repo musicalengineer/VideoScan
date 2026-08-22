@@ -25,6 +25,29 @@ extension HallieTurnExecutor {
     ) async throws -> Result {
         var effective = payload
         var notes: [String] = []
+        var correctionAnnouncements: [String] = []
+
+        if let people = effective.people, !people.isEmpty {
+            let recovery = recoverPresencePeople(people, context: context)
+            if !recovery.ambiguous.isEmpty {
+                let choices = recovery.ambiguous.joined(separator: " or ")
+                return Result(
+                    route: route,
+                    outcome: .declined,
+                    prose: "I found more than one close family name. Did you mean \(choices)?",
+                    basisLine: "Basis: spelling recovery was ambiguous; no catalog query was performed.",
+                    queryDescription: description(of: request.intent.ast),
+                    citations: [],
+                    catalogPersonName: nil)
+            }
+            effective.people = recovery.people
+            for correction in recovery.corrections {
+                notes.append(
+                    "spelling recovery “\(correction.typed)” → People profile “\(correction.canonical)”")
+                correctionAnnouncements.append(
+                    "I took “\(correction.typed)” to mean \(correction.canonical).")
+            }
+        }
 
         // "videos of my dad": a first-person relative is resolved through the
         // speaker and the family tree, or declined by name (+SpeakerKinship).
@@ -100,6 +123,9 @@ extension HallieTurnExecutor {
                 ? "\(change) — \(total) catalog item\(total == 1 ? "" : "s")."
                 : "\(change) — nothing matched. " + ArchivistPresenceAnswerComposer.noEvidenceProse
         }
+        if !correctionAnnouncements.isEmpty {
+            prose = correctionAnnouncements.joined(separator: " ") + " " + prose
+        }
 
         var basis = answer.basisLine
         var prefixes: [String] = []
@@ -133,6 +159,84 @@ extension HallieTurnExecutor {
             catalogPersonName: nil,
             matchCount: result.conclusion == .present ? total : 0,
             answerPlan: plan)
+    }
+
+    private struct PresencePeopleRecovery {
+        let people: [String]
+        let corrections: [(typed: String, canonical: String)]
+        let ambiguous: [String]
+    }
+
+    /// Reconcile translator-produced names with the People gallery. A
+    /// CyberBrain identity may contribute its fuller spelling (for example,
+    /// profile "Rick" ↔ archive identity "Rick Breen"), but the resulting
+    /// catalog query always uses the People profile's canonical tag.
+    private static func recoverPresencePeople(
+        _ typedPeople: [String],
+        context: Context
+    ) -> PresencePeopleRecovery {
+        guard let profiles = context.profiles, !profiles.isEmpty else {
+            return PresencePeopleRecovery(
+                people: typedPeople, corrections: [], ambiguous: [])
+        }
+        let cyberPeople = context.cyberBrain?.archive.people ?? []
+        let candidates = profiles.map { profile -> (
+            identity: String, canonical: String, spellings: [String]
+        ) in
+            let profileSpellings = [profile.canonicalName] + profile.aliases
+            let profileKeys = Set(profileSpellings.map(PersonResolver.normalize))
+            let linkedSpellings = cyberPeople.filter { person in
+                let personKeys = Set(
+                    ([person.canonicalName] + person.aliases)
+                        .map(PersonResolver.normalize))
+                return !profileKeys.isDisjoint(with: personKeys)
+            }.flatMap { [$0.canonicalName] + $0.aliases }
+            return (
+                identity: profile.stableID,
+                canonical: profile.canonicalName,
+                spellings: profileSpellings + linkedSpellings)
+        }
+
+        var result: [String] = []
+        var corrections: [(typed: String, canonical: String)] = []
+        for typed in typedPeople {
+            let key = PersonResolver.normalize(typed)
+            let exactIDs = Set(candidates.compactMap { candidate in
+                candidate.spellings.contains {
+                    PersonResolver.normalize($0) == key
+                } ? candidate.identity : nil
+            })
+            let matchedIDs: [String]
+            if !exactIDs.isEmpty {
+                matchedIDs = exactIDs.sorted()
+            } else {
+                matchedIDs = HallieSpellingRecovery.bestMatches(
+                    typed: typed,
+                    candidates: candidates.map {
+                        (identity: $0.identity, spellings: $0.spellings)
+                    })
+            }
+            if matchedIDs.count > 1 {
+                let names = candidates.filter {
+                    matchedIDs.contains($0.identity)
+                }.map(\.canonical).sorted()
+                return PresencePeopleRecovery(
+                    people: typedPeople, corrections: [], ambiguous: names)
+            }
+            guard let matchedID = matchedIDs.first,
+                  let match = candidates.first(where: {
+                      $0.identity == matchedID
+                  }) else {
+                result.append(typed)
+                continue
+            }
+            result.append(match.canonical)
+            if PersonResolver.normalize(match.canonical) != key {
+                corrections.append((typed: typed, canonical: match.canonical))
+            }
+        }
+        return PresencePeopleRecovery(
+            people: result, corrections: corrections, ambiguous: [])
     }
 
     /// One vouched birth year for a typed name, or nil when nobody knows it or

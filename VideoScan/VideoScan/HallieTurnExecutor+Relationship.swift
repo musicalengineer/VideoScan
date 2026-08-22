@@ -289,11 +289,17 @@ extension HallieTurnExecutor {
     ) -> SlotResolution {
         switch ArchivistGraphExecutor.resolveSubject(
             typed, selection: selection, inputs: inputs, query: query) {
-        case .person(let person, let bridge):
-            let note = bridge.map {
+        case .person(let person, let bridge, let correction):
+            var notes = bridge.map {
                 "People profile identity bridge “\($0.requestedName)” → “\($0.profileCanonicalName)” → GEDCOM “\($0.effectiveGEDCOMName)”"
+            }.map { [$0] } ?? []
+            if let correction {
+                notes.append(
+                    "spelling recovery “\(correction)” → GEDCOM “\(person.name)”")
             }
-            return .gedcom(id: person.id, note: note)
+            return .gedcom(
+                id: person.id,
+                note: notes.isEmpty ? nil : notes.joined(separator: "; "))
         case .result(let result):
             if !result.ambiguityCandidates.isEmpty {
                 let choices = result.ambiguityCandidates.map { candidate -> Candidate in

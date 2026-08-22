@@ -668,13 +668,23 @@ enum HallieShellCLI {
                     dependencies: dependencies)
             }
         }
+        let repair = HallieSpellingRecovery.repairRequestOpener(question)
+        let routingQuestion = repair.text
+        if let original = repair.originalWord,
+           let replacement = repair.replacementWord {
+            appLog.write(
+                "Hallie shell: repaired request opener “\(original)” → “\(replacement)”")
+            if options.diagnostics {
+                output("corrected: \(original) → \(replacement)")
+            }
+        }
         do {
             state.biographyPhoto = nil
             // Model-free step first: capability questions, follow-ups on the
             // last answer, refinements, local family-tree shapes.
             let identity = state.identityContext
             let pre = HallieTurnExecutor.preTranslation(
-                question: question,
+                question: routingQuestion,
                 playAfterAnswer: false,
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) })
@@ -765,7 +775,7 @@ enum HallieShellCLI {
                             playAfterAnswer: wantsPlay)
                     } else {
                         let social = await dependencies.composeConversation(
-                            kind, question, state.socialHistory, options)
+                            kind, routingQuestion, state.socialHistory, options)
                         state.lastResponder = social.responderHost
                         let result = HallieSocialConversation.result(for: social.value)
                         state.memory.record(intent: nil, result: result)

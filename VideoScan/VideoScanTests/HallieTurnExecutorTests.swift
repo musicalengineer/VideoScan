@@ -179,6 +179,32 @@ struct HallieTurnExecutorTests {
         #expect(decline.citations.isEmpty)
     }
 
+    @Test func presenceRecoversMisspelledFullNameToCatalogProfileTag() async throws {
+        let profile = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "rick", canonicalName: "Rick", aliases: ["Dicky"])
+        let cyberBrain = try CyberBrainIndex(archive: CyberBrainArchive(
+            archiveID: "fixture", displayName: "Fixture",
+            people: [CyberBrainPerson(
+                id: "person.rick", gedcomPersonID: nil,
+                canonicalName: "Rick Breen", aliases: ["Dicky"])],
+            sources: []))
+        let record = ArchivistPresenceRecordSnapshot(
+            fullPath: "/isolated/rick.mov",
+            confirmedPeople: [tag("Rick")])
+
+        let result = try await HallieTurnExecutor.execute(
+            .presence(.init(people: ["rick brren"], mediaKind: .video)),
+            context: .init(
+                presenceRecords: [record], profiles: [profile],
+                cyberBrain: cyberBrain))
+
+        #expect(result.outcome == .answered)
+        #expect(result.prose.hasPrefix("I took “rick brren” to mean Rick."))
+        #expect(result.citations.count == 1)
+        #expect(result.basisLine.contains(
+            "spelling recovery “rick brren” → People profile “Rick”"))
+    }
+
     @Test func temporalUsesInjectedSelectedDateProvenanceAndDeclinesAmbiguity() async throws {
         let selectedID = UUID()
         let profile = HallieTurnExecutor.ProfileSnapshot(

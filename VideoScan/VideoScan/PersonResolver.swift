@@ -37,6 +37,11 @@ enum PersonListResolution: Sendable, Equatable {
 
 struct PersonResolver: Sendable {
 
+    private struct SpellingEntry: Sendable {
+        let canonicalName: String
+        let spellings: [String]
+    }
+
     /// Keep the resolver's pre-normalization combinatorics bounded. This
     /// mirrors NLQueryNormalizer.maxListItems, but is enforced here because
     /// translator output reaches identity resolution before normalization.
@@ -44,6 +49,7 @@ struct PersonResolver: Sendable {
 
     /// normalized token → canonical names it could mean (sorted, unique).
     private let index: [String: [String]]
+    private let spellingEntries: [SpellingEntry]
 
     init(people: [ResolvablePerson]) {
         var idx: [String: Set<String>] = [:]
@@ -56,6 +62,11 @@ struct PersonResolver: Sendable {
             }
         }
         index = idx.mapValues { $0.sorted() }
+        spellingEntries = people.map {
+            SpellingEntry(
+                canonicalName: $0.canonicalName,
+                spellings: [$0.canonicalName] + $0.aliases)
+        }
     }
 
     /// Production bridge from the persisted People gallery. Keep this
@@ -67,15 +78,28 @@ struct PersonResolver: Sendable {
         })
     }
 
-    /// Exact normalized match on a name or alias. Phase 1 deliberately
-    /// does no fuzzy/prefix matching — a wrong-person match in a family
-    /// archive is a trust-destroying error, and the ambiguity path
-    /// already gives the chat a graceful "which one?" turn.
+    /// Exact normalized match first. A narrowly bounded spelling recovery is
+    /// attempted only when exact lookup fails: short names are never guessed,
+    /// and tied nearest identities are surfaced as ambiguous.
     func resolve(_ typed: String) -> PersonResolution {
         let key = Self.normalize(typed)
-        guard !key.isEmpty, let hits = index[key] else { return .unknown }
-        if hits.count == 1 { return .resolved(canonicalName: hits[0]) }
-        return .ambiguous(candidates: hits)
+        guard !key.isEmpty else { return .unknown }
+        if let hits = index[key] {
+            if hits.count == 1 { return .resolved(canonicalName: hits[0]) }
+            return .ambiguous(candidates: hits)
+        }
+        let recovered = HallieSpellingRecovery.bestMatches(
+            typed: typed,
+            candidates: spellingEntries.map {
+                (identity: $0.canonicalName, spellings: $0.spellings)
+            })
+        if recovered.count == 1 {
+            return .resolved(canonicalName: recovered[0])
+        }
+        if !recovered.isEmpty {
+            return .ambiguous(candidates: recovered.sorted())
+        }
+        return .unknown
     }
 
     /// Resolve a translator-produced person list atomically. The caller
@@ -150,6 +174,148 @@ struct PersonResolver: Sendable {
                     locale: Locale(identifier: "en_US"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+}
+
+/// Small, deterministic typo layer shared by identity lookup and the two
+/// Hallie clients. This is intentionally not a general spell checker: it can
+/// only select from a closed caller-provided vocabulary.
+enum HallieSpellingRecovery {
+    struct QuestionRepair: Sendable, Equatable {
+        let text: String
+        let originalWord: String?
+        let replacementWord: String?
+    }
+
+    static func repairRequestOpener(_ question: String) -> QuestionRepair {
+        let words = question.split(whereSeparator: \Character.isWhitespace)
+        guard words.count >= 2 else {
+            return QuestionRepair(
+                text: question, originalWord: nil, replacementWord: nil)
+        }
+        let first = String(words[0])
+        let second = PersonResolver.normalize(String(words[1]))
+        let allowed: [String]
+        switch second {
+        case "me", "us":
+            allowed = ["show", "tell", "find", "give"]
+        case "my", "the", "a", "all", "some", "any":
+            allowed = ["show", "find", "search", "list", "open", "play"]
+        default:
+            return QuestionRepair(
+                text: question, originalWord: nil, replacementWord: nil)
+        }
+        let normalizedFirst = PersonResolver.normalize(first)
+        guard !allowed.contains(normalizedFirst) else {
+            return QuestionRepair(
+                text: question, originalWord: nil, replacementWord: nil)
+        }
+        let ranked = allowed.compactMap { candidate -> (String, Int)? in
+            guard let distance = tokenDistance(
+                normalizedFirst, candidate), distance == 1 else { return nil }
+            return (candidate, distance)
+        }
+        guard ranked.count == 1, let replacement = ranked.first?.0,
+              let range = question.range(of: first) else {
+            return QuestionRepair(
+                text: question, originalWord: nil, replacementWord: nil)
+        }
+        var repaired = question
+        repaired.replaceSubrange(range, with: replacement)
+        return QuestionRepair(
+            text: repaired, originalWord: first,
+            replacementWord: replacement)
+    }
+
+    /// Returns the identity or identities tied at the lowest acceptable
+    /// edit score. Callers resolve a singleton and clarify a tie.
+    static func bestMatches(
+        typed: String,
+        candidates: [(identity: String, spellings: [String])]
+    ) -> [String] {
+        var scores: [String: Int] = [:]
+        for candidate in candidates {
+            for spelling in candidate.spellings {
+                guard let score = nameScore(typed, spelling) else { continue }
+                scores[candidate.identity] = min(
+                    scores[candidate.identity] ?? Int.max, score)
+            }
+        }
+        guard let best = scores.values.min() else { return [] }
+        return scores.compactMap { $0.value == best ? $0.key : nil }.sorted()
+    }
+
+    private static func nameScore(_ typed: String, _ candidate: String) -> Int? {
+        let typedTokens = tokens(typed)
+        let candidateTokens = tokens(candidate)
+        guard !typedTokens.isEmpty,
+              typedTokens.count <= 6,
+              candidateTokens.count <= 8,
+              typedTokens.count <= candidateTokens.count else { return nil }
+
+        func assign(
+            _ index: Int, used: Set<Int>, score: Int
+        ) -> Int? {
+            if index == typedTokens.count { return score > 0 ? score : nil }
+            var best: Int?
+            for candidateIndex in candidateTokens.indices
+            where !used.contains(candidateIndex) {
+                guard let distance = tokenDistance(
+                    typedTokens[index], candidateTokens[candidateIndex]) else {
+                    continue
+                }
+                var nextUsed = used
+                nextUsed.insert(candidateIndex)
+                if let total = assign(
+                    index + 1, used: nextUsed, score: score + distance),
+                   total <= 2, total < (best ?? Int.max) {
+                    best = total
+                }
+            }
+            return best
+        }
+        return assign(0, used: [], score: 0)
+    }
+
+    private static func tokens(_ value: String) -> [String] {
+        PersonResolver.normalize(value)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+    }
+
+    /// Optimal-string-alignment distance, capped per token. Transposed keys
+    /// (`shwo`) count as one edit. Words shorter than four characters must be
+    /// exact, protecting short family names from risky guesses.
+    private static func tokenDistance(_ lhs: String, _ rhs: String) -> Int? {
+        if lhs == rhs { return 0 }
+        guard lhs.count >= 4, rhs.count >= 4 else { return nil }
+        let limit = max(lhs.count, rhs.count) >= 8 ? 2 : 1
+        guard abs(lhs.count - rhs.count) <= limit else { return nil }
+        let left = Array(lhs)
+        let right = Array(rhs)
+        var matrix = Array(
+            repeating: Array(repeating: 0, count: right.count + 1),
+            count: left.count + 1)
+        for index in 0...left.count { matrix[index][0] = index }
+        for index in 0...right.count { matrix[0][index] = index }
+        for i in 1...left.count {
+            for j in 1...right.count {
+                let substitution = matrix[i - 1][j - 1]
+                    + (left[i - 1] == right[j - 1] ? 0 : 1)
+                matrix[i][j] = min(
+                    matrix[i - 1][j] + 1,
+                    matrix[i][j - 1] + 1,
+                    substitution)
+                if i > 1, j > 1,
+                   left[i - 1] == right[j - 2],
+                   left[i - 2] == right[j - 1] {
+                    matrix[i][j] = min(
+                        matrix[i][j], matrix[i - 2][j - 2] + 1)
+                }
+            }
+        }
+        let distance = matrix[left.count][right.count]
+        return distance <= limit ? distance : nil
     }
 }
 

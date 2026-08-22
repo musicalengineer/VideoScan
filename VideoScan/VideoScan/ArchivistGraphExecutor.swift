@@ -375,10 +375,12 @@ enum ArchivistGraphExecutor {
                               inputs: inputs, query: query) {
         case .result(let result):
             return result
-        case .person(let person, let bridge):
-            return executeResolved(
+        case .person(let person, let bridge, let correction):
+            let result = executeResolved(
                 query, person: person, graph: inputs.graph,
                 identityBridge: bridge)
+            return applyingSpellingCorrection(
+                correction, canonicalName: person.name, to: result)
         }
     }
 
@@ -387,7 +389,8 @@ enum ArchivistGraphExecutor {
     /// (ambiguity chips, not-found, profile conflict, surname roll-up).
     enum SubjectResolution {
         case person(GedcomFamilyGraph.Person,
-                    identityBridge: ArchivistGraphEvidence.IdentityBridge?)
+                    identityBridge: ArchivistGraphEvidence.IdentityBridge?,
+                    spellingCorrection: String?)
         case result(ArchivistGraphResult)
     }
 
@@ -431,7 +434,7 @@ enum ArchivistGraphExecutor {
                 prose: "The People profiles contain conflicting definitions for one identity.",
                 basis: "Checked: People profiles; the family tree was not consulted."))
 
-        case .people(let people, let profileRoute):
+        case .people(let people, let profileRoute, let correction):
             guard people.count == 1 else {
                 // A surname typed as a person ("the breens", "breens") for a
                 // family-tree request is a roll-up, not an unknown person.
@@ -449,14 +452,17 @@ enum ArchivistGraphExecutor {
             }
             let bridge = identityBridge(
                 profileRoute, effectivePerson: people[0])
-            return .person(people[0], identityBridge: bridge)
+            return .person(
+                people[0], identityBridge: bridge,
+                spellingCorrection: correction)
         }
     }
 
     private enum Resolution {
         case people(
             [GedcomFamilyGraph.Person],
-            profileRoute: ProfileRoute?)
+            profileRoute: ProfileRoute?,
+            spellingCorrection: String?)
         case profileAmbiguous([ArchivistGraphProfileSnapshot])
         case profileConflict(stableID: String)
     }
@@ -484,17 +490,18 @@ enum ArchivistGraphExecutor {
         case .gedcomPersonID(let rawID):
             guard !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let person = inputs.graph.people[rawID] else {
-                return .people([], profileRoute: nil)
+                return .people([], profileRoute: nil, spellingCorrection: nil)
             }
-            return .people([person], profileRoute: nil)
+            return .people(
+                [person], profileRoute: nil, spellingCorrection: nil)
         case .profileStableID(let rawID):
             guard !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
-                return .people([], profileRoute: nil)
+                return .people([], profileRoute: nil, spellingCorrection: nil)
             }
             let definitions = inputs.profiles.filter { $0.stableID == rawID }
             guard let first = definitions.first else {
-                return .people([], profileRoute: nil)
+                return .people([], profileRoute: nil, spellingCorrection: nil)
             }
             let meaning = profileMeaning(first)
             guard definitions.allSatisfy({ profileMeaning($0) == meaning }) else {
@@ -542,13 +549,65 @@ enum ArchivistGraphExecutor {
             return .profileAmbiguous(identities)
         }
 
-        guard let profile = identities.first else {
-            return .people(
-                inputs.graph.people(matching: typedName), profileRoute: nil)
+        if let profile = identities.first {
+            return resolveSelectedProfile(
+                profile, requestedName: typedName, graph: inputs.graph)
         }
 
-        return resolveSelectedProfile(
-            profile, requestedName: typedName, graph: inputs.graph)
+        // Exact identity lookup failed. Recover only the unique nearest
+        // People profile; a tied spelling remains an explicit clarification.
+        let fuzzyProfileIDs = HallieSpellingRecovery.bestMatches(
+            typed: typedName,
+            candidates: groupedProfiles.compactMap { stableID, definitions in
+                guard let first = definitions.first,
+                      definitions.allSatisfy({
+                          profileMeaning($0) == profileMeaning(first)
+                      }) else { return nil }
+                return (
+                    identity: stableID,
+                    spellings: definitions.flatMap {
+                        [$0.canonicalName] + $0.aliases
+                    })
+            })
+        if !fuzzyProfileIDs.isEmpty {
+            let fuzzyProfiles = fuzzyProfileIDs.compactMap { stableID in
+                groupedProfiles[stableID].map {
+                    deterministicProfileSnapshot(
+                        stableID: stableID, definitions: $0)
+                }
+            }.sorted(by: profileOrder)
+            if fuzzyProfiles.count > 1 {
+                return .profileAmbiguous(fuzzyProfiles)
+            }
+            if let recovered = fuzzyProfiles.first {
+                let resolution = resolveSelectedProfile(
+                    recovered, requestedName: typedName, graph: inputs.graph)
+                switch resolution {
+                case .people(let people, let route, _):
+                    return .people(
+                        people, profileRoute: route,
+                        spellingCorrection: typedName)
+                case .profileAmbiguous, .profileConflict:
+                    return resolution
+                }
+            }
+        }
+
+        let exactPeople = inputs.graph.people(matching: typedName)
+        if !exactPeople.isEmpty {
+            return .people(
+                exactPeople, profileRoute: nil, spellingCorrection: nil)
+        }
+        let fuzzyIDs = HallieSpellingRecovery.bestMatches(
+            typed: typedName,
+            candidates: inputs.graph.people.values.map {
+                (identity: $0.id, spellings: [$0.name])
+            })
+        let fuzzyPeople = fuzzyIDs.compactMap { inputs.graph.people[$0] }
+            .sorted(by: personOrder)
+        let correction = fuzzyPeople.count == 1 ? typedName : nil
+        return .people(
+            fuzzyPeople, profileRoute: nil, spellingCorrection: correction)
     }
 
     /// The profile is already selected by stable ID. Only that profile's
@@ -567,7 +626,8 @@ enum ArchivistGraphExecutor {
             matching: profile.canonicalName)
         if !canonicalMatches.isEmpty {
             return .people(
-                canonicalMatches, profileRoute: profileRoute)
+                canonicalMatches, profileRoute: profileRoute,
+                spellingCorrection: nil)
         }
 
         let fallbackTerms = ([requestedName] + profile.aliases).filter {
@@ -586,10 +646,12 @@ enum ArchivistGraphExecutor {
             if !matchesByID.isEmpty {
                 return .people(
                     matchesByID.values.sorted(by: personOrder),
-                    profileRoute: profileRoute)
+                    profileRoute: profileRoute,
+                    spellingCorrection: nil)
             }
         }
-        return .people([], profileRoute: profileRoute)
+        return .people(
+            [], profileRoute: profileRoute, spellingCorrection: nil)
     }
 
     private static func executeResolved(
@@ -880,6 +942,27 @@ enum ArchivistGraphExecutor {
             profileCandidates: [],
             ambiguityCandidates: [],
             catalogPersonName: nil)
+    }
+
+    static func applyingSpellingCorrection(
+        _ correction: String?,
+        canonicalName: String,
+        to result: ArchivistGraphResult
+    ) -> ArchivistGraphResult {
+        guard let correction else { return result }
+        return ArchivistGraphResult(
+            conclusion: result.conclusion,
+            prose: "I took that spelling to mean \(canonicalName). "
+                + result.prose,
+            basisLine: "Spelling recovery: uniquely matched “\(correction)” "
+                + "to GEDCOM “\(canonicalName)”. " + result.basisLine,
+            evidence: result.evidence,
+            candidates: result.candidates,
+            profileCandidates: result.profileCandidates,
+            ambiguityCandidates: result.ambiguityCandidates,
+            catalogPersonName: result.catalogPersonName,
+            familyTreeFocus: result.familyTreeFocus,
+            subjectIndex: result.subjectIndex)
     }
 
     private static func normalize(_ value: String) -> String {

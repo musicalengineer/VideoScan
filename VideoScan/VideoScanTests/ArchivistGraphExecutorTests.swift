@@ -577,6 +577,35 @@ struct ArchivistGraphExecutorTests {
         ])
     }
 
+    @Test func uniqueNameMisspellingRecoversAndExplainsTheCorrection() {
+        let result = execute(
+            people: ["Crhis River"], operation: .biography)
+
+        #expect(result.conclusion == .answered)
+        #expect(result.catalogPersonName == "Chris River")
+        #expect(result.prose.hasPrefix(
+            "I took that spelling to mean Chris River."))
+        #expect(result.basisLine.contains(
+            "Spelling recovery: uniquely matched “Crhis River”"))
+    }
+
+    @Test func tiedNameMisspellingAsksInsteadOfGuessing() {
+        let tied = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Mary /River/
+        0 @I2@ INDI
+        1 NAME Mark /River/
+        0 TRLR
+        """)
+
+        let result = execute(
+            people: ["Mara River"], operation: .biography, graph: tied)
+
+        #expect(result.conclusion == .personAmbiguous)
+        #expect(result.candidates.map(\.name) == ["Mark River", "Mary River"])
+        #expect(result.evidence == nil)
+    }
+
     @Test func malformedGraphQueriesFailClosedBeforeIdentityResolution() {
         let validationBasis =
             "Checked: graph-query validation only; no family source was consulted."
