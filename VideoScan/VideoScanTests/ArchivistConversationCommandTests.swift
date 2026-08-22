@@ -34,12 +34,12 @@ struct ArchivistConversationCommandTests {
         ("I'm good", .userDoingWell), ("I had a rough day", .userHavingHardTime),
         ("I'm doing well, thanks.", .userDoingWell),
         ("I'm a little tired today.", .userHavingHardTime),
-        ("It's nice to talk with you.", .affirmation),
+        ("It's nice to talk with you.", .companionship),
         ("Thanks, that's kind of you.", .thanks),
         ("Thank you for helping me.", .thanks),
         ("That was helpful.", .affirmation),
-        ("Okay, that makes sense.", .affirmation),
-        ("You're welcome.", .affirmation),
+        ("Okay, that makes sense.", .understanding),
+        ("You're welcome.", .userWelcome),
         ("Is it morning or afternoon?", .timeOfDay),
         ("I'll talk with you later.", .farewell),
         ("what is the date?", .date), ("what is the daye?", .date),
@@ -62,6 +62,15 @@ struct ArchivistConversationCommandTests {
             == "It's 12:00 PM.")
         #expect(Command.smalltalkReply(.timeOfDay, now: instant, timeZone: zone)
             == "It's afternoon.")
+    }
+
+    @Test func conversationalAcknowledgementsMatchWhatThePersonSaid() {
+        #expect(Command.smalltalkReply(.companionship)
+            == "It's nice to talk with you too. What would you like to talk about?")
+        #expect(Command.smalltalkReply(.userWelcome)
+            == "Thank you. What would you like to talk about next?")
+        #expect(Command.smalltalkReply(.understanding)
+            == "Good. We can keep going whenever you're ready.")
     }
 
     @Test(arguments: [

@@ -21,6 +21,9 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         case wellbeing
         case userDoingWell
         case userHavingHardTime
+        case companionship
+        case userWelcome
+        case understanding
         case date
         case time
         case timeOfDay
@@ -251,10 +254,12 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "youre the best": .affirmation, "love it": .affirmation, "i love it": .affirmation,
         "yay": .affirmation, "wow": .affirmation, "neat": .affirmation, "sweet": .affirmation,
         "fantastic": .affirmation, "amazing": .affirmation, "brilliant": .affirmation,
-        "that makes sense": .affirmation, "you're welcome": .affirmation,
-        "youre welcome": .affirmation,
-        "it's nice to talk with you": .affirmation,
-        "its nice to talk with you": .affirmation,
+        "that makes sense": .understanding,
+        "okay that makes sense": .understanding,
+        "ok that makes sense": .understanding,
+        "you're welcome": .userWelcome, "youre welcome": .userWelcome,
+        "it's nice to talk with you": .companionship,
+        "its nice to talk with you": .companionship,
         "that was helpful": .affirmation,
     ]
 
@@ -310,6 +315,8 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             return "I'm glad to hear that. What would you like to talk about?"
         case .userHavingHardTime:
             return "I'm sorry to hear that. We can take things at an easy pace. What would be helpful right now?"
+        case .companionship, .userWelcome, .understanding:
+            return acknowledgementReply(kind)
         case .date:
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US")
@@ -336,6 +343,19 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             return "Bye for now — I'll be right here when you want to look through more."
         case .affirmation:
             return "Glad that helped! Ask me another one whenever you're ready."
+        }
+    }
+
+    private static func acknowledgementReply(_ kind: Smalltalk) -> String {
+        switch kind {
+        case .companionship:
+            return "It's nice to talk with you too. What would you like to talk about?"
+        case .userWelcome:
+            return "Thank you. What would you like to talk about next?"
+        case .understanding:
+            return "Good. We can keep going whenever you're ready."
+        default:
+            preconditionFailure("acknowledgementReply called for \(kind)")
         }
     }
 
