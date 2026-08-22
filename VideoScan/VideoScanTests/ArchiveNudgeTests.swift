@@ -69,6 +69,30 @@ struct ArchiveNudgeTests {
                 == "1 keeper is nearly ready — it just needs a date.")
     }
 
+    @Test func copiesOfOneRecordingCollapseToTheKeeperOrTheBestVouched() {
+        let group = UUID()
+        func copy(_ name: String, stars: Int, dup: DuplicateDisposition) -> VideoRecord {
+            let r = record(name, stars: stars, dup: dup)
+            r.duplicateGroupID = group
+            r.duplicateGroupCount = 3
+            return r
+        }
+        let withKeeper = ArchiveNudge.assess([
+            copy("lacie/xmas.mov", stars: 3, dup: .review),
+            copy("mybook/xmas.mov", stars: 2, dup: .keep),
+            copy("x9/xmas.mov", stars: 3, dup: .review),
+        ])
+        #expect(withKeeper.ready.map(\.filename) == ["mybook/xmas.mov"], "the chosen keeper wins even with fewer stars")
+        #expect(withKeeper.ready.first?.reasons.last == "3 copies — this one")
+
+        let noKeeper = ArchiveNudge.assess([
+            copy("lacie/xmas.mov", stars: 2, dup: .review),
+            copy("mybook/xmas.mov", stars: 3, dup: .none),
+        ])
+        #expect(noKeeper.ready.map(\.filename) == ["mybook/xmas.mov"], "no keeper chosen → the best-vouched copy, once")
+        #expect(noKeeper.ready.first?.reasons.last == "2 copies — this one")
+    }
+
     @Test func tenThousandCandidatesAssessWellUnderASecond() {
         let records = (0..<10_000).map { i in
             record("f\(i).mov", stars: i % 4, disposition: i % 7 == 0 ? .important : .unreviewed,

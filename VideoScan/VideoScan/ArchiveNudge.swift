@@ -31,6 +31,9 @@ struct ArchiveNudge: Equatable, Sendable {
         /// Why it qualifies, in the order a person would say it.
         let reasons: [String]
         let needsDate: Bool
+        /// How strongly the catalog vouches (Important 3, each star 1,
+        /// stage Ready 2 / Master 1) — orders the list and picks the copy.
+        let score: Int
     }
 
     let ready: [Candidate]
@@ -56,20 +59,44 @@ struct ArchiveNudge: Equatable, Sendable {
         }
     }
 
-    /// Build from the not-yet-archived assets.
+    /// Build from the not-yet-archived assets. One entry per recording:
+    /// copies of the same content (a duplicate group) collapse to the
+    /// chosen keeper, or — when no keeper was chosen yet — to the
+    /// best-vouched copy, so the list never nags about the same tape
+    /// three times (Rick 2026-08-21: "filter out all the copies").
     static func assess(_ records: [VideoRecord]) -> ArchiveNudge {
-        var ready: [Candidate] = []
-        var near: [Candidate] = []
-        for rec in records {
-            guard let candidate = candidate(rec) else { continue }
-            if candidate.needsDate { near.append(candidate) } else { ready.append(candidate) }
-        }
         // Strongest vouching first, then name — stable and explainable.
         let order: (Candidate, Candidate) -> Bool = { a, b in
-            if a.reasons.count != b.reasons.count { return a.reasons.count > b.reasons.count }
+            if a.score != b.score { return a.score > b.score }
             return a.filename.localizedStandardCompare(b.filename) == .orderedAscending
         }
-        return ArchiveNudge(ready: ready.sorted(by: order), nearReady: near.sorted(by: order))
+        var singles: [Candidate] = []
+        var byGroup: [UUID: (keeper: Candidate?, best: Candidate?, copies: Int)] = [:]
+        for rec in records {
+            guard let candidate = candidate(rec) else { continue }
+            guard let group = rec.duplicateGroupID, rec.duplicateGroupCount > 1 else {
+                singles.append(candidate)
+                continue
+            }
+            var entry = byGroup[group] ?? (nil, nil, 0)
+            entry.copies += 1
+            if rec.duplicateDisposition == .keep, entry.keeper == nil {
+                entry.keeper = candidate
+            }
+            if entry.best.map({ order(candidate, $0) }) ?? true { entry.best = candidate }
+            byGroup[group] = entry
+        }
+        var all = singles
+        for entry in byGroup.values {
+            guard let chosen = entry.keeper ?? entry.best else { continue }
+            all.append(Candidate(id: chosen.id, filename: chosen.filename, year: chosen.year,
+                                 reasons: chosen.reasons
+                                    + (entry.copies > 1 ? ["\(entry.copies) copies — this one"] : []),
+                                 needsDate: chosen.needsDate, score: chosen.score))
+        }
+        let ready = all.filter { !$0.needsDate }.sorted(by: order)
+        let near = all.filter { $0.needsDate }.sorted(by: order)
+        return ArchiveNudge(ready: ready, nearReady: near)
     }
 
     static func candidate(_ rec: VideoRecord) -> Candidate? {
@@ -81,10 +108,11 @@ struct ArchiveNudge: Equatable, Sendable {
         guard rec.junkScore < 50 else { return nil }
 
         var reasons: [String] = []
-        if rec.mediaDisposition == .important { reasons.append("marked Important") }
-        if rec.starRating >= 2 { reasons.append(String(repeating: "★", count: rec.starRating)) }
-        if rec.archiveStage == .readyForArchive { reasons.append("stage: Ready") }
-        else if rec.archiveStage == .masterAssigned { reasons.append("stage: Master") }
+        var score = 0
+        if rec.mediaDisposition == .important { reasons.append("marked Important"); score += 3 }
+        if rec.starRating >= 2 { reasons.append(String(repeating: "★", count: rec.starRating)); score += rec.starRating }
+        if rec.archiveStage == .readyForArchive { reasons.append("stage: Ready"); score += 2 }
+        else if rec.archiveStage == .masterAssigned { reasons.append("stage: Master"); score += 1 }
         if rec.duplicateDisposition == .keep { reasons.append("the copy to keep") }
         // Vouching is the gate; "the copy to keep" alone is not a reason to promote.
         let vouched = reasons.contains { $0 != "the copy to keep" }
@@ -103,6 +131,6 @@ struct ArchiveNudge: Equatable, Sendable {
         let needsDate = resolution.precision >= .decade
         let year = needsDate ? nil : resolution.year
         return Candidate(id: rec.id, filename: rec.filename, year: year,
-                         reasons: reasons, needsDate: needsDate)
+                         reasons: reasons, needsDate: needsDate, score: score)
     }
 }

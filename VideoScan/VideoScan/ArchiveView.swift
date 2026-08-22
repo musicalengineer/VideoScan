@@ -51,7 +51,7 @@ struct ArchiveView: View {
     /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
     @AppStorage("selectedTab") var selectedTab: Int = 0
 
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openWindow) var openWindow
 
     var body: some View {
         HSplitView {

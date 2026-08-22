@@ -159,10 +159,13 @@ struct ArchiveProgressBar: View {
 
 /// The nudge under the bar: one loose sentence and a chevron that opens
 /// the list of files the catalog already vouches for, each with an
-/// "Archive…" button that opens the same Promote flow as the context menu.
+/// "Archive Helper…" button — the review flow (copies, date, audio, name),
+/// not the bare promote sheet, because most keepers still need a date
+/// confirmed or audio checked first (Rick 2026-08-21).
 struct ArchiveNudgeView: View {
     let nudge: ArchiveNudge
-    let promote: ([UUID]) -> Void
+    /// Open the Archive Helper for ONE recording.
+    let openHelper: (UUID) -> Void
     @State private var isOpen = false
 
     var body: some View {
@@ -177,15 +180,14 @@ struct ArchiveNudgeView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 12)
                     Text(nudge.headline)
-                        .font(.system(size: 14))
+                        .font(.system(size: 16))
                         .foregroundStyle(nudge.isEmpty ? Color.secondary : Color.primary)
                     Spacer(minLength: 0)
-                    if !nudge.ready.isEmpty {
-                        Button("Archive the first \(min(nudge.ready.count, 5))…") {
-                            promote(Array(nudge.ready.prefix(5).map(\.id)))
+                    if let first = nudge.ready.first {
+                        Button("Start with \(first.filename)…") {
+                            openHelper(first.id)
                         }
-                        .controlSize(.small)
-                        .help("Opens Promote to Archive for the first files in the list — you still review and confirm each one.")
+                        .help("Opens the Archive Helper for the first file in the list — copies, date, audio and name are checked before anything is promoted.")
                     }
                 }
                 .contentShape(Rectangle())
@@ -194,18 +196,18 @@ struct ArchiveNudgeView: View {
             .disabled(nudge.isEmpty)
 
             if isOpen, !nudge.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(nudge.ready.prefix(ArchiveNudge.listLimit)) { row($0) }
                     if !nudge.nearReady.isEmpty {
                         Text("Nearly ready — just need a date")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .padding(.top, 6)
                         ForEach(nudge.nearReady.prefix(ArchiveNudge.listLimit)) { row($0) }
                     }
                     if nudge.ready.count > ArchiveNudge.listLimit || nudge.nearReady.count > ArchiveNudge.listLimit {
                         Text("…and more. Star or mark files in the Catalog and they appear here.")
-                            .font(.system(size: 12))
+                            .font(.system(size: 14))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -218,26 +220,28 @@ struct ArchiveNudgeView: View {
     }
 
     private func row(_ candidate: ArchiveNudge.Candidate) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Text(candidate.filename)
-                .font(.system(size: 13))
+                .font(.system(size: 15))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .layoutPriority(1)
+            // Right beside the name, where the eye already is.
+            Button("Archive Helper…") { openHelper(candidate.id) }
+                .help(candidate.needsDate
+                      ? "Opens the Archive Helper — it will ask for the date first."
+                      : "Opens the Archive Helper: copies, date, audio and name, then promote.")
             if let year = candidate.year {
                 Text(String(year))
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.system(size: 14).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Text(candidate.reasons.joined(separator: " · "))
-                .font(.system(size: 12))
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Button(candidate.needsDate ? "Needs a date" : "Archive…") {
-                promote([candidate.id])
-            }
-            .controlSize(.small)
-            .disabled(candidate.needsDate)
         }
+        .padding(.vertical, 2)
     }
 }
