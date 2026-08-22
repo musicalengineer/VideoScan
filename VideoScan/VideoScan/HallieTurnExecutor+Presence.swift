@@ -206,8 +206,17 @@ extension HallieTurnExecutor {
                     PersonResolver.normalize($0) == key
                 } ? candidate.identity : nil
             })
+            // The name someone TYPED exactly as a profile's own name wins
+            // over profiles that merely list it as an alias: "Timmy" is
+            // Timmy, even though Tim's profile knows "Timmy" too (cycle 4:
+            // "show me Timmy as a baby" → "Did you mean Tim or Timmy?").
+            let canonicalExactIDs = candidates.compactMap { candidate in
+                PersonResolver.normalize(candidate.canonical) == key ? candidate.identity : nil
+            }
             let matchedIDs: [String]
-            if !exactIDs.isEmpty {
+            if canonicalExactIDs.count == 1 {
+                matchedIDs = canonicalExactIDs
+            } else if !exactIDs.isEmpty {
                 matchedIDs = exactIDs.sorted()
             } else {
                 matchedIDs = HallieSpellingRecovery.bestMatches(

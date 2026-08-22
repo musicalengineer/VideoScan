@@ -797,4 +797,21 @@ struct HallieTurnExecutorTests {
         #expect(!shell.contains("ArchivistAggregateExecutor"))
         #expect(!shell.contains("ArchivistGraphExecutor"))
     }
+
+    @Test func aNameTypedExactlyAsAProfilesOwnNameIsNeverAmbiguous() async throws {
+        // Cycle 4: "show me Timmy as a baby" asked "Did you mean Tim or
+        // Timmy?" because Tim's profile lists "Timmy" as an alias.
+        let context = HallieTurnExecutor.Context(
+            presenceRecords: [],
+            profiles: [
+                .init(stableID: "tim", canonicalName: "Tim", aliases: ["Timmy", "Timothy"]),
+                .init(stableID: "timmy", canonicalName: "Timmy", aliases: []),
+            ])
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "show me Timmy",
+            ast: .presence(.init(people: ["Timmy"])))
+        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        #expect(!result.prose.contains("Did you mean"), Comment(rawValue: result.prose))
+        #expect(result.clarification == nil)
+    }
 }

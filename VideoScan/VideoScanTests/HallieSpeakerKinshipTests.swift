@@ -85,6 +85,42 @@ struct HallieSpeakerKinshipTests {
         #expect(withoutBrain.failure?.hasPrefix("I don't find you (Rick Breen) in the family tree") == true)
     }
 
+    @Test func onTheGraphRouteMyDadIsTheFatherNotTheOwner() async throws {
+        // Cycle 4: "did my dad have brothers or sisters" answered about
+        // Rick (the owner) instead of Rick's father.
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Rick /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 SEX M
+        1 FAMC @F0@
+        1 FAMS @F1@
+        0 @I3@ INDI
+        1 NAME Mary /Breen/
+        1 SEX F
+        1 FAMC @F0@
+        0 @F0@ FAM
+        1 CHIL @I2@
+        1 CHIL @I3@
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 CHIL @I1@
+        0 TRLR
+        """)
+        let context = HallieTurnExecutor.Context(graph: tree, speakers: rick)
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "did my dad have brothers or sisters",
+            ast: .graph(.init(people: ["me"], operation: .kinship, relation: .siblings)))
+        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        #expect(result.outcome == .answered)
+        #expect(result.prose == "Richard Harding Breen Sr's siblings: Mary Breen.", Comment(rawValue: result.prose))
+        #expect(result.basisLine.contains("'my dad' = Richard Harding Breen Sr, father of Rick Breen in the family tree"))
+    }
+
     @Test func myWifeAndOtherNamesStayInPlace() {
         let bound = Kin.rebind(people: ["Timmy", "me"], question: "Timmy with my wife at the cape",
                                speakers: rick, graph: graph())

@@ -684,6 +684,43 @@ enum HallieTurnExecutor {
             // continuation reads them the same way. Fresh turns only — a
             // continuation's intent already carries bound names.
             if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty {
+                // "did my dad have brothers or sisters": the relative must
+                // be resolved BEFORE "my" is bound to the owner, or the
+                // answer is about the wrong person (cycle 4: it reported
+                // Rick's siblings for a question about Rick's father).
+                // …but NOT when the translator already turned the phrase
+                // into the query's relation: "who is my father" is
+                // father-of(me), and rebinding "my father" first would ask
+                // for the father's father.
+                let phrase = SpeakerKinship.kinshipPhrase(in: request.intent.originalQuestion)
+                let alreadyTheRelation = phrase.map { $0.relation.rawValue == rawPayload.relation?.rawValue } ?? true
+                let kin = alreadyTheRelation
+                    ? SpeakerKinship.Rebinding(people: rawPayload.people)
+                    : SpeakerKinship.rebind(
+                        people: rawPayload.people,
+                        question: request.intent.originalQuestion,
+                        speakers: context.speakers,
+                        graph: context.graph,
+                        cyberBrain: context.cyberBrain)
+                if let failure = kin.failure {
+                    return Result(
+                        route: .graph, outcome: .declined, prose: failure,
+                        basisLine: "Basis: the question names a relative of the speaker that the family tree could not resolve; no family fact was looked up.",
+                        queryDescription: graphQueryDescription(rawPayload),
+                        citations: [], catalogPersonName: nil)
+                }
+                if !kin.notes.isEmpty {
+                    var rebound = rawPayload
+                    rebound.people = kin.people
+                    let inner = try await execute(
+                        Request(intent: request.intent.replacing(
+                            ast: .graph(rebound),
+                            speakerBindings: [SpeakerBinding(
+                                index: 0, pronoun: "my", role: .owner,
+                                boundName: context.speakers.ownerName ?? "")])),
+                        context: context, dependencies: dependencies)
+                    return inner.prefixingBasis(kin.notes.joined(separator: "; "))
+                }
                 let binding = bindPronouns(
                     rawPayload.people, speakers: context.speakers,
                     isKnownPerson: { isKnownPerson($0, context: context) })
