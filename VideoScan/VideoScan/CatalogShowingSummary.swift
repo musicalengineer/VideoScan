@@ -179,88 +179,51 @@ enum CatalogShowingSummary {
     }
 }
 
-// MARK: - The row
+// MARK: - The box
 
-/// Full-width line under the toolbar: "Showing" then the pills. Sits
-/// OUTSIDE the toolbar's fixed-inset layout so its variable width never
-/// slides the search capsule. Pure layout over a handful of Bools — no
-/// records are touched here.
-struct CatalogShowingRow: View {
+/// One highlighted box beside the Show menu: "Showing: Videos · Not yet
+/// archived · Connected drives". Pure layout over a handful of Bools —
+/// no records are touched here. Colour says the one thing that matters
+/// most at a glance: green = to-do view (archived hidden), blue =
+/// archived included, neutral = no Master Archive yet.
+struct CatalogShowingBox: View {
     let state: CatalogShowingSummary.State
-    let onToggleArchived: () -> Void
-    let onToggleDrives: () -> Void
 
-    // Senior-friendly type: 14pt, one size up from the table chrome.
-    private static let labelFont = Font.system(size: 14, weight: .semibold)
-    private static let pillFont = Font.system(size: 14, weight: .medium)
+    // Senior-friendly: 14pt semibold, one size up from the toolbar chrome.
+    private static let font = Font.system(size: 14, weight: .semibold)
     private let toDoGreen = Color(red: 0.10, green: 0.62, blue: 0.30)
     private let allBlue = Color(red: 0.13, green: 0.45, blue: 0.85)
 
+    private var fill: Color {
+        guard state.hasMasterArchive else { return Color.secondary.opacity(0.18) }
+        return state.viewFilters.contains(.notYetArchived) ? toDoGreen : allBlue
+    }
+    private var foreground: Color { state.hasMasterArchive ? .white : .primary }
+
     var body: some View {
         let pills = CatalogShowingSummary.pills(for: state)
-        HStack(spacing: 8) {
-            Text("Showing")
-                .font(Self.labelFont)
-                .foregroundColor(.secondary)
-            ForEach(pills) { pill in
-                pillView(pill)
-            }
-            Spacer(minLength: 0)
+        HStack(spacing: 6) {
+            Text("Showing:")
+                .font(Self.font)
+                .foregroundColor(foreground.opacity(0.8))
+            Text(pills.map(\.text).joined(separator: " · "))
+                .font(Self.font)
+                .foregroundColor(foreground)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(NSColor.underPageBackgroundColor).opacity(0.5))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(CatalogShowingSummary.sentence(for: state))
-        .accessibilityIdentifier("catalog.showingRow")
-    }
-
-    @ViewBuilder
-    private func pillView(_ pill: CatalogShowingSummary.Pill) -> some View {
-        switch pill.action {
-        case .none:
-            pillLabel(pill)
-        case .toggleArchived:
-            Button(action: onToggleArchived) { pillLabel(pill) }
-                .buttonStyle(.plain)
-                .help(state.viewFilters.contains(.notYetArchived)
-                      ? "Files already in the Master Archive are hidden — this is your to-do list. Click to include them."
-                      : "Archived files are shown too. Click to hide them and see only what still needs archiving.")
-                .accessibilityIdentifier("catalog.showingRow.archived")
-        case .toggleDrives:
-            Button(action: onToggleDrives) { pillLabel(pill) }
-                .buttonStyle(.plain)
-                .help(state.showDisconnectedMedia
-                      ? "Files on disconnected drives are listed too. Click to show only drives that are plugged in."
-                      : "Only drives that are plugged in right now. Click to also list files on disconnected drives.")
-                .accessibilityIdentifier("catalog.showingRow.drives")
-        }
-    }
-
-    private func pillLabel(_ pill: CatalogShowingSummary.Pill) -> some View {
-        let (fg, bg): (Color, Color) = {
-            switch pill.emphasis {
-            case .archiveToDo: return (.white, toDoGreen)
-            case .archiveAll:  return (.white, allBlue)
-            case .reveal:      return (.orange, Color.orange.opacity(0.14))
-            case .neutral:     return (.primary, Color.secondary.opacity(0.14))
-            }
-        }()
-        return HStack(spacing: 4) {
-            Text(pill.text)
-            if pill.action != .none {
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .opacity(0.8)
-            }
-        }
-        .font(Self.pillFont)
-        .foregroundColor(fg)
         .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(bg))
-        .contentShape(Capsule())
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(fill))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .help(state.hasMasterArchive
+              ? (state.viewFilters.contains(.notYetArchived)
+                 ? "Files already in the Master Archive are hidden — this is your to-do list. Click to include them."
+                 : "Archived files are shown too. Click to hide them and see only what still needs archiving.")
+              : "What the table is filtered to. Use the Show menu to change it.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(CatalogShowingSummary.sentence(for: state))
+        .accessibilityIdentifier("catalog.showingBox")
     }
 }
 

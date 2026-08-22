@@ -568,33 +568,6 @@ struct CatalogView: View {
 
             Divider()
 
-            // "Showing: Videos · Not yet archived · Connected drives" —
-            // the plain-words reminder of what the table is filtered to
-            // (Rick 2026-08-22). Its own row so its width never pushes
-            // the toolbar's fixed-inset search capsule around.
-            CatalogShowingRow(
-                state: CatalogShowingSummary.State(
-                    kindFacet: model.kindFacetSetting.facet,
-                    viewFilters: catalogViewFilters,
-                    showPairsOnly: showPairsOnly,
-                    showDisconnectedMedia: showDisconnectedMedia,
-                    showRemoved: showRemoved,
-                    showSetAside: showSetAside,
-                    showSuperseded: showSuperseded,
-                    hasMasterArchive: model.masterArchive != nil,
-                    focusLabel: filterByIDs.isEmpty ? nil : focusLabel
-                ),
-                onToggleArchived: {
-                    if catalogViewFilters.contains(.notYetArchived) {
-                        catalogViewFilters.remove(.notYetArchived)
-                    } else {
-                        catalogViewFilters.remove(.hasMasterCopy)
-                        catalogViewFilters.insert(.notYetArchived)
-                    }
-                },
-                onToggleDrives: { showDisconnectedMedia.toggle() }
-            )
-            Divider()
 
             // Background preview sweep (2026-07-27): unobtrusive one-line
             // status while the sweep works/pauses. Self-observing subview

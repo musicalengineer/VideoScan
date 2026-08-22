@@ -81,6 +81,19 @@ struct CatalogToolbar<Dashboard: View>: View {
     private var viewIsModified: Bool {
         !viewFilters.isEmpty || showRemoved || showSetAside || showSuperseded
     }
+
+    /// Plain values for the Showing box — a handful of Bools, no records.
+    private var showingState: CatalogShowingSummary.State {
+        CatalogShowingSummary.State(
+            kindFacet: model.kindFacetSetting.facet,
+            viewFilters: viewFilters,
+            showPairsOnly: showPairsOnly,
+            showDisconnectedMedia: showDisconnectedMedia,
+            showRemoved: showRemoved,
+            showSetAside: showSetAside,
+            showSuperseded: showSuperseded,
+            hasMasterArchive: model.masterArchive != nil)
+    }
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     // MARK: Delete-Confirmed-Junk sheet state
@@ -503,6 +516,22 @@ struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Choose which files are shown — media kind, filters, and hidden records")
+
+            // "Showing: Videos · Not yet archived · Connected drives" — a
+            // highlighted box beside the Show menu saying in plain words
+            // what the table is filtered to (Rick 2026-08-22: "humans
+            // looking at lots of data need bright clear reminders").
+            // Green = the to-do view (archived hidden), blue = archived
+            // included. Click flips between the two.
+            CatalogShowingBox(state: showingState)
+                .onTapGesture {
+                    if viewFilters.contains(.notYetArchived) {
+                        viewFilters.remove(.notYetArchived)
+                    } else if model.masterArchive != nil {
+                        viewFilters.remove(.hasMasterCopy)
+                        viewFilters.insert(.notYetArchived)
+                    }
+                }
 
             if !outputCSVPath.isEmpty {
                 Button(action: {
