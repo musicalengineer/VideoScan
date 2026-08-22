@@ -12,15 +12,14 @@ import Foundation
 struct HallieNeuralVoice: Identifiable, Equatable, Sendable {
     let modelName: String
     let displayName: String
-    let speed: Float
 
     var id: String { "kokoro:\(modelName)" }
 
     static let choices = [
-        HallieNeuralVoice(modelName: "af_heart", displayName: "Heart — warm American", speed: 0.92),
-        HallieNeuralVoice(modelName: "af_bella", displayName: "Bella — gentle American", speed: 0.92),
-        HallieNeuralVoice(modelName: "af_sarah", displayName: "Sarah — clear American", speed: 0.92),
-        HallieNeuralVoice(modelName: "bf_emma", displayName: "Emma — warm British", speed: 0.92),
+        HallieNeuralVoice(modelName: "af_heart", displayName: "Heart — warm American"),
+        HallieNeuralVoice(modelName: "af_bella", displayName: "Bella — gentle American"),
+        HallieNeuralVoice(modelName: "af_sarah", displayName: "Sarah — clear American"),
+        HallieNeuralVoice(modelName: "bf_emma", displayName: "Emma — warm British"),
     ]
 
     static func selected(_ identifier: String?) -> HallieNeuralVoice? {
@@ -69,8 +68,9 @@ enum HallieNeuralSpeech {
             && FileManager.default.fileExists(atPath: directory.appendingPathComponent("mlx.metallib").path)
     }
 
-    static func job(for text: String, voice: HallieNeuralVoice) -> HallieNeuralSpeechJob {
-        HallieNeuralSpeechJob(text: text, voice: voice)
+    static func job(for text: String, voice: HallieNeuralVoice,
+                    speed: Float) -> HallieNeuralSpeechJob {
+        HallieNeuralSpeechJob(text: text, voice: voice, speed: speed)
     }
 
     static func removeTemporaryAudio(_ url: URL?) {
@@ -85,13 +85,15 @@ enum HallieNeuralSpeech {
 final class HallieNeuralSpeechJob: @unchecked Sendable {
     private let text: String
     private let voice: HallieNeuralVoice
+    private let speed: Float
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
 
-    init(text: String, voice: HallieNeuralVoice) {
+    init(text: String, voice: HallieNeuralVoice, speed: Float) {
         self.text = text
         self.voice = voice
+        self.speed = speed
     }
 
     func cancel() {
@@ -194,7 +196,7 @@ final class HallieNeuralSpeechJob: @unchecked Sendable {
             "--voices", install.appendingPathComponent(HallieNeuralSpeech.voicesName).path,
             "--output", outputDirectory.path,
             "--voice", voice.modelName,
-            "--speed", String(voice.speed),
+            "--speed", String(speed),
             "--text", text,
         ]
     }

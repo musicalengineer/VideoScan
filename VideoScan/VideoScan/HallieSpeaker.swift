@@ -15,14 +15,29 @@ import AVFoundation
 import Combine
 import Foundation
 
+struct HallieSpeechPace: Identifiable, Equatable, Sendable {
+    let factor: Double
+    let displayName: String
+
+    var id: Double { factor }
+
+    static let choices = [
+        HallieSpeechPace(factor: 0.84, displayName: "Unhurried — 84%"),
+        HallieSpeechPace(factor: 0.88, displayName: "Relaxed — 88%"),
+        HallieSpeechPace(factor: 0.92, displayName: "Natural — 92%"),
+        HallieSpeechPace(factor: 1.00, displayName: "Standard — 100%"),
+    ]
+}
+
 @MainActor
 final class HallieSpeaker: NSObject, ObservableObject {
     static let shared = HallieSpeaker()
 
     nonisolated static let enabledKey = "archivist.speakAnswers"
     nonisolated static let voiceKey = "archivist.speakVoice"
-    /// 0.85 × the system default — "a teeny bit slower".
-    nonisolated static let rateFactor: Float = 0.85
+    nonisolated static let speedKey = "archivist.speakSpeed"
+    nonisolated static let defaultVoiceID = "kokoro:af_bella"
+    nonisolated static let defaultSpeedFactor = 0.88
     nonisolated static let pitch: Float = 0.95
 
     @Published private(set) var isSpeaking = false
@@ -43,7 +58,8 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// Sentences to speak: claim tags removed, bracketed basis noise
     /// removed, split at sentence ends so each gets its own breath.
     nonisolated static func sentences(_ text: String) -> [String] {
-        var cleaned = text.replacingOccurrences(of: #"\[c\d+\]"#, with: "", options: .regularExpression)
+        var cleaned = spokenText(text)
+        cleaned = cleaned.replacingOccurrences(of: #"\[c\d+\]"#, with: "", options: .regularExpression)
         cleaned = cleaned.replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
         cleaned = cleaned.replacingOccurrences(of: " — ", with: ", ")
         // A sentence ends at . ! ? … followed by a space or the end of the
@@ -66,6 +82,22 @@ final class HallieSpeaker: NSObject, ObservableObject {
         return pieces
             .map { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " .", with: ".") }
             .filter { $0.count > 1 }
+    }
+
+    /// Expand suffixes before sentence splitting and speech synthesis. This
+    /// keeps "Richard Breen Jr." together and makes both Apple and Kokoro say
+    /// "Junior" rather than guessing at the abbreviation.
+    nonisolated static func spokenText(_ text: String) -> String {
+        var spoken = text
+        let suffixes = [(#"\bJr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Junior"),
+                        (#"\bSr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Senior")]
+        for (pattern, replacement) in suffixes {
+            spoken = spoken.replacingOccurrences(
+                of: pattern,
+                with: replacement,
+                options: [.regularExpression, .caseInsensitive])
+        }
+        return spoken
     }
 
     /// Rank installed English voices: Premium, then Enhanced, then the
@@ -106,6 +138,26 @@ final class HallieSpeaker: NSObject, ObservableObject {
         defaults.object(forKey: enabledKey) == nil ? true : defaults.bool(forKey: enabledKey)
     }
 
+    /// Bella is Hallie's default when no preference has ever been saved.
+    /// An explicit empty value still means "Best installed Apple voice".
+    nonisolated static func selectedNeuralVoice(
+        _ defaults: UserDefaults = .standard
+    ) -> HallieNeuralVoice? {
+        let identifier = defaults.object(forKey: voiceKey) == nil
+            ? defaultVoiceID
+            : defaults.string(forKey: voiceKey)
+        return HallieNeuralVoice.selected(identifier)
+    }
+
+    nonisolated static func speedFactor(_ defaults: UserDefaults = .standard) -> Float {
+        guard defaults.object(forKey: speedKey) != nil else {
+            return Float(defaultSpeedFactor)
+        }
+        let stored = defaults.double(forKey: speedKey)
+        guard (0.5...1.5).contains(stored) else { return Float(defaultSpeedFactor) }
+        return Float(stored)
+    }
+
     // MARK: - Speaking
 
     func speak(_ text: String) {
@@ -113,9 +165,12 @@ final class HallieSpeaker: NSObject, ObservableObject {
         let sentences = Self.sentences(text)
         guard !sentences.isEmpty else { return }
 
-        if let voice = HallieNeuralVoice.selected(UserDefaults.standard.string(forKey: Self.voiceKey)),
+        if let voice = Self.selectedNeuralVoice(),
            HallieNeuralSpeech.isInstalled {
-            speakNeural(sentences.joined(separator: " "), voice: voice)
+            speakNeural(
+                sentences.joined(separator: " "),
+                voice: voice,
+                speed: Self.speedFactor())
         } else {
             speakWithApple(sentences)
         }
@@ -126,7 +181,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         for sentence in sentences {
             let utterance = AVSpeechUtterance(string: sentence)
             utterance.voice = voice
-            utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Self.rateFactor
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Self.speedFactor()
             utterance.pitchMultiplier = Self.pitch
             utterance.postUtteranceDelay = 0.18
             synthesizer.speak(utterance)
@@ -134,10 +189,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
         isSpeaking = true
     }
 
-    private func speakNeural(_ text: String, voice: HallieNeuralVoice) {
+    private func speakNeural(_ text: String, voice: HallieNeuralVoice, speed: Float) {
         isSpeaking = true
         let generation = speechGeneration
-        let job = HallieNeuralSpeech.job(for: text, voice: voice)
+        let job = HallieNeuralSpeech.job(for: text, voice: voice, speed: speed)
         neuralJob = job
         neuralTask = Task { [weak self] in
             do {

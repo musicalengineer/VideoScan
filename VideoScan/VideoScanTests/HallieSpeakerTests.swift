@@ -16,6 +16,18 @@ struct HallieSpeakerTests {
         #expect(HallieSpeaker.sentences("Hello — I'm Hallie Mae.").first?.contains("—") == false)
     }
 
+    @Test func nameSuffixesAreExpandedBeforeSentenceSplitting() {
+        let text = "Richard Breen Jr. is Richard Breen Sr.'s son. ROBERT BREEN JR, is also listed."
+        #expect(HallieSpeaker.spokenText(text) ==
+                "Richard Breen Junior is Richard Breen Senior's son. ROBERT BREEN Junior, is also listed.")
+        #expect(HallieSpeaker.sentences(text) == [
+            "Richard Breen Junior is Richard Breen Senior's son.",
+            "ROBERT BREEN Junior, is also listed.",
+        ])
+        #expect(HallieSpeaker.spokenText("The file Jr.mov is untouched.") ==
+                "The file Jr.mov is untouched.")
+    }
+
     @Test func premiumVoicesRankFirstAndNoveltyVoicesLast() {
         let voices = HallieSpeaker.englishVoices()
         guard voices.count >= 2 else { return }   // a bare CI box may have one voice
@@ -58,5 +70,24 @@ struct HallieSpeakerTests {
         defaults.set("kokoro:af_heart", forKey: HallieSpeaker.voiceKey)
         #expect(HallieSpeaker.bestVoice(defaults)?.identifier == HallieSpeaker.englishVoices().first?.identifier,
                 "Apple speech remains the fallback when the neural helper is unavailable")
+    }
+
+    @Test func bellaAndRelaxedPaceAreDefaultsButExplicitChoicesWin() {
+        guard let defaults = UserDefaults(suiteName: "HallieSpeakerTests.\(UUID().uuidString)") else {
+            Issue.record("Could not create isolated user defaults")
+            return
+        }
+        #expect(HallieSpeaker.selectedNeuralVoice(defaults)?.id == "kokoro:af_bella")
+        #expect(abs(HallieSpeaker.speedFactor(defaults) - 0.88) < 0.0001)
+
+        defaults.set("kokoro:af_heart", forKey: HallieSpeaker.voiceKey)
+        defaults.set(0.92, forKey: HallieSpeaker.speedKey)
+        #expect(HallieSpeaker.selectedNeuralVoice(defaults)?.id == "kokoro:af_heart")
+        #expect(abs(HallieSpeaker.speedFactor(defaults) - 0.92) < 0.0001)
+
+        defaults.set("", forKey: HallieSpeaker.voiceKey)
+        defaults.set(0.01, forKey: HallieSpeaker.speedKey)
+        #expect(HallieSpeaker.selectedNeuralVoice(defaults) == nil)
+        #expect(abs(HallieSpeaker.speedFactor(defaults) - 0.88) < 0.0001)
     }
 }
