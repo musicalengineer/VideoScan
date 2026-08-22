@@ -48,6 +48,9 @@ struct HallieTerminalLineEditorTests {
 
     @Test func terminalSequencesMapToRequestedEditingKeys() {
         #expect(HallieTerminalKeyDecoder.decode([0x1b, 0x5b, 0x41]) == .historyPrevious)
+        #expect(HallieTerminalKeyDecoder.decode([0x1b, 0x4f, 0x41]) == .historyPrevious)
+        #expect(HallieTerminalKeyDecoder.decode(
+            [0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x41]) == .historyPrevious)
         #expect(HallieTerminalKeyDecoder.decode([0x01]) == .moveToStart)
         #expect(HallieTerminalKeyDecoder.decode([0x05]) == .moveToEnd)
         #expect(HallieTerminalKeyDecoder.decode([0x1b, 0x5b, 0x44]) == .left)

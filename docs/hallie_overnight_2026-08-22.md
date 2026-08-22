@@ -78,3 +78,5 @@ Nothing overnight wrote to the catalog or the CyberBrain. Saturday's plan is unc
 **Fix:** Hallie's standalone interactive shell now has a small native line editor. Up Arrow recalls prior entries; Ctrl-A and Ctrl-E move to the start and end; Left/Right Arrow and Backspace make recalled text editable. History is session-local (100 entries) and only active for a real terminal. Piped input and the injected test seam still use ordinary line input, and terminal settings are restored before every Hallie answer.
 
 **Verification:** 4/4 focused line-editor tests; a pseudo-terminal smoke against the real 7,314-item catalog exercised `:help` → Up recall → Ctrl-A/Ctrl-E editing → `:quit`; piped `:quit` also passed. The shell remained read-only and no Ollama request or app UI was started. Claude acknowledged the ownership boundary on #583 and stayed in `HallieWeb*`.
+
+**16:43 follow-up:** Rick's terminal did not recall on Up. The original CSI form worked in reproduction; the reader now also accepts SS3/application-cursor and modifier-bearing CSI forms. Both alternate byte sequences passed through a real pseudo-terminal, and the focused suite remains 4/4.

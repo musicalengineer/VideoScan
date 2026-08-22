@@ -122,11 +122,10 @@ enum HallieTerminalKeyDecoder {
         case [0x05]: return .moveToEnd         // Ctrl-E
         case [0x08], [0x7f]: return .backspace
         case [0x0a], [0x0d]: return .enter
-        case [0x1b, 0x5b, 0x41]: return .historyPrevious
-        case [0x1b, 0x5b, 0x42]: return .historyNext
-        case [0x1b, 0x5b, 0x43]: return .right
-        case [0x1b, 0x5b, 0x44]: return .left
         default:
+            if let escapeKey = decodeEscapeSequence(bytes) {
+                return escapeKey
+            }
             guard bytes.first != 0x1b,
                   let string = String(bytes: bytes, encoding: .utf8),
                   string.count == 1,
@@ -134,6 +133,23 @@ enum HallieTerminalKeyDecoder {
                   !character.isASCII || character.asciiValue.map({ $0 >= 0x20 }) == true
             else { return .ignored }
             return .character(character)
+        }
+    }
+
+    private static func decodeEscapeSequence(
+        _ bytes: [UInt8]
+    ) -> HallieLineEditor.Key? {
+        guard bytes.count >= 3,
+              bytes[0] == 0x1b,
+              bytes[1] == 0x5b || bytes[1] == 0x4f,
+              let final = bytes.last
+        else { return nil }
+        switch final {
+        case 0x41: return .historyPrevious
+        case 0x42: return .historyNext
+        case 0x43: return .right
+        case 0x44: return .left
+        default: return nil
         }
     }
 }
@@ -193,10 +209,7 @@ struct HallieTerminalLineReader {
     private func readKey() -> HallieLineEditor.Key? {
         guard let first = readByte() else { return nil }
         if first == 0x1b {
-            guard let second = readByte(), let third = readByte() else {
-                return .ignored
-            }
-            return HallieTerminalKeyDecoder.decode([first, second, third])
+            return readEscapeSequence(startingWith: first)
         }
         if first < 0x80 {
             return HallieTerminalKeyDecoder.decode([first])
@@ -213,6 +226,26 @@ struct HallieTerminalLineReader {
         for _ in 1..<length {
             guard let byte = readByte() else { return .ignored }
             bytes.append(byte)
+        }
+        return HallieTerminalKeyDecoder.decode(bytes)
+    }
+
+    private func readEscapeSequence(
+        startingWith first: UInt8
+    ) -> HallieLineEditor.Key {
+        guard let second = readByte() else { return .ignored }
+        var bytes = [first, second]
+        guard second == 0x5b || second == 0x4f else { return .ignored }
+
+        // SS3 cursor keys are ESC O A-D. CSI keys may include parameters,
+        // such as ESC [ 1 ; 2 A, and end at the first final byte (@ through ~).
+        let maximumSequenceLength = 16
+        while bytes.count < maximumSequenceLength {
+            guard let byte = readByte() else { return .ignored }
+            bytes.append(byte)
+            if byte >= 0x40, byte <= 0x7e {
+                break
+            }
         }
         return HallieTerminalKeyDecoder.decode(bytes)
     }
