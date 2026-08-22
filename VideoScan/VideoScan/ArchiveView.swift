@@ -39,6 +39,9 @@ struct ArchiveView: View {
     /// memoized per records version — CatalogStorageTotals.compute is
     /// O(records) and must never run in body.
     @State var storageTotalsMemo = RenderMemo<RecordsVersion, CatalogStorageTotals>()
+    /// "It looks like N files are ready" (ArchiveNudge.swift), memoized
+    /// per records version.
+    @State var nudgeMemo = RenderMemo<RecordsVersion, ArchiveNudge>()
     /// "timeline" | "files" — the Archived category's view switch.
     /// Timeline is the default: the archive is the story, Files the bench.
     @AppStorage("archive.viewMode") var archiveViewMode: String = "timeline"

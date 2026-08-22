@@ -50,6 +50,9 @@ extension ArchiveView {
             // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
             if selectedCategory == .archived {
                 ArchiveProgressBar(progress: archiveProgress)
+                ArchiveNudgeView(nudge: archiveNudge) { ids in
+                    model.requestPromote(recordIDs: ids)
+                }
                 Divider()
             }
 
@@ -319,5 +322,15 @@ extension ArchiveView {
             CatalogStorageTotalsCalculator.compute(records: model.records)
         }
         return ArchiveProgress.from(totals: model.masterArchiveTotals, storage: storage)
+    }
+
+    /// Files the catalog already vouches for, not yet archived.
+    @MainActor
+    var archiveNudge: ArchiveNudge {
+        let key = RecordsVersion(count: model.records.count,
+                                 revision: model.volumeAggregatesRevision)
+        return nudgeMemo.value(for: key) {
+            ArchiveNudge.assess(snapshot.notYetArchived)
+        }
     }
 }

@@ -86,7 +86,9 @@ struct ArchiveProgress: Equatable, Sendable {
 struct ArchiveProgressBar: View {
     let progress: ArchiveProgress
 
-    private let verifiedColor = Color(red: 0.18, green: 0.62, blue: 0.36)     // good
+    // Rick 2026-08-21: "a brighter green… if it popped a little more" —
+    // a vivid, saturated green; the amber and gray stay recessive.
+    private let verifiedColor = Color(red: 0.10, green: 0.80, blue: 0.36)     // good
     private let unverifiedColor = Color(red: 0.90, green: 0.62, blue: 0.16)   // warning
     private let remainingColor = Color.secondary.opacity(0.18)
 
@@ -151,6 +153,91 @@ struct ArchiveProgressBar: View {
         HStack(spacing: 5) {
             RoundedRectangle(cornerRadius: 3).fill(color).frame(width: 12, height: 12)
             Text("\(label) · \(count.formatted())")
+        }
+    }
+}
+
+/// The nudge under the bar: one loose sentence and a chevron that opens
+/// the list of files the catalog already vouches for, each with an
+/// "Archive…" button that opens the same Promote flow as the context menu.
+struct ArchiveNudgeView: View {
+    let nudge: ArchiveNudge
+    let promote: ([UUID]) -> Void
+    @State private var isOpen = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isOpen.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                    Text(nudge.headline)
+                        .font(.system(size: 14))
+                        .foregroundStyle(nudge.isEmpty ? Color.secondary : Color.primary)
+                    Spacer(minLength: 0)
+                    if !nudge.ready.isEmpty {
+                        Button("Archive the first \(min(nudge.ready.count, 5))…") {
+                            promote(Array(nudge.ready.prefix(5).map(\.id)))
+                        }
+                        .controlSize(.small)
+                        .help("Opens Promote to Archive for the first files in the list — you still review and confirm each one.")
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(nudge.isEmpty)
+
+            if isOpen, !nudge.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(nudge.ready.prefix(ArchiveNudge.listLimit)) { row($0) }
+                    if !nudge.nearReady.isEmpty {
+                        Text("Nearly ready — just need a date")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 6)
+                        ForEach(nudge.nearReady.prefix(ArchiveNudge.listLimit)) { row($0) }
+                    }
+                    if nudge.ready.count > ArchiveNudge.listLimit || nudge.nearReady.count > ArchiveNudge.listLimit {
+                        Text("…and more. Star or mark files in the Catalog and they appear here.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.leading, 20)
+                .padding(.top, 4)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
+    }
+
+    private func row(_ candidate: ArchiveNudge.Candidate) -> some View {
+        HStack(spacing: 10) {
+            Text(candidate.filename)
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let year = candidate.year {
+                Text(String(year))
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Text(candidate.reasons.joined(separator: " · "))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button(candidate.needsDate ? "Needs a date" : "Archive…") {
+                promote([candidate.id])
+            }
+            .controlSize(.small)
+            .disabled(candidate.needsDate)
         }
     }
 }
