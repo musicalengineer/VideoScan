@@ -72,6 +72,34 @@ extension HallieTurnExecutor {
             notes.append(contentsOf: kin.notes)
         }
 
+        // "pull up anything from Franklin": the translator took a place for
+        // a person. A name nobody knows — no profile, no tree, no CyberBrain,
+        // no person tag anywhere in the catalog — is searched as a place or
+        // word instead, and the basis says so (overnight cycle 9).
+        // Only when there is something to know people FROM: with no
+        // profiles, tree, CyberBrain or records at all, "unknown" means
+        // nothing and the name stays a person.
+        let hasIdentitySources = (context.profiles?.isEmpty == false) || context.graph != nil
+            || context.cyberBrain != nil || !context.presenceRecords.isEmpty
+        if hasIdentitySources, let people = effective.people, !people.isEmpty {
+            let taggedNames = Set(context.presenceRecords
+                .flatMap { $0.confirmedPeople.map { PersonResolver.normalize($0.name) } })
+            var keep: [String] = []
+            var demoted: [String] = []
+            for name in people {
+                let known = isKnownPerson(name, context: context, acceptSurname: true)
+                    || taggedNames.contains(PersonResolver.normalize(name))
+                if known { keep.append(name) } else { demoted.append(name) }
+            }
+            if !demoted.isEmpty {
+                effective.people = keep.isEmpty ? nil : keep
+                effective.keywords = (effective.keywords ?? []) + demoted
+                notes.append(contentsOf: demoted.map {
+                    "“\($0)” isn't a person I know, so I searched it as a place or word"
+                })
+            }
+        }
+
         // "as a baby" / "as a kid" / "as a teenager" → a year band from the
         // FIRST named person's birth year. Only when the AST has no explicit
         // years (an explicit year is the user's word and wins) and only when

@@ -814,4 +814,43 @@ struct HallieTurnExecutorTests {
         #expect(!result.prose.contains("Did you mean"), Comment(rawValue: result.prose))
         #expect(result.clarification == nil)
     }
+
+    @Test func aNameNobodyKnowsIsSearchedAsAPlaceOrWordAndSaysSo() async throws {
+        // Cycle 9: "pull up anything from Franklin" — the translator made
+        // Franklin a person; nobody by that name exists anywhere, but a
+        // folder does.
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Franklin/parade.mov",
+                directory: "/Volumes/X/Franklin", volumeName: "X",
+                inferredDate: nil,
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)],
+                transcript: nil),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Cape/beach.mov",
+                directory: "/Volumes/X/Cape", volumeName: "X",
+                inferredDate: nil,
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)],
+                transcript: nil),
+        ]
+        let context = HallieTurnExecutor.Context(presenceRecords: records, profiles: [
+            .init(stableID: "donna", canonicalName: "Donna"),
+        ])
+        let place = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "pull up anything from Franklin",
+                                ast: .presence(.init(people: ["Franklin"])))),
+            context: context)
+        #expect(place.outcome == .answered, Comment(rawValue: place.prose))
+        #expect(place.citations.map(\.filename) == ["parade.mov"])
+        #expect(place.basisLine.contains("“Franklin” isn't a person I know, so I searched it as a place or word"))
+
+        // A real person stays a person — and a tagged name with no profile too.
+        let person = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "show me Donna",
+                                ast: .presence(.init(people: ["Donna"])))),
+            context: context)
+        #expect(person.citations.count == 2)
+        #expect(!person.basisLine.contains("isn't a person I know"))
+    }
 }
