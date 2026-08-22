@@ -350,6 +350,14 @@ struct CatalogView: View {
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
+    /// The filter set, persisted (2026-08-22). Until now the Show ▸ filters
+    /// were session-only, so "Not yet archived" — the catalog's whole
+    /// point once a Master Archive exists — had to be re-ticked every
+    /// launch. Encoded by CatalogShowingSummary; mirrored from
+    /// `catalogViewFilters` in onChange, loaded once in onAppear. Absent
+    /// key = first run → `seedDefaultViewFilters`.
+    @AppStorage("catalog.viewFilters") private var persistedViewFilters: String = ""
+    @State private var didLoadPersistedViewFilters = false
     /// Baseline reachability opt-out (2026-07-20). Reachable-only is the
     /// DEFAULT — the catalog table shows only media on currently-mounted
     /// volumes. Flipping this ON lifts that baseline and shows disconnected
@@ -560,6 +568,34 @@ struct CatalogView: View {
 
             Divider()
 
+            // "Showing: Videos · Not yet archived · Connected drives" —
+            // the plain-words reminder of what the table is filtered to
+            // (Rick 2026-08-22). Its own row so its width never pushes
+            // the toolbar's fixed-inset search capsule around.
+            CatalogShowingRow(
+                state: CatalogShowingSummary.State(
+                    kindFacet: model.kindFacetSetting.facet,
+                    viewFilters: catalogViewFilters,
+                    showPairsOnly: showPairsOnly,
+                    showDisconnectedMedia: showDisconnectedMedia,
+                    showRemoved: showRemoved,
+                    showSetAside: showSetAside,
+                    showSuperseded: showSuperseded,
+                    hasMasterArchive: model.masterArchive != nil,
+                    focusLabel: filterByIDs.isEmpty ? nil : focusLabel
+                ),
+                onToggleArchived: {
+                    if catalogViewFilters.contains(.notYetArchived) {
+                        catalogViewFilters.remove(.notYetArchived)
+                    } else {
+                        catalogViewFilters.remove(.hasMasterCopy)
+                        catalogViewFilters.insert(.notYetArchived)
+                    }
+                },
+                onToggleDrives: { showDisconnectedMedia.toggle() }
+            )
+            Divider()
+
             // Background preview sweep (2026-07-27): unobtrusive one-line
             // status while the sweep works/pauses. Self-observing subview
             // — progress re-renders ONLY this line, never the table.
@@ -677,6 +713,7 @@ struct CatalogView: View {
                 }
             }
             .onAppear {
+                loadPersistedViewFiltersIfNeeded()
                 handlePendingCatalogNavigation()
                 restoreFocusedMedia()
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
@@ -700,6 +737,13 @@ struct CatalogView: View {
                     model.archivistSearchRequest = nil
                 }
             }
+            .onChange(of: catalogViewFilters) {
+                guard didLoadPersistedViewFilters else { return }
+                persistedViewFilters = CatalogShowingSummary.encode(catalogViewFilters)
+            }
+            // A Master Archive designated AFTER first run flips the default
+            // to the to-do view once (never again — the user's choice wins).
+            .onChange(of: model.masterArchive != nil) { seedDefaultViewFiltersIfUntouched() }
             .onDisappear {
                 // CatalogView's @State selection ceases to be a visible
                 // current row when this tab leaves the hierarchy.
@@ -1396,5 +1440,36 @@ extension CatalogView {
         }
         text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
         return text
+    }
+}
+
+// MARK: - Persisted Show filters (2026-08-22)
+
+extension CatalogView {
+    /// UserDefaults key written the first time the filter set is seeded,
+    /// so the "Not yet archived" default is applied exactly once.
+    static let viewFiltersSeededKey = "catalog.viewFilters.seeded"
+
+    /// Load the persisted filter set on first appearance; seed the
+    /// default when nothing was ever saved.
+    func loadPersistedViewFiltersIfNeeded() {
+        guard !didLoadPersistedViewFilters else { return }
+        catalogViewFilters = CatalogShowingSummary.decode(persistedViewFilters)
+        didLoadPersistedViewFilters = true
+        seedDefaultViewFiltersIfUntouched()
+    }
+
+    /// Once a Master Archive exists, the catalog defaults to the to-do
+    /// view (Rick 2026-08-22: "when I am browsing the main catalog, it is
+    /// really the 'To be archived' catalog"). Applied ONCE per install;
+    /// after that the pill / Show menu is the user's call.
+    func seedDefaultViewFiltersIfUntouched() {
+        guard didLoadPersistedViewFilters, model.masterArchive != nil else { return }
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.viewFiltersSeededKey) else { return }
+        defaults.set(true, forKey: Self.viewFiltersSeededKey)
+        if !catalogViewFilters.contains(.hasMasterCopy) {
+            catalogViewFilters.insert(.notYetArchived)
+        }
     }
 }

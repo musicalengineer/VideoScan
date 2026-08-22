@@ -128,6 +128,11 @@ final class VideoScanModel: ObservableObject {
     @Published var pendingCatalogPairMode: Bool = false
     /// Set by Catalog tab to navigate the Archive tab to a specific record.
     @Published var pendingArchiveSelection: UUID?
+    /// Search term to carry into the Archive tab alongside
+    /// `pendingArchiveSelection` (2026-08-22: a catalog search whose hits
+    /// are all archived hands the query over so every hit is listed there,
+    /// not just the highlighted first one). Consumed with the selection.
+    @Published var pendingArchiveSearch: String?
     /// The file(s) currently "under the microscope" — persists across tab
     /// switches so both Catalog and Archive highlight the same set. Includes
     /// the primary record plus any duplicate-group members.

@@ -36,6 +36,11 @@ struct CatalogContent: View {
     /// `@Binding` here ≈ a C++ reference member — writes land in
     /// ContentView's @State storage, not in a local copy.
     @Binding var searchHitCount: Int
+    /// Search hits the to-do view HID because they are already archived
+    /// (2026-08-22). Written by computeFiltered (event-driven), read by
+    /// `archivedHitsBanner`. Empty whenever no search is active or the
+    /// Not-yet-archived filter is off.
+    @State var archivedSearchHitIDs: [UUID] = []
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
@@ -429,6 +434,7 @@ struct CatalogContent: View {
             // (ContentView clears one when the other activates); zero the
             // badge so a stale count can't outlive its query.
             searchHitCount = 0
+            archivedSearchHitIDs = []
             return records.filter { filterByIDs.contains($0.id) }
         }
         // Default: hide soft-deleted (purged) records. Composes with all the
@@ -553,7 +559,20 @@ struct CatalogContent: View {
         // Master Archive worklists (2026-08-15). Event-driven pass; the
         // model's memoized reverse index makes each predicate O(1).
         if viewFilters.contains(.notYetArchived) {
-            out = out.filter { model.pfNotYetArchived($0) }
+            if searchText.isEmpty {
+                out = out.filter { model.pfNotYetArchived($0) }
+                archivedSearchHitIDs = []
+            } else {
+                // Same predicate, but remember what it hid: a search for
+                // an archived file must never dead-end at "No matches"
+                // (Rick 2026-08-22: "when we search we'll miss important
+                // videos"). The banner offers the jump to the Archive tab.
+                let split = CatalogShowingSummary.splitArchivedHits(out) { !model.pfNotYetArchived($0) }
+                out = split.shown
+                archivedSearchHitIDs = split.archived.map(\.id)
+            }
+        } else {
+            archivedSearchHitIDs = []
         }
         if viewFilters.contains(.hasMasterCopy) {
             out = out.filter { model.pfHasMasterCopy($0) }
@@ -585,6 +604,9 @@ struct CatalogContent: View {
                     // user action needed is missing while its volume is
                     // mounted. Non-blocking, once per volume per session.
                     looksMovedBanner
+                    // "3 matches are already in the Archive" — the
+                    // to-do view's search escape hatch (2026-08-22).
+                    archivedHitsBanner
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
                     // of leaving the user staring at a blank table area.
@@ -597,10 +619,12 @@ struct CatalogContent: View {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 28))
                                     .foregroundColor(.secondary)
-                                Text("No matches")
+                                Text(archivedSearchHitIDs.isEmpty ? "No matches" : "No matches here")
                                     .font(.title3.weight(.medium))
                                     .foregroundColor(.secondary)
-                                Text("Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated.")
+                                Text(archivedSearchHitIDs.isEmpty
+                                     ? "Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated."
+                                     : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count) + " Use Show in Archive above.")
                                     .font(.callout)
                                     .foregroundColor(.secondary)
                                     .multilineTextAlignment(.center)

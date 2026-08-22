@@ -113,7 +113,8 @@ struct ArchiveView: View {
         guard let id = model.pendingArchiveSelection else { return }
         model.pendingArchiveSelection = nil
         selectedCategory = category(containing: id)
-        searchText = ""
+        searchText = model.pendingArchiveSearch ?? ""
+        model.pendingArchiveSearch = nil
         model.focusedMediaIDs = model.focusSet(for: id)
         selectedIDs = model.focusedMediaIDs
     }
