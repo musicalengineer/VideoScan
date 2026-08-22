@@ -40,9 +40,16 @@ struct ArchiveNudge: Equatable, Sendable {
     let nearReady: [Candidate]
 
     static let empty = ArchiveNudge(ready: [], nearReady: [])
-    static let listLimit = 25
+    /// A nudge, not an inventory: the few most likely to be ready.
+    static let listLimit = 15
 
     var isEmpty: Bool { ready.isEmpty && nearReady.isEmpty }
+
+    /// The rows the panel shows — ready first (strongest vouching first),
+    /// then the nearly-ready to fill up to the limit. Never the whole list.
+    var shortlist: [Candidate] {
+        Array((ready + nearReady).prefix(Self.listLimit))
+    }
 
     /// Looser wording on purpose — it's a hunch from the catalog's own
     /// marks, not a verdict.
@@ -66,25 +73,37 @@ struct ArchiveNudge: Equatable, Sendable {
     /// three times (Rick 2026-08-21: "filter out all the copies").
     static func assess(_ records: [VideoRecord]) -> ArchiveNudge {
         // Strongest vouching first, then name — stable and explainable.
+        // Strongest vouching first; among equals the OLDER recording first
+        // (the heritage tapes are the point of the archive, and the
+        // 2026 fixtures should not crowd out Cape Cod 1993); then name.
         let order: (Candidate, Candidate) -> Bool = { a, b in
             if a.score != b.score { return a.score > b.score }
+            if a.year != b.year { return (a.year ?? .max) < (b.year ?? .max) }
             return a.filename.localizedStandardCompare(b.filename) == .orderedAscending
         }
         var singles: [Candidate] = []
-        var byGroup: [UUID: (keeper: Candidate?, best: Candidate?, copies: Int)] = [:]
+        // Files with no dup group yet can still be the same tape under a
+        // camera's default name on four cards ("00000.MTS" ×4): same
+        // name and same length is treated as one recording here.
+        var byGroup: [String: (keeper: Candidate?, best: Candidate?, copies: Int)] = [:]
         for rec in records {
             guard let candidate = candidate(rec) else { continue }
-            guard let group = rec.duplicateGroupID, rec.duplicateGroupCount > 1 else {
+            let key: String
+            if let group = rec.duplicateGroupID, rec.duplicateGroupCount > 1 {
+                key = "group:" + group.uuidString
+            } else if !rec.filename.isEmpty, rec.durationSeconds > 0 {
+                key = "name:\(rec.filename.lowercased())|\(Int(rec.durationSeconds.rounded()))"
+            } else {
                 singles.append(candidate)
                 continue
             }
-            var entry = byGroup[group] ?? (nil, nil, 0)
+            var entry = byGroup[key] ?? (nil, nil, 0)
             entry.copies += 1
             if rec.duplicateDisposition == .keep, entry.keeper == nil {
                 entry.keeper = candidate
             }
             if entry.best.map({ order(candidate, $0) }) ?? true { entry.best = candidate }
-            byGroup[group] = entry
+            byGroup[key] = entry
         }
         var all = singles
         for entry in byGroup.values {
