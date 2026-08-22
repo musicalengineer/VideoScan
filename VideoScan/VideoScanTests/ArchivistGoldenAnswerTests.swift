@@ -350,7 +350,8 @@ private func gradeGoldenResult(
         }
     }
     if let query = expectedQueryContains {
-        #expect(result.queryDescription?.contains(query) == true,
+        // Case-insensitive: person names keep their typed casing since 87a21a4d.
+        #expect(result.queryDescription?.lowercased().contains(query.lowercased()) == true,
                 "\(label): query '\(result.queryDescription ?? "nil")'")
     }
     if let paths = expectedPaths {

@@ -158,7 +158,8 @@ struct HallieConversationMemoryTests {
 
         let rick = try await run("what about rick?", memory: &memory, context: context)
         #expect(rick.matchCount == 2)
-        #expect(rick.queryDescription == "shape=presence person=rick years=1990...1999")
+        // Person names keep the typed/recovered casing since 87a21a4d.
+        #expect(rick.queryDescription?.lowercased() == "shape=presence person=rick years=1990...1999")
         #expect(rick.basisLine.hasPrefix("Basis: refining: rick · 1990–1999; "))
 
         // The chain continues from the refined AST, not the original.
@@ -189,8 +190,8 @@ struct HallieConversationMemoryTests {
         #expect(baby.citations.map(\.filename) == ["timmy_a.mov"])
         #expect(baby.basisLine.contains(
             "using Timmy's birth year 2005 from the People profile (“as a baby” = 2005–2007)"))
-        #expect(baby.queryDescription == "shape=cross person=timmy years=2005...2007 keyword=peekaboo"
-                || baby.queryDescription == "shape=presence person=timmy years=2005...2007 keyword=peekaboo")
+        #expect(baby.queryDescription?.lowercased() == "shape=cross person=timmy years=2005...2007 keyword=peekaboo"
+                || baby.queryDescription?.lowercased() == "shape=presence person=timmy years=2005...2007 keyword=peekaboo")
 
         let kid = try await HallieTurnExecutor.execute(
             .presence(.init(people: ["timmy"], keywords: ["kid", "peekaboo"])),

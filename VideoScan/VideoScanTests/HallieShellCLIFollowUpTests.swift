@@ -100,12 +100,15 @@ struct HallieShellCLIFollowUpTests {
 
         // "show more" paged; "and in the 90s?" refined without the model.
         #expect(harness.output.contains("Here are 5 more (items 26–30 of 30)."))
-        #expect(harness.output.contains { $0.contains("refining: donna · 1990–1999") })
-        #expect(harness.output.contains("interpreted: shape=presence (local)"))
+        // Since 5ce7c75b the shell keeps diagnostics ("refining: …",
+        // "interpreted: …", "offer: …") out of the conversation; the
+        // refinement is visible in what Hallie SAYS.
+        #expect(harness.output.contains("Narrowed to 1990–1999 — 30 catalog items."))
+        #expect(!harness.output.contains("interpreted: shape=presence (local)"))
 
-        // Capability question answered locally with an offer line.
+        // Capability question answered locally, with the offer in the prose.
         #expect(harness.output.contains { $0.hasPrefix("I can't edit biographies or family facts yet") })
-        #expect(harness.output.contains("offer: ask “who is Donna?”"))
+        #expect(harness.output.contains { $0.contains("show what I currently have for Donna") })
 
         // "play it" after the refinement plays the refined set's first item.
         #expect(harness.mediaActions.count == 2)
