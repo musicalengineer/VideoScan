@@ -678,83 +678,14 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let rawPayload):
-            // Pronouns first (2026-08-18: "how am I related to you?"):
-            // "I"/"me"/"my" → the owner, "you"/"Hallie" → the archivist,
-            // bound deterministically and recorded on the Intent so every
-            // continuation reads them the same way. Fresh turns only — a
+            // Everything that must happen BEFORE a family-tree lookup on a
+            // fresh turn — wedding-date guard, bare-pronoun guard, "my dad"
+            // rebinding, "I"/"you" binding — lives in +GraphPreflight; a
             // continuation's intent already carries bound names.
-            if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty {
-                // "when did Rick get married": the tree shape has no marriage
-                // operation, so the translator reaches for birth — and the
-                // answer was a BIRTH date (cycle 6). Answer the wedding date
-                // from the tree, or decline honestly; never a birth date.
-                if let wedding = HallieMarriageDate.answer(
-                    question: request.intent.originalQuestion,
-                    payload: rawPayload, context: context) {
-                    return wedding
-                }
-                // A bare "they"/"he"/"she" that nothing stood for must never
-                // be looked up as a name (cycle 5: "tell me about They").
-                if let pronoun = rawPayload.people.first(where: HalliePronounContinuity.isThirdPersonPronoun) {
-                    return Result(
-                        route: .graph, outcome: .declined,
-                        prose: HalliePronounContinuity.whoDoYouMean(pronoun),
-                        basisLine: "Basis: a pronoun with no previous answer to refer to; no family fact was looked up.",
-                        queryDescription: graphQueryDescription(rawPayload),
-                        citations: [], catalogPersonName: nil)
-                }
-                // "did my dad have brothers or sisters": the relative must
-                // be resolved BEFORE "my" is bound to the owner, or the
-                // answer is about the wrong person (cycle 4: it reported
-                // Rick's siblings for a question about Rick's father).
-                // …but NOT when the translator already turned the phrase
-                // into the query's relation: "who is my father" is
-                // father-of(me), and rebinding "my father" first would ask
-                // for the father's father.
-                let phrase = SpeakerKinship.kinshipPhrase(in: request.intent.originalQuestion)
-                let alreadyTheRelation = phrase.map { $0.relation.rawValue == rawPayload.relation?.rawValue } ?? true
-                let kin = alreadyTheRelation
-                    ? SpeakerKinship.Rebinding(people: rawPayload.people)
-                    : SpeakerKinship.rebind(
-                        people: rawPayload.people,
-                        question: request.intent.originalQuestion,
-                        speakers: context.speakers,
-                        graph: context.graph,
-                        cyberBrain: context.cyberBrain)
-                if let failure = kin.failure {
-                    return Result(
-                        route: .graph, outcome: .declined, prose: failure,
-                        basisLine: "Basis: the question names a relative of the speaker that the family tree could not resolve; no family fact was looked up.",
-                        queryDescription: graphQueryDescription(rawPayload),
-                        citations: [], catalogPersonName: nil)
-                }
-                if !kin.notes.isEmpty {
-                    var rebound = rawPayload
-                    rebound.people = kin.people
-                    let inner = try await execute(
-                        Request(intent: request.intent.replacing(
-                            ast: .graph(rebound),
-                            speakerBindings: [SpeakerBinding(
-                                index: 0, pronoun: "my", role: .owner,
-                                boundName: context.speakers.ownerName ?? "")])),
-                        context: context, dependencies: dependencies)
-                    return inner.prefixingBasis(kin.notes.joined(separator: "; "))
-                }
-                let binding = bindPronouns(
-                    rawPayload.people, speakers: context.speakers,
-                    isKnownPerson: { isKnownPerson($0, context: context) })
-                if let unbound = binding.unbound.first {
-                    return unboundPronounResult(unbound, payload: rawPayload)
-                }
-                if !binding.bindings.isEmpty {
-                    var bound = rawPayload
-                    bound.people = binding.people
-                    let inner = try await execute(
-                        Request(intent: request.intent.replacing(
-                            ast: .graph(bound), speakerBindings: binding.bindings)),
-                        context: context, dependencies: dependencies)
-                    return inner
-                }
+            if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty,
+               let handled = try await graphPreflight(
+                   rawPayload, request: request, context: context, dependencies: dependencies) {
+                return handled
             }
             let result = try await executeGraphCase(
                 rawPayload, request: request, context: context,
