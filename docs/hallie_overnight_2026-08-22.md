@@ -29,3 +29,10 @@ Rick (21:20): "can you and codex work overnight on hallie in a virtuous cycle of
 **Tests:** scaffoldLabelsNeverReachTheReader + pin updates; battery 317/317.
 **Next (my lane):** "the boys" / "all four boys" as an any-of identity (cc011 declines today: "I don't have any videos tagged with all four boys"); presence people are ANDed and the AST has no any-of — needs a small executor-side expansion (kin phrase → the owner's children by name, OR'd) without touching the translator.
 
+## Claude cycle 4 — 02:13–02:50 — 256da75a
+**Before** (= cycle 3 after): 200-Q **76%**, interaction **93%**.
+**Fix:** two wrong-person answers. (1) *"did my dad have brothers or sisters"* was answered about **Rick** — the family-tree route bound "my" to the owner and dropped "dad". SpeakerKinship now runs on that route before pronoun binding, except when the translator already made the phrase the query's own relation ("who is my father" must not become the father's father). It now answers about Richard Harding Breen **Sr** — and honestly says the tree records no siblings for him. (2) *"show me Timmy as a baby"* / *"Donna and Timmy together"* asked "Did you mean Tim or Timmy?" because Tim's profile lists "Timmy" as an alias; a name typed exactly as a profile's own name now wins over alias matches. Real answer tonight: *"There are 2 catalog items matching that request. Donna is confirmed in both of them. Timmy is also confirmed in both of them."*
+**After:** 200-Q **77%** (151/197; catalog_search 75→81), interaction **94%**.
+**Tests:** 2 new; battery 319/319.
+**Next (my lane):** "when did they get married" — a bare pronoun reaching the tree route as a name ("I don't find 'they'… tell me about They"); resolve from the last answer's people or decline by asking who. Then "the boys" any-of (needs a family-word → names mapping; the tree stops in 1959 so the sons aren't in it — honest decline + telling door until Rick tells her who the boys are).
+
