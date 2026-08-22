@@ -132,7 +132,10 @@ struct HallieTurnExecutorKinshipBridgeTests {
         let result = try await HallieTurnExecutor.execute(
             .init(intent: kinship("rick", .father)), context: context)
         #expect(result.outcome == .declined)
-        #expect(result.prose.contains("don't find"))
+        // The People tab knows "Rick" even though the tree can't bridge the
+        // nickname (2026-08-22): decline by name, not "I don't find rick".
+        #expect(result.prose.hasPrefix("Rick is in the People tab, so I know the name — but I can't trace father for Rick yet."))
+        #expect(!result.prose.contains("don't find"))
     }
 
     @Test func birthAndDeathUseTheSameBridge() async throws {

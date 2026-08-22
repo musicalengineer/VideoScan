@@ -616,7 +616,7 @@ enum HallieShellCLI {
                 profiles: profiles?.map {
                     HallieTurnExecutor.ProfileSnapshot(
                         stableID: $0.id, canonicalName: $0.name,
-                        aliases: $0.aliases, birthdate: $0.birthdate)
+                        aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes)
                 },
                 graph: graph,
                 cyberBrain: cyberBrain)
@@ -700,7 +700,8 @@ enum HallieShellCLI {
                 playAfterAnswer: false,
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
-                catalogStats: state.catalogStats)
+                catalogStats: state.catalogStats,
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):
@@ -831,7 +832,7 @@ enum HallieShellCLI {
                     stableID: $0.id,
                     canonicalName: $0.name,
                     aliases: $0.aliases,
-                    birthdate: $0.birthdate)
+                    birthdate: $0.birthdate, note: $0.notes)
             }
             let selectedDate = state.selectedRecordID
                 .flatMap(state.record)

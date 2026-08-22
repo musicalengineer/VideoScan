@@ -278,6 +278,47 @@ struct ArchivistGraphExecutorTests {
         #expect(result.evidence?.subjectID == "@R@")
     }
 
+    /// Rick 2026-08-22: the gallery's "Tim" (brother) lists "Timmy" as an
+    /// alias and "Timmy" (son) lists "Tim". The typed spelling's own profile
+    /// wins; an alias claimed by two profiles still asks.
+    @Test func exactCanonicalNameBeatsCrossClaimedAliases() {
+        let brother = ArchivistGraphProfileSnapshot(
+            stableID: "tim", canonicalName: "Tim", aliases: ["Timmy", "Mimmy"])
+        // (The real gallery also gives the son "Tim" as an alias — that alias
+        // would then bridge him to the tree's Tim through the ordinary alias
+        // bridge, which is a data problem, not a resolver one. Not modelled.)
+        let son = ArchivistGraphProfileSnapshot(
+            stableID: "timmy", canonicalName: "Timmy", aliases: ["Timmy Breen"])
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 @T@ INDI
+        1 NAME Tim /Breen/
+        1 BIRT
+        2 DATE 1955
+        0 TRLR
+        """)
+
+        let typedTim = execute(people: ["Tim"], operation: .birth,
+                               graph: tree, profiles: [brother, son])
+        #expect(typedTim.conclusion == .answered)
+        #expect(typedTim.evidence?.subjectID == "@T@")
+
+        let typedTimmy = execute(people: ["Timmy"], operation: .biography,
+                                 graph: tree, profiles: [brother, son])
+        #expect(typedTimmy.conclusion == .personNotFound,
+                "the son's own profile wins, and he is not in the tree")
+        #expect(typedTimmy.ambiguityCandidates.isEmpty)
+
+        let aliasOnly = execute(people: ["Mimmy"], operation: .biography,
+                                graph: tree, profiles: [brother, son])
+        #expect(aliasOnly.conclusion == .answered, "only Tim claims Mimmy")
+
+        let shared = ArchivistGraphProfileSnapshot(
+            stableID: "other", canonicalName: "Timothy", aliases: ["Mimmy"])
+        let tied = execute(people: ["Mimmy"], operation: .biography,
+                           graph: tree, profiles: [brother, son, shared])
+        #expect(tied.conclusion == .profileAmbiguous)
+    }
+
     @Test func profileAliasBridgesIdentityWhileFactsRetainGedcomProvenance() {
         let profile = ArchivistGraphProfileSnapshot(
             stableID: "rick", canonicalName: "Richard Breen",

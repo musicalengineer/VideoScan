@@ -544,7 +544,15 @@ enum ArchivistGraphExecutor {
                 stableID: stableID, definitions: definitions))
         }
 
-        let identities = matchingProfiles.sorted(by: profileOrder)
+        var identities = matchingProfiles.sorted(by: profileOrder)
+        // Cross-claimed spellings (Rick 2026-08-22: the gallery's "Tim" lists
+        // "Timmy" as an alias and "Timmy" lists "Tim" — brother and son): the
+        // profile whose CANONICAL name is the typed spelling wins outright;
+        // alias-only claims still tie and ask.
+        if identities.count > 1 {
+            let exact = identities.filter { normalize($0.canonicalName) == key }
+            if exact.count == 1 { identities = exact }
+        }
         guard identities.count <= 1 else {
             return .profileAmbiguous(identities)
         }

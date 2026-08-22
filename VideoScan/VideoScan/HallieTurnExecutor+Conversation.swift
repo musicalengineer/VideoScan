@@ -168,7 +168,8 @@ extension HallieTurnExecutor {
         playAfterAnswer: Bool,
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
-        catalogStats: HallieCatalogStats? = nil
+        catalogStats: HallieCatalogStats? = nil,
+        rosterAnswer: (() -> Result)? = nil
     ) -> PreTranslation {
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.
@@ -177,6 +178,11 @@ extension HallieTurnExecutor {
         }
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
+        }
+        // "who do you know?" — the People tab, the tree, and what the family
+        // has told her; answered locally (PeopleTab), never by the model.
+        if let rosterAnswer, PeopleTab.isRosterQuestion(question) {
+            return .answer(rosterAnswer())
         }
         // "Where did that come from?" — answered from the last answer's own
         // trail, never by the model.

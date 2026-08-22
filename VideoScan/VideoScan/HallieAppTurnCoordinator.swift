@@ -250,7 +250,7 @@ enum HallieAppTurnCoordinator {
                             stableID: $0.id,
                             canonicalName: $0.name,
                             aliases: $0.aliases,
-                            birthdate: $0.birthdate)
+                            birthdate: $0.birthdate, note: $0.notes)
                     }
                 case .unavailable:
                     return nil
@@ -572,7 +572,8 @@ enum HallieAppTurnCoordinator {
                 isKnownPerson: { name in
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
                 },
-                catalogStats: catalogStats)
+                catalogStats: catalogStats,
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) })
         }
         return try await withTaskCancellationHandler {
             try await worker.value

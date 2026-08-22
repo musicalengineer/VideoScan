@@ -217,17 +217,22 @@ enum HallieTurnExecutor {
         let canonicalName: String
         let aliases: [String]
         let birthdate: Date?
+        /// The free-text note on the profile. Never a fact: the only reader
+        /// (PeopleTab) quotes it with attribution, and nothing matches on it.
+        let note: String
 
         init(
             stableID: String,
             canonicalName: String,
             aliases: [String] = [],
-            birthdate: Date? = nil
+            birthdate: Date? = nil,
+            note: String = ""
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
             self.aliases = aliases
             self.birthdate = birthdate
+            self.note = note
         }
     }
 
@@ -768,6 +773,13 @@ enum HallieTurnExecutor {
                dependencies: dependencies) {
             return result
         }
+        // No tree at all, but the People tab knows the name: answer from
+        // the profile (see +PeopleTab) rather than "I don't have a tree".
+        if context.graph == nil, let typed = payload.people.first,
+           let profile = PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
+            return PeopleTab.answer(profile: profile, payload: payload, context: context,
+                                    queryDescription: graphQueryDescription(payload))
+        }
         guard let graph = context.graph else {
             return Result(
                 route: .graph,
@@ -844,6 +856,12 @@ enum HallieTurnExecutor {
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {
+            // Not in the tree — but is it someone from the People tab? Then
+            // the profile answers (name, alternate names, birth date, tags).
+            if let profile = PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
+                return PeopleTab.answer(profile: profile, payload: payload, context: context,
+                                        queryDescription: queryDescription)
+            }
             return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
         }
         return FamilyKnowledgeSupplement.apply(
