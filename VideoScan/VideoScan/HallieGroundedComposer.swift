@@ -183,6 +183,8 @@ struct HallieGroundedComposer: Sendable {
         repeat.
         - Never say you lack evidence or don't know: you are only asked to \
         phrase claims that are already established.
+        - Call files by their names (e.g. "Cape_1993.mov"); never write \
+        "Item 1" or "claim 2" — those are labels for you, not for the reader.
         - Speak about the family plainly, the way a person would: prefer "there \
         are 21 clips of Donna at the Cape" over "I found 21 catalog items \
         matching that".

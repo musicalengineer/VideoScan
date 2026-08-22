@@ -45,6 +45,9 @@ enum HallieCompositionVerifier {
             /// "I do not have evidence for how many videos you have or if you
             /// had cars when you were young [c1]." (eval 2026-08-21).
             case metaConversation
+            /// "Two examples are Item 1 and Item 2" — the model echoed the
+            /// plan's scaffolding instead of naming the files.
+            case scaffoldLabel
         }
         let text: String
         let reason: Reason
@@ -104,6 +107,18 @@ enum HallieCompositionVerifier {
         for (word, digits) in numberWords where allowed.contains(digits) {
             allowed.insert(word)
         }
+        // "Two examples are …" citing two item claims: a count of the
+        // claims the sentence itself rests on is vouched by construction
+        // (the old "Item 2:" labels supplied that digit; sentence-shaped
+        // item claims don't).
+        if claims.count >= 2 {
+            for n in 2...min(claims.count, 20) {
+                allowed.insert(String(n))
+                if let word = numberWords.first(where: { $0.value == String(n) })?.key {
+                    allowed.insert(word)
+                }
+            }
+        }
         return allowed
     }
 
@@ -144,6 +159,10 @@ enum HallieCompositionVerifier {
                 dropped.append(Dropped(text: raw, reason: .metaConversation))
                 continue
             }
+            if namesScaffoldLabel(display) {
+                dropped.append(Dropped(text: raw, reason: .scaffoldLabel))
+                continue
+            }
             // An answer may not OPEN mid-thought. When sentence one is
             // dropped, sentence two ("The other is videocomplement…") is
             // left as the whole answer and reads as a non-sequitur
@@ -181,25 +200,31 @@ enum HallieCompositionVerifier {
     ) -> Bool {
         var remainder = display.lowercased()
         for claim in claims {
-            guard claim.text.hasPrefix("Item "),
-                  let colon = claim.text.firstIndex(of: ":") else { continue }
-            var tail = String(claim.text[claim.text.index(after: colon)...])
-                .trimmingCharacters(in: .whitespaces)
-            if let separator = tail.range(of: " — ") {
-                tail = String(tail[..<separator.lowerBound])
-            }
-            if let time = tail.range(
-                of: #" at [0-9]+(?:\.[0-9]+)?s$"#,
-                options: .regularExpression) {
-                tail = String(tail[..<time.lowerBound])
-            }
-            guard !tail.isEmpty else { continue }
+            guard let filename = itemFilename(in: claim.text) else { continue }
             remainder = remainder.replacingOccurrences(
-                of: tail.lowercased(), with: "")
+                of: filename.lowercased(), with: "")
         }
         return remainder.range(
             of: mediaFilenamePattern,
             options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The filename an item claim vouches for. Two claim shapes are
+    /// recognised: the older label form "Item 1: file — why" (still used
+    /// by tests and older plans) and the sentence form "One of them is
+    /// file — why." (HallieAnswerPlan since overnight cycle 3).
+    static func itemFilename(in claimText: String) -> String? {
+        let prefixes = #"^(?:Item \d+:\s*|(?:One|Another|A third|A fourth|A fifth|A sixth|A seventh|An eighth) of them is\s+)"#
+        guard let lead = claimText.range(of: prefixes, options: .regularExpression) else { return nil }
+        var tail = String(claimText[lead.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let separator = tail.range(of: " — ") {
+            tail = String(tail[..<separator.lowerBound])
+        }
+        if let time = tail.range(of: #" at [0-9]+(?:\.[0-9]+)?s\.?$"#, options: .regularExpression) {
+            tail = String(tail[..<time.lowerBound])
+        }
+        while tail.hasSuffix(".") { tail.removeLast() }
+        return tail.isEmpty ? nil : tail
     }
 
     /// Keep this aligned with VideoScanModel's cataloged video and optional
@@ -341,6 +366,13 @@ enum HallieCompositionVerifier {
     /// complementary live failure where the model omitted the subject and
     /// returned "s father was …". Falling back to the complete deterministic
     /// sentence is safer than displaying a grammatically broken fragment.
+    /// "Item 1", "item 2", "claim c3", "c1" as a word: plan scaffolding
+    /// that must never reach the reader as if it were a name.
+    static func namesScaffoldLabel(_ text: String) -> Bool {
+        let pattern = #"(?i)\b(item|items|claim|claims|example)\s+#?\d+\b|\b(c|claim)\d+\b"#
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
     static func isSentenceFragment(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first else { return true }

@@ -175,10 +175,14 @@ struct HallieAnswerPlan: Sendable, Equatable {
         for (index, citation) in citations.prefix(maxItemClaims).enumerated() {
             let at = citation.playbackSeconds.map { String(format: " at %.1fs", $0) } ?? ""
             let why = citation.bases.map(\.summary).joined(separator: "; ")
+            // A sentence, not a label: "Item 1: …" taught the model to say
+            // "Two examples are Item 1 and Item 2" (overnight cycle 3).
+            let ordinal = ["One", "Another", "A third", "A fourth", "A fifth",
+                           "A sixth", "A seventh", "An eighth"][min(index, 7)]
             claims.append(Claim(
                 id: "c\(claims.count + 1)",
-                text: "Item \(index + 1): \(citation.filename)\(at)"
-                    + (why.isEmpty ? "" : " — \(why)"),
+                text: "\(ordinal) of them is \(citation.filename)\(at)"
+                    + (why.isEmpty ? "." : " — \(why)."),
                 evidenceIDs: [citation.recordID.uuidString]))
         }
         return HallieAnswerPlan(

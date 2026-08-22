@@ -66,7 +66,7 @@ struct HallieGroundedCompositionTests {
         // Since 2026-08-21 the plan also carries derived span/people claims
         // between the count and the items, so locate the items by prefix
         // rather than by a fixed index.
-        let itemClaims = plan.claims.filter { $0.text.hasPrefix("Item ") }
+        let itemClaims = plan.claims.filter { HallieCompositionVerifier.itemFilename(in: $0.text) != nil }
         #expect(itemClaims.count == min(result.citations.count, HallieAnswerPlan.maxItemClaims))
         #expect(itemClaims[0].text.contains("donna_1.mov"))
         #expect(itemClaims[0].evidenceIDs == [result.citations[0].recordID.uuidString])
@@ -752,8 +752,31 @@ struct HallieCompositionNoiseTests {
         #expect(texts.contains { $0.contains("1993") && $0.contains("2011") })
         #expect(texts.contains { $0.contains("Donna") && $0.contains("2 of them") })
         #expect(plan.claims.first?.text == "I found 3 catalog items matching that.")
-        // Item claims still present and last.
-        #expect(texts.contains { $0.hasPrefix("Item 1:") })
+        // Item claims still present and last — as sentences, never "Item 1:" labels.
+        #expect(texts.contains { $0.hasPrefix("One of them is ") })
+        #expect(!texts.contains { $0.hasPrefix("Item ") })
+    }
+
+    @Test func scaffoldLabelsNeverReachTheReader() {
+        // Overnight cycle 3: the model wrote "Two examples are Item 1 and
+        // Item 2" — the plan's labels, not the files.
+        let plan = HallieAnswerPlan(
+            route: .presence, shape: .list,
+            claims: [.init(id: "c1", text: "I found 41 catalog items matching that."),
+                     .init(id: "c3", text: "One of them is Cape_1993.mov — confirmed person tag Donna."),
+                     .init(id: "c4", text: "Another of them is Cape_1995.mov.")],
+            fallbackText: "I found 41 catalog items matching that.")
+        let bad = HallieCompositionVerifier.verify(
+            "I found 41 catalog items matching that [c1]. Two examples are Item 1 and Item 2 [c3][c4].",
+            plan: plan, personaName: "Hallie")
+        #expect(bad.kept.map(\.display) == ["I found 41 catalog items matching that."])
+        #expect(bad.dropped.map(\.reason) == [.scaffoldLabel])
+        let good = HallieCompositionVerifier.verify(
+            "I found 41 catalog items matching that [c1]. Two of them are Cape_1993.mov and Cape_1995.mov [c3][c4].",
+            plan: plan, personaName: "Hallie")
+        #expect(good.dropped.isEmpty, "\(good.dropped)")
+        #expect(HallieCompositionVerifier.itemFilename(in: "One of them is Cape_1993.mov at 12.5s — why.") == "Cape_1993.mov")
+        #expect(HallieCompositionVerifier.itemFilename(in: "Item 2: b.mov") == "b.mov")
     }
 
     @Test func spanClaimReadsSinglyWhenOneYear() {
