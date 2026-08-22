@@ -291,17 +291,6 @@ struct ArchivistChatWindow: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(isThinking
                               || input.trimmingCharacters(in: .whitespaces).isEmpty)
-                // Rick 2026-08-22: "don't see a speaker setting in hallie" —
-                // the sheet was only reachable by right-clicking the portrait.
-                Button {
-                    showSpeakerSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Who is talking to her, and letting the family use her from the iPad or laptop")
-                .accessibilityLabel("Hallie settings")
             }
             .padding(10)
         }
@@ -411,6 +400,28 @@ struct ArchivistChatWindow: View {
     /// from the archive; the name edits in place.
     private var identityHeader: some View {
         HStack(spacing: 10) {
+            // Rick 2026-08-22: "the settings button should be upper left…
+            // a larger icon — we're dealing with senior citizens."
+            VStack(spacing: 3) {
+                Button {
+                    showSpeakerSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 30, weight: .regular))
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(Color.secondary.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Settings — who is talking, read aloud, and letting the family use her from the iPad or laptop")
+                .accessibilityLabel("Hallie settings")
+                Text("Settings")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.trailing, 18)
+            .frame(maxHeight: .infinity, alignment: .top)
+
             Button(action: choosePhoto) {
                 Group {
                     if !archivistPhotoPath.isEmpty,
@@ -566,6 +577,17 @@ struct ArchivistChatWindow: View {
                 Text(message.text)
                     .font(.system(size: 17))
                     .textSelection(.enabled)
+                if message.role == .assistant {
+                    Button {
+                        HallieSpeaker.shared.speak(message.text)
+                    } label: {
+                        Label("Read this aloud", systemImage: "speaker.wave.2.fill")
+                            .font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Read this answer aloud")
+                }
                 if showTechnicalDetails, let query = message.queryLine {
                     Text(query)
                         .font(.system(size: 15).monospaced())
@@ -1000,6 +1022,11 @@ struct ArchivistChatWindow: View {
     }
 
     private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
+        // Rick 2026-08-22: "in-app, there's no audio." On by default; the
+        // settings sheet has the switch and the voice picker.
+        if HallieSpeaker.isEnabled() {
+            HallieSpeaker.shared.speak(response.result.prose)
+        }
         lastResponder = response.responderHost
         pendingHallieClarification = response.pendingClarification
         hallieTelling = response.telling

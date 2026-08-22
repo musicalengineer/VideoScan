@@ -9,6 +9,7 @@
 // read back by `HallieTurnExecutor.Speakers.fromDefaults()`.
 
 import AppKit
+import AVFoundation
 import SwiftUI
 
 struct ArchivistSpeakerSettingsSheet: View {
@@ -50,6 +51,9 @@ struct ArchivistSpeakerSettingsSheet: View {
                     }
                 }
             }
+
+            Divider().padding(.vertical, 4)
+            HallieReadAloudSettings()
 
             Divider().padding(.vertical, 4)
             HallieWebAccessSettings()
@@ -116,6 +120,44 @@ struct HallieWebAccessSettings: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+}
+
+/// "Read answers aloud" + which voice (Rick 2026-08-22: no audio in-app;
+/// "soft-spoken librarian, gentle but firm, a teeny bit slower").
+struct HallieReadAloudSettings: View {
+    @AppStorage(HallieSpeaker.enabledKey) private var enabled = true
+    @AppStorage(HallieSpeaker.voiceKey) private var voiceID = ""
+    private let voices = HallieSpeaker.englishVoices()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Read her answers aloud", isOn: $enabled)
+                .font(.system(size: 15))
+                .onChange(of: enabled) { _, on in if !on { HallieSpeaker.shared.stop() } }
+            if enabled {
+                HStack(spacing: 8) {
+                    Text("Voice")
+                    Picker("", selection: $voiceID) {
+                        Text("Best installed (\(voices.first?.name ?? "system"))").tag("")
+                        ForEach(voices, id: \.identifier) { voice in
+                            Text(voice.name + (voice.quality == .premium ? " ★★" : voice.quality == .enhanced ? " ★" : ""))
+                                .tag(voice.identifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+                    .onChange(of: voiceID) { _, _ in HallieSpeaker.shared.audition() }
+                    Button("Hear her") { HallieSpeaker.shared.audition() }
+                        .controlSize(.small)
+                }
+                .font(.system(size: 13))
+                Text("★★ premium and ★ enhanced voices sound far more natural. Download them in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices… (Ava, Zoe, Allison are the softest).")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
