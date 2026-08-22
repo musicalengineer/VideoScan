@@ -36,3 +36,9 @@ Rick (21:20): "can you and codex work overnight on hallie in a virtuous cycle of
 **Tests:** 2 new; battery 319/319.
 **Next (my lane):** "when did they get married" — a bare pronoun reaching the tree route as a name ("I don't find 'they'… tell me about They"); resolve from the last answer's people or decline by asking who. Then "the boys" any-of (needs a family-word → names mapping; the tree stops in 1959 so the sons aren't in it — honest decline + telling door until Rick tells her who the boys are).
 
+## Claude cycle 5 — 03:13–03:50 — 2168e516
+**Before** (= cycle 4 after): 200-Q **77%**, interaction **94%**.
+**Fix:** *"when did they get married"* right after *"who did Rick marry"* reached the family-tree route with people = ["they"] and the not-found path offered "tell me about They". Now a bare third-person pronoun is rewritten to the last answer's people before translation ("they" → "Rick and Donna"; "he"/"she" only when there was exactly one), and a pronoun that still reaches the tree route (no memory) gets "I'm not sure who you mean by 'they' — ask me by name…" instead of a lookup.
+**After:** 200-Q **77%** (family_tree 76→80), interaction **93%** (−1, noise). Battery 323/323; 4 new tests.
+**Honest finding, not fixed yet:** with the pronoun resolved, that turn now reads *"Richard Harding Breen Jr was born on March 4, 1959"* — the grader counts it clean, but it is the wrong answer: the family-tree shape has no marriage-date operation, so the translator reached for birth. The GEDCOM graph doesn't parse FAM MARR dates today. **Cycle 6 target:** a deterministic guard — a marriage/wedding-date question must never be answered with a birth date; answer the marriage date if the tree has one (add MARR parsing) or decline honestly ("I can tell you who Rick married, but the tree I have doesn't give the wedding date").
+
