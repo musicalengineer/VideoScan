@@ -574,6 +574,8 @@ enum HallieShellCLI {
         var pendingClarification: PendingClarification?
         /// Non-nil while a family member is telling Hallie about someone.
         var telling: HallieTellingMode.Session?
+        /// Catalog-wide numbers, computed once per session on first use.
+        var catalogStats: HallieCatalogStats?
         /// Conversation memory: the last result set / AST for follow-ups
         /// ("play the first one", "show more", "and in the 90s?").
         var memory = HallieTurnExecutor.ConversationMemory()
@@ -683,11 +685,15 @@ enum HallieShellCLI {
             // Model-free step first: capability questions, follow-ups on the
             // last answer, refinements, local family-tree shapes.
             let identity = state.identityContext
+            if HallieCatalogStats.detect(routingQuestion) != nil, state.catalogStats == nil {
+                state.catalogStats = HallieCatalogStats.compute(records: state.records)
+            }
             let pre = HallieTurnExecutor.preTranslation(
                 question: routingQuestion,
                 playAfterAnswer: false,
                 memory: state.memory,
-                isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) })
+                isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
+                catalogStats: state.catalogStats)
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):

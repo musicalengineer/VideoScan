@@ -383,9 +383,14 @@ enum HallieAppTurnCoordinator {
 
         // Identity sources are loaded lazily and off-main, only if the
         // resolver actually needs to ask "is 'matt' a person?".
+        // Catalog-wide counts ("how many are archived") are answered from a
+        // snapshot of the records this turn already holds; computed only
+        // when the question is one of those (O(records), milliseconds).
+        let catalogStats = HallieCatalogStats.detect(routingQuestion) != nil
+            ? HallieCatalogStats.compute(records: records) : nil
         let preTranslation = try await preTranslationOffMain(
             question: routingQuestion, playAfterAnswer: playAfterAnswer,
-            memory: memory, dependencies: dependencies)
+            memory: memory, catalogStats: catalogStats, dependencies: dependencies)
         try Task.checkCancellation()
 
         let intent: HallieTurnExecutor.Intent
@@ -542,6 +547,7 @@ enum HallieAppTurnCoordinator {
         question: String,
         playAfterAnswer: Bool,
         memory: HallieTurnExecutor.ConversationMemory,
+        catalogStats: HallieCatalogStats? = nil,
         dependencies: Dependencies
     ) async throws -> HallieTurnExecutor.PreTranslation {
         let worker = Task.detached(priority: .userInitiated) {
@@ -565,7 +571,8 @@ enum HallieAppTurnCoordinator {
                 memory: memory,
                 isKnownPerson: { name in
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
-                })
+                },
+                catalogStats: catalogStats)
         }
         return try await withTaskCancellationHandler {
             try await worker.value

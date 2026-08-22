@@ -167,7 +167,8 @@ extension HallieTurnExecutor {
         question: String,
         playAfterAnswer: Bool,
         memory: ConversationMemory,
-        isKnownPerson: (String) -> Bool
+        isKnownPerson: (String) -> Bool,
+        catalogStats: HallieCatalogStats? = nil
     ) -> PreTranslation {
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.
@@ -181,6 +182,12 @@ extension HallieTurnExecutor {
         // trail, never by the model.
         if let kind = HallieProvenanceFollowUp.detect(question) {
             return .answer(HallieProvenanceFollowUp.answer(kind, provenance: memory.lastProvenance))
+        }
+        // "how many are archived" / "how much footage altogether": the
+        // client hands in the catalog snapshot only when the question is
+        // catalog-wide (HallieCatalogStats.detect), so this is O(1) here.
+        if let stats = catalogStats, let question = HallieCatalogStats.detect(question) {
+            return .answer(HallieCatalogStats.answer(question, stats: stats))
         }
         let resolution = ArchivistFollowUpResolver.resolve(
             question, snapshot: memory.followUpSnapshot,
