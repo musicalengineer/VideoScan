@@ -188,3 +188,62 @@ private actor Gauge {
     }
     func peak(prefix: String) -> Int { peaks[prefix] ?? 0 }
 }
+
+/// Poster frames for Browse rows.
+struct HallieWebPosterTests {
+    @Test func thePlanSeeksPastTheLeaderAndScalesTo360() {
+        let plan = HallieWebPosterPlan(sourcePath: "/v/t.dv", outputPath: "/p/x.jpg", offsetSeconds: 3)
+        #expect(plan.arguments == ["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-ss", "3.0", "-i", "/v/t.dv",
+                                   "-frames:v", "1", "-vf", "scale=-2:'min(360,ih)'", "-q:v", "4", "-f", "image2", "/p/x.jpg"])
+    }
+
+    @Test func firstAskStartsTheStillThenItIsThereAndShortClipsUseFrameZero() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("posters-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let offsets = OffsetLog()
+        let cache = HallieWebPosterCache(directory: dir, runner: { plan in
+            await offsets.add(plan.offsetSeconds)
+            try Data([0xFF, 0xD8, 0xFF]).write(to: URL(fileURLWithPath: plan.outputPath))
+        })
+        let long = UUID(), short = UUID()
+        #expect(await cache.poster(for: long, sourcePath: "/v/long.dv", durationSeconds: 600) == nil)
+        #expect(await cache.poster(for: short, sourcePath: "/v/short.mov", durationSeconds: 2) == nil)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await cache.poster(for: long, sourcePath: "/v/long.dv", durationSeconds: 600)?.lastPathComponent == "\(long.uuidString).jpg")
+        #expect(await offsets.values.sorted() == [0, 3])
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix(".") }
+        #expect(leftovers.isEmpty)
+    }
+
+    @Test func realFfmpegMakesAStillFromADVTape() async throws {
+        guard FileManager.default.isExecutableFile(atPath: ToolLocator.ffmpegPath) else { return }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("posters-real-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tape = dir.appendingPathComponent("tape.dv")
+        let gen = Process(); gen.executableURL = URL(fileURLWithPath: ToolLocator.ffmpegPath)
+        gen.arguments = ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x480:rate=30",
+                         "-f", "lavfi", "-i", "sine=frequency=440", "-t", "5", "-shortest",
+                         "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-s", "720x480", "-r", "29.97",
+                         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-f", "dv", tape.path]
+        try gen.run(); gen.waitUntilExit()
+        let cache = HallieWebPosterCache(directory: dir.appendingPathComponent("p"))
+        let id = UUID()
+        _ = await cache.poster(for: id, sourcePath: tape.path, durationSeconds: 5)
+        let deadline = Date().addingTimeInterval(20)
+        var url: URL?
+        while Date() < deadline {
+            if let u = await cache.poster(for: id, sourcePath: tape.path, durationSeconds: 5) { url = u; break }
+            if await cache.isFailed(id) { break }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        let data = try Data(contentsOf: try #require(url))
+        #expect(data.count > 1000)
+        #expect(data.prefix(2) == Data([0xFF, 0xD8]), "a JPEG")
+    }
+}
+
+private actor OffsetLog {
+    private(set) var values: [Double] = []
+    func add(_ v: Double) { values.append(v) }
+}

@@ -44,6 +44,8 @@ final class HallieWebAccess: ObservableObject {
         let proxyCache = HallieWebProxyCache(
             directory: HallieWebProxyPlan.directory(defaults),
             height: HallieWebProxyPlan.height(defaults))
+        let posterCache = HallieWebPosterCache(
+            directory: HallieWebProxyPlan.directory(defaults).appendingPathComponent("posters", isDirectory: true))
         let bridge = HallieWebBridge(
             records: { [weak model] in model?.records ?? [] },
             record: { [weak model] id in model?.record(forID: id) },
@@ -79,7 +81,8 @@ final class HallieWebAccess: ObservableObject {
                         allRecords: model.records, model: model, volumeSearchPaths: [])
                     return snapshot.archived.map { ArchiveView.timelineItem(for: $0, model: model) }
                 }
-            })
+            },
+            posters: posterCache)
         let server = HallieWebServer { request, peer in
             await bridge.handle(request, peer: peer)
         }

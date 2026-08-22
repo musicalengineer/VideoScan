@@ -57,6 +57,8 @@ final class HallieWebBridge {
     private let isSpinningDisk: @MainActor (String) -> Bool
     /// The Archive Timeline's items (Browse tab). Nil = no Browse.
     private let timeline: (@MainActor () -> [ArchiveTimelineItem])?
+    /// Still frames for Browse rows. Nil = placeholders only.
+    private let posters: HallieWebPosterCache?
     static let sessionIdleLimit: TimeInterval = 6 * 60 * 60
 
     init(
@@ -66,7 +68,8 @@ final class HallieWebBridge {
         dependencies: HallieAppTurnCoordinator.Dependencies = .live,
         proxy: HallieWebProxyCache? = nil,
         isSpinningDisk: @escaping @MainActor (String) -> Bool = { _ in false },
-        timeline: (@MainActor () -> [ArchiveTimelineItem])? = nil
+        timeline: (@MainActor () -> [ArchiveTimelineItem])? = nil,
+        posters: HallieWebPosterCache? = nil
     ) {
         self.records = records
         self.record = record
@@ -75,6 +78,7 @@ final class HallieWebBridge {
         self.proxy = proxy
         self.isSpinningDisk = isSpinningDisk
         self.timeline = timeline
+        self.posters = posters
     }
 
     // MARK: - Routing
@@ -99,6 +103,9 @@ final class HallieWebBridge {
         case ("GET", "/api/timeline"):
             guard authorized(request, config) else { return .text(401, "passphrase") }
             return timelineJSON()
+        case ("GET", let path) where path.hasPrefix("/api/poster/"):
+            guard authorized(request, config) else { return .text(401, "passphrase") }
+            return await poster(recordID: String(path.dropFirst("/api/poster/".count)))
         default:
             return .text(404, "not here")
         }
@@ -314,6 +321,7 @@ final class HallieWebBridge {
                 "playable": how != .none && it.kind != .photo,
                 "native": how == .native,
                 "url": "/api/media/\(it.id.uuidString)",
+                "poster": posters != nil && it.kind == .video ? "/api/poster/\(it.id.uuidString)" : NSNull(),
             ]
         }
         let decades: [[String: Any]] = built.decades.map { decade in
@@ -332,6 +340,32 @@ final class HallieWebBridge {
             "undated": built.undated.map(item),
             "total": built.decades.reduce(0) { $0 + $1.count } + built.undated.count,
         ])
+    }
+
+    // MARK: - Posters
+
+    /// 200 + JPEG when the still exists; 202 while it is being made; 404
+    /// when it can't be (no file, not a video, or ffmpeg gave up).
+    private func poster(recordID: String) async -> HallieHTTPResponse {
+        guard let posters, let id = UUID(uuidString: recordID), let record = record(id) else {
+            return .text(404, "no poster")
+        }
+        let ext = (record.fullPath as NSString).pathExtension.lowercased()
+        guard Self.browserPlayableExtensions.contains(ext) || Self.proxyableExtensions.contains(ext) || ext == "mov",
+              FileManager.default.fileExists(atPath: record.fullPath) else {
+            return .text(404, "no poster")
+        }
+        if await posters.isFailed(id) { return .text(404, "no poster") }
+        guard let url = await posters.poster(for: id, sourcePath: record.fullPath,
+                                             durationSeconds: record.durationSeconds) else {
+            return .json(["state": "preparing"], status: 202)
+        }
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value,
+              size > 0 else { return .text(404, "no poster") }
+        return HallieHTTPResponse(
+            status: 200, reason: "OK",
+            headers: [("Content-Type", "image/jpeg"), ("Cache-Control", "max-age=86400")],
+            body: .file(url, range: 0..<size, totalLength: size))
     }
 
     // MARK: - Media

@@ -36,7 +36,10 @@ enum HallieWebPage {
           #browse { flex:1; overflow-y:auto; padding:10px 14px; display:none; -webkit-overflow-scrolling:touch; }
           #browse h2 { font:600 22px Georgia, serif; margin:18px 0 6px; color:var(--accent); }
           #browse h3 { font:600 17px -apple-system, sans-serif; margin:12px 0 4px; color:var(--muted); }
-          .bitem { display:flex; gap:10px; align-items:center; padding:10px 6px; border-bottom:1px solid var(--line); }
+          .bitem { display:flex; gap:10px; align-items:center; padding:10px 6px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+          .bitem img.poster { width:120px; height:68px; object-fit:cover; border-radius:8px; background:var(--line); flex:none; }
+          .bitem .poster.empty { width:120px; height:68px; border-radius:8px; background:var(--line); flex:none; }
+          .bitem video { flex-basis:100%; }
           .bitem .t { flex:1; min-width:0; }
           .bitem .t b { display:block; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
           .bitem .t span { font-size:14px; color:var(--muted); }
@@ -213,6 +216,13 @@ enum HallieWebPage {
           }
           function browseRow(it) {
             var row = document.createElement('div'); row.className = 'bitem';
+            if (it.poster) {
+              var img = document.createElement('img'); img.className = 'poster'; img.loading = 'lazy'; img.alt = '';
+              var tries = 0;
+              img.onerror = function () { if (tries++ < 6) setTimeout(function () { img.src = it.poster + '?k=' + tries + (key ? '&key=' + encodeURIComponent(key) : ''); }, 2500 * tries); else img.replaceWith(placeholder()); };
+              img.src = it.poster + (key ? ('?key=' + encodeURIComponent(key)) : '');
+              row.appendChild(img);
+            } else { row.appendChild(placeholder()); }
             var t = document.createElement('div'); t.className = 't';
             var b = document.createElement('b'); b.textContent = it.title || it.filename; t.appendChild(b);
             var sp = document.createElement('span');
@@ -227,6 +237,7 @@ enum HallieWebPage {
             }
             return row;
           }
+          function placeholder() { var d = document.createElement('div'); d.className = 'poster empty'; return d; }
           function renderTimeline() {
             var t = timelineData; if (!t) return;
             blist.textContent = '';
