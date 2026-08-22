@@ -46,6 +46,13 @@ extension ArchiveView {
 
             Divider()
 
+            // How far along the archive is — one big bar above the story
+            // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
+            if selectedCategory == .archived {
+                ArchiveProgressBar(progress: archiveProgress)
+                Divider()
+            }
+
             if selectedCategory == .archived && archiveViewMode == "timeline" {
                 timelinePane
             } else {
@@ -299,5 +306,18 @@ extension ArchiveView {
         model.pendingCatalogPairMode = true
         selectedTab = 1
         MainWindowHelper.shared.openMainWindow()
+    }
+}
+
+extension ArchiveView {
+    /// Verified ÷ unique, from two already-memoized computations.
+    @MainActor
+    var archiveProgress: ArchiveProgress {
+        let key = RecordsVersion(count: model.records.count,
+                                 revision: model.volumeAggregatesRevision)
+        let storage = storageTotalsMemo.value(for: key) {
+            CatalogStorageTotalsCalculator.compute(records: model.records)
+        }
+        return ArchiveProgress.from(totals: model.masterArchiveTotals, storage: storage)
     }
 }

@@ -35,6 +35,10 @@ struct ArchiveView: View {
     /// version — same discipline as categoryMemo. Not private: the
     /// Timeline extension lives in its own file.
     @State var timelineItemMemo = RenderMemo<RecordsVersion, [ArchiveTimelineItem]>()
+    /// Unique-file totals for the progress bar (ArchiveProgress.swift),
+    /// memoized per records version — CatalogStorageTotals.compute is
+    /// O(records) and must never run in body.
+    @State var storageTotalsMemo = RenderMemo<RecordsVersion, CatalogStorageTotals>()
     /// "timeline" | "files" — the Archived category's view switch.
     /// Timeline is the default: the archive is the story, Files the bench.
     @AppStorage("archive.viewMode") var archiveViewMode: String = "timeline"
