@@ -197,3 +197,53 @@ struct HallieWebTests {
         #expect(String(data: data, encoding: .utf8) == "{\"ok\":true}")
     }
 }
+
+/// Browse: the Archive Timeline as JSON, same delivery facts as citations.
+struct HallieWebBrowseTests {
+    @Test @MainActor func timelineJSONIsDecadesYearsItemsWithDeliveryFacts() async throws {
+        let items = [
+            ArchiveTimelineItem(id: UUID(), title: "Cape Cod", archiveFilename: "1993-07-xx_Cape-Cod.dv",
+                                relPath: "1990s/1993/1993-07-xx_Cape-Cod.dv", year: 1993, kind: .video,
+                                durationSeconds: 600, peopleText: "Donna, Rick", isVerified: true),
+            ArchiveTimelineItem(id: UUID(), title: "Christmas", archiveFilename: "2004-12-25_Christmas.mp4",
+                                relPath: "2000s/2004/2004-12-25_Christmas.mp4", year: 2004, kind: .video,
+                                durationSeconds: 120, peopleText: "", isVerified: false),
+            ArchiveTimelineItem(id: UUID(), title: "Grandma", archiveFilename: "grandma.jpg",
+                                relPath: "Undated/grandma.jpg", year: nil, kind: .photo,
+                                durationSeconds: 0, peopleText: "", isVerified: true),
+        ]
+        let proxy = HallieWebProxyCache(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("browse-\(UUID().uuidString)"), runner: { _ in })
+        let bridge = HallieWebBridge(
+            records: { [] }, record: { _ in nil },
+            configuration: { .init(passphrase: "", archivistName: "Hallie Mae", archivistPersonName: nil,
+                                   hosts: [], modelName: "x", composeWithModel: false) },
+            dependencies: .live, proxy: proxy, timeline: { items })
+        let response = await bridge.handle(
+            HallieHTTPRequest(method: "GET", path: "/api/timeline", query: [:], headers: [:], body: Data()),
+            peer: "192.168.0.9")
+        #expect(response.status == 200)
+        guard case .data(let data) = response.body,
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            Issue.record("no JSON"); return
+        }
+        #expect(json["available"] as? Bool == true)
+        #expect(json["total"] as? Int == 3)
+        let decades = json["decades"] as? [[String: Any]] ?? []
+        #expect(decades.map { $0["label"] as? String } == ["1990s", "2000s"])
+        let first = ((decades.first?["years"] as? [[String: Any]])?.first?["items"] as? [[String: Any]])?.first
+        #expect(first?["title"] as? String == "Cape Cod")
+        #expect(first?["playable"] as? Bool == true, "DV goes through the proxy")
+        #expect(first?["native"] as? Bool == false)
+        #expect(first?["verified"] as? Bool == true)
+        #expect(first?["duration"] as? String != nil)
+        let undated = json["undated"] as? [[String: Any]] ?? []
+        #expect(undated.first?["kind"] as? String == "photo")
+        #expect(undated.first?["playable"] as? Bool == false, "photos aren't played")
+
+        let ping = await bridge.handle(HallieHTTPRequest(method: "GET", path: "/api/ping", query: [:], headers: [:], body: Data()), peer: "127.0.0.1")
+        if case .data(let d) = ping.body { #expect(String(data: d, encoding: .utf8)?.contains("\"browse\":true") == true) }
+        let page = await bridge.handle(HallieHTTPRequest(method: "GET", path: "/", query: [:], headers: [:], body: Data()), peer: "127.0.0.1")
+        if case .data(let d) = page.body { #expect(String(data: d, encoding: .utf8)?.contains("Browse the archive") == true) }
+    }
+}

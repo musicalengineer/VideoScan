@@ -55,6 +55,8 @@ final class HallieWebBridge {
     private let proxy: HallieWebProxyCache?
     /// The HDD one-reader rule, answered by the catalog's volume roles.
     private let isSpinningDisk: @MainActor (String) -> Bool
+    /// The Archive Timeline's items (Browse tab). Nil = no Browse.
+    private let timeline: (@MainActor () -> [ArchiveTimelineItem])?
     static let sessionIdleLimit: TimeInterval = 6 * 60 * 60
 
     init(
@@ -63,7 +65,8 @@ final class HallieWebBridge {
         configuration: @escaping @MainActor () -> Configuration,
         dependencies: HallieAppTurnCoordinator.Dependencies = .live,
         proxy: HallieWebProxyCache? = nil,
-        isSpinningDisk: @escaping @MainActor (String) -> Bool = { _ in false }
+        isSpinningDisk: @escaping @MainActor (String) -> Bool = { _ in false },
+        timeline: (@MainActor () -> [ArchiveTimelineItem])? = nil
     ) {
         self.records = records
         self.record = record
@@ -71,6 +74,7 @@ final class HallieWebBridge {
         self.dependencies = dependencies
         self.proxy = proxy
         self.isSpinningDisk = isSpinningDisk
+        self.timeline = timeline
     }
 
     // MARK: - Routing
@@ -91,7 +95,10 @@ final class HallieWebBridge {
             guard authorized(request, config) else { return .text(401, "passphrase") }
             return await media(request, recordID: String(path.dropFirst("/api/media/".count)))
         case ("GET", "/api/ping"):
-            return .json(["ok": true, "name": config.archivistName])
+            return .json(["ok": true, "name": config.archivistName, "browse": timeline != nil])
+        case ("GET", "/api/timeline"):
+            guard authorized(request, config) else { return .text(401, "passphrase") }
+            return timelineJSON()
         default:
             return .text(404, "not here")
         }
@@ -277,6 +284,54 @@ final class HallieWebBridge {
             "native": how == .native,
             "url": "/api/media/\(citation.recordID.uuidString)",
         ]
+    }
+
+    // MARK: - Browse (the Archive Timeline)
+
+    /// The archive as a story: decades → years → items, each item with the
+    /// same delivery facts a citation carries, so the page plays it the
+    /// same way. Archive only, on purpose: vetted, dated, named.
+    private func timelineJSON() -> HallieHTTPResponse {
+        guard let timeline else { return .json(["decades": [], "undated": [], "available": false]) }
+        let built = ArchiveTimeline.build(items: timeline())
+        func item(_ it: ArchiveTimelineItem) -> [String: Any] {
+            let how = record(it.id).map(delivery(for:)) ?? delivery(forFilename: it.archiveFilename)
+            let kind: String
+            switch it.kind {
+            case .video: kind = "video"
+            case .audio: kind = "audio"
+            case .photo: kind = "photo"
+            }
+            return [
+                "id": it.id.uuidString,
+                "title": it.title,
+                "filename": it.archiveFilename,
+                "year": it.year as Any,
+                "kind": kind,
+                "duration": it.friendlyDuration,
+                "people": it.peopleText,
+                "verified": it.isVerified,
+                "playable": how != .none && it.kind != .photo,
+                "native": how == .native,
+                "url": "/api/media/\(it.id.uuidString)",
+            ]
+        }
+        let decades: [[String: Any]] = built.decades.map { decade in
+            [
+                "start": decade.start,
+                "label": decade.label,
+                "count": decade.count,
+                "years": decade.years.map { year in
+                    ["year": year.year, "items": year.items.map(item)]
+                },
+            ]
+        }
+        return .json([
+            "available": true,
+            "decades": decades,
+            "undated": built.undated.map(item),
+            "total": built.decades.reduce(0) { $0 + $1.count } + built.undated.count,
+        ])
     }
 
     // MARK: - Media

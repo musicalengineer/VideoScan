@@ -22,6 +22,8 @@ final class HallieWebAccess: ObservableObject {
     private var server: HallieWebServer?
     private var bridge: HallieWebBridge?
     private weak var model: VideoScanModel?
+    /// Archive Timeline items for the Browse tab, one compute per catalog version.
+    private let timelineMemo = RenderMemo<RecordsVersion, [ArchiveTimelineItem]>()
 
     /// Attach the catalog once at launch; starts if enabled.
     func attach(model: VideoScanModel) {
@@ -64,6 +66,19 @@ final class HallieWebAccess: ObservableObject {
                     .filter { !$0.searchPath.isEmpty && path.hasPrefix($0.searchPath) }
                     .max(by: { $0.searchPath.count < $1.searchPath.count })?
                     .mediaTech == .hdd
+            },
+            timeline: { [weak model, timelineMemo] in
+                guard let model else { return [] }
+                // Same projection the Archive tab uses, memoized per catalog
+                // version so a Browse request is O(1) after the first.
+                let key = RecordsVersion(count: model.records.count,
+                                         revision: model.volumeAggregatesRevision)
+                return timelineMemo.value(for: key) {
+                    let snapshot = ArchiveCategorySnapshot.compute(
+                        active: pfActiveRecords(model.records),
+                        allRecords: model.records, model: model, volumeSearchPaths: [])
+                    return snapshot.archived.map { ArchiveView.timelineItem(for: $0, model: model) }
+                }
             })
         let server = HallieWebServer { request, peer in
             await bridge.handle(request, peer: peer)

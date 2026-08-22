@@ -30,6 +30,21 @@ enum HallieWebPage {
           header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
           header h1 { font:600 22px Georgia, serif; margin:0; flex:1; }
           header button { font-size:16px; background:none; border:1px solid var(--line); color:var(--ink); border-radius:10px; padding:6px 10px; }
+          nav { display:flex; border-bottom:1px solid var(--line); }
+          nav button { flex:1; font-size:18px; padding:10px; background:none; border:none; color:var(--muted); border-bottom:3px solid transparent; }
+          nav button.on { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
+          #browse { flex:1; overflow-y:auto; padding:10px 14px; display:none; -webkit-overflow-scrolling:touch; }
+          #browse h2 { font:600 22px Georgia, serif; margin:18px 0 6px; color:var(--accent); }
+          #browse h3 { font:600 17px -apple-system, sans-serif; margin:12px 0 4px; color:var(--muted); }
+          .bitem { display:flex; gap:10px; align-items:center; padding:10px 6px; border-bottom:1px solid var(--line); }
+          .bitem .t { flex:1; min-width:0; }
+          .bitem .t b { display:block; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+          .bitem .t span { font-size:14px; color:var(--muted); }
+          .bitem button { font-size:17px; padding:8px 12px; border-radius:12px; border:1px solid var(--accent); color:var(--accent); background:none; }
+          .bitem .mac { font-size:14px; color:var(--muted); }
+          #bsearch { width:100%; font-size:18px; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:var(--her); color:var(--ink); margin:6px 0 4px; }
+          body.browsing #log, body.browsing form { display:none; }
+          body.browsing #browse { display:block; }
           #log { flex:1; overflow-y:auto; padding:14px 14px 0; -webkit-overflow-scrolling:touch; }
           .msg { max-width:92%; margin:0 0 12px; padding:12px 14px; border-radius:16px; white-space:pre-wrap; word-wrap:break-word; }
           .her { background:var(--her); border:1px solid var(--line); border-top-left-radius:4px; }
@@ -57,7 +72,9 @@ enum HallieWebPage {
           <button id="speakToggle" title="Read answers aloud">🔈 Read aloud</button>
           <button id="whoBtn" title="Who is talking">👤</button>
         </header>
+        <nav><button id="tabAsk" class="on">Ask</button><button id="tabBrowse">Browse the archive</button></nav>
         <div id="log"></div>
+        <div id="browse"><input id="bsearch" placeholder="Find in the archive (a name, a year, a word)…"><div id="blist" class="tiny">Loading the archive…</div></div>
         <form id="ask">
           <button type="button" class="mic" id="mic" title="Dictate">🎤</button>
           <input id="text" autocomplete="off" autocapitalize="sentences" placeholder="Ask \(name)…">
@@ -170,6 +187,71 @@ enum HallieWebPage {
               if (r.status === 200 || r.status === 206) { note.remove(); start(); } else { poll(); }
             }).catch(poll);
           }
+          // ---- Browse: the Archive Timeline, decades → years → items.
+          var browse = document.getElementById('browse'), blist = document.getElementById('blist'), bsearch = document.getElementById('bsearch');
+          var timelineData = null;
+          function setTab(name) {
+            document.body.classList.toggle('browsing', name === 'browse');
+            document.getElementById('tabAsk').classList.toggle('on', name !== 'browse');
+            document.getElementById('tabBrowse').classList.toggle('on', name === 'browse');
+            store('hallie.tab', name);
+            if (name === 'browse' && !timelineData) loadTimeline();
+          }
+          document.getElementById('tabAsk').onclick = function () { setTab('ask'); };
+          document.getElementById('tabBrowse').onclick = function () { setTab('browse'); };
+          function loadTimeline() {
+            blist.textContent = 'Loading the archive…';
+            fetch('/api/timeline', { headers: { 'X-Hallie-Key': key } })
+              .then(function (r) { if (r.status === 401) { askKey(); throw new Error('passphrase'); } return r.json(); })
+              .then(function (t) { timelineData = t; renderTimeline(); })
+              .catch(function (e) { blist.textContent = "I couldn't load the archive just now (" + e + ')'; });
+          }
+          function matches(it, q) {
+            if (!q) return true;
+            var hay = (it.title + ' ' + it.filename + ' ' + (it.year || '') + ' ' + it.people).toLowerCase();
+            return q.split(/\\s+/).every(function (w) { return hay.indexOf(w) >= 0; });
+          }
+          function browseRow(it) {
+            var row = document.createElement('div'); row.className = 'bitem';
+            var t = document.createElement('div'); t.className = 't';
+            var b = document.createElement('b'); b.textContent = it.title || it.filename; t.appendChild(b);
+            var sp = document.createElement('span');
+            sp.textContent = [it.year ? String(it.year) : '', it.duration, it.people, it.verified ? 'verified copy' : ''].filter(Boolean).join(' · ');
+            t.appendChild(sp); row.appendChild(t);
+            if (it.playable) {
+              var pb = document.createElement('button'); pb.textContent = '▶︎ Play';
+              pb.onclick = function () { playInline(row, it); };
+              row.appendChild(pb);
+            } else {
+              var m = document.createElement('span'); m.className = 'mac'; m.textContent = it.kind === 'photo' ? 'photo' : 'plays on the Mac only'; row.appendChild(m);
+            }
+            return row;
+          }
+          function renderTimeline() {
+            var t = timelineData; if (!t) return;
+            blist.textContent = '';
+            if (!t.available) { blist.textContent = 'Browsing isn\\u2019t switched on for this page.'; return; }
+            var q = (bsearch.value || '').trim().toLowerCase();
+            var shown = 0;
+            t.decades.forEach(function (d) {
+              var rows = [];
+              d.years.forEach(function (y) {
+                var its = y.items.filter(function (it) { return matches(it, q); });
+                if (!its.length) return;
+                var h3 = document.createElement('h3'); h3.textContent = y.year; rows.push(h3);
+                its.forEach(function (it) { rows.push(browseRow(it)); shown += 1; });
+              });
+              if (!rows.length) return;
+              var h2 = document.createElement('h2'); h2.textContent = 'The ' + d.label; blist.appendChild(h2);
+              rows.forEach(function (r) { blist.appendChild(r); });
+            });
+            var und = t.undated.filter(function (it) { return matches(it, q); });
+            if (und.length) { var h2u = document.createElement('h2'); h2u.textContent = 'Undated'; blist.appendChild(h2u); und.forEach(function (it) { blist.appendChild(browseRow(it)); shown += 1; }); }
+            if (!shown) { var none = document.createElement('div'); none.className = 'tiny'; none.textContent = q ? 'Nothing in the archive matches \\u201c' + q + '\\u201d yet.' : 'The archive is empty so far \\u2014 the story starts with the first promote.'; blist.appendChild(none); }
+          }
+          bsearch.oninput = renderTimeline;
+          if (store('hallie.tab') === 'browse') setTab('browse');
+
           var busy = false;
           function send(payload) {
             if (busy) return;
