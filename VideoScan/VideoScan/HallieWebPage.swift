@@ -73,6 +73,7 @@ enum HallieWebPage {
         <header>
           <h1>\(name)</h1>
           <button id="speakToggle" title="Read answers aloud">🔈 Read aloud</button>
+          <select id="voicePick" title="Which voice reads aloud" style="display:none;font-size:15px;max-width:150px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink);padding:5px"></select>
           <button id="whoBtn" title="Who is talking">👤</button>
         </header>
         <nav><button id="tabAsk" class="on">Ask</button><button id="tabBrowse">Browse the archive</button></nav>
@@ -106,7 +107,7 @@ enum HallieWebPage {
             if (v !== null) { key = v.trim(); store('hallie.key', key); }
           }
           document.getElementById('whoBtn').onclick = askWho;
-          speakToggle.onclick = function () { speak = !speak; store('hallie.speak', speak ? 'on' : 'off'); speakToggle.textContent = speak ? '🔊 Reading aloud' : '🔈 Read aloud'; if (!speak && window.speechSynthesis) speechSynthesis.cancel(); };
+          speakToggle.onclick = function () { speak = !speak; store('hallie.speak', speak ? 'on' : 'off'); speakToggle.textContent = speak ? '🔊 Reading aloud' : '🔈 Read aloud'; if (!speak && window.speechSynthesis) speechSynthesis.cancel(); voicePick.style.display = speak && voicePick.options.length ? '' : 'none'; };
 
           function add(role, text) {
             var d = document.createElement('div');
@@ -116,12 +117,49 @@ enum HallieWebPage {
             log.scrollTop = log.scrollHeight;
             return d;
           }
+          // ---- Reading aloud (Rick 2026-08-22: "slow it down and make it
+          // sound more natural"): a slower rate, one sentence per utterance
+          // with a breath between (iOS also clips very long utterances),
+          // and the best installed voice — premium/enhanced Siri voices
+          // first when the iPad has them (Settings → Accessibility → Spoken
+          // Content → Voices downloads them), remembered per device.
+          var voicePick = document.getElementById('voicePick');
+          var preferred = ['Ava', 'Zoe', 'Allison', 'Samantha', 'Nicky', 'Joelle', 'Susan', 'Karen', 'Moira', 'Tessa'];
+          function voices() { return (window.speechSynthesis ? speechSynthesis.getVoices() : []).filter(function (v) { return /^en/i.test(v.lang); }); }
+          function rankVoice(v) {
+            var n = v.name.toLowerCase(), score = 0;
+            if (/premium|enhanced/.test(n)) score += 20;
+            var i = preferred.findIndex(function (p) { return n.indexOf(p.toLowerCase()) >= 0; });
+            if (i >= 0) score += 10 - i;
+            if (/en-us/i.test(v.lang)) score += 2;
+            if (/compact|eloquence|fred|albert|bad news|bells|boing|bubbles|cellos|organ|trinoids|whisper|wobble|zarvox|junior|ralph|kathy/.test(n)) score -= 30;
+            return score;
+          }
+          function fillVoices() {
+            var vs = voices().sort(function (a, b) { return rankVoice(b) - rankVoice(a); });
+            if (!vs.length) return;
+            voicePick.innerHTML = '';
+            vs.slice(0, 12).forEach(function (v) { var o = document.createElement('option'); o.value = v.name; o.textContent = v.name.replace(/\\s*\\(.*\\)$/, '') + (/premium|enhanced/i.test(v.name) ? ' ★' : ''); voicePick.appendChild(o); });
+            var saved = store('hallie.voice');
+            if (saved && vs.some(function (v) { return v.name === saved; })) voicePick.value = saved; else { voicePick.value = vs[0].name; store('hallie.voice', vs[0].name); }
+            voicePick.style.display = speak ? '' : 'none';
+          }
+          if (window.speechSynthesis) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
+          voicePick.onchange = function () { store('hallie.voice', voicePick.value); sayAloud('Hello — this is how I sound.'); };
+          function chosenVoice() { var name = store('hallie.voice'); return voices().find(function (v) { return v.name === name; }) || null; }
+          function sentences(text) {
+            return (text || '').replace(/\\[c\\d+\\]/g, '').split(/(?<=[.!?…])\\s+/).map(function (s) { return s.trim(); }).filter(Boolean);
+          }
           function sayAloud(text) {
             if (!speak || !window.speechSynthesis) return;
             speechSynthesis.cancel();
-            var u = new SpeechSynthesisUtterance(text);
-            u.rate = 0.95; u.lang = 'en-US';
-            speechSynthesis.speak(u);
+            var v = chosenVoice();
+            sentences(text).forEach(function (sentence) {
+              var u = new SpeechSynthesisUtterance(sentence);
+              u.rate = 0.82; u.pitch = 0.95; u.lang = (v && v.lang) || 'en-US';
+              if (v) u.voice = v;
+              speechSynthesis.speak(u);
+            });
           }
           function render(r) {
             var d = add('her', r.prose || '');
