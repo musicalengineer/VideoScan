@@ -184,10 +184,20 @@ enum HallieConversationGuard {
             guard !containsKnownPerson(tokens, isKnownPerson: isKnownPerson) else {
                 return nil
             }
+            // In "what makes music sound happy?", `sound` is a linking verb,
+            // not the archive's audio-track noun. Treat it as a weak cue only
+            // for this grammatical shape. Any other archive word (video,
+            // tape, footage, transcript, a family name, a year...) still
+            // keeps the question grounded. This fixes the observed catalog
+            // search for a plain music-theory question without weakening
+            // "why is there no sound on this tape?".
+            var archiveTokens = Set(tokens).intersection(archiveWords)
+            if normalized.hasPrefix("what makes ") {
+                archiveTokens.remove("sound")
+            }
             // Factual questions containing archive/tree vocabulary remain
             // grounded even when they happen to start with "why" or "what".
-            return Set(tokens).isDisjoint(with: archiveWords)
-                ? .generalKnowledge : nil
+            return archiveTokens.isEmpty ? .generalKnowledge : nil
         }
 
         let creativeOrAdviceLeads = [

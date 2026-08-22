@@ -69,6 +69,7 @@ struct HallieSocialConversationTests {
 
     @Test(arguments: [
         "Why do leaves change color in autumn?",
+        "What makes music sound happy or sad?",
         "What is the difference between a planet and a star?",
         "What does bittersweet mean?",
         "Help me think of three questions to ask my grandmother.",
@@ -135,6 +136,7 @@ struct HallieSocialConversationTests {
         "Why did we move to Westford in 1994?",
         "Explain the 1988 Christmas tape.",
         "Why is there no audio on the beach footage?",
+        "What makes the music sound strange on this video?",
     ])
     func archiveCuesNeverUseGeneralKnowledgeShortcut(text: String) {
         #expect(HallieConversationGuard.definitelyGeneral(
