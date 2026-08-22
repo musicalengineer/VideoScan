@@ -130,6 +130,7 @@ struct HallieWebAccessSettings: View {
 struct HallieReadAloudSettings: View {
     @AppStorage(HallieSpeaker.enabledKey) private var enabled = true
     @AppStorage(HallieSpeaker.voiceKey) private var voiceID = ""
+    @ObservedObject private var speaker = HallieSpeaker.shared
     private let voices = HallieSpeaker.englishVoices()
 
     var body: some View {
@@ -159,8 +160,15 @@ struct HallieReadAloudSettings: View {
                     .labelsHidden()
                     .frame(maxWidth: 260)
                     .onChange(of: voiceID) { _, _ in HallieSpeaker.shared.audition() }
-                    Button("Hear her") { HallieSpeaker.shared.audition() }
+                    Button(speaker.isSpeaking ? "Stop" : "Hear her") {
+                        if speaker.isSpeaking { speaker.stop() } else { speaker.audition() }
+                    }
                         .controlSize(.small)
+                    if speaker.isSpeaking {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Hallie is preparing or speaking")
+                    }
                 }
                 .font(.system(size: 13))
                 Text(HallieNeuralSpeech.isInstalled
