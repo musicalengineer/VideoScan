@@ -205,49 +205,7 @@ enum HallieWebPage {
             log.scrollTop = log.scrollHeight;
             sayAloud(r.prose || '');
           }
-          function personLine(p) {
-            var s = p.name; if (p.years) s += ' (' + p.years + ')'; if (p.place) s += ' — ' + p.place; return s;
-          }
-          function imageWith(url, alt) {
-            var img = document.createElement('img'); img.className = 'attach-img'; img.alt = alt || '';
-            img.src = url + (key ? ('?key=' + encodeURIComponent(key)) : ''); return img;
-          }
-          function renderAttachment(a) {
-            var box = document.createElement('div'); box.className = 'attach';
-            if (a.kind === 'photo') {
-              box.appendChild(imageWith(a.url, 'Photo of ' + a.name));
-              var cap = document.createElement('div'); cap.className = 'tiny'; cap.textContent = a.caption || a.name; box.appendChild(cap);
-            } else if (a.kind === 'crest') {
-              var ci = imageWith(a.url, a.surname + ' crest'); ci.className = 'attach-crest'; box.appendChild(ci);
-              var cc = document.createElement('div'); cc.className = 'tiny'; cc.textContent = 'The ' + a.surname + ' crest'; box.appendChild(cc);
-            } else if (a.kind === 'lineage') {
-              var t = document.createElement('div'); t.className = 'attach-title'; t.textContent = a.title; box.appendChild(t);
-              var r0 = document.createElement('div'); r0.className = 'attach-root'; r0.textContent = personLine(a.root); box.appendChild(r0);
-              (a.generations || []).forEach(function (g) {
-                var row = document.createElement('div'); row.className = 'attach-gen';
-                var lab = document.createElement('span'); lab.className = 'attach-label'; lab.textContent = g.label; row.appendChild(lab);
-                var ul = document.createElement('ul');
-                (g.people || []).forEach(function (p) { var li = document.createElement('li'); li.textContent = personLine(p); ul.appendChild(li); });
-                row.appendChild(ul); box.appendChild(row);
-              });
-              if (a.reachedAll === false) { var n = document.createElement('div'); n.className = 'tiny'; n.textContent = 'The tree stops here.'; box.appendChild(n); }
-            } else if (a.kind === 'tree') {
-              var tt = document.createElement('div'); tt.className = 'attach-title'; tt.textContent = a.title; box.appendChild(tt);
-              function renderNode(n) {
-                var li = document.createElement('li');
-                var s = personLine(n.person);
-                if (n.spouses && n.spouses.length) s += '  ⚭ ' + n.spouses.map(function (x) { return x.name; }).join(', ');
-                li.textContent = s;
-                if (n.children && n.children.length) { var ul2 = document.createElement('ul'); n.children.forEach(function (c) { ul2.appendChild(renderNode(c)); }); li.appendChild(ul2); }
-                return li;
-              }
-              var ulr = document.createElement('ul'); ulr.className = 'attach-tree'; (a.roots || []).forEach(function (n) { ulr.appendChild(renderNode(n)); }); box.appendChild(ulr);
-            } else if (a.kind === 'photoRequest') {
-              var pr = document.createElement('div'); pr.className = 'tiny';
-              pr.textContent = 'Do you have a photo of ' + a.name + '? On the Mac, put it in: ' + a.folder; box.appendChild(pr);
-            }
-            return box;
-          }
+          \(attachmentScript)
           function playInline(container, c) {
             var old = container.querySelector('video'); if (old) old.remove();
             var oldNote = container.querySelector('.preparing'); if (oldNote) oldNote.remove();
@@ -398,4 +356,56 @@ enum HallieWebPage {
         </html>
         """
     }
+}
+
+extension HallieWebPage {
+    /// Card rendering for `attachments` (2026-08-22): photos and crests as
+    /// images fetched by token, lineage and tree cards as nested lists,
+    /// photo requests as a one-line note. Kept out of `html()` so the page
+    /// function stays readable (and under the lint ceiling).
+    static let attachmentScript = """
+          function personLine(p) {
+            var s = p.name; if (p.years) s += ' (' + p.years + ')'; if (p.place) s += ' — ' + p.place; return s;
+          }
+          function imageWith(url, alt) {
+            var img = document.createElement('img'); img.className = 'attach-img'; img.alt = alt || '';
+            img.src = url + (key ? ('?key=' + encodeURIComponent(key)) : ''); return img;
+          }
+          function renderAttachment(a) {
+            var box = document.createElement('div'); box.className = 'attach';
+            if (a.kind === 'photo') {
+              box.appendChild(imageWith(a.url, 'Photo of ' + a.name));
+              var cap = document.createElement('div'); cap.className = 'tiny'; cap.textContent = a.caption || a.name; box.appendChild(cap);
+            } else if (a.kind === 'crest') {
+              var ci = imageWith(a.url, a.surname + ' crest'); ci.className = 'attach-crest'; box.appendChild(ci);
+              var cc = document.createElement('div'); cc.className = 'tiny'; cc.textContent = 'The ' + a.surname + ' crest'; box.appendChild(cc);
+            } else if (a.kind === 'lineage') {
+              var t = document.createElement('div'); t.className = 'attach-title'; t.textContent = a.title; box.appendChild(t);
+              var r0 = document.createElement('div'); r0.className = 'attach-root'; r0.textContent = personLine(a.root); box.appendChild(r0);
+              (a.generations || []).forEach(function (g) {
+                var row = document.createElement('div'); row.className = 'attach-gen';
+                var lab = document.createElement('span'); lab.className = 'attach-label'; lab.textContent = g.label; row.appendChild(lab);
+                var ul = document.createElement('ul');
+                (g.people || []).forEach(function (p) { var li = document.createElement('li'); li.textContent = personLine(p); ul.appendChild(li); });
+                row.appendChild(ul); box.appendChild(row);
+              });
+              if (a.reachedAll === false) { var n = document.createElement('div'); n.className = 'tiny'; n.textContent = 'The tree stops here.'; box.appendChild(n); }
+            } else if (a.kind === 'tree') {
+              var tt = document.createElement('div'); tt.className = 'attach-title'; tt.textContent = a.title; box.appendChild(tt);
+              function renderNode(n) {
+                var li = document.createElement('li');
+                var s = personLine(n.person);
+                if (n.spouses && n.spouses.length) s += '  ⚭ ' + n.spouses.map(function (x) { return x.name; }).join(', ');
+                li.textContent = s;
+                if (n.children && n.children.length) { var ul2 = document.createElement('ul'); n.children.forEach(function (c) { ul2.appendChild(renderNode(c)); }); li.appendChild(ul2); }
+                return li;
+              }
+              var ulr = document.createElement('ul'); ulr.className = 'attach-tree'; (a.roots || []).forEach(function (n) { ulr.appendChild(renderNode(n)); }); box.appendChild(ulr);
+            } else if (a.kind === 'photoRequest') {
+              var pr = document.createElement('div'); pr.className = 'tiny';
+              pr.textContent = 'Do you have a photo of ' + a.name + '? On the Mac, put it in: ' + a.folder; box.appendChild(pr);
+            }
+            return box;
+          }
+          """
 }
