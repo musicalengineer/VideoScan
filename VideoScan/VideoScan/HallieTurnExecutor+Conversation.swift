@@ -169,7 +169,8 @@ extension HallieTurnExecutor {
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats? = nil,
-        rosterAnswer: (() -> Result)? = nil
+        rosterAnswer: (() -> Result)? = nil,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil
     ) -> PreTranslation {
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
@@ -177,6 +178,16 @@ extension HallieTurnExecutor {
         // search for a person named Breen.
         if let surnameAnswer = HallieSurnameReference.answer(question) {
             return .answer(surnameAnswer)
+        }
+        // Lineage shapes the translator has no vocabulary for ("maternal
+        // line back 5 generations", "the Latta family tree", "trace the
+        // family back to Ireland", "what is GEDCOM") — answered from the
+        // graph with a card attached (2026-08-22). A nil answer means the
+        // shape was not really ours (e.g. "family tree for Donna" is a
+        // person, not a surname) and the question continues as typed.
+        if let lineageAnswer, let lineage = HallieLineageQuestion.detect(question),
+           let answer = lineageAnswer(lineage) {
+            return .answer(answer)
         }
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.

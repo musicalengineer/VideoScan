@@ -920,6 +920,7 @@ final class VideoScanModel: ObservableObject {
         // gate as CatalogStore.load()).
         if !(Self.isRunningTests && catalogStore === CatalogStore.shared) {
             masterArchive = catalogStore.masterArchive
+            HallieFamilyAssets.archiveRootPath = masterArchive?.rootPath   // didSet is silent inside init
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         if !restored.isEmpty {
@@ -1273,7 +1274,11 @@ final class VideoScanModel: ObservableObject {
     /// save persists it (additive snapshot key). Loaded from the store
     /// in `init` right after `load()`.
     @Published var masterArchive: MasterArchiveDesignation? {
-        didSet { catalogStore.masterArchive = masterArchive }
+        didSet {
+            catalogStore.masterArchive = masterArchive
+            // Family photos / crests live under the archive (Rick 2026-08-22).
+            HallieFamilyAssets.archiveRootPath = masterArchive?.rootPath
+        }
     }
 
     /// Reverse index source-id → promoted-copy record (and copy-id →

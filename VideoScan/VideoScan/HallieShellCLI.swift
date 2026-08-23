@@ -619,7 +619,10 @@ enum HallieShellCLI {
                         aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes)
                 },
                 graph: graph,
-                cyberBrain: cyberBrain)
+                cyberBrain: cyberBrain,
+                // Same owner binding the full path uses (2026-08-22): "trace
+                // the family back to Ireland" needs to know whose family.
+                speakers: HallieTurnExecutor.Speakers.fromDefaults())
         }
     }
 
@@ -701,7 +704,8 @@ enum HallieShellCLI {
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
                 catalogStats: state.catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) })
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) },
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):

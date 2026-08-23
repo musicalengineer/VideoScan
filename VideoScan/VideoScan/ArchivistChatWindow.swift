@@ -74,6 +74,9 @@ struct ArchivistMessage: Identifiable {
     /// Optional verified POI cover photo attached to a biography. This is
     /// presentation only; it is never part of the LLM prompt or fact basis.
     var biographyPhoto: ArchivistBiographyPhoto? = nil
+    /// Cards to look at (lineage, tree, crest, photo request) — presentation
+    /// only, same rule as `biographyPhoto` (2026-08-22).
+    var attachments: [HallieAttachment] = []
     /// Bounded evidence samples returned by the shared factual executor.
     /// These are explicitly samples, never represented as every match.
     var citations: [HallieTurnExecutor.Citation] = []
@@ -605,6 +608,9 @@ struct ArchivistChatWindow: View {
                 if let photo = message.biographyPhoto {
                     ArchivistBiographyPhotoView(photo: photo)
                 }
+                if !message.attachments.isEmpty {
+                    HallieAttachmentsView(attachments: message.attachments)
+                }
                 if !message.citations.isEmpty {
                     citationEvidence(message.citations)
                 }
@@ -1087,6 +1093,7 @@ struct ArchivistChatWindow: View {
             queryLine: response.result.queryDescription,
             basisLine: response.result.basisLine,
             biographyPhoto: response.biographyPhoto,
+            attachments: response.result.attachments,
             citations: isFollowUpAction ? [] : citations,
             knowledgeCitations: response.result.knowledgeCitations,
             responder: response.responderHost,

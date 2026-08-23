@@ -14,6 +14,8 @@ import VideoScanCore
 
 @MainActor
 final class HallieWebBridge {
+    /// Opaque token → image file the app attached to an answer this launch.
+    var attachmentTokens: [String: URL] = [:]
 
     struct Session {
         var memory = HallieTurnExecutor.ConversationMemory()
@@ -106,6 +108,9 @@ final class HallieWebBridge {
         case ("GET", let path) where path.hasPrefix("/api/poster/"):
             guard authorized(request, config) else { return .text(401, "passphrase") }
             return await poster(recordID: String(path.dropFirst("/api/poster/".count)))
+        case ("GET", let path) where path.hasPrefix("/api/attachment/"):
+            guard authorized(request, config) else { return .text(401, "passphrase") }
+            return attachmentImage(token: String(path.dropFirst("/api/attachment/".count)))
         default:
             return .text(404, "not here")
         }
@@ -247,6 +252,7 @@ final class HallieWebBridge {
         return [
             "prose": result.prose,
             "basis": result.basisLine,
+            "attachments": result.attachments.map { attachmentJSON($0) },
             "route": HallieTurnExecutor.label(result.route),
             "outcome": HallieTurnExecutor.label(result.outcome),
             "responder": response.responderHost,
@@ -472,5 +478,68 @@ extension HallieAppTurnCoordinator.Dependencies {
             continueTurn: continueTurn,
             resolveBiographyPhoto: resolveBiographyPhoto,
             composeAnswer: composeAnswer)
+    }
+}
+
+// MARK: - Attachments (2026-08-22)
+//
+// Cards go over as plain JSON the page renders as nested lists; images
+// (photos, crests) are served by an opaque per-launch token so the page
+// never sees or requests a filesystem path — only files the app itself
+// attached can ever be fetched.
+
+extension HallieWebBridge {
+    func attachmentJSON(_ attachment: HallieAttachment) -> [String: Any] {
+        func person(_ p: HalliePersonCard) -> [String: Any] {
+            var j: [String: Any] = ["name": p.name, "id": p.gedcomID]
+            if let y = p.years { j["years"] = y }
+            if let b = p.birthPlace { j["place"] = b }
+            if let url = p.photoURL { j["photo"] = "/api/attachment/" + attachmentToken(for: url) }
+            return j
+        }
+        func node(_ n: HallieTreeCard.Node) -> [String: Any] {
+            ["person": person(n.person), "spouses": n.spouses.map(person), "children": n.children.map(node)]
+        }
+        switch attachment {
+        case .photo(let p):
+            return ["kind": "photo", "name": p.personName, "caption": p.caption ?? "",
+                    "url": "/api/attachment/" + attachmentToken(for: p.fileURL)]
+        case .crest(let surname, let url):
+            return ["kind": "crest", "surname": surname, "url": "/api/attachment/" + attachmentToken(for: url)]
+        case .lineage(let card):
+            return ["kind": "lineage", "title": card.title, "root": person(card.root),
+                    "line": card.line.rawValue, "reachedAll": card.reachedAll,
+                    "generations": card.generations.map { ["label": $0.label, "generation": $0.generation, "people": $0.people.map(person)] }]
+        case .tree(let card):
+            return ["kind": "tree", "title": card.title, "surname": card.surname ?? "",
+                    "depth": card.depth, "roots": card.roots.map(node)]
+        case .photoRequest(let name, let folder):
+            return ["kind": "photoRequest", "name": name, "folder": folder.path]
+        }
+    }
+
+    func attachmentToken(for url: URL) -> String {
+        if let existing = attachmentTokens.first(where: { $0.value == url })?.key { return existing }
+        let token = UUID().uuidString.lowercased()
+        attachmentTokens[token] = url
+        return token
+    }
+
+    func attachmentImage(token: String) -> HallieHTTPResponse {
+        guard let url = attachmentTokens[token],
+              let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value,
+              size > 0 else { return .text(404, "no image") }
+        let type: String
+        switch url.pathExtension.lowercased() {
+        case "png": type = "image/png"
+        case "gif": type = "image/gif"
+        case "heic": type = "image/heic"
+        case "webp": type = "image/webp"
+        default: type = "image/jpeg"
+        }
+        return HallieHTTPResponse(
+            status: 200, reason: "OK",
+            headers: [("Content-Type", type), ("Content-Length", String(size)), ("Cache-Control", "private, max-age=3600")],
+            body: .file(url, range: 0..<size, totalLength: size))
     }
 }
