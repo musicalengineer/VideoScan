@@ -764,13 +764,21 @@ enum HallieAppTurnCoordinator {
                                 personName: canonicalName,
                                 fileURL: url))
                         ])
-                    } else if let folder = try? assets.folderForPhotoRequest(person: person) {
-                        // The folder is created here only after the current
-                        // archive/viewer authority permits it. Renderers never
-                        // create directories from attachment path strings.
-                        result = result.adding(attachments: [
-                            .photoRequest(personName: canonicalName, folderURL: folder)
-                        ])
+                    } else {
+                        do {
+                            let folder = try assets.folderForPhotoRequest(person: person)
+                            // The folder is created here only after the current
+                            // archive/viewer authority permits it. Renderers never
+                            // create directories from attachment path strings.
+                            result = result.adding(attachments: [
+                                .photoRequest(personName: canonicalName, folderURL: folder)
+                            ])
+                        } catch {
+                            // Photo presentation is optional.  Preserve the
+                            // grounded biography and record why no request card
+                            // was offered; never reinterpret the failed write.
+                            appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error.localizedDescription)")
+                        }
                     }
                 }
             } else {

@@ -196,9 +196,9 @@ struct HallieLineageDetectTests {
     @Test func surnameTreeShapes() {
         #expect(Q.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
         #expect(Q.detect("show the family tree for the current breen family") == .surnameTree(surname: "breen"))
-        #expect(Q.detect("family tree starting with the lattas") == .surnameTree(surname: "latta"))
+        #expect(Q.detect("family tree starting with the lattas") == .surnameTree(surname: "lattas"))
         #expect(Q.detect("the hudson family tree") == .surnameTree(surname: "hudson"))
-        #expect(Q.detect("family tree of the mcgills") == .surnameTree(surname: "mcgill"))
+        #expect(Q.detect("family tree of the mcgills") == .surnameTree(surname: "mcgills"))
     }
 
     @Test func originAndGedcomShapes() {
@@ -261,6 +261,15 @@ struct HallieLineageAnswerTests {
         #expect(r.offeredActions == [.openFamilyTreeSurname("Latta")])
         // A person, not a surname → nil so the normal route answers.
         #expect(HallieLineageAnswer.answer(.surnameTree(surname: "donna"), context: context) == nil)
+    }
+
+    @Test func spokenPluralSurnameResolvesOnlyAgainstTheGEDCOM() throws {
+        let plural = try #require(HallieLineageAnswer.answer(
+            .surnameTree(surname: "lattas"), context: context))
+        #expect(plural.prose.contains("Latta family"))
+        #expect(plural.queryDescription == "family tree: surname Latta")
+        #expect(HallieLineageAnswer.resolvedSurname("mcgills", graph: graph) == "McGill")
+        #expect(HallieLineageAnswer.resolvedSurname("Davis", graph: graph) == "Davis")
     }
 
     @Test func originTrailAnswers() throws {

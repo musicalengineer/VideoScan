@@ -39,7 +39,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "trace (the|our|my|X's) (family|ancestors|roots|line) back to Ireland"
         if let m = lower.firstMatch(of: /\btrace\b(.*?)\bback(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
-            if subject.firstMatch(of: /\b(?:family|ancestor|ancestry|roots|line|lineage)\b/) != nil {
+            if subject.firstMatch(of: /\b(?:family|ancestor|ancestors|ancestry|roots|line|lineage)\b/) != nil {
                 let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
                 return .originTrail(person: possessor(in: subject), country: country?.capitalized)
             }
@@ -274,15 +274,16 @@ enum HallieLineageAnswer {
 
     static func surnameTree(_ typed: String, graph: GedcomFamilyGraph) -> Result? {
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let resolved = resolvedSurname(typed, graph: graph)
         guard let card = HallieAttachmentBuilder.tree(
-            surname: typed, depth: HallieLineageQuestion.treeDepth, in: graph,
+            surname: resolved, depth: HallieLineageQuestion.treeDepth, in: graph,
             photo: { assets.photoURLs(for: $0).first }) else {
             // Not a surname in the tree → maybe a person ("family tree for
             // Donna"); let the normal route handle it.
             return nil
         }
         let surname = card.surname ?? typed.capitalized
-        let all = graph.people(withSurname: typed)
+        let all = graph.people(withSurname: resolved)
         var sentences = ["In the family tree, the \(surname) family starts with "
             + card.roots.map { root -> String in
                 var s = root.person.name
@@ -300,6 +301,29 @@ enum HallieLineageAnswer {
             offeredActions: [.openFamilyTreeSurname(surname)],
             attachments: [.tree(card)]
                 + (assets.crestURL(surname: surname).map { [.crest(surname: surname, fileURL: $0)] } ?? []))
+    }
+
+    /// Keep real surnames ending in `s` (Ross, Davis, Hayes) exact.  Only
+    /// interpret a trailing `s` as a spoken plural when the exact surname
+    /// is absent and the singular form is present in this GEDCOM.
+    static func resolvedSurname(
+        _ typed: String,
+        graph: GedcomFamilyGraph
+    ) -> String {
+        let recorded = graph.people(withSurname: typed)
+            .compactMap(\.surname)
+        guard !recorded.isEmpty else { return typed }
+        if let exact = recorded.first(where: {
+            $0.compare(typed, options: [.caseInsensitive, .diacriticInsensitive])
+                == .orderedSame
+        }) {
+            return exact
+        }
+        let grouped = Dictionary(grouping: recorded) {
+            $0.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                       locale: Locale(identifier: "en_US_POSIX"))
+        }
+        return grouped.count == 1 ? recorded[0] : typed
     }
 
     // MARK: Origin trail
