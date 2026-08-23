@@ -4,67 +4,17 @@
 // BOTH: originals in the Master Archive so they get the RAID's 3-2-1
 // protection; App Support only as the fallback root and for thumbnails).
 //
-// codex owns the full `FamilyAssetStore` (lookup, hardening, tests) on
-// feature/family-assets. This file is only the folder convention both
-// sides compile against, so the "put it here" prompt and his store agree
-// on paths. Pure path arithmetic; creates nothing.
+// Path authority and validation live in FamilyAssetStore. This file now
+// contains only the shell/eval attachment renderer.
 
 import Foundation
-
-enum HallieFamilyAssets {
-    static let archiveSubfolder = "Family Tree"
-
-    /// `<root>/Family Tree/` — the Master Archive when designated, else
-    /// App Support. The root is published by the app at launch (and on
-    /// re-designation) so the pure answer paths never touch the model.
-    nonisolated(unsafe) static var archiveRootPath: String? = nil
-
-    static var assetsRoot: URL {
-        if let root = archiveRootPath {
-            return URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(archiveSubfolder, isDirectory: true)
-        }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return support.appendingPathComponent("VideoScan/family-tree/assets", isDirectory: true)
-    }
-
-    static var peopleFolder: URL { assetsRoot.appendingPathComponent("People", isDirectory: true) }
-    static var crestsFolder: URL { assetsRoot.appendingPathComponent("Crests", isDirectory: true) }
-
-    /// `Crests/<Surname>.(png|jpg|jpeg|heic)` when present. Case-insensitive
-    /// on the surname; the first extension found wins. Nil = no crest yet.
-    static func crestURL(surname: String) -> URL? {
-        let folder = crestsFolder
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return nil }
-        let wanted = surname.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
-        let exts = ["png", "jpg", "jpeg", "heic"]
-        for name in names.sorted() {
-            let url = folder.appendingPathComponent(name)
-            let stem = url.deletingPathExtension().lastPathComponent
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
-            guard stem == wanted, exts.contains(url.pathExtension.lowercased()),
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-                  values.isRegularFile == true, values.isSymbolicLink != true else { continue }
-            return url
-        }
-        return nil
-    }
-
-    /// `People/<Name>/` — the name as written, minus path-hostile characters.
-    static func photoFolder(forPerson name: String) -> URL? {
-        let cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/:\\\\")).joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return nil }
-        return peopleFolder.appendingPathComponent(cleaned, isDirectory: true)
-    }
-}
 
 /// Text rendering of attachments for the shell / eval harness.
 enum HallieAttachmentText {
     static func lines(_ attachments: [HallieAttachment]) -> [String] {
         var out: [String] = []
         func person(_ p: HalliePersonCard) -> String {
-            var s = p.name
+            var s = "\(p.name) [GEDCOM \(p.gedcomID)]"
             if let y = p.years { s += " (\(y))" }
             if let b = p.birthPlace { s += " — \(b)" }
             return s

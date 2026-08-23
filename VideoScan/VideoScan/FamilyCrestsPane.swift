@@ -15,6 +15,7 @@ struct FamilyCrestsPane: View {
     @State private var rows: [Row] = []
     @State private var surname = ""
     @State private var errorMessage: String?
+    @State private var reloadGeneration = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -92,11 +93,26 @@ struct FamilyCrestsPane: View {
     }
 
     private func reload() {
-        rows = store.crests().map { crest in
-            let image = store.makeThumbnail(for: crest.fileURL, maxPixelSize: 120).map {
-                NSImage(cgImage: $0, size: .zero)
+        reloadGeneration &+= 1
+        let generation = reloadGeneration
+        let root = store.root
+        let cacheRoot = store.cacheRoot
+        let access = store.access
+        Task {
+            let loaded = await Task.detached(priority: .utility) {
+                let backgroundStore = FamilyAssetStore(
+                    root: root, cacheRoot: cacheRoot, access: access)
+                return backgroundStore.crests().map { crest in
+                    (crest, backgroundStore.makeThumbnail(
+                        for: crest.fileURL, maxPixelSize: 120))
+                }
+            }.value
+            guard generation == reloadGeneration else { return }
+            rows = loaded.map { crest, thumbnail in
+                Row(
+                    crest: crest,
+                    thumbnail: thumbnail.map { NSImage(cgImage: $0, size: .zero) })
             }
-            return Row(crest: crest, thumbnail: image)
         }
     }
 

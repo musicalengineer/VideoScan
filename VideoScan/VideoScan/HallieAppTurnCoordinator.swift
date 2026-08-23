@@ -257,15 +257,8 @@ enum HallieAppTurnCoordinator {
                 }
             },
             loadGraph: {
-                let directory = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask).first?
-                    .appendingPathComponent(
-                        "VideoScan/family-tree/originals", isDirectory: true)
-                return directory.flatMap {
-                    FamilyGraphFileLoader(
-                        originalsDirectory: $0).loadNewest()
-                }
+                FamilyAssetConfigurationCenter.shared
+                    .snapshot().loadFamilyGraph()
             },
             loadCyberBrain: {
                 guard let root = FileManager.default.urls(
@@ -754,11 +747,31 @@ enum HallieAppTurnCoordinator {
                payload.operation == .biography,
                let canonicalName = result.catalogPersonName {
                 photo = dependencies.resolveBiographyPhoto(canonicalName)
-                if photo == nil, result.outcome == .answered,
-                   let folder = HallieFamilyAssets.photoFolder(forPerson: canonicalName) {
-                    // Rick 2026-08-22: "if not, Hallie can prompt: do you have
-                    // a photo? put it here" — presentation only, no facts.
-                    result = result.adding(attachments: [.photoRequest(personName: canonicalName, folderURL: folder)])
+                if photo == nil, result.outcome == .answered {
+                    let assets = FamilyAssetConfigurationCenter.shared
+                        .snapshot().makeStore()
+                    let graphMatches = context.graph?.people.values.filter {
+                        $0.name.compare(
+                            canonicalName,
+                            options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    } ?? []
+                    let person = graphMatches.count == 1
+                        ? FamilyAssetPerson(graphMatches[0])
+                        : FamilyAssetPerson(name: canonicalName)
+                    if let url = assets.photoURLs(for: person).first {
+                        result = result.adding(attachments: [
+                            .photo(HalliePhotoAttachment(
+                                personName: canonicalName,
+                                fileURL: url))
+                        ])
+                    } else if let folder = try? assets.folderForPhotoRequest(person: person) {
+                        // The folder is created here only after the current
+                        // archive/viewer authority permits it. Renderers never
+                        // create directories from attachment path strings.
+                        result = result.adding(attachments: [
+                            .photoRequest(personName: canonicalName, folderURL: folder)
+                        ])
+                    }
                 }
             } else {
                 photo = nil

@@ -412,6 +412,7 @@ extension HallieTurnExecutor {
     static func offerLabel(_ action: OfferedAction) -> String {
         switch action {
         case .openFamilyTree(let name): return "Open in Family Tree: \(name)"
+        case .openFamilyTreePerson(_, let name): return "Open in Family Tree: \(name)"
         case .openFamilyTreeSurname(let surname): return "Open in Family Tree: the \(surname)s"
         case .ask(_, let label): return label
         }

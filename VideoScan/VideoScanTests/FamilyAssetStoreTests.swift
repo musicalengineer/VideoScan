@@ -16,7 +16,7 @@ struct FamilyAssetStoreTests {
         return (
             base,
             FamilyAssetStore(
-                root: base.appendingPathComponent("archive/Family Tree", isDirectory: true),
+                root: base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true),
                 cacheRoot: base.appendingPathComponent("support/thumbs", isDirectory: true)))
     }
 
@@ -56,7 +56,7 @@ struct FamilyAssetStoreTests {
         let roots = FamilyAssetStore.productionRoots(
             masterArchiveRoot: archive,
             applicationSupportRoot: support)
-        #expect(roots.assets.path == "/Volumes/FamilyArchive/Family Tree")
+        #expect(roots.assets.path == "/Volumes/FamilyArchive/40_Family_Tree")
         #expect(roots.thumbnailCache.path == "/tmp/Application Support/VideoScan/family-tree/thumbs")
 
         let fallback = FamilyAssetStore.productionRoots(
@@ -64,6 +64,35 @@ struct FamilyAssetStoreTests {
             applicationSupportRoot: support)
         #expect(fallback.assets.path == "/tmp/Application Support/VideoScan/family-tree/assets")
         #expect(fallback.thumbnailCache == roots.thumbnailCache)
+    }
+
+    @Test func productionAuthorityNeverFallsBackFromUnavailableMaster() {
+        let support = URL(fileURLWithPath: "/tmp/FamilyAssetSupport", isDirectory: true)
+        let master = URL(fileURLWithPath: "/Volumes/ExpectedArchive", isDirectory: true)
+
+        let fallback = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: nil,
+            masterIsSafelyAvailable: true,
+            readOnly: false,
+            applicationSupportRoot: support)
+        #expect(fallback.access == .readWrite)
+        #expect(fallback.roots.assets.path.hasSuffix("family-tree/assets"))
+
+        let offline = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: master,
+            masterIsSafelyAvailable: false,
+            readOnly: false,
+            applicationSupportRoot: support)
+        #expect(offline.access == .unavailable)
+        #expect(offline.roots.assets.path == "/Volumes/ExpectedArchive/40_Family_Tree")
+
+        let viewer = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: master,
+            masterIsSafelyAvailable: true,
+            readOnly: true,
+            applicationSupportRoot: support)
+        #expect(viewer.access == .readOnly)
+        #expect(viewer.roots.assets == offline.roots.assets)
     }
 
     @Test func crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified() throws {
@@ -95,6 +124,48 @@ struct FamilyAssetStoreTests {
             .map(\.lastPathComponent) == ["A.PNG"])
     }
 
+    @Test func deployedPersonFolderConventionMatchesPunctuationYearAndID() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        try writePNG(to: store.peopleDirectory
+            .appendingPathComponent("Mary_OConnor", isDirectory: true)
+            .appendingPathComponent("portrait.png"))
+        try writePNG(to: store.peopleDirectory
+            .appendingPathComponent("Mary_Strayhorn_b1754", isDirectory: true)
+            .appendingPathComponent("older.png"))
+        try writePNG(to: store.peopleDirectory
+            .appendingPathComponent("Mary_Strayhorn_b1800", isDirectory: true)
+            .appendingPathComponent("younger.png"))
+        try writePNG(to: store.peopleDirectory
+            .appendingPathComponent(
+                "Mary_Strayhorn_b1754_I342486912729", isDirectory: true)
+            .appendingPathComponent("identified.png"))
+
+        #expect(store.photoURLs(for: FamilyAssetPerson(name: "Mary O'Connor"))
+            .map(\.lastPathComponent) == ["portrait.png"])
+        #expect(store.photoURLs(for: FamilyAssetPerson(
+            name: "Mary Strayhorn", birthYear: 1800))
+            .map(\.lastPathComponent) == ["younger.png"])
+        #expect(store.photoURLs(for: FamilyAssetPerson(
+            gedcomID: "@I342486912729@",
+            name: "Mary Strayhorn",
+            birthYear: 1754))
+            .map(\.lastPathComponent) == ["identified.png"])
+        #expect(store.photoURLs(for: FamilyAssetPerson(
+            name: "Mary Strayhorn")).isEmpty)
+    }
+
+    @Test func multiplePersonImagesHaveDeterministicOrder() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let folder = store.peopleDirectory
+            .appendingPathComponent("Mary_OConnor", isDirectory: true)
+        try writePNG(to: folder.appendingPathComponent("z.png"))
+        try writePNG(to: folder.appendingPathComponent("A.png"))
+        #expect(store.photoURLs(for: FamilyAssetPerson(name: "Mary O'Connor"))
+            .map(\.lastPathComponent) == ["A.png", "z.png"])
+    }
+
     @Test func poisonedEntriesAreRejectedAndLookupNeverRecurses() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }
@@ -123,12 +194,12 @@ struct FamilyAssetStoreTests {
         let folder = try store.folderForPhotoRequest(
             person: FamilyAssetPerson(name: "../David: McGill\\Photos"))
         #expect(folder.deletingLastPathComponent() == store.peopleDirectory)
-        #expect(folder.lastPathComponent == "David McGill Photos")
+        #expect(folder.lastPathComponent == "David_McGillPhotos")
         #expect(fileManager.fileExists(atPath: folder.path))
 
         let idFolder = try store.folderForPhotoRequest(
             person: FamilyAssetPerson(gedcomID: "@I7@", name: "David McGill"))
-        #expect(idFolder.lastPathComponent == "@I7@")
+        #expect(idFolder.lastPathComponent == "David_McGill")
 
         #expect(throws: FamilyAssetStore.StoreError.invalidPerson) {
             try store.folderForPhotoRequest(
@@ -141,6 +212,22 @@ struct FamilyAssetStoreTests {
         #expect(throws: FamilyAssetStore.StoreError.invalidPerson) {
             try store.folderForPhotoRequest(person: FamilyAssetPerson(name: ".."))
         }
+    }
+
+    @Test func duplicatePhotoRequestFoldersUseBirthYearThenGEDCOMID() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        _ = try store.folderForPhotoRequest(person: FamilyAssetPerson(name: "Mary Strayhorn"))
+        let year = try store.folderForPhotoRequest(person: FamilyAssetPerson(
+            name: "Mary Strayhorn", birthYear: 1754))
+        #expect(year.lastPathComponent == "Mary_Strayhorn_b1754")
+
+        let collision = try store.folderForPhotoRequest(person: FamilyAssetPerson(
+            gedcomID: "@I342486912729@",
+            name: "Mary Strayhorn",
+            birthYear: 1754))
+        #expect(collision.lastPathComponent
+            == "Mary_Strayhorn_b1754_I342486912729")
     }
 
     @Test func symlinkedStoreDirectoriesAreNeverReadOrWritten() throws {

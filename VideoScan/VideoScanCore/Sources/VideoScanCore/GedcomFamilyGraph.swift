@@ -67,6 +67,16 @@ public struct GedcomFamilyGraph: Sendable {
         public let date: String?
     }
 
+    /// One recorded FAM involving a person. Keeping the family pointer and
+    /// its own children together prevents renderers from accidentally
+    /// assigning children from one marriage to another spouse.
+    public struct FamilyUnit: Sendable, Equatable {
+        public let id: String
+        public let spouse: Person?
+        public let children: [Person]
+        public let marriageDate: String?
+    }
+
     public private(set) var people: [String: Person] = [:]
     private var families: [String: Family] = [:]
 
@@ -94,6 +104,8 @@ public struct GedcomFamilyGraph: Sendable {
             if let fam = currentFam { families[fam.id] = fam.family }
             currentIndi = nil
             currentFam = nil
+            pendingEvent = nil
+            pendingFamilyEvent = nil
         }
 
         for rawLine in gedcomText.split(whereSeparator: \.isNewline) {
@@ -183,6 +195,27 @@ public struct GedcomFamilyGraph: Sendable {
         sourceDirectory = fileURL.deletingLastPathComponent().path
         sourceModifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate
+    }
+
+    /// Recorded family units in the person's FAMS order. Missing pointers
+    /// are ignored; children never migrate between units.
+    public func familyUnits(of person: Person) -> [FamilyUnit] {
+        person.spouseOfFamilies.compactMap { familyID in
+            guard let family = families[familyID] else { return nil }
+            let spouseID: String?
+            if family.husband == person.id {
+                spouseID = family.wife
+            } else if family.wife == person.id {
+                spouseID = family.husband
+            } else {
+                spouseID = nil
+            }
+            return FamilyUnit(
+                id: familyID,
+                spouse: spouseID.flatMap { people[$0] },
+                children: family.children.compactMap { people[$0] },
+                marriageDate: family.marriageDate)
+        }
     }
 
     /// First four-digit run in a raw GEDCOM date string, or nil.

@@ -145,6 +145,30 @@ struct GedcomLineageTests {
         #expect(GedcomFamilyGraph.place("Cork, Ireland", mentions: "ireland"))
     }
 
+    @Test func zeroGenerationRequestReturnsNoAncestors() {
+        #expect(graph.ancestorLine(
+            of: rick, line: .both, generations: 0).isEmpty)
+    }
+
+    @Test func deathPlaceIsNotPresentedAsOriginOrBirthPlace() throws {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Child /Stone/
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Parent /Stone/
+        1 DEAT
+        2 PLAC Cork, Ireland
+        1 FAMS @F1@
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 CHIL @I1@
+        0 TRLR
+        """)
+        let child = try #require(g.people["@I1@"])
+        #expect(g.originTrail(of: child, country: "Ireland").isEmpty)
+    }
+
     @Test func ancestorPathsKeepOnlyTheChainToTargets() {
         let agnes = graph.people["@I6@"]!, david = graph.people["@I4@"]!
         let gens = graph.ancestorPaths(from: rick, to: [agnes, david])
@@ -181,6 +205,10 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("trace the family back to Ireland") == .originTrail(person: nil, country: "Ireland"))
         #expect(Q.detect("trace rick's ancestors back to england") == .originTrail(person: "Rick", country: "England"))
         #expect(Q.detect("where did the family come from?") == .originTrail(person: nil, country: nil))
+        #expect(Q.detect("trace this network route back to Ireland") == nil)
+        #expect(Q.detect("family tree of the Ross family") == .surnameTree(surname: "ross"))
+        #expect(Q.detect("family tree of the Davis family") == .surnameTree(surname: "davis"))
+        #expect(Q.detect("family tree of the Hayes family") == .surnameTree(surname: "hayes"))
         #expect(Q.detect("what is gedcom?") == .gedcomAwareness)
         #expect(Q.detect("where does your family tree come from") == .gedcomAwareness)
     }
@@ -210,6 +238,10 @@ struct HallieLineageAnswerTests {
         #expect(card.generations.map(\.label) == ["mother", "grandmother", "great-grandmother"])
         #expect(card.reachedAll == false)
         #expect(HallieAttachmentText.lines(r.attachments).first?.contains("[lineage]") == true)
+        #expect(r.offeredActions == [.openFamilyTreePerson(
+            personID: "@I1@", personName: "Rick Breen")])
+        #expect(HallieAttachmentText.lines(r.attachments)
+            .contains { $0.contains("GEDCOM @I1@") })
     }
 
     @Test func ownerIsUsedWhenNoPersonNamed() throws {

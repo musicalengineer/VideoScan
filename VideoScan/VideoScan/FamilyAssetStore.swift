@@ -3,19 +3,160 @@ import CoreGraphics
 import ImageIO
 import VideoScanCore
 
+/// Immutable authority captured before Hallie leaves the main actor.  Paths
+/// alone are not permission: `access` carries the viewer/offline/UUID result
+/// that was current when the snapshot was published.
+struct FamilyAssetConfiguration: Sendable, Equatable {
+    let roots: FamilyAssetStore.Roots
+    let access: FamilyAssetStore.Access
+
+    func makeStore() -> FamilyAssetStore {
+        FamilyAssetStore(
+            root: roots.assets,
+            cacheRoot: roots.thumbnailCache,
+            access: access)
+    }
+
+    func loadFamilyGraph() -> GedcomFamilyGraph? {
+        guard access != .unavailable else { return nil }
+        return FamilyGraphFileLoader(
+            originalsDirectory: roots.assets.appendingPathComponent(
+                "GEDCOM", isDirectory: true)).loadNewest()
+    }
+}
+
+/// Small lock-protected bridge between the main-actor archive model and
+/// Hallie's detached workers.  This replaces a `nonisolated(unsafe)` mutable
+/// pathname; readers always receive one coherent value-type snapshot.
+final class FamilyAssetConfigurationCenter: @unchecked Sendable {
+    static let shared = FamilyAssetConfigurationCenter()
+
+    private let lock = NSLock()
+    private var value: FamilyAssetConfiguration
+
+    private init() {
+        value = Self.configuration(
+            masterArchiveRoot: nil,
+            masterIsSafelyAvailable: true,
+            readOnly: true)
+    }
+
+    func snapshot() -> FamilyAssetConfiguration {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func publish(
+        masterArchiveRoot: URL?,
+        masterIsSafelyAvailable: Bool,
+        readOnly: Bool
+    ) {
+        let next = Self.configuration(
+            masterArchiveRoot: masterArchiveRoot,
+            masterIsSafelyAvailable: masterIsSafelyAvailable,
+            readOnly: readOnly)
+        lock.lock()
+        value = next
+        lock.unlock()
+    }
+
+    static func configuration(
+        masterArchiveRoot: URL?,
+        masterIsSafelyAvailable: Bool,
+        readOnly: Bool,
+        applicationSupportRoot: URL? = nil
+    ) -> FamilyAssetConfiguration {
+        let support = applicationSupportRoot
+            ?? FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let roots = FamilyAssetStore.productionRoots(
+            masterArchiveRoot: masterArchiveRoot,
+            applicationSupportRoot: support)
+        let access: FamilyAssetStore.Access
+        if masterArchiveRoot != nil, !masterIsSafelyAvailable {
+            access = .unavailable
+        } else {
+            access = readOnly ? .readOnly : .readWrite
+        }
+        return FamilyAssetConfiguration(roots: roots, access: access)
+    }
+}
+
+/// Content validation shared by archive assets and legacy POI covers.  It
+/// reopens and identifies the file immediately before display; extensions
+/// are not treated as proof that bytes are an image.
+enum FamilyAssetImageValidator {
+    static func revalidatedURL(_ url: URL) -> URL? {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        guard FamilyAssetStore.allowedImageExtensions.contains(
+                fresh.pathExtension.lowercased()),
+              let values = try? fresh.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true,
+              values.isSymbolicLink != true,
+              let source = CGImageSourceCreateWithURL(fresh as CFURL, nil),
+              CGImageSourceGetCount(source) > 0
+        else { return nil }
+        return fresh
+    }
+
+    static func thumbnail(_ url: URL, maxPixelSize: Int) -> CGImage? {
+        guard maxPixelSize > 0,
+              let verified = revalidatedURL(url),
+              let source = CGImageSourceCreateWithURL(verified as CFURL, nil)
+        else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(
+            source, 0, options as CFDictionary)
+    }
+
+    static func thumbnailJPEGData(
+        _ url: URL,
+        maxPixelSize: Int = 1200,
+        quality: Double = 0.86
+    ) -> Data? {
+        guard let image = thumbnail(url, maxPixelSize: maxPixelSize) else {
+            return nil
+        }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(
+            destination,
+            image,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+}
+
 /// A person key used to locate presentation photos without making them
 /// genealogical evidence. GEDCOM remains the source of family relationships.
 struct FamilyAssetPerson: Sendable, Equatable {
     let gedcomID: String?
     let name: String
+    let birthYear: Int?
 
-    init(gedcomID: String? = nil, name: String) {
+    init(gedcomID: String? = nil, name: String, birthYear: Int? = nil) {
         self.gedcomID = gedcomID
         self.name = name
+        self.birthYear = birthYear
     }
 
     init(_ person: GedcomFamilyGraph.Person) {
-        self.init(gedcomID: person.id, name: person.name)
+        self.init(
+            gedcomID: person.id,
+            name: person.name,
+            birthYear: person.birthYear)
     }
 }
 
@@ -27,7 +168,7 @@ struct FamilyCrest: Sendable, Equatable, Identifiable {
 
 /// Local-first storage for family-tree presentation assets.
 ///
-/// `root` is normally `<Master Archive>/Family Tree`. When no Master Archive
+/// `root` is normally `<Master Archive>/40_Family_Tree`. When no Master Archive
 /// is designated it is Application Support's `family-tree/assets` directory.
 /// `cacheRoot` is always Application Support's `family-tree/thumbs` and may
 /// contain only derived, replaceable thumbnails.
@@ -102,7 +243,7 @@ struct FamilyAssetStore {
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("family-tree", isDirectory: true)
         let assets = masterArchiveRoot.map {
-            $0.standardizedFileURL.appendingPathComponent("Family Tree", isDirectory: true)
+            $0.standardizedFileURL.appendingPathComponent("40_Family_Tree", isDirectory: true)
         } ?? familySupport.appendingPathComponent("assets", isDirectory: true)
         return Roots(
             assets: assets,
@@ -146,24 +287,12 @@ struct FamilyAssetStore {
         photoURLs(for: FamilyAssetPerson(person))
     }
 
-    /// Looks in both `People/<GEDCOM ID>` and `People/<name>`. Directory
+    /// Resolves the deployed `People/<Name>[_bYYYY][_I<GEDCOM-ID>]` convention.
+    /// GEDCOM identity wins, then birth year, then an unambiguous name. Folder
     /// matching is case/diacritic-insensitive, but never recursive.
     func photoURLs(for person: FamilyAssetPerson) -> [URL] {
         guard access != .unavailable else { return [] }
-        if let id = person.gedcomID,
-           !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // An unsafe GEDCOM pointer is data corruption, not permission to
-            // drop to a possibly shared name folder.
-            guard !Self.safeGEDCOMIDComponent(id).isEmpty else { return [] }
-            if let folder = uniqueSafePersonFolder(matching: id) {
-                // GEDCOM identity wins. Never combine it with a same-name
-                // folder, which could belong to another person with that name.
-                return verifiedImages(in: folder)
-            }
-        }
-        guard let folder = uniqueSafePersonFolder(matching: person.name) else {
-            return []
-        }
+        guard let folder = resolvedPersonFolder(for: person) else { return [] }
         return verifiedImages(in: folder)
     }
 
@@ -177,10 +306,18 @@ struct FamilyAssetStore {
     @discardableResult
     func folderForPhotoRequest(person: FamilyAssetPerson) throws -> URL {
         try requireWriteAccess()
-        let component = Self.safePersonFolderComponent(person)
-        guard !component.isEmpty else { throw StoreError.invalidPerson }
+        if let rawID = person.gedcomID,
+           !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           Self.safeGEDCOMIDComponent(rawID).isEmpty {
+            throw StoreError.invalidPerson
+        }
         try ensureSafeDirectory(root)
         try ensureSafeDirectory(peopleDirectory)
+        if let existing = resolvedPersonFolder(for: person, creatingRequest: true) {
+            return existing
+        }
+
+        let component = try newPersonFolderComponent(for: person)
         let folder = peopleDirectory.appendingPathComponent(component, isDirectory: true)
             .standardizedFileURL
         guard folder.deletingLastPathComponent() == peopleDirectory else {
@@ -196,6 +333,14 @@ struct FamilyAssetStore {
         try ensureSafeDirectory(root)
         try ensureSafeDirectory(crestsDirectory)
         return crestsDirectory
+    }
+
+    @discardableResult
+    func ensureGEDCOMDirectory() throws -> URL {
+        try requireWriteAccess()
+        try ensureSafeDirectory(root)
+        try ensureSafeDirectory(gedcomDirectory)
+        return gedcomDirectory
     }
 
     func readableCrestsDirectory() -> URL? {
@@ -242,24 +387,25 @@ struct FamilyAssetStore {
     /// Re-check a previously returned URL immediately before display/open.
     func revalidatedImageURL(_ url: URL) -> URL? {
         guard access != .unavailable else { return nil }
-        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
-        return isVerifiedImage(fresh) ? fresh : nil
+        return FamilyAssetImageValidator.revalidatedURL(url)
     }
 
     /// Decode a bounded presentation image rather than the full phone/scan.
     func makeThumbnail(for url: URL, maxPixelSize: Int = 440) -> CGImage? {
-        guard maxPixelSize > 0,
-              let verified = revalidatedImageURL(url),
-              let source = CGImageSourceCreateWithURL(verified as CFURL, nil)
-        else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceShouldCacheImmediately: true,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(
-            source, 0, options as CFDictionary)
+        guard access != .unavailable else { return nil }
+        return FamilyAssetImageValidator.thumbnail(url, maxPixelSize: maxPixelSize)
+    }
+
+    /// Re-check a photo-request directory before Finder opens it.  The URL
+    /// must still be a direct child of this store's People directory and the
+    /// current snapshot must still authorize writes.
+    func revalidatedPhotoRequestFolder(_ url: URL) -> URL? {
+        guard access == .readWrite else { return nil }
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: true)
+            .standardizedFileURL
+        guard fresh.deletingLastPathComponent() == peopleDirectory,
+              isSafeDirectory(fresh) else { return nil }
+        return fresh
     }
 
     private func verifiedImages(in directory: URL) -> [URL] {
@@ -269,13 +415,59 @@ struct FamilyAssetStore {
             .sorted(by: Self.stableURLOrder)
     }
 
-    private func uniqueSafePersonFolder(matching raw: String) -> URL? {
-        let wanted = Self.lookupKey(raw)
-        guard !wanted.isEmpty else { return nil }
-        let matches = safeChildren(of: peopleDirectory).filter {
-            isSafeDirectory($0) && Self.lookupKey($0.lastPathComponent) == wanted
+    private struct FolderIdentity {
+        let nameKey: String
+        let birthYear: Int?
+        let gedcomIDKey: String?
+    }
+
+    private func safePersonFolders() -> [URL] {
+        safeChildren(of: peopleDirectory)
+            .filter(isSafeDirectory)
+            .sorted(by: Self.stableURLOrder)
+    }
+
+    private func resolvedPersonFolder(
+        for person: FamilyAssetPerson,
+        creatingRequest: Bool = false
+    ) -> URL? {
+        let folders = safePersonFolders()
+        let rawID = person.gedcomID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !rawID.isEmpty {
+            // An unsafe pointer is corrupt identity data, not permission to
+            // fall through to a shared human name.
+            guard !Self.safeGEDCOMIDComponent(rawID).isEmpty else { return nil }
+            let wantedID = Self.gedcomIDKey(rawID)
+            let idMatches = folders.filter { folder in
+                let direct = Self.gedcomIDKey(folder.lastPathComponent)
+                let suffix = Self.folderIdentity(folder.lastPathComponent).gedcomIDKey
+                return !wantedID.isEmpty && (direct == wantedID || suffix == wantedID)
+            }
+            if idMatches.count == 1 { return idMatches[0] }
+            if idMatches.count > 1 { return nil }
         }
-        return matches.count == 1 ? matches[0] : nil
+
+        let wantedName = Self.personNameKey(person.name)
+        guard !wantedName.isEmpty else { return nil }
+        let nameMatches = folders.filter {
+            Self.folderIdentity($0.lastPathComponent).nameKey == wantedName
+        }
+        if let birthYear = person.birthYear {
+            let yearMatches = nameMatches.filter {
+                Self.folderIdentity($0.lastPathComponent).birthYear == birthYear
+            }
+            if yearMatches.count == 1 {
+                // An ID-bearing write request with no matching ID means the
+                // year-only folder may be a different same-name/same-year
+                // person. Give the new request its explicit ID suffix.
+                if creatingRequest, !rawID.isEmpty { return nil }
+                return yearMatches[0]
+            }
+            if yearMatches.count > 1 { return nil }
+            if creatingRequest, !nameMatches.isEmpty { return nil }
+        }
+        return nameMatches.count == 1 ? nameMatches[0] : nil
     }
 
     private func safeChildren(of directory: URL) -> [URL] {
@@ -296,16 +488,7 @@ struct FamilyAssetStore {
     }
 
     private func isVerifiedImage(_ url: URL) -> Bool {
-        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
-        guard Self.allowedImageExtensions.contains(fresh.pathExtension.lowercased()),
-              let values = try? fresh.resourceValues(
-                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-              values.isRegularFile == true,
-              values.isSymbolicLink != true,
-              let source = CGImageSourceCreateWithURL(fresh as CFURL, nil),
-              CGImageSourceGetCount(source) > 0
-        else { return false }
-        return true
+        FamilyAssetImageValidator.revalidatedURL(url) != nil
     }
 
     private func ensureSafeDirectory(_ directory: URL) throws {
@@ -332,12 +515,32 @@ struct FamilyAssetStore {
         }
     }
 
-    private static func safePersonFolderComponent(_ person: FamilyAssetPerson) -> String {
-        if let rawID = person.gedcomID,
-           !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return safeGEDCOMIDComponent(rawID)
+    private func newPersonFolderComponent(for person: FamilyAssetPerson) throws -> String {
+        let base = Self.safePersonNameComponent(person.name)
+        let rawID = person.gedcomID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let id = Self.gedcomIDKey(rawID)
+        guard !base.isEmpty || !id.isEmpty else { throw StoreError.invalidPerson }
+
+        let folders = safePersonFolders()
+        let baseName = base.isEmpty ? id : base
+        let sameName = folders.filter {
+            Self.folderIdentity($0.lastPathComponent).nameKey
+                == Self.personNameKey(person.name)
         }
-        return safeDisplayComponent(person.name)
+        if sameName.isEmpty { return baseName }
+
+        if let birthYear = person.birthYear {
+            let withYear = "\(baseName)_b\(birthYear)"
+            let sameYear = folders.filter {
+                Self.lookupKey($0.lastPathComponent) == Self.lookupKey(withYear)
+            }
+            if sameYear.isEmpty { return withYear }
+            if !id.isEmpty { return "\(withYear)_\(id)" }
+            throw StoreError.invalidPerson
+        }
+        if !id.isEmpty { return "\(baseName)_\(id)" }
+        throw StoreError.invalidPerson
     }
 
     private static func safeGEDCOMIDComponent(_ raw: String) -> String {
@@ -354,6 +557,19 @@ struct FamilyAssetStore {
 
     private static func safeSurnameComponent(_ surname: String) -> String {
         safeDisplayComponent(surname)
+    }
+
+    private static func safePersonNameComponent(_ raw: String) -> String {
+        let forbidden = CharacterSet(charactersIn: "/\\:.\'’")
+            .union(.controlCharacters)
+        let cleaned = String(raw.unicodeScalars.compactMap { scalar -> Character? in
+            if forbidden.contains(scalar) { return nil }
+            return scalar == "_" ? " " : Character(String(scalar))
+        })
+        let words = cleaned.split(whereSeparator: { $0.isWhitespace })
+        let component = words.joined(separator: "_")
+        guard component != ".", component != ".." else { return "" }
+        return String(component.prefix(120))
     }
 
     private static func safeDisplayComponent(_ raw: String) -> String {
@@ -380,6 +596,54 @@ struct FamilyAssetStore {
             .joined(separator: " ")
     }
 
+    private static func personNameKey(_ raw: String) -> String {
+        let punctuation = CharacterSet(charactersIn: "/.\'’")
+        let normalized = String(raw.unicodeScalars.compactMap { scalar -> Character? in
+            if punctuation.contains(scalar) { return nil }
+            return scalar == "_" ? " " : Character(String(scalar))
+        })
+        return lookupKey(normalized)
+    }
+
+    private static func gedcomIDKey(_ raw: String) -> String {
+        raw.uppercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
+    private static func folderIdentity(_ raw: String) -> FolderIdentity {
+        let punctuation = CharacterSet(charactersIn: "/.\'’")
+        let cleaned = String(raw.unicodeScalars.compactMap { scalar -> Character? in
+            if punctuation.contains(scalar) { return nil }
+            return Character(String(scalar))
+        })
+        var parts = cleaned.split(whereSeparator: {
+            $0 == "_" || $0.isWhitespace
+        }).map(String.init)
+        var id: String?
+        if let last = parts.last {
+            let candidate = gedcomIDKey(last)
+            if candidate.hasPrefix("I"),
+               candidate.dropFirst().contains(where: { $0.isNumber }) {
+                id = candidate
+                parts.removeLast()
+            }
+        }
+        var year: Int?
+        if let last = parts.last,
+           last.count == 5,
+           last.lowercased().hasPrefix("b"),
+           let parsed = Int(last.dropFirst()) {
+            year = parsed
+            parts.removeLast()
+        }
+        return FolderIdentity(
+            nameKey: personNameKey(parts.joined(separator: " ")),
+            birthYear: year,
+            gedcomIDKey: id)
+    }
+
     private static func stableURLOrder(_ lhs: URL, _ rhs: URL) -> Bool {
         let left = lookupKey(lhs.lastPathComponent)
         let right = lookupKey(rhs.lastPathComponent)
@@ -401,7 +665,7 @@ struct FamilyAssetStore {
         return result.standardizedFileURL
     }
 
-    private static let allowedImageExtensions: Set<String> = [
+    fileprivate static let allowedImageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "heic",
     ]
 }

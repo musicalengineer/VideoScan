@@ -265,12 +265,8 @@ enum HallieShellCLI {
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
                     }
-                    let directory = fm.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first?
-                        .appendingPathComponent("VideoScan/family-tree/originals")
-                    return directory.flatMap {
-                        FamilyGraphFileLoader(originalsDirectory: $0).loadNewest()
-                    }
+                    return FamilyAssetConfigurationCenter.shared
+                        .snapshot().loadFamilyGraph()
                 },
                 loadCyberBrain: {
                     guard let root = FileManager.default.urls(

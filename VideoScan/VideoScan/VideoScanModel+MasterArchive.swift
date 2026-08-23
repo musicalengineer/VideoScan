@@ -250,6 +250,7 @@ extension VideoScanModel {
     ///     `masterArchiveIdentityRefusal`);
     ///   - root unreachable → look for the volume by UUID and rehome.
     func reresolveMasterArchiveMount() {
+        defer { publishFamilyAssetConfiguration() }
         masterArchiveIdentityMismatch = nil
         guard let current = masterArchive, let uuid = current.volumeUUID else { return }
         let fm = FileManager.default

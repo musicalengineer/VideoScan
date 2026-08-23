@@ -49,7 +49,7 @@ struct HalliePersonCard: Sendable, Equatable { let gedcomID: String; let name: S
 5. Eval corpus: 12 lineage/attachment cases; run the 200-Q harness before/after; no regression allowed.
 
 ### codex (feature/family-assets) — tonight
-1. `FamilyAssetStore` (pure, injectable `root` + `cacheRoot`). **Rick 21:40: originals live in the Master Archive** — production root `<MasterArchiveRoot>/Family Tree/` (People/, Crests/, GEDCOM/) so photos and crests get the RAID's 3-2-1 protection; fallback root `App Support/VideoScan/family-tree/assets/` when no Master Archive is designated; `App Support/VideoScan/family-tree/thumbs/` = derived thumbnails only (so Hallie shows a face when the RAID is unmounted). The archive tree is app-managed (`excludingMasterArchiveFiles`); nothing here is added to the catalog scan.
+1. `FamilyAssetStore` (pure, injectable `root` + `cacheRoot`). **Rick 21:40: originals live in the Master Archive** — production root `<MasterArchiveRoot>/40_Family_Tree/` (People/, Crests/, GEDCOM/) so photos and crests get the RAID's 3-2-1 protection; fallback root `App Support/VideoScan/family-tree/assets/` when no Master Archive is designated; `App Support/VideoScan/family-tree/thumbs/` = derived thumbnails only (so Hallie shows a face when the RAID is unmounted). The archive tree is app-managed (`excludingMasterArchiveFiles`); nothing here is added to the catalog scan.
    - `crests/<Surname>.{png,jpg,heic}` → `crestURL(surname:)` (case/diacritic-insensitive; "Breen" first, Rick supplies the image).
    - `people/<gedcomID>/` and `people/<normalized-name>/` → `photoURLs(for person:)` (regular, non-symlink image files only; same hardening as `ArchivistBiographyPhoto.resolve`).
    - `folderForPhotoRequest(person:)` creates the folder and returns it.

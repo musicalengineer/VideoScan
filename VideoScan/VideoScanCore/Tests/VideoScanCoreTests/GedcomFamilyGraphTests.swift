@@ -122,6 +122,52 @@ struct GedcomFamilyGraphTests {
         #expect(g.people["@I6@"]?.birthDate == nil)
     }
 
+    @Test func levelZeroBoundaryClearsPendingEventState() {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME First /Person/
+        1 BIRT
+        2 PLAC Albany, New York
+        0 @I2@ INDI
+        1 NAME Second /Person/
+        2 PLAC Must Not Leak
+        0 TRLR
+        """)
+        #expect(g.people["@I1@"]?.birthPlace == "Albany, New York")
+        #expect(g.people["@I2@"]?.birthPlace == nil)
+        #expect(g.people["@I2@"]?.deathPlace == nil)
+    }
+
+    @Test func familyUnitsKeepChildrenWithTheirRecordedMarriage() throws {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Root /Person/
+        1 FAMS @F1@
+        1 FAMS @F2@
+        0 @I2@ INDI
+        1 NAME First /Spouse/
+        0 @I3@ INDI
+        1 NAME Second /Spouse/
+        0 @I4@ INDI
+        1 NAME First /Child/
+        0 @I5@ INDI
+        1 NAME Second /Child/
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 WIFE @I2@
+        1 CHIL @I4@
+        0 @F2@ FAM
+        1 HUSB @I1@
+        1 WIFE @I3@
+        1 CHIL @I5@
+        0 TRLR
+        """)
+        let root = try #require(g.people["@I1@"])
+        let units = g.familyUnits(of: root)
+        #expect(units.map { $0.spouse?.id } == ["@I2@", "@I3@"])
+        #expect(units.map { $0.children.map(\.id) } == [["@I4@"], ["@I5@"]])
+    }
+
     @Test func colloquialRelationWords() {
         #expect(GedcomFamilyGraph.relation(fromWord: "dad") == .father)
         #expect(GedcomFamilyGraph.relation(fromWord: "Mom") == .mother)

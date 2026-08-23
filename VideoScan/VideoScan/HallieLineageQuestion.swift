@@ -39,8 +39,10 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "trace (the|our|my|X's) (family|ancestors|roots|line) back to Ireland"
         if let m = lower.firstMatch(of: /\btrace\b(.*?)\bback(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
-            let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
-            return .originTrail(person: possessor(in: subject), country: country?.capitalized)
+            if subject.firstMatch(of: /\b(?:family|ancestor|ancestry|roots|line|lineage)\b/) != nil {
+                let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
+                return .originTrail(person: possessor(in: subject), country: country?.capitalized)
+            }
         }
         if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:ancestors|ancestry|family|roots|line|lineage)\b/) {
             return .originTrail(person: possessor(in: String(m.1)), country: nil)
@@ -65,17 +67,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
         // "family tree for the latta family" / "the lattas' family tree" /
         // "starting with the latta family" / "the hudson family tree"
-        if let m = lower.firstMatch(of: /family tree (?:for|of|starting (?:with|from)) (?:the )?(?:current |present |whole |entire |modern |immediate |original |early )?([a-z][a-z'-]+?)s?(?:'s?)?(?:\s+family|\s+clan|\s+side)?\s*$/) {
+        if let m = lower.firstMatch(of: /family tree (?:for|of|starting (?:with|from)) (?:the )?(?:current |present |whole |entire |modern |immediate |original |early )?([a-z][a-z'-]+)(?:'s?)?(?:\s+family|\s+clan|\s+side)?\s*$/) {
             return .surnameTree(surname: String(m.1))
         }
-        if let m = lower.firstMatch(of: /\bstarting (?:with|from) (?:the )?([a-z][a-z'-]+?)s?(?:\s+family|\s+clan)?\s*$/),
+        if let m = lower.firstMatch(of: /\bstarting (?:with|from) (?:the )?([a-z][a-z'-]+)(?:\s+family|\s+clan)?\s*$/),
            lower.contains("tree") || lower.contains("descend") {
             return .surnameTree(surname: String(m.1))
         }
-        if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+?) family(?:'s)? tree\b/) {
-            return .surnameTree(surname: String(m.1))
-        }
-        if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+)s'? family tree\b/) {
+        if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+) family(?:'s)? tree\b/) {
             return .surnameTree(surname: String(m.1))
         }
         return nil
@@ -236,7 +235,10 @@ enum HallieLineageAnswer {
                              line: GedcomFamilyGraph.Line,
                              generations: Int,
                              graph: GedcomFamilyGraph) -> Result {
-        let card = HallieAttachmentBuilder.lineage(of: person, line: line, generations: generations, in: graph)
+        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let card = HallieAttachmentBuilder.lineage(
+            of: person, line: line, generations: generations, in: graph,
+            photo: { assets.photoURLs(for: $0).first })
         var sentences: [String] = []
         if card.generations.isEmpty {
             let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
@@ -263,14 +265,18 @@ enum HallieLineageAnswer {
             basisLine: ArchivistBiographyPolicy.gedcomBasis,
             queryDescription: "lineage \(line.rawValue) ×\(generations): \(person.name)",
             citations: [], catalogPersonName: person.name,
-            offeredActions: [.openFamilyTree(personName: person.name)],
+            offeredActions: [.openFamilyTreePerson(
+                personID: person.id, personName: person.name)],
             attachments: card.generations.isEmpty ? [] : [.lineage(card)])
     }
 
     // MARK: Surname tree
 
     static func surnameTree(_ typed: String, graph: GedcomFamilyGraph) -> Result? {
-        guard let card = HallieAttachmentBuilder.tree(surname: typed, depth: HallieLineageQuestion.treeDepth, in: graph) else {
+        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        guard let card = HallieAttachmentBuilder.tree(
+            surname: typed, depth: HallieLineageQuestion.treeDepth, in: graph,
+            photo: { assets.photoURLs(for: $0).first }) else {
             // Not a surname in the tree → maybe a person ("family tree for
             // Donna"); let the normal route handle it.
             return nil
@@ -293,7 +299,7 @@ enum HallieLineageAnswer {
             citations: [], catalogPersonName: nil,
             offeredActions: [.openFamilyTreeSurname(surname)],
             attachments: [.tree(card)]
-                + (HallieFamilyAssets.crestURL(surname: surname).map { [.crest(surname: surname, fileURL: $0)] } ?? []))
+                + (assets.crestURL(surname: surname).map { [.crest(surname: surname, fileURL: $0)] } ?? []))
     }
 
     // MARK: Origin trail
@@ -372,7 +378,8 @@ enum HallieLineageAnswer {
             basisLine: ArchivistBiographyPolicy.gedcomBasis,
             queryDescription: "origin trail: \(person.name)" + (country.map { " → \($0)" } ?? ""),
             citations: [], catalogPersonName: person.name,
-            offeredActions: [.openFamilyTree(personName: person.name)],
+            offeredActions: [.openFamilyTreePerson(
+                personID: person.id, personName: person.name)],
             attachments: card.map { [.lineage($0)] } ?? [])
     }
 
@@ -429,7 +436,7 @@ enum HallieLineageAnswer {
             parts.append(source)
             parts.append("Drop a newer .ged file in that folder and I’ll read it next time.")
         } else {
-            parts.append("No family tree is loaded right now — put a .ged file in Application Support/VideoScan/family-tree/originals and I’ll read it.")
+            parts.append("No family tree is loaded right now — add a .ged file to the authorized 40_Family_Tree/GEDCOM folder and I’ll read it.")
         }
         return Result(
             route: .capability, outcome: .answered,
@@ -440,7 +447,7 @@ enum HallieLineageAnswer {
 
     private static func noTree() -> Result {
         Result(route: .graph, outcome: .declined,
-               prose: "I don’t have a family tree loaded, so I can’t walk the lines yet. Put a GEDCOM (.ged) file in Application Support/VideoScan/family-tree/originals and ask again.",
+               prose: "I don’t have a family tree loaded, so I can’t walk the lines yet. Add a GEDCOM (.ged) file to the authorized 40_Family_Tree/GEDCOM folder and ask again.",
                basisLine: "Basis: no GEDCOM loaded; nothing was looked up.",
                queryDescription: "lineage: no tree", citations: [], catalogPersonName: nil)
     }

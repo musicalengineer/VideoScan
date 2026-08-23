@@ -14,7 +14,7 @@ struct HallieAttachmentsView: View {
             ForEach(Array(attachments.enumerated()), id: \.offset) { _, a in
                 switch a {
                 case .photo(let p): HallieImageCard(url: p.fileURL, caption: p.caption ?? p.personName, maxHeight: 260)
-                case .crest(let surname, let url): HallieImageCard(url: url, caption: "The \(surname) crest", maxHeight: 160)
+                case .crest(let surname, let url): HallieImageCard(url: url, caption: "Saved \(surname) crest reference", maxHeight: 160)
                 case .lineage(let card): HallieLineageCardView(card: card)
                 case .tree(let card): HallieTreeCardView(card: card)
                 case .photoRequest(let name, let folder): HalliePhotoRequestView(name: name, folder: folder)
@@ -56,8 +56,12 @@ struct HallieImageCard: View {
         .accessibilityLabel(caption)
         .task(id: url) {
             guard image == nil else { return }
-            let loaded = await Task.detached(priority: .userInitiated) { NSImage(contentsOf: url) }.value
-            if !Task.isCancelled { image = loaded }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                FamilyAssetImageValidator.thumbnail(url, maxPixelSize: 1200)
+            }.value
+            if !Task.isCancelled, let decoded {
+                image = NSImage(cgImage: decoded, size: .zero)
+            }
         }
     }
 }
@@ -87,7 +91,11 @@ struct HallieLineageCardView: View {
 
     private func personRow(_ p: HalliePersonCard, emphasized: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "person.fill").font(.system(size: 12)).foregroundStyle(.secondary)
+            if let url = p.photoURL {
+                HalliePersonThumbnail(url: url)
+            } else {
+                Image(systemName: "person.fill").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
             Text(p.name).font(.system(size: 15, weight: emphasized ? .semibold : .regular))
             if let y = p.years { Text(y).font(.system(size: 14).monospacedDigit()).foregroundStyle(.secondary) }
             if let b = p.birthPlace { Text("· \(b)").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1) }
@@ -121,6 +129,7 @@ private struct HallieTreeNodeView: View {
                 if depth > 0 {
                     Text("└").foregroundStyle(.secondary).font(.system(size: 13))
                 }
+                if let url = node.person.photoURL { HalliePersonThumbnail(url: url) }
                 Text(node.person.name).font(.system(size: 15, weight: depth == 0 ? .semibold : .regular))
                 if let y = node.person.years { Text(y).font(.system(size: 14).monospacedDigit()).foregroundStyle(.secondary) }
                 if !node.spouses.isEmpty {
@@ -150,11 +159,40 @@ struct HalliePhotoRequestView: View {
             }
             Spacer(minLength: 0)
             Button("Reveal folder") {
-                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                NSWorkspace.shared.activateFileViewerSelecting([folder])
+                let store = FamilyAssetConfigurationCenter.shared
+                    .snapshot().makeStore()
+                guard let verified = store.revalidatedPhotoRequestFolder(folder) else {
+                    return
+                }
+                NSWorkspace.shared.activateFileViewerSelecting([verified])
             }
             .controlSize(.small)
         }
         .modifier(CardChrome())
+    }
+}
+
+private struct HalliePersonThumbnail: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: "person.fill").foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(Circle())
+        .task(id: url) {
+            let decoded = await Task.detached(priority: .utility) {
+                FamilyAssetImageValidator.thumbnail(url, maxPixelSize: 96)
+            }.value
+            if !Task.isCancelled, let decoded {
+                image = NSImage(cgImage: decoded, size: .zero)
+            }
+        }
     }
 }

@@ -3,9 +3,9 @@ import PhotosUI
 
 /// Family Tree tab.
 ///
-/// Driven by `FamilyTreeLiveModel`: when a GEDCOM exists under
-/// App Support/VideoScan/family-tree/originals the canvas shows the real
-/// graph (selected person centred, 3 generations up, 2 down). With no
+/// Driven by `FamilyTreeLiveModel`: when a GEDCOM exists in the authorized
+/// 40_Family_Tree/GEDCOM directory the canvas shows the real graph (selected
+/// person centred, 3 generations up, 2 down). With no
 /// .ged the original demo tree stays, behind a banner that says so.
 ///
 /// Photos chosen here (NSOpenPanel / Apple Photos) are in-memory overrides
@@ -17,6 +17,8 @@ struct FamilyTreeDemoView: View {
     // `@StateObject` ≈ the view owns this object for its lifetime (created
     // once, survives re-renders) — unlike `@State` for plain values.
     @StateObject private var model: FamilyTreeLiveModel
+    @EnvironmentObject private var catalogModel: VideoScanModel
+    private let usesInjectedModel: Bool
     @State private var zoom: Double = 0.88
     @State private var selectedPhotoItem: PhotosPickerItem?
 
@@ -24,11 +26,13 @@ struct FamilyTreeDemoView: View {
     // right-click in either place can drop the other a hint.
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     @AppStorage("ftHighlightedPersonName") private var incomingHighlight: String = ""
+    @AppStorage("ftHighlightedPersonID") private var incomingPersonID: String = ""
     /// Hallie's "Open in Family Tree: the Breens" offer drops a surname here;
     /// it becomes the sidebar search text and is cleared once applied.
     @AppStorage("ftIncomingSearchText") private var incomingSearchText: String = ""
 
     init(model: FamilyTreeLiveModel? = nil) {
+        usesInjectedModel = model != nil
         _model = StateObject(wrappedValue: model ?? FamilyTreeLiveModel())
     }
 
@@ -36,6 +40,19 @@ struct FamilyTreeDemoView: View {
         VStack(spacing: 0) {
             if case .loaded(live: false) = model.loadState {
                 demoBanner
+            } else if model.loadState == .unavailable {
+                unavailableBanner
+            }
+            if let warning = model.loadWarning {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(warning).font(.system(size: 12))
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.10))
             }
             HSplitView {
                 sidebar
@@ -53,13 +70,15 @@ struct FamilyTreeDemoView: View {
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
-        .task {
-            if model.loadState == .idle {
-                await model.loadFromDisk()
+        .task(id: sourceRevision) {
+            if !usesInjectedModel {
+                model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
             }
+            await model.loadFromDisk()
             handleIncomingHighlight()
         }
         .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
+        .onChange(of: incomingPersonID) { _, _ in handleIncomingHighlight() }
         .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
         .onChange(of: model.loadState) { _, _ in handleIncomingHighlight() }
     }
@@ -72,6 +91,18 @@ struct FamilyTreeDemoView: View {
         // Wait for the graph: a hint that arrives before the load finishes
         // is picked up again by the loadState onChange.
         guard case .loaded = model.loadState else { return }
+        if !incomingPersonID.isEmpty {
+            if model.focus(onID: incomingPersonID) {
+                incomingPersonID = ""
+                incomingHighlight = ""
+            } else {
+                // GEDCOM pointers are file-local. Never guess by display name
+                // if an action's exact pointer is absent after a new export.
+                incomingPersonID = ""
+                incomingHighlight = ""
+            }
+            return
+        }
         if !incomingSearchText.isEmpty {
             let text = incomingSearchText.trimmingCharacters(in: .whitespaces)
             model.searchText = text
@@ -89,7 +120,7 @@ struct FamilyTreeDemoView: View {
         HStack(spacing: 10) {
             Image(systemName: "info.circle")
                 .foregroundStyle(.yellow)
-            Text("Demo tree — drop your GEDCOM file in Application Support/VideoScan/family-tree/originals")
+            Text("Demo tree — add a GEDCOM file to the 40_Family_Tree/GEDCOM folder")
                 .font(.system(size: 12))
                 .lineLimit(1)
             Spacer()
@@ -107,6 +138,29 @@ struct FamilyTreeDemoView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .background(Color.yellow.opacity(0.10))
+    }
+
+    private var unavailableBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .foregroundStyle(.orange)
+            Text("Family Tree is unavailable until the designated Master Archive is connected and its identity is verified.")
+                .font(.system(size: 12))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color.orange.opacity(0.12))
+    }
+
+    private var sourceRevision: String {
+        if usesInjectedModel { return "injected" }
+        return [
+            catalogModel.masterArchiveRootPath ?? "fallback",
+            catalogModel.isMasterArchiveOnline ? "online" : "offline",
+            catalogModel.masterArchiveIdentityMismatch ?? "identity-ok",
+            catalogModel.isReadOnly ? "readonly" : "readwrite",
+        ].joined(separator: "|")
     }
 
     // MARK: Sidebar
@@ -302,13 +356,19 @@ struct FamilyTreeDemoView: View {
                 .padding(14)
                 .background(panelBackground)
 
+                FamilyCrestsPane(
+                    store: FamilyAssetConfigurationCenter.shared
+                        .snapshot().makeStore())
+                    .padding(14)
+                    .background(panelBackground)
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Notes")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Text(model.isLive
-                         ? "Names and dates come straight from your GEDCOM file and are shown as recorded. Photos chosen here are kept for this session only."
-                         : "This is a placeholder tree. Drop a .ged export into the family-tree/originals folder and reload to see your own family.")
+                         ? "Names and dates come straight from your GEDCOM file and are shown as recorded. Saved family photos are read from 40_Family_Tree/People; photos chosen here are kept for this session only."
+                         : "This is a clearly labeled placeholder tree. Add a .ged export to 40_Family_Tree/GEDCOM and reload to see your own family.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -487,6 +547,8 @@ private struct FamilyTreePersonCard: View {
                             .scaledToFill()
                             .frame(width: 58, height: 58)
                             .clipShape(Circle())
+                    } else if let assetPerson = card.assetPerson {
+                        FamilyAssetPortrait(person: assetPerson, accent: accent)
                     } else {
                         Circle()
                             .fill(accent.opacity(0.22))
@@ -546,6 +608,35 @@ private struct FamilyTreePersonCard: View {
             Button("Show \(person.name) in People tab") {
                 onShowInPeople(person.name)
             }
+        }
+    }
+}
+
+private struct FamilyAssetPortrait: View {
+    let person: FamilyAssetPerson
+    let accent: Color
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Circle().fill(accent.opacity(0.22))
+            }
+        }
+        .frame(width: 58, height: 58)
+        .clipShape(Circle())
+        .task(id: person) {
+            let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+            let decoded = await Task.detached(priority: .utility) {
+                let store = configuration.makeStore()
+                guard let url = store.photoURLs(for: person).first,
+                      let cg = store.makeThumbnail(for: url, maxPixelSize: 160)
+                else { return nil as NSImage? }
+                return NSImage(cgImage: cg, size: .zero)
+            }.value
+            if !Task.isCancelled { image = decoded }
         }
     }
 }

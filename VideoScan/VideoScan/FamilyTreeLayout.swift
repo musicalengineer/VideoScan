@@ -97,8 +97,8 @@ struct FamilyTreeLayout {
                        descendantGenerations: Int = 2,
                        metrics: Metrics = Metrics()) -> Result {
         guard let root = graph.people[rootID] else { return .empty }
-        let ancestorGenerations = max(0, ancestorGenerations)
-        let descendantGenerations = max(0, descendantGenerations)
+        let ancestorGenerations = min(12, max(0, ancestorGenerations))
+        let descendantGenerations = min(2, max(0, descendantGenerations))
 
         var builder = Builder(graph: graph, metrics: metrics,
                               ancestorGenerations: ancestorGenerations,
@@ -165,16 +165,21 @@ struct FamilyTreeLayout {
 
         mutating func spouseEdge(_ left: Node, _ right: Node) {
             let half = metrics.cardSize.width / 2
+            let ordered = left.position.x <= right.position.x
+                ? (left, right) : (right, left)
             edges.append(Edge(kind: .spouse,
-                              from: CGPoint(x: left.position.x + half, y: left.position.y),
-                              to: CGPoint(x: right.position.x - half, y: right.position.y)))
+                              from: CGPoint(x: ordered.0.position.x + half,
+                                            y: ordered.0.position.y),
+                              to: CGPoint(x: ordered.1.position.x - half,
+                                          y: ordered.1.position.y)))
         }
 
         // MARK: Ancestors
 
         mutating func placeRootAndAncestors(_ root: GedcomFamilyGraph.Person) {
             let rootNode = add(root, generation: 0, x: rootX, slotKey: "root", isRoot: true)
-            placeParents(of: root, childNode: rootNode, depth: 1, slot: 0)
+            placeParents(of: root, childNode: rootNode, depth: 1, slot: 0,
+                         path: [root.id])
         }
 
         /// Recursive pedigree walk. `depth` is rows above the root (1 = the
@@ -182,10 +187,15 @@ struct FamilyTreeLayout {
         /// row. The generation cap is the only thing stopping the
         /// recursion, which also makes a malformed cyclic GEDCOM harmless.
         mutating func placeParents(of person: GedcomFamilyGraph.Person,
-                                   childNode: Node, depth: Int, slot: Int) {
+                                   childNode: Node, depth: Int, slot: Int,
+                                   path: Set<String>) {
             guard depth <= ancestorGenerations else { return }
-            let father = graph.relatives(.father, of: person).first
-            let mother = graph.relatives(.mother, of: person).first
+            let father = graph.relatives(.father, of: person).first.flatMap {
+                path.contains($0.id) ? nil : $0
+            }
+            let mother = graph.relatives(.mother, of: person).first.flatMap {
+                path.contains($0.id) ? nil : $0
+            }
             guard father != nil || mother != nil else { return }
 
             let generation = -depth
@@ -221,11 +231,13 @@ struct FamilyTreeLayout {
 
             if let father, let fatherNode {
                 placeParents(of: father, childNode: fatherNode,
-                             depth: depth + 1, slot: slot * 2)
+                             depth: depth + 1, slot: slot * 2,
+                             path: path.union([father.id]))
             }
             if let mother, let motherNode {
                 placeParents(of: mother, childNode: motherNode,
-                             depth: depth + 1, slot: slot * 2 + 1)
+                             depth: depth + 1, slot: slot * 2 + 1,
+                             path: path.union([mother.id]))
             }
         }
 
@@ -234,46 +246,60 @@ struct FamilyTreeLayout {
         mutating func placeDescendants(of root: GedcomFamilyGraph.Person) {
             guard let rootNode = nodes.first(where: \.isRoot) else { return }
 
-            // Spouses sit to the right of the root on the same row, chained
-            // by spouse lines (root–s1, s1–s2 …).
-            let spouses = uniqued(graph.relatives(.spouse, of: root))
-            var previous = rootNode
-            var firstSpouseNode: Node?
-            for (index, spouse) in spouses.enumerated() {
+            // Each FAM stays intact. Remarried spouses are each connected to
+            // the root, never to one another, and each unit retains its own
+            // children.
+            let units = graph.familyUnits(of: root)
+            var spouseNodes: [String: Node] = [:]
+            for (index, unit) in units.enumerated() {
+                guard let spouse = unit.spouse else { continue }
+                // Alternate sides so two remarriages never draw a root→far
+                // spouse line through the nearer spouse's card.
+                let direction: CGFloat = index.isMultiple(of: 2) ? 1 : -1
+                let distance = CGFloat(index / 2 + 1)
                 let node = add(spouse, generation: 0,
-                               x: rootX + metrics.slotWidth * CGFloat(index + 1),
+                               x: rootX + direction * metrics.slotWidth * distance,
                                slotKey: "s\(index)", isSpouseOfRoot: true)
-                spouseEdge(previous, node)
-                if firstSpouseNode == nil { firstSpouseNode = node }
-                previous = node
+                spouseEdge(rootNode, node)
+                spouseNodes[unit.id] = node
             }
 
             guard descendantGenerations >= 1 else { return }
-            let children = uniqued(graph.relatives(.children, of: root))
-            guard !children.isEmpty else { return }
-
-            // Children are centred under the couple (root + first spouse)
-            // when there is one, else under the root — same as the demo.
-            let anchorX = firstSpouseNode.map { ($0.position.x + rootX) / 2 } ?? rootX
-            let anchor = CGPoint(x: anchorX, y: bottom(of: rootNode).y)
+            var seenChildren = Set<String>()
+            let familyChildren: [(unit: GedcomFamilyGraph.FamilyUnit,
+                                  child: GedcomFamilyGraph.Person)] = units.flatMap { unit in
+                unit.children.compactMap { child in
+                    seenChildren.insert(child.id).inserted ? (unit, child) : nil
+                }
+            }
+            guard !familyChildren.isEmpty else { return }
 
             // Tidy-tree widths: a child's block is as wide as its own
             // children need, never narrower than one slot.
-            let grandchildren: [[GedcomFamilyGraph.Person]] = children.map { child in
+            let grandchildren: [[GedcomFamilyGraph.Person]] = familyChildren.map { item in
                 descendantGenerations >= 2
-                    ? uniqued(graph.relatives(.children, of: child))
+                    ? uniqued(graph.relatives(.children, of: item.child))
+                        .filter { $0.id != root.id && $0.id != item.child.id }
                     : []
             }
             let widths: [CGFloat] = grandchildren.map {
                 max(1, CGFloat($0.count)) * metrics.slotWidth
             }
             let total = widths.reduce(0, +)
-            var cursor = anchorX - total / 2
+            var cursor = rootX - total / 2
 
-            for (index, child) in children.enumerated() {
+            for (index, item) in familyChildren.enumerated() {
+                let child = item.child
                 let width = widths[index]
                 let childX = cursor + width / 2
-                let childNode = add(child, generation: 1, x: childX, slotKey: "c\(index)")
+                let childNode = add(
+                    child, generation: 1, x: childX,
+                    slotKey: "c\(item.unit.id).\(index)")
+                let spouseNode = spouseNodes[item.unit.id]
+                let anchorX = spouseNode.map {
+                    ($0.position.x + rootNode.position.x) / 2
+                } ?? rootNode.position.x
+                let anchor = CGPoint(x: anchorX, y: bottom(of: rootNode).y)
                 edges.append(Edge(kind: .child, from: anchor, to: top(of: childNode)))
 
                 let kids = grandchildren[index]

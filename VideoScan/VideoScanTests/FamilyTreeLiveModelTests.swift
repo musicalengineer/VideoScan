@@ -248,12 +248,37 @@ struct FamilyTreeLayoutShapeTests {
         let root = try #require(node(result, "@I1@"))
         #expect(root.isRoot)
         #expect(result.nodes.filter { $0.generation < 0 }.isEmpty)
-        // Two marriages → two spouse cards beside the root, chained by
-        // spouse lines; children from both families below.
+        // Two marriages → two independent root/spouse lines. The spouses
+        // are never connected to each other.
         let spouses = result.nodes.filter(\.isSpouseOfRoot)
         #expect(spouses.map(\.personID) == ["@I2@", "@I8@"])
         #expect(result.edges.filter { $0.kind == .spouse }.count == 2)
         #expect(Set(result.nodes(inGeneration: 1).map(\.personID)) == ["@I3@", "@I9@"])
+        let first = try #require(node(result, "@I2@"))
+        let second = try #require(node(result, "@I8@"))
+        let spouseEdges = result.edges.filter { $0.kind == .spouse }
+        #expect(spouseEdges.contains {
+            abs($0.from.x - (root.position.x + 75)) < 0.5
+                && abs($0.to.x - (first.position.x - 75)) < 0.5
+        })
+        #expect(spouseEdges.contains {
+            abs($0.from.x - (second.position.x + 75)) < 0.5
+                && abs($0.to.x - (root.position.x - 75)) < 0.5
+        })
+
+        let firstChild = try #require(node(result, "@I3@"))
+        let secondChild = try #require(node(result, "@I9@"))
+        let childEdges = result.edges.filter { $0.kind == .child }
+        let firstAnchorX = (root.position.x + first.position.x) / 2
+        let secondAnchorX = (root.position.x + second.position.x) / 2
+        #expect(childEdges.contains {
+            abs($0.to.x - firstChild.position.x) < 0.5
+                && abs($0.from.x - firstAnchorX) < 0.5
+        })
+        #expect(childEdges.contains {
+            abs($0.to.x - secondChild.position.x) < 0.5
+                && abs($0.from.x - secondAnchorX) < 0.5
+        })
         // Root is the top row: nothing above the margin.
         let minTop = result.nodes.map { $0.position.y - 97 }.min() ?? -1
         #expect(abs(minTop - 40) < 0.5)
@@ -398,6 +423,14 @@ struct FamilyTreeModelBehaviourTests {
         #expect(!model.focus(onName: "Nobody Here"))
         #expect(model.selectedID == "@I5@")
         #expect(!model.focus(onName: "   "))
+    }
+
+    @Test func exactGEDCOMIDFocusDoesNotGuessByDuplicateName() {
+        let model = liveModel()
+        #expect(model.focus(onID: "@I14@"))
+        #expect(model.selectedID == "@I14@")
+        #expect(!model.focus(onID: "@MISSING@"))
+        #expect(model.selectedID == "@I14@")
     }
 
     @Test func searchFiltersNameSurnameAndID() {

@@ -308,6 +308,8 @@ enum HallieTurnExecutor {
     enum OfferedAction: Sendable, Equatable {
         /// Open the Family Tree tab focused on this person.
         case openFamilyTree(personName: String)
+        /// Focus an exact file-local GEDCOM pointer (duplicate names safe).
+        case openFamilyTreePerson(personID: String, personName: String)
         /// Open the Family Tree tab filtered to this surname.
         case openFamilyTreeSurname(String)
         /// Ask this question next (label is what the chip shows).

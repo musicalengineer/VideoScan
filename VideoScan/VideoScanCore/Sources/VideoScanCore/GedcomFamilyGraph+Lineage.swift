@@ -33,10 +33,11 @@ extension GedcomFamilyGraph {
     public func ancestorLine(of person: Person,
                              line: Line,
                              generations: Int) -> [AncestorGeneration] {
+        guard generations > 0 else { return [] }
         var out: [AncestorGeneration] = []
         var frontier = [person]
         var seen: Set<String> = [person.id]
-        for g in 1...max(1, generations) {
+        for g in 1...generations {
             var next: [Person] = []
             for p in frontier {
                 let parents: [Person]
@@ -149,8 +150,8 @@ extension GedcomFamilyGraph {
             }
     }
 
-    /// One stop on an origin trail: an ancestor and the place the tree
-    /// records for them (birth place first, death place as a fallback).
+    /// One stop on an origin trail: an ancestor and their recorded birth
+    /// place. A death place is not evidence that the person came from there.
     public struct OriginStop: Sendable, Equatable {
         public let generation: Int
         public let person: Person
@@ -169,7 +170,7 @@ extension GedcomFamilyGraph {
         var out: [OriginStop] = []
         for gen in ancestorLine(of: person, line: .both, generations: maxGenerations) {
             for p in gen.people {
-                guard let place = p.birthPlace ?? p.deathPlace else { continue }
+                guard let place = p.birthPlace else { continue }
                 if let wanted, !Self.place(place, mentions: wanted) { continue }
                 out.append(OriginStop(generation: gen.generation, person: p, place: place))
             }

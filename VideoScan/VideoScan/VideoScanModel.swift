@@ -920,9 +920,9 @@ final class VideoScanModel: ObservableObject {
         // gate as CatalogStore.load()).
         if !(Self.isRunningTests && catalogStore === CatalogStore.shared) {
             masterArchive = catalogStore.masterArchive
-            HallieFamilyAssets.archiveRootPath = masterArchive?.rootPath   // didSet is silent inside init
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
+        publishFamilyAssetConfiguration()
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
@@ -1166,6 +1166,7 @@ final class VideoScanModel: ObservableObject {
     func applyReadOnlyMode(_ readOnly: Bool) {
         isReadOnly = readOnly
         catalogStore.isReadOnly = readOnly
+        publishFamilyAssetConfiguration()
     }
 
     /// Persist the current records array. Debounced; bursts of mutations
@@ -1276,8 +1277,8 @@ final class VideoScanModel: ObservableObject {
     @Published var masterArchive: MasterArchiveDesignation? {
         didSet {
             catalogStore.masterArchive = masterArchive
-            // Family photos / crests live under the archive (Rick 2026-08-22).
-            HallieFamilyAssets.archiveRootPath = masterArchive?.rootPath
+            // Family photos / crests follow the same archive authority.
+            publishFamilyAssetConfiguration()
         }
     }
 
