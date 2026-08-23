@@ -171,6 +171,13 @@ extension HallieTurnExecutor {
         catalogStats: HallieCatalogStats? = nil,
         rosterAnswer: (() -> Result)? = nil
     ) -> PreTranslation {
+        // Public surname history is not an archive assertion. Keep this
+        // narrow and sourced so a question such as "Breen surname origin"
+        // does not become either an invented family-tree fact or a catalog
+        // search for a person named Breen.
+        if let surnameAnswer = HallieSurnameReference.answer(question) {
+            return .answer(surnameAnswer)
+        }
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.
         if let capability = ArchivistCapabilityQuestion.detect(question) {

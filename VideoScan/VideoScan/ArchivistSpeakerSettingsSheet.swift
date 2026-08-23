@@ -129,7 +129,8 @@ struct HallieWebAccessSettings: View {
 /// "soft-spoken librarian, gentle but firm, a teeny bit slower").
 struct HallieReadAloudSettings: View {
     @AppStorage(HallieSpeaker.enabledKey) private var enabled = true
-    @AppStorage(HallieSpeaker.voiceKey) private var voiceID = ""
+    @AppStorage(HallieSpeaker.voiceKey) private var voiceID = HallieSpeaker.defaultVoiceID
+    @AppStorage(HallieSpeaker.speedKey) private var speedFactor = HallieSpeaker.defaultSpeedFactor
     @ObservedObject private var speaker = HallieSpeaker.shared
     private let voices = HallieSpeaker.englishVoices()
 
@@ -143,13 +144,12 @@ struct HallieReadAloudSettings: View {
                     Text("Voice")
                     Picker("", selection: $voiceID) {
                         Text("Best installed (\(voices.first?.name ?? "system"))").tag("")
-                        if HallieNeuralSpeech.isInstalled {
-                            Section("Local neural voices") {
-                                ForEach(HallieNeuralVoice.choices) { voice in
-                                    Text(voice.displayName + " ✦").tag(voice.id)
-                                }
+                        Section("Local neural voices") {
+                            ForEach(HallieNeuralVoice.choices) { voice in
+                                Text(voice.displayName + " ✦").tag(voice.id)
                             }
                         }
+                        .disabled(!HallieNeuralSpeech.isInstalled)
                         Section("Apple voices") {
                             ForEach(voices, id: \.identifier) { voice in
                                 Text(voice.name + (voice.quality == .premium ? " ★★" : voice.quality == .enhanced ? " ★" : ""))
@@ -169,6 +169,20 @@ struct HallieReadAloudSettings: View {
                             .controlSize(.small)
                             .accessibilityLabel("Hallie is preparing or speaking")
                     }
+                }
+                .font(.system(size: 13))
+                HStack(spacing: 8) {
+                    Text("Pace")
+                    Picker("", selection: $speedFactor) {
+                        ForEach(HallieSpeechPace.choices) { pace in
+                            Text(pace.displayName).tag(pace.factor)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 180)
+                    .onChange(of: speedFactor) { _, _ in HallieSpeaker.shared.audition() }
+                    Text("Bella at 88% is Hallie's default.")
+                        .foregroundStyle(.secondary)
                 }
                 .font(.system(size: 13))
                 Text(HallieNeuralSpeech.isInstalled
