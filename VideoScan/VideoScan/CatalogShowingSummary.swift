@@ -203,9 +203,6 @@ struct CatalogShowingBox: View {
     var body: some View {
         let pills = CatalogShowingSummary.pills(for: state)
         HStack(spacing: 6) {
-            Text("Showing:")
-                .font(Self.font)
-                .foregroundColor(foreground.opacity(0.8))
             Text(pills.map(\.text).joined(separator: " · "))
                 .font(Self.font)
                 .foregroundColor(foreground)
