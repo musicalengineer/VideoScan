@@ -573,7 +573,8 @@ enum HallieAppTurnCoordinator {
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
                 },
                 catalogStats: catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) })
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) })
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -753,6 +754,12 @@ enum HallieAppTurnCoordinator {
                payload.operation == .biography,
                let canonicalName = result.catalogPersonName {
                 photo = dependencies.resolveBiographyPhoto(canonicalName)
+                if photo == nil, result.outcome == .answered,
+                   let folder = HallieFamilyAssets.photoFolder(forPerson: canonicalName) {
+                    // Rick 2026-08-22: "if not, Hallie can prompt: do you have
+                    // a photo? put it here" — presentation only, no facts.
+                    result = result.adding(attachments: [.photoRequest(personName: canonicalName, folderURL: folder)])
+                }
             } else {
                 photo = nil
             }

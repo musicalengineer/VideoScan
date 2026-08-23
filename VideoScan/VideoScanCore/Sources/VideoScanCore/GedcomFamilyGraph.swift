@@ -32,6 +32,11 @@ public struct GedcomFamilyGraph: Sendable {
         /// never reinterpreted (honesty over formatting).
         public var birthDate: String?
         public var deathDate: String?
+        /// Raw GEDCOM "2 PLAC" text under BIRT / DEAT ("Cork, Ireland"),
+        /// verbatim like the dates (2026-08-22, "trace the family back to
+        /// Ireland"). Nil when the record has none.
+        public var birthPlace: String?
+        public var deathPlace: String?
         /// The GEDCOM surname (the part between slashes: "Richard /Breen/ Jr"
         /// → "Breen"), kept separately so a surname question ("the Breens")
         /// can count people without guessing which name token is the family
@@ -42,6 +47,8 @@ public struct GedcomFamilyGraph: Sendable {
         /// 1962", "ABT 1944", "BET 1930 AND 1931" → first run wins). Nil when
         /// the date has none. The raw string stays the displayed fact.
         public var birthYear: Int? { GedcomFamilyGraph.year(in: birthDate) }
+        /// Same for the raw death date.
+        public var deathYear: Int? { GedcomFamilyGraph.year(in: deathDate) }
     }
 
     struct Family: Sendable {
@@ -62,6 +69,15 @@ public struct GedcomFamilyGraph: Sendable {
 
     public private(set) var people: [String: Person] = [:]
     private var families: [String: Family] = [:]
+
+    /// Where this tree came from, when loaded from a file (2026-08-22,
+    /// "what is GEDCOM / where does your tree come from"). Nil for a
+    /// graph parsed from text (tests, imports).
+    public var sourceFileName: String?
+    public var sourceDirectory: String?
+    public var sourceModifiedAt: Date?
+    /// Number of FAM records — the "families" figure in Hallie's answer.
+    public var familyCount: Int { families.count }
 
     // MARK: Parse
 
@@ -115,6 +131,12 @@ public struct GedcomFamilyGraph: Sendable {
                     currentIndi = person
                     continue
                 }
+                if level == 2, tag == "PLAC", let event = pendingEvent, !value.isEmpty {
+                    if event == "BIRT", person.birthPlace == nil { person.birthPlace = value }
+                    if event == "DEAT", person.deathPlace == nil { person.deathPlace = value }
+                    currentIndi = person
+                    continue
+                }
                 switch (level, tag) {
                 case (1, "NAME") where person.name.isEmpty:
                     person.name = value.replacingOccurrences(of: "/", with: " ")
@@ -157,6 +179,10 @@ public struct GedcomFamilyGraph: Sendable {
             return nil
         }
         self.init(gedcomText: text)
+        sourceFileName = fileURL.lastPathComponent
+        sourceDirectory = fileURL.deletingLastPathComponent().path
+        sourceModifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
     }
 
     /// First four-digit run in a raw GEDCOM date string, or nil.

@@ -158,6 +158,15 @@ extension HallieShellCLI {
                 personName: canonical, profiles: state.profiles ?? [])
         }
         output(result.prose)
+        var attachments = result.attachments
+        if state.biographyPhoto == nil, result.clarification == nil, result.outcome == .answered,
+           case .graph(let payload)? = ast, payload.operation == .biography,
+           let canonical = result.catalogPersonName,
+           let folder = HallieFamilyAssets.photoFolder(forPerson: canonical) {
+            // Same prompt the app adds (HallieAppTurnCoordinator): presentation only.
+            attachments.append(.photoRequest(personName: canonical, folderURL: folder))
+        }
+        for line in HallieAttachmentText.lines(attachments) { output(line) }
         if diagnostics {
             if result.composedBy == .model {
                 output("phrased by: model (facts verified against the plan)")

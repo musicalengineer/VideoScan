@@ -49,7 +49,7 @@ struct HalliePersonCard: Sendable, Equatable { let gedcomID: String; let name: S
 5. Eval corpus: 12 lineage/attachment cases; run the 200-Q harness before/after; no regression allowed.
 
 ### codex (feature/family-assets) — tonight
-1. `FamilyAssetStore` (pure, injectable root; production root `App Support/VideoScan/family-tree/assets/`):
+1. `FamilyAssetStore` (pure, injectable `root` + `cacheRoot`). **Rick 21:40: originals live in the Master Archive** — production root `<MasterArchiveRoot>/Family Tree/` (People/, Crests/, GEDCOM/) so photos and crests get the RAID's 3-2-1 protection; fallback root `App Support/VideoScan/family-tree/assets/` when no Master Archive is designated; `App Support/VideoScan/family-tree/thumbs/` = derived thumbnails only (so Hallie shows a face when the RAID is unmounted). The archive tree is app-managed (`excludingMasterArchiveFiles`); nothing here is added to the catalog scan.
    - `crests/<Surname>.{png,jpg,heic}` → `crestURL(surname:)` (case/diacritic-insensitive; "Breen" first, Rick supplies the image).
    - `people/<gedcomID>/` and `people/<normalized-name>/` → `photoURLs(for person:)` (regular, non-symlink image files only; same hardening as `ArchivistBiographyPhoto.resolve`).
    - `folderForPhotoRequest(person:)` creates the folder and returns it.
@@ -70,4 +70,4 @@ Replace `FamilyTreeDemoView`'s demo data with a live model over `GedcomFamilyGra
 1. `feature/hallie-rich-media` (contract + routes) 2. `feature/family-assets` (compiles against contract) 3. `feature/family-tree-gedcom`. Each: green suites + codex review + Rick.
 
 ## Not tonight
-FamilySearch API calls; drawing trees on the iPad (HTML outline only); any LLM-phrased genealogy; photos inside the Master Archive tree (assets live beside the GEDCOM, not in the archive).
+FamilySearch API calls; drawing trees on the iPad (HTML outline only); any LLM-phrased genealogy; drawing on the iPad; FamilySearch calls. (Photos/crests DO live in the Master Archive — Rick's 21:40 decision.)
