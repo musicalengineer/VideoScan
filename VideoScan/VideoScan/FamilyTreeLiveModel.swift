@@ -161,8 +161,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     // `nonisolated` ≈ "no actor lock needed": pure path math, usable as a
     // default argument before the main-actor instance exists.
     nonisolated static var productionOriginalsDirectory: URL {
-        FamilyAssetConfigurationCenter.shared.snapshot().roots.assets
-            .appendingPathComponent("GEDCOM", isDirectory: true)
+        FamilyAssetConfigurationCenter.shared.snapshot().gedcomDirectory()
     }
 
     init(originalsDirectory: URL? = nil,
@@ -171,7 +170,7 @@ final class FamilyTreeLiveModel: ObservableObject {
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
         self.originalsDirectory = originalsDirectory
-            ?? production.roots.assets.appendingPathComponent("GEDCOM", isDirectory: true)
+            ?? production.gedcomDirectory()
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations
@@ -259,8 +258,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     func configure(source: FamilyAssetConfiguration) {
-        originalsDirectory = source.roots.assets
-            .appendingPathComponent("GEDCOM", isDirectory: true)
+        originalsDirectory = source.gedcomDirectory()
         sourceAccess = source.access
     }
 

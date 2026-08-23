@@ -9,6 +9,10 @@ import VideoScanCore
 struct FamilyAssetConfiguration: Sendable, Equatable {
     let roots: FamilyAssetStore.Roots
     let access: FamilyAssetStore.Access
+    /// Read-only compatibility source used only when no Master Archive is
+    /// designated.  A designated-but-offline archive must never fall back
+    /// to a different tree on the internal disk.
+    let legacyGEDCOMDirectory: URL?
 
     func makeStore() -> FamilyAssetStore {
         FamilyAssetStore(
@@ -20,8 +24,40 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
     func loadFamilyGraph() -> GedcomFamilyGraph? {
         guard access != .unavailable else { return nil }
         return FamilyGraphFileLoader(
-            originalsDirectory: roots.assets.appendingPathComponent(
-                "GEDCOM", isDirectory: true)).loadNewest()
+            originalsDirectory: gedcomDirectory()).loadNewest()
+    }
+
+    /// Prefer the deployed assets/GEDCOM convention.  Older installations
+    /// stored their only export in family-tree/originals; retain read access
+    /// until they adopt a Master Archive, without copying or mutating it.
+    func gedcomDirectory(fileManager: FileManager = .default) -> URL {
+        let preferred = roots.assets.appendingPathComponent(
+            "GEDCOM", isDirectory: true)
+        guard !Self.hasGEDCOMCandidate(preferred, fileManager: fileManager),
+              let legacyGEDCOMDirectory,
+              Self.hasGEDCOMCandidate(legacyGEDCOMDirectory,
+                                      fileManager: fileManager) else {
+            return preferred
+        }
+        return legacyGEDCOMDirectory
+    }
+
+    private static func hasGEDCOMCandidate(
+        _ directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]) else { return false }
+        return files.contains { url in
+            guard url.pathExtension.lowercased() == "ged",
+                  let values = try? url.resourceValues(forKeys: keys) else {
+                return false
+            }
+            return values.isRegularFile == true && values.isSymbolicLink != true
+        }
     }
 }
 
@@ -82,7 +118,14 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
         } else {
             access = readOnly ? .readOnly : .readWrite
         }
-        return FamilyAssetConfiguration(roots: roots, access: access)
+        let legacyGEDCOMDirectory = masterArchiveRoot == nil
+            ? roots.thumbnailCache.deletingLastPathComponent()
+                .appendingPathComponent("originals", isDirectory: true)
+            : nil
+        return FamilyAssetConfiguration(
+            roots: roots,
+            access: access,
+            legacyGEDCOMDirectory: legacyGEDCOMDirectory)
     }
 }
 

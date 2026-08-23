@@ -95,6 +95,47 @@ struct FamilyAssetStoreTests {
         #expect(viewer.roots.assets == offline.roots.assets)
     }
 
+    @Test func legacyGEDCOMIsReadOnlyFallbackOnlyWithoutMasterArchive() throws {
+        let base = fileManager.temporaryDirectory
+            .appendingPathComponent("LegacyGEDCOMFallback-\(UUID())", isDirectory: true)
+        defer { try? fileManager.removeItem(at: base) }
+        let support = base.appendingPathComponent("support", isDirectory: true)
+        let legacy = support.appendingPathComponent(
+            "VideoScan/family-tree/originals", isDirectory: true)
+        try fileManager.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try Data("0 HEAD\n0 @I1@ INDI\n1 NAME Legacy /Person/\n0 TRLR\n".utf8)
+            .write(to: legacy.appendingPathComponent("legacy.ged"))
+
+        let fallback = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: nil,
+            masterIsSafelyAvailable: true,
+            readOnly: true,
+            applicationSupportRoot: support)
+        #expect(fallback.gedcomDirectory()
+            == legacy.standardizedFileURL.resolvingSymlinksInPath())
+        #expect(fallback.loadFamilyGraph()?.people["@I1@"]?.name == "Legacy Person")
+
+        // Once the new convention contains any regular GEDCOM candidate it
+        // is authoritative, even when malformed; loader diagnostics should
+        // report that file instead of silently changing trees.
+        let preferred = fallback.roots.assets.appendingPathComponent(
+            "GEDCOM", isDirectory: true)
+        try fileManager.createDirectory(at: preferred, withIntermediateDirectories: true)
+        try Data("damaged".utf8).write(to: preferred.appendingPathComponent("new.ged"))
+        #expect(fallback.gedcomDirectory() == preferred.standardizedFileURL)
+        #expect(fallback.loadFamilyGraph() == nil)
+
+        let master = base.appendingPathComponent("archive", isDirectory: true)
+        let designated = FamilyAssetConfigurationCenter.configuration(
+            masterArchiveRoot: master,
+            masterIsSafelyAvailable: true,
+            readOnly: true,
+            applicationSupportRoot: support)
+        #expect(designated.legacyGEDCOMDirectory == nil)
+        #expect(designated.gedcomDirectory().path
+            == master.appendingPathComponent("40_Family_Tree/GEDCOM").path)
+    }
+
     @Test func crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }
