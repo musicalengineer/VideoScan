@@ -233,6 +233,9 @@ struct ArchivistChatWindow: View {
     /// for QA and are always retained in the structured transcript.
     @AppStorage("archivist.showTechnicalDetails") private var showTechnicalDetails = false
     @State private var showSpeakerSettings = false
+    /// Ask ⇄ Stop while she reads an answer aloud (Rick 2026-08-24:
+    /// "can't stop Hallie" on long lists).
+    @ObservedObject private var hallieSpeaker = HallieSpeaker.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -290,10 +293,19 @@ struct ArchivistChatWindow: View {
                     }
                     .disabled(isThinking)
                     .accessibilityIdentifier("archivist.chatInput")
-                Button("Ask", action: send)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isThinking
-                              || input.trimmingCharacters(in: .whitespaces).isEmpty)
+                if hallieSpeaker.isSpeaking {
+                    // The Ask button becomes Stop while she speaks — one
+                    // obvious control in one place (⌘. also works).
+                    Button("Stop") { hallieSpeaker.stop() }
+                        .keyboardShortcut(".", modifiers: .command)
+                        .tint(.red)
+                        .accessibilityIdentifier("archivist.stopSpeaking")
+                } else {
+                    Button("Ask", action: send)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isThinking
+                                  || input.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
             .padding(10)
         }
