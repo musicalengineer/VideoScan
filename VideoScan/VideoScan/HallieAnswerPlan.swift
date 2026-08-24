@@ -32,11 +32,19 @@ struct HallieAnswerPlan: Sendable, Equatable {
         let id: String
         let text: String
         let evidenceIDs: [String]
+        /// Who vouches for this claim when it is a family member's account
+        /// rather than a document ("Rick Breen"). The composer must voice
+        /// such claims as attributed testimony — "According to Rick, …" —
+        /// never as bare fact (Rick 2026-08-24: character and appearance
+        /// belong in a biography, with the receipt).
+        let attribution: String?
 
-        init(id: String, text: String, evidenceIDs: [String] = []) {
+        init(id: String, text: String, evidenceIDs: [String] = [],
+             attribution: String? = nil) {
             self.id = id
             self.text = text
             self.evidenceIDs = evidenceIDs
+            self.attribution = attribution
         }
     }
 
@@ -244,11 +252,20 @@ struct HallieAnswerPlan: Sendable, Equatable {
         fallbackText: String
     ) -> HallieAnswerPlan {
         var claims: [Claim] = []
+        let attributionBySource = Dictionary(uniqueKeysWithValues:
+            plan.sourceCitations.compactMap { citation in
+                citation.attribution.map { (citation.id, $0) }
+            })
         for claim in plan.claims {
+            // A family member's not-yet-document-verified account keeps its
+            // teller's name so the composer can voice it as testimony.
+            let attribution = claim.confidence == .confirmed ? nil
+                : claim.evidenceIDs.compactMap { attributionBySource[$0] }.first
             claims.append(Claim(
                 id: "c\(claims.count + 1)",
                 text: claim.text,
-                evidenceIDs: claim.evidenceIDs))
+                evidenceIDs: claim.evidenceIDs,
+                attribution: attribution))
         }
         for statement in plan.uncertaintyStatements {
             claims.append(Claim(id: "c\(claims.count + 1)", text: statement))

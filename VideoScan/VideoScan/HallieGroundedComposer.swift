@@ -188,6 +188,11 @@ struct HallieGroundedComposer: Sendable {
         - Speak about the family plainly, the way a person would: prefer "there \
         are 21 clips of Donna at the Cape" over "I found 21 catalog items \
         matching that".
+        - A claim marked (as told by NAME) is that person's own account: voice \
+        it as attributed testimony — "According to NAME, …" or "NAME \
+        remembers …" — never as bare fact. When such an account describes a \
+        person's character or appearance, include one warm sentence of it in a \
+        biography; families want their people described, not just dated.
         - Keep it short: at most 3 sentences for a list of items, at most 6 for \
         a biography.
         - Plain text only. No headings, bullets, markdown, or preamble.
@@ -220,7 +225,11 @@ struct HallieGroundedComposer: Sendable {
         }
         lines.append("Approved claims:")
         for claim in plan.claims {
-            lines.append("[\(claim.id)] \(claim.text)")
+            if let teller = claim.attribution {
+                lines.append("[\(claim.id)] (as told by \(teller)) \(claim.text)")
+            } else {
+                lines.append("[\(claim.id)] \(claim.text)")
+            }
         }
         lines.append("")
         lines.append("Write the answer now, tagging every sentence with its claim IDs.")
