@@ -35,6 +35,26 @@ struct HallieTellingModeTests {
         }
     }
 
+    @Test func rememberPhrasingsOpenTellingAndPronounsAskWho() throws {
+        // Live miss 2026-08-24: this exact shape answered a biography and
+        // silently discarded Rick's words.
+        let her = try #require(HallieTellingMode.detectOpening(
+            "I want you to remember and tell about her: slim attractive blonde, kind"))
+        #expect(her.subject == nil)          // never a person named "Her"
+        #expect(her.pronoun == .she)
+        #expect(her.firstStatement == "slim attractive blonde, kind")
+
+        let named = try #require(HallieTellingMode.detectOpening(
+            "Remember this about Donna: she loves gardening"))
+        #expect(named.subject == "Donna")
+        #expect(named.firstStatement == "she loves gardening")
+
+        let noted = try #require(HallieTellingMode.detectOpening(
+            "please write down about Glen Hudson. He served in the Coast Guard."))
+        #expect(noted.subject == "Glen Hudson")
+        #expect(noted.firstStatement == "He served in the Coast Guard.")
+    }
+
     @Test func questionsToHallieAreNeverOpeners() {
         for text in [
             "tell me about Donna", "can you tell me about my dad",

@@ -187,6 +187,18 @@ enum HallieTellingMode {
         let pronoun = kinshipPronoun(in: nameWords)
             ?? relation.flatMap { kinshipPronoun(in: $0.split(separator: " ").map(String.init)) }
             ?? .they
+        // A bare pronoun subject ("remember this about her") cannot name a
+        // person by itself — keep the statement, ask who. Never mint a
+        // person literally named "Her".
+        if nameWords.count == 1,
+           let pronounWord = nameWords.first,
+           ["her", "him", "she", "he", "them", "they"].contains(pronounWord) {
+            return Opening(subject: nil,
+                           relation: nil,
+                           pronoun: ["her", "she"].contains(pronounWord) ? .she
+                               : ["him", "he"].contains(pronounWord) ? .he : .they,
+                           firstStatement: firstStatement)
+        }
         let possessiveLead = ["my", "our", "your"].contains(nameWords.first ?? "")
         let kinshipOnly = possessiveLead
             && nameWords.count >= 2
@@ -360,6 +372,11 @@ enum HallieTellingMode {
         #"^(?:hallie[,]?\s+)?(?:i have|i've got|i got) (?:a story|some stories|something|some things|a few things|a memory|some memories|memories) (?:to tell you |to share |i want to share |i'd like to share )?about "#,
         #"^(?:hallie[,]?\s+)?(?:remember this|write this down|make a note|take a note|note this|take this down|write this) about "#,
         #"^(?:hallie[,]?\s+)?(?:let me|i want to|i'd like to) tell you (?:who|what) (?:\w+ )?(?:was|is) like[,:]? "#,
+        // "I want you to remember (and tell) about her: …" — live miss
+        // 2026-08-24: this routed to a biography ANSWER and Rick's words
+        // were silently not saved.
+        #"^(?:hallie[,]?\s+)?(?:i want you to|i'd like you to|i need you to|you should|please) (?:remember|note|write down|keep|record)(?: this| that| it)?(?: and tell(?: me| us| people| everyone)?)?(?: (?:something|more|a few things))? about "#,
+        #"^(?:hallie[,]?\s+)?(?:remember|note|record) (?:this |that |it )?about "#,
     ]
 
     private static let kinshipWords: [String: Pronoun] = [
