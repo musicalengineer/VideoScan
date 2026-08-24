@@ -885,7 +885,7 @@ enum ArchivistGraphExecutor {
     private static func declineUnexpectedRelation() -> ArchivistGraphResult {
         decline(
             .unexpectedRelation,
-            prose: "That family-tree operation does not accept a relationship.",
+            prose: "Let me do that one person at a time — try \u{201C}show my paternal line back 5 generations\u{201D}, \u{201C}trace the family back to Ireland\u{201D}, or name the person you're curious about.",
             basis: queryValidationBasis)
     }
 

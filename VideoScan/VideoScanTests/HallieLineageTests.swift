@@ -176,6 +176,24 @@ struct GedcomLineageTests {
         #expect(graph.ancestorPaths(from: rick, to: []).isEmpty)
     }
 
+    @Test func nicknameAndPrefixMatching() {
+        #expect(graph.people(matching: "rick breen").map(\.name) == ["Rick Breen"])
+        // Diminutive: fred → frederick would apply on a tree that has one;
+        // here "tim breen" resolves exactly, and a prefix ask like
+        // "elle ronan" is rejected only when shorter than 3 letters.
+        #expect(GedcomFamilyGraph.diminutives["fred"] == "frederick")
+        #expect(graph.people(matching: "el ronan").isEmpty)
+    }
+
+    @Test func lineRestrictedTrailAndLoosePlaces() {
+        let maternalIreland = graph.originTrail(of: rick, country: "ireland", line: .maternal)
+        #expect(maternalIreland.map(\.person.name) == ["Agnes McGill"])
+        let paternalIreland = graph.originTrail(of: rick, country: "ireland", line: .paternal)
+        #expect(paternalIreland.isEmpty)
+        #expect(GedcomFamilyGraph.place("Boston, Suffolk, Massachusetts, USA", mentions: "old puritan boston"))
+        #expect(GedcomFamilyGraph.place("Boston, New England", mentions: "england") == false)
+    }
+
     @Test func sourceMetadataOnlyFromFiles() {
         #expect(graph.sourceFileName == nil)
         #expect(graph.familyCount == 5)
@@ -202,9 +220,12 @@ struct HallieLineageDetectTests {
     }
 
     @Test func originAndGedcomShapes() {
-        #expect(Q.detect("trace the family back to Ireland") == .originTrail(person: nil, country: "Ireland"))
-        #expect(Q.detect("trace rick's ancestors back to england") == .originTrail(person: "Rick", country: "England"))
-        #expect(Q.detect("where did the family come from?") == .originTrail(person: nil, country: nil))
+        #expect(Q.detect("trace the family back to Ireland") == .originTrail(person: nil, country: "Ireland", line: .both))
+        #expect(Q.detect("trace rick's ancestors back to england") == .originTrail(person: "Rick", country: "England", line: .both))
+        #expect(Q.detect("where did the family come from?") == .originTrail(person: nil, country: nil, line: .both))
+        #expect(Q.detect("trace my maternal links back to Ireland") == .originTrail(person: nil, country: "Ireland", line: .maternal))
+        #expect(Q.detect("trace my paternal links to old puritan boston") == .originTrail(person: nil, country: "Old Puritan Boston", line: .paternal))
+        #expect(Q.detect("trace our heritage back") == .originTrail(person: nil, country: nil, line: .both))
         #expect(Q.detect("trace this network route back to Ireland") == nil)
         #expect(Q.detect("family tree of the Ross family") == .surnameTree(surname: "ross"))
         #expect(Q.detect("family tree of the Davis family") == .surnameTree(surname: "davis"))
@@ -273,17 +294,17 @@ struct HallieLineageAnswerTests {
     }
 
     @Test func originTrailAnswers() throws {
-        let r = try #require(HallieLineageAnswer.answer(.originTrail(person: nil, country: "Ireland"), context: context))
+        let r = try #require(HallieLineageAnswer.answer(.originTrail(person: nil, country: "Ireland", line: .both), context: context))
         #expect(r.outcome == .answered)
         #expect(r.prose.contains("David Latta"))
         #expect(r.prose.contains("Belfast, Ireland"))
-        let none = try #require(HallieLineageAnswer.answer(.originTrail(person: nil, country: "Italy"), context: context))
+        let none = try #require(HallieLineageAnswer.answer(.originTrail(person: nil, country: "Italy", line: .both), context: context))
         #expect(none.outcome == .declined)
         #expect(none.prose.contains("nobody born in Italy"))
     }
 
     @Test func whereDidTheFamilyComeFromAnswersByCountry() throws {
-        let r = try #require(HallieLineageAnswer.answer(.originTrail(person: "Rick", country: nil), context: context))
+        let r = try #require(HallieLineageAnswer.answer(.originTrail(person: "Rick", country: nil, line: .both), context: context))
         #expect(r.outcome == .answered)
         #expect(r.prose.contains("Ireland (David Latta"))
         #expect(r.prose.contains("Scotland"))

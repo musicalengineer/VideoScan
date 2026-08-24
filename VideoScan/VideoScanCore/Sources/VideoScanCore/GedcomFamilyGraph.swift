@@ -279,8 +279,74 @@ public struct GedcomFamilyGraph: Sendable {
         // A complete canonical name is more specific than a token-subset
         // match ("Zoe River" must not become ambiguous with "Zoe River Jr").
         let exact = matches.filter { FamilyIdentityText.tokens($0.name) == tokens }
-        return exact.isEmpty ? matches : exact
+        if !matches.isEmpty { return exact.isEmpty ? matches : exact }
+
+        // Nothing token-exact (2026-08-24, Rick: "tell me about fred lamb"
+        // declined although Frederick Burton Lamb is right there). Two
+        // deterministic fallbacks, tried in order, still never substring
+        // matching in the middle of a name:
+        //   1. Diminutives: each token may expand through the curated
+        //      table (fred → frederick). Exact-token match on the result.
+        //   2. Unique prefix: every asked token (≥3 letters) must be a
+        //      PREFIX of some name token ("ann" finds Anna and Ann — the
+        //      caller's ambiguity handling asks which one).
+        let expanded = tokens.map { Self.diminutives[$0] ?? $0 }
+        if expanded != tokens {
+            let byNickname = people.values.filter { person in
+                let nameTokens = Set(FamilyIdentityText.tokens(person.name))
+                return expanded.allSatisfy { nameTokens.contains($0) }
+            }
+            if !byNickname.isEmpty {
+                return byNickname.sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+            }
+        }
+        guard tokens.allSatisfy({ $0.count >= 3 }) else { return [] }
+        return people.values.filter { person in
+            let nameTokens = FamilyIdentityText.tokens(person.name)
+            return tokens.allSatisfy { asked in
+                nameTokens.contains { $0.hasPrefix(asked) }
+            }
+        }
+        .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
     }
+
+    /// Curated diminutive → formal-name table (lowercased tokens). Data,
+    /// not heuristics: only pairs a family archivist would vouch for.
+    public static let diminutives: [String: String] = [
+        "fred": "frederick", "freddy": "frederick",
+        "will": "william", "bill": "william", "billy": "william", "willie": "william",
+        "dave": "david", "davey": "david",
+        "dick": "richard", "rich": "richard", "richie": "richard", "rick": "richard", "ricky": "richard",
+        "tim": "timothy", "timmy": "timothy",
+        "tom": "thomas", "tommy": "thomas",
+        "jim": "james", "jimmy": "james",
+        "bob": "robert", "bobby": "robert", "rob": "robert", "robbie": "robert",
+        "ted": "theodore", "teddy": "theodore",
+        "ed": "edward", "eddie": "edward", "ned": "edward",
+        "joe": "joseph", "joey": "joseph",
+        "jack": "john", "johnny": "john",
+        "steve": "stephen", "steven": "stephen",
+        "mike": "michael", "mickey": "michael",
+        "dan": "daniel", "danny": "daniel",
+        "sam": "samuel", "sammy": "samuel",
+        "nate": "nathaniel", "nat": "nathaniel",
+        "chris": "christopher",
+        "pete": "peter",
+        "geo": "george",
+        "kate": "katherine", "katie": "katherine", "kathy": "katherine", "kitty": "katherine",
+        "liz": "elizabeth", "lizzie": "elizabeth", "beth": "elizabeth", "betty": "elizabeth", "betsy": "elizabeth", "eliza": "elizabeth",
+        "maggie": "margaret", "meg": "margaret", "peggy": "margaret",
+        "molly": "mary", "polly": "mary",
+        "nellie": "ellen", "nell": "ellen",
+        "abby": "abigail",
+        "sue": "susan", "susie": "susan", "suzie": "susan",
+        "nancy": "ann",
+        "sally": "sarah",
+        "hattie": "harriet",
+        "millie": "mildred",
+        "winnie": "winifred",
+        "eileen": "eileen",
+    ]
 
     // MARK: Kinship
 

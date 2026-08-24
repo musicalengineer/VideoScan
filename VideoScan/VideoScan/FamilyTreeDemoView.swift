@@ -18,6 +18,7 @@ struct FamilyTreeDemoView: View {
     // once, survives re-renders) — unlike `@State` for plain values.
     @StateObject private var model: FamilyTreeLiveModel
     @EnvironmentObject private var catalogModel: VideoScanModel
+    @Environment(\.openWindow) private var openWindow
     private let usesInjectedModel: Bool
     @State private var zoom: Double = 0.88
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -252,6 +253,10 @@ struct FamilyTreeDemoView: View {
                                 isSelected: card.person.id == model.selectedID,
                                 onSelect: { model.select(card.person.id) },
                                 onPickPhoto: { pickPhotoFile(for: card.person.id) },
+                                onAskHallie: { name in
+                                    catalogModel.archivistAskRequest = "tell me about \(name)"
+                                    openWindow(id: "archivist")
+                                },
                                 onShowInPeople: { name in
                                     showInPeopleTab(named: name)
                                 }
@@ -517,6 +522,9 @@ private struct FamilyTreePersonCard: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onPickPhoto: () -> Void
+    /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
+    /// "Tell me about this person").
+    let onAskHallie: (String) -> Void
     let onShowInPeople: (String) -> Void
 
     private var person: FamilyTreePersonSummary { card.person }
@@ -596,6 +604,10 @@ private struct FamilyTreePersonCard: View {
             onSelect()
         }
         .contextMenu {
+            Button("Tell me about \(person.name)") {
+                onAskHallie(person.name)
+            }
+            Divider()
             Button("Center on \(person.name)") {
                 onSelect()
             }

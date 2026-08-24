@@ -554,7 +554,11 @@ enum HallieAppTurnCoordinator {
                 let context = HallieTurnExecutor.Context(
                     profiles: dependencies.loadProfiles(),
                     graph: dependencies.loadGraph(),
-                    cyberBrain: dependencies.loadCyberBrain())
+                    cyberBrain: dependencies.loadCyberBrain(),
+                    // Owner binding (2026-08-24 live spot-test): without it
+                    // "trace MY maternal line" asks "whose line?" in the app
+                    // while the shell answers. Same source as the full path.
+                    speakers: dependencies.loadSpeakers())
                 loaded = context
                 return context
             }

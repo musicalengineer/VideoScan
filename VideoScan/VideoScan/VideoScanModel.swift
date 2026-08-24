@@ -736,6 +736,10 @@ final class VideoScanModel: ObservableObject {
     /// here; the catalog view observes it, applies it to its own
     /// search field, and clears it. One-way, last-writer.
     @Published var archivistSearchRequest: String?
+    /// A question another view wants Hallie to ask out loud (Family Tree
+    /// right-click "Tell me about this person", 2026-08-24). Consumed by
+    /// the chat window.
+    @Published var archivistAskRequest: String?
 
     /// Exactly one selected Catalog row, published for Hallie's
     /// `currentSelection` temporal reference. Zero or multiple selections

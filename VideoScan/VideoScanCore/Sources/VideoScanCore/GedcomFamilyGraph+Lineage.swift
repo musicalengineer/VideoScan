@@ -165,10 +165,11 @@ extension GedcomFamilyGraph {
     /// there. Deliberately does not infer a country from a town name.
     public func originTrail(of person: Person,
                             country: String? = nil,
+                            line: Line = .both,
                             maxGenerations: Int = 12) -> [OriginStop] {
         let wanted = country.map { Self.normalizedPlaceToken($0) }
         var out: [OriginStop] = []
-        for gen in ancestorLine(of: person, line: .both, generations: maxGenerations) {
+        for gen in ancestorLine(of: person, line: line, generations: maxGenerations) {
             for p in gen.people {
                 guard let place = p.birthPlace else { continue }
                 if let wanted, !Self.place(place, mentions: wanted) { continue }
@@ -182,9 +183,16 @@ extension GedcomFamilyGraph {
     /// whole comma-separated components so "Cork, Ireland" matches
     /// "Ireland" and "New England, USA" does not.
     public static func place(_ place: String, mentions token: String) -> Bool {
-        place.split(separator: ",")
-            .map { normalizedPlaceToken(String($0)) }
-            .contains(token)
+        let components = place.split(separator: ",").map { normalizedPlaceToken(String($0)) }
+        if components.contains(token) { return true }
+        // Multi-word asks match loosely: "old puritan boston" reaches the
+        // "Boston" component; whole-word only, so "england" still cannot
+        // reach "New England" (that guard is the single-word rule above).
+        let words = token.split(separator: " ").map(String.init)
+        guard words.count > 1 else { return false }
+        return components.contains { component in
+            words.contains { $0.count >= 3 && component == $0 }
+        }
     }
 
     public static func normalizedPlaceToken(_ s: String) -> String {

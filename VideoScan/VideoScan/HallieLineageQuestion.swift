@@ -21,7 +21,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// still a name and resolves normally).
     case ancestorLine(person: String?, line: GedcomFamilyGraph.Line, generations: Int)
     case surnameTree(surname: String)
-    case originTrail(person: String?, country: String?)
+    case originTrail(person: String?, country: String?, line: GedcomFamilyGraph.Line)
     case gedcomAwareness
 
     static let defaultGenerations = 5
@@ -36,21 +36,35 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
         if isGedcomAwareness(lower) { return .gedcomAwareness }
 
-        // "trace (the|our|my|X's) (family|ancestors|roots|line) back to Ireland"
-        if let m = lower.firstMatch(of: /\btrace\b(.*?)\bback(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
+        // "trace (the|our|my|X's) (family|ancestors|links|side…) back to
+        // Ireland" — "links"/"side"/"heritage" joined the vocabulary and
+        // maternal/paternal restrict the walked line (Rick live, 8/24).
+        if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
-            if subject.firstMatch(of: /\b(?:family|ancestor|ancestors|ancestry|roots|line|lineage)\b/) != nil {
+            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
                 let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
-                return .originTrail(person: possessor(in: subject), country: country?.capitalized)
+                return .originTrail(person: possessor(in: subject),
+                                    country: country?.capitalized,
+                                    line: lineWord(in: subject))
             }
         }
-        if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:ancestors|ancestry|family|roots|line|lineage)\b/) {
-            return .originTrail(person: possessor(in: String(m.1)), country: nil)
+        // "trace my paternal links to old puritan boston" — no "back".
+        if let m = lower.firstMatch(of: /\btrace\b(.*?)\bto\s+([a-z][a-z .'-]*)$/) {
+            let subject = String(m.1)
+            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
+                return .originTrail(person: possessor(in: subject),
+                                    country: String(m.2).trimmingCharacters(in: .whitespaces).capitalized,
+                                    line: lineWord(in: subject))
+            }
+        }
+        if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:ancestors|ancestry|family|roots|line|lineage|links?|side|heritage|people)\b/) {
+            return .originTrail(person: possessor(in: String(m.1)), country: nil,
+                                line: lineWord(in: lower))
         }
         // "where does the family come from" / "where did we come from originally"
         if lower.firstMatch(of: /\bwhere (?:did|does|do) (?:the |our |my |we |us )?(?:family|ancestors|people)?\s*(?:originally )?come from\b/) != nil
             || lower.firstMatch(of: /\bwhat country (?:did|does|is) (?:the |our |my )?family (?:come )?from\b/) != nil {
-            return .originTrail(person: nil, country: nil)
+            return .originTrail(person: nil, country: nil, line: .both)
         }
 
         // "(show me) rick's maternal line back 5 generations"
@@ -110,7 +124,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
         // Trailing nouns the question attached to the person: "rick's
         // ancestors" → "rick's"; "the family" → "the".
-        while let m = s.firstMatch(of: /\s*\b(?:family|ancestors|ancestry|roots|line|lineage|tree|people|side|pedigree)\b\s*$/) {
+        while let m = s.firstMatch(of: /\s*\b(?:family|ancestors|ancestry|roots|line|lineage|links?|heritage|tree|people|side|pedigree|maternal|paternal|mother'?s|father'?s)\b\s*$/) {
             s = String(s[s.startIndex..<m.range.lowerBound])
         }
         s = s.trimmingCharacters(in: .whitespaces)
@@ -129,6 +143,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     static func capitalizedName(_ name: String) -> String {
         name.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+    }
+
+    /// "maternal" / "mother's" → .maternal; "paternal" / "father's" →
+    /// .paternal; anything else → .both.
+    static func lineWord(in text: String) -> GedcomFamilyGraph.Line {
+        if text.firstMatch(of: /\b(?:maternal|mother'?s)\b/) != nil { return .maternal }
+        if text.firstMatch(of: /\b(?:paternal|father'?s)\b/) != nil { return .paternal }
+        return .both
     }
 
     static func generations(in text: String) -> Int? {
@@ -165,11 +187,11 @@ enum HallieLineageAnswer {
             case .failure(let r): return r
             case .success(let p): return ancestorLine(of: p, line: line, generations: generations, graph: graph)
             }
-        case .originTrail(let person, let country):
+        case .originTrail(let person, let country, let line):
             guard let graph = context.graph else { return noTree() }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
-            case .success(let p): return originTrail(of: p, country: country, graph: graph)
+            case .success(let p): return originTrail(of: p, country: country, line: line, graph: graph)
             }
         }
     }
@@ -330,10 +352,11 @@ enum HallieLineageAnswer {
 
     static func originTrail(of person: GedcomFamilyGraph.Person,
                             country: String?,
+                            line: GedcomFamilyGraph.Line = .both,
                             graph: GedcomFamilyGraph) -> Result {
         let maxGen = HallieLineageQuestion.maxGenerations
-        let stops = graph.originTrail(of: person, country: country, maxGenerations: maxGen)
-        let anyPlaces = graph.originTrail(of: person, country: nil, maxGenerations: maxGen)
+        let stops = graph.originTrail(of: person, country: country, line: line, maxGenerations: maxGen)
+        let anyPlaces = graph.originTrail(of: person, country: nil, line: line, maxGenerations: maxGen)
         let who = HallieLineageQuestion.possessive(person.name)
         var sentences: [String] = []
         var card: HallieLineageCard? = nil

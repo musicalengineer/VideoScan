@@ -305,8 +305,10 @@ struct ArchivistChatWindow: View {
                 archivistPersonName: $archivistPersonName,
                 archivistName: archivistName)
         }
+        .onChange(of: model.archivistAskRequest) { consumePendingAskRequest() }
         .onAppear {
             inputFocused = true
+            consumePendingAskRequest()
             // A pre-avatar launch may have persisted the placeholder —
             // she has a name now (Rick's great-grandmother's).
             if archivistName == "Name TBD" { archivistName = "Hallie Mae" }
@@ -819,6 +821,17 @@ struct ArchivistChatWindow: View {
         guard let recalled else { return .ignored }
         input = recalled
         return .handled
+    }
+
+    /// Family Tree right-click → "Tell me about this person" (Rick
+    /// 2026-08-24). The tree publishes the question; we ask it as if a
+    /// chip was tapped. Left pending while a previous answer is still
+    /// composing; onChange fires again on the next request.
+    private func consumePendingAskRequest() {
+        guard let question = model.archivistAskRequest, !isThinking else { return }
+        model.archivistAskRequest = nil
+        handle(chip: ArchivistMessage.Chip(
+            label: question, action: .askText(question, playAfterAnswer: false)))
     }
 
     private func handle(chip: ArchivistMessage.Chip) {
