@@ -18,6 +18,10 @@ struct ArchivistCitationRow: View {
     let timestampSuffix: String
     let basisLines: [String]
     let record: VideoRecord?
+    /// The record has a verified copy in the Master Archive — shown as a
+    /// green badge, not a button (Rick 2026-08-24: status at a glance;
+    /// "Archived" is the canonical word everywhere else).
+    let isArchived: Bool
     let onPlay: () -> Void
     let onReveal: () -> Void
     let onShowInCatalog: () -> Void
@@ -46,8 +50,20 @@ struct ArchivistCitationRow: View {
             }
             HStack(spacing: 14) {
                 actionButton("Play", systemImage: "play.fill", color: .blue, action: onPlay)
-                actionButton("Reveal in Finder", systemImage: "folder", color: .green, action: onReveal)
+                // "Show …" verbs read consistently; orange frees green for
+                // the Archived badge (Rick 2026-08-24).
+                actionButton("Show in Finder", systemImage: "folder", color: .orange, action: onReveal)
                 actionButton("Show in Catalog", systemImage: "film.stack", color: .purple, action: onShowInCatalog)
+                if isArchived {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.seal.fill")
+                        Text("Archived")
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.10, green: 0.62, blue: 0.30))
+                    .help("This one is safely in the Master Archive — a byte-verified copy exists on the archive volume.")
+                    .accessibilityLabel("Archived: verified copy in the Master Archive")
+                }
             }
             .padding(.leading, 20)
             if expanded {

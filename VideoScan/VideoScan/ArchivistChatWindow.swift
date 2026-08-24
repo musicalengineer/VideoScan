@@ -648,6 +648,8 @@ struct ArchivistChatWindow: View {
                     basisLines: showTechnicalDetails
                         ? citation.bases.map(citationBasis) : [],
                     record: model.record(forID: citation.recordID),
+                    isArchived: model.record(forID: citation.recordID)
+                        .map { model.pfHasMasterCopy($0) } ?? false,
                     onPlay: { playCitation(citation) },
                     onReveal: { revealCitation(citation) },
                     onShowInCatalog: { showCitationInCatalog(citation) })
