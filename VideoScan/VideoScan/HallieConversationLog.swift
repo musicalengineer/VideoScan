@@ -55,6 +55,10 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     let offeredActions: [String]
     let mediaEvidence: [MediaEvidence]
     let knowledgeEvidence: [KnowledgeEvidence]
+    /// Deterministic text outline of rich cards, including GEDCOM IDs. The
+    /// chat bubble stays friendly; the private QA log retains every factual
+    /// name/date/place rendered beside it.
+    let attachmentOutline: [String]?
     /// "template" | "model" — who phrased an assistant answer. Optional so
     /// older lines (and non-answer events) decode unchanged. When "model",
     /// `text` keeps the claim tags ("… [c1]") for traceability.
@@ -78,6 +82,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         offeredActions: [String] = [],
         mediaEvidence: [MediaEvidence] = [],
         knowledgeEvidence: [KnowledgeEvidence] = [],
+        attachmentOutline: [String]? = nil,
         composedBy: String? = nil
     ) {
         self.version = Self.schemaVersion
@@ -98,6 +103,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.offeredActions = offeredActions
         self.mediaEvidence = mediaEvidence
         self.knowledgeEvidence = knowledgeEvidence
+        self.attachmentOutline = attachmentOutline
         self.composedBy = composedBy
     }
 }

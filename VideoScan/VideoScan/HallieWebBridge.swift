@@ -14,6 +14,14 @@ import VideoScanCore
 
 @MainActor
 final class HallieWebBridge {
+    /// Opaque token → image file the app attached to an answer this launch.
+    struct AttachmentCapability: Sendable {
+        let url: URL
+        /// Non-nil when the file came from the authorized family source.
+        /// The source must still be current and available when bytes are read.
+        let familyRoot: URL?
+    }
+    var attachmentTokens: [String: AttachmentCapability] = [:]
 
     struct Session {
         var memory = HallieTurnExecutor.ConversationMemory()
@@ -106,6 +114,10 @@ final class HallieWebBridge {
         case ("GET", let path) where path.hasPrefix("/api/poster/"):
             guard authorized(request, config) else { return .text(401, "passphrase") }
             return await poster(recordID: String(path.dropFirst("/api/poster/".count)))
+        case ("GET", let path) where path.hasPrefix("/api/attachment/"):
+            guard authorized(request, config) else { return .text(401, "passphrase") }
+            return await attachmentImage(
+                token: String(path.dropFirst("/api/attachment/".count)))
         default:
             return .text(404, "not here")
         }
@@ -233,6 +245,8 @@ final class HallieWebBridge {
                 chips.append(["label": label, "ask": question])
             case .openFamilyTree(let name):
                 chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
+            case .openFamilyTreePerson(_, let name):
+                chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
             case .openFamilyTreeSurname(let surname):
                 chips.append(["label": "The \(surname) family", "ask": "who are the \(surname)s"])
             }
@@ -247,6 +261,7 @@ final class HallieWebBridge {
         return [
             "prose": result.prose,
             "basis": result.basisLine,
+            "attachments": result.attachments.map { attachmentJSON($0) },
             "route": HallieTurnExecutor.label(result.route),
             "outcome": HallieTurnExecutor.label(result.outcome),
             "responder": response.responderHost,
@@ -472,5 +487,92 @@ extension HallieAppTurnCoordinator.Dependencies {
             continueTurn: continueTurn,
             resolveBiographyPhoto: resolveBiographyPhoto,
             composeAnswer: composeAnswer)
+    }
+}
+
+// MARK: - Attachments (2026-08-22)
+//
+// Cards go over as plain JSON the page renders as nested lists; images
+// (photos, crests) are served by an opaque per-launch token so the page
+// never sees or requests a filesystem path — only files the app itself
+// attached can ever be fetched.
+
+extension HallieWebBridge {
+    func attachmentJSON(_ attachment: HallieAttachment) -> [String: Any] {
+        func person(_ p: HalliePersonCard) -> [String: Any] {
+            var j: [String: Any] = ["name": p.name, "id": p.gedcomID]
+            if let y = p.years { j["years"] = y }
+            if let b = p.birthPlace { j["place"] = b }
+            if let url = p.photoURL { j["photo"] = "/api/attachment/" + attachmentToken(for: url) }
+            return j
+        }
+        func node(_ n: HallieTreeCard.Node) -> [String: Any] {
+            ["person": person(n.person), "spouses": n.spouses.map(person), "children": n.children.map(node)]
+        }
+        switch attachment {
+        case .photo(let p):
+            return ["kind": "photo", "name": p.personName, "caption": p.caption ?? "",
+                    "url": "/api/attachment/" + attachmentToken(for: p.fileURL)]
+        case .crest(let surname, let url):
+            return ["kind": "crest", "surname": surname, "url": "/api/attachment/" + attachmentToken(for: url)]
+        case .lineage(let card):
+            return ["kind": "lineage", "title": card.title, "root": person(card.root),
+                    "line": card.line.rawValue, "reachedAll": card.reachedAll,
+                    "generations": card.generations.map { ["label": $0.label, "generation": $0.generation, "people": $0.people.map(person)] }]
+        case .tree(let card):
+            return ["kind": "tree", "title": card.title, "surname": card.surname ?? "",
+                    "depth": card.depth, "roots": card.roots.map(node)]
+        case .photoRequest(let name, let folder):
+            _ = folder // The remote client must never receive filesystem paths.
+            return ["kind": "photoRequest", "name": name]
+        }
+    }
+
+    func attachmentToken(for url: URL) -> String {
+        if let existing = attachmentTokens.first(where: {
+            $0.value.url == url
+        })?.key { return existing }
+        if attachmentTokens.count >= 256 {
+            attachmentTokens.removeAll(keepingCapacity: true)
+        }
+        let token = UUID().uuidString.lowercased()
+        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        let familyRoot = Self.isDescendant(url, of: configuration.roots.assets)
+            ? configuration.roots.assets : nil
+        attachmentTokens[token] = AttachmentCapability(
+            url: url, familyRoot: familyRoot)
+        return token
+    }
+
+    func attachmentImage(token: String) async -> HallieHTTPResponse {
+        guard let capability = attachmentTokens[token] else {
+            return .text(404, "no image")
+        }
+        if let originalRoot = capability.familyRoot {
+            let current = FamilyAssetConfigurationCenter.shared.snapshot()
+            guard current.access != .unavailable,
+                  current.roots.assets == originalRoot,
+                  Self.isDescendant(capability.url, of: originalRoot) else {
+                return .text(404, "no image")
+            }
+        }
+        let url = capability.url
+        let data = await Task.detached(priority: .utility) {
+            FamilyAssetImageValidator.thumbnailJPEGData(url)
+        }.value
+        guard let data else { return .text(404, "no image") }
+        return HallieHTTPResponse(
+            status: 200, reason: "OK",
+            headers: [("Content-Type", "image/jpeg"),
+                      ("Content-Length", String(data.count)),
+                      ("Cache-Control", "private, max-age=3600")],
+            body: .data(data))
+    }
+
+    private static func isDescendant(_ candidate: URL, of root: URL) -> Bool {
+        let child = candidate.standardizedFileURL.pathComponents
+        let parent = root.standardizedFileURL.pathComponents
+        return child.count > parent.count
+            && Array(child.prefix(parent.count)) == parent
     }
 }

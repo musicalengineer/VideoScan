@@ -27,6 +27,7 @@ extension HallieShellCLI {
                 + result.offeredActions.map(HallieTurnExecutor.offerLabel),
             citations: result.citations,
             knowledgeCitations: result.knowledgeCitations,
+            attachments: result.attachments,
             composedBy: result.composedBy.rawValue,
             state: &state)
     }
@@ -42,6 +43,7 @@ extension HallieShellCLI {
         offeredActions: [String] = [],
         citations: [HallieTurnExecutor.Citation] = [],
         knowledgeCitations: [HallieTurnExecutor.KnowledgeCitation] = [],
+        attachments: [HallieAttachment] = [],
         composedBy: String? = nil,
         state: inout Session
     ) -> HallieTranscriptEvent {
@@ -71,6 +73,8 @@ extension HallieShellCLI {
                 .init(id: $0.id, title: $0.title,
                       attribution: $0.attribution, locator: $0.locator)
             },
+            attachmentOutline: attachments.isEmpty
+                ? nil : HallieAttachmentText.lines(attachments),
             composedBy: composedBy)
     }
 
@@ -158,6 +162,19 @@ extension HallieShellCLI {
                 personName: canonical, profiles: state.profiles ?? [])
         }
         output(result.prose)
+        var attachments = result.attachments
+        if state.biographyPhoto == nil, result.clarification == nil,
+           result.outcome == .answered,
+           case .graph(let payload)? = ast, payload.operation == .biography,
+           let canonical = result.catalogPersonName {
+            let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+            let person = FamilyAssetPerson(name: canonical)
+            if let url = assets.photoURLs(for: person).first {
+                attachments.append(.photo(HalliePhotoAttachment(
+                    personName: canonical, fileURL: url)))
+            }
+        }
+        for line in HallieAttachmentText.lines(attachments) { output(line) }
         if diagnostics {
             if result.composedBy == .model {
                 output("phrased by: model (facts verified against the plan)")
@@ -176,6 +193,8 @@ extension HallieShellCLI {
             for action in result.offeredActions {
                 switch action {
                 case .openFamilyTree(let name):
+                    output("offer: open the Family Tree tab focused on \(name) (app only)")
+                case .openFamilyTreePerson(_, let name):
                     output("offer: open the Family Tree tab focused on \(name) (app only)")
                 case .openFamilyTreeSurname(let surname):
                     output("offer: open the Family Tree tab filtered to \(surname) (app only)")

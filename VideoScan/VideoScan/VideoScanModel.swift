@@ -922,6 +922,7 @@ final class VideoScanModel: ObservableObject {
             masterArchive = catalogStore.masterArchive
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
+        publishFamilyAssetConfiguration()
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
@@ -1165,6 +1166,7 @@ final class VideoScanModel: ObservableObject {
     func applyReadOnlyMode(_ readOnly: Bool) {
         isReadOnly = readOnly
         catalogStore.isReadOnly = readOnly
+        publishFamilyAssetConfiguration()
     }
 
     /// Persist the current records array. Debounced; bursts of mutations
@@ -1273,7 +1275,11 @@ final class VideoScanModel: ObservableObject {
     /// save persists it (additive snapshot key). Loaded from the store
     /// in `init` right after `load()`.
     @Published var masterArchive: MasterArchiveDesignation? {
-        didSet { catalogStore.masterArchive = masterArchive }
+        didSet {
+            catalogStore.masterArchive = masterArchive
+            // Family photos / crests follow the same archive authority.
+            publishFamilyAssetConfiguration()
+        }
     }
 
     /// Reverse index source-id → promoted-copy record (and copy-id →

@@ -257,15 +257,8 @@ enum HallieAppTurnCoordinator {
                 }
             },
             loadGraph: {
-                let directory = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask).first?
-                    .appendingPathComponent(
-                        "VideoScan/family-tree/originals", isDirectory: true)
-                return directory.flatMap {
-                    FamilyGraphFileLoader(
-                        originalsDirectory: $0).loadNewest()
-                }
+                FamilyAssetConfigurationCenter.shared
+                    .snapshot().loadFamilyGraph()
             },
             loadCyberBrain: {
                 guard let root = FileManager.default.urls(
@@ -573,7 +566,8 @@ enum HallieAppTurnCoordinator {
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
                 },
                 catalogStats: catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) })
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) })
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -753,6 +747,40 @@ enum HallieAppTurnCoordinator {
                payload.operation == .biography,
                let canonicalName = result.catalogPersonName {
                 photo = dependencies.resolveBiographyPhoto(canonicalName)
+                if photo == nil, result.outcome == .answered {
+                    let assets = FamilyAssetConfigurationCenter.shared
+                        .snapshot().makeStore()
+                    let graphMatches = context.graph?.people.values.filter {
+                        $0.name.compare(
+                            canonicalName,
+                            options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    } ?? []
+                    let person = graphMatches.count == 1
+                        ? FamilyAssetPerson(graphMatches[0])
+                        : FamilyAssetPerson(name: canonicalName)
+                    if let url = assets.photoURLs(for: person).first {
+                        result = result.adding(attachments: [
+                            .photo(HalliePhotoAttachment(
+                                personName: canonicalName,
+                                fileURL: url))
+                        ])
+                    } else {
+                        do {
+                            let folder = try assets.folderForPhotoRequest(person: person)
+                            // The folder is created here only after the current
+                            // archive/viewer authority permits it. Renderers never
+                            // create directories from attachment path strings.
+                            result = result.adding(attachments: [
+                                .photoRequest(personName: canonicalName, folderURL: folder)
+                            ])
+                        } catch {
+                            // Photo presentation is optional.  Preserve the
+                            // grounded biography and record why no request card
+                            // was offered; never reinterpret the failed write.
+                            appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error.localizedDescription)")
+                        }
+                    }
+                }
             } else {
                 photo = nil
             }

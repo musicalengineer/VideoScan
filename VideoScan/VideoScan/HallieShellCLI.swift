@@ -128,6 +128,10 @@ enum HallieShellCLI {
 
     struct Dependencies {
         var loadCatalog: (URL) -> [VideoRecord]?
+        /// Publish the read-only archive authority before GEDCOM/cards load.
+        /// Injected as a no-op so unit tests never inspect the real catalog
+        /// designation or mutate the process-wide presentation snapshot.
+        var configureFamilyAssets: (Options) -> Void
         var loadProfiles: () -> ProfileLoadResult
         var loadGraph: (URL?) -> GedcomFamilyGraph?
         var loadCyberBrain: () -> CyberBrainIndex?
@@ -172,6 +176,7 @@ enum HallieShellCLI {
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
+            configureFamilyAssets: @escaping (Options) -> Void = { _ in },
             loadProfiles: @escaping () -> ProfileLoadResult,
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping () -> CyberBrainIndex? = { nil },
@@ -213,6 +218,7 @@ enum HallieShellCLI {
             self.recordTestimony = recordTestimony
             self.speakers = speakers
             self.loadCatalog = loadCatalog
+            self.configureFamilyAssets = configureFamilyAssets
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
@@ -254,6 +260,7 @@ enum HallieShellCLI {
         static var production: Dependencies {
             Dependencies(
                 loadCatalog: { FileBackedCatalogSource.loadRecords(from: $0) },
+                configureFamilyAssets: { configureFamilyAssetsReadOnly(options: $0) },
                 loadProfiles: { loadProfilesReadOnly() },
                 loadGraph: { requested in
                     let fm = FileManager.default
@@ -265,12 +272,8 @@ enum HallieShellCLI {
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
                     }
-                    let directory = fm.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first?
-                        .appendingPathComponent("VideoScan/family-tree/originals")
-                    return directory.flatMap {
-                        FamilyGraphFileLoader(originalsDirectory: $0).loadNewest()
-                    }
+                    return FamilyAssetConfigurationCenter.shared
+                        .snapshot().loadFamilyGraph()
                 },
                 loadCyberBrain: {
                     guard let root = FileManager.default.urls(
@@ -395,6 +398,86 @@ enum HallieShellCLI {
         func set(_ value: String) { lock.withLock { storage = value } }
     }
 
+    /// Give the standalone shell the same immutable, read-only asset
+    /// authority as the app without constructing `VideoScanModel`.
+    /// Explicit GEDCOM paths inside the deployed archive layout win;
+    /// otherwise the catalog's small deterministic header supplies the
+    /// persisted Master Archive designation.
+    static func configureFamilyAssetsReadOnly(options: Options) {
+        if let explicitRoot = masterArchiveRoot(containingGEDCOM: options.gedcomURL) {
+            FamilyAssetConfigurationCenter.shared.publish(
+                masterArchiveRoot: explicitRoot,
+                masterIsSafelyAvailable: FileManager.default.fileExists(
+                    atPath: explicitRoot.path),
+                readOnly: true)
+            return
+        }
+
+        guard let designation = masterArchiveDesignation(
+            catalogURL: options.catalogURL) else {
+            FamilyAssetConfigurationCenter.shared.publish(
+                masterArchiveRoot: nil,
+                masterIsSafelyAvailable: true,
+                readOnly: true)
+            return
+        }
+        let root = URL(fileURLWithPath: designation.rootPath, isDirectory: true)
+        let online = FileManager.default.fileExists(atPath: root.path)
+        let identityMatches: Bool
+        if let expected = designation.volumeUUID {
+            identityMatches = MasterArchiveDesignation.volumeUUID(
+                forPath: designation.targetPath) == expected
+        } else {
+            identityMatches = true
+        }
+        FamilyAssetConfigurationCenter.shared.publish(
+            masterArchiveRoot: root,
+            masterIsSafelyAvailable: online && identityMatches,
+            readOnly: true)
+    }
+
+    /// Recognize only `<Master>/40_Family_Tree/GEDCOM[/file.ged]`.
+    /// An arbitrary user-supplied GEDCOM remains usable for relationships,
+    /// but cannot confer authority over neighboring files as rich media.
+    static func masterArchiveRoot(containingGEDCOM requested: URL?) -> URL? {
+        guard let requested else { return nil }
+        let resolved = requested.standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: resolved.path, isDirectory: &isDirectory)
+        let gedcomDirectory = exists && isDirectory.boolValue
+            ? resolved : resolved.deletingLastPathComponent()
+        guard gedcomDirectory.lastPathComponent == "GEDCOM" else { return nil }
+        let familyTree = gedcomDirectory.deletingLastPathComponent()
+        guard familyTree.lastPathComponent == "40_Family_Tree" else { return nil }
+        let master = familyTree.deletingLastPathComponent()
+        return master.pathComponents.count > 1 ? master : nil
+    }
+
+    /// Current catalog writers put metadata before the large records array.
+    /// Decode only that bounded header instead of allocating a second copy
+    /// of thousands of `VideoRecord`s during shell startup.
+    static func masterArchiveDesignation(
+        catalogURL: URL,
+        probeBytes: Int = CatalogSnapshot.probeWindowBytes
+    ) -> MasterArchiveDesignation? {
+        guard probeBytes > 0,
+              let handle = try? FileHandle(forReadingFrom: catalogURL) else {
+            return nil
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: probeBytes),
+              let marker = data.range(of: Data(",\"records\":".utf8)) else {
+            return nil
+        }
+        var header = data[..<marker.lowerBound]
+        header.append(0x7D) // `}` closes the bounded top-level header.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(CatalogSnapshot.self, from: Data(header)))?
+            .masterArchive
+    }
+
     static let usage = """
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
@@ -492,6 +575,7 @@ enum HallieShellCLI {
             output("error: cannot read catalog at \(options.catalogURL.path)")
             return ExitCode.catalogUnavailable.rawValue
         }
+        dependencies.configureFamilyAssets(options)
         let profiles: [POIProfile]?
         switch dependencies.loadProfiles() {
         case .loaded(let values): profiles = values
@@ -619,7 +703,10 @@ enum HallieShellCLI {
                         aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes)
                 },
                 graph: graph,
-                cyberBrain: cyberBrain)
+                cyberBrain: cyberBrain,
+                // Same owner binding the full path uses (2026-08-22): "trace
+                // the family back to Ireland" needs to know whose family.
+                speakers: HallieTurnExecutor.Speakers.fromDefaults())
         }
     }
 
@@ -701,7 +788,8 @@ enum HallieShellCLI {
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
                 catalogStats: state.catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) })
+                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) },
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):

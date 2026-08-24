@@ -54,6 +54,7 @@ struct HallieConversationLogTests {
             HallieTranscriptEvent.self, from: Data($0.utf8)) }
         #expect(decoded.map(\.sequence) == [1, 2])
         #expect(decoded.map(\.text) == ["Where was Donna?", "Cape Cod"])
+        #expect(decoded.allSatisfy { $0.attachmentOutline == nil })
 
         let directoryMode = try FileManager.default.attributesOfItem(
             atPath: logDirectory.path)[.posixPermissions] as? NSNumber

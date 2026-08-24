@@ -8,6 +8,9 @@
 import Foundation
 
 enum HallieWebPage {
+    // This function is a single self-contained, offline HTML document. Its
+    // physical line count reflects the literal, not executable Swift logic.
+    // swiftlint:disable:next function_body_length
     static func html(archivistName: String) -> String {
         let name = archivistName
             .replacingOccurrences(of: "&", with: "&amp;")
@@ -55,6 +58,16 @@ enum HallieWebPage {
           .basis { font-size:14px; color:var(--muted); margin-top:6px; display:none; }
           .msg.open .basis { display:block; }
           .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+          .attach { margin-top:10px; padding:10px 12px; border-radius:12px; background:rgba(127,127,127,0.08); }
+          .attach-title { font-weight:600; font-size:17px; margin-bottom:4px; }
+          .attach-root { font-weight:600; margin-bottom:6px; }
+          .attach-gen { margin:4px 0; }
+          .attach-label { display:inline-block; font-size:13px; text-transform:uppercase; letter-spacing:0.04em; opacity:0.7; margin-bottom:2px; }
+          .attach ul { margin:0 0 0 18px; padding:0; }
+          .attach-tree ul { margin-left:18px; }
+          .attach-img { max-width:100%; max-height:320px; border-radius:10px; display:block; }
+          .attach-crest { max-width:160px; max-height:160px; display:block; }
+          .attach-person { width:32px; height:32px; object-fit:cover; border-radius:50%; vertical-align:middle; margin-right:7px; }
           .chips button { font-size:17px; padding:8px 12px; border-radius:12px; border:1px solid var(--accent); color:var(--accent); background:none; }
           .cite { display:flex; gap:10px; align-items:center; margin-top:8px; font-size:17px; }
           .cite button { font-size:16px; padding:6px 10px; border-radius:10px; border:1px solid var(--line); background:none; color:var(--ink); }
@@ -181,6 +194,7 @@ enum HallieWebPage {
                 d.appendChild(row);
               });
             }
+            (r.attachments || []).forEach(function (a) { d.appendChild(renderAttachment(a)); });
             var chips = (r.chips || []);
             if (chips.length) {
               var wrap = document.createElement('div'); wrap.className = 'chips';
@@ -195,6 +209,7 @@ enum HallieWebPage {
             log.scrollTop = log.scrollHeight;
             sayAloud(r.prose || '');
           }
+          \(attachmentScript)
           function playInline(container, c) {
             var old = container.querySelector('video'); if (old) old.remove();
             var oldNote = container.querySelector('.preparing'); if (oldNote) oldNote.remove();
@@ -345,4 +360,59 @@ enum HallieWebPage {
         </html>
         """
     }
+}
+
+extension HallieWebPage {
+    /// Card rendering for `attachments` (2026-08-22): photos and crests as
+    /// images fetched by token, lineage and tree cards as nested lists,
+    /// photo requests as a one-line note. Kept out of `html()` so the card
+    /// renderer can be reviewed and tested separately from the page shell.
+    static let attachmentScript = """
+          function personLine(p) {
+            var s = p.name; if (p.years) s += ' (' + p.years + ')'; if (p.place) s += ' — ' + p.place; return s;
+          }
+          function appendPerson(container, p) {
+            if (p.photo) { var pi = imageWith(p.photo, 'Photo of ' + p.name); pi.className = 'attach-person'; container.appendChild(pi); }
+            var span = document.createElement('span'); span.textContent = personLine(p); container.appendChild(span);
+          }
+          function imageWith(url, alt) {
+            var img = document.createElement('img'); img.className = 'attach-img'; img.alt = alt || '';
+            img.src = url + (key ? ('?key=' + encodeURIComponent(key)) : ''); return img;
+          }
+          function renderAttachment(a) {
+            var box = document.createElement('div'); box.className = 'attach';
+            if (a.kind === 'photo') {
+              box.appendChild(imageWith(a.url, 'Photo of ' + a.name));
+              var cap = document.createElement('div'); cap.className = 'tiny'; cap.textContent = a.caption || a.name; box.appendChild(cap);
+            } else if (a.kind === 'crest') {
+              var ci = imageWith(a.url, a.surname + ' crest'); ci.className = 'attach-crest'; box.appendChild(ci);
+              var cc = document.createElement('div'); cc.className = 'tiny'; cc.textContent = 'Saved ' + a.surname + ' crest reference'; box.appendChild(cc);
+            } else if (a.kind === 'lineage') {
+              var t = document.createElement('div'); t.className = 'attach-title'; t.textContent = a.title; box.appendChild(t);
+              var r0 = document.createElement('div'); r0.className = 'attach-root'; appendPerson(r0, a.root); box.appendChild(r0);
+              (a.generations || []).forEach(function (g) {
+                var row = document.createElement('div'); row.className = 'attach-gen';
+                var lab = document.createElement('span'); lab.className = 'attach-label'; lab.textContent = g.label; row.appendChild(lab);
+                var ul = document.createElement('ul');
+                (g.people || []).forEach(function (p) { var li = document.createElement('li'); appendPerson(li, p); ul.appendChild(li); });
+                row.appendChild(ul); box.appendChild(row);
+              });
+              if (a.reachedAll === false) { var n = document.createElement('div'); n.className = 'tiny'; n.textContent = 'The tree stops here.'; box.appendChild(n); }
+            } else if (a.kind === 'tree') {
+              var tt = document.createElement('div'); tt.className = 'attach-title'; tt.textContent = a.title; box.appendChild(tt);
+              function renderNode(n) {
+                var li = document.createElement('li');
+                appendPerson(li, n.person);
+                if (n.spouses && n.spouses.length) { var rel = document.createTextNode('  ⚭ ' + n.spouses.map(function (x) { return x.name; }).join(', ')); li.appendChild(rel); }
+                if (n.children && n.children.length) { var ul2 = document.createElement('ul'); n.children.forEach(function (c) { ul2.appendChild(renderNode(c)); }); li.appendChild(ul2); }
+                return li;
+              }
+              var ulr = document.createElement('ul'); ulr.className = 'attach-tree'; (a.roots || []).forEach(function (n) { ulr.appendChild(renderNode(n)); }); box.appendChild(ulr);
+            } else if (a.kind === 'photoRequest') {
+              var pr = document.createElement('div'); pr.className = 'tiny';
+              pr.textContent = 'Do you have a photo of ' + a.name + '? You can add it from the Mac.'; box.appendChild(pr);
+            }
+            return box;
+          }
+          """
 }

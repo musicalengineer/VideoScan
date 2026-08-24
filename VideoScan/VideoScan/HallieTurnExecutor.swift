@@ -308,6 +308,8 @@ enum HallieTurnExecutor {
     enum OfferedAction: Sendable, Equatable {
         /// Open the Family Tree tab focused on this person.
         case openFamilyTree(personName: String)
+        /// Focus an exact file-local GEDCOM pointer (duplicate names safe).
+        case openFamilyTreePerson(personID: String, personName: String)
         /// Open the Family Tree tab filtered to this surname.
         case openFamilyTreeSurname(String)
         /// Ask this question next (label is what the chip shows).
@@ -340,6 +342,10 @@ enum HallieTurnExecutor {
         /// so the log shows which claim each sentence rests on. Nil = log
         /// `prose` as is.
         let transcriptText: String?
+        /// Things to LOOK at alongside the prose — a photo, a crest, a
+        /// lineage or tree card (2026-08-22). Presentation only: never part
+        /// of the fact basis, never shown to the translator or composer.
+        let attachments: [HallieAttachment]
 
         init(
             route: Route,
@@ -356,7 +362,8 @@ enum HallieTurnExecutor {
             offeredActions: [OfferedAction] = [],
             answerPlan: HallieAnswerPlan? = nil,
             composedBy: HallieComposedBy = .template,
-            transcriptText: String? = nil
+            transcriptText: String? = nil,
+            attachments: [HallieAttachment] = []
         ) {
             self.route = route
             self.outcome = outcome
@@ -373,6 +380,19 @@ enum HallieTurnExecutor {
             self.answerPlan = answerPlan
             self.composedBy = composedBy
             self.transcriptText = transcriptText
+            self.attachments = attachments
+        }
+
+        /// The same answer with extra things to look at. Facts untouched.
+        func adding(attachments extra: [HallieAttachment]) -> Result {
+            guard !extra.isEmpty else { return self }
+            return Result(
+                route: route, outcome: outcome, prose: prose, basisLine: basisLine,
+                queryDescription: queryDescription, citations: citations,
+                knowledgeCitations: knowledgeCitations, catalogPersonName: catalogPersonName,
+                clarification: clarification, matchCount: matchCount, mediaAction: mediaAction,
+                offeredActions: offeredActions, answerPlan: answerPlan, composedBy: composedBy,
+                transcriptText: transcriptText, attachments: attachments + extra)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -395,7 +415,8 @@ enum HallieTurnExecutor {
                 answerPlan: answerPlan,
                 composedBy: composition.composedBy,
                 transcriptText: composition.composedBy == .model
-                    ? composition.transcriptText : nil)
+                    ? composition.transcriptText : nil,
+                attachments: attachments)
         }
     }
 

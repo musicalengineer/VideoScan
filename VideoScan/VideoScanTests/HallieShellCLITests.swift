@@ -258,6 +258,48 @@ struct HallieShellCLITests {
         }
     }
 
+    @Test func onlyDeployedGEDCOMLayoutConfersPhotoAuthority() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieGEDCOMAuthority-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let master = base.appendingPathComponent("Breen_Family_Archive", isDirectory: true)
+        let gedcom = master
+            .appendingPathComponent("40_Family_Tree/GEDCOM", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: gedcom, withIntermediateDirectories: true)
+        let file = gedcom.appendingPathComponent("family.ged")
+        try Data("0 HEAD\n0 TRLR\n".utf8).write(to: file)
+
+        #expect(HallieShellCLI.masterArchiveRoot(containingGEDCOM: file) == master)
+        #expect(HallieShellCLI.masterArchiveRoot(containingGEDCOM: gedcom) == master)
+        #expect(HallieShellCLI.masterArchiveRoot(containingGEDCOM:
+            base.appendingPathComponent("unrelated/family.ged")) == nil)
+    }
+
+    @Test func catalogHeaderProbeReadsMasterWithoutDecodingRecords() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieCatalogHeader-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let catalog = base.appendingPathComponent("catalog.json")
+        let json = """
+        {"version":6,"generation":12,"savedAt":"2026-08-23T01:31:09Z","savedFromHost":"fixture","masterArchive":{"targetPath":"/Volumes/FamilyArchive","rootPath":"/Volumes/FamilyArchive/Breen_Family_Archive","volumeUUID":"fixture-uuid","designatedAt":"2026-08-21T00:28:35Z"},"records":[{"intentionally":"not a VideoRecord"}]}
+        """
+        try Data(json.utf8).write(to: catalog)
+
+        let designation = try #require(
+            HallieShellCLI.masterArchiveDesignation(catalogURL: catalog))
+        #expect(designation.targetPath == "/Volumes/FamilyArchive")
+        #expect(designation.rootPath
+            == "/Volumes/FamilyArchive/Breen_Family_Archive")
+        #expect(designation.volumeUUID == "fixture-uuid")
+
+        let missingMarker = base.appendingPathComponent("missing.json")
+        try Data("{}".utf8).write(to: missingMarker)
+        #expect(HallieShellCLI.masterArchiveDesignation(
+            catalogURL: missingMarker) == nil)
+    }
+
     // MARK: - Interactive and once modes
 
     @Test func helpSessionAndQuitCommandsDoNotTranslateOrOpenMedia() async throws {

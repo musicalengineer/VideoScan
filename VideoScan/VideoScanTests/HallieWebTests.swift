@@ -59,6 +59,39 @@ struct HallieWebTests {
         #expect(head.hasSuffix("\r\n\r\n"))
     }
 
+    @Test @MainActor
+    func attachmentEndpointServesBoundedValidatedImageAndRejectsPoison() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieWebAttachment-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let valid = root.appendingPathComponent("valid.png")
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        try png.write(to: valid)
+        let poison = root.appendingPathComponent("poison.jpg")
+        try Data("not an image".utf8).write(to: poison)
+        let link = root.appendingPathComponent("link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: valid)
+
+        let b = bridge(Recorder())
+        let good = await b.attachmentImage(token: b.attachmentToken(for: valid))
+        #expect(good.status == 200)
+        #expect(good.headers.contains { $0.0 == "Content-Type" && $0.1 == "image/jpeg" })
+        if case .data(let bytes) = good.body {
+            #expect(!bytes.isEmpty)
+        } else {
+            Issue.record("attachment must be a validated in-memory thumbnail")
+        }
+        let poisonResponse = await b.attachmentImage(
+            token: b.attachmentToken(for: poison))
+        let linkResponse = await b.attachmentImage(
+            token: b.attachmentToken(for: link))
+        #expect(poisonResponse.status == 404)
+        #expect(linkResponse.status == 404)
+    }
+
     // MARK: - Bridge through the real coordinator
 
     private final class Recorder: @unchecked Sendable {

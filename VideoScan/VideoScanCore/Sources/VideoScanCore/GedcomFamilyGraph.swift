@@ -32,6 +32,11 @@ public struct GedcomFamilyGraph: Sendable {
         /// never reinterpreted (honesty over formatting).
         public var birthDate: String?
         public var deathDate: String?
+        /// Raw GEDCOM "2 PLAC" text under BIRT / DEAT ("Cork, Ireland"),
+        /// verbatim like the dates (2026-08-22, "trace the family back to
+        /// Ireland"). Nil when the record has none.
+        public var birthPlace: String?
+        public var deathPlace: String?
         /// The GEDCOM surname (the part between slashes: "Richard /Breen/ Jr"
         /// → "Breen"), kept separately so a surname question ("the Breens")
         /// can count people without guessing which name token is the family
@@ -42,6 +47,8 @@ public struct GedcomFamilyGraph: Sendable {
         /// 1962", "ABT 1944", "BET 1930 AND 1931" → first run wins). Nil when
         /// the date has none. The raw string stays the displayed fact.
         public var birthYear: Int? { GedcomFamilyGraph.year(in: birthDate) }
+        /// Same for the raw death date.
+        public var deathYear: Int? { GedcomFamilyGraph.year(in: deathDate) }
     }
 
     struct Family: Sendable {
@@ -60,8 +67,27 @@ public struct GedcomFamilyGraph: Sendable {
         public let date: String?
     }
 
+    /// One recorded FAM involving a person. Keeping the family pointer and
+    /// its own children together prevents renderers from accidentally
+    /// assigning children from one marriage to another spouse.
+    public struct FamilyUnit: Sendable, Equatable {
+        public let id: String
+        public let spouse: Person?
+        public let children: [Person]
+        public let marriageDate: String?
+    }
+
     public private(set) var people: [String: Person] = [:]
     private var families: [String: Family] = [:]
+
+    /// Where this tree came from, when loaded from a file (2026-08-22,
+    /// "what is GEDCOM / where does your tree come from"). Nil for a
+    /// graph parsed from text (tests, imports).
+    public var sourceFileName: String?
+    public var sourceDirectory: String?
+    public var sourceModifiedAt: Date?
+    /// Number of FAM records — the "families" figure in Hallie's answer.
+    public var familyCount: Int { families.count }
 
     // MARK: Parse
 
@@ -78,6 +104,8 @@ public struct GedcomFamilyGraph: Sendable {
             if let fam = currentFam { families[fam.id] = fam.family }
             currentIndi = nil
             currentFam = nil
+            pendingEvent = nil
+            pendingFamilyEvent = nil
         }
 
         for rawLine in gedcomText.split(whereSeparator: \.isNewline) {
@@ -112,6 +140,12 @@ public struct GedcomFamilyGraph: Sendable {
                 if level == 2, tag == "DATE", let event = pendingEvent {
                     if event == "BIRT", person.birthDate == nil { person.birthDate = value }
                     if event == "DEAT", person.deathDate == nil { person.deathDate = value }
+                    currentIndi = person
+                    continue
+                }
+                if level == 2, tag == "PLAC", let event = pendingEvent, !value.isEmpty {
+                    if event == "BIRT", person.birthPlace == nil { person.birthPlace = value }
+                    if event == "DEAT", person.deathPlace == nil { person.deathPlace = value }
                     currentIndi = person
                     continue
                 }
@@ -157,6 +191,34 @@ public struct GedcomFamilyGraph: Sendable {
             return nil
         }
         self.init(gedcomText: text)
+        sourceFileName = fileURL.lastPathComponent
+        sourceDirectory = fileURL.deletingLastPathComponent().path
+        sourceModifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+    }
+
+    /// Recorded family units in the person's FAMS order. Missing pointers
+    /// are ignored; children never migrate between units.
+    public func familyUnits(of person: Person) -> [FamilyUnit] {
+        person.spouseOfFamilies.compactMap { familyID in
+            guard let family = families[familyID] else { return nil }
+            let isHusband = family.husband == person.id
+            let isWife = family.wife == person.id
+            // A FAMS pointer is evidence only when the reciprocal FAM record
+            // names this person in exactly one partner role. Dangling pointers
+            // and self-spouse records must not manufacture a family unit.
+            guard isHusband != isWife else { return nil }
+            let spouseID = isHusband ? family.wife : family.husband
+            return FamilyUnit(
+                id: familyID,
+                spouse: spouseID.flatMap { people[$0] },
+                // A corrupt self-child pointer must not render the root again
+                // as their own descendant.
+                children: family.children.compactMap {
+                    $0 == person.id ? nil : people[$0]
+                },
+                marriageDate: family.marriageDate)
+        }
     }
 
     /// First four-digit run in a raw GEDCOM date string, or nil.

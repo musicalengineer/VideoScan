@@ -55,6 +55,7 @@ struct ArchivistMessage: Identifiable {
             /// Open the Family Tree tab focused on a person (offered after
             /// "show Donna's family tree").
             case openFamilyTree(personName: String)
+            case openFamilyTreePerson(personID: String, personName: String)
             /// Open the Family Tree tab filtered to a surname.
             case openFamilyTreeSurname(String)
         }
@@ -74,6 +75,9 @@ struct ArchivistMessage: Identifiable {
     /// Optional verified POI cover photo attached to a biography. This is
     /// presentation only; it is never part of the LLM prompt or fact basis.
     var biographyPhoto: ArchivistBiographyPhoto? = nil
+    /// Cards to look at (lineage, tree, crest, photo request) — presentation
+    /// only, same rule as `biographyPhoto` (2026-08-22).
+    var attachments: [HallieAttachment] = []
     /// Bounded evidence samples returned by the shared factual executor.
     /// These are explicitly samples, never represented as every match.
     var citations: [HallieTurnExecutor.Citation] = []
@@ -194,11 +198,6 @@ struct ArchivistChatWindow: View {
     /// original validated spec here lets a reply continue deterministically;
     /// a context-free "yes" must never be sent back through the translator.
     @State private var pendingPersonClarification: ArchivistPersonClarification?
-    /// Lazily-loaded kinship graph from the user's exported GEDCOM
-    /// (App Support/family-tree/originals). Double-optional: nil =
-    /// not tried; .some(nil) = tried, unavailable.
-    @State private var familyGraph: GedcomFamilyGraph??
-
     private static let starterQuestions = [
         "show me Donna down the cape in the early 90s",
         "how many videos of Donna do we have?",
@@ -605,6 +604,9 @@ struct ArchivistChatWindow: View {
                 if let photo = message.biographyPhoto {
                     ArchivistBiographyPhotoView(photo: photo)
                 }
+                if !message.attachments.isEmpty {
+                    HallieAttachmentsView(attachments: message.attachments)
+                }
                 if !message.citations.isEmpty {
                     citationEvidence(message.citations)
                 }
@@ -731,6 +733,8 @@ struct ArchivistChatWindow: View {
                 offeredActions: message.chips.map(\.label),
                 mediaEvidence: media,
                 knowledgeEvidence: knowledge,
+                attachmentOutline: message.attachments.isEmpty
+                    ? nil : HallieAttachmentText.lines(message.attachments),
                 composedBy: message.composedBy))
         }
         guard !events.isEmpty else { return }
@@ -852,18 +856,30 @@ struct ArchivistChatWindow: View {
                 role: .user, text: candidate.label))
             continueHallie(pending: pending, selecting: candidateID)
         case .openFamilyTree(let personName):
-            openFamilyTreeTab(focus: personName, surname: nil)
+            openFamilyTreeTab(focus: personName, personID: nil, surname: nil)
+        case .openFamilyTreePerson(let personID, let personName):
+            openFamilyTreeTab(
+                focus: personName, personID: personID, surname: nil)
         case .openFamilyTreeSurname(let surname):
-            openFamilyTreeTab(focus: nil, surname: surname)
+            openFamilyTreeTab(focus: nil, personID: nil, surname: surname)
         }
     }
 
     /// Same cross-tab hook the People tab uses ("Show <name> in Family
     /// Tree"): drop the name into AppStorage, switch the main window to the
     /// Family Tree tab (tag 5), and let that view pick it up.
-    private func openFamilyTreeTab(focus personName: String?, surname: String?) {
+    private func openFamilyTreeTab(
+        focus personName: String?, personID: String?, surname: String?
+    ) {
+        if let personID {
+            UserDefaults.standard.set(personID, forKey: "ftHighlightedPersonID")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "ftHighlightedPersonID")
+        }
         if let personName {
             UserDefaults.standard.set(personName, forKey: "ftHighlightedPersonName")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "ftHighlightedPersonName")
         }
         if let surname {
             UserDefaults.standard.set(surname, forKey: "ftIncomingSearchText")
@@ -1073,6 +1089,11 @@ struct ArchivistChatWindow: View {
             case .openFamilyTree(let name):
                 return ArchivistMessage.Chip(
                     label: label, action: .openFamilyTree(personName: name))
+            case .openFamilyTreePerson(let id, let name):
+                return ArchivistMessage.Chip(
+                    label: label,
+                    action: .openFamilyTreePerson(
+                        personID: id, personName: name))
             case .openFamilyTreeSurname(let surname):
                 return ArchivistMessage.Chip(
                     label: label, action: .openFamilyTreeSurname(surname))
@@ -1087,6 +1108,7 @@ struct ArchivistChatWindow: View {
             queryLine: response.result.queryDescription,
             basisLine: response.result.basisLine,
             biographyPhoto: response.biographyPhoto,
+            attachments: response.result.attachments,
             citations: isFollowUpAction ? [] : citations,
             knowledgeCitations: response.result.knowledgeCitations,
             responder: response.responderHost,
@@ -1604,17 +1626,12 @@ struct ArchivistChatWindow: View {
         }
     }
 
-    /// Load the newest .ged from App Support/family-tree/originals.
+    /// Load from the same authorized source as cards and the Family Tree tab.
     private func loadFamilyGraph() -> GedcomFamilyGraph? {
-        if let cached = familyGraph { return cached }
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory,
-                                           in: .userDomainMask).first?
-            .appendingPathComponent("VideoScan/family-tree/originals")
-        let graph = dir.flatMap {
-            FamilyGraphFileLoader(originalsDirectory: $0).loadNewest()
-        }
-        familyGraph = .some(graph)
-        return graph
+        // Re-check authority on every legacy-path use. A cached graph must not
+        // survive an archive disconnect or UUID refusal.
+        FamilyAssetConfigurationCenter.shared
+            .snapshot().loadFamilyGraph()
     }
 
     /// The archivist's reply policy — resolution first, then intent.
