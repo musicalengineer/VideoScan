@@ -89,7 +89,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             switch self {
             case .total: return ["videos", "files", "recordings", "tapes", "clips", "items", "movies"]
             case .footage: return ["footage", "hours", "minutes", "long", "runtime", "duration", "playing", "time"]
-            case .archived: return ["archived", "archive", "promoted", "verified", "safe"]
+            case .archived: return ["archived", "archive", "promoted", "verified", "safe", "reliably"]
             case .duplicates: return ["duplicates", "duplicate", "dupes", "copies", "duplicated"]
             case .diskSpace: return ["space", "disk", "storage", "big", "bytes", "gb", "tb", "gigabytes", "terabytes", "size"]
             case .years: return ["years", "year", "decades", "span", "earliest", "oldest", "latest", "newest", "cover", "covers", "range", "from"]
@@ -110,6 +110,7 @@ struct HallieCatalogStats: Equatable, Sendable {
 
     private static let filler: Set<String> = [
         "how", "many", "much", "do", "does", "did", "we", "have", "has", "had", "there", "are", "is",
+        "to", "into", "been",
         "in", "the", "our", "this", "that", "of", "a", "an", "altogether", "all", "total", "totally",
         "overall", "whole", "entire", "catalog", "catalogue", "archive", "collection", "library",
         "hallie", "please", "can", "could", "you", "tell", "me", "what", "whats", "what's", "roughly",

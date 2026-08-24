@@ -6,6 +6,17 @@ import VideoScanCore
 /// Catalog-wide numbers answered before translation (overnight cycle 2).
 struct HallieCatalogStatsTests {
 
+    @Test func promotedToArchivePhrasingDetects() {
+        // Live miss 2026-08-24: "to" was outside the closed vocabulary and
+        // the question became a 5,886-item generic search.
+        #expect(HallieCatalogStats.detect("how many videos have been promoted to archive?") == .archived)
+        #expect(HallieCatalogStats.detect("how many are reliably archived") == .archived)
+        #expect(HallieCatalogStats.detect("how many have been promoted so far") == .archived)
+        // A real search must still fall through.
+        #expect(HallieCatalogStats.detect("show me videos promoted to archive in 1993") == nil)
+        #expect(HallieCatalogStats.detect("donna going to the beach") == nil)
+    }
+
     @Test func recognisesCatalogWideQuestionsAndNothingElse() {
         let cases: [(String, HallieCatalogStats.Question)] = [
             ("how many are archived", .archived),
