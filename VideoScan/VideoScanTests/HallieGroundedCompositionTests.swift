@@ -653,11 +653,16 @@ struct HallieGroundedCompositionClientTests {
             options: options, input: { nil }, output: { output.append($0) },
             dependencies: shellDependencies(result: listResult(), composeCalls: calls, transcript: transcript))
         #expect(calls.values.count == 1)
-        #expect(output.values.contains("Just one, donna_cape.mov."))
-        #expect(output.values.contains { $0.hasPrefix("phrased by: model") })
+        #expect(output.values.contains(
+            "I found 1 catalog item matching that. Just one, donna_cape.mov."))
+        // Composition provenance belongs in the transcript/log, not in the
+        // reader-facing conversation unless diagnostics were requested.
+        #expect(!output.values.contains { $0.hasPrefix("phrased by:") })
         let assistant = transcript.values.first { $0.kind == .assistant }
         #expect(assistant?.composedBy == "model")
-        #expect(assistant?.text == "Just one, donna_cape.mov [c2].")
+        // The count-restoration leash keeps the mandatory c1 fact even when
+        // the model phrases only the example claim.
+        #expect(assistant?.text == "I found 1 catalog item matching that. [c1] Just one, donna_cape.mov [c2].")
         #expect(assistant?.basisLine == "Basis: 1 cited of 1 matching catalog items.")
     }
 }

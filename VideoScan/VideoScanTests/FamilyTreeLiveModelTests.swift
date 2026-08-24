@@ -317,6 +317,28 @@ struct FamilyTreeLayoutShapeTests {
         #expect(Set(result.nodes.map(\.id)).count == result.nodes.count)
     }
 
+    @Test func descendantCycleDoesNotRenderTheRootAsItsOwnGrandchild() {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Root /Person/
+        1 FAMS @F1@
+        0 @I2@ INDI
+        1 NAME Child /Person/
+        1 FAMS @F2@
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 CHIL @I2@
+        0 @F2@ FAM
+        1 HUSB @I2@
+        1 CHIL @I1@
+        0 TRLR
+        """)
+        let result = FamilyTreeLayout.layout(
+            graph: graph, rootID: "@I1@", descendantGenerations: 2)
+        #expect(result.nodes.map(\.personID) == ["@I1@", "@I2@"])
+        #expect(result.nodes.filter { $0.personID == "@I1@" }.count == 1)
+    }
+
     @Test func placLineDoesNotDisturbDates() throws {
         let john = try #require(fixtureGraph().people["@I1@"])
         #expect(john.birthDate == "1 JAN 1900")

@@ -439,12 +439,16 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// (it IS the master now) and leaves role Archive; the PREVIOUS master
     /// is queued right away (codex m3 — designation change re-runs the
     /// pass), never renamed.
-    @Test func initializeMasterArchive_resolvesQueuedTarget_andQueuesPreviousMaster() throws {
+    @Test func initializeMasterArchive_resolvesQueuedTarget_andQueuesPreviousMaster() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("roletax")
         defer { sb.cleanup() }
-        try MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+        try await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
             path.hasPrefix("/Volumes/Elsewhere") ? "UUID-ELSEWHERE" : "UUID-TMP"
         }) {
+            // Force the async TaskLocal overload; see the corresponding
+            // MasterArchive hardening regression for the Swift 6.2 Release
+            // optimizer crash this avoids.
+            await Task.yield()
             let m = makeModel()
             let t = CatalogScanTarget(searchPath: sb.archiveVolume.path)
             t.role = .archive
@@ -479,10 +483,11 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// target is offline (identity unreadable), online with the master's
     /// UUID, or flagged as a rename candidate pointing at the master, it
     /// must NOT be offered for downgrade.
-    @Test func M1_renamedMasterOldPathTarget_neverQueued() {
-        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+    @Test func M1_renamedMasterOldPathTarget_neverQueued() async {
+        await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
             path.hasPrefix("/Volumes/New") || path.hasPrefix("/Volumes/Old") ? "UUID-MASTER" : nil
         }) {
+            await Task.yield()
             let m = makeModel()
             let new = CatalogScanTarget(searchPath: "/Volumes/New")
             new.role = .archive; new.isReachable = true
@@ -513,10 +518,11 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// (a') Rename-candidate route: the cache says "/Volumes/Old is the
     /// volume now at /Volumes/New" — enough to keep it out of the queue
     /// even when the UUID probe cannot see it.
-    @Test func M1_renameCandidatePointingAtMaster_neverQueued() {
-        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+    @Test func M1_renameCandidatePointingAtMaster_neverQueued() async {
+        await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
             path.hasPrefix("/Volumes/New") ? "UUID-MASTER" : nil
         }) {
+            await Task.yield()
             let m = makeModel()
             let new = CatalogScanTarget(searchPath: "/Volumes/New")
             new.role = .archive; new.isReachable = true
@@ -542,10 +548,11 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// (b) Master offline + path drift: the designation resolves to NO
     /// target (path gone, UUID not mounted) → R4 is disabled entirely; an
     /// Archive-role stranger is left alone until the master is resolvable.
-    @Test func M1_unresolvedMaster_disablesR4() {
-        MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
+    @Test func M1_unresolvedMaster_disablesR4() async {
+        await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ path in
             path.hasPrefix("/Volumes/LaCie") ? "UUID-LACIE" : nil
         }) {
+            await Task.yield()
             let m = makeModel()
             let lacie = CatalogScanTarget(searchPath: "/Volumes/LaCie")
             lacie.role = .archive; lacie.isReachable = true

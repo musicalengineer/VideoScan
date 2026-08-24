@@ -168,6 +168,40 @@ struct GedcomFamilyGraphTests {
         #expect(units.map { $0.children.map(\.id) } == [["@I4@"], ["@I5@"]])
     }
 
+    @Test func familyUnitsRejectDanglingAndSelfReferentialPointers() throws {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Root /Person/
+        1 FAMS @F-DANGLING@
+        1 FAMS @F-SELF-SPOUSE@
+        1 FAMS @F-VALID@
+        0 @I2@ INDI
+        1 NAME Other /Spouse/
+        0 @I3@ INDI
+        1 NAME Valid /Child/
+        0 @I4@ INDI
+        1 NAME Invented /Child/
+        0 @F-DANGLING@ FAM
+        1 HUSB @I2@
+        1 CHIL @I4@
+        0 @F-SELF-SPOUSE@ FAM
+        1 HUSB @I1@
+        1 WIFE @I1@
+        1 CHIL @I4@
+        0 @F-VALID@ FAM
+        1 HUSB @I1@
+        1 WIFE @I2@
+        1 CHIL @I1@
+        1 CHIL @I3@
+        0 TRLR
+        """)
+        let root = try #require(g.people["@I1@"])
+        let units = g.familyUnits(of: root)
+        #expect(units.map(\.id) == ["@F-VALID@"])
+        #expect(units.first?.spouse?.id == "@I2@")
+        #expect(units.first?.children.map(\.id) == ["@I3@"])
+    }
+
     @Test func colloquialRelationWords() {
         #expect(GedcomFamilyGraph.relation(fromWord: "dad") == .father)
         #expect(GedcomFamilyGraph.relation(fromWord: "Mom") == .mother)

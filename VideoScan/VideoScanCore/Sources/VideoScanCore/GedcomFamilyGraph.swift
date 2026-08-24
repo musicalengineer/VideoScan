@@ -202,18 +202,21 @@ public struct GedcomFamilyGraph: Sendable {
     public func familyUnits(of person: Person) -> [FamilyUnit] {
         person.spouseOfFamilies.compactMap { familyID in
             guard let family = families[familyID] else { return nil }
-            let spouseID: String?
-            if family.husband == person.id {
-                spouseID = family.wife
-            } else if family.wife == person.id {
-                spouseID = family.husband
-            } else {
-                spouseID = nil
-            }
+            let isHusband = family.husband == person.id
+            let isWife = family.wife == person.id
+            // A FAMS pointer is evidence only when the reciprocal FAM record
+            // names this person in exactly one partner role. Dangling pointers
+            // and self-spouse records must not manufacture a family unit.
+            guard isHusband != isWife else { return nil }
+            let spouseID = isHusband ? family.wife : family.husband
             return FamilyUnit(
                 id: familyID,
                 spouse: spouseID.flatMap { people[$0] },
-                children: family.children.compactMap { people[$0] },
+                // A corrupt self-child pointer must not render the root again
+                // as their own descendant.
+                children: family.children.compactMap {
+                    $0 == person.id ? nil : people[$0]
+                },
                 marriageDate: family.marriageDate)
         }
     }

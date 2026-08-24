@@ -76,11 +76,15 @@ struct MasterArchiveHardeningTests {
     }
 
     @Test("1b: a volume that stops reporting a UUID is also refused (unknown ≠ same)")
-    func missingUUIDIsRefused() throws {
+    func missingUUIDIsRefused() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("uuidnil")
         defer { sb.cleanup() }
         let probe = ProbeBox("UUID-A")
-        try MasterArchiveDesignation.$volumeUUIDProbe.withValue({ _ in probe.uuid }) {
+        try await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ _ in probe.uuid }) {
+        // Force the async TaskLocal overload. Swift 6.2's Release optimizer
+        // otherwise miscompiles this synchronous throwing wrapper and crashes
+        // in swift_task_localValuePushImpl before the test body starts.
+        await Task.yield()
         let model = MasterArchiveTestSupport.makeModel(sb)
         try MasterArchiveTestSupport.initialize(model, in: sb)
         probe.uuid = nil
