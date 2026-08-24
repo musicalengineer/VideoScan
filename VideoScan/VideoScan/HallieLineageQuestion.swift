@@ -39,7 +39,10 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "trace (the|our|my|X's) (family|ancestors|links|side…) back to
         // Ireland" — "links"/"side"/"heritage" joined the vocabulary and
         // maternal/paternal restrict the walked line (Rick live, 8/24).
-        if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
+        // Destination forms accept more verbs than bare "trace" — "find my
+        // family links back to England" (live, 8/24). Verb+family-word+
+        // destination together keep "find videos of donna" out.
+        if let m = lower.firstMatch(of: /\b(?:trace|follow|find|walk|take)\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
             if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
                 let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
@@ -49,7 +52,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
             }
         }
         // "trace my paternal links to old puritan boston" — no "back".
-        if let m = lower.firstMatch(of: /\btrace\b(.*?)\bto\s+([a-z][a-z .'-]*)$/) {
+        if let m = lower.firstMatch(of: /\b(?:trace|follow|walk)\b(.*?)\bto\s+([a-z][a-z .'-]*)$/) {
             let subject = String(m.1)
             if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
                 return .originTrail(person: possessor(in: subject),
