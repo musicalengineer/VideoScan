@@ -40,6 +40,14 @@ final class HallieSpeaker: NSObject, ObservableObject {
     nonisolated static let defaultSpeedFactor = 0.88
     nonisolated static let pitch: Float = 0.95
 
+    /// Family-specific spellings are transformed only in the private string
+    /// sent to speech synthesis. Hallie's visible answer and catalog data are
+    /// never rewritten. Add carefully heard corrections here as Rick audits
+    /// Bella on real family names.
+    nonisolated static let familyNamePronunciations: [(written: String, spoken: String)] = [
+        ("Edith", "EE-dith"),
+    ]
+
     @Published private(set) var isSpeaking = false
     private let synthesizer = AVSpeechSynthesizer()
     private var neuralTask: Task<Void, Never>?
@@ -84,9 +92,8 @@ final class HallieSpeaker: NSObject, ObservableObject {
             .filter { $0.count > 1 }
     }
 
-    /// Expand suffixes before sentence splitting and speech synthesis. This
-    /// keeps "Richard Breen Jr." together and makes both Apple and Kokoro say
-    /// "Junior" rather than guessing at the abbreviation.
+    /// Expand suffixes and audited family names before sentence splitting and
+    /// speech synthesis. The caller's display string remains unchanged.
     nonisolated static func spokenText(_ text: String) -> String {
         var spoken = text
         let suffixes = [(#"\bJr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Junior"),
@@ -95,6 +102,13 @@ final class HallieSpeaker: NSObject, ObservableObject {
             spoken = spoken.replacingOccurrences(
                 of: pattern,
                 with: replacement,
+                options: [.regularExpression, .caseInsensitive])
+        }
+        for pronunciation in familyNamePronunciations {
+            let name = NSRegularExpression.escapedPattern(for: pronunciation.written)
+            spoken = spoken.replacingOccurrences(
+                of: #"\b"# + name + #"\b"#,
+                with: pronunciation.spoken,
                 options: [.regularExpression, .caseInsensitive])
         }
         return spoken

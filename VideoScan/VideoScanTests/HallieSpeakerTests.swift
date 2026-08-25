@@ -28,6 +28,16 @@ struct HallieSpeakerTests {
                 "The file Jr.mov is untouched.")
     }
 
+    @Test func familyPronunciationsChangeSpeechButNotDisplayedText() {
+        let displayed = "Edith Breen appears beside Meredith Breen."
+        #expect(HallieSpeaker.spokenText(displayed) ==
+                "EE-dith Breen appears beside Meredith Breen.")
+        #expect(displayed == "Edith Breen appears beside Meredith Breen.")
+        #expect(HallieSpeaker.familyNamePronunciations.contains {
+            $0.written == "Edith" && $0.spoken == "EE-dith"
+        })
+    }
+
     @Test func premiumVoicesRankFirstAndNoveltyVoicesLast() {
         let voices = HallieSpeaker.englishVoices()
         guard voices.count >= 2 else { return }   // a bare CI box may have one voice
