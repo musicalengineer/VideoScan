@@ -85,6 +85,30 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             }
         }
 
+        // Live 8/25: "How hallie, how are you?" — a mistyped salutation
+        // ("How" for "Hi") addressed to Hallie BY NAME, followed by an exact
+        // small-talk clause — answered as her 1876 namesake's biography.
+        // When the person names Hallie and one comma-separated clause is
+        // exactly a small-talk phrase, the leftover may be at most one
+        // stray word: that is a greeting, not a family question. "Donna,
+        // how are you?" (no Hallie) and "Hallie, how old is Donna?" (not a
+        // small-talk clause) are untouched.
+        if lowered.contains("hallie") {
+            let clauses = lowered
+                .split(whereSeparator: { ",;.!?".contains($0) })
+                .map { clause -> [String] in
+                    clause.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+                        .map(String.init)
+                        .filter { $0 != "hallie" && $0 != "please" }
+                }
+            let hits = clauses.compactMap { smalltalkPhrases[$0.joined(separator: " ")] }
+            let leftovers = clauses.filter { smalltalkPhrases[$0.joined(separator: " ")] == nil }
+            if let smalltalk = hits.first,
+               leftovers.allSatisfy({ $0.count <= 1 }) {
+                return .smalltalk(smalltalk)
+            }
+        }
+
         // "how do i …" / "how can we …" is a how-to question about Hallie
         // herself; the help card answers it with worked examples. Capability
         // questions ("how do i change donna's bio") are classified BEFORE

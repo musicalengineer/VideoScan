@@ -195,6 +195,20 @@ struct ArchivistConversationCommandTests {
         #expect(result.basisLine.contains("no model call"))
     }
 
+    /// Live 8/25: "How hallie, how are you?" ("How" for "Hi") produced the
+    /// 1876 Hallie's biography. Naming Hallie + an exact small-talk clause
+    /// is a greeting; the same shapes without her name or without a
+    /// small-talk clause stay on the query path.
+    @Test func mistypedSalutationAddressedToHallieIsSmalltalk() {
+        #expect(ArchivistConversationCommand.detect("How hallie, how are you?") == .smalltalk(.wellbeing))
+        #expect(ArchivistConversationCommand.detect("Hallie! good morning") == .smalltalk(.greeting))
+        #expect(ArchivistConversationCommand.detect("Hey Hallie, how are you doing?") == .smalltalk(.wellbeing))
+        #expect(ArchivistConversationCommand.detect("Donna, how are you?") == nil)
+        #expect(ArchivistConversationCommand.detect("Hallie, how old is Donna?") == nil)
+        #expect(ArchivistConversationCommand.detect("tell me about hallie") == nil,
+                "asking ABOUT Hallie by name is still the namesake question")
+    }
+
     @Test func resetClearsConversationMemory() throws {
         var memory = HallieTurnExecutor.ConversationMemory()
         let ast = ArchivistQueryAST.presence(.init(people: ["donna"]))

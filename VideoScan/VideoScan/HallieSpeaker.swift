@@ -230,6 +230,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 HallieNeuralSpeech.removeTemporaryAudio(synthesizedAudioURL)
                 guard let self, generation == self.speechGeneration, !Task.isCancelled else { return }
                 HallieNeuralSpeechDiagnostics.shared.recordFailure(error.localizedDescription)
+                // In the app log, not just NSLog: live 8/25 the voice fell back
+                // to Apple speech and nothing on disk said why.
+                appLog.write("[hallie-voice] neural voice unavailable; using Apple speech — "
+                             + "\(error.localizedDescription)")
                 NSLog("VideoScan: Hallie neural voice unavailable; using Apple speech: %@",
                       error.localizedDescription)
                 self.neuralTask = nil
