@@ -1082,17 +1082,9 @@ enum HallieShellCLI {
         _ reply: String,
         from candidates: [HallieTurnExecutor.Candidate]
     ) -> HallieTurnExecutor.CandidateID? {
-        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let number = Int(trimmed), candidates.indices.contains(number - 1) {
-            return candidates[number - 1].id
-        }
-        let key = PersonResolver.normalize(trimmed)
-        let matches = candidates.filter {
-            PersonResolver.normalize($0.label) == key
-                || PersonResolver.normalize($0.canonicalName) == key
-        }
-        guard matches.count == 1 else { return nil }
-        return matches[0].id
+        // Shared matcher: numbers, exact names, "born in 1785", older/
+        // younger, ordinals (HallieClarificationReply.swift).
+        HallieTurnExecutor.clarificationSelection(reply, from: candidates)
     }
 
     private static func handleCommand(

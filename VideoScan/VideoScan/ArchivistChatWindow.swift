@@ -923,20 +923,12 @@ struct ArchivistChatWindow: View {
         guard !isThinking else { return }
         if let pending = pendingHallieClarification {
             let folded = PersonResolver.normalize(text)
-            if let number = Int(folded),
-               pending.clarification.candidates.indices.contains(number - 1) {
-                let candidate = pending.clarification.candidates[number - 1]
+            // Shared matcher: numbers, exact names, "the one born in 1785",
+            // older/younger, ordinals (HallieClarificationReply.swift).
+            if let selected = HallieTurnExecutor.clarificationSelection(
+                text, from: pending.clarification.candidates) {
                 messages.append(ArchivistMessage(role: .user, text: text))
-                continueHallie(pending: pending, selecting: candidate.id)
-                return
-            }
-            let exactCandidates = pending.clarification.candidates.filter {
-                PersonResolver.normalize($0.label) == folded
-                    || PersonResolver.normalize($0.canonicalName) == folded
-            }
-            if exactCandidates.count == 1, let candidate = exactCandidates.first {
-                messages.append(ArchivistMessage(role: .user, text: text))
-                continueHallie(pending: pending, selecting: candidate.id)
+                continueHallie(pending: pending, selecting: selected)
                 return
             }
             if ["yes", "y", "yeah", "yep", "correct", "right",
