@@ -19,9 +19,22 @@ import Foundation
 enum HallieOutputBuffer {
     static let minimumFrames: UInt32 = 256
 
-    /// Returns a one-line description of what happened, for the log.
+    /// Experiment knob (Rick 8/25, stutter persisted at 512): override the
+    /// minimum without a rebuild —
+    ///   defaults write Rick-Breen.VideoScan hallie.outputBufferFrames 2048
+    /// Accepts 64...4096; anything else falls back to the default.
+    static let framesKey = "hallie.outputBufferFrames"
+    static func configuredMinimum(_ defaults: UserDefaults = .standard) -> UInt32 {
+        let stored = defaults.integer(forKey: framesKey)
+        return (64...4096).contains(stored) ? UInt32(stored) : minimumFrames
+    }
+
+    /// Returns a one-line description of what happened, for the log —
+    /// including the device's nominal sample rate, because a 24 kHz WAV on
+    /// a 48/96 kHz interface is resampled by the HAL, which is the next
+    /// suspect once the buffer is ruled out.
     @discardableResult
-    static func ensureMinimum(_ minimum: UInt32 = minimumFrames) -> String {
+    static func ensureMinimum(_ minimum: UInt32 = configuredMinimum()) -> String {
         var device = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = AudioObjectPropertyAddress(
@@ -44,16 +57,27 @@ enum HallieOutputBuffer {
         guard status == noErr else {
             return "output buffer: could not read frame size (status \(status))"
         }
+        let rate = nominalSampleRate(device).map { " @ \(Int($0)) Hz" } ?? ""
         guard frames < minimum else {
-            return "output buffer: \(frames) frames on \(deviceName(device)) (left alone)"
+            return "output buffer: \(frames) frames on \(deviceName(device))\(rate) (left alone; min \(minimum))"
         }
         var wanted = minimum
         status = AudioObjectSetPropertyData(
             device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &wanted)
         guard status == noErr else {
-            return "output buffer: \(frames) frames on \(deviceName(device)); raise to \(minimum) refused (status \(status))"
+            return "output buffer: \(frames) frames on \(deviceName(device))\(rate); raise to \(minimum) refused (status \(status))"
         }
-        return "output buffer: raised \(frames) → \(minimum) frames on \(deviceName(device))"
+        return "output buffer: raised \(frames) → \(minimum) frames on \(deviceName(device))\(rate)"
+    }
+
+    private static func nominalSampleRate(_ device: AudioDeviceID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var rate = Double(0)
+        var size = UInt32(MemoryLayout<Double>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr ? rate : nil
     }
 
     private static func deviceName(_ device: AudioDeviceID) -> String {

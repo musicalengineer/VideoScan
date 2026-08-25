@@ -230,9 +230,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 // player's I/O cycle starts at the larger size.
                 let buffer = HallieOutputBuffer.ensureMinimum()
                 player.prepareToPlay()
+                let wavRate = (player.settings[AVSampleRateKey] as? Double).map { "\(Int($0)) Hz" } ?? "? Hz"
                 appLog.write(String(
-                    format: "[hallie-voice] %@ synthesized %.1fs of audio in %.1fs (%@); %@",
-                    voice.displayName, player.duration, Date().timeIntervalSince(started),
+                    format: "[hallie-voice] %@ synthesized %.1fs of %@ audio in %.1fs (%@); %@",
+                    voice.displayName, player.duration, wavRate, Date().timeIntervalSince(started),
                     HallieNeuralSpeech.supportsWarmWorker ? "warm worker" : "one-shot helper",
                     buffer))
                 self.neuralAudioURL = audioURL
