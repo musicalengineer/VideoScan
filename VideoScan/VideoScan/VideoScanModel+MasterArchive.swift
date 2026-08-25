@@ -147,6 +147,8 @@ struct ArchivePromotePlan: Sendable {
 final class ArchivePromotionIndex {
     private var builtFor: RecordsVersion?
     private var copyBySource: [UUID: VideoRecord] = [:]
+    private var copyByContentHash: [String: VideoRecord] = [:]
+    private var copyByDupGroup: [UUID: VideoRecord] = [:]
     private var sourceByCopy: [UUID: UUID] = [:]
     /// Archive totals for the sidebar panel: promoted copies whose full-file
     /// fixity was recorded (i.e. verified at promotion), and their bytes.
@@ -162,6 +164,27 @@ final class ArchivePromotionIndex {
     func copy(ofSourceID id: UUID, in records: [VideoRecord], version: RecordsVersion) -> VideoRecord? {
         rebuildIfNeeded(records, version: version)
         return copyBySource[id]
+    }
+
+    /// Content-level fallback (Rick 2026-08-25: the MediaExpansion original
+    /// of Mark's-birthday showed "not yet archived" while its byte-identical
+    /// staging copy had been promoted and verified). Archived-ness is a
+    /// property of the CONTENT, not of the path the promote happened to
+    /// read. Two ways in, strongest first:
+    ///   1. the record's segmented content hash equals an archive copy's;
+    ///   2. the record sits in a High-confidence duplicate group whose
+    ///      reasons include a hash match, and a member of that group is an
+    ///      archive copy or was promoted.
+    /// DISPLAY AND WORKLISTS ONLY. Nothing destructive keys off this — the
+    /// delete paths stay full-verify gated (codex 8/12).
+    func copy(ofContentOf rec: VideoRecord, in records: [VideoRecord], version: RecordsVersion) -> VideoRecord? {
+        rebuildIfNeeded(records, version: version)
+        if !rec.contentHash.isEmpty, let hit = copyByContentHash[rec.contentHash] { return hit }
+        guard let group = rec.duplicateGroupID,
+              rec.duplicateConfidence == .high,
+              rec.duplicateReasons.localizedCaseInsensitiveContains("hash"),
+              let hit = copyByDupGroup[group] else { return nil }
+        return hit
     }
 
     func sourceID(ofCopyID id: UUID, in records: [VideoRecord], version: RecordsVersion) -> UUID? {
@@ -186,6 +209,8 @@ final class ArchivePromotionIndex {
         rebuildCount += 1
         copyBySource.removeAll(keepingCapacity: true)
         sourceByCopy.removeAll(keepingCapacity: true)
+        copyByContentHash.removeAll(keepingCapacity: true)
+        copyByDupGroup.removeAll(keepingCapacity: true)
         verifiedCount = 0; verifiedBytes = 0; unverifiedCount = 0
         for rec in records where rec.derivationKind == ArchivePromotion.derivationKind && !rec.isPurged {
             if rec.archiveFixity != nil {
@@ -194,9 +219,20 @@ final class ArchivePromotionIndex {
             } else {
                 unverifiedCount += 1
             }
+            if !rec.contentHash.isEmpty { copyByContentHash[rec.contentHash] = rec }
+            if let group = rec.duplicateGroupID { copyByDupGroup[group] = rec }
             guard let src = rec.derivedFrom else { continue }
             copyBySource[src] = rec
             sourceByCopy[rec.id] = src
+        }
+        // A promote SOURCE's dup group also points at its copy: the copy
+        // itself often has no group yet (dup analysis ran before the promote).
+        if !copyBySource.isEmpty {
+            for rec in records where !rec.isPurged {
+                guard let group = rec.duplicateGroupID, copyByDupGroup[group] == nil,
+                      let copy = copyBySource[rec.id] else { continue }
+                copyByDupGroup[group] = copy
+            }
         }
         builtFor = version
     }
@@ -516,6 +552,16 @@ extension VideoScanModel {
     func masterArchiveCopy(of record: VideoRecord) -> VideoRecord? {
         archivePromotionIndex.copy(ofSourceID: record.id, in: records,
                                    version: promotionIndexVersion)
+    }
+
+    /// The archive copy that holds this record's CONTENT: the promote link
+    /// when there is one, else a hash-backed identical copy (see
+    /// `ArchivePromotionIndex.copy(ofContentOf:)`). Worklists and badges
+    /// use this; the promote/verify/delete engines keep `masterArchiveCopy`.
+    func archivedCopy(of record: VideoRecord) -> VideoRecord? {
+        masterArchiveCopy(of: record)
+            ?? archivePromotionIndex.copy(ofContentOf: record, in: records,
+                                          version: promotionIndexVersion)
     }
 
     /// Sidebar totals: verified (fixity-recorded) archive copies + bytes,

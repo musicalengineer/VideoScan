@@ -75,11 +75,11 @@ extension VideoScanModel {
     /// itself an archive copy. Used by computeFiltered (event-driven,
     /// not in a view body); the memoized index makes it O(1) per record.
     func pfNotYetArchived(_ rec: VideoRecord) -> Bool {
-        !isArchiveCopy(rec) && masterArchiveCopy(of: rec) == nil
+        !isArchiveCopy(rec) && archivedCopy(of: rec) == nil
     }
 
     /// "Has Master Copy": a source that has been promoted.
     func pfHasMasterCopy(_ rec: VideoRecord) -> Bool {
-        masterArchiveCopy(of: rec) != nil
+        archivedCopy(of: rec) != nil
     }
 }

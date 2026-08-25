@@ -97,4 +97,53 @@ struct MasterArchiveScaleTests {
         #expect(plan.totalBytes == 2_000_000)
         #expect(ms < 2_000, "plan for 2k of 100k took \(Int(ms)) ms")
     }
+
+    /// Rick 2026-08-25: byte-identical originals on OTHER volumes are
+    /// archived by content, not by the path the promote read. Pinned at
+    /// scale so the fallback stays O(1) per lookup.
+    @Test("content-level archived: hash and High dup-group fallbacks; Medium/no-hash never", .timeLimit(.minutes(1)))
+    func contentLevelArchivedFallback() {
+        let model = VideoScanModel()
+        var records: [VideoRecord] = []
+        var groups: [UUID] = []
+        for i in 0..<50_000 {
+            let src = VideoRecord()
+            src.filename = "clip_\(i).mkv"; src.fullPath = "/Volumes/Projects/staging/clip_\(i).mkv"
+            src.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            let group = UUID(); groups.append(group)
+            src.duplicateGroupID = group; src.duplicateConfidence = .high
+            src.duplicateReasons = "hash+filename+duration"
+            let copy = VideoRecord()
+            copy.filename = src.filename
+            copy.fullPath = "/Volumes/Archive/Breen_Family_Archive/30_Video/1984/x_" + src.filename
+            copy.derivedFrom = src.id; copy.derivationKind = ArchivePromotion.derivationKind
+            copy.contentHash = "v1:hash\(i)"
+            let original = VideoRecord()      // the MediaExpansion twin: no promote link
+            original.filename = src.filename; original.fullPath = "/Volumes/MediaExpansion/clip_\(i).mkv"
+            original.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            original.duplicateGroupID = group; original.duplicateConfidence = .high
+            original.duplicateReasons = "hash+filename+duration+resolution"
+            records += [src, copy, original]
+        }
+        // Negative controls.
+        let medium = VideoRecord(); medium.fullPath = "/Volumes/X/m.mkv"
+        medium.duplicateGroupID = groups[0]; medium.duplicateConfidence = .medium; medium.duplicateReasons = "hash+duration"
+        let noHash = VideoRecord(); noHash.fullPath = "/Volumes/X/n.mkv"
+        noHash.duplicateGroupID = groups[1]; noHash.duplicateConfidence = .high; noHash.duplicateReasons = "filename+duration"
+        let byHash = VideoRecord(); byHash.fullPath = "/Volumes/X/h.mkv"; byHash.contentHash = "v1:hash7"
+        records += [medium, noHash, byHash]
+        model.records = records
+
+        let t0 = CFAbsoluteTimeGetCurrent()
+        var notYet = 0
+        for r in records where !model.isArchiveCopy(r) { if model.pfNotYetArchived(r) { notYet += 1 } }
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        #expect(notYet == 2, "only the Medium and the no-hash controls remain to-do (got \(notYet))")
+        #expect(!model.pfNotYetArchived(byHash), "segmented content hash equal to an archive copy's = archived")
+        #expect(model.pfNotYetArchived(medium) && model.pfNotYetArchived(noHash))
+        #expect(model.archivePromotionIndex.rebuildCount == 1)
+        #expect(ms < 2_000, "150k lookups took \(Int(ms)) ms")
+        // Engines keep the strict promote link.
+        #expect(model.masterArchiveCopy(of: records[2]) == nil && model.archivedCopy(of: records[2]) != nil)
+    }
 }
