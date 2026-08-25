@@ -560,7 +560,13 @@ enum HallieLineageAnswer {
                 citations: [], catalogPersonName: person.canonicalName)
         }
         var sentences: [String] = []
-        for account in accounts.prefix(3) {
+        // Newest accounts first: a fresh telling session is what the asker
+        // most wants voiced (live 8/25: the appearance passage was fourth
+        // in file order and fell off the three-account cap).
+        let ordered = accounts.sorted {
+            ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+        }
+        for account in ordered.prefix(3) {
             let quote = Self.trimmedQuote(account.text)
             if let teller = account.attribution, account.confidence != .confirmed {
                 sentences.append("According to \(teller): \u{201C}\(quote)\u{201D}")
