@@ -21,12 +21,20 @@ enum HallieHelperFailure {
         /// The helper answered but the strict decoder refused it, even
         /// after one repair retry: rephrase.
         case unusableAnswer
+        /// The helper was REACHED and refused the request (HTTP 4xx):
+        /// a model-name / endpoint / configuration problem, not the network
+        /// and not something a moment's wait fixes (codex #671).
+        case badRequest(status: Int)
     }
 
     static func kind(of error: Error) -> Kind {
-        if let nl = error as? NLTranslatorError,
-           case .badResponse = nl {
-            return .unusableAnswer
+        if let nl = error as? NLTranslatorError {
+            switch nl {
+            case .badResponse: return .unusableAnswer
+            case .serverError(let status, _) where (400...499).contains(status):
+                return .badRequest(status: status)
+            default: break
+            }
         }
         return .unreachable
     }
@@ -43,6 +51,10 @@ enum HallieHelperFailure {
             return "I heard you, but I couldn't turn that into a search I trust, "
                 + "even on a second try. I didn't search the archive or open anything; "
                 + "could you say it another way?"
+        case .badRequest(let status):
+            return "My language helper answered, but refused the request (HTTP \(status)) — "
+                + "that's a setup problem on my side, like the model name or endpoint, not the network. "
+                + "I didn't search the archive or open anything; please check the Hallie helper settings."
         }
     }
 

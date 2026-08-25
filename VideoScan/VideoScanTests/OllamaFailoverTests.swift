@@ -70,7 +70,9 @@ private func fakeTranslator(
         await dialled.record(host)
         return stub
     }
-    return OllamaFailoverTranslator(hosts: hosts, template: template, onResponder: onResponder)
+    var translator = OllamaFailoverTranslator(hosts: hosts, template: template, onResponder: onResponder)
+    translator.connectionRetryDelay = .zero
+    return translator
 }
 
 /// Records dial order across the concurrency boundary the fake crosses.
@@ -128,7 +130,8 @@ struct OllamaFailoverTests {
             responses: ["a.local": .status(503, "unavailable"), "b.local": .ok(goodReply)],
             dialled: d1)
         _ = try await t1.translate("x")
-        #expect(await d1.all() == ["a.local", "b.local"], "5xx is a host problem — fail over")
+        #expect(await d1.all() == ["a.local", "a.local", "b.local"],
+                "5xx is a host problem — one same-host retry (codex #671), then fail over")
 
         let d2 = Dialled()
         let t2 = fakeTranslator(
@@ -149,7 +152,8 @@ struct OllamaFailoverTests {
                         "loaded.local": .ok(goodReply)],
             dialled: dialled)
         _ = try await t.translate("x")
-        #expect(await dialled.all() == ["fresh.local", "loaded.local"])
+        #expect(await dialled.all() == ["fresh.local", "loaded.local"],
+                "a missing model is a state, not a blip — no same-host retry")
     }
 
     /// SENSOR. The model replied with prose instead of the schema. Every
@@ -216,7 +220,9 @@ struct OllamaFailoverTests {
             await bodies.record(String(decoding: body, as: UTF8.self))
             return .ok(await queue.next() ?? garbageReply)
         }
-        return OllamaFailoverTranslator(hosts: hosts, template: template)
+        var translator = OllamaFailoverTranslator(hosts: hosts, template: template)
+        translator.connectionRetryDelay = .zero
+        return translator
     }
 
     private actor ReplyQueue {
@@ -234,6 +240,75 @@ struct OllamaFailoverTests {
         #expect(!NLTranslatorError.badResponse("unparseable response envelope: <html>").isRepairable)
         #expect(!NLTranslatorError.badResponse("empty message content").isRepairable)
         #expect(!NLTranslatorError.unreachable("asleep").isRepairable)
+    }
+
+    // MARK: Connection retry (codex #671 / #659)
+    //
+    // A single-host fleet used to get NO second chance: one blip → apology.
+    // One bounded same-host retry after a short backoff; then the walk
+    // moves on exactly as before.
+
+    /// Down on the first dial, up on the second — same host answers.
+    @Test func momentaryBlipIsRetriedOnceOnTheSameHost() async throws {
+        let dialled = Dialled()
+        let flaky = FlakyHost(failuresBeforeUp: 1)
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, _ in
+            let host = urlString.replacingOccurrences(of: "http://", with: "")
+                .split(separator: ":").first.map(String.init) ?? ""
+            if await flaky.shouldFail() {
+                return .down("connection refused")
+            }
+            if urlString.hasSuffix("/api/tags") { return .ok("{\"models\":[]}") }
+            await dialled.record(host)
+            return .ok(goodReply)
+        }
+        var t = OllamaFailoverTranslator(hosts: ["only.local"], template: template)
+        t.connectionRetryDelay = .zero
+        let spec = try await t.translate("x")
+        #expect(spec.people == ["Donna"])
+        #expect(await dialled.all() == ["only.local"])
+        #expect(await flaky.calls() >= 2, "the second probe is the retry")
+    }
+
+    /// Still down after the retry: the walk proceeds to the next host, and
+    /// a single-host fleet apologises — bounded, never a loop.
+    @Test func connectionRetryIsBoundedThenMovesOn() async throws {
+        let dialled = Dialled()
+        let t = fakeTranslator(
+            hosts: ["a.local", "b.local"],
+            responses: ["a.local": .down("asleep"), "b.local": .ok(goodReply)],
+            dialled: dialled)
+        _ = try await t.translate("x")
+        #expect(await dialled.all() == ["b.local"])
+
+        var single = fakeTranslator(hosts: ["a.local"], responses: ["a.local": .down("asleep")], dialled: dialled)
+        single.connectionRetryDelay = .zero
+        await #expect(throws: NLTranslatorError.self) { try await single.translate("x") }
+    }
+
+    /// Retries are for the HOST being unreachable, never for a bad answer
+    /// (that has its own one-shot repair) and never for a 4xx.
+    @Test func connectionRetryIgnoresModelAndRequestErrors() async throws {
+        let dialled = Dialled()
+        let t = fakeTranslator(
+            hosts: ["a.local", "b.local"],
+            responses: ["a.local": .status(400, "bad request"), "b.local": .ok(goodReply)],
+            dialled: dialled)
+        await #expect(throws: NLTranslatorError.self) { try await t.translate("x") }
+        #expect(await dialled.all() == ["a.local"], "a 4xx is neither retried nor walked")
+    }
+
+    private actor FlakyHost {
+        private var remaining: Int
+        private var seen = 0
+        init(failuresBeforeUp: Int) { remaining = failuresBeforeUp }
+        func shouldFail() -> Bool {
+            seen += 1
+            if remaining > 0 { remaining -= 1; return true }
+            return false
+        }
+        func calls() -> Int { seen }
     }
 
     @Test func repairRetrySucceedsOnSameHostWithHint() async throws {

@@ -17,6 +17,19 @@ struct HallieHelperFailureTests {
         #expect(m.contains("didn't search the archive"), "fail-closed sentence stays")
     }
 
+    /// codex #671: 4xx proves the helper was reached; blaming the network
+    /// sends Rick to wake machines that are awake.
+    @Test func fourHundredsAreSetupProblemsNotUnreachable() {
+        for status in [400, 401, 403, 404, 422] {
+            let e = NLTranslatorError.serverError(status: status, detail: "")
+            #expect(HallieHelperFailure.kind(of: e) == .badRequest(status: status))
+            let m = HallieHelperFailure.message(for: e)
+            #expect(m.contains("HTTP \(status)") && m.contains("setup problem"))
+            #expect(!m.contains("reaching"))
+            #expect(m.contains("didn't search the archive"))
+        }
+    }
+
     @Test func hostShapedErrorsAreUnreachable() {
         for e: Error in [NLTranslatorError.unreachable("asleep"),
                          NLTranslatorError.serverError(status: 503, detail: ""),

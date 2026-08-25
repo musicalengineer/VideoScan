@@ -63,6 +63,14 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
     /// decoder's complaint in front of it. Off = the pre-8/25 behaviour.
     var repairOnBadResponse: Bool = true
 
+    /// One bounded CONNECTION retry per host (codex #671 / #659): a probe
+    /// or transport failure, or a 5xx, is retried once on the same host
+    /// after `connectionRetryDelay` before the walk moves on. This is what
+    /// makes a single-host fleet survive a momentary blip — fleet failover
+    /// alone only helps when there is a second host. 0 retries = old walk.
+    var connectionRetries: Int = 1
+    var connectionRetryDelay: Duration = .seconds(1)
+
     init(hosts: [String],
          template: OllamaQueryTranslator = OllamaQueryTranslator(),
          onResponder: (@Sendable (String) -> Void)? = nil,
@@ -119,6 +127,11 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
             var attempt = template
             attempt.host = host
 
+            var connectionTries = 0
+            hostLoop: while true {
+            connectionTries += 1
+            let tag = connectionTries == 1 ? host : "\(host) (retry \(connectionTries - 1))"
+
             // Liveness first. This is the whole answer to "an asleep
             // primary makes the app look hung": a dead host costs one
             // 3-second probe instead of a full 20-second generation
@@ -126,11 +139,12 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
             // never cut off, because the probe passes and the long
             // timeout then applies to thinking only.
             if probeBeforeRequest, let down = await attempt.probeLiveness() {
-                attempts.append("\(host): \(Self.shortReason(down))")
+                attempts.append("\(tag): \(Self.shortReason(down))")
                 onAttemptFailed?(host, down)
                 lastError = down
                 if Task.isCancelled { throw CancellationError() }
-                continue
+                if try await shouldRetryConnection(after: down, tries: connectionTries) { continue hostLoop }
+                break hostLoop
             }
 
             do {
@@ -138,7 +152,7 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
                 onResponder?(host)
                 return spec
             } catch {
-                attempts.append("\(host): \(Self.shortReason(error))")
+                attempts.append("\(tag): \(Self.shortReason(error))")
                 onAttemptFailed?(host, error)
                 lastError = error
 
@@ -188,6 +202,9 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
                     throw error
                 }
                 if !nl.isRetryableOnAnotherHost { throw nl }
+                if try await shouldRetryConnection(after: nl, tries: connectionTries) { continue hostLoop }
+                break hostLoop
+            }
             }
         }
 
@@ -204,6 +221,21 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
             }
         }
         throw NLTranslatorError.unreachable(summary)
+    }
+
+    /// Whether a host-shaped failure earns another try on the SAME host.
+    /// Sleeps the backoff (cancellation-aware) when it does.
+    private func shouldRetryConnection(after error: NLTranslatorError, tries: Int) async throws -> Bool {
+        guard tries <= connectionRetries else { return false }
+        // A blip, not a state: transport failures and 5xx. A host that has
+        // not pulled the model will not have it a second later.
+        switch error {
+        case .unreachable: break
+        case .serverError(let status, _) where (500...599).contains(status): break
+        default: return false
+        }
+        try await Task.sleep(for: connectionRetryDelay)
+        return !Task.isCancelled
     }
 
     private static func shortReason(_ error: Error) -> String {
