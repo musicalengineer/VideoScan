@@ -499,6 +499,42 @@ struct FamilyAssetStoreTests {
         #expect(store.revalidatedImageURL(landed) != nil, "what was imported is what the store shows")
     }
 
+    // MARK: Group folders (Rick 2026-08-25)
+
+    @Test func groupFolderNamesAreRecognisedAndTokenised() {
+        #expect(FamilyAssetStore.groupFolderTokens("RickDonnaBreenFamily") == ["rick", "donna", "breen"])
+        #expect(FamilyAssetStore.groupFolderTokens("Rick_and_Donna") == ["rick", "donna"])
+        #expect(FamilyAssetStore.groupFolderTokens("Breen_Family") == ["breen"])
+        #expect(FamilyAssetStore.groupFolderTokens("Judson_Lamb") == nil, "a person folder is not a group")
+        #expect(FamilyAssetStore.groupFolderTokens("Family") == nil, "a marker alone names nobody")
+    }
+
+    @Test func groupFolderMatchesFirstNameOrDiminutivePlusSurname() {
+        let g = "RickDonnaBreenFamily"
+        #expect(FamilyAssetStore.groupFolderMatches(g, person: "Rick Breen"))
+        #expect(FamilyAssetStore.groupFolderMatches(g, person: "Richard Harding Breen Jr"), "rick → richard")
+        #expect(FamilyAssetStore.groupFolderMatches(g, person: "Donna Breen"))
+        #expect(!FamilyAssetStore.groupFolderMatches(g, person: "Donna Elaine Hudson"), "maiden surname is not in the folder")
+        #expect(!FamilyAssetStore.groupFolderMatches(g, person: "John Breen"))
+        #expect(!FamilyAssetStore.groupFolderMatches(g, person: "Rick"), "a lone first name is never enough")
+        #expect(FamilyAssetStore.groupFolderMatches("Breen_Family", person: "John Breen"), "surname-only group")
+        #expect(!FamilyAssetStore.groupFolderMatches("Breen_Family", person: "Judson Lamb"))
+    }
+
+    @Test func groupPhotosFollowAPersonsOwnPhotos() throws {
+        let (base, store) = try temporaryStore()
+        let own = try store.folderForPhotoRequest(person: FamilyAssetPerson(name: "Rick Breen"))
+        try writePNG(to: own.appendingPathComponent("portrait.png"))
+        let group = store.peopleDirectory.appendingPathComponent("RickDonnaBreenFamily", isDirectory: true)
+        try writePNG(to: group.appendingPathComponent("SouthEastMontana1995.png"))
+        let rick = store.photoURLs(for: FamilyAssetPerson(name: "Rick Breen"))
+        #expect(rick.map(\.lastPathComponent) == ["portrait.png", "SouthEastMontana1995.png"])
+        let donna = store.photoURLs(for: FamilyAssetPerson(name: "Donna Breen"))
+        #expect(donna.map(\.lastPathComponent) == ["SouthEastMontana1995.png"], "no own folder, group still shows")
+        #expect(store.photoURLs(for: FamilyAssetPerson(name: "Judson Lamb")).isEmpty)
+        _ = base
+    }
+
     @Test func thumbnailDecodeIsPixelBounded() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }

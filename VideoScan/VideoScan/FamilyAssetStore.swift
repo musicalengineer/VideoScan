@@ -415,8 +415,63 @@ struct FamilyAssetStore {
     /// matching is case/diacritic-insensitive, but never recursive.
     func photoURLs(for person: FamilyAssetPerson) -> [URL] {
         guard access != .unavailable else { return [] }
-        guard let folder = resolvedPersonFolder(for: person) else { return [] }
-        return verifiedImages(in: folder)
+        let own = resolvedPersonFolder(for: person).map(verifiedImages(in:)) ?? []
+        return own + groupPhotoURLs(for: person).filter { !own.contains($0) }
+    }
+
+    // MARK: Group folders (Rick 2026-08-25: "RickDonnaBreenFamily")
+
+    /// Photos from `People/` folders that name SEVERAL people — a couple or
+    /// a family shot filed once instead of copied into every subject's
+    /// folder. A folder is a group folder when its name carries a `Family`
+    /// or `And` marker (`RickDonnaBreenFamily`, `Rick_and_Donna`); the
+    /// remaining CamelCase/underscore tokens are the people. See
+    /// `groupFolderMatches` for the matching rule. Presentation only, like
+    /// every asset here; never evidence.
+    func groupPhotoURLs(for person: FamilyAssetPerson) -> [URL] {
+        guard access != .unavailable else { return [] }
+        return safePersonFolders()
+            .filter { Self.groupFolderMatches($0.lastPathComponent, person: person.name) }
+            .flatMap(verifiedImages(in:))
+    }
+
+    /// Tokens of a group folder's name, lowercased, markers removed — or nil
+    /// when the folder is not a group folder at all.
+    static func groupFolderTokens(_ folderName: String) -> [String]? {
+        // Split on underscores/spaces, then on CamelCase humps.
+        var tokens: [String] = []
+        for chunk in folderName.split(whereSeparator: { $0 == "_" || $0 == "-" || $0.isWhitespace }) {
+            var current = ""
+            for ch in chunk {
+                if ch.isUppercase, !current.isEmpty { tokens.append(current); current = "" }
+                current.append(ch)
+            }
+            if !current.isEmpty { tokens.append(current) }
+        }
+        let lowered = tokens.map { $0.lowercased() }
+        let markers: Set<String> = ["family", "and", "the", "&"]
+        guard lowered.contains(where: { markers.contains($0) }) else { return nil }
+        let people = lowered.filter { !markers.contains($0) && !$0.isEmpty }
+        return people.isEmpty ? nil : people
+    }
+
+    /// A person is in a group folder when their SURNAME is a token and
+    /// either their first name — or its formal form through the curated
+    /// diminutives (rick → richard) — is a token, or the folder names no
+    /// one but the surname (`Breen_Family` → every Breen). Generational
+    /// suffixes (jr/sr/ii) never count as surnames.
+    static func groupFolderMatches(_ folderName: String, person: String) -> Bool {
+        guard let tokens = groupFolderTokens(folderName) else { return false }
+        let suffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv"]
+        let nameTokens = personNameKey(person).split(separator: " ").map(String.init)
+            .filter { !suffixes.contains($0) }
+        guard let first = nameTokens.first, let surname = nameTokens.last, nameTokens.count >= 2,
+              tokens.contains(surname) else { return false }
+        func formal(_ t: String) -> String { GedcomFamilyGraph.diminutives[t] ?? t }
+        let formalTokens = Set(tokens.map(formal))
+        if formalTokens.contains(formal(first)) { return true }
+        // Surname-only group: nothing left once the surname is removed.
+        return tokens.allSatisfy { $0 == surname }
     }
 
     /// Creates a human-readable person folder under `People`. Raw GEDCOM IDs
