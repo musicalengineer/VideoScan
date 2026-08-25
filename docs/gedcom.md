@@ -40,7 +40,55 @@ export. Check the source tree for these common causes:
 Open several of the distant ancestors before exporting and verify that each is
 actually connected through parent relationships in the owned tree.
 
-## Exporting from FamilySearch
+## Get Family Tree (in the app)
+
+The Family Tree tab has a **Get Family Tree** button — in the sidebar header,
+and on the demo-tree banner. It downloads your FamilySearch tree as a GEDCOM
+without you leaving VideoScan, and without VideoScan ever handling your
+password.
+
+How it works:
+
+1. Choose how many generations back (1–8, the API's own ceiling), whether to
+   include spouses, and where to save the file.
+2. VideoScan shows you the exact command it will run, then writes it to
+   `~/Library/Application Support/VideoScan/family-tree/get-family-tree.command`
+   and opens it in Terminal.
+3. Terminal shows the command again and waits. You press Return, then type
+   your FamilySearch password at `getmyancestors`' own prompt.
+4. VideoScan watches for the file. When it ends with GEDCOM's `0 TRLR`
+   marker, the tree is parsed and you are told how many people and how many
+   generations it actually reached.
+5. **Install family tree** copies it into `40_Family_Tree/GEDCOM/` and
+   reloads the tab. Nothing is installed unless it parsed.
+
+Requires `getmyancestors` (GPL, free):
+
+```
+python3 -m venv ~/dev/VideoScan/venv-genealogy
+~/dev/VideoScan/venv-genealogy/bin/pip install getmyancestors
+```
+
+### Why Terminal and not a button that just does it
+
+`getmyancestors` authenticates by POSTing your username and password straight
+at FamilySearch's login form; it does not use the OAuth browser flow.
+`familysearch_api_notes.md` rules that VideoScan must never collect or proxy
+that password, so the tool prompts for it directly on its own terminal. The
+same seam keeps the tool's GPL license outside VideoScan's sources (a separate
+process, like ffmpeg), and puts any failure — notably the day the tool's
+borrowed third-party app key is revoked — in a window you are already reading.
+
+### Going deeper than eight generations
+
+FamilySearch's ancestry resource returns at most eight generations per call.
+To go further, note an end-of-line ancestor's FamilySearch person ID
+(`LF7T-Y4C`), run **Get Family Tree** again with that ID in the *start from*
+field, and merge the exports with `mergemyancestors`. Deep lines in the shared
+tree are user-submitted and thinly sourced the further back they go — worth
+checking before Hallie recites them as fact.
+
+## Exporting from FamilySearch (manually)
 
 FamilySearch does not currently provide direct GEDCOM export from its shared
 Family Tree. Its help center recommends downloading with compatible third-party

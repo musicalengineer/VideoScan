@@ -4,6 +4,31 @@ Status: research only; no FamilySearch calls or credentials are implemented here
 
 Checked against official FamilySearch documentation on 2026-08-22. Re-check the linked documentation before implementation or release because access rules, endpoints, and legal terms can change.
 
+## BLOCKER (added 2026-08-25): VideoScan cannot obtain a production key
+
+Everything below this section is sound engineering guidance, but it cannot
+currently be exercised against real data. FamilySearch's
+[certification guide](https://www.familysearch.org/developers/docs/guides/implementation-cert)
+states that only a legal, registered business is eligible for verification,
+and that **sole proprietorships are not eligible**. There is no personal-use,
+hobbyist, or non-commercial path. Registering an app grants Integration
+(Sandbox) access automatically — synthetic data only. Production requires
+acceptance into the Compatible Solution Program.
+
+The ceiling for a direct integration is therefore a working OAuth/PKCE flow
+against people who do not exist. Treat the rest of this document as a design
+that is ready if the eligibility rule ever changes, not as a roadmap that can
+be started today.
+
+Ancestry is not an alternative: it has had no public API since the early
+2010s. GEDCOM export is the only supported route out of an Ancestry tree.
+
+**What shipped instead:** the Family Tree tab's *Get Family Tree* button
+(`FamilySearchPull.swift`), which hands a `getmyancestors` command to Terminal
+so the user authenticates directly with the tool. See `gedcom.md`. That design
+keeps the rule above this section intact — VideoScan still never collects or
+proxies the FamilySearch password.
+
 ## Recommendation for VideoScan
 
 Keep the local GEDCOM as the source of truth. FamilySearch is a remote, user-authorized reference and enrichment source, not the owner of VideoScan's tree.

@@ -22,6 +22,10 @@ struct FamilyTreeDemoView: View {
     private let usesInjectedModel: Bool
     @State private var zoom: Double = 0.88
     @State private var selectedPhotoItem: PhotosPickerItem?
+    /// Non-nil while the Get Family Tree sheet is up. `.sheet(item:)` rather
+    /// than a boolean so the coordinator and the sheet are created together
+    /// (the chained-sheet trap).
+    @State private var pullCoordinator: FamilySearchPullCoordinator?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -71,6 +75,11 @@ struct FamilyTreeDemoView: View {
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
+        .sheet(item: $pullCoordinator) { coordinator in
+            FamilySearchPullSheet(coordinator: coordinator) { _ in
+                Task { await model.loadFromDisk() }
+            }
+        }
         .task(id: sourceRevision) {
             if !usesInjectedModel {
                 model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
@@ -115,6 +124,14 @@ struct FamilyTreeDemoView: View {
         incomingHighlight = ""
     }
 
+    /// Build the coordinator against whatever GEDCOM directory this session
+    /// resolved (archive when one is designated, Application Support when
+    /// not) so a downloaded tree always lands where the tab reads from.
+    private func presentGetFamilyTree() {
+        pullCoordinator = FamilySearchPullCoordinator(
+            gedcomDirectory: model.originalsDirectory)
+    }
+
     // MARK: Banner
 
     private var demoBanner: some View {
@@ -125,6 +142,14 @@ struct FamilyTreeDemoView: View {
                 .font(.system(size: 12))
                 .lineLimit(1)
             Spacer()
+            // The badge performs the fix: the fastest way out of the demo
+            // tree is to go and fetch a real one.
+            Button {
+                presentGetFamilyTree()
+            } label: {
+                Label("Get Family Tree", systemImage: "arrow.down.circle")
+            }
+            .controlSize(.small)
             Button("Reveal folder") {
                 model.revealOriginalsFolder()
             }
@@ -172,6 +197,14 @@ struct FamilyTreeDemoView: View {
                 Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.title3.weight(.semibold))
                 Spacer()
+                Button {
+                    presentGetFamilyTree()
+                } label: {
+                    Label("Get Family Tree", systemImage: "arrow.down.circle")
+                        .labelStyle(.iconOnly)
+                }
+                .controlSize(.small)
+                .help("Download your tree from FamilySearch as a GEDCOM file")
             }
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)

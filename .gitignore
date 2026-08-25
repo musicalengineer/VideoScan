@@ -1,6 +1,7 @@
 # Python
 venv/
 venv-mlx/
+venv-genealogy/
 __pycache__/
 *.pyc
 *.pyo
