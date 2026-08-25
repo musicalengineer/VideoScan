@@ -52,7 +52,14 @@ final class HallieSpeaker: NSObject, ObservableObject {
     private let synthesizer = AVSpeechSynthesizer()
     private var neuralTask: Task<Void, Never>?
     private var neuralJob: HallieNeuralSpeechJob?
-    private var neuralPlayer: AVAudioPlayer?
+    /// Bella's WAV plays through an AVAudioEngine graph, not AVAudioPlayer
+    /// (2026-08-25). With the Babyface at 512 frames / 44.1 kHz and nothing
+    /// compiling, AVAudioPlayer still stammered while browsers were clean;
+    /// the engine converts the 24 kHz mono file to the device format in
+    /// software and feeds the HAL one steady stream, the way browsers do.
+    private var neuralEngine: AVAudioEngine?
+    private var neuralNode: AVAudioPlayerNode?
+    private var neuralPlaybackID = UUID()
     private var neuralAudioURL: URL?
     private var speechGeneration: UInt = 0
 
@@ -224,24 +231,37 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     HallieNeuralSpeech.removeTemporaryAudio(audioURL)
                     return
                 }
-                let player = try AVAudioPlayer(contentsOf: audioURL)
-                player.delegate = self
-                // Raise the device buffer BEFORE prepareToPlay so the
-                // player's I/O cycle starts at the larger size.
+                let file = try AVAudioFile(forReading: audioURL)
+                let engine = AVAudioEngine()
+                let node = AVAudioPlayerNode()
+                engine.attach(node)
+                engine.connect(node, to: engine.mainMixerNode, format: file.processingFormat)
+                // Raise the device buffer BEFORE the engine starts its
+                // I/O cycle so the larger size applies from the first frame.
                 let buffer = HallieOutputBuffer.ensureMinimum()
-                player.prepareToPlay()
-                let wavRate = (player.settings[AVSampleRateKey] as? Double).map { "\(Int($0)) Hz" } ?? "? Hz"
-                appLog.write(String(
-                    format: "[hallie-voice] %@ synthesized %.1fs of %@ audio in %.1fs (%@); %@",
-                    voice.displayName, player.duration, wavRate, Date().timeIntervalSince(started),
-                    HallieNeuralSpeech.supportsWarmWorker ? "warm worker" : "one-shot helper",
-                    buffer))
+                engine.prepare()
+                try engine.start()
+                let playbackID = UUID()
+                self.neuralPlaybackID = playbackID
                 self.neuralAudioURL = audioURL
-                self.neuralPlayer = player
+                self.neuralEngine = engine
+                self.neuralNode = node
                 self.neuralJob = nil
-                if !player.play() {
-                    throw HallieNeuralSpeech.Failure.missingOutput
+                node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, self.neuralPlaybackID == playbackID else { return }
+                        self.finishNeuralPlayback()
+                    }
                 }
+                node.play()
+                let duration = Double(file.length) / file.processingFormat.sampleRate
+                appLog.write(String(
+                    format: "[hallie-voice] %@ synthesized %.1fs of %d Hz audio in %.1fs (%@); engine → %@; %@",
+                    voice.displayName, duration, Int(file.processingFormat.sampleRate),
+                    Date().timeIntervalSince(started),
+                    HallieNeuralSpeech.supportsWarmWorker ? "warm worker" : "one-shot helper",
+                    "\(Int(engine.outputNode.outputFormat(forBus: 0).sampleRate)) Hz",
+                    buffer))
             } catch {
                 HallieNeuralSpeech.removeTemporaryAudio(synthesizedAudioURL)
                 guard let self, generation == self.speechGeneration, !Task.isCancelled else { return }
@@ -265,11 +285,26 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralTask = nil
         neuralJob?.cancel()
         neuralJob = nil
-        neuralPlayer?.stop()
-        neuralPlayer = nil
+        tearDownNeuralPlayback()
+        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        isSpeaking = false
+    }
+
+    private func tearDownNeuralPlayback() {
+        neuralPlaybackID = UUID()   // orphan any in-flight completion
+        neuralNode?.stop()
+        neuralEngine?.stop()
+        neuralNode = nil
+        neuralEngine = nil
         HallieNeuralSpeech.removeTemporaryAudio(neuralAudioURL)
         neuralAudioURL = nil
-        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+    }
+
+    /// Natural end of Bella's file (engine completion, data played back).
+    private func finishNeuralPlayback() {
+        tearDownNeuralPlayback()
+        neuralTask = nil
+        neuralJob = nil
         isSpeaking = false
     }
 
@@ -290,34 +325,3 @@ extension HallieSpeaker: AVSpeechSynthesizerDelegate {
     }
 }
 
-extension HallieSpeaker: AVAudioPlayerDelegate {
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in
-            guard player === self.neuralPlayer else { return }
-            self.neuralPlayer = nil
-            self.neuralTask = nil
-            self.neuralJob = nil
-            HallieNeuralSpeech.removeTemporaryAudio(self.neuralAudioURL)
-            self.neuralAudioURL = nil
-            self.isSpeaking = false
-        }
-    }
-
-    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        Task { @MainActor in
-            guard player === self.neuralPlayer else { return }
-            NSLog("VideoScan: Hallie neural audio playback failed: %@",
-                  error?.localizedDescription ?? "unknown playback error")
-            appLog.write("[hallie-voice] neural audio playback failed; using Apple speech — "
-                         + (error?.localizedDescription ?? "unknown playback error"))
-            HallieNeuralSpeechDiagnostics.shared.recordFailure(
-                error?.localizedDescription ?? "unknown playback error")
-            self.neuralPlayer = nil
-            self.neuralTask = nil
-            self.neuralJob = nil
-            HallieNeuralSpeech.removeTemporaryAudio(self.neuralAudioURL)
-            self.neuralAudioURL = nil
-            self.isSpeaking = false
-        }
-    }
-}
