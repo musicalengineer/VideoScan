@@ -9,6 +9,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FamilySearchPullSheet: View {
     @ObservedObject var coordinator: FamilySearchPullCoordinator
@@ -30,9 +31,9 @@ struct FamilySearchPullSheet: View {
                         optionsForm
                     case .waiting(let output):
                         waitingSection(output: output)
-                    case .ready(let output, let people, let generations):
-                        readySection(output: output, people: people,
-                                     generations: generations)
+                    case .ready(let output, let new, let current, let unmatched):
+                        readySection(output: output, new: new, current: current,
+                                     unmatchedFolderIDs: unmatched)
                     case .installed(let installed, let people):
                         installedSection(installed: installed, people: people)
                     }
@@ -263,23 +264,73 @@ struct FamilySearchPullSheet: View {
         }
     }
 
-    private func readySection(output: URL, people: Int, generations: Int) -> some View {
+    private func readySection(
+        output: URL,
+        new: FamilySearchPullCoordinator.TreeSummary,
+        current: FamilySearchPullCoordinator.TreeSummary?,
+        unmatchedFolderIDs: Int
+    ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Download finished", systemImage: "checkmark.circle.fill")
+            Label(current == nil ? "Install this family tree?" : "Replace the family tree Hallie uses?",
+                  systemImage: "arrow.triangle.2.circlepath")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.green)
-            HStack(spacing: 24) {
-                stat("People", "\(people)")
-                stat("Generations deep", "\(generations)")
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
+                GridRow {
+                    Text("").frame(width: 90)
+                    Text("People").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Families").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Generations").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("File").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                if let current {
+                    GridRow {
+                        Text("Current").font(.system(size: 12, weight: .medium))
+                        Text("\(current.people)")
+                        Text("\(current.families)")
+                        Text("\(current.generations)")
+                        Text(current.fileName).font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                GridRow {
+                    Text("New").font(.system(size: 12, weight: .medium))
+                    Text("\(new.people)").fontWeight(.semibold)
+                    Text("\(new.families)").fontWeight(.semibold)
+                    Text("\(new.generations)").fontWeight(.semibold)
+                    Text(new.fileName).font(.system(size: 11, design: .monospaced))
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
-            Text("\(output.lastPathComponent) parsed cleanly. Installing copies it into the archive's 40_Family_Tree/GEDCOM folder; the previous tree is kept alongside it, and the newest valid file is the one the app reads.")
+            .font(.system(size: 13))
+            if unmatchedFolderIDs > 0 {
+                Label("\(unmatchedFolderIDs) photo folder\(unmatchedFolderIDs == 1 ? " is" : "s are") keyed to person IDs from the current file that the new file doesn’t use. Names still match; ID-keyed folders won’t until renamed.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Replace copies \(new.fileName) into the archive’s 40_Family_Tree/GEDCOM folder and reloads. The current file stays there untouched — the newest valid file is the one the app reads, so moving the new one out restores the old tree. Quality is your call; VideoScan checks only that it parses.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Reveal downloaded file") {
+            Button("Reveal file") {
                 NSWorkspace.shared.activateFileViewerSelecting([output])
             }
             .controlSize(.small)
+        }
+    }
+
+    /// A .ged that already exists — a Terminal run this sheet was not
+    /// watching, an Ancestry export, a MacFamilyTree save.
+    private func chooseExistingGedcom() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a GEDCOM file"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ged") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        if panel.runModal() == .OK, let url = panel.url {
+            coordinator.installFromFile(url)
         }
     }
 
@@ -329,6 +380,7 @@ struct FamilySearchPullSheet: View {
             Spacer()
             switch coordinator.phase {
             case .idle, .failed:
+                Button("Install from file…") { chooseExistingGedcom() }
                 Button {
                     coordinator.launch()
                 } label: {
@@ -337,9 +389,11 @@ struct FamilySearchPullSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!coordinator.toolIsInstalled || validationMessage != nil)
             case .waiting:
+                Button("Install from file…") { chooseExistingGedcom() }
                 Button("Stop waiting") { coordinator.cancel() }
-            case .ready:
-                Button("Install family tree") {
+            case .ready(_, _, let current, _):
+                Button("Keep current") { coordinator.cancel() }
+                Button(current == nil ? "Install family tree" : "Replace family tree") {
                     coordinator.install()
                     if case .installed(let url, _) = coordinator.phase {
                         onInstalled(url)

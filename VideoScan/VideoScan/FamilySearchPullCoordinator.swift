@@ -22,11 +22,21 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         case idle
         /// Terminal has the script; we're watching for the .ged to land.
         case waiting(output: URL)
-        /// The file arrived, stopped growing, and parsed. Ready to install.
-        case ready(output: URL, people: Int, generations: Int)
+        /// The file arrived and parsed. Ready to install — shown as a
+        /// REPLACE decision against the tree currently loaded (Rick
+        /// 2026-08-25: "Would you like to replace the existing gedcom data?").
+        case ready(output: URL, new: TreeSummary, current: TreeSummary?, unmatchedFolderIDs: Int)
         /// Installed into the archive; `installed` is the archive copy.
         case installed(installed: URL, people: Int)
         case failed(message: String)
+    }
+
+    /// What a GEDCOM file amounts to, for the side-by-side.
+    struct TreeSummary: Equatable {
+        let fileName: String
+        let people: Int
+        let families: Int
+        let generations: Int
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -161,6 +171,19 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         phase = .idle
     }
 
+    /// A .ged the user already has (a Terminal run the sheet was not
+    /// watching, a MacFamilyTree export, an Ancestry download): same parse,
+    /// same replace prompt, same install. Nothing is copied until Replace.
+    func installFromFile(_ url: URL) {
+        watchTask?.cancel()
+        watchTask = nil
+        guard url.pathExtension.lowercased() == "ged" else {
+            phase = .failed(message: FamilySearchPullError.outputNotGedcom(url).localizedDescription)
+            return
+        }
+        Task { await finish(output: url) }
+    }
+
     // MARK: Watching
 
     private func startWatching(output: URL) {
@@ -264,11 +287,27 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// killed halfway, the borrowed app key revoked mid-run — must not be
     /// installed over a good tree.
     private func finish(output: URL) async {
+        let gedcomDirectory = self.gedcomDirectory
+        let fileManager = self.fileManager
+        let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
         let parsed = await Task.detached(priority: .userInitiated) {
-            () -> (people: Int, generations: Int)? in
+            () -> (new: TreeSummary, current: TreeSummary?, unmatched: Int)? in
             guard let graph = GedcomFamilyGraph(fileURL: output),
                   !graph.people.isEmpty else { return nil }
-            return (graph.people.count, Self.deepestAncestorDepth(in: graph))
+            let new = TreeSummary(
+                fileName: output.lastPathComponent, people: graph.people.count,
+                families: graph.familyCount, generations: Self.deepestAncestorDepth(in: graph))
+            // The tree Hallie reads today: newest valid file in the archive's
+            // GEDCOM folder, exactly as the loader will choose it.
+            let outcome = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory, fileManager: fileManager).loadNewestOutcome()
+            let current = outcome.graph.map {
+                TreeSummary(fileName: outcome.selectedURL?.lastPathComponent ?? "current tree",
+                            people: $0.people.count, families: $0.familyCount,
+                            generations: Self.deepestAncestorDepth(in: $0))
+            }
+            let newIDs = Set(graph.people.keys.map(Self.idKey))
+            let unmatched = folderIDs.filter { !newIDs.contains($0) }.count
+            return (new, current, unmatched)
         }.value
 
         guard let parsed else {
@@ -276,8 +315,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             return
         }
-        phase = .ready(output: output, people: parsed.people,
-                       generations: parsed.generations)
+        phase = .ready(output: output, new: parsed.new, current: parsed.current,
+                       unmatchedFolderIDs: parsed.unmatched)
+    }
+
+    /// GEDCOM pointer normalised for comparison (`@I42@` / `I42` / `i42`).
+    nonisolated static func idKey(_ raw: String) -> String {
+        raw.uppercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
     }
 
     /// How many generations the export actually reaches — the number Rick
@@ -336,7 +380,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// loader takes the newest valid file, so this is additive — the
     /// previous tree stays on disk as its own history.
     func install() {
-        guard case .ready(let output, let people, _) = phase else { return }
+        guard case .ready(let output, let new, _, _) = phase else { return }
+        let people = new.people
         do {
             try fileManager.createDirectory(
                 at: gedcomDirectory, withIntermediateDirectories: true)

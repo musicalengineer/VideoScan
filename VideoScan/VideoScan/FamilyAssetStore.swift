@@ -419,6 +419,22 @@ struct FamilyAssetStore {
         return own + groupPhotoURLs(for: person).filter { !own.contains($0) }
     }
 
+    /// GEDCOM IDs that People/ folder names are keyed to (`_I42` suffix or a
+    /// bare ID folder), normalised like `gedcomIDKey`. Used by the Get
+    /// Family Tree replace prompt: a new export renumbers people, so these
+    /// folders stop matching by ID (names still match). Read-only.
+    func personFolderGEDCOMIDs() -> Set<String> {
+        guard access != .unavailable else { return [] }
+        var ids: Set<String> = []
+        for folder in safePersonFolders() {
+            let name = folder.lastPathComponent
+            if let suffix = Self.folderIdentity(name).gedcomIDKey { ids.insert(suffix) }
+            let direct = Self.gedcomIDKey(name)
+            if direct.hasPrefix("I"), direct.count > 1, direct.dropFirst().allSatisfy(\.isNumber) { ids.insert(direct) }
+        }
+        return ids
+    }
+
     // MARK: Group folders (Rick 2026-08-25: "RickDonnaBreenFamily")
 
     /// Photos from `People/` folders that name SEVERAL people — a couple or

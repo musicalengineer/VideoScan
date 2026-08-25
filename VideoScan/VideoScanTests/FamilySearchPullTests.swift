@@ -500,3 +500,68 @@ private func writeTemp(_ contents: String) throws -> URL {
     let elapsed = ContinuousClock.now - started
     #expect(elapsed < .seconds(2), "10k command builds took \(elapsed)")
 }
+
+
+// MARK: - Replace prompt (Rick 2026-08-25)
+
+private struct SilentLauncher: FamilySearchPullLauncher {
+    func open(_ url: URL) {}
+}
+
+@Test func gedcomIDKeysNormaliseAtSignsAndCase() {
+    #expect(FamilySearchPullCoordinator.idKey("@I42@") == "I42")
+    #expect(FamilySearchPullCoordinator.idKey("i42") == "I42")
+}
+
+@Test @MainActor func installFromFileParsesAndComparesAgainstTheCurrentTree() async throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("fs-replace-\(UUID().uuidString)", isDirectory: true)
+    let gedcomDir = base.appendingPathComponent("GEDCOM", isDirectory: true)
+    try fm.createDirectory(at: gedcomDir, withIntermediateDirectories: true)
+    let current = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Judson /Lamb/
+    1 FAMS @F1@
+    0 @I2@ INDI
+    1 NAME Mary /Lamb/
+    1 FAMC @F1@
+    0 @F1@ FAM
+    1 HUSB @I1@
+    1 CHIL @I2@
+    0 TRLR
+    """
+    try current.write(to: gedcomDir.appendingPathComponent("current.ged"), atomically: true, encoding: .utf8)
+    let incoming = base.appendingPathComponent("new.ged")
+    try current.replacingOccurrences(of: "0 TRLR", with: "0 @I3@ INDI\n1 NAME Isaac /Damon/\n0 TRLR")
+        .write(to: incoming, atomically: true, encoding: .utf8)
+
+    let coordinator = FamilySearchPullCoordinator(gedcomDirectory: gedcomDir, launcher: SilentLauncher())
+    coordinator.installFromFile(incoming)
+    for _ in 0..<100 {
+        if case .ready = coordinator.phase { break }
+        try await Task.sleep(for: .milliseconds(50))
+    }
+    guard case .ready(let output, let new, let currentSummary, _) = coordinator.phase else {
+        Issue.record("expected .ready, got \(coordinator.phase)"); return
+    }
+    #expect(output == incoming)
+    #expect(new.people == 3 && new.families == 1)
+    #expect(currentSummary?.people == 2 && currentSummary?.fileName == "current.ged")
+
+    coordinator.install()
+    guard case .installed(let installed, let people) = coordinator.phase else {
+        Issue.record("expected .installed"); return
+    }
+    #expect(people == 3)
+    #expect(installed.deletingLastPathComponent() == gedcomDir)
+    #expect(fm.fileExists(atPath: gedcomDir.appendingPathComponent("current.ged").path),
+            "replace is additive: the old file stays")
+}
+
+@Test @MainActor func installFromFileRejectsNonGedcom() {
+    let coordinator = FamilySearchPullCoordinator(
+        gedcomDirectory: FileManager.default.temporaryDirectory, launcher: SilentLauncher())
+    coordinator.installFromFile(URL(fileURLWithPath: "/tmp/tree.txt"))
+    guard case .failed = coordinator.phase else { Issue.record("expected .failed"); return }
+}
