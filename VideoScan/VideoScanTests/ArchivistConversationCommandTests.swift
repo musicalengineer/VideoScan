@@ -64,6 +64,16 @@ struct ArchivistConversationCommandTests {
             == "It's afternoon.")
     }
 
+    @Test func yourselfAsksAreTheArchivistNotHerNamesake() {
+        // Live 8/25: "tell me about yourself" answered as Hallie May McGill
+        // (b. 1876) — the ancestor, not the archivist.
+        for text in ["tell me about yourself", "Tell me about yourself, Hallie",
+                     "describe yourself", "introduce yourself"] {
+            #expect(ArchivistConversationCommand.detect(text) != nil, Comment(rawValue: text))
+        }
+        #expect(ArchivistConversationCommand.detect("tell me about Hallie May McGill") == nil)
+    }
+
     @Test func conversationalAcknowledgementsMatchWhatThePersonSaid() {
         #expect(Command.smalltalkReply(.companionship)
             == "It's nice to talk with you too. What would you like to talk about?")
