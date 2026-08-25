@@ -145,19 +145,39 @@ struct HallieCatalogStats: Equatable, Sendable {
             func fuzzable(_ word: String) -> Bool {
                 word.count >= 3 && !globalVocabulary.contains(word)
             }
-            func fits(_ word: String) -> Bool {
+            let exactKeyIndices = words.indices.filter {
+                question.keys.contains(words[$0])
+            }
+            func fuzzyKey(_ word: String, at index: Int) -> Bool {
+                let matchesKey = question.keys.contains {
+                    $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0)
+                }
+                guard matchesKey else { return false }
+                // Once a correctly spelled key is already present, accept a
+                // second fuzzy key only as an adjacent compound ("disk
+                // spce"). This keeps real scoped names such as "files of
+                // Miles" from being consumed as another spelling of files.
+                return exactKeyIndices.isEmpty
+                    || exactKeyIndices.contains { abs($0 - index) == 1 }
+            }
+            func fits(_ word: String, at index: Int) -> Bool {
                 if allowed.contains(word) { return true }
                 guard fuzzable(word) else { return false }
-                return allowed.contains { $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0) }
+                if fuzzyKey(word, at: index) { return true }
+                // Filler fuzzing is deliberately syntactic. "how mny" is
+                // an obvious quantity typo; an unknown word elsewhere may
+                // be a person's name (Mary is one edit from many).
+                guard index == 1, words.first == "how" else { return false }
+                return ["many", "much"].contains {
+                    Self.editDistanceIsAtMostOne(word, $0)
+                }
             }
-            func isKey(_ word: String) -> Bool {
+            func isKey(_ word: String, at index: Int) -> Bool {
                 question.keys.contains(word)
-                    || (fuzzable(word) && question.keys.contains {
-                        $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0)
-                    })
+                    || (fuzzable(word) && fuzzyKey(word, at: index))
             }
-            guard words.allSatisfy(fits),
-                  words.contains(where: isKey) else { continue }
+            guard words.indices.allSatisfy({ fits(words[$0], at: $0) }),
+                  words.indices.contains(where: { isKey(words[$0], at: $0) }) else { continue }
             // "how many videos" must not be read as "how many years" etc.:
             // prefer the kind whose key appears; ordering below resolves
             // the overlaps (archived before total, years before footage).

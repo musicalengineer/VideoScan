@@ -13,6 +13,11 @@ struct HallieCatalogStatsTests {
         // A typo'd NAME must still fall through to a real search.
         #expect(HallieCatalogStats.detect("show me dona at the cape") == nil)
         #expect(HallieCatalogStats.detect("how many videos of dona") == nil)
+        // Common names one edit from the closed vocabulary must remain
+        // person-scoped searches, never whole-catalog totals.
+        #expect(HallieCatalogStats.detect("how many videos of Mary") == nil)
+        #expect(HallieCatalogStats.detect("how many files of Miles") == nil)
+        #expect(HallieCatalogStats.detect("how many recordings of Carey") == nil)
     }
 
     @Test func promotedToArchivePhrasingDetects() {
