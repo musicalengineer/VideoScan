@@ -777,8 +777,11 @@ struct HallieAppV2IntegrationTests {
                             through: "// MARK: Play")
         let coordinator = try productionSource("HallieAppTurnCoordinator.swift")
 
-        #expect(ask.contains("I'm having trouble reaching my language helper"))
-        #expect(ask.contains("No catalog query or media action was performed."))
+        // 2026-08-25: the wording moved to HallieHelperFailure so the app
+        // and shell agree, and so "unreachable" and "unusable answer" are
+        // told apart instead of both blaming the network.
+        #expect(ask.contains("HallieHelperFailure.message(for: error)"))
+        #expect(ask.contains("HallieHelperFailure.basisLine"))
         #expect(ask.contains("lastMatches = []"))
         #expect(!ask.contains("archivistSearchRequest"))
         #expect(!ask.contains("applyQuery"))

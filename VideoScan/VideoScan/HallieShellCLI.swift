@@ -974,8 +974,7 @@ enum HallieShellCLI {
             state.citations = []
             let diagnostic = String(reflecting: error)
             appLog.write("Hallie shell interpretation failed — \(diagnostic)")
-            let message = "I'm having trouble reaching my language helper just now. "
-                + "I didn't search the archive or open anything; please try that again in a moment."
+            let message = HallieHelperFailure.message(for: error)
             output(message)
             if options.diagnostics
                 || ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
@@ -984,7 +983,7 @@ enum HallieShellCLI {
             let event = transcriptEvent(
                 kind: .error,
                 text: message,
-                basisLine: "No catalog query or media action was performed.",
+                basisLine: HallieHelperFailure.basisLine,
                 outcome: "interpretation-failed",
                 state: &state)
             await dependencies.recordTranscript([event])

@@ -1012,9 +1012,8 @@ struct ArchivistChatWindow: View {
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,
-                    text: "I'm having trouble reaching my language helper just now. "
-                        + "I didn't search the archive or open anything; please try that again in a moment.",
-                    basisLine: "No catalog query or media action was performed."))
+                    text: HallieHelperFailure.message(for: error),
+                    basisLine: HallieHelperFailure.basisLine))
             }
         }
     }

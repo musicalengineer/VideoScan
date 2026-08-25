@@ -67,6 +67,18 @@ enum NLTranslatorError: LocalizedError {
     ///
     /// 4xx is deliberately NOT retryable — a malformed request is
     /// malformed everywhere.
+    /// Whether a same-host REPAIR retry (rejection fed back in the prompt)
+    /// could change the outcome. Only true when the MODEL's content was
+    /// decoded and refused — the model can read a complaint and fix its
+    /// vocabulary. An unparseable envelope (a proxy's HTML page, a
+    /// truncated reply — codex #315), an empty message, or a bad request
+    /// body is not something the model said, so a hint cannot help.
+    var isRepairable: Bool {
+        guard case .badResponse(let detail) = self else { return false }
+        return detail.hasPrefix("content is not a strict")
+            || detail.hasPrefix("conversation interpretation")
+    }
+
     var isRetryableOnAnotherHost: Bool {
         switch self {
         case .unreachable, .modelUnavailable: return true
@@ -117,6 +129,31 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     /// the fallback is even tried (codex #314).
     var probeTimeoutSeconds: Double = 3
     var transport: Transport = .urlSession
+
+    /// Repair retry (2026-08-25). Translation runs at temperature 0, so
+    /// re-sending the identical prompt to the same host reproduces the
+    /// identical rejected answer. Rick's "translator flaked 3× tonight"
+    /// were ALL `.badResponse` — the model answered with out-of-vocabulary
+    /// JSON (`mediaKind: "HD"`, `relation: "maidenName"`), not a host
+    /// outage. The only retry that can change the outcome is one that
+    /// tells the model WHY the first answer was rejected. When set, this
+    /// text is appended to the system prompt for that one attempt.
+    var repairHint: String?
+
+    /// System-prompt suffix carrying the rejection reason. Kept short and
+    /// generic: the strict-decode error already names the offending
+    /// field, and the schema's vocabulary is in the prompt above it.
+    static func repairSuffix(for rejection: String) -> String {
+        """
+
+
+        YOUR PREVIOUS ANSWER WAS REJECTED by the strict decoder: \
+        \(rejection.prefix(240))
+        Answer again. Use ONLY values the schema allows — never invent \
+        enum values, never leave required arrays empty, omit unknown \
+        fields, and reply with the JSON object only.
+        """
+    }
 
     var displayName: String { "\(model) @ \(host)" }
 
@@ -331,7 +368,9 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "think": false,
             "options": options,
             "messages": [
-                ["role": "system", "content": systemPrompt],
+                ["role": "system",
+                 "content": systemPrompt
+                     + (repairHint.map(Self.repairSuffix(for:)) ?? "")],
                 ["role": "user", "content": text],
             ],
         ]

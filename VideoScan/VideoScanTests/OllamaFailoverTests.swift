@@ -154,7 +154,8 @@ struct OllamaFailoverTests {
 
     /// SENSOR. The model replied with prose instead of the schema. Every
     /// host runs the SAME model, so walking the fleet would spend one
-    /// timeout per host to collect identical garbage. Stop at the first.
+    /// timeout per host to collect identical garbage. Stop at the first
+    /// host — after the one same-host repair retry added 2026-08-25.
     @Test func badResponseDoesNotWalkTheFleet() async throws {
         let dialled = Dialled()
         let t = fakeTranslator(
@@ -165,8 +166,118 @@ struct OllamaFailoverTests {
             dialled: dialled)
 
         await #expect(throws: (any Error).self) { try await t.translate("x") }
-        #expect(await dialled.all() == ["a.local"],
+        #expect(await dialled.all() == ["a.local", "a.local"],
                 "a model-shaped failure must not become N host timeouts")
+    }
+
+    /// Pre-8/25 behaviour is still available when repair is switched off.
+    @Test func badResponseWithoutRepairDialsOnce() async throws {
+        let dialled = Dialled()
+        var t = fakeTranslator(
+            hosts: ["a.local", "b.local"],
+            responses: ["a.local": .ok(garbageReply), "b.local": .ok(goodReply)],
+            dialled: dialled)
+        t.repairOnBadResponse = false
+
+        await #expect(throws: (any Error).self) { try await t.translate("x") }
+        #expect(await dialled.all() == ["a.local"])
+    }
+
+    // MARK: Repair retry (2026-08-25)
+    //
+    // Rick's "translator flaked 3× tonight" were all `.badResponse`:
+    // out-of-vocabulary JSON from a LIVE host. At temperature 0 the same
+    // prompt reproduces the same rejection, so the retry must carry the
+    // decoder's complaint. These pin: one retry, same host, hint present
+    // only on the retry, and no fleet walk afterwards.
+
+    /// Records every chat request body the fake saw, in order.
+    private actor Bodies {
+        private(set) var all: [String] = []
+        func record(_ b: String) { all.append(b) }
+        func get() -> [String] { all }
+    }
+
+    /// A translator whose chat replies come from a per-call sequence.
+    private func sequencedTranslator(
+        hosts: [String],
+        replies: [String],
+        dialled: Dialled,
+        bodies: Bodies
+    ) -> OllamaFailoverTranslator {
+        let queue = ReplyQueue(replies)
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, body in
+            if urlString.hasSuffix("/api/tags") { return .ok("{\"models\":[]}") }
+            let host = urlString
+                .replacingOccurrences(of: "http://", with: "")
+                .split(separator: ":").first.map(String.init) ?? ""
+            await dialled.record(host)
+            await bodies.record(String(decoding: body, as: UTF8.self))
+            return .ok(await queue.next() ?? garbageReply)
+        }
+        return OllamaFailoverTranslator(hosts: hosts, template: template)
+    }
+
+    private actor ReplyQueue {
+        private var items: [String]
+        init(_ items: [String]) { self.items = items }
+        func next() -> String? { items.isEmpty ? nil : items.removeFirst() }
+    }
+
+    /// Only the model's own content earns a repair. codex #315's HTML
+    /// envelope is not something the model said; hinting at a proxy is
+    /// a wasted request (pinned above by malformedEnvelopeDoesNotWalkTheFleet).
+    @Test func repairIsGatedOnContentRejections() {
+        #expect(NLTranslatorError.badResponse("content is not a strict ArchivistQueryAST (x): {}").isRepairable)
+        #expect(NLTranslatorError.badResponse("conversation interpretation did not match its strict wire shape").isRepairable)
+        #expect(!NLTranslatorError.badResponse("unparseable response envelope: <html>").isRepairable)
+        #expect(!NLTranslatorError.badResponse("empty message content").isRepairable)
+        #expect(!NLTranslatorError.unreachable("asleep").isRepairable)
+    }
+
+    @Test func repairRetrySucceedsOnSameHostWithHint() async throws {
+        let dialled = Dialled(), bodies = Bodies()
+        let t = sequencedTranslator(
+            hosts: ["a.local", "b.local"],
+            replies: [garbageReply, goodReply],
+            dialled: dialled, bodies: bodies)
+
+        let spec = try await t.translate("videos of donna")
+        #expect(spec.people == ["Donna"])
+        #expect(await dialled.all() == ["a.local", "a.local"],
+                "the repair goes back to the host that answered, not the next one")
+
+        let seen = await bodies.get()
+        #expect(seen.count == 2)
+        #expect(!(seen.first ?? "").contains("PREVIOUS ANSWER WAS REJECTED"),
+                "the first ask carries no hint")
+        #expect((seen.last ?? "").contains("PREVIOUS ANSWER WAS REJECTED"),
+                "the retry tells the model why it was refused")
+        #expect((seen.last ?? "").contains("content is not a strict"),
+                "the decoder's own reason rides along")
+    }
+
+    @Test func repairRetryHappensOnlyOnce() async throws {
+        let dialled = Dialled(), bodies = Bodies()
+        let t = sequencedTranslator(
+            hosts: ["a.local", "b.local"],
+            replies: [garbageReply, garbageReply, goodReply],
+            dialled: dialled, bodies: bodies)
+
+        await #expect(throws: NLTranslatorError.self) { try await t.translate("x") }
+        #expect(await dialled.all() == ["a.local", "a.local"],
+                "one repair, then stop — b.local is never dialled")
+    }
+
+    /// The hint suffix is part of the SYSTEM message, so `format:` schema
+    /// constraints and the user text are untouched.
+    @Test func repairSuffixLandsInSystemPrompt() throws {
+        var t = OllamaQueryTranslator()
+        t.repairHint = "content is not a strict ArchivistQueryAST: mediaKind HD"
+        let suffix = OllamaQueryTranslator.repairSuffix(for: t.repairHint!)
+        #expect(suffix.contains("mediaKind HD"))
+        #expect(suffix.contains("never invent"))
     }
 
     /// SENSOR for codex #315. A malformed HTTP-200 envelope — an HTML

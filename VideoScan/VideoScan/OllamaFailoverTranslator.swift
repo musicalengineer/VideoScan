@@ -56,6 +56,13 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
     /// single-host setup where the extra round trip buys nothing.
     var probeBeforeRequest: Bool = true
 
+    /// Retry ONCE on the same host when the model's reply fails strict
+    /// decoding, feeding the rejection back as `repairHint` (2026-08-25).
+    /// This is not fleet failover — a bad reply is still never walked to
+    /// the next host — it is a second chance for the SAME model with the
+    /// decoder's complaint in front of it. Off = the pre-8/25 behaviour.
+    var repairOnBadResponse: Bool = true
+
     init(hosts: [String],
          template: OllamaQueryTranslator = OllamaQueryTranslator(),
          onResponder: (@Sendable (String) -> Void)? = nil,
@@ -134,6 +141,34 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
                 attempts.append("\(host): \(Self.shortReason(error))")
                 onAttemptFailed?(host, error)
                 lastError = error
+
+                // Repair retry: the host is LIVE (probe passed, reply
+                // arrived) but the model's JSON failed strict decoding.
+                // One more ask, same host, rejection in the prompt. If
+                // that is bad too, fall through to the no-fleet-walk rule.
+                if repairOnBadResponse,
+                   let rejected = error as? NLTranslatorError,
+                   rejected.isRepairable,
+                   case .badResponse(let rejection) = rejected,
+                   !Task.isCancelled {
+                    var repair = attempt
+                    repair.repairHint = rejection
+                    do {
+                        let spec = try await request(repair)
+                        onResponder?(host)
+                        return spec
+                    } catch {
+                        attempts.append("\(host) (repair): \(Self.shortReason(error))")
+                        onAttemptFailed?(host, error)
+                        lastError = error
+                        if error is CancellationError || Task.isCancelled {
+                            throw CancellationError()
+                        }
+                        guard let nl = error as? NLTranslatorError else { throw error }
+                        if !nl.isRetryableOnAnotherHost { throw nl }
+                        continue
+                    }
+                }
 
                 // A cancelled task must not keep dialling the fleet.
                 if error is CancellationError || Task.isCancelled {
