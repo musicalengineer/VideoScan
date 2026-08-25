@@ -293,8 +293,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         var deepest = 0
 
         for root in graph.people.values {
-            guard memo[root.id] == nil else {
-                deepest = max(deepest, memo[root.id]!)
+            if let known = memo[root.id] {
+                deepest = max(deepest, known)
                 continue
             }
             // (person, hasBeenExpanded)
