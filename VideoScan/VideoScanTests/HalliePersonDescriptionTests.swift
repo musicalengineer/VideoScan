@@ -55,7 +55,7 @@ struct HalliePersonDescriptionTests {
                                    text: "Donna retired in 2020 and moved to Middlefield.",
                                    subjectPersonIDs: ["person.donna"], sourceIDs: ["source.rick"],
                                    confidence: .probable, privacy: .family,
-                                   createdAt: told.addingTimeInterval(600), updatedAt: told),
+                                   createdAt: told.addingTimeInterval(600), updatedAt: told.addingTimeInterval(600)),
                     CyberBrainItem(id: "told.older", kind: .biography,
                                    text: "Donna is slim, attractive, with striking blonde hair.",
                                    subjectPersonIDs: ["person.donna"], sourceIDs: ["source.rick"],
