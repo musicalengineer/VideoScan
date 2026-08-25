@@ -35,6 +35,9 @@ struct FamilyTreeDemoView: View {
     /// Hallie's "Open in Family Tree: the Breens" offer drops a surname here;
     /// it becomes the sidebar search text and is cleared once applied.
     @AppStorage("ftIncomingSearchText") private var incomingSearchText: String = ""
+    /// Hallie's "Get Family Tree…" chip: a fresh token per request so the
+    /// same ask twice presents the sheet twice.
+    @AppStorage("ftGetFamilyTreeRequest") private var getFamilyTreeRequest: String = ""
 
     init(model: FamilyTreeLiveModel? = nil) {
         usesInjectedModel = model != nil
@@ -91,6 +94,11 @@ struct FamilyTreeDemoView: View {
         .onChange(of: incomingPersonID) { _, _ in handleIncomingHighlight() }
         .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
         .onChange(of: model.loadState) { _, _ in handleIncomingHighlight() }
+        .onChange(of: getFamilyTreeRequest) { _, token in
+            guard !token.isEmpty else { return }
+            getFamilyTreeRequest = ""
+            presentGetFamilyTree()
+        }
     }
 
     /// If the People tab (or Hallie) dropped a name into AppStorage, find the

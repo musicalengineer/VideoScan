@@ -352,4 +352,30 @@ struct HallieLineageAnswerTests {
         #expect(trail.isEmpty)
         #expect(Date().timeIntervalSince(t0) < 0.5)
     }
+
+    // MARK: Get Family Tree (2026-08-25)
+
+    @Test func fetchRequestsRouteToGetFamilyTree() {
+        for text in ["get more of the family tree", "Hallie, download the family tree from FamilySearch",
+                     "pull my tree from family search", "can you fetch more generations?",
+                     "update the family tree", "get the gedcom from familysearch"] {
+            #expect(HallieLineageQuestion.detect(text) == .getFamilyTree, Comment(rawValue: text))
+        }
+    }
+
+    @Test func questionsAboutTheTreeAreNotFetches() {
+        #expect(HallieLineageQuestion.detect("what is gedcom?") == .gedcomAwareness)
+        #expect(HallieLineageQuestion.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
+        #expect(HallieLineageQuestion.detect("who are my ancestors") != .getFamilyTree)
+        #expect(HallieLineageQuestion.detect("get me a photo of donna") != .getFamilyTree)
+    }
+
+    @Test func getFamilyTreeAnswerOffersTheSheetAndChangesNothing() {
+        let result = HallieLineageAnswer.getFamilyTreeAnswer(nil)
+        #expect(result.outcome == .answered)
+        #expect(result.offeredActions == [.getFamilyTree])
+        #expect(result.prose.contains("never here"), "the password rule is stated up front")
+        #expect(result.basisLine.contains("nothing was downloaded"))
+        #expect(HallieTurnExecutor.offerLabel(.getFamilyTree) == "Get Family Tree…")
+    }
 }

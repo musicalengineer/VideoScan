@@ -58,6 +58,8 @@ struct ArchivistMessage: Identifiable {
             case openFamilyTreePerson(personID: String, personName: String)
             /// Open the Family Tree tab filtered to a surname.
             case openFamilyTreeSurname(String)
+            /// Open the Family Tree tab and present Get Family Tree.
+            case getFamilyTree
         }
         let id = UUID()
         let label: String
@@ -895,6 +897,15 @@ struct ArchivistChatWindow: View {
                 focus: personName, personID: personID, surname: nil)
         case .openFamilyTreeSurname(let surname):
             openFamilyTreeTab(focus: nil, personID: nil, surname: surname)
+        case .getFamilyTree:
+            // Same AppStorage hand-off as focus; the tab presents the sheet
+            // when the request token changes.
+            UserDefaults.standard.set(UUID().uuidString, forKey: "ftGetFamilyTreeRequest")
+            UserDefaults.standard.set(5, forKey: "selectedTab")
+            MainWindowHelper.shared.openMainWindow()
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "Opening Get Family Tree in the Family Tree tab."))
         }
     }
 
@@ -1121,6 +1132,8 @@ struct ArchivistChatWindow: View {
             case .openFamilyTreeSurname(let surname):
                 return ArchivistMessage.Chip(
                     label: label, action: .openFamilyTreeSurname(surname))
+            case .getFamilyTree:
+                return ArchivistMessage.Chip(label: label, action: .getFamilyTree)
             case .ask(let question, _):
                 return ArchivistMessage.Chip(
                     label: label, action: .askText(question, playAfterAnswer: false))

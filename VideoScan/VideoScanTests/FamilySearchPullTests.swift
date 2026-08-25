@@ -78,11 +78,19 @@ private func request(
 
 // MARK: - LOGIC: command construction
 
-@Test func ascendIsClampedToTheApiCeiling() throws {
-    let command = try FamilySearchPullCommand(
-        toolURL: tool, request: request(ascend: 20))
-    let index = try #require(command.arguments.firstIndex(of: "-a"))
-    #expect(command.arguments[index + 1] == "8")
+/// getmyancestors walks parents one generation at a time, so depth is not
+/// bounded by FamilySearch's 8-generation `ancestry` endpoint (verified in
+/// the tool's source 2026-08-25). Only the practical ceiling clamps.
+@Test func ascendIsNotCappedAtEightButAtThePracticalCeiling() throws {
+    let twenty = try FamilySearchPullCommand(toolURL: tool, request: request(ascend: 20))
+    let index = try #require(twenty.arguments.firstIndex(of: "-a"))
+    #expect(twenty.arguments[index + 1] == "20")
+    let forty = try FamilySearchPullCommand(toolURL: tool, request: request(ascend: 40))
+    let i40 = try #require(forty.arguments.firstIndex(of: "-a"))
+    #expect(forty.arguments[i40 + 1] == "40")
+    let silly = try FamilySearchPullCommand(toolURL: tool, request: request(ascend: 99))
+    let i2 = try #require(silly.arguments.firstIndex(of: "-a"))
+    #expect(silly.arguments[i2 + 1] == "40", "the product safety cap, not an API ceiling")
 }
 
 @Test func ascendIsClampedUpFromZero() throws {

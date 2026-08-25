@@ -23,6 +23,10 @@ enum HallieLineageQuestion: Equatable, Sendable {
     case surnameTree(surname: String)
     case originTrail(person: String?, country: String?, line: GedcomFamilyGraph.Line)
     case gedcomAwareness
+    /// "get more of the family tree" / "download the tree from FamilySearch"
+    /// — points at the Family Tree tab's Get Family Tree sheet (Rick
+    /// 2026-08-25: "maybe via Hallie if we can make it simple english").
+    case getFamilyTree
     /// "describe X" / "what was X like" / "X's appearance/personality" —
     /// answered DETERMINISTICALLY from the family's told accounts, voiced
     /// as attributed testimony (Rick 2026-08-25: a prompt nudge left it
@@ -43,6 +47,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         let lower = normalize(text)
         guard !lower.isEmpty else { return nil }
 
+        if isGetFamilyTree(lower) { return .getFamilyTree }
         if isGedcomAwareness(lower) { return .gedcomAwareness }
 
         // "show me a photo of Fred Lamb" (typos in the lead words are the
@@ -137,6 +142,19 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .surnameTree(surname: String(m.1))
         }
         return nil
+    }
+
+    /// A request to FETCH tree data, as opposed to questions about it.
+    /// Requires a fetch verb and a tree/GEDCOM/FamilySearch object; "show
+    /// me the family tree" and "what is GEDCOM" are not fetches.
+    static func isGetFamilyTree(_ lower: String) -> Bool {
+        let verbs = /\b(?:get|fetch|download|pull|import|grab|update|refresh|expand|extend|deepen)\b/
+        let object = /\b(?:family ?search|gedcom|(?:family )?tree|ancestors|ancestry|generations)\b/
+        guard lower.firstMatch(of: verbs) != nil, lower.firstMatch(of: object) != nil else { return false }
+        if lower.contains("familysearch") || lower.contains("family search") { return true }
+        return lower.firstMatch(of: /\b(?:get|fetch|download|pull|import|grab) (?:more (?:of )?)?(?:the |my |our |a )?(?:whole |entire |full |bigger |deeper |updated |new |latest )?(?:family )?(?:tree|gedcom|ancestors|ancestry)\b/) != nil
+            || lower.firstMatch(of: /\b(?:more|deeper|further|older) (?:generations|ancestors)\b/) != nil
+            || lower.firstMatch(of: /\b(?:update|refresh|expand|extend|deepen) (?:the |my |our )?(?:family )?tree\b/) != nil
     }
 
     static func isGedcomAwareness(_ lower: String) -> Bool {
@@ -243,6 +261,8 @@ enum HallieLineageAnswer {
         switch question {
         case .gedcomAwareness:
             return gedcomAwareness(context.graph)
+        case .getFamilyTree:
+            return getFamilyTreeAnswer(context.graph)
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
@@ -662,6 +682,22 @@ enum HallieLineageAnswer {
                 citations: [], catalogPersonName: person.name,
                 attachments: folder.map { [.photoRequest(personName: person.name, folderURL: $0)] } ?? [])
         }
+    }
+
+    /// Deterministic pointer at the Get Family Tree sheet. Says what will
+    /// happen (Terminal, your own password, install after it parses) so the
+    /// chip is not a surprise; the app performs nothing until it is tapped.
+    static func getFamilyTreeAnswer(_ graph: GedcomFamilyGraph?) -> Result {
+        let have = graph.map { "The tree I have now holds \($0.people.count) people from \($0.sourceFileName ?? "the loaded GEDCOM"). " } ?? "I don’t have a family tree loaded yet. "
+        return Result(
+            route: .graph, outcome: .answered,
+            prose: have
+                + "I can fetch more from FamilySearch: tap Get Family Tree, choose how many ancestor steps, "
+                + "and I’ll hand a getmyancestors command to Terminal — you type your FamilySearch password there, never here. "
+                + "When the download finishes and parses, you can install it into the archive.",
+            basisLine: "Basis: Get Family Tree (getmyancestors via Terminal); nothing was downloaded or changed; no model call.",
+            queryDescription: "lineage: get family tree", citations: [], catalogPersonName: nil,
+            offeredActions: [.getFamilyTree])
     }
 
     private static func noTree() -> Result {

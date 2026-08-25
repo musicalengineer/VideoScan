@@ -318,6 +318,9 @@ enum HallieTurnExecutor {
         case openFamilyTreePerson(personID: String, personName: String)
         /// Open the Family Tree tab filtered to this surname.
         case openFamilyTreeSurname(String)
+        /// Open the Family Tree tab's "Get Family Tree" sheet (the
+        /// getmyancestors GEDCOM pull, Rick 2026-08-25).
+        case getFamilyTree
         /// Ask this question next (label is what the chip shows).
         case ask(question: String, label: String)
     }

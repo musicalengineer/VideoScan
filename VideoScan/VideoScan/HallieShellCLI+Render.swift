@@ -198,6 +198,8 @@ extension HallieShellCLI {
                     output("offer: open the Family Tree tab focused on \(name) (app only)")
                 case .openFamilyTreeSurname(let surname):
                     output("offer: open the Family Tree tab filtered to \(surname) (app only)")
+                case .getFamilyTree:
+                    output("offer: open Get Family Tree in the Family Tree tab (app only)")
                 case .ask(let question, _):
                     output("offer: ask “\(question)”")
                 }

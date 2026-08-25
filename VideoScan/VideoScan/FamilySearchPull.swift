@@ -31,8 +31,15 @@ import Foundation
 struct FamilySearchPullRequest: Equatable {
     /// FamilySearch account name (normally an email address).
     var username: String
-    /// Generations of ancestors. FamilySearch's `ancestry` resource accepts
-    /// 1...8; going deeper means re-running from an end-of-line ancestor.
+    /// Generations of ancestors. getmyancestors climbs ONE generation at a
+    /// time (`for i in range(args.ascend): tree.add_parents(...)`), fetching
+    /// each person's parents individually — so there is no API ceiling here;
+    /// FamilySearch's 8-generation limit belongs to its bulk `ancestry`
+    /// resource, which the tool does not use. 40 is a PRODUCT safety cap
+    /// (docs/vs_app_gets_gedcom_data_using_own_script.md), not an API fact:
+    /// it stops an accidental unbounded run; a sparse tree ends on its own
+    /// long before. `-a 1` = the start person plus ONE parent step, hence
+    /// the UI label "Ancestor steps".
     var ascend: Int = 8
     /// Generations of descendants. The `descendancy` resource accepts 1...4;
     /// 0 means "don't ask for any".
@@ -54,7 +61,9 @@ struct FamilySearchPullRequest: Equatable {
     /// copy is made by `install()` only after the file parses.
     var outputURL: URL
 
-    static let ascendRange = 1...8
+    static let ascendRange = 1...40
+    /// Convenient depths offered as one-tap presets.
+    static let ascendPresets = [8, 12, 20, 40]
     static let descendRange = 0...4
     static let rateLimitRange = 1...10
     static let concurrencyRange = 1...10

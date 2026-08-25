@@ -97,7 +97,7 @@ struct FamilySearchPullSheet: View {
                             get: { coordinator.request.startPersonID },
                             set: { coordinator.request.startPersonID = $0; revalidate() }),
                           prompt: Text("LF7T-Y4C — leave blank to start from you"))
-                Text("To go deeper than eight generations, run this again starting from an end-of-line ancestor.")
+                Text("Each generation is another round of requests; deep lines in the shared tree are thinly sourced, so start moderate and go deeper on a line that proves solid.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -107,12 +107,23 @@ struct FamilySearchPullSheet: View {
                     get: { coordinator.request.ascend },
                     set: { coordinator.request.ascend = $0; revalidate() }),
                         in: FamilySearchPullRequest.ascendRange) {
-                    LabeledContent("Generations back",
+                    LabeledContent("Ancestor steps",
                                    value: "\(coordinator.request.ascend)")
                 }
-                Text("FamilySearch allows at most eight per run.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    ForEach(FamilySearchPullRequest.ascendPresets, id: \.self) { preset in
+                        Button("\(preset)") {
+                            coordinator.request.ascend = preset
+                            revalidate()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .disabled(coordinator.request.ascend == preset)
+                    }
+                    Text("Each step is one generation of parents; the walk stops early when a line runs out. 40 is a safety cap, not a FamilySearch limit.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
 
                 Stepper(value: Binding(
                     get: { coordinator.request.descend },

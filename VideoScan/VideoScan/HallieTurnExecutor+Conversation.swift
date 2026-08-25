@@ -414,6 +414,7 @@ extension HallieTurnExecutor {
         case .openFamilyTree(let name): return "Open in Family Tree: \(name)"
         case .openFamilyTreePerson(_, let name): return "Open in Family Tree: \(name)"
         case .openFamilyTreeSurname(let surname): return "Open in Family Tree: the \(surname)s"
+        case .getFamilyTree: return "Get Family Tree…"
         case .ask(_, let label): return label
         }
     }

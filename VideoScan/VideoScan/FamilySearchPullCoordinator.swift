@@ -8,6 +8,7 @@
 // simply "a file is going to show up at a path I chose".
 
 import AppKit
+import Combine
 import Foundation
 import VideoScanCore
 

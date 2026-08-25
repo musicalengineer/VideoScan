@@ -249,6 +249,9 @@ final class HallieWebBridge {
                 chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
             case .openFamilyTreeSurname(let surname):
                 chips.append(["label": "The \(surname) family", "ask": "who are the \(surname)s"])
+            case .getFamilyTree:
+                // The sheet is Mac-only; the web client gets the prose alone.
+                break
             }
         }
         let cited = citations.map(citationJSON)
