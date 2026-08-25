@@ -4,6 +4,7 @@
 // work — cards are tiny value types built off-main by the executor.
 
 import AppKit
+import PhotosUI
 import SwiftUI
 
 struct HallieAttachmentsView: View {
@@ -147,28 +148,70 @@ private struct HallieTreeNodeView: View {
 struct HalliePhotoRequestView: View {
     let name: String
     let folder: URL
+    /// "Choose from Photos…" (Rick 2026-08-24: "I have a lot of nice
+    /// photos there"). The pick is saved into the archive folder through
+    /// the store, then Hallie shows it right away.
+    @EnvironmentObject private var model: VideoScanModel
+    @State private var pickedItem: PhotosPickerItem?
+    @State private var status: String?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "photo.badge.plus").font(.system(size: 16)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Do you have a photo of \(name)?").font(.system(size: 15, weight: .medium))
-                Text("Put it here and I’ll show it next time:").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("Pick one from Photos, or put a file here and I’ll show it next time:")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
                 Text(folder.path).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
                     .textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+                if let status {
+                    Text(status).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
-            Button("Reveal folder") {
-                let store = FamilyAssetConfigurationCenter.shared
-                    .snapshot().makeStore()
-                guard let verified = store.revalidatedPhotoRequestFolder(folder) else {
-                    return
+            VStack(alignment: .trailing, spacing: 6) {
+                PhotosPicker(selection: $pickedItem, matching: .images) {
+                    Text("Choose from Photos…")
                 }
-                NSWorkspace.shared.activateFileViewerSelecting([verified])
+                .controlSize(.small)
+                .accessibilityIdentifier("hallie.photoRequest.choosePhotos")
+                Button("Reveal folder") {
+                    let store = FamilyAssetConfigurationCenter.shared
+                        .snapshot().makeStore()
+                    guard let verified = store.revalidatedPhotoRequestFolder(folder) else {
+                        return
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting([verified])
+                }
+                .controlSize(.small)
             }
-            .controlSize(.small)
         }
         .modifier(CardChrome())
+        .onChange(of: pickedItem) { _, item in importPicked(item) }
+    }
+
+    private func importPicked(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        status = "Saving…"
+        Task {
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                await MainActor.run { status = "Couldn’t read that photo."; pickedItem = nil }
+                return
+            }
+            await MainActor.run {
+                let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+                do {
+                    _ = try store.importPersonPhoto(data, fileExtension: ext, into: folder)
+                    status = "Saved to the archive."
+                    // Show it now instead of making the user ask again.
+                    model.archivistAskRequest = "show me a photo of \(name)"
+                } catch {
+                    status = "Couldn’t save it: \(error.localizedDescription)"
+                }
+                pickedItem = nil
+            }
+        }
     }
 }
 

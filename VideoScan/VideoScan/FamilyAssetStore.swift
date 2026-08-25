@@ -427,6 +427,55 @@ struct FamilyAssetStore {
         return imported
     }
 
+    /// Save image bytes chosen in Apple Photos into a person's request
+    /// folder (Rick 2026-08-24: "I want the Photos option too"). Same
+    /// hardening as importCrest: write access required, the folder must be
+    /// a live People/ child, the bytes must decode as an image BEFORE they
+    /// land in the archive, never overwrite, re-verify after the copy.
+    func importPersonPhoto(_ data: Data,
+                           fileExtension: String,
+                           into folder: URL) throws -> URL {
+        try requireWriteAccess()
+        guard let target = revalidatedPhotoRequestFolder(folder) else {
+            throw StoreError.unsafeDirectory(folder)
+        }
+        let ext = fileExtension.lowercased()
+        guard ["png", "jpg", "jpeg", "heic", "tif", "tiff"].contains(ext) else {
+            throw StoreError.sourceIsNotARegularImage(folder.appendingPathComponent("photo.\(ext)"))
+        }
+        // Stage in the cache root so a non-image never touches the archive.
+        let staging = cacheRoot.appendingPathComponent("import-staging", isDirectory: true)
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        let temp = staging.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+        try data.write(to: temp, options: .atomic)
+        defer { try? fileManager.removeItem(at: temp) }
+        guard isVerifiedImage(temp) else {
+            throw StoreError.sourceIsNotARegularImage(temp)
+        }
+        let stamp: String = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd-HHmmss"
+            return f.string(from: Date())
+        }()
+        let stem = target.lastPathComponent + "-from-Photos-" + stamp
+        var destination = target.appendingPathComponent(stem).appendingPathExtension(ext).standardizedFileURL
+        var suffix = 2
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = target.appendingPathComponent("\(stem)-\(suffix)").appendingPathExtension(ext).standardizedFileURL
+            suffix += 1
+        }
+        guard destination.deletingLastPathComponent() == target else {
+            throw StoreError.unsafeDirectory(destination)
+        }
+        try fileManager.copyItem(at: temp, to: destination)
+        guard isVerifiedImage(destination) else {
+            try? fileManager.removeItem(at: destination)
+            throw StoreError.sourceIsNotARegularImage(destination)
+        }
+        return destination
+    }
+
     /// Re-check a previously returned URL immediately before display/open.
     func revalidatedImageURL(_ url: URL) -> URL? {
         guard access != .unavailable else { return nil }
