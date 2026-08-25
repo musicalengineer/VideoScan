@@ -30,11 +30,24 @@ struct TranscodeSheet: View {
         }
     }
 
+    /// Archived sources default to the archive's OWN year folder (Rick
+    /// 2026-08-25: the sticky last-used folder filed Mark's-birthday-1984
+    /// edit copy under 1998 and Cape-1992 under 1995). The remembered
+    /// folder still wins for anything not in the archive, and the user can
+    /// always Choose… elsewhere.
+    private func defaultToArchiveYearFolder() {
+        let rec = request.record
+        let copy = model.isArchiveCopy(rec) ? rec : model.archivedCopy(of: rec)
+        guard let copy else { return }
+        outputFolder = URL(fileURLWithPath: copy.fullPath).deletingLastPathComponent()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Transcode Media")
                 .font(.headline)
                 .accessibilityIdentifier("transcodeSheet.title")
+                .onAppear(perform: defaultToArchiveYearFolder)
 
             GroupBox("Source File") {
                 VStack(alignment: .leading, spacing: 4) {
