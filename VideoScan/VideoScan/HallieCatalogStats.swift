@@ -112,7 +112,7 @@ struct HallieCatalogStats: Equatable, Sendable {
         "how", "many", "much", "do", "does", "did", "we", "have", "has", "had", "there", "are", "is",
         "to", "into", "been",
         "in", "the", "our", "this", "that", "of", "a", "an", "altogether", "all", "total", "totally",
-        "overall", "whole", "entire", "catalog", "catalogue", "archive", "collection", "library",
+        "overall", "whole", "entire", "catalog", "catalogue", "archive", "collection", "library", "family",
         "hallie", "please", "can", "could", "you", "tell", "me", "what", "whats", "what's", "roughly",
         "about", "approximately", "exactly", "so", "far", "now", "currently", "at", "moment", "got",
     ]
@@ -130,14 +130,47 @@ struct HallieCatalogStats: Equatable, Sendable {
         guard words.contains("how") || words.contains("what") || words.contains("which") else { return nil }
         for question in Question.allCases {
             let allowed = filler.union(question.keys).union(question.extras)
-            guard words.allSatisfy({ allowed.contains($0) }),
-                  words.contains(where: { question.keys.contains($0) }) else { continue }
+            // Distance-1 typo forgiveness TOWARD vocabulary words only
+            // ("mny"→"many", "archved"→"archived"; live 2026-08-25). A
+            // typo'd content word (a name, a place) matches nothing here
+            // and the question still falls through to a real search.
+            func fits(_ word: String) -> Bool {
+                if allowed.contains(word) { return true }
+                guard word.count >= 3 else { return false }
+                return allowed.contains { $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0) }
+            }
+            func isKey(_ word: String) -> Bool {
+                question.keys.contains(word)
+                    || (word.count >= 4 && question.keys.contains {
+                        $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0)
+                    })
+            }
+            guard words.allSatisfy(fits),
+                  words.contains(where: isKey) else { continue }
             // "how many videos" must not be read as "how many years" etc.:
             // prefer the kind whose key appears; ordering below resolves
             // the overlaps (archived before total, years before footage).
             return question
         }
         return nil
+    }
+
+    /// True when `a` becomes `b` with at most one edit (insert, delete, or
+    /// substitute). Small inputs only — both words are question tokens.
+    static func editDistanceIsAtMostOne(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        let x = Array(a), y = Array(b)
+        if abs(x.count - y.count) > 1 { return false }
+        var i = 0, j = 0, edits = 0
+        while i < x.count && j < y.count {
+            if x[i] == y[j] { i += 1; j += 1; continue }
+            edits += 1
+            if edits > 1 { return false }
+            if x.count == y.count { i += 1; j += 1 }        // substitution
+            else if x.count > y.count { i += 1 }            // deletion from a
+            else { j += 1 }                                 // insertion into a
+        }
+        return edits + (x.count - i) + (y.count - j) <= 1
     }
 
     // MARK: - The answers

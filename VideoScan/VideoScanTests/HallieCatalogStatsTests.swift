@@ -6,6 +6,15 @@ import VideoScanCore
 /// Catalog-wide numbers answered before translation (overnight cycle 2).
 struct HallieCatalogStatsTests {
 
+    @Test func typoForgivenessReachesVocabularyOnly() {
+        #expect(HallieCatalogStats.detect("how mny videos are in the family catalog?") == .total)
+        #expect(HallieCatalogStats.detect("how many are archved") == .archived)
+        #expect(HallieCatalogStats.detect("how much disk spce") == .diskSpace)
+        // A typo'd NAME must still fall through to a real search.
+        #expect(HallieCatalogStats.detect("show me dona at the cape") == nil)
+        #expect(HallieCatalogStats.detect("how many videos of dona") == nil)
+    }
+
     @Test func promotedToArchivePhrasingDetects() {
         // Live miss 2026-08-24: "to" was outside the closed vocabulary and
         // the question became a 5,886-item generic search.
