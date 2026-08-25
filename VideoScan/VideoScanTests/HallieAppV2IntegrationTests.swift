@@ -762,8 +762,11 @@ struct HallieAppV2IntegrationTests {
         #expect(!commit.contains("askText(candidate"))
         #expect(commit.contains("response.pendingClarification"))
         #expect(chat.contains("HallieAppTurnCoordinator.continue("))
-        #expect(ask.contains("let number = Int(folded)"))
-        #expect(ask.contains("exactCandidates.count == 1"))
+        // 2026-08-24: typed replies resolve through the shared deterministic
+        // matcher (numbers, names, "the one born in 1785", yes) — pinned by
+        // its own suite; here we only pin that the app routes through it.
+        #expect(ask.contains("HallieTurnExecutor.clarificationSelection("))
+        #expect(ask.contains("continueHallie(pending: pending, selecting: selected)"))
         #expect(ask.contains("I need the name so I don't guess."))
         #expect(ask.contains("Okay — I won't guess which person you meant."))
     }
@@ -816,7 +819,7 @@ struct HallieAppV2IntegrationTests {
         // ArchivistCitationRow (colored, iconed) on 2026-08-17.
         let row = try productionSource("ArchivistCitationRow.swift")
         #expect(row.contains("actionButton(\"Play\""))
-        #expect(row.contains("actionButton(\"Reveal in Finder\""))
+        #expect(row.contains("actionButton(\"Show in Finder\""))   // renamed 2026-08-24 (Rick)
         #expect(row.contains("actionButton(\"Show in Catalog\""))
         #expect(chat.contains("ArchivistCitationRow("))
         #expect(chat.contains("let citations = response.citations"))
