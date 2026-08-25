@@ -57,7 +57,9 @@ extension CatalogContent {
     /// O(1) memoized reverse-index read (ArchivePromotionIndex).
     var masterCopyOfSelected: VideoRecord? {
         guard let rec = selectedRecord else { return nil }
-        return model.masterArchiveCopy(of: rec)
+        // Content-level (Rick 2026-08-25): an identical original on another
+        // volume shows the same "Archived on … to …" line as the promote source.
+        return model.archivedCopy(of: rec)
     }
 
     /// Inspector: the source the selected archive copy was promoted from.

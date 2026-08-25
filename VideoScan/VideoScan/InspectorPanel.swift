@@ -301,8 +301,22 @@ struct InspectorPanel: View {
                     // Reveal opens Finder on the file.
                     if masterCopy != nil || promotionSource != nil {
                         inspectorSection("Master Archive", systemImage: "archivebox") {
+                            // Rick 2026-08-25: "Archived on [Date] to [Volume] in
+                            // nice bold green" — the one line that says this
+                            // content is safe, on originals AND on their copies.
+                            if let banner = Self.archivedBanner(record: rec, masterCopy: masterCopy,
+                                                                promotionSource: promotionSource) {
+                                Label(banner.text, systemImage: banner.verified ? "checkmark.seal.fill" : "clock.badge.exclamationmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(banner.verified
+                                        ? Color(red: 0.10, green: 0.62, blue: 0.30) : .orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.bottom, 4)
+                                    .accessibilityIdentifier("inspector.archivedBanner")
+                            }
                             if let copy = masterCopy {
-                                promotionLinkRow(label: "Master copy ✓", target: copy, revealTitle: "Reveal")
+                                promotionLinkRow(label: copy.derivedFrom == rec.id ? "Master copy ✓" : "Identical copy in archive ✓",
+                                                 target: copy, revealTitle: "Reveal")
                                 if let fixity = copy.archiveFixity {
                                     inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))…")
                                 }
@@ -895,6 +909,39 @@ struct InspectorPanel: View {
             }
             Spacer()
         }
+    }
+
+    /// The "Archived on … to …" line. Pure so it can be pinned by tests.
+    /// `verified` = a fixity record exists (read-back SHA-256 after the copy);
+    /// without one the line goes orange and says so — a file that merely
+    /// sits under the archive root is not "archived" yet.
+    struct ArchivedBanner: Equatable {
+        let text: String
+        let verified: Bool
+    }
+
+    nonisolated static func archivedBanner(
+        record: VideoRecord, masterCopy: VideoRecord?, promotionSource: VideoRecord?
+    ) -> ArchivedBanner? {
+        // The archive-side record is either the copy of this source, or
+        // this record itself when it IS the archive copy.
+        let archived: VideoRecord? = masterCopy ?? (promotionSource != nil ? record : nil)
+        guard let archived else { return nil }
+        let volume: String = {
+            if !archived.scanContext.volumeName.isEmpty { return archived.scanContext.volumeName }
+            let parts = archived.fullPath.split(separator: "/").map(String.init)
+            if parts.count >= 2, parts[0] == "Volumes" { return parts[1] }
+            return archived.masterLocation.isEmpty
+                ? "the Master Archive"
+                : URL(fileURLWithPath: archived.masterLocation).lastPathComponent
+        }()
+        let identical = masterCopy != nil && masterCopy?.derivedFrom != record.id
+        let via = identical ? " (identical copy)" : ""
+        if let fixity = archived.archiveFixity {
+            let when = fixity.verifiedAt.formatted(date: .abbreviated, time: .omitted)
+            return ArchivedBanner(text: "Archived on \(when) to \(volume)\(via)", verified: true)
+        }
+        return ArchivedBanner(text: "In the archive on \(volume)\(via) — not yet verified", verified: false)
     }
 
     @ViewBuilder
