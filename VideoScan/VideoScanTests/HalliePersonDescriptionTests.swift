@@ -14,11 +14,11 @@ struct HalliePersonDescriptionTests {
     typealias Q = HallieLineageQuestion
 
     @Test func describeAndLikeAndPhotoShapesDetect() {
-        #expect(Q.detect("describe Donna") == .personDescription(person: "Donna"))
+        #expect(Q.detect("describe Donna") == .personDescription(person: "Donna", focus: .general))
         #expect(Q.detect("describe donna's personality and physical appearance as told to you by Rick")
-                == .personDescription(person: "Donna"))
-        #expect(Q.detect("what was Muriel Lamb like?") == .personDescription(person: "Muriel Lamb"))
-        #expect(Q.detect("tell me about donna's physical appearance") == .personDescription(person: "Donna"))
+                == .personDescription(person: "Donna", focus: .appearance))
+        #expect(Q.detect("what was Muriel Lamb like?") == .personDescription(person: "Muriel Lamb", focus: .general))
+        #expect(Q.detect("tell me about donna's physical appearance") == .personDescription(person: "Donna", focus: .appearance))
         #expect(Q.detect("show mr a photo of Fred Lamb") == .personPhoto(person: "Fred Lamb"))
         #expect(Q.detect("do we have any pictures of Mary OConnor") == .personPhoto(person: "Mary Oconnor"))
         #expect(Q.detect("tell me about Donna") == nil)          // biography stays
@@ -41,6 +41,36 @@ struct HalliePersonDescriptionTests {
                 ])],
             sources: [CyberBrainSource(id: "source.rick", type: .firstPerson,
                                        title: "Told by Rick", attribution: "Rick Breen")]))
+    }
+
+    @Test func focusedAskRanksMatchingAccountsFirst() throws {
+        let told = Date(timeIntervalSince1970: 1_787_300_000)
+        let index = try CyberBrainIndex(archive: CyberBrainArchive(
+            archiveID: "t", displayName: "T",
+            people: [CyberBrainPerson(
+                id: "person.donna", gedcomPersonID: nil,
+                canonicalName: "Donna Breen", aliases: ["Donna"],
+                biographyPassages: [
+                    CyberBrainItem(id: "told.newer", kind: .biography,
+                                   text: "Donna retired in 2020 and moved to Middlefield.",
+                                   subjectPersonIDs: ["person.donna"], sourceIDs: ["source.rick"],
+                                   confidence: .probable, privacy: .family,
+                                   createdAt: told.addingTimeInterval(600), updatedAt: told),
+                    CyberBrainItem(id: "told.older", kind: .biography,
+                                   text: "Donna is slim, attractive, with striking blonde hair.",
+                                   subjectPersonIDs: ["person.donna"], sourceIDs: ["source.rick"],
+                                   confidence: .probable, privacy: .family,
+                                   createdAt: told, updatedAt: told),
+                ])],
+            sources: [CyberBrainSource(id: "source.rick", type: .firstPerson,
+                                       title: "Told by Rick", attribution: "Rick Breen")]))
+        let context = HallieTurnExecutor.Context(profiles: [], cyberBrain: index)
+        let focused = try #require(HallieLineageAnswer.personDescription(
+            "Donna", focus: .appearance, context: context))
+        #expect(focused.prose.hasPrefix("According to Rick Breen: “Donna is slim"))
+        let general = try #require(HallieLineageAnswer.personDescription(
+            "Donna", focus: .general, context: context))
+        #expect(general.prose.hasPrefix("According to Rick Breen: “Donna retired"))
     }
 
     @Test func describeQuotesTheTellerVerbatim() throws {

@@ -27,7 +27,8 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// answered DETERMINISTICALLY from the family's told accounts, voiced
     /// as attributed testimony (Rick 2026-08-25: a prompt nudge left it
     /// to the model's mood; a description ask must always speak).
-    case personDescription(person: String)
+    enum DescriptionFocus: String, Sendable { case appearance, personality, general }
+    case personDescription(person: String, focus: DescriptionFocus = .general)
     /// "show me a photo of X" — the stored portrait as an attachment;
     /// no language model involved.
     case personPhoto(person: String)
@@ -55,11 +56,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if let m = lower.firstMatch(of: /^describe\s+(?:the\s+)?([a-z][a-z .'-]+?)(?:'s?\s+(?:physical\s+)?(?:appearance|personality|character|looks|traits))?(?:\s+(?:and|as)\b.*)?$/) {
             let name = String(m.1).trimmingCharacters(in: .whitespaces)
             if !name.isEmpty {
-                return .personDescription(person: HallieLineageQuestion.capitalizedName(name))
+                return .personDescription(person: HallieLineageQuestion.capitalizedName(name),
+                                          focus: descriptionFocus(in: lower))
             }
         }
         if let m = lower.firstMatch(of: /\bwhat (?:was|is|were) ([a-z][a-z .'-]+?) like\b/) {
-            return .personDescription(person: HallieLineageQuestion.capitalizedName(String(m.1)))
+            return .personDescription(person: HallieLineageQuestion.capitalizedName(String(m.1)),
+                                      focus: descriptionFocus(in: lower))
         }
         if let m = lower.firstMatch(of: /\b([a-z][a-z .'-]+?)'s\s+(?:physical\s+)?(?:appearance|personality|character|looks)\b/) {
             // "tell me about donna's appearance" — drop the lead words so
@@ -70,7 +73,8 @@ enum HallieLineageQuestion: Equatable, Sendable {
             while let first = tokens.first, leads.contains(first) { tokens.removeFirst() }
             if !tokens.isEmpty {
                 return .personDescription(
-                    person: HallieLineageQuestion.capitalizedName(tokens.joined(separator: " ")))
+                    person: HallieLineageQuestion.capitalizedName(tokens.joined(separator: " ")),
+                    focus: descriptionFocus(in: lower))
             }
         }
 
@@ -194,6 +198,26 @@ enum HallieLineageQuestion: Equatable, Sendable {
         return .both
     }
 
+    static func descriptionFocus(in text: String) -> DescriptionFocus {
+        if text.firstMatch(of: /\b(?:appearance|looks|physical)\b/) != nil { return .appearance }
+        if text.firstMatch(of: /\b(?:personality|character|traits)\b/) != nil { return .personality }
+        return .general
+    }
+
+    /// Cue words for ranking told accounts under a focused ask. Ranking
+    /// only — accounts are never edited or excluded by these.
+    static let appearanceCues: Set<String> = [
+        "slim", "tall", "short", "hair", "eyes", "attractive", "beautiful",
+        "handsome", "striking", "blonde", "blond", "brunette", "redhead",
+        "looks", "looked", "pretty", "petite", "wore", "smile",
+    ]
+    static let personalityCues: Set<String> = [
+        "kind", "smart", "funny", "gracious", "warm", "generous", "patient",
+        "gentle", "caring", "easy", "going", "standards", "angelic", "loving",
+        "wise", "stubborn", "determined", "hardworking", "witty", "quiet",
+        "outgoing", "personality",
+    ]
+
     static func generations(in text: String) -> Int? {
         guard let m = text.firstMatch(of: /(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+generations?/) else { return nil }
         let words = ["one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
@@ -219,8 +243,8 @@ enum HallieLineageAnswer {
         switch question {
         case .gedcomAwareness:
             return gedcomAwareness(context.graph)
-        case .personDescription(let person):
-            return personDescription(person, context: context)
+        case .personDescription(let person, let focus):
+            return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
             return personPhoto(person, context: context)
         case .surnameTree(let surname):
@@ -541,6 +565,7 @@ enum HallieLineageAnswer {
     /// Deterministic — shape .fixed, never the model. Confirmed archive
     /// passages read plainly; told-not-yet-verified ones carry the teller.
     static func personDescription(_ typed: String,
+                                  focus: HallieLineageQuestion.DescriptionFocus = .general,
                                   context: HallieTurnExecutor.Context) -> Result? {
         guard let index = context.cyberBrain else { return nil }
         guard case .resolved(let person) = index.resolve(typed) else {
@@ -560,11 +585,25 @@ enum HallieLineageAnswer {
                 citations: [], catalogPersonName: person.canonicalName)
         }
         var sentences: [String] = []
-        // Newest accounts first: a fresh telling session is what the asker
-        // most wants voiced (live 8/25: the appearance passage was fourth
-        // in file order and fell off the three-account cap).
+        // Newest accounts first; under a focused ask ("physical
+        // appearance"), accounts containing matching cue words rank ahead
+        // regardless of age. Ranking only — nothing is edited or dropped.
+        let cues: Set<String>
+        switch focus {
+        case .appearance: cues = HallieLineageQuestion.appearanceCues
+        case .personality: cues = HallieLineageQuestion.personalityCues
+        case .general: cues = []
+        }
+        func matchesFocus(_ account: CyberBrainIndex.FamilyAccount) -> Bool {
+            guard !cues.isEmpty else { return false }
+            let words = Set(account.text.lowercased()
+                .split(whereSeparator: { !$0.isLetter }).map(String.init))
+            return !words.isDisjoint(with: cues)
+        }
         let ordered = accounts.sorted {
-            ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+            let a = matchesFocus($0), b = matchesFocus($1)
+            if a != b { return a }
+            return ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
         }
         for account in ordered.prefix(3) {
             let quote = Self.trimmedQuote(account.text)
