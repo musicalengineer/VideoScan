@@ -23,6 +23,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
     case surnameTree(surname: String)
     case originTrail(person: String?, country: String?, line: GedcomFamilyGraph.Line)
     case gedcomAwareness
+    /// "describe X" / "what was X like" / "X's appearance/personality" —
+    /// answered DETERMINISTICALLY from the family's told accounts, voiced
+    /// as attributed testimony (Rick 2026-08-25: a prompt nudge left it
+    /// to the model's mood; a description ask must always speak).
+    case personDescription(person: String)
+    /// "show me a photo of X" — the stored portrait as an attachment;
+    /// no language model involved.
+    case personPhoto(person: String)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -35,6 +43,36 @@ enum HallieLineageQuestion: Equatable, Sendable {
         guard !lower.isEmpty else { return nil }
 
         if isGedcomAwareness(lower) { return .gedcomAwareness }
+
+        // "show me a photo of Fred Lamb" (typos in the lead words are the
+        // translator's problem no longer — this is deterministic).
+        if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image)s?\s+of\s+([a-z][a-z .'-]+?)\s*$/),
+           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any)\b/) != nil {
+            let name = HallieLineageQuestion.capitalizedName(String(m.1).trimmingCharacters(in: .whitespaces))
+            return .personPhoto(person: name)
+        }
+        // "describe X", "what was X like", "X's appearance/personality/character".
+        if let m = lower.firstMatch(of: /^describe\s+(?:the\s+)?([a-z][a-z .'-]+?)(?:'s?\s+(?:physical\s+)?(?:appearance|personality|character|looks|traits))?(?:\s+(?:and|as)\b.*)?$/) {
+            let name = String(m.1).trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty {
+                return .personDescription(person: HallieLineageQuestion.capitalizedName(name))
+            }
+        }
+        if let m = lower.firstMatch(of: /\bwhat (?:was|is|were) ([a-z][a-z .'-]+?) like\b/) {
+            return .personDescription(person: HallieLineageQuestion.capitalizedName(String(m.1)))
+        }
+        if let m = lower.firstMatch(of: /\b([a-z][a-z .'-]+?)'s\s+(?:physical\s+)?(?:appearance|personality|character|looks)\b/) {
+            // "tell me about donna's appearance" — drop the lead words so
+            // only the name survives.
+            var tokens = String(m.1).split(separator: " ").map(String.init)
+            let leads: Set<String> = ["tell", "me", "about", "show", "please",
+                                      "hallie", "describe", "us", "what", "was", "is", "the"]
+            while let first = tokens.first, leads.contains(first) { tokens.removeFirst() }
+            if !tokens.isEmpty {
+                return .personDescription(
+                    person: HallieLineageQuestion.capitalizedName(tokens.joined(separator: " ")))
+            }
+        }
 
         // "trace (the|our|my|X's) (family|ancestors|links|side…) back to
         // Ireland" — "links"/"side"/"heritage" joined the vocabulary and
@@ -181,6 +219,10 @@ enum HallieLineageAnswer {
         switch question {
         case .gedcomAwareness:
             return gedcomAwareness(context.graph)
+        case .personDescription(let person):
+            return personDescription(person, context: context)
+        case .personPhoto(let person):
+            return personPhoto(person, context: context)
         case .surnameTree(let surname):
             guard let graph = context.graph else { return noTree() }
             return surnameTree(surname, graph: graph)
@@ -493,6 +535,88 @@ enum HallieLineageAnswer {
             prose: parts.joined(separator: " "),
             basisLine: "Basis: capability answer; the tree’s file name, folder and counts come from the loaded GEDCOM, nothing else was looked up.",
             queryDescription: "capability gedcom", citations: [], catalogPersonName: nil)
+    }
+
+    /// "describe X": the family's told accounts, quoted with their teller.
+    /// Deterministic — shape .fixed, never the model. Confirmed archive
+    /// passages read plainly; told-not-yet-verified ones carry the teller.
+    static func personDescription(_ typed: String,
+                                  context: HallieTurnExecutor.Context) -> Result? {
+        guard let index = context.cyberBrain else { return nil }
+        guard case .resolved(let person) = index.resolve(typed) else {
+            // Unknown to the CyberBrain: let the normal biography route
+            // answer (GEDCOM-only people still get dates and kin).
+            return nil
+        }
+        let accounts = index.familyAccounts(
+            forPersonID: person.id,
+            privacyCeiling: HallieTurnExecutor.appPrivacyCeiling)
+        guard !accounts.isEmpty else {
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "No one has told me about \(person.canonicalName) that way yet. Say \u{201C}let me tell you about \(person.canonicalName)\u{201D} and I\u{2019}ll remember every word.",
+                basisLine: "Basis: Breen Family CyberBrain — no family accounts recorded for this person.",
+                queryDescription: "describe: \(person.canonicalName)",
+                citations: [], catalogPersonName: person.canonicalName)
+        }
+        var sentences: [String] = []
+        for account in accounts.prefix(3) {
+            let quote = Self.trimmedQuote(account.text)
+            if let teller = account.attribution, account.confidence != .confirmed {
+                sentences.append("According to \(teller): \u{201C}\(quote)\u{201D}")
+            } else if let teller = account.attribution {
+                sentences.append("\(teller) recorded: \u{201C}\(quote)\u{201D}")
+            } else {
+                sentences.append("The family archive records: \u{201C}\(quote)\u{201D}")
+            }
+        }
+        return Result(
+            route: .graph, outcome: .answered,
+            prose: sentences.joined(separator: " "),
+            basisLine: "Basis: Breen Family CyberBrain family accounts, quoted verbatim with their tellers; told items are family testimony, not yet verified against documents.",
+            queryDescription: "describe: \(person.canonicalName)",
+            citations: [], catalogPersonName: person.canonicalName)
+    }
+
+    /// First ~240 characters of an account, cut at a sentence end.
+    static func trimmedQuote(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 240 else { return trimmed }
+        let head = String(trimmed.prefix(240))
+        if let cut = head.lastIndex(where: { ".!?".contains($0) }) {
+            return String(head[...cut])
+        }
+        return head + "\u{2026}"
+    }
+
+    /// "show me a photo of X": the stored portrait as an attachment, or
+    /// the folder prompt when there is none yet.
+    static func personPhoto(_ typed: String,
+                            context: HallieTurnExecutor.Context) -> Result? {
+        guard let graph = context.graph else { return nil }
+        switch resolve(typed, context: context, graph: graph) {
+        case .failure(let result): return result
+        case .success(let person):
+            let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+            if let url = store.photoURLs(for: person).first {
+                return Result(
+                    route: .graph, outcome: .answered,
+                    prose: "Here\u{2019}s \(person.name).",
+                    basisLine: "Basis: portrait from the Master Archive\u{2019}s 40_Family_Tree folder for this person.",
+                    queryDescription: "photo: \(person.name)",
+                    citations: [], catalogPersonName: person.name,
+                    offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
+                    attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
+            }
+            let folder = try? store.folderForPhotoRequest(person: person)
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "I don\u{2019}t have a photo of \(person.name) yet.",
+                basisLine: "Basis: no image in the archive\u{2019}s People folder for this person.",
+                queryDescription: "photo: \(person.name)",
+                citations: [], catalogPersonName: person.name,
+                attachments: folder.map { [.photoRequest(personName: person.name, folderURL: $0)] } ?? [])
+        }
     }
 
     private static func noTree() -> Result {

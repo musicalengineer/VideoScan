@@ -111,6 +111,34 @@ public struct CyberBrainIndex: Sendable {
             .map { $0 }
     }
 
+    /// The family's spoken/written accounts about one person, with the
+    /// teller when the source records one — the raw material for
+    /// "describe X" answers voiced as attributed testimony (Rick
+    /// 2026-08-25: those answers must be deterministic, not left to a
+    /// model's mood).
+    public struct FamilyAccount: Sendable, Equatable {
+        public let text: String
+        public let attribution: String?
+        public let confidence: CyberBrainItem.Confidence
+        public let createdAt: Date?
+    }
+
+    public func familyAccounts(
+        forPersonID personID: String,
+        privacyCeiling: CyberBrainItem.Privacy
+    ) -> [FamilyAccount] {
+        visibleEvidence(for: personID, privacyCeiling: privacyCeiling)
+            .filter { $0.confidence != .disputed }
+            .map { item in
+                FamilyAccount(
+                    text: item.text,
+                    attribution: item.sourceIDs
+                        .compactMap { source(id: $0)?.attribution }.first,
+                    confidence: item.confidence,
+                    createdAt: item.createdAt)
+            }
+    }
+
     fileprivate func visibleEvidence(
         for personID: String,
         privacyCeiling: CyberBrainItem.Privacy
