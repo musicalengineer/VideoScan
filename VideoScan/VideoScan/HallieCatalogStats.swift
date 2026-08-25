@@ -128,20 +128,31 @@ struct HallieCatalogStats: Equatable, Sendable {
         guard !words.contains(where: { $0.contains(where: \.isNumber) }) else { return nil }
         // A question must actually ASK a quantity.
         guard words.contains("how") || words.contains("what") || words.contains("which") else { return nil }
+        // Every correctly-spelled vocabulary word, across ALL question
+        // kinds. A word found here is NOT a typo — if it doesn't fit the
+        // question at hand, the question falls through; fuzzing it would
+        // break the overlap ordering ("archived" must never count as
+        // filler "archive"; singular "video" must not become "videos").
+        let globalVocabulary = Question.allCases.reduce(filler) {
+            $0.union($1.keys).union($1.extras)
+        }
         for question in Question.allCases {
             let allowed = filler.union(question.keys).union(question.extras)
-            // Distance-1 typo forgiveness TOWARD vocabulary words only
+            // Distance-1 typo forgiveness for UNKNOWN tokens only
             // ("mny"→"many", "archved"→"archived"; live 2026-08-25). A
             // typo'd content word (a name, a place) matches nothing here
             // and the question still falls through to a real search.
+            func fuzzable(_ word: String) -> Bool {
+                word.count >= 3 && !globalVocabulary.contains(word)
+            }
             func fits(_ word: String) -> Bool {
                 if allowed.contains(word) { return true }
-                guard word.count >= 3 else { return false }
+                guard fuzzable(word) else { return false }
                 return allowed.contains { $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0) }
             }
             func isKey(_ word: String) -> Bool {
                 question.keys.contains(word)
-                    || (word.count >= 4 && question.keys.contains {
+                    || (fuzzable(word) && question.keys.contains {
                         $0.count >= 4 && Self.editDistanceIsAtMostOne(word, $0)
                     })
             }
