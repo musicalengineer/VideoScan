@@ -42,4 +42,27 @@ struct HallieClarificationReplyTests {
         #expect(pick("the last one") == "@I2@")
         #expect(pick("neither, tell me about Donna") == nil)
     }
+
+    @Test func negatedCompetingAndMismatchedDescriptorsNeverGuess() {
+        #expect(pick("not the one born in 1785") == nil)
+        #expect(pick("not the first one") == nil)
+        #expect(pick("older or younger") == nil)
+        #expect(pick("the first or last") == nil)
+
+        let mixedDates = [
+            candidate("@B@", "Alex Parker", "Alex Parker (born 1785, died 1850)"),
+            candidate("@D@", "Alex Parker", "Alex Parker (born 1750, died 1785)"),
+        ]
+        #expect(HallieTurnExecutor.clarificationSelection(
+            "the one born in 1785", from: mixedDates) == .gedcomPersonID("@B@"))
+        #expect(HallieTurnExecutor.clarificationSelection(
+            "the one who died in 1785", from: mixedDates) == .gedcomPersonID("@D@"))
+
+        let duplicateBirthYear = [
+            candidate("@1@", "A Parker", "A Parker (born 1785)"),
+            candidate("@2@", "B Parker", "B Parker (born 1785)"),
+        ]
+        #expect(HallieTurnExecutor.clarificationSelection(
+            "born in 1785", from: duplicateBirthYear) == nil)
+    }
 }

@@ -28,6 +28,11 @@ extension HallieTurnExecutor {
         }
 
         let folded = PersonResolver.normalize(trimmed)
+        let words = Set(folded.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init))
+        // A negated selector is not permission to guess. Re-ask rather than
+        // treating "not the older one" as an affirmative "older" match.
+        guard !words.contains("not"), !words.contains("neither") else { return nil }
         // "Did you mean Judson Lamb?" → "yes" is a complete answer when
         // there is exactly one choice.
         if candidates.count == 1,
@@ -41,12 +46,11 @@ extension HallieTurnExecutor {
         }
         if exact.count == 1 { return exact[0].id }
 
-        // "the one born in 1785" / "1785 one" — a year unique to one label.
+        // "the one born in 1785" / "1785 one" — a year unique to one
+        // candidate. Birth/death qualifiers are honored, so a death in 1785
+        // cannot satisfy "born in 1785".
         if let m = trimmed.firstMatch(of: /\b(1[0-9]{3}|20[0-9]{2})\b/) {
-            let year = String(m.1)
-            let byYear = candidates.filter { $0.label.contains(year) }
-            if byYear.count == 1 { return byYear[0].id }
-            return nil   // a year that matches nothing or several: re-ask
+            return clarificationYearSelection(Int(m.1), words: words, candidates: candidates)
         }
 
         func labelYear(_ c: Candidate) -> Int? {
@@ -55,19 +59,51 @@ extension HallieTurnExecutor {
         let dated = candidates.compactMap { c in labelYear(c).map { (c, $0) } }
         if dated.count == candidates.count,
            Set(dated.map(\.1)).count == candidates.count {
-            if ["older", "oldest", "earlier", "earliest", "elder"].contains(where: folded.contains) {
-                return dated.min { $0.1 < $1.1 }?.0.id
-            }
-            if ["younger", "youngest", "later", "latest", "newer", "most recent"].contains(where: folded.contains) {
+            let asksOlder = ["older", "oldest", "earlier", "earliest", "elder"]
+                .contains { words.contains($0) }
+            let asksYounger = ["younger", "youngest", "later", "latest", "newer"]
+                .contains { words.contains($0) } || folded.contains("most recent")
+            if asksOlder || asksYounger {
+                guard asksOlder != asksYounger else { return nil }
+                if asksOlder {
+                    return dated.min { $0.1 < $1.1 }?.0.id
+                }
                 return dated.max { $0.1 < $1.1 }?.0.id
             }
         }
 
         let ordinals = ["first": 0, "second": 1, "third": 2, "fourth": 3,
                         "fifth": 4, "last": candidates.count - 1]
-        for (word, index) in ordinals where folded.contains(word) {
-            if candidates.indices.contains(index) { return candidates[index].id }
-        }
+        let selectedOrdinals = ordinals.filter { words.contains($0.key) }
+        guard selectedOrdinals.count <= 1 else { return nil }
+        if let (_, index) = selectedOrdinals.first,
+           candidates.indices.contains(index) { return candidates[index].id }
         return nil
+    }
+
+    private static func clarificationYearSelection(
+        _ year: Int?,
+        words: Set<String>,
+        candidates: [Candidate]
+    ) -> CandidateID? {
+        guard let year else { return nil }
+        let asksBirth = words.contains("born") || words.contains("birth")
+        let asksDeath = words.contains("died") || words.contains("death")
+        guard !(asksBirth && asksDeath) else { return nil }
+
+        func labeledYear(_ candidate: Candidate, birth: Bool) -> Int? {
+            let label = candidate.label.lowercased()
+            let match = birth
+                ? label.firstMatch(of: /\b(?:born|b\.)\s*(1[0-9]{3}|20[0-9]{2})\b/)
+                : label.firstMatch(of: /\b(?:died|d\.)\s*(1[0-9]{3}|20[0-9]{2})\b/)
+            return match.flatMap { Int($0.1) }
+        }
+
+        let byYear = candidates.filter { candidate in
+            if asksBirth { return labeledYear(candidate, birth: true) == year }
+            if asksDeath { return labeledYear(candidate, birth: false) == year }
+            return candidate.label.contains(String(year))
+        }
+        return byYear.count == 1 ? byYear[0].id : nil
     }
 }
