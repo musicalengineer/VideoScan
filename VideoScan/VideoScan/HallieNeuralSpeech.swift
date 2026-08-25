@@ -7,6 +7,7 @@
 // ~/Library/Application Support/VideoScan/HallieKokoro rather than in the
 // catalog or source tree.
 
+import AVFoundation
 import Darwin
 import Foundation
 
@@ -53,6 +54,7 @@ enum HallieNeuralSpeech {
     static let executableName = "kokoro-tts"
     static let modelName = "kokoro-v1_0.safetensors"
     static let voicesName = "voices.npz"
+    static let workerCapabilityName = "worker-protocol-v1"
 
     static var installationDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -67,6 +69,15 @@ enum HallieNeuralSpeech {
             && FileManager.default.fileExists(atPath: directory.appendingPathComponent(modelName).path)
             && FileManager.default.fileExists(atPath: directory.appendingPathComponent(voicesName).path)
             && FileManager.default.fileExists(atPath: directory.appendingPathComponent("mlx.metallib").path)
+    }
+
+    static var supportsWarmWorker: Bool {
+        supportsWarmWorker(in: installationDirectory)
+    }
+
+    static func supportsWarmWorker(in directory: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent(workerCapabilityName).path)
     }
 
     static func job(for text: String, voice: HallieNeuralVoice,
@@ -143,6 +154,11 @@ private struct HallieNeuralWorkerResponse: Decodable {
 
 private struct HallieNeuralWorkerAttemptFailure: LocalizedError {
     let detail: String
+    let status: Int32
+    init(detail: String, status: Int32 = -1) {
+        self.detail = detail
+        self.status = status
+    }
     var errorDescription: String? { detail }
 }
 
@@ -153,15 +169,18 @@ private final class HallieNeuralLineChannel: @unchecked Sendable {
     private var finished = false
     private var waiter: CheckedContinuation<String?, Never>?
     private let maximumBufferBytes = 1 * 1_024 * 1_024
+    private let maximumQueuedLines = 256
 
     func append(_ data: Data) {
         lock.lock()
         guard !finished else { lock.unlock(); return }
-        if buffer.count < maximumBufferBytes { buffer.append(data) }
+        let remaining = max(0, maximumBufferBytes - buffer.count)
+        if remaining > 0 { buffer.append(data.prefix(remaining)) }
         while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
             let lineData = buffer.subdata(in: buffer.startIndex..<newline)
             buffer.removeSubrange(buffer.startIndex...newline)
             lines.append(String(data: lineData, encoding: .utf8) ?? "")
+            if lines.count > maximumQueuedLines { lines.removeFirst() }
         }
         var continuation: CheckedContinuation<String?, Never>?
         var line: String?
@@ -291,6 +310,7 @@ actor HallieNeuralSpeechWorker {
     private var idleTask: Task<Void, Never>?
     private var requestGeneration = 0
     private var activeRequestID: String?
+    private var activeRequestGeneration: Int?
     private(set) var totalSpawns = 0
 
     init(
@@ -306,8 +326,10 @@ actor HallieNeuralSpeechWorker {
     }
 
     func synthesize(requestID: String, text: String,
-                    voice: HallieNeuralVoice, speed: Float) async throws -> URL {
+                    voice: HallieNeuralVoice, speed: Float,
+                    isCancelled: @Sendable () -> Bool = { false }) async throws -> URL {
         requestGeneration += 1
+        let generation = requestGeneration
         idleTask?.cancel()
         idleTask = nil
         defer { scheduleIdleShutdown() }
@@ -318,8 +340,10 @@ actor HallieNeuralSpeechWorker {
         }
 
         var lastDetail = "worker failed twice"
+        var lastStatus: Int32 = -1
         for attempt in 0..<2 {
             try Task.checkCancellation()
+            if isCancelled() { throw CancellationError() }
             let outputDirectory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("VideoScan-Hallie-\(UUID().uuidString)", isDirectory: true)
             do {
@@ -327,26 +351,34 @@ actor HallieNeuralSpeechWorker {
                     at: outputDirectory, withIntermediateDirectories: true)
                 let result = try await performRequest(
                     requestID: requestID, text: text, voice: voice,
-                    speed: speed, outputDirectory: outputDirectory)
+                    speed: speed, outputDirectory: outputDirectory,
+                    generation: generation)
+                guard requestGeneration == generation else { throw CancellationError() }
                 if attempt == 1 { diagnostics.recordRetryRecovery() }
                 return result
             } catch is CancellationError {
                 try? FileManager.default.removeItem(at: outputDirectory)
-                if let current = handle {
+                if requestGeneration == generation, let current = handle {
                     current.stop(.cancelled)
                     tearDown(current)
                 }
                 throw CancellationError()
             } catch {
                 try? FileManager.default.removeItem(at: outputDirectory)
+                // Actors are reentrant at `await`. A newer utterance may have
+                // replaced this request and its process while this catch was
+                // suspended. The superseded request must never tear down or
+                // retry against the newer utterance's worker.
+                guard requestGeneration == generation else { throw CancellationError() }
                 lastDetail = error.localizedDescription
+                lastStatus = (error as? HallieNeuralWorkerAttemptFailure)?.status ?? -1
                 if let current = handle {
                     current.stop(.recycle)
                     tearDown(current)
                 }
             }
         }
-        throw HallieNeuralSpeech.Failure.synthesis(-1, lastDetail)
+        throw HallieNeuralSpeech.Failure.synthesis(lastStatus, lastDetail)
     }
 
     func cancel(requestID: String) {
@@ -365,15 +397,21 @@ actor HallieNeuralSpeechWorker {
 
     private func performRequest(
         requestID: String, text: String, voice: HallieNeuralVoice,
-        speed: Float, outputDirectory: URL
+        speed: Float, outputDirectory: URL, generation: Int
     ) async throws -> URL {
         let worker = try ensureWorker()
         activeRequestID = requestID
+        activeRequestGeneration = generation
         defer {
-            if activeRequestID == requestID { activeRequestID = nil }
+            if activeRequestGeneration == generation {
+                activeRequestID = nil
+                activeRequestGeneration = nil
+            }
         }
 
-        var payload = try JSONEncoder().encode(HallieNeuralWorkerRequest(
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        var payload = try encoder.encode(HallieNeuralWorkerRequest(
             id: requestID, outputDirectory: outputDirectory.path,
             voiceName: voice.modelName, speed: speed, text: text))
         payload.append(UInt8(ascii: "\n"))
@@ -393,7 +431,7 @@ actor HallieNeuralSpeechWorker {
         defer { timeoutTask.cancel() }
 
         var responseLine: String?
-        for _ in 0..<128 {
+        while true {
             let line = await withTaskCancellationHandler {
                 await worker.lines.nextLine()
             } onCancel: {
@@ -415,7 +453,8 @@ actor HallieNeuralSpeechWorker {
             }
             let stderr = worker.errors.tail
             throw HallieNeuralWorkerAttemptFailure(
-                detail: stderr.isEmpty ? reason : "\(reason): \(stderr)")
+                detail: stderr.isEmpty ? reason : "\(reason): \(stderr)",
+                status: worker.process.isRunning ? -1 : worker.process.terminationStatus)
         }
         try Task.checkCancellation()
 
@@ -431,10 +470,24 @@ actor HallieNeuralSpeechWorker {
 
         let output = outputDirectory
             .appendingPathComponent("hallie-\(voice.modelName).wav")
-        guard FileManager.default.fileExists(atPath: output.path) else {
+        guard Self.isValidWAV(at: output) else {
             throw HallieNeuralSpeech.Failure.missingOutput
         }
         return output
+    }
+
+    private static func isValidWAV(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [
+            .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
+        ]), values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size > 44,
+              let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 12), header.count == 12 else { return false }
+        guard header.prefix(4) == Data("RIFF".utf8),
+              header.suffix(4) == Data("WAVE".utf8),
+              let audio = try? AVAudioFile(forReading: url) else { return false }
+        return audio.length > 0 && audio.fileFormat.sampleRate > 0
     }
 
     private func ensureWorker() throws -> HallieNeuralWorkerHandle {
@@ -470,7 +523,6 @@ actor HallieNeuralSpeechWorker {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                lines.finish()
             } else {
                 lines.append(data)
             }
@@ -483,7 +535,17 @@ actor HallieNeuralSpeechWorker {
                 errors.append(data)
             }
         }
-        process.terminationHandler = { _ in lines.finish() }
+        process.terminationHandler = { _ in
+            // Drain final bytes before waking a request waiting on EOF; stderr
+            // often contains the only useful crash explanation.
+            errorHandle.readabilityHandler = nil
+            let remainingError = errorHandle.readDataToEndOfFile()
+            if !remainingError.isEmpty { errors.append(remainingError) }
+            outputHandle.readabilityHandler = nil
+            let remainingOutput = outputHandle.readDataToEndOfFile()
+            if !remainingOutput.isEmpty { lines.append(remainingOutput) }
+            lines.finish()
+        }
 
         do {
             try process.run()
@@ -539,6 +601,7 @@ final class HallieNeuralSpeechJob: @unchecked Sendable {
     private let requestID = UUID().uuidString
     private let worker: HallieNeuralSpeechWorker
     private var cancelled = false
+    private var legacyProcess: Process?
 
     init(text: String, voice: HallieNeuralVoice, speed: Float,
          worker: HallieNeuralSpeechWorker = .shared) {
@@ -549,20 +612,107 @@ final class HallieNeuralSpeechJob: @unchecked Sendable {
     }
 
     func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
+        let process = lock.withLock {
+            cancelled = true
+            return legacyProcess
+        }
+        if process?.isRunning == true { process?.terminate() }
         let requestID = requestID
         Task { await worker.cancel(requestID: requestID) }
     }
 
     func synthesize() async throws -> URL {
         guard HallieNeuralSpeech.isInstalled else { throw HallieNeuralSpeech.Failure.notInstalled }
-        lock.lock()
-        let wasCancelled = cancelled
-        lock.unlock()
+        let wasCancelled = lock.withLock { cancelled }
         if wasCancelled { throw CancellationError() }
+        // Installations made before the worker protocol remain usable. The
+        // installer adds the capability marker only after a worker-mode smoke
+        // test passes; until then we preserve the former one-shot behavior.
+        guard HallieNeuralSpeech.supportsWarmWorker else {
+            return try await synthesizeWithLegacyHelper()
+        }
         return try await worker.synthesize(
-            requestID: requestID, text: text, voice: voice, speed: speed)
+            requestID: requestID, text: text, voice: voice, speed: speed,
+            isCancelled: { [weak self] in
+                guard let self else { return true }
+                return self.lock.withLock { self.cancelled }
+            })
+    }
+
+    private func synthesizeWithLegacyHelper() async throws -> URL {
+        let install = HallieNeuralSpeech.installationDirectory
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VideoScan-Hallie-\(UUID().uuidString)", isDirectory: true)
+        let output = outputDirectory.appendingPathComponent("hallie-\(voice.modelName).wav")
+
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let stdout = Pipe()
+                let stderr = Pipe()
+                process.executableURL = install.appendingPathComponent(HallieNeuralSpeech.executableName)
+                process.arguments = [
+                    "--model", install.appendingPathComponent(HallieNeuralSpeech.modelName).path,
+                    "--voices", install.appendingPathComponent(HallieNeuralSpeech.voicesName).path,
+                    "--output", outputDirectory.path,
+                    "--voice", self.voice.modelName,
+                    "--speed", String(self.speed),
+                    "--text", self.text,
+                ]
+                process.currentDirectoryURL = install
+                process.standardOutput = stdout
+                process.standardError = stderr
+
+                do {
+                    let alreadyCancelled = self.lock.withLock {
+                        self.legacyProcess = process
+                        return self.cancelled
+                    }
+                    guard !alreadyCancelled else {
+                        self.lock.withLock { self.legacyProcess = nil }
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+
+                    try FileManager.default.createDirectory(
+                        at: outputDirectory, withIntermediateDirectories: true)
+                    try process.run()
+                    if self.lock.withLock({ self.cancelled }) { process.terminate() }
+                    process.waitUntilExit()
+
+                    let wasCancelled = self.lock.withLock {
+                        self.legacyProcess = nil
+                        return self.cancelled
+                    }
+                    if wasCancelled {
+                        try? FileManager.default.removeItem(at: outputDirectory)
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+
+                    let detailData = stderr.fileHandleForReading.readDataToEndOfFile()
+                    let detail = (String(data: detailData, encoding: .utf8) ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard process.terminationStatus == 0 else {
+                        try? FileManager.default.removeItem(at: outputDirectory)
+                        continuation.resume(throwing: HallieNeuralSpeech.Failure.synthesis(
+                            process.terminationStatus, detail))
+                        return
+                    }
+                    guard FileManager.default.fileExists(atPath: output.path) else {
+                        try? FileManager.default.removeItem(at: outputDirectory)
+                        continuation.resume(throwing: HallieNeuralSpeech.Failure.missingOutput)
+                        return
+                    }
+                    continuation.resume(returning: output)
+                } catch {
+                    self.lock.withLock { self.legacyProcess = nil }
+                    try? FileManager.default.removeItem(at: outputDirectory)
+                    continuation.resume(throwing: error is CancellationError
+                        ? error
+                        : HallieNeuralSpeech.Failure.launch(error.localizedDescription))
+                }
+            }
+        }
     }
 }

@@ -95,14 +95,18 @@ struct HallieSpeakerTests {
 @Suite(.serialized)
 struct HallieNeuralSpeechWorkerTests {
     private func fakeInstallation(
-        failFirstSpawn: Bool = false
-    ) throws -> (directory: URL, spawnFile: URL) {
+        failFirstSpawn: Bool = false,
+        failEverySpawn: Bool = false,
+        malformedAudio: Bool = false,
+        delayedRequestID: String? = nil
+    ) throws -> (directory: URL, spawnFile: URL, requestFile: URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("HallieNeuralWorkerTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         let executable = directory.appendingPathComponent(HallieNeuralSpeech.executableName)
         let spawnFile = directory.appendingPathComponent("spawns")
+        let requestFile = directory.appendingPathComponent("requests")
         let firstFailure = failFirstSpawn ? """
             if [ "$spawn_number" -eq 1 ]; then
                 IFS= read -r ignored
@@ -110,23 +114,42 @@ struct HallieNeuralSpeechWorkerTests {
                 exit 9
             fi
             """ : ""
+        let everyFailure = failEverySpawn ? """
+            IFS= read -r ignored
+            echo "final fixture crash reason" >&2
+            exit 23
+            """ : ""
+        let audioBase64 = malformedAudio
+            ? "UklGRiYAAABXQVZFWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWA=="
+            : "UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQIAAAAAAA=="
+        let requestDelay = delayedRequestID.map { requestID in
+            """
+            if [ "$request_id" = "\(requestID)" ]; then
+                /bin/sleep 2
+            fi
+            """
+        } ?? ""
         let script = """
             #!/bin/sh
             printf 'x' >> '\(spawnFile.path)'
             spawn_number=$(wc -c < '\(spawnFile.path)' | tr -d ' ')
+            \(everyFailure)
             \(firstFailure)
             while IFS= read -r line; do
                 request_id=$(printf '%s' "$line" | /usr/bin/sed -E 's/.*"id":"([^"]+)".*/\\1/')
                 output_dir=$(printf '%s' "$line" | /usr/bin/sed -E 's/.*"outputDirectory":"([^"]+)".*/\\1/')
+                printf '%s\n' "$request_id" >> '\(requestFile.path)'
+                \(requestDelay)
                 /bin/mkdir -p "$output_dir"
-                : > "$output_dir/hallie-af_bella.wav"
+                printf '%s' '\(audioBase64)' \
+                    | /usr/bin/base64 -D > "$output_dir/hallie-af_bella.wav"
                 printf '@hallie-response@{"id":"%s","ok":true}\n' "$request_id"
             done
             """
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        return (directory, spawnFile)
+        return (directory, spawnFile, requestFile)
     }
 
     @Test func warmWorkerIsReusedThenLeavesMemoryAfterIdleTimeout() async throws {
@@ -187,5 +210,93 @@ struct HallieNeuralSpeechWorkerTests {
         let snapshot = diagnostics.snapshot()
         #expect(snapshot.failureCount == 1)
         #expect(snapshot.lastFailure?.count == 1_024)
+    }
+
+    @Test func doubleCrashRetainsFinalStderrAndExitStatus() async throws {
+        let fixture = try fakeInstallation(failEverySpawn: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let worker = HallieNeuralSpeechWorker(
+            installationDirectory: fixture.directory,
+            idleTimeoutSeconds: 10,
+            requestTimeoutSeconds: 1,
+            diagnostics: HallieNeuralSpeechDiagnostics())
+        let voice = try #require(HallieNeuralVoice.selected("kokoro:af_bella"))
+
+        do {
+            _ = try await worker.synthesize(
+                requestID: "double-crash", text: "Fail", voice: voice, speed: 0.88)
+            Issue.record("a helper that crashed twice unexpectedly succeeded")
+        } catch let HallieNeuralSpeech.Failure.synthesis(status, detail) {
+            #expect(status == 23)
+            #expect(detail.contains("final fixture crash reason"))
+        } catch {
+            Issue.record("unexpected double-crash error: \(error)")
+        }
+        #expect(await worker.totalSpawns == 2)
+        await worker.shutdown()
+    }
+
+    @Test func malformedWAVIsRetriedAndRejected() async throws {
+        let fixture = try fakeInstallation(malformedAudio: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let worker = HallieNeuralSpeechWorker(
+            installationDirectory: fixture.directory,
+            idleTimeoutSeconds: 10,
+            requestTimeoutSeconds: 1,
+            diagnostics: HallieNeuralSpeechDiagnostics())
+        let voice = try #require(HallieNeuralVoice.selected("kokoro:af_bella"))
+
+        await #expect(throws: HallieNeuralSpeech.Failure.self) {
+            _ = try await worker.synthesize(
+                requestID: "bad-wave", text: "Fail", voice: voice, speed: 0.88)
+        }
+        #expect(await worker.totalSpawns == 2)
+        await worker.shutdown()
+    }
+
+    @Test func supersededRequestCannotTearDownTheNewWorker() async throws {
+        let fixture = try fakeInstallation(delayedRequestID: "old")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let worker = HallieNeuralSpeechWorker(
+            installationDirectory: fixture.directory,
+            idleTimeoutSeconds: 10,
+            requestTimeoutSeconds: 5,
+            diagnostics: HallieNeuralSpeechDiagnostics())
+        let voice = try #require(HallieNeuralVoice.selected("kokoro:af_bella"))
+
+        let old = Task {
+            try await worker.synthesize(
+                requestID: "old", text: "Old", voice: voice, speed: 0.88)
+        }
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: fixture.requestFile.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let newest = try await worker.synthesize(
+            requestID: "new", text: "New", voice: voice, speed: 0.88)
+        #expect(FileManager.default.fileExists(atPath: newest.path))
+        do {
+            _ = try await old.value
+            Issue.record("the superseded request unexpectedly completed")
+        } catch is CancellationError {
+            // Expected: latest utterance wins.
+        } catch {
+            Issue.record("unexpected superseded-request error: \(error)")
+        }
+
+        HallieNeuralSpeech.removeTemporaryAudio(newest)
+        await worker.shutdown()
+    }
+
+    @Test func capabilityMarkerDistinguishesLegacyAndWarmHelpers() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HallieCapabilityTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(!HallieNeuralSpeech.supportsWarmWorker(in: directory))
+        try Data().write(to: directory.appendingPathComponent(HallieNeuralSpeech.workerCapabilityName))
+        #expect(HallieNeuralSpeech.supportsWarmWorker(in: directory))
     }
 }

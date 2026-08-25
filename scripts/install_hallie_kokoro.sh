@@ -108,6 +108,20 @@ SMOKE_DIRECTORY="$WORK_DIRECTORY/smoke"
     --text "Hello. Hallie's local neural voice is ready."
 test -s "$SMOKE_DIRECTORY/hallie-af_heart.wav"
 
+# Prove the long-lived protocol before advertising it to VideoScan. Older
+# installed helpers have no marker and continue through the compatible
+# one-shot path until the user next runs this installer.
+WORKER_SMOKE_DIRECTORY="$WORK_DIRECTORY/worker-smoke"
+printf '{"id":"installer-smoke","outputDirectory":"%s","voiceName":"af_heart","speed":0.92,"text":"Hallie worker ready."}\n' \
+    "$WORKER_SMOKE_DIRECTORY" \
+    | "$STAGING_DIRECTORY/kokoro-tts" \
+        --worker \
+        --model "$STAGING_DIRECTORY/kokoro-v1_0.safetensors" \
+        --voices "$STAGING_DIRECTORY/voices.npz" \
+    | grep -q '@hallie-response@'
+test -s "$WORKER_SMOKE_DIRECTORY/hallie-af_heart.wav"
+touch "$STAGING_DIRECTORY/worker-protocol-v1"
+
 if [[ -d "$INSTALL_DIRECTORY" ]]; then
     BACKUP_DIRECTORY="$INSTALL_DIRECTORY.previous.$(date +%Y%m%d-%H%M%S)"
     mv "$INSTALL_DIRECTORY" "$BACKUP_DIRECTORY"
