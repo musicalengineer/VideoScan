@@ -49,7 +49,8 @@ password.
 
 How it works:
 
-1. Choose how many generations back (1–8, the API's own ceiling), whether to
+1. Choose how many ancestor steps (1–40; 8, 12, 20 and 40 are one-tap
+   presets — `-a 1` is you plus one generation of parents), whether to
    include spouses, and where to save the file.
 2. VideoScan shows you the exact command it will run, then writes it to
    `~/Library/Application Support/VideoScan/family-tree/get-family-tree.command`
@@ -81,12 +82,30 @@ borrowed third-party app key is revoked — in a window you are already reading.
 
 ### Going deeper than eight generations
 
-FamilySearch's ancestry resource returns at most eight generations per call.
-To go further, note an end-of-line ancestor's FamilySearch person ID
-(`LF7T-Y4C`), run **Get Family Tree** again with that ID in the *start from*
-field, and merge the exports with `mergemyancestors`. Deep lines in the shared
-tree are user-submitted and thinly sourced the further back they go — worth
-checking before Hallie recites them as fact.
+There is no eight-generation limit. `getmyancestors` does not rely on one
+eight-generation ancestry response: it walks the existing parent frontier one
+generation at a time, stops when no parents remain, and accepts any `-a`
+value. A single twenty-step run is the preferred model for a sparse tree;
+repeated eight-generation exports and `mergemyancestors` are not the normal
+workflow. The sheet allows up to 40 steps — a product safety cap, not a
+FamilySearch fact.
+
+The proposed correction and the security/licensing reasons for retaining the
+Terminal boundary are documented in
+[VS app gets gedcom data using its own script loosely based on getmyancestors
+or similar](vs_app_gets_gedcom_data_using_own_script.md).
+
+Re-rooting on an end-of-line ancestor's FamilySearch person ID (`LF7T-Y4C`)
+and merging with `mergemyancestors` is still useful to deepen ONE line without
+re-pulling everything. Deep lines in the shared tree are user-submitted and
+thinly sourced the further back they go — worth checking before Hallie
+recites them as fact.
+
+### Asking Hallie
+
+"Hallie, get more of the family tree" / "download the family tree from
+FamilySearch" answers with a short explanation and a **Get Family Tree…**
+chip that opens the same sheet. No language model is involved.
 
 ## Exporting from FamilySearch (manually)
 

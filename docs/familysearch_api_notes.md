@@ -29,6 +29,14 @@ so the user authenticates directly with the tool. See `gedcom.md`. That design
 keeps the rule above this section intact — VideoScan still never collects or
 proxies the FamilySearch password.
 
+The current branch's eight-generation clamp was subsequently found to be an
+incorrect assumption about the external tool. `getmyancestors` walks parent
+frontiers one generation at a time and can accept a larger depth in one run.
+The decision to retain and harden that external-tool boundary—rather than copy
+its unsupported login flow into a VideoScan-owned client—is recorded in
+[VS app gets gedcom data using its own script loosely based on getmyancestors
+or similar](vs_app_gets_gedcom_data_using_own_script.md).
+
 ## Recommendation for VideoScan
 
 Keep the local GEDCOM as the source of truth. FamilySearch is a remote, user-authorized reference and enrichment source, not the owner of VideoScan's tree.
