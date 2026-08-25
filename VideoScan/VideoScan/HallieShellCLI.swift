@@ -1115,7 +1115,11 @@ enum HallieShellCLI {
         case ":session":
             let selected = state.selectedRecordID?.uuidString ?? "none"
             let pending = state.pendingClarification == nil ? "none" : "identity"
-            output("session: \(state.transcriptSessionID.uuidString) · \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending)")
+            let voice = HallieNeuralSpeechDiagnostics.shared.snapshot()
+            output("session: \(state.transcriptSessionID.uuidString) · \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending) · neural failures \(voice.failureCount) · retry recoveries \(voice.retryRecoveryCount)")
+            if let detail = voice.lastFailure {
+                output("neural voice last failure: \(detail)")
+            }
         case ":photo":
             if let photo = state.biographyPhoto {
                 output("photo: \(photo.fileURL.path)")

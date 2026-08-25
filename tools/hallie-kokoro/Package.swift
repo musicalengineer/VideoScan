@@ -19,6 +19,7 @@ let package = Package(
             name: "HallieKokoroHelper",
             dependencies: [
                 .product(name: "KokoroSwift", package: "kokoro-ios"),
+                .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXUtilsLibrary", package: "MLXUtilsLibrary"),
             ]
         ),

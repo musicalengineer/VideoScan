@@ -195,8 +195,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
         let job = HallieNeuralSpeech.job(for: text, voice: voice, speed: speed)
         neuralJob = job
         neuralTask = Task { [weak self] in
+            var synthesizedAudioURL: URL?
             do {
                 let audioURL = try await job.synthesize()
+                synthesizedAudioURL = audioURL
                 guard let self, generation == self.speechGeneration, !Task.isCancelled else {
                     HallieNeuralSpeech.removeTemporaryAudio(audioURL)
                     return
@@ -211,7 +213,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     throw HallieNeuralSpeech.Failure.missingOutput
                 }
             } catch {
+                HallieNeuralSpeech.removeTemporaryAudio(synthesizedAudioURL)
                 guard let self, generation == self.speechGeneration, !Task.isCancelled else { return }
+                HallieNeuralSpeechDiagnostics.shared.recordFailure(error.localizedDescription)
                 NSLog("VideoScan: Hallie neural voice unavailable; using Apple speech: %@",
                       error.localizedDescription)
                 self.neuralTask = nil
@@ -270,6 +274,8 @@ extension HallieSpeaker: AVAudioPlayerDelegate {
             guard player === self.neuralPlayer else { return }
             NSLog("VideoScan: Hallie neural audio playback failed: %@",
                   error?.localizedDescription ?? "unknown playback error")
+            HallieNeuralSpeechDiagnostics.shared.recordFailure(
+                error?.localizedDescription ?? "unknown playback error")
             self.neuralPlayer = nil
             self.neuralTask = nil
             self.neuralJob = nil
