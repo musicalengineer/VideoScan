@@ -186,6 +186,12 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 voice: voice,
                 speed: Self.speedFactor())
         } else {
+            // Every road to the Apple voice is logged (Rick 8/25: "we need
+            // to see why and when it falls back").
+            let why = Self.selectedNeuralVoice() == nil
+                ? "no neural voice selected (\(UserDefaults.standard.string(forKey: Self.voiceKey) ?? "default"))"
+                : "neural voice not installed at \(HallieNeuralSpeech.installationDirectory.path)"
+            appLog.write("[hallie-voice] using Apple speech — \(why)")
             speakWithApple(sentences)
         }
     }
@@ -210,6 +216,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralJob = job
         neuralTask = Task { [weak self] in
             var synthesizedAudioURL: URL?
+            let started = Date()
             do {
                 let audioURL = try await job.synthesize()
                 synthesizedAudioURL = audioURL
@@ -219,7 +226,15 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 }
                 let player = try AVAudioPlayer(contentsOf: audioURL)
                 player.delegate = self
+                // Raise the device buffer BEFORE prepareToPlay so the
+                // player's I/O cycle starts at the larger size.
+                let buffer = HallieOutputBuffer.ensureMinimum()
                 player.prepareToPlay()
+                appLog.write(String(
+                    format: "[hallie-voice] %@ synthesized %.1fs of audio in %.1fs (%@); %@",
+                    voice.displayName, player.duration, Date().timeIntervalSince(started),
+                    HallieNeuralSpeech.supportsWarmWorker ? "warm worker" : "one-shot helper",
+                    buffer))
                 self.neuralAudioURL = audioURL
                 self.neuralPlayer = player
                 self.neuralJob = nil
@@ -292,6 +307,8 @@ extension HallieSpeaker: AVAudioPlayerDelegate {
             guard player === self.neuralPlayer else { return }
             NSLog("VideoScan: Hallie neural audio playback failed: %@",
                   error?.localizedDescription ?? "unknown playback error")
+            appLog.write("[hallie-voice] neural audio playback failed; using Apple speech — "
+                         + (error?.localizedDescription ?? "unknown playback error"))
             HallieNeuralSpeechDiagnostics.shared.recordFailure(
                 error?.localizedDescription ?? "unknown playback error")
             self.neuralPlayer = nil
