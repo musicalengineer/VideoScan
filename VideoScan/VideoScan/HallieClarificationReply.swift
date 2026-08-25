@@ -28,6 +28,13 @@ extension HallieTurnExecutor {
         }
 
         let folded = PersonResolver.normalize(trimmed)
+        // "Did you mean Judson Lamb?" → "yes" is a complete answer when
+        // there is exactly one choice.
+        if candidates.count == 1,
+           ["yes", "y", "yeah", "yep", "yup", "correct", "right", "thats right",
+            "that's right", "sure", "please", "yes please", "exactly"].contains(folded) {
+            return candidates[0].id
+        }
         let exact = candidates.filter {
             PersonResolver.normalize($0.label) == folded
                 || PersonResolver.normalize($0.canonicalName) == folded

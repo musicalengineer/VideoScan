@@ -290,24 +290,27 @@ public struct GedcomFamilyGraph: Sendable {
         //   2. Unique prefix: every asked token (≥3 letters) must be a
         //      PREFIX of some name token ("ann" finds Anna and Ann — the
         //      caller's ambiguity handling asks which one).
+        // Fuzzy fallbacks assert only a UNIQUE person. "rick" → "richard"
+        // matching three Richards must read as not-found (so the People
+        // tab or a "did you mean…?" list can answer), never as GEDCOM
+        // ambiguity (regression caught 2026-08-24: "Which rick do you mean?").
         let expanded = tokens.map { Self.diminutives[$0] ?? $0 }
         if expanded != tokens {
             let byNickname = people.values.filter { person in
                 let nameTokens = Set(FamilyIdentityText.tokens(person.name))
                 return expanded.allSatisfy { nameTokens.contains($0) }
             }
-            if !byNickname.isEmpty {
-                return byNickname.sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
-            }
+            if byNickname.count == 1 { return byNickname }
+            if byNickname.count > 1 { return [] }
         }
         guard tokens.allSatisfy({ $0.count >= 3 }) else { return [] }
-        return people.values.filter { person in
+        let byPrefix = people.values.filter { person in
             let nameTokens = FamilyIdentityText.tokens(person.name)
             return tokens.allSatisfy { asked in
                 nameTokens.contains { $0.hasPrefix(asked) }
             }
         }
-        .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+        return byPrefix.count == 1 ? byPrefix : []
     }
 
     /// Curated diminutive → formal-name table (lowercased tokens). Data,

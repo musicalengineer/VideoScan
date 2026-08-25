@@ -883,6 +883,43 @@ enum HallieTurnExecutor {
                 return PeopleTab.answer(profile: profile, payload: payload, context: context,
                                         queryDescription: queryDescription)
             }
+            // A near miss ("Jusson Lambe") → "Did you mean Judson Lamb?" as a
+            // clarification with the real people as choices — the existing
+            // chip/typed-reply continuation finishes the turn. Never a
+            // silent substitution (Rick 2026-08-24).
+            let suggestions = HallieNameSuggestion.suggest(
+                typed, graph: graph,
+                profiles: (context.profiles ?? []).map {
+                    (stableID: $0.stableID, name: $0.canonicalName, aliases: $0.aliases)
+                })
+            if !suggestions.isEmpty {
+                let choices = suggestions.map { suggestion -> Candidate in
+                    switch suggestion.identity {
+                    case .gedcom(let id):
+                        return Candidate(id: .gedcomPersonID(id),
+                                         canonicalName: suggestion.name, label: suggestion.label)
+                    case .profile(let stableID):
+                        return Candidate(id: .profileStableID(stableID),
+                                         canonicalName: suggestion.name, label: suggestion.label)
+                    }
+                }
+                let prose = choices.count == 1
+                    ? "I don't find \u{201C}\(typed)\u{201D} — did you mean \(choices[0].canonicalName)?"
+                    : "I don't find \u{201C}\(typed)\u{201D} — did you mean one of these?"
+                return Result(
+                    route: .graph,
+                    outcome: .needsClarification,
+                    prose: prose,
+                    basisLine: "Basis: no exact match in the family tree or People tab; the closest recorded names are offered, nothing was assumed.",
+                    queryDescription: queryDescription,
+                    citations: [],
+                    catalogPersonName: nil,
+                    clarification: Clarification(
+                        intent: request.intent,
+                        stage: choices[0].source == .peopleProfile ? .profileIdentity : .gedcomPerson,
+                        candidates: choices,
+                        continuationToken: context.continuationToken))
+            }
             return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
         }
         return FamilyKnowledgeSupplement.apply(

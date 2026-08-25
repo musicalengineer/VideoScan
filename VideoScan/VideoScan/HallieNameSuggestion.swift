@@ -1,0 +1,122 @@
+// HallieNameSuggestion.swift
+// "Did you mean Judson Lamb?" (Rick, live 2026-08-24: "Jusson Lambe…
+// Issaa Damno…"). When a typed name matches nobody, offer the closest
+// real names as a clarification — never a silent substitution.
+//
+// Pure: names in, suggestions out. Matching is token-wise edit distance
+// against GEDCOM and People-tab names; every typed token must land on a
+// distinct name token within its budget, so "Jusson Lambe" reaches
+// "Judson Lamb" while "John Smith" cannot drift to "Joan Smyth" through a
+// pile of small edits (two tokens each costing the maximum is rejected).
+
+import Foundation
+import VideoScanCore
+
+enum HallieNameSuggestion {
+
+    struct Suggestion: Equatable, Sendable {
+        enum Identity: Equatable, Sendable {
+            case gedcom(id: String)
+            case profile(stableID: String)
+        }
+        let identity: Identity
+        let name: String
+        let label: String
+        /// Total edits across tokens — lower is better.
+        let cost: Int
+    }
+
+    /// Closest names to `typed`, best first, at most `limit`. Empty when
+    /// nothing is close enough. Exact matches are excluded (the caller
+    /// only asks after resolution already failed).
+    static func suggest(
+        _ typed: String,
+        graph: GedcomFamilyGraph?,
+        profiles: [(stableID: String, name: String, aliases: [String])] = [],
+        limit: Int = 3
+    ) -> [Suggestion] {
+        let typedTokens = FamilyIdentityText.tokens(typed)
+        guard !typedTokens.isEmpty, typedTokens.allSatisfy({ $0.count >= 2 }) else { return [] }
+
+        var found: [Suggestion] = []
+        if let graph {
+            for person in graph.people.values {
+                guard let cost = matchCost(typedTokens, against: FamilyIdentityText.tokens(person.name)) else { continue }
+                var label = person.name
+                if let year = person.birthYear { label += " (born \(year))" }
+                found.append(Suggestion(identity: .gedcom(id: person.id), name: person.name,
+                                        label: label, cost: cost))
+            }
+        }
+        for profile in profiles {
+            let names = [profile.name] + profile.aliases
+            let best = names.compactMap { matchCost(typedTokens, against: FamilyIdentityText.tokens($0)) }.min()
+            if let best {
+                found.append(Suggestion(identity: .profile(stableID: profile.stableID),
+                                        name: profile.name, label: "\(profile.name) (People tab)", cost: best))
+            }
+        }
+        // Distinct people stay distinct (two Judson Lambs, told apart by
+        // their labels); a People-tab profile that merely repeats a GEDCOM
+        // name is folded away.
+        let gedcomNames = Set(found.compactMap { s -> String? in
+            if case .gedcom = s.identity { return FamilyIdentityText.normalized(s.name) }
+            return nil
+        })
+        let kept = found.filter { s in
+            if case .profile = s.identity {
+                return !gedcomNames.contains(FamilyIdentityText.normalized(s.name))
+            }
+            return true
+        }
+        return kept
+            .sorted { $0.cost == $1.cost ? $0.label < $1.label : $0.cost < $1.cost }
+            .prefix(limit).map { $0 }
+    }
+
+    /// Sum of per-token edit distances when EVERY typed token matches a
+    /// distinct name token within budget (≤1 edit for tokens up to 4
+    /// letters, ≤2 for longer); nil when any token has no match. At least
+    /// one token must be a non-trivial match (cost > 0 somewhere) — an
+    /// all-exact match is not a "suggestion".
+    static func matchCost(_ typed: [String], against nameTokens: [String]) -> Int? {
+        guard !nameTokens.isEmpty else { return nil }
+        var remaining = nameTokens
+        var total = 0
+        for token in typed {
+            let budget = token.count <= 4 ? 1 : 2
+            var bestIndex: Int?
+            var bestCost = Int.max
+            for (i, candidate) in remaining.enumerated() {
+                let d = editDistance(token, candidate, limit: budget)
+                if d <= budget, d < bestCost { bestCost = d; bestIndex = i }
+            }
+            guard let index = bestIndex else { return nil }
+            remaining.remove(at: index)
+            total += bestCost
+        }
+        return total > 0 ? total : nil
+    }
+
+    /// Levenshtein distance, capped: returns `limit + 1` as soon as the
+    /// distance is known to exceed `limit`.
+    static func editDistance(_ a: String, _ b: String, limit: Int) -> Int {
+        let x = Array(a), y = Array(b)
+        if abs(x.count - y.count) > limit { return limit + 1 }
+        if x.isEmpty { return y.count }
+        if y.isEmpty { return x.count }
+        var previous = Array(0...y.count)
+        for i in 1...x.count {
+            var current = [i] + Array(repeating: 0, count: y.count)
+            var rowMin = i
+            for j in 1...y.count {
+                let cost = x[i - 1] == y[j - 1] ? 0 : 1
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+                rowMin = min(rowMin, current[j])
+            }
+            if rowMin > limit { return limit + 1 }
+            previous = current
+        }
+        return previous[y.count]
+    }
+}
