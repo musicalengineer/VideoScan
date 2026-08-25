@@ -304,9 +304,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         rebuildSelection()
     }
 
-    /// Hallie / People-tab focus: exact name (case-insensitive) first, then
-    /// surname holders (first by sort order). Returns false when nothing
-    /// matched so the caller can leave the current selection alone.
+    /// Hallie / People-tab focus: exact preferred name first, then one
+    /// unambiguous preferred/alternate name or FamilySearch ID, then surname
+    /// holders (first by sort order). Returns false when nothing matched so
+    /// the caller can leave the current selection alone.
     @discardableResult
     func focus(onName raw: String) -> Bool {
         let wanted = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -317,6 +318,11 @@ final class FamilyTreeLiveModel: ObservableObject {
                 $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
             }) {
                 select(exact.id)
+                return true
+            }
+            let identityMatches = graph.people(matching: wanted)
+            if identityMatches.count == 1, let identity = identityMatches.first {
+                select(identity.id)
                 return true
             }
             if let bySurname = Self.sorted(graph.people(withSurname: wanted)).first {
@@ -434,14 +440,28 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     private func refilter() {
         let needle = searchText.trimmingCharacters(in: .whitespaces)
-        let source: [FamilyTreePersonSummary] = isLive
-            ? sortedPeople.map(Self.summary)
-            : FamilyTreeDemoData.people
         guard !needle.isEmpty else {
-            filteredPeople = source
+            filteredPeople = isLive
+                ? sortedPeople.map(Self.summary)
+                : FamilyTreeDemoData.people
             return
         }
-        filteredPeople = source.filter {
+        if isLive {
+            filteredPeople = sortedPeople.filter { person in
+                person.name.localizedCaseInsensitiveContains(needle)
+                    || person.alternateNames.contains {
+                        $0.localizedCaseInsensitiveContains(needle)
+                    }
+                    || (person.surname?.localizedCaseInsensitiveContains(needle) ?? false)
+                    || person.alternateSurnames.contains {
+                        $0.localizedCaseInsensitiveContains(needle)
+                    }
+                    || person.id.localizedCaseInsensitiveContains(needle)
+                    || (person.familySearchID?.localizedCaseInsensitiveContains(needle) ?? false)
+            }.map(Self.summary)
+            return
+        }
+        filteredPeople = FamilyTreeDemoData.people.filter {
             $0.name.localizedCaseInsensitiveContains(needle)
                 || ($0.surname?.localizedCaseInsensitiveContains(needle) ?? false)
                 || $0.reference.localizedCaseInsensitiveContains(needle)

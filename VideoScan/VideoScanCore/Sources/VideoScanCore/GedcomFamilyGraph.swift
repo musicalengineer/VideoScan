@@ -4,8 +4,10 @@
 // available so a person can say 'show videos of rick's father'").
 //
 // Scope: exactly what kinship questions need — INDI names/sex and
-// FAM husband/wife/children links. Dates, sources, notes, and the
-// rest of the standard are ignored. The graph is knowledge-in-DATA:
+// FAM husband/wife/children links, including alternate names, multiple
+// parent-family links, and FamilySearch's stable `_FSFTID`. Beyond the dates
+// and places below, sources, notes, and the rest of the standard are ignored.
+// The graph is knowledge-in-DATA:
 // parsed fresh from the user's exported .ged (App Support
 // family-tree/originals/), never baked into the app.
 //
@@ -25,8 +27,17 @@ public struct GedcomFamilyGraph: Sendable {
         /// Display name with the GEDCOM slashes stripped:
         /// "Richard Harding /Breen/ Jr" → "Richard Harding Breen Jr".
         public var name: String
+        /// Additional level-1 NAME records, in file order. FamilySearch
+        /// exports commonly carry both a preferred and an alternate name;
+        /// discarding the latter made otherwise valid searches fail.
+        public var alternateNames: [String] = []
         public var sex: String          // "M" / "F" / ""
         public var childOfFamily: String?
+        /// Every FAMC link, in file order. `childOfFamily` remains the first
+        /// link for source compatibility, while kinship resolution consults
+        /// all recorded birth/adoptive/step families instead of silently
+        /// replacing one with another.
+        public var childOfFamilies: [String] = []
         public var spouseOfFamilies: [String] = []
         /// Raw GEDCOM date strings ("4 Mar 1959") — displayed verbatim,
         /// never reinterpreted (honesty over formatting).
@@ -42,6 +53,11 @@ public struct GedcomFamilyGraph: Sendable {
         /// can count people without guessing which name token is the family
         /// name. `nil` when the NAME line had no slashes.
         public var surname: String?
+        /// Surnames present only in alternate NAME records.
+        public var alternateSurnames: [String] = []
+        /// FamilySearch's stable person identifier (for example GVQV-NW3).
+        /// This survives new exports even when file-local @I…@ pointers move.
+        public var familySearchID: String?
 
         /// Four-digit year pulled out of the raw GEDCOM birth date ("4 JUL
         /// 1962", "ABT 1944", "BET 1930 AND 1931" → first run wins). Nil when
@@ -136,50 +152,13 @@ public struct GedcomFamilyGraph: Sendable {
             let value = parts.count == 3 ? String(parts[2]) : ""
 
             if var person = currentIndi {
-                if level == 1 { pendingEvent = (tag == "BIRT" || tag == "DEAT") ? tag : nil }
-                if level == 2, tag == "DATE", let event = pendingEvent {
-                    if event == "BIRT", person.birthDate == nil { person.birthDate = value }
-                    if event == "DEAT", person.deathDate == nil { person.deathDate = value }
-                    currentIndi = person
-                    continue
-                }
-                if level == 2, tag == "PLAC", let event = pendingEvent, !value.isEmpty {
-                    if event == "BIRT", person.birthPlace == nil { person.birthPlace = value }
-                    if event == "DEAT", person.deathPlace == nil { person.deathPlace = value }
-                    currentIndi = person
-                    continue
-                }
-                switch (level, tag) {
-                case (1, "NAME") where person.name.isEmpty:
-                    person.name = value.replacingOccurrences(of: "/", with: " ")
-                        .split(separator: " ").joined(separator: " ")
-                    if let open = value.firstIndex(of: "/"),
-                       let close = value[value.index(after: open)...]
-                        .firstIndex(of: "/") {
-                        let raw = value[value.index(after: open)..<close]
-                            .trimmingCharacters(in: .whitespaces)
-                        person.surname = raw.isEmpty ? nil : raw
-                    }
-                case (1, "SEX"):
-                    person.sex = value
-                case (1, "FAMC"):
-                    person.childOfFamily = value
-                case (1, "FAMS"):
-                    person.spouseOfFamilies.append(value)
-                default:
-                    break
-                }
+                Self.applyPersonLine(level: level, tag: tag, value: value,
+                                     person: &person, pendingEvent: &pendingEvent)
                 currentIndi = person
             } else if var fam = currentFam {
-                if level == 1 { pendingFamilyEvent = tag == "MARR" ? tag : nil }
-                switch (level, tag) {
-                case (1, "HUSB"): fam.family.husband = value
-                case (1, "WIFE"): fam.family.wife = value
-                case (1, "CHIL"): fam.family.children.append(value)
-                case (2, "DATE") where pendingFamilyEvent == "MARR" && fam.family.marriageDate == nil:
-                    fam.family.marriageDate = value
-                default: break
-                }
+                Self.applyFamilyLine(level: level, tag: tag, value: value,
+                                     family: &fam.family,
+                                     pendingEvent: &pendingFamilyEvent)
                 currentFam = fam
             }
         }
@@ -190,6 +169,11 @@ public struct GedcomFamilyGraph: Sendable {
         guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
             return nil
         }
+        let records = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let first = records.first, let last = records.last,
+              first.trimmingCharacters(in: CharacterSet(charactersIn: "\u{feff}")) == "0 HEAD",
+              last.uppercased() == "0 TRLR" else { return nil }
         self.init(gedcomText: text)
         sourceFileName = fileURL.lastPathComponent
         sourceDirectory = fileURL.deletingLastPathComponent().path
@@ -245,11 +229,12 @@ public struct GedcomFamilyGraph: Sendable {
         key = key.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return [] }
         func matches(_ person: Person) -> Bool {
-            guard let surname = person.surname else { return false }
-            let normalized = FamilyIdentityText.normalized(surname)
-            return normalized == key
-                || normalized + "s" == key
-                || normalized + "es" == key
+            ([person.surname].compactMap { $0 } + person.alternateSurnames).contains { surname in
+                let normalized = FamilyIdentityText.normalized(surname)
+                return normalized == key
+                    || normalized + "s" == key
+                    || normalized + "es" == key
+            }
         }
         return people.values.filter(matches).sorted {
             $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
@@ -262,15 +247,23 @@ public struct GedcomFamilyGraph: Sendable {
     /// name (case/diacritic-insensitive). "rick" won't match (nickname),
     /// but "richard" and "richard breen" will; ambiguity returns all.
     public func people(matching typed: String) -> [Person] {
+        let familySearchKey = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if Self.isFamilySearchID(familySearchKey) {
+            return people.values.filter { $0.familySearchID == familySearchKey }
+                .sorted { $0.id < $1.id }
+        }
         let tokens = FamilyIdentityText.tokens(typed)
         guard !tokens.isEmpty else { return [] }
         let matches = people.values.filter { person in
-            let nameTokens = Set(FamilyIdentityText.tokens(person.name))
             // Identity lookup is token-exact, never substring based:
             // "Ann" must not silently resolve to "Joanne". Nicknames
             // belong in the explicit alias resolver, not in fuzzy GEDCOM
             // matching.
-            return tokens.allSatisfy { nameTokens.contains($0) }
+            return Self.allNames(of: person).contains { candidate in
+                let nameTokens = Set(FamilyIdentityText.tokens(candidate))
+                return tokens.allSatisfy { nameTokens.contains($0) }
+            }
         }
         .sorted {
             $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
@@ -278,7 +271,11 @@ public struct GedcomFamilyGraph: Sendable {
 
         // A complete canonical name is more specific than a token-subset
         // match ("Zoe River" must not become ambiguous with "Zoe River Jr").
-        let exact = matches.filter { FamilyIdentityText.tokens($0.name) == tokens }
+        let exact = matches.filter { person in
+            Self.allNames(of: person).contains {
+                FamilyIdentityText.tokens($0) == tokens
+            }
+        }
         if !matches.isEmpty { return exact.isEmpty ? matches : exact }
 
         // Nothing token-exact (2026-08-24, Rick: "tell me about fred lamb"
@@ -297,17 +294,21 @@ public struct GedcomFamilyGraph: Sendable {
         let expanded = tokens.map { Self.diminutives[$0] ?? $0 }
         if expanded != tokens {
             let byNickname = people.values.filter { person in
-                let nameTokens = Set(FamilyIdentityText.tokens(person.name))
-                return expanded.allSatisfy { nameTokens.contains($0) }
+                Self.allNames(of: person).contains { candidate in
+                    let nameTokens = Set(FamilyIdentityText.tokens(candidate))
+                    return expanded.allSatisfy { nameTokens.contains($0) }
+                }
             }
             if byNickname.count == 1 { return byNickname }
             if byNickname.count > 1 { return [] }
         }
         guard tokens.allSatisfy({ $0.count >= 3 }) else { return [] }
         let byPrefix = people.values.filter { person in
-            let nameTokens = FamilyIdentityText.tokens(person.name)
-            return tokens.allSatisfy { asked in
-                nameTokens.contains { $0.hasPrefix(asked) }
+            Self.allNames(of: person).contains { candidate in
+                let nameTokens = FamilyIdentityText.tokens(candidate)
+                return tokens.allSatisfy { asked in
+                    nameTokens.contains { $0.hasPrefix(asked) }
+                }
             }
         }
         return byPrefix.count == 1 ? byPrefix : []
@@ -377,19 +378,16 @@ public struct GedcomFamilyGraph: Sendable {
         }
         switch relation {
         case .father:
-            return [lookup(person.childOfFamily.flatMap { families[$0]?.husband })]
-                .compactMap { $0 }
+            return uniquePeople(parentFamilies(of: person).compactMap { lookup($0.husband) })
         case .mother:
-            return [lookup(person.childOfFamily.flatMap { families[$0]?.wife })]
-                .compactMap { $0 }
+            return uniquePeople(parentFamilies(of: person).compactMap { lookup($0.wife) })
         case .parents:
             return relatives(.father, of: person) + relatives(.mother, of: person)
         case .brother, .sister, .siblings:
-            guard let famID = person.childOfFamily,
-                  let fam = families[famID] else { return [] }
-            let sibs = fam.children
+            let sibs = uniquePeople(parentFamilies(of: person)
+                .flatMap(\.children)
                 .filter { $0 != person.id }
-                .compactMap { people[$0] }
+                .compactMap { people[$0] })
             switch relation {
             case .brother: return sibs.filter { $0.sex == "M" }
             case .sister:  return sibs.filter { $0.sex == "F" }
@@ -417,6 +415,136 @@ public struct GedcomFamilyGraph: Sendable {
             default:       return spouses
             }
         }
+    }
+
+    private func parentFamilies(of person: Person) -> [Family] {
+        let identifiers = person.childOfFamilies.isEmpty
+            ? [person.childOfFamily].compactMap { $0 }
+            : person.childOfFamilies
+        return identifiers.compactMap { families[$0] }
+    }
+
+    private func uniquePeople(_ candidates: [Person]) -> [Person] {
+        var seen: Set<String> = []
+        return candidates.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func allNames(of person: Person) -> [String] {
+        [person.name] + person.alternateNames
+    }
+
+    private static func applyPersonLine(
+        level: Int,
+        tag: String,
+        value: String,
+        person: inout Person,
+        pendingEvent: inout String?
+    ) {
+        if level == 1 { pendingEvent = (tag == "BIRT" || tag == "DEAT") ? tag : nil }
+        if applyPersonEventDetail(level: level, tag: tag, value: value,
+                                  person: &person, event: pendingEvent) { return }
+        switch (level, tag) {
+        case (1, "NAME"):
+            applyName(value, to: &person)
+        case (1, "SEX"):
+            person.sex = value
+        case (1, "FAMC"):
+            if !value.isEmpty, person.childOfFamily == nil {
+                person.childOfFamily = value
+            }
+            if !value.isEmpty, !person.childOfFamilies.contains(value) {
+                person.childOfFamilies.append(value)
+            }
+        case (1, "FAMS"):
+            if !value.isEmpty, !person.spouseOfFamilies.contains(value) {
+                person.spouseOfFamilies.append(value)
+            }
+        case (1, "_FSFTID") where person.familySearchID == nil:
+            let identifier = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased()
+            if isFamilySearchID(identifier) { person.familySearchID = identifier }
+        default:
+            break
+        }
+    }
+
+    private static func applyPersonEventDetail(
+        level: Int,
+        tag: String,
+        value: String,
+        person: inout Person,
+        event: String?
+    ) -> Bool {
+        guard level == 2, let event else { return false }
+        switch (tag, event) {
+        case ("DATE", "BIRT") where person.birthDate == nil:
+            person.birthDate = value
+        case ("DATE", "DEAT") where person.deathDate == nil:
+            person.deathDate = value
+        case ("PLAC", "BIRT") where person.birthPlace == nil && !value.isEmpty:
+            person.birthPlace = value
+        case ("PLAC", "DEAT") where person.deathPlace == nil && !value.isEmpty:
+            person.deathPlace = value
+        default:
+            return false
+        }
+        return true
+    }
+
+    private static func applyName(_ value: String, to person: inout Person) {
+        let parsed = parseName(value)
+        if person.name.isEmpty {
+            person.name = parsed.display
+            person.surname = parsed.surname
+        } else if !parsed.display.isEmpty,
+                  parsed.display != person.name,
+                  !person.alternateNames.contains(parsed.display) {
+            person.alternateNames.append(parsed.display)
+            if let surname = parsed.surname,
+               surname != person.surname,
+               !person.alternateSurnames.contains(surname) {
+                person.alternateSurnames.append(surname)
+            }
+        }
+    }
+
+    private static func applyFamilyLine(
+        level: Int,
+        tag: String,
+        value: String,
+        family: inout Family,
+        pendingEvent: inout String?
+    ) {
+        if level == 1 { pendingEvent = tag == "MARR" ? tag : nil }
+        switch (level, tag) {
+        case (1, "HUSB"): family.husband = value
+        case (1, "WIFE"): family.wife = value
+        case (1, "CHIL"): family.children.append(value)
+        case (2, "DATE") where pendingEvent == "MARR" && family.marriageDate == nil:
+            family.marriageDate = value
+        default: break
+        }
+    }
+
+    private static func parseName(_ value: String) -> (display: String, surname: String?) {
+        let display = value.replacingOccurrences(of: "/", with: " ")
+            .split(separator: " ").joined(separator: " ")
+        guard let open = value.firstIndex(of: "/"),
+              let close = value[value.index(after: open)...].firstIndex(of: "/") else {
+            return (display, nil)
+        }
+        let raw = value[value.index(after: open)..<close]
+            .trimmingCharacters(in: .whitespaces)
+        return (display, raw.isEmpty ? nil : raw)
+    }
+
+    private static func isFamilySearchID(_ value: String) -> Bool {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0].count == 4, parts[1].count == 3 else {
+            return false
+        }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        return parts.joined().unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     /// Colloquial synonyms → relations ("dad", "mom", "kids"…).

@@ -97,6 +97,104 @@ struct GedcomFamilyGraphTests {
         #expect(broadIDs == ["@I1@", "@I2@"]) // Short name remains broad.
     }
 
+    @Test func familySearchAlternateNamesAndStableIDRemainSearchable() throws {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Alice Mae /Stone/
+        1 NAME Alice /River/
+        1 NAME Alice /River/
+        1 _FSFTID gvqv-nw3
+        0 TRLR
+        """)
+
+        let person = try #require(g.people["@I1@"])
+        #expect(person.name == "Alice Mae Stone")
+        #expect(person.surname == "Stone")
+        #expect(person.alternateNames == ["Alice River"])
+        #expect(person.alternateSurnames == ["River"])
+        #expect(person.familySearchID == "GVQV-NW3")
+        #expect(
+            g.people(matching: "Alice River").map(\.id) == ["@I1@"]
+        )
+        #expect(
+            g.people(matching: "gvqv-nw3").map(\.id) == ["@I1@"]
+        )
+        #expect(
+            g.people(withSurname: "Rivers").map(\.id) == ["@I1@"]
+        )
+    }
+
+    @Test func multipleParentFamiliesArePreservedInsteadOfLastOneWinning() throws {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Child /River/
+        1 FAMC
+        1 FAMC @F-BIRTH@
+        1 FAMC @F-ADOPT@
+        0 @I2@ INDI
+        1 NAME Birth /Father/
+        0 @I3@ INDI
+        1 NAME Birth /Mother/
+        0 @I4@ INDI
+        1 NAME Adoptive /Father/
+        0 @I5@ INDI
+        1 NAME Adoptive /Mother/
+        0 @I6@ INDI
+        1 NAME Birth /Sibling/
+        0 @I7@ INDI
+        1 NAME Adoptive /Sibling/
+        0 @F-BIRTH@ FAM
+        1 HUSB @I2@
+        1 WIFE @I3@
+        1 CHIL @I1@
+        1 CHIL @I6@
+        0 @F-ADOPT@ FAM
+        1 HUSB @I4@
+        1 WIFE @I5@
+        1 CHIL @I1@
+        1 CHIL @I7@
+        0 TRLR
+        """)
+
+        let child = try #require(g.people["@I1@"])
+        #expect(child.childOfFamily == "@F-BIRTH@")
+        #expect(
+            child.childOfFamilies == ["@F-BIRTH@", "@F-ADOPT@"]
+        )
+        #expect(
+            g.relatives(.father, of: child).map(\.id) == ["@I2@", "@I4@"]
+        )
+        #expect(
+            g.relatives(.mother, of: child).map(\.id) == ["@I3@", "@I5@"]
+        )
+        #expect(
+            g.relatives(.siblings, of: child).map(\.id) == ["@I6@", "@I7@"]
+        )
+    }
+
+    @Test func fileImportRequiresACompleteGEDCOMEnvelope() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GedcomEnvelope-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let complete = directory.appendingPathComponent("complete.ged")
+        let missingTrailer = directory.appendingPathComponent("missing-trailer.ged")
+        let missingHeader = directory.appendingPathComponent("missing-header.ged")
+        try "\u{feff}0 HEAD\n0 @I1@ INDI\n1 NAME Complete /Person/\n0 TRLR\n"
+            .write(to: complete, atomically: true, encoding: .utf8)
+        try "0 HEAD\n0 @I1@ INDI\n1 NAME Partial /Person/\n"
+            .write(to: missingTrailer, atomically: true, encoding: .utf8)
+        try "0 @I1@ INDI\n1 NAME Headerless /Person/\n0 TRLR\n"
+            .write(to: missingHeader, atomically: true, encoding: .utf8)
+
+        #expect(GedcomFamilyGraph(fileURL: complete)?.people.count == 1)
+        #expect(GedcomFamilyGraph(fileURL: missingTrailer) == nil)
+        #expect(GedcomFamilyGraph(fileURL: missingHeader) == nil)
+    }
+
     @Test func kinshipResolvesAcrossGenerations() throws {
         let g = graph
         let junior = try #require(g.people(matching: "arthur jr").first)

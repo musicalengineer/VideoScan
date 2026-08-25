@@ -466,6 +466,27 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.filteredPeople.count == 18)
     }
 
+    @Test func alternateNameAndFamilySearchIDCanFindImportedPerson() {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 @I42@ INDI
+        1 NAME Margaret /Kelly/
+        1 NAME Peggy /O'Kelly/
+        1 _FSFTID ABCD-123
+        """)
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        model.install(graph: graph)
+
+        model.searchText = "Peggy"
+        #expect(model.filteredPeople.map(\.name) == ["Margaret Kelly"])
+        model.searchText = "O'Kelly"
+        #expect(model.filteredPeople.map(\.name) == ["Margaret Kelly"])
+        model.searchText = "ABCD-123"
+        #expect(model.filteredPeople.map(\.name) == ["Margaret Kelly"])
+        #expect(model.focus(onName: "Peggy O'Kelly"))
+        #expect(model.selectedID == "@I42@")
+    }
+
     @Test func photoOverrideWinsOverProviderAndProviderIsConsulted() {
         var asked: [String] = []
         let provided = NSImage(size: NSSize(width: 2, height: 2))
