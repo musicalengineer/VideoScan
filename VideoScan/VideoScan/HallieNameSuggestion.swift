@@ -69,10 +69,24 @@ enum HallieNameSuggestion {
             }
             return true
         }
-        return kept
+        let ranked = kept
             .sorted { $0.cost == $1.cost ? $0.label < $1.label : $0.cost < $1.cost }
-            .prefix(limit).map { $0 }
+        // The limit must never SPLIT people who share a name: offering one
+        // of two Judson Lambs and hiding the other would resolve a real
+        // GEDCOM ambiguity by accident (codex #663). Take the top `limit`,
+        // then pull in every remaining entry whose name is already listed.
+        // Bounded (codex #675): a pathological tree with hundreds of one
+        // name still gets a chip list a person can read, not every entry.
+        let head = Array(ranked.prefix(limit))
+        let listedNames = Set(head.map { FamilyIdentityText.normalized($0.name) })
+        let tail = ranked.dropFirst(limit).filter {
+            listedNames.contains(FamilyIdentityText.normalized($0.name))
+        }
+        return head + tail.prefix(max(0, Self.maxSuggestions - head.count))
     }
+
+    /// Hard ceiling on offered chips, same-name groups included.
+    static let maxSuggestions = 12
 
     /// Sum of per-token edit distances when EVERY typed token matches a
     /// distinct name token within budget (≤1 edit for tokens up to 4

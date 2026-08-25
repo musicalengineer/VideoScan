@@ -771,6 +771,24 @@ struct HallieAppV2IntegrationTests {
         #expect(ask.contains("Okay — I won't guess which person you meant."))
     }
 
+    /// codex #663 sensors on the photo-request card: the import is tracked
+    /// and cancellable, runs off the main actor, and a follow-up that lands
+    /// while Hallie is thinking is consumed when she frees up.
+    @Test func photosImportIsTrackedDetachedAndFollowUpIsNotLost() throws {
+        let card = try productionSource("HallieAttachmentView.swift")
+        #expect(card.contains("@State private var importTask: Task<Void, Never>?"))
+        #expect(card.contains("importTask?.cancel()"))
+        #expect(card.contains(".onDisappear { importTask?.cancel() }"))
+        #expect(card.contains("await HalliePhotoImport.run("))
+        #expect(card.contains("loadTransferable(type: HalliePickedPhotoFile.self)"),
+                "file representation, never a whole-asset Data load")
+        #expect(!card.contains("loadTransferable(type: Data.self)"))
+        #expect(card.contains("guard !Task.isCancelled else { return }"))
+        let chat = try productionSource("ArchivistChatWindow.swift")
+        #expect(chat.contains(".onChange(of: isThinking) { _, thinking in"))
+        #expect(chat.contains("if !thinking { consumePendingAskRequest() }"))
+    }
+
     @Test func interpretationFailureIsFailClosed() throws {
         let chat = try productionSource("ArchivistChatWindow.swift")
         let ask = try slice(chat, from: "private func ask(_ text: String)",

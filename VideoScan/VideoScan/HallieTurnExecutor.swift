@@ -79,11 +79,17 @@ enum HallieTurnExecutor {
         case profileIdentity
         case gedcomPerson
         case cyberBrainPerson
+        /// "Did you mean…?" offers the closest names from BOTH the tree
+        /// and the People tab in one list; every chip must be actionable
+        /// (codex #663 — the stage used to be taken from the first choice,
+        /// so a People chip under a GEDCOM first choice was refused).
+        case suggestedIdentity
 
         func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
             case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
-                 (.cyberBrainPerson, .cyberBrain):
+                 (.cyberBrainPerson, .cyberBrain),
+                 (.suggestedIdentity, .peopleProfile), (.suggestedIdentity, .gedcom):
                 return true
             default:
                 return false
@@ -916,7 +922,7 @@ enum HallieTurnExecutor {
                     catalogPersonName: nil,
                     clarification: Clarification(
                         intent: request.intent,
-                        stage: choices[0].source == .peopleProfile ? .profileIdentity : .gedcomPerson,
+                        stage: .suggestedIdentity,
                         candidates: choices,
                         continuationToken: context.continuationToken))
             }

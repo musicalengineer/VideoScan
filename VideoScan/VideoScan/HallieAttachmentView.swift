@@ -154,6 +154,10 @@ struct HalliePhotoRequestView: View {
     @EnvironmentObject private var model: VideoScanModel
     @State private var pickedItem: PhotosPickerItem?
     @State private var status: String?
+    /// The in-flight import. Tracked so a second pick or a vanished card
+    /// cancels it instead of letting an orphan write into the archive and
+    /// poke a dead view (codex #663).
+    @State private var importTask: Task<Void, Never>?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -188,29 +192,35 @@ struct HalliePhotoRequestView: View {
         }
         .modifier(CardChrome())
         .onChange(of: pickedItem) { _, item in importPicked(item) }
+        .onDisappear { importTask?.cancel() }
     }
 
     private func importPicked(_ item: PhotosPickerItem?) {
         guard let item else { return }
+        importTask?.cancel()
         status = "Saving…"
-        Task {
-            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-            guard let data = try? await item.loadTransferable(type: Data.self) else {
-                await MainActor.run { status = "Couldn’t read that photo."; pickedItem = nil }
-                return
+        let folder = folder, name = name
+        // All the work — Photos export, bounded read, archive write — runs
+        // in HalliePhotoImport's detached worker; cancelling THIS task
+        // cancels that worker (codex #675). Only the Sendable configuration
+        // snapshot crosses over.
+        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        importTask = Task { @MainActor in
+            let outcome = await HalliePhotoImport.run(
+                load: { try await item.loadTransferable(type: HalliePickedPhotoFile.self) },
+                configuration: configuration,
+                folder: folder)
+            guard !Task.isCancelled else { return }
+            switch outcome {
+            case .success:
+                status = "Saved to the archive."
+                // Show it now instead of making the user ask again.
+                model.archivistAskRequest = "show me a photo of \(name)"
+            case .failure(let error):
+                status = "Couldn’t save it: \(error.localizedDescription)"
             }
-            await MainActor.run {
-                let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
-                do {
-                    _ = try store.importPersonPhoto(data, fileExtension: ext, into: folder)
-                    status = "Saved to the archive."
-                    // Show it now instead of making the user ask again.
-                    model.archivistAskRequest = "show me a photo of \(name)"
-                } catch {
-                    status = "Couldn’t save it: \(error.localizedDescription)"
-                }
-                pickedItem = nil
-            }
+            pickedItem = nil
+            importTask = nil
         }
     }
 }

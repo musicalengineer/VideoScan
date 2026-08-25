@@ -318,6 +318,12 @@ struct ArchivistChatWindow: View {
                 archivistName: archivistName)
         }
         .onChange(of: model.archivistAskRequest) { consumePendingAskRequest() }
+        // A request that arrived while Hallie was thinking (a Photos import
+        // finishing mid-answer) is picked up the moment she is free, not
+        // left waiting for some unrelated next request (codex #663).
+        .onChange(of: isThinking) { _, thinking in
+            if !thinking { consumePendingAskRequest() }
+        }
         .onAppear {
             inputFocused = true
             consumePendingAskRequest()

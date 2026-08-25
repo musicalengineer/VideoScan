@@ -66,6 +66,53 @@ struct HallieNameSuggestionTests {
 @MainActor
 @Suite("Clarification replies — yes picks a lone suggestion")
 struct HallieSuggestionYesTests {
+    /// codex #663: the suggestion limit must never split two people who
+    /// share a name — offering one Judson Lamb and hiding the other would
+    /// quietly resolve a real GEDCOM ambiguity.
+    @Test func limitNeverSplitsASameNameGroup() {
+        let crowded = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Judson /Lamb/
+        1 BIRT
+        2 DATE 1846
+        0 @I2@ INDI
+        1 NAME Judson /Lamb/
+        1 BIRT
+        2 DATE 1811
+        0 @I3@ INDI
+        1 NAME Judson /Lamb/
+        1 BIRT
+        2 DATE 1901
+        0 @I4@ INDI
+        1 NAME Judson /Lamb/
+        1 BIRT
+        2 DATE 1930
+        0 TRLR
+        """)
+        let got = HallieNameSuggestion.suggest("Jusson Lambe", graph: crowded, limit: 3)
+        #expect(got.count == 4, "all four Judson Lambs are offered even though the limit is 3")
+
+        // …but bounded (codex #675): a pathological tree never becomes an
+        // unreadable wall of chips.
+        var text = "0 HEAD\n"
+        for i in 1...40 { text += "0 @I\(i)@ INDI\n1 NAME Judson /Lamb/\n1 BIRT\n2 DATE \(1700 + i)\n" }
+        text += "0 TRLR\n"
+        let flood = HallieNameSuggestion.suggest("Jusson Lambe", graph: GedcomFamilyGraph(gedcomText: text), limit: 3)
+        #expect(flood.count == HallieNameSuggestion.maxSuggestions)
+    }
+
+    /// codex #663: a mixed GEDCOM + People-tab list must have every chip
+    /// actionable; the stage used to be taken from the first choice only.
+    @Test func mixedSourceSuggestionsAreAllAcceptedByTheirStage() {
+        let stage = HallieTurnExecutor.ClarificationStage.suggestedIdentity
+        #expect(stage.accepts(.gedcom))
+        #expect(stage.accepts(.peopleProfile))
+        #expect(!stage.accepts(.cyberBrain))
+        #expect(!HallieTurnExecutor.ClarificationStage.gedcomPerson.accepts(.peopleProfile),
+                "the narrow stages stay narrow")
+    }
+
     @Test func yesSelectsTheOnlyCandidate() {
         let only = [HallieTurnExecutor.Candidate(id: .gedcomPersonID("@I1@"),
                                                  canonicalName: "Judson Lamb", label: "Judson Lamb (born 1846)")]

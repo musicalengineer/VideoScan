@@ -356,6 +356,149 @@ struct FamilyAssetStoreTests {
         #expect(store.photoURLs(for: FamilyAssetPerson(name: "renee")).isEmpty)
     }
 
+    // MARK: Photos import hardening (codex #663, 2026-08-25)
+
+    private func personFolder(_ store: FamilyAssetStore) throws -> URL {
+        try store.folderForPhotoRequest(person: FamilyAssetPerson(name: "Judson Lamb", birthYear: 1846))
+    }
+
+    private func pngBytes(_ base: URL, width: Int = 48, height: Int = 48) throws -> Data {
+        let scratch = base.appendingPathComponent("scratch-\(UUID().uuidString).png")
+        try writePNG(to: scratch, width: width, height: height)
+        return try Data(contentsOf: scratch)
+    }
+
+    @Test func oversizedPhotoIsRejectedBeforeAnyWrite() throws {
+        let (base, store) = try temporaryStore()
+        let folder = try personFolder(store)
+        let huge = Data(count: FamilyAssetStore.maxImportBytes + 1)
+        #expect(throws: FamilyAssetStore.StoreError.imageTooLarge(bytes: huge.count)) {
+            try store.importPersonPhoto(huge, fileExtension: "jpg", into: folder)
+        }
+        #expect(try fileManager.contentsOfDirectory(atPath: folder.path).isEmpty)
+        #expect(!fileManager.fileExists(atPath: store.cacheRoot.appendingPathComponent("import-staging").path),
+                "no staging file is ever created (the symlink-swap window is gone)")
+        _ = base
+    }
+
+    @Test func truncatedImageFailsForcedDecodeAndNeverLands() throws {
+        let (base, store) = try temporaryStore()
+        let folder = try personFolder(store)
+        let whole = try pngBytes(base, width: 256, height: 256)
+        #expect(FamilyAssetImageValidator.isVerifiedImageData(whole))
+        // Header intact, pixel data cut: ImageIO STILL reports one complete
+        // frame (measured 2026-08-25), so only the container check catches it.
+        let truncated = whole.prefix(whole.count / 3)
+        #expect(!FamilyAssetImageValidator.isVerifiedImageData(Data(truncated)))
+        #expect(!FamilyAssetImageValidator.isVerifiedImageData(Data(whole.dropLast(12))),
+                "missing IEND = not whole")
+        #expect(!FamilyAssetImageValidator.isVerifiedImageData(Data("not an image at all, just text".utf8)))
+        #expect(throws: (any Error).self) {
+            try store.importPersonPhoto(Data(truncated), fileExtension: "png", into: folder)
+        }
+        #expect(try fileManager.contentsOfDirectory(atPath: folder.path).isEmpty)
+        // Same rule at display time for a file already in the folder.
+        let planted = folder.appendingPathComponent("cut.png")
+        try Data(truncated).write(to: planted)
+        #expect(FamilyAssetImageValidator.revalidatedURL(planted) == nil)
+    }
+
+    @Test func importNeverFollowsAPlantedSymlinkAndNeverOverwrites() throws {
+        let (base, store) = try temporaryStore()
+        var clocked = store
+        let fixed = Date(timeIntervalSince1970: 1_756_140_000)   // 2026-08-25 ~13:20 ET
+        clocked.importClock = { fixed }
+        let folder = try personFolder(clocked)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let predicted = folder.appendingPathComponent(
+            "\(folder.lastPathComponent)-from-Photos-\(f.string(from: fixed)).png")
+        let outside = base.appendingPathComponent("outside-the-archive.png")
+        try fileManager.createSymbolicLink(at: predicted, withDestinationURL: outside)
+
+        let landed = try clocked.importPersonPhoto(try pngBytes(base), fileExtension: "png", into: folder)
+        #expect(!fileManager.fileExists(atPath: outside.path), "the link's target must never be written")
+        #expect(landed.lastPathComponent.hasSuffix("-2.png"), "the taken name is skipped, not replaced")
+        let values = try landed.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        #expect(values.isRegularFile == true && values.isSymbolicLink != true)
+        // A second import at the same instant is again a new file.
+        let again = try clocked.importPersonPhoto(try pngBytes(base), fileExtension: "png", into: folder)
+        #expect(again.lastPathComponent.hasSuffix("-3.png"))
+    }
+
+    /// codex #675: the folder itself swapped for a symlink AFTER
+    /// revalidation and BEFORE the write. The clock hook runs exactly in
+    /// that window, so the test performs the swap there; the fd walk must
+    /// refuse (ELOOP) and the link's target must stay untouched.
+    @Test func parentFolderSwappedForSymlinkMidImportIsRefused() throws {
+        let (base, store) = try temporaryStore()
+        let folder = try personFolder(store)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        try fileManager.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        var racing = store
+        let fm = fileManager
+        racing.importClock = {
+            try? fm.removeItem(at: folder)
+            try? fm.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
+            return Date(timeIntervalSince1970: 1_756_140_000)
+        }
+        #expect(throws: FamilyAssetStore.StoreError.unsafeDirectory(folder)) {
+            try racing.importPersonPhoto(try pngBytes(base), fileExtension: "png", into: folder)
+        }
+        #expect(try fileManager.contentsOfDirectory(atPath: elsewhere.path).isEmpty,
+                "nothing was written through the swapped-in link")
+    }
+
+    @Test func nonEEXISTCreateErrorsSurfaceImmediately() throws {
+        let (base, store) = try temporaryStore()
+        let folder = try personFolder(store)
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        do {
+            _ = try store.importPersonPhoto(try pngBytes(base), fileExtension: "png", into: folder)
+            Issue.record("expected a permission failure")
+        } catch FamilyAssetStore.StoreError.createFailed(_, let errno) {
+            #expect(errno == EACCES, "the FIRST meaningful errno, not a 50-deep suffix walk")
+        }
+    }
+
+    @Test func jpegAndHEICStructureChecksMatchRealEncoders() throws {
+        func encode(_ type: UTType) throws -> Data {
+            let context = try #require(CGContext(
+                data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 256,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(CGColor(red: 0.5, green: 0.2, blue: 0.1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+            let out = NSMutableData()
+            let dest = try #require(CGImageDestinationCreateWithData(
+                out, type.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(dest, try #require(context.makeImage()), nil)
+            #expect(CGImageDestinationFinalize(dest))
+            return out as Data
+        }
+        for type in [UTType.jpeg, .heic] {
+            let whole = try encode(type)
+            #expect(FamilyAssetImageValidator.isVerifiedImageData(whole), "\(type.identifier)")
+            #expect(!FamilyAssetImageValidator.isVerifiedImageData(Data(whole.dropLast(7))),
+                    "\(type.identifier) with the tail cut is not whole")
+        }
+    }
+
+    @Test func importAcceptsExactlyWhatDiscoveryWillShow() throws {
+        let (base, store) = try temporaryStore()
+        let folder = try personFolder(store)
+        let bytes = try pngBytes(base)
+        for ext in ["tif", "tiff", "gif", "bmp", "pdf"] {
+            #expect(throws: (any Error).self, "\(ext) is not discoverable, so it must not be importable") {
+                try store.importPersonPhoto(bytes, fileExtension: ext, into: folder)
+            }
+        }
+        let landed = try store.importPersonPhoto(bytes, fileExtension: "PNG", into: folder)
+        #expect(store.revalidatedImageURL(landed) != nil, "what was imported is what the store shows")
+    }
+
     @Test func thumbnailDecodeIsPixelBounded() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }

@@ -141,10 +141,72 @@ enum FamilyAssetImageValidator {
                 forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
               values.isRegularFile == true,
               values.isSymbolicLink != true,
-              let source = CGImageSourceCreateWithURL(fresh as CFURL, nil),
-              CGImageSourceGetCount(source) > 0
+              let data = try? Data(contentsOf: fresh, options: .mappedIfSafe),
+              isVerifiedImageData(data)
         else { return nil }
         return fresh
+    }
+
+    /// Bytes-in-memory validation shared by display-time revalidation and
+    /// Photos imports (codex #663: "accepts truncated images without
+    /// forcing decode"). Measured 2026-08-25: ImageIO reports a PNG cut to
+    /// a THIRD of its bytes as `statusComplete` with a decodable frame —
+    /// status and forced decode cannot tell a whole file from a stump. What
+    /// can is the container: PNG ends in IEND, JPEG in the EOI marker, and
+    /// HEIF/HEIC box lengths must sum exactly to the byte count. Both
+    /// checks run — structure proves the file is whole, the decode proves
+    /// the bytes are an image at all.
+    static func isVerifiedImageData(_ data: Data) -> Bool {
+        guard isStructurallyComplete(data),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0
+        else { return false }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) != nil
+    }
+
+    /// Container-level "is this file whole?" for the formats the store
+    /// admits. Unknown magic is NOT complete — the extension allow-list is
+    /// jpg/jpeg/png/heic, and anything else is refused by content too.
+    static func isStructurallyComplete(_ data: Data) -> Bool {
+        guard data.count >= 12 else { return false }
+        let head = [UInt8](data.prefix(12))
+        // PNG: signature, and the last chunk is IEND + its fixed CRC.
+        if head.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return [UInt8](data.suffix(8)) == [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]
+        }
+        // JPEG: SOI first; EOI must be the final marker (a few bytes of
+        // padding after EOI is tolerated — some writers add it).
+        if head.starts(with: [0xFF, 0xD8]) {
+            let tail = [UInt8](data.suffix(64))
+            guard let eoi = tail.lastIndex(of: 0xD9), eoi > 0, tail[eoi - 1] == 0xFF else { return false }
+            return tail[(eoi + 1)...].allSatisfy { $0 == 0x00 || $0 == 0xFF || $0 == 0x0A || $0 == 0x20 }
+        }
+        // HEIF/HEIC (ISO BMFF): walk top-level boxes; they must land
+        // exactly on the end of the data.
+        if String(decoding: head[4..<8], as: UTF8.self) == "ftyp" {
+            var offset = 0
+            let count = data.count
+            while offset + 8 <= count {
+                var size = Int(data[offset]) << 24 | Int(data[offset + 1]) << 16
+                    | Int(data[offset + 2]) << 8 | Int(data[offset + 3])
+                if size == 1 {
+                    guard offset + 16 <= count else { return false }
+                    size = 0
+                    for i in 8..<16 { size = size << 8 | Int(data[offset + i]) }
+                } else if size == 0 {
+                    size = count - offset
+                }
+                guard size >= 8, offset <= count - size else { return false }
+                offset += size
+            }
+            return offset == count
+        }
+        return false
     }
 
     static func thumbnail(_ url: URL, maxPixelSize: Int) -> CGImage? {
@@ -229,6 +291,8 @@ struct FamilyAssetStore {
         case crestAlreadyExists(URL)
         case sourceUnavailable
         case readOnly
+        case imageTooLarge(bytes: Int)
+        case createFailed(String, errno: Int32)
 
         var errorDescription: String? {
             switch self {
@@ -246,6 +310,12 @@ struct FamilyAssetStore {
                 return "The designated Master Archive is not safely available. Connect the correct archive volume and try again."
             case .readOnly:
                 return "Family assets are read-only in this session."
+            case .imageTooLarge(let bytes):
+                let mb = Double(bytes) / 1_048_576
+                return String(format: "That photo is %.0f MB; the archive accepts photos up to %d MB.",
+                              mb, FamilyAssetStore.maxImportBytes / 1_048_576)
+            case .createFailed(let name, let errno):
+                return "Couldn’t create \(name) in the archive (\(String(cString: strerror(errno))))."
             }
         }
     }
@@ -262,6 +332,16 @@ struct FamilyAssetStore {
     let cacheRoot: URL
     let access: Access
     private let fileManager: FileManager
+
+    /// Names imported photos; injectable so tests can predict a destination
+    /// (the symlink-swap test plants a link exactly where the import lands).
+    var importClock: @Sendable () -> Date = { Date() }
+
+    /// Largest photo the Photos picker may hand us (codex #663: the old
+    /// path loaded unbounded `Data`). 48 MB covers any camera JPEG/HEIC;
+    /// a scan bigger than that belongs in the folder by hand, not through
+    /// a picker that holds the whole file in memory.
+    static let maxImportBytes = 48 << 20
 
     init(
         root: URL,
@@ -440,40 +520,96 @@ struct FamilyAssetStore {
             throw StoreError.unsafeDirectory(folder)
         }
         let ext = fileExtension.lowercased()
-        guard ["png", "jpg", "jpeg", "heic", "tif", "tiff"].contains(ext) else {
+        // Same set the store will later DISCOVER — an importable-but-
+        // invisible TIFF was codex #663's "contradictory TIFF support".
+        guard Self.allowedImageExtensions.contains(ext) else {
             throw StoreError.sourceIsNotARegularImage(folder.appendingPathComponent("photo.\(ext)"))
         }
-        // Stage in the cache root so a non-image never touches the archive.
-        let staging = cacheRoot.appendingPathComponent("import-staging", isDirectory: true)
-        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-        let temp = staging.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
-        try data.write(to: temp, options: .atomic)
-        defer { try? fileManager.removeItem(at: temp) }
-        guard isVerifiedImage(temp) else {
-            throw StoreError.sourceIsNotARegularImage(temp)
+        guard data.count <= Self.maxImportBytes else {
+            throw StoreError.imageTooLarge(bytes: data.count)
+        }
+        // Validate the BYTES, in memory, before anything touches disk. The
+        // old cache-root staging file was a symlink-swap window (codex
+        // #663): a link planted between write and copy would have been
+        // followed into the archive. No staging file, no window.
+        guard FamilyAssetImageValidator.isVerifiedImageData(data) else {
+            throw StoreError.sourceIsNotARegularImage(folder.appendingPathComponent("photo.\(ext)"))
         }
         let stamp: String = {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
             f.dateFormat = "yyyyMMdd-HHmmss"
-            return f.string(from: Date())
+            return f.string(from: importClock())
         }()
         let stem = target.lastPathComponent + "-from-Photos-" + stamp
-        var destination = target.appendingPathComponent(stem).appendingPathExtension(ext).standardizedFileURL
-        var suffix = 2
-        while fileManager.fileExists(atPath: destination.path) {
-            destination = target.appendingPathComponent("\(stem)-\(suffix)").appendingPathExtension(ext).standardizedFileURL
-            suffix += 1
+
+        // Anchor on descriptors, not paths (codex #675: the folder could be
+        // swapped for a symlink between `revalidatedPhotoRequestFolder`
+        // and the write). Root is opened O_DIRECTORY|O_NOFOLLOW, every
+        // component below it is openat(O_DIRECTORY|O_NOFOLLOW) relative to
+        // its parent, and the file is openat(O_CREAT|O_EXCL|O_NOFOLLOW) —
+        // the same walk ArchivePromoteEngine uses for the archive proper.
+        let rootPath = root.path
+        guard target.path.hasPrefix(rootPath + "/") else {
+            throw StoreError.unsafeDirectory(target)
         }
-        guard destination.deletingLastPathComponent() == target else {
-            throw StoreError.unsafeDirectory(destination)
+        let components = target.path.dropFirst(rootPath.count + 1)
+            .split(separator: "/").map(String.init)
+        let rootFD: Int32
+        let dirFD: Int32
+        do {
+            rootFD = try ArchivePromoteEngine.openDirectory(rootPath)
+        } catch {
+            throw StoreError.unsafeDirectory(root)
         }
-        try fileManager.copyItem(at: temp, to: destination)
-        guard isVerifiedImage(destination) else {
-            try? fileManager.removeItem(at: destination)
-            throw StoreError.sourceIsNotARegularImage(destination)
+        defer { Darwin.close(rootFD) }
+        do {
+            dirFD = try ArchivePromoteEngine.descend(
+                from: rootFD, components: components, create: false, displayRoot: rootPath)
+        } catch {
+            throw StoreError.unsafeDirectory(target)
         }
-        return destination
+        defer { Darwin.close(dirFD) }
+
+        // Only EEXIST advances the suffix (codex #675: a disk-full or
+        // permission error must surface at once, not after 50 masks).
+        for suffix in 1...50 {
+            let name = (suffix == 1 ? stem : "\(stem)-\(suffix)") + "." + ext
+            let fd = openat(dirFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+            if fd < 0 {
+                let e = errno
+                if e == EEXIST { continue }
+                throw StoreError.createFailed(name, errno: e)
+            }
+            var written = false
+            defer {
+                Darwin.close(fd)
+                if !written { unlinkat(dirFD, name, 0) }
+            }
+            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                var offset = 0
+                while offset < buffer.count {
+                    let n = Darwin.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                    if n < 0 {
+                        let e = errno
+                        if e == EINTR { continue }
+                        throw StoreError.createFailed(name, errno: e)
+                    }
+                    offset += n
+                }
+            }
+            _ = fsync(fd)
+            // What is on disk is what was validated: same length, regular
+            // file, on the descriptor we wrote — not on a path.
+            var sb = stat()
+            guard fstat(fd, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG,
+                  Int(sb.st_size) == data.count else {
+                throw StoreError.createFailed(name, errno: EIO)
+            }
+            written = true
+            return target.appendingPathComponent(name, isDirectory: false).standardizedFileURL
+        }
+        throw StoreError.createFailed(stem + "." + ext, errno: EEXIST)
     }
 
     /// Re-check a previously returned URL immediately before display/open.
