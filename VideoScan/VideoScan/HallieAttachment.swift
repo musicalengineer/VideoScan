@@ -48,6 +48,10 @@ struct HalliePhotoAttachment: Sendable, Equatable {
     var cropOffsetX: Double = 0
     var cropOffsetY: Double = 0
     var cropScale: Double = 1
+    /// The tree record the photo was shown FOR (2026-08-26), so "this photo
+    /// is me and my family" can exclude it for that person. Nil when the
+    /// producer had no unique tree match.
+    var personGedcomID: String? = nil
 }
 
 /// One person on a card. Built from a GEDCOM record; `gedcomID` is the

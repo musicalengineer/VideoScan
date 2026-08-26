@@ -13,12 +13,17 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
     /// designated.  A designated-but-offline archive must never fall back
     /// to a different tree on the internal disk.
     let legacyGEDCOMDirectory: URL?
+    /// Who the group-folder name tokens mean (2026-08-26). Published by
+    /// whoever holds the parsed tree; nil → name-only matching.
+    var identity: FamilyAssetIdentityDirectory? = nil
 
     func makeStore() -> FamilyAssetStore {
-        FamilyAssetStore(
+        var store = FamilyAssetStore(
             root: roots.assets,
             cacheRoot: roots.thumbnailCache,
             access: access)
+        store.identity = identity
+        return store
     }
 
     func loadFamilyGraph() -> GedcomFamilyGraph? {
@@ -93,7 +98,19 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
             masterIsSafelyAvailable: masterIsSafelyAvailable,
             readOnly: readOnly)
         lock.lock()
-        value = next
+        // Identity is derived from the tree, not the roots; it survives a
+        // roots/authority republish and is replaced when the tree reloads.
+        var carried = next
+        carried.identity = value.identity
+        value = carried
+        lock.unlock()
+    }
+
+    /// Replace the identity directory (tree reload, or a Hallie turn that
+    /// just built a fuller one from CyberBrain + People-tab aliases).
+    func publishIdentity(_ identity: FamilyAssetIdentityDirectory?) {
+        lock.lock()
+        value.identity = identity
         lock.unlock()
     }
 
@@ -332,6 +349,9 @@ struct FamilyAssetStore {
     let cacheRoot: URL
     let access: Access
     private let fileManager: FileManager
+    /// Optional identity-aware attribution for group folders. Nil keeps the
+    /// name-only rule (`groupFolderMatches(_:person:)`).
+    var identity: FamilyAssetIdentityDirectory? = nil
 
     /// Names imported photos; injectable so tests can predict a destination
     /// (the symlink-swap test plants a link exactly where the import lands).
@@ -416,7 +436,8 @@ struct FamilyAssetStore {
     func photoURLs(for person: FamilyAssetPerson) -> [URL] {
         guard access != .unavailable else { return [] }
         let own = resolvedPersonFolder(for: person).map(verifiedImages(in:)) ?? []
-        return own + groupPhotoURLs(for: person).filter { !own.contains($0) }
+        let all = own + groupPhotoURLs(for: person).filter { !own.contains($0) }
+        return all.filter { !isPhotoExcluded($0, for: person) }
     }
 
     /// GEDCOM IDs that People/ folder names are keyed to (`_I42` suffix or a
@@ -447,9 +468,113 @@ struct FamilyAssetStore {
     func groupPhotoURLs(for person: FamilyAssetPerson) -> [URL] {
         guard access != .unavailable else { return [] }
         return safePersonFolders()
-            .filter { Self.groupFolderMatches($0.lastPathComponent, person: person.name) }
+            .filter { groupFolderMatches($0.lastPathComponent, person: person) }
             .flatMap(verifiedImages(in:))
+            .filter { !isPhotoExcluded($0, for: person) }
     }
+
+    /// Identity-aware when the store carries a directory AND the person is a
+    /// tree record it knows (2026-08-26: "rick" must not reach Richard Sr);
+    /// otherwise the name-only rule.
+    func groupFolderMatches(_ folderName: String, person: FamilyAssetPerson) -> Bool {
+        if let identity, let member = identity.member(person.gedcomID) {
+            guard let tokens = Self.groupFolderTokens(folderName) else { return false }
+            return identity.folderNames(member.gedcomID, folderTokens: tokens)
+        }
+        return Self.groupFolderMatches(folderName, person: person.name)
+    }
+
+    // MARK: Per-photo exclusions (2026-08-26: "this photo is … me and my family")
+
+    /// Sidecar beside a photo naming the tree people it is NOT of:
+    /// `SouthEastMontana1995.jpg.notof.json` → `{"notOf":["@I2@"], …}`.
+    /// Travels with the photo, human-readable, additive; nothing else in
+    /// the archive is touched.
+    static let exclusionSidecarSuffix = ".notof.json"
+
+    struct PhotoExclusion: Codable, Sendable, Equatable {
+        var notOf: [String]
+        var notedBy: String?
+        var notedAt: Date?
+        var caption: String?
+    }
+
+    static func exclusionSidecarURL(for photo: URL) -> URL {
+        photo.deletingLastPathComponent()
+            .appendingPathComponent(photo.lastPathComponent + exclusionSidecarSuffix)
+    }
+
+    /// GEDCOM IDs (normalised like `gedcomIDKey`) the photo is recorded as
+    /// not showing. Empty when no sidecar exists or it is unreadable.
+    func photoExclusions(for photo: URL) -> Set<String> {
+        let sidecar = Self.exclusionSidecarURL(for: photo)
+        guard let values = try? sidecar.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true,
+              let data = try? Data(contentsOf: sidecar),
+              data.count <= 64 << 10,
+              let record = try? Self.sidecarDecoder.decode(PhotoExclusion.self, from: data)
+        else { return [] }
+        return Set(record.notOf.map(Self.gedcomIDKey).filter { !$0.isEmpty })
+    }
+
+    private func isPhotoExcluded(_ photo: URL, for person: FamilyAssetPerson) -> Bool {
+        guard let id = person.gedcomID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty else { return false }
+        let key = Self.gedcomIDKey(id)
+        guard !key.isEmpty else { return false }
+        return photoExclusions(for: photo).contains(key)
+    }
+
+    /// Record that `photo` does not show `gedcomID`. The photo must be a
+    /// verified image under `People/`; the sidecar is written atomically and
+    /// merged with any earlier exclusions. Requires write access.
+    @discardableResult
+    func excludePhoto(_ photo: URL, from gedcomID: String,
+                      notedBy: String? = nil, caption: String? = nil,
+                      at date: Date = Date()) throws -> URL {
+        try requireWriteAccess()
+        let id = gedcomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !Self.safeGEDCOMIDComponent(id).isEmpty else {
+            throw StoreError.invalidPerson
+        }
+        let canonicalPhoto = Self.canonicalized(photo, fileManager: fileManager)
+        let parent = canonicalPhoto.deletingLastPathComponent()
+        guard parent.deletingLastPathComponent().standardizedFileURL == peopleDirectory.standardizedFileURL,
+              isSafeDirectory(parent),
+              isVerifiedImage(canonicalPhoto) else {
+            throw StoreError.sourceIsNotARegularImage(photo)
+        }
+        let sidecar = Self.exclusionSidecarURL(for: canonicalPhoto)
+        if let values = try? sidecar.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),
+           values.isSymbolicLink == true || values.isDirectory == true {
+            throw StoreError.unsafeDirectory(sidecar)
+        }
+        var record = (try? Data(contentsOf: sidecar))
+            .flatMap { try? Self.sidecarDecoder.decode(PhotoExclusion.self, from: $0) }
+            ?? PhotoExclusion(notOf: [])
+        if !record.notOf.contains(where: { Self.gedcomIDKey($0) == Self.gedcomIDKey(id) }) {
+            record.notOf.append(id)
+        }
+        record.notedBy = notedBy ?? record.notedBy
+        record.notedAt = date
+        record.caption = caption ?? record.caption
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        do {
+            try encoder.encode(record).write(to: sidecar, options: .atomic)
+        } catch {
+            throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+        }
+        return sidecar
+    }
+
+    private static let sidecarDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
 
     /// Tokens of a group folder's name, lowercased, markers removed — or nil
     /// when the folder is not a group folder at all.

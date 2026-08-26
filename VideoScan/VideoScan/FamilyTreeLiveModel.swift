@@ -310,6 +310,12 @@ final class FamilyTreeLiveModel: ObservableObject {
             installedSourceKey = sourceKey
         }
         graph = newGraph
+        // Group-photo attribution follows the tree (2026-08-26): rebuilt
+        // here from tree + speaker settings; a Hallie turn later enriches
+        // it with CyberBrain / People-tab aliases.
+        FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map {
+            FamilyAssetIdentityDirectory(graph: $0, speakers: .fromDefaults())
+        })
         if let newGraph {
             sortedPeople = Self.sorted(Array(newGraph.people.values))
             peopleCount = sortedPeople.count

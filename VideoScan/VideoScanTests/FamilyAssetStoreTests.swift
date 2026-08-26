@@ -535,6 +535,98 @@ struct FamilyAssetStoreTests {
         _ = base
     }
 
+    // MARK: Identity-aware group folders (live miss 2026-08-26)
+
+    private func identityStore() throws -> (base: URL, store: FamilyAssetStore) {
+        var (base, store) = try temporaryStore()
+        store.identity = FamilyAssetIdentityDirectoryTests.directory()
+        let group = store.peopleDirectory.appendingPathComponent("RickDonnaBreenFamily", isDirectory: true)
+        try writePNG(to: group.appendingPathComponent("SouthEastMontana1995.png"))
+        let parents = store.peopleDirectory.appendingPathComponent("DickAndMurielBreen", isDirectory: true)
+        try writePNG(to: parents.appendingPathComponent("wedding1938.png"))
+        let ambiguous = store.peopleDirectory.appendingPathComponent("RichardBreenFamily", isDirectory: true)
+        try writePNG(to: ambiguous.appendingPathComponent("someone.png"))
+        return (base, store)
+    }
+
+    private static let jr = FamilyAssetPerson(gedcomID: "@I1@", name: "Richard Harding Breen Jr")
+    private static let sr = FamilyAssetPerson(gedcomID: "@I2@", name: "Richard Harding Breen Sr")
+    private static let donna = FamilyAssetPerson(gedcomID: "@I3@", name: "Donna Elaine Hudson")
+
+    @Test func groupPhotosGoToTheRightRichard() throws {
+        let (base, store) = try identityStore()
+        defer { try? fileManager.removeItem(at: base) }
+        #expect(store.photoURLs(for: Self.jr).map(\.lastPathComponent) == ["SouthEastMontana1995.png"])
+        #expect(store.photoURLs(for: Self.sr).map(\.lastPathComponent) == ["wedding1938.png"])
+        #expect(store.photoURLs(for: Self.donna).map(\.lastPathComponent) == ["SouthEastMontana1995.png"],
+                "Donna Hudson married a Breen; the folder's surname is hers by marriage")
+        #expect(store.groupPhotoURLs(for: FamilyAssetPerson(gedcomID: "@I5@", name: "Muriel Lamb"))
+            .map(\.lastPathComponent) == ["wedding1938.png"])
+        #expect(store.groupPhotoURLs(for: FamilyAssetPerson(gedcomID: "@I8@", name: "Matthew Breen")).isEmpty,
+                "a son is not named in either folder")
+    }
+
+    @Test func ownPhotosStillComeFirstUnderIdentityMatching() throws {
+        let (base, store) = try identityStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let own = try store.folderForPhotoRequest(person: Self.jr)
+        try writePNG(to: own.appendingPathComponent("portrait.png"))
+        #expect(store.photoURLs(for: Self.jr).map(\.lastPathComponent) == ["portrait.png", "SouthEastMontana1995.png"])
+    }
+
+    @Test func aPersonUnknownToTheDirectoryFallsBackToNameMatching() throws {
+        let (base, store) = try identityStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let stranger = FamilyAssetPerson(name: "Rick Breen")   // no GEDCOM pointer
+        // Name-only rule: rick/dick/richard all fold to "richard" + Breen.
+        #expect(store.groupPhotoURLs(for: stranger).map(\.lastPathComponent)
+                == ["wedding1938.png", "someone.png", "SouthEastMontana1995.png"])
+    }
+
+    // MARK: Per-photo exclusion sidecars
+
+    @Test func anExcludedPhotoIsNeverShownForThatPersonAgain() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let group = store.peopleDirectory.appendingPathComponent("RickDonnaBreenFamily", isDirectory: true)
+        let photo = group.appendingPathComponent("SouthEastMontana1995.png")
+        try writePNG(to: photo)
+        let own = try store.folderForPhotoRequest(person: Self.sr)
+        try writePNG(to: own.appendingPathComponent("portrait.png"))
+        // Name-only matching (no directory): Sr gets the family photo.
+        #expect(store.photoURLs(for: Self.sr).map(\.lastPathComponent) == ["portrait.png", "SouthEastMontana1995.png"])
+        let sidecar = try store.excludePhoto(photo, from: "@I2@", notedBy: "Rick Breen", caption: "me and my family")
+        #expect(sidecar.lastPathComponent == "SouthEastMontana1995.png.notof.json")
+        #expect(store.photoExclusions(for: photo) == ["I2"])
+        #expect(store.photoURLs(for: Self.sr).map(\.lastPathComponent) == ["portrait.png"])
+        #expect(store.groupPhotoURLs(for: Self.sr).isEmpty)
+        #expect(store.photoURLs(for: Self.jr).map(\.lastPathComponent) == ["SouthEastMontana1995.png"], "Jr still sees it")
+        // A second exclusion merges; the sidecar is not an image and never surfaces.
+        try store.excludePhoto(photo, from: "@I9@")
+        #expect(store.photoExclusions(for: photo) == ["I2", "I9"])
+        #expect(store.photoURLs(for: Self.jr).map(\.lastPathComponent) == ["SouthEastMontana1995.png"])
+    }
+
+    @Test func exclusionsRequireWriteAccessAndAPeoplePhoto() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let group = store.peopleDirectory.appendingPathComponent("RickDonnaBreenFamily", isDirectory: true)
+        let photo = group.appendingPathComponent("SouthEastMontana1995.png")
+        try writePNG(to: photo)
+        let readOnly = FamilyAssetStore(root: store.root, cacheRoot: store.cacheRoot, access: .readOnly)
+        #expect(throws: FamilyAssetStore.StoreError.readOnly) {
+            try readOnly.excludePhoto(photo, from: "@I2@")
+        }
+        let elsewhere = base.appendingPathComponent("stray.png")
+        try writePNG(to: elsewhere)
+        #expect(throws: FamilyAssetStore.StoreError.sourceIsNotARegularImage(elsewhere)) {
+            try store.excludePhoto(elsewhere, from: "@I2@")
+        }
+        #expect(throws: FamilyAssetStore.StoreError.invalidPerson) {
+            try store.excludePhoto(photo, from: "   ")
+        }
+    }
+
     @Test func thumbnailDecodeIsPixelBounded() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }

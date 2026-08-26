@@ -752,8 +752,20 @@ enum HallieAppTurnCoordinator {
                let canonicalName = result.catalogPersonName {
                 photo = dependencies.resolveBiographyPhoto(canonicalName)
                 if photo == nil, result.outcome == .answered {
-                    let assets = FamilyAssetConfigurationCenter.shared
+                    var assets = FamilyAssetConfigurationCenter.shared
                         .snapshot().makeStore()
+                    if let graph = context.graph {
+                        // Identity-aware group folders (2026-08-26): who
+                        // "Rick" in RickDonnaBreenFamily is — the owner, by
+                        // FamilySearch ID / CyberBrain / People-tab aliases —
+                        // never a same-first-name relative. Published so the
+                        // lineage and tree cards share the same reading.
+                        let directory = FamilyAssetIdentityDirectory(
+                            graph: graph, speakers: context.speakers,
+                            cyberBrain: context.cyberBrain, profiles: context.profiles)
+                        assets.identity = directory
+                        FamilyAssetConfigurationCenter.shared.publishIdentity(directory)
+                    }
                     let graphMatches = context.graph?.people.values.filter {
                         $0.name.compare(
                             canonicalName,
@@ -766,7 +778,8 @@ enum HallieAppTurnCoordinator {
                         result = result.adding(attachments: [
                             .photo(HalliePhotoAttachment(
                                 personName: canonicalName,
-                                fileURL: url))
+                                fileURL: url,
+                                personGedcomID: person.gedcomID))
                         ])
                     } else {
                         do {
