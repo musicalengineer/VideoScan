@@ -89,27 +89,37 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // Destination forms accept more verbs than bare "trace" — "find my
         // family links back to England" (live, 8/24). Verb+family-word+
         // destination together keep "find videos of donna" out.
-        if let m = lower.firstMatch(of: /\b(?:trace|follow|find|walk|take)\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
+        // "… as far back as you can go" / "… as far back as possible" is a
+        // depth wish, not a destination; drop it before the trace shapes
+        // so "back" inside it can't be mistaken for "back to <country>"
+        // (live 2026-08-26). A named start person with no destination
+        // becomes an ancestor line at full depth (see `traceTarget`).
+        let trace = lower.replacing(/\s+as far (?:back )?as (?:you can(?: go)?|possible|it goes|we can)\s*$/, with: "")
+        if let m = trace.firstMatch(of: /\b(?:trace|follow|find|walk|take)\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
-            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
+            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people|tree)\b/) != nil {
                 let country = m.2.map { String($0).trimmingCharacters(in: .whitespaces) }
-                return .originTrail(person: possessor(in: subject),
-                                    country: country?.capitalized,
-                                    line: lineWord(in: subject))
+                return traceQuestion(person: possessor(in: subject) ?? namedTarget(in: subject),
+                                     country: country?.capitalized,
+                                     line: lineWord(in: subject))
             }
         }
         // "trace my paternal links to old puritan boston" — no "back".
-        if let m = lower.firstMatch(of: /\b(?:trace|follow|walk)\b(.*?)\bto\s+([a-z][a-z .'-]*)$/) {
+        if let m = trace.firstMatch(of: /\b(?:trace|follow|walk)\b(.*?)\bto\s+([a-z][a-z .'-]*)$/) {
             let subject = String(m.1)
-            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people)\b/) != nil {
-                return .originTrail(person: possessor(in: subject),
-                                    country: String(m.2).trimmingCharacters(in: .whitespaces).capitalized,
-                                    line: lineWord(in: subject))
+            if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people|tree)\b/) != nil {
+                return traceQuestion(person: possessor(in: subject) ?? namedTarget(in: subject),
+                                     country: String(m.2).trimmingCharacters(in: .whitespaces).capitalized,
+                                     line: lineWord(in: subject))
             }
         }
-        if let m = lower.firstMatch(of: /\btrace\b(.*?)\b(?:ancestors|ancestry|family|roots|line|lineage|links?|side|heritage|people)\b/) {
-            return .originTrail(person: possessor(in: String(m.1)), country: nil,
-                                line: lineWord(in: lower))
+        if let m = trace.firstMatch(of: /\btrace\b(.*?)\b(?:ancestors|ancestry|family|roots|line|lineage|links?|side|heritage|people)\b/) {
+            // "trace the parker family tree from my great great grandmother
+            // edith lucy parker" — the start person is named AFTER the family
+            // word, so look in the remainder too (live 2026-08-26).
+            let rest = String(trace[m.range.upperBound...])
+            return traceQuestion(person: possessor(in: String(m.1)) ?? namedTarget(in: rest),
+                                 country: nil, line: lineWord(in: trace))
         }
         // "where does the family come from" / "where did we come from originally"
         if lower.firstMatch(of: /\bwhere (?:did|does|do) (?:the |our |my |we |us )?(?:family|ancestors|people)?\s*(?:originally )?come from\b/) != nil
@@ -121,12 +131,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if let m = lower.firstMatch(of: /(?:^|\s)(.*?)\b(maternal|paternal|mother'?s|father'?s)\s+(?:line|side|ancestors|ancestry|lineage)\b(.*)$/) {
             let line: GedcomFamilyGraph.Line = String(m.2).hasPrefix("m") ? .maternal : .paternal
             let gens = generations(in: String(m.3)) ?? defaultGenerations
-            return .ancestorLine(person: possessor(in: String(m.1)), line: line, generations: gens)
+            return .ancestorLine(person: possessor(in: String(m.1)) ?? namedTarget(in: String(m.3)),
+                                 line: line, generations: gens)
         }
         // "rick's ancestors back 4 generations" / "my ancestry 6 generations"
         if let m = lower.firstMatch(of: /(?:^|\s)(.*?)\b(?:ancestors|ancestry|pedigree)\b(.*?\b(\d+|[a-z]+)\s+generations?)/) {
             let gens = generations(in: String(m.2)) ?? defaultGenerations
-            return .ancestorLine(person: possessor(in: String(m.1)), line: .both, generations: gens)
+            return .ancestorLine(person: possessor(in: String(m.1)) ?? namedTarget(in: String(m.2)),
+                                 line: .both, generations: gens)
         }
 
         // "family tree for the latta family" / "the lattas' family tree" /
@@ -204,6 +216,59 @@ enum HallieLineageQuestion: Equatable, Sendable {
         return nil
     }
 
+    /// Shape for the trace verbs once the start person is known. A NAMED
+    /// start with no destination ("trace the tree from Edith Lucy Parker
+    /// as far back as you can go") is an ancestor walk at full depth —
+    /// an origin trail with no country would only report birthplaces.
+    /// The unnamed / possessive forms keep their 2026-08-22 behaviour.
+    static func traceQuestion(person: String?, country: String?,
+                              line: GedcomFamilyGraph.Line) -> HallieLineageQuestion {
+        if let person, country == nil {
+            return .ancestorLine(person: person, line: line, generations: maxGenerations)
+        }
+        return .originTrail(person: person, country: country, line: line)
+    }
+
+    /// Kinship words that can sit between a preposition and the actual
+    /// name as an apposition: "from my great great grandmother edith lucy
+    /// parker", "from Richard Breen Sr great grandmother edith lucy parker".
+    /// The NAME AFTER the last kinship phrase wins — the kinship words are
+    /// descriptive, and a name plus a relation is one person, not two.
+    private static let kinshipApposition =
+        /(?:\b(?:great|grand)[- ]?)*\b(?:grand)?(?:mother|father|mom|dad|parents?|aunt|uncle|cousin|sister|brother|wife|husband|son|daughter|ancestor)s?\b/
+
+    /// "… from <name>" / "starting with <name>" / "of <name>" / "for <name>"
+    /// anywhere in `fragment` → the capitalized name; nil when nothing is
+    /// named or the object is the owner / a "the …" family reference
+    /// (surname forms are handled by their own regexes). Trailing
+    /// "family/tree/back/N generations" words are stripped.
+    static func namedTarget(in fragment: String) -> String? {
+        guard let m = fragment.firstMatch(of: /\b(?:from|starting (?:with|from|at)|beginning (?:with|at)|of|for)\s+(.+)$/) else {
+            return nil
+        }
+        var s = String(m.1).trimmingCharacters(in: .whitespaces)
+        // Peel trailing non-name words one at a time ("donna back 5
+        // generations" → "donna back" → "donna").
+        while let t = s.firstMatch(of: /\s*\b(?:as far (?:back )?as .*|back(?:wards?)?|(?:\d+|[a-z]+)\s+generations?|family|tree|line|lineage|ancestors|ancestry|side|onwards?)\s*$/) {
+            s = String(s[s.startIndex..<t.range.lowerBound])
+        }
+        // Apposition: keep what follows the LAST kinship phrase, if anything does.
+        if let last = s.matches(of: kinshipApposition).last {
+            let after = String(s[last.range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            guard !after.isEmpty else { return nil }
+            s = after
+        }
+        // "of the lattas" / "for the breen family" is a family reference,
+        // not a person — the surname regexes own those.
+        if s.hasPrefix("the ") { return nil }
+        s = s.replacing(/^(?:my|our|his|her|their)\s+/, with: "")
+        s = s.replacing(/'s?$/, with: "").trimmingCharacters(in: .whitespaces)
+        let owners: Set<String> = ["", "my", "our", "me", "mine", "us", "we", "the", "this", "that", "here", "there"]
+        if owners.contains(s) { return nil }
+        guard s.firstMatch(of: /^[a-z][a-z .'-]*$/) != nil else { return nil }
+        return capitalizedName(s)
+    }
+
     static func capitalizedName(_ name: String) -> String {
         name.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
     }
@@ -274,20 +339,59 @@ enum HallieLineageAnswer {
             guard let graph = context.graph else { return noTree() }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
-            case .success(let p): return ancestorLine(of: p, line: line, generations: generations, graph: graph)
+            case .success(let p, let note):
+                return ancestorLine(of: p, line: line, generations: generations, graph: graph, basisNote: note)
             }
         case .originTrail(let person, let country, let line):
             guard let graph = context.graph else { return noTree() }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
-            case .success(let p): return originTrail(of: p, country: country, line: line, graph: graph)
+            case .success(let p, let note):
+                return originTrail(of: p, country: country, line: line, graph: graph, basisNote: note)
             }
         }
     }
 
     // MARK: Person resolution (shared resolver, same rules as every graph route)
 
-    private enum Resolved { case success(GedcomFamilyGraph.Person), failure(Result?) }
+    /// `note` = how "you" was pinned when it took a fallback step, for the
+    /// basis line; nil for an ordinary named lookup.
+    enum Resolved: Equatable {
+        case success(GedcomFamilyGraph.Person, note: String? = nil)
+        case failure(Result?)
+    }
+
+    /// The owner fallback chain (2026-08-26). Used when no person was
+    /// typed, or the typed name IS the signed-in owner (so "Rick's line"
+    /// and "my line" resolve identically). Steps, in order:
+    ///   (i)   CyberBrain gedcomPersonID — handled by the caller first.
+    ///   (ii)  `people(namedLike:)`: diminutive- and suffix-tolerant
+    ///         ("Rick Breen" ~ "Richard Harding Breen Jr"). One hit → it.
+    ///         Several → the tree root if it is among them (never silently
+    ///         Sr over Jr), else ask which one.
+    ///   (iii) No hit at all → the tree root person (first INDI in file
+    ///         order; getmyancestors/FamilySearch put the home person
+    ///         first — an assumption, so the basis line says "tree root").
+    static func resolveOwner(_ name: String, graph: GedcomFamilyGraph) -> Resolved {
+        let like = graph.people(namedLike: name)
+        if like.count == 1 {
+            return .success(like[0], note: "Basis: “you” = \(like[0].name) (matched \(name) by name).")
+        }
+        if like.count > 1 {
+            if let root = graph.rootPerson, like.contains(where: { $0.id == root.id }) {
+                return .success(root, note: "Basis: “you” = \(root.name) (tree root).")
+            }
+            return .failure(Result(
+                route: .graph, outcome: .needsClarification,
+                prose: "Which \(name) do you mean — " + like.prefix(4).map(\.name).joined(separator: " or ") + "?",
+                basisLine: "Basis: the family tree has \(like.count) people matching \(name) and no root marker to prefer; nothing was looked up.",
+                queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
+        }
+        if let root = graph.rootPerson {
+            return .success(root, note: "Basis: “you” = \(root.name) (tree root; \(name) has no tree record).")
+        }
+        return .failure(nil)
+    }
 
     private static func resolve(_ typed: String?,
                                 context: HallieTurnExecutor.Context,
@@ -331,6 +435,16 @@ enum HallieLineageAnswer {
         case .person(let p, _, _):
             return .success(p)
         case .result(let r):
+            // The owner ("my line", or their own name typed) gets the
+            // fallback chain before the honest decline: the tree spells
+            // Rick "Richard Harding Breen Jr" (live 2026-08-26).
+            let isOwner = typed == nil || context.speakers.ownerName.map {
+                FamilyIdentityText.tokens($0) == FamilyIdentityText.tokens(name)
+            } == true
+            if isOwner {
+                let owner = resolveOwner(name, graph: graph)
+                if owner != .failure(nil) { return owner }
+            }
             // The resolver's own honest answer (not found / which one?).
             return .failure(Result(
                 route: .graph,
@@ -345,7 +459,8 @@ enum HallieLineageAnswer {
     static func ancestorLine(of person: GedcomFamilyGraph.Person,
                              line: GedcomFamilyGraph.Line,
                              generations: Int,
-                             graph: GedcomFamilyGraph) -> Result {
+                             graph: GedcomFamilyGraph,
+                             basisNote: String? = nil) -> Result {
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
         let card = HallieAttachmentBuilder.lineage(
             of: person, line: line, generations: generations, in: graph,
@@ -373,7 +488,7 @@ enum HallieLineageAnswer {
         return Result(
             route: .graph, outcome: card.generations.isEmpty ? .declined : .answered,
             prose: sentences.joined(separator: " "),
-            basisLine: ArchivistBiographyPolicy.gedcomBasis,
+            basisLine: ArchivistBiographyPolicy.gedcomBasis + (basisNote.map { " " + $0 } ?? ""),
             queryDescription: "lineage \(line.rawValue) ×\(generations): \(person.name)",
             citations: [], catalogPersonName: person.name,
             offeredActions: [.openFamilyTreePerson(
@@ -442,7 +557,8 @@ enum HallieLineageAnswer {
     static func originTrail(of person: GedcomFamilyGraph.Person,
                             country: String?,
                             line: GedcomFamilyGraph.Line = .both,
-                            graph: GedcomFamilyGraph) -> Result {
+                            graph: GedcomFamilyGraph,
+                            basisNote: String? = nil) -> Result {
         let maxGen = HallieLineageQuestion.maxGenerations
         let stops = graph.originTrail(of: person, country: country, line: line, maxGenerations: maxGen)
         let anyPlaces = graph.originTrail(of: person, country: nil, line: line, maxGenerations: maxGen)
@@ -511,7 +627,7 @@ enum HallieLineageAnswer {
         return Result(
             route: .graph, outcome: (country != nil ? !stops.isEmpty : !anyPlaces.isEmpty) ? .answered : .declined,
             prose: sentences.joined(separator: " "),
-            basisLine: ArchivistBiographyPolicy.gedcomBasis,
+            basisLine: ArchivistBiographyPolicy.gedcomBasis + (basisNote.map { " " + $0 } ?? ""),
             queryDescription: "origin trail: \(person.name)" + (country.map { " → \($0)" } ?? ""),
             citations: [], catalogPersonName: person.name,
             offeredActions: [.openFamilyTreePerson(
@@ -661,7 +777,7 @@ enum HallieLineageAnswer {
         guard let graph = context.graph else { return nil }
         switch resolve(typed, context: context, graph: graph) {
         case .failure(let result): return result
-        case .success(let person):
+        case .success(let person, _):
             let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
             if let url = store.photoURLs(for: person).first {
                 return Result(

@@ -95,6 +95,14 @@ public struct GedcomFamilyGraph: Sendable {
 
     public private(set) var people: [String: Person] = [:]
     private var families: [String: Family] = [:]
+    /// The FIRST `0 @…@ INDI` record in file order (2026-08-26, "trace …
+    /// from …" resolved the owner as "Rick Breen" and declined). GEDCOM
+    /// has no home-person tag; getmyancestors, FamilySearch, Ancestry and
+    /// Gramps all write the home/root person first, so this is the best
+    /// available "who is 'me'" hint when the owner's name has no exact
+    /// tree record. It is an ASSUMPTION — callers say so in their basis
+    /// line. Nil for a tree with no people.
+    public private(set) var rootPersonID: String?
 
     /// Where this tree came from, when loaded from a file (2026-08-22,
     /// "what is GEDCOM / where does your tree come from"). Nil for a
@@ -139,6 +147,7 @@ public struct GedcomFamilyGraph: Sendable {
                     case "INDI":
                         currentIndi = Person(id: id, name: "", sex: "",
                                              childOfFamily: nil)
+                        if rootPersonID == nil { rootPersonID = id }
                     case "FAM":
                         currentFam = (id, Family())
                     default:
@@ -312,6 +321,37 @@ public struct GedcomFamilyGraph: Sendable {
             }
         }
         return byPrefix.count == 1 ? byPrefix : []
+    }
+
+    /// The root person record, when the tree has one (see `rootPersonID`).
+    public var rootPerson: Person? { rootPersonID.flatMap { people[$0] } }
+
+    /// Tokens that are generational suffixes, not names: ignored on both
+    /// sides of `people(namedLike:)`.
+    public static let nameSuffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv", "junior", "senior"]
+
+    /// Owner-style loose match (2026-08-26): every typed token, expanded
+    /// through `diminutives`, must appear among the person's name tokens.
+    /// A generational suffix (Jr/Sr/III) on the RECORD is ignored unless
+    /// the typed name carries one — "Rick Breen" finds BOTH "Richard
+    /// Harding Breen Jr" and "… Sr"; "Rick Breen Jr" finds only Jr. Middle
+    /// names on the record side are allowed. Unlike `people(matching:)`,
+    /// ambiguity is RETURNED (all candidates, name order) rather than
+    /// collapsed to not-found, because the caller here has a tie-breaker
+    /// (the tree root) and otherwise asks which one. Never
+    /// substring-matches: "ann" still does not find "Joanne".
+    public func people(namedLike typed: String) -> [Person] {
+        let tokens = FamilyIdentityText.tokens(typed)
+            .map { Self.diminutives[$0] ?? $0 }
+        guard tokens.contains(where: { !Self.nameSuffixes.contains($0) }) else { return [] }
+        return people.values.filter { person in
+            Self.allNames(of: person).contains { candidate in
+                let nameTokens = Set(FamilyIdentityText.tokens(candidate)
+                    .map { Self.diminutives[$0] ?? $0 })
+                return tokens.allSatisfy { nameTokens.contains($0) }
+            }
+        }
+        .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
     }
 
     /// Curated diminutive → formal-name table (lowercased tokens). Data,

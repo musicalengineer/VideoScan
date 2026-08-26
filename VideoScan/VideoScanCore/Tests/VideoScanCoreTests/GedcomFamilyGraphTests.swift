@@ -62,6 +62,36 @@ struct GedcomFamilyGraphTests {
         #expect(g.people["@I5@"]?.sex == "F")
     }
 
+    @Test func rootPersonIsTheFirstINDIInFileOrder() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.sample)
+        #expect(graph.rootPersonID == "@I1@")
+        #expect(graph.rootPerson?.name == "Arthur Stone Sr")
+        #expect(GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR").rootPersonID == nil)
+    }
+
+    @Test func namedLikeIsDiminutiveAndSuffixTolerantAndReturnsAmbiguity() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.sample)
+        // "art stone" is not a diminutive we vouch for; "arthur stone" hits
+        // both Sr and Jr (suffixes ignored) and BOTH come back, name order.
+        #expect(graph.people(namedLike: "Arthur Stone").map(\.name) == ["Arthur Stone Jr", "Arthur Stone Sr"])
+        #expect(graph.people(namedLike: "arthur stone jr").map(\.name) == ["Arthur Stone Jr"])
+        #expect(graph.people(namedLike: "Betty Stone").map(\.name) == ["Betty Stone"])
+        // Diminutive expansion on the typed side; middle names tolerated.
+        let fs = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        0 @I2@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        0 @I3@ INDI
+        1 NAME Joanne /Breen/
+        0 TRLR
+        """)
+        #expect(fs.people(namedLike: "Rick Breen").map(\.id) == ["@I1@", "@I2@"])
+        #expect(fs.people(namedLike: "Ann Breen").isEmpty)   // never substring
+        #expect(fs.people(namedLike: "").isEmpty)
+    }
+
     @Test func nameMatchingIsTokenAndCaseInsensitive() {
         let g = graph
         #expect(g.people(matching: "arthur").count == 2)          // Sr + Jr
