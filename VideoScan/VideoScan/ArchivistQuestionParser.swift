@@ -34,6 +34,9 @@ enum ArchivistQuestionParser {
         // after it substitutes the father's canonical name, the rewritten
         // "Who was …?" question returns here for the biography answer.
         if kinship(text) != nil { return nil }
+        // "rick's grandma muriel" is one person named twice, not a
+        // biography of someone called "Rick's Grandma Muriel".
+        if HallieKinshipApposition.parse(text) != nil { return nil }
         // Multi-hop possessives ("Rick's great great grandpa on his paternal
         // side") are not biographies of a person called "Rick's great great
         // grandpa" either; HallieLineageQuestion.kinshipQuestion owns them.
@@ -67,6 +70,10 @@ enum ArchivistQuestionParser {
     }
 
     static func kinship(_ text: String) -> ArchivistKinshipQuestion? {
+        // "Donna's sister Nancy" names the sister; the relation-only
+        // route would answer "Donna's sister: …" and re-ask with the
+        // wrong subject. HallieKinshipApposition owns that shape.
+        if HallieKinshipApposition.parse(text) != nil { return nil }
         guard let match = text.firstMatch(
             of: /(.+?)(['’]s\s+)([A-Za-z]+)/),
               let relation = GedcomFamilyGraph.relation(

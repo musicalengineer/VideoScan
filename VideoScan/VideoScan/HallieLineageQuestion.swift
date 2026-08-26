@@ -62,6 +62,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// route does.
     case deepAncestor(person: String?, depth: Int, sex: String?,
                       side: ArchivistQueryAST.Graph.Side?)
+    /// "rick's grandma muriel" / "my uncle Bill" / "Donna's sister Nancy"
+    /// (live 2026-08-26): a kinship word AND a name for the same person —
+    /// the relation set filtered by the name. Parsed and answered in one
+    /// place, HallieKinshipApposition.
+    case kinshipNamed(HallieKinshipApposition)
 
     /// "the oldest person in the tree" / "who lived the longest" / "the
     /// deepest ancestor of Rick" / "first born in Ireland" (live
@@ -218,6 +223,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // and BEFORE the line shape, which would otherwise read "paternal
         // side" as a line request and swallow the kinship words into the
         // person (live 2026-08-26).
+        // "find rick's grandma muriel and tell me about her": relation +
+        // name = one person (live 2026-08-26). After the trace shapes (a
+        // trace's start person is the same words after "from"), before
+        // the relation-only parser, which steps aside for a trailing name.
+        if let named = HallieKinshipApposition.parse(lower) { return .kinshipNamed(named) }
         if let kin = kinshipQuestion(in: lower) { return kin }
 
         // "(show me) rick's maternal line back 5 generations"
@@ -645,6 +655,8 @@ enum HallieLineageAnswer {
             // Not answered here: preTranslation turns it into a graph
             // kinship intent and the ordinary executor route runs it.
             return nil
+        case .kinshipNamed(let apposition):
+            return kinshipApposition(apposition, context: context)
         case .superlative(let kind, let scope, _):
             guard let graph = context.graph else { return noTree() }
             return superlative(kind, scope: scope, graph: graph, context: context)
@@ -714,7 +726,7 @@ enum HallieLineageAnswer {
         }
     }
 
-    private static func resolve(_ typed: String?,
+    static func resolve(_ typed: String?,
                                 context: HallieTurnExecutor.Context,
                                 graph: GedcomFamilyGraph) -> Resolved {
         guard let name = typed ?? context.speakers.ownerName else {
@@ -1442,7 +1454,7 @@ enum HallieLineageAnswer {
             offeredActions: [.getFamilyTree])
     }
 
-    private static func noTree() -> Result {
+    static func noTree() -> Result {
         Result(route: .graph, outcome: .declined,
                prose: "I don’t have a family tree loaded, so I can’t walk the lines yet. Add a GEDCOM (.ged) file to the authorized 40_Family_Tree/GEDCOM folder and ask again.",
                basisLine: "Basis: no GEDCOM loaded; nothing was looked up.",
