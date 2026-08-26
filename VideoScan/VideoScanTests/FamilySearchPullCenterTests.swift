@@ -228,9 +228,9 @@ final class FamilySearchPullCenterTests: XCTestCase {
     // MARK: (e) timeout
 
     func testDefaultTimeoutCoversAnOvernightPull() {
-        // A real 20-generation pull took ~2 h on 2026-08-25; the old 90 min
-        // default gave up while Terminal was still working.
-        XCTAssertGreaterThanOrEqual(FamilySearchPullCoordinator.defaultTimeout, .seconds(8 * 3600))
+        // A real 20-generation pull took 9.5 h (2026-08-25 → 26); the old
+        // 90 min default gave up while Terminal was still working.
+        XCTAssertGreaterThanOrEqual(FamilySearchPullCoordinator.defaultTimeout, .seconds(24 * 3600))
         let coordinator = FamilySearchPullCoordinator(
             gedcomDirectory: sandbox.gedcomDirectory, launcher: SilentLauncher())
         XCTAssertEqual(coordinator.timeout, FamilySearchPullCoordinator.defaultTimeout)

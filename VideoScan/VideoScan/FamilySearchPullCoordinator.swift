@@ -69,8 +69,12 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     private let pollInterval: Duration
     let timeout: Duration
 
-    /// 8 hours. Pinned by `FamilySearchPullCenterTests.defaultTimeoutCoversAnOvernightPull`.
-    static let defaultTimeout: Duration = .seconds(8 * 60 * 60)
+    /// 7 days — effectively "never". A real 20-generation pull took 9.5 h
+    /// (2026-08-25 19:36 → 08-26 05:07); the poll is a 2 s stat(), so a clock
+    /// deadline only adds a way to give up on a run that is still working.
+    /// Completion is the `0 TRLR` trailer; death is the stall detector.
+    /// Pinned by `FamilySearchPullCenterTests.defaultTimeoutCoversAnOvernightPull`.
+    static let defaultTimeout: Duration = .seconds(7 * 24 * 60 * 60)
 
     init(
         gedcomDirectory: URL,

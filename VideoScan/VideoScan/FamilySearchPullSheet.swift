@@ -258,7 +258,7 @@ struct FamilySearchPullSheet: View {
                 Text("Waiting for Terminal to finish…")
                     .font(.system(size: 13, weight: .medium))
             }
-            Text("Switch to the Terminal window, check the command, press Return, and enter your FamilySearch password. A deep pull can take a couple of hours; the file is written all at once at the end.")
+            Text("Switch to the Terminal window, check the command, press Return, and enter your FamilySearch password. A deep pull can take most of a night (20 generations took 9½ hours); the file is written all at once at the end.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
