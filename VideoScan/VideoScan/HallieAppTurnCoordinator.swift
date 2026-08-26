@@ -741,6 +741,9 @@ enum HallieAppTurnCoordinator {
                         composition.hosts, composition.modelName)
                     result = result.applying(outcome)
                     appLog.write("Hallie: phrased \(HallieTurnExecutor.label(result.route))/\(HallieTurnExecutor.label(result.outcome)) by \(outcome.composedBy.rawValue) (\(outcome.note); dropped \(outcome.dropped.count))")
+                    for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan) {
+                        appLog.write(line)
+                    }
                 }
             }
             try Task.checkCancellation()
