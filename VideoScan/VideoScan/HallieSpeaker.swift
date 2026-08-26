@@ -41,12 +41,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
     nonisolated static let pitch: Float = 0.95
 
     /// Family-specific spellings are transformed only in the private string
-    /// sent to speech synthesis. Hallie's visible answer and catalog data are
-    /// never rewritten. Add carefully heard corrections here as Rick audits
-    /// Bella on real family names.
-    nonisolated static let familyNamePronunciations: [(written: String, spoken: String)] = [
-        ("Edith", "EE-dith"),
-    ]
+    /// sent to speech synthesis (HalliePronunciationLexicon: shipped table +
+    /// user-editable pronunciations.json). Hallie's visible answer and
+    /// catalog data are never rewritten.
 
     @Published private(set) var isSpeaking = false
     private let synthesizer = AVSpeechSynthesizer()
@@ -78,8 +75,11 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     /// Sentences to speak: claim tags removed, bracketed basis noise
     /// removed, split at sentence ends so each gets its own breath.
-    nonisolated static func sentences(_ text: String) -> [String] {
-        var cleaned = spokenText(text)
+    nonisolated static func sentences(
+        _ text: String,
+        lexicon: HalliePronunciationLexicon = .shipped
+    ) -> [String] {
+        var cleaned = spokenText(text, lexicon: lexicon)
         cleaned = cleaned.replacingOccurrences(of: #"\[c\d+\]"#, with: "", options: .regularExpression)
         cleaned = cleaned.replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
         cleaned = cleaned.replacingOccurrences(of: " — ", with: ", ")
@@ -107,7 +107,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     /// Expand suffixes and audited family names before sentence splitting and
     /// speech synthesis. The caller's display string remains unchanged.
-    nonisolated static func spokenText(_ text: String) -> String {
+    nonisolated static func spokenText(
+        _ text: String,
+        lexicon: HalliePronunciationLexicon = .shipped
+    ) -> String {
         var spoken = text
         let suffixes = [(#"\bJr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Junior"),
                         (#"\bSr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Senior")]
@@ -117,14 +120,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 with: replacement,
                 options: [.regularExpression, .caseInsensitive])
         }
-        for pronunciation in familyNamePronunciations {
-            let name = NSRegularExpression.escapedPattern(for: pronunciation.written)
-            spoken = spoken.replacingOccurrences(
-                of: #"\b"# + name + #"\b"#,
-                with: pronunciation.spoken,
-                options: [.regularExpression, .caseInsensitive])
-        }
-        return spoken
+        return lexicon.apply(to: spoken).spoken
     }
 
     /// Rank installed English voices: Premium, then Enhanced, then the
@@ -189,8 +185,16 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     func speak(_ text: String) {
         stop()
-        let sentences = Self.sentences(text)
+        // Re-read per utterance: the file is tiny and an edit should be
+        // heard on the very next answer, no restart.
+        let lexicon = HalliePronunciationLexicon.load()
+        let sentences = Self.sentences(text, lexicon: lexicon)
         guard !sentences.isEmpty else { return }
+        let fired = lexicon.apply(to: Self.spokenText(text, lexicon: HalliePronunciationLexicon(entries: []))).fired
+        if !fired.isEmpty {
+            appLog.write("[hallie-voice] pronunciations: "
+                         + fired.map { "\($0.written)→\($0.spoken)" }.joined(separator: ", "))
+        }
 
         if let voice = Self.selectedNeuralVoice(),
            HallieNeuralSpeech.isInstalled {
