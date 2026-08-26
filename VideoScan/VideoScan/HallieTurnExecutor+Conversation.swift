@@ -160,9 +160,54 @@ extension HallieTurnExecutor {
         case answer(Result)
     }
 
+    /// "photo of the oldest person in the tree" (live 2026-08-26): resolve
+    /// the PERSON first, then hand "photo/video of <name>" to the
+    /// person-media routes — never a keyword search on the superlative
+    /// words. Photos go to the portrait route with the ranking sentence in
+    /// front; videos become "videos of <name>" for the presence route.
+    static func superlativeMediaTurn(
+        _ lineage: HallieLineageQuestion,
+        media: String,
+        question: String,
+        playAfterAnswer: Bool,
+        lineageAnswer: (HallieLineageQuestion) -> Result?
+    ) -> PreTranslation {
+        guard let found = lineageAnswer(lineage) else {
+            return .translate(question: question, playAfterAnswer: playAfterAnswer)
+        }
+        guard found.outcome == .answered, let name = found.catalogPersonName else {
+            return .answer(found)
+        }
+        if ["photo", "picture", "portrait", "image", "snapshot"].contains(media) {
+            guard let photo = lineageAnswer(.personPhoto(person: name)) else { return .answer(found) }
+            return .answer(HallieLineageAnswer.prefixing(found.prose, to: photo))
+        }
+        return .translate(question: "videos of \(name)", playAfterAnswer: playAfterAnswer)
+    }
+
+    /// "who do you know about? tell me about Thankful Pratt" — two
+    /// questions in one turn (live 2026-08-26: only the second was
+    /// answered). Splits on an INNER question mark into two askable parts;
+    /// nil for one question, or when either part is too short to be one.
+    static func splitTwoQuestions(_ text: String) -> (first: String, second: String)? {
+        let parts = text.split(separator: "?", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard parts.count == 2,
+              parts.allSatisfy({ $0.split(separator: " ").count >= 2 && $0.contains(where: \.isLetter) })
+        else { return nil }
+        return (parts[0] + "?", parts[1])
+    }
+
     /// Runs the model-free resolvers in order: help / small talk / reset →
     /// capability question → follow-up on the last answer → nothing. Pure
     /// given its inputs.
+    ///
+    /// Two questions in one turn: when the FIRST has a model-free answer,
+    /// it is given; the second is answered too when it is model-free, else
+    /// offered as a chip ("tap it and I’ll answer that next") — the least
+    /// risky shape, since a translated second question cannot carry the
+    /// first answer's prose through the model.
     static func preTranslation(
         question: String,
         playAfterAnswer: Bool,
@@ -171,6 +216,55 @@ extension HallieTurnExecutor {
         catalogStats: HallieCatalogStats? = nil,
         rosterAnswer: (() -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil
+    ) -> PreTranslation {
+        if let (first, second) = splitTwoQuestions(question),
+           case .answer(let a) = preTranslationSingle(
+               question: first, playAfterAnswer: playAfterAnswer, memory: memory,
+               isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+               rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer),
+           a.route != .reset, a.clarification == nil {
+            let secondTurn = preTranslationSingle(
+                question: second, playAfterAnswer: playAfterAnswer, memory: memory,
+                isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
+            if case .answer(let b) = secondTurn, b.route != .reset {
+                return .answer(Result(
+                    route: b.route, outcome: b.outcome,
+                    prose: a.prose + "\n\n" + b.prose,
+                    basisLine: a.basisLine + " " + b.basisLine,
+                    queryDescription: "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")",
+                    citations: b.citations, knowledgeCitations: b.knowledgeCitations,
+                    catalogPersonName: b.catalogPersonName, clarification: b.clarification,
+                    matchCount: b.matchCount, mediaAction: b.mediaAction,
+                    offeredActions: a.offeredActions + b.offeredActions,
+                    attachments: a.attachments + b.attachments))
+            }
+            let label = second.prefix(1).uppercased() + second.dropFirst()
+            return .answer(Result(
+                route: a.route, outcome: a.outcome,
+                prose: a.prose + "\n\nYou also asked “\(second)” — tap it and I’ll answer that next.",
+                basisLine: a.basisLine,
+                queryDescription: "two questions: \(a.queryDescription ?? "?") + deferred",
+                citations: a.citations, knowledgeCitations: a.knowledgeCitations,
+                catalogPersonName: a.catalogPersonName, clarification: nil,
+                matchCount: a.matchCount, mediaAction: a.mediaAction,
+                offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
+                attachments: a.attachments))
+        }
+        return preTranslationSingle(
+            question: question, playAfterAnswer: playAfterAnswer, memory: memory,
+            isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+            rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
+    }
+
+    private static func preTranslationSingle(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool,
+        catalogStats: HallieCatalogStats?,
+        rosterAnswer: (() -> Result)?,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)?
     ) -> PreTranslation {
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
@@ -196,6 +290,11 @@ extension HallieTurnExecutor {
                     ast: .graph(.init(people: [person ?? "me"], operation: .kinship,
                                       relation: relation, side: side)),
                     playAfterAnswer: playAfterAnswer))
+            }
+            if case .superlative(_, _, let media?) = lineage, let lineageAnswer {
+                return superlativeMediaTurn(
+                    lineage, media: media, question: question,
+                    playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
             }
             if let lineageAnswer, let answer = lineageAnswer(lineage) {
                 return .answer(answer)

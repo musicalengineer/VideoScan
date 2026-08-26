@@ -30,9 +30,16 @@ extension GedcomFamilyGraph {
     /// Walk UP from `person` for at most `generations` steps. The result
     /// lists the generations actually found — fewer than asked for when
     /// the tree runs out, which the caller must say out loud.
+    ///
+    /// `untilYear` ("… back to 1600", 2026-08-26) is a stop: an ancestor
+    /// is kept when born in or after that year, or when their birth year
+    /// is unknown but the child they were reached through was born in or
+    /// after it. Nobody past the bound is walked through, so the line
+    /// ends at the year rather than where the tree ends.
     public func ancestorLine(of person: Person,
                              line: Line,
-                             generations: Int) -> [AncestorGeneration] {
+                             generations: Int,
+                             untilYear: Int? = nil) -> [AncestorGeneration] {
         guard generations > 0 else { return [] }
         var out: [AncestorGeneration] = []
         var frontier = [person]
@@ -47,6 +54,7 @@ extension GedcomFamilyGraph {
                 case .both:     parents = relatives(.parents, of: p)
                 }
                 for parent in parents where !seen.contains(parent.id) {
+                    if let untilYear, !Self.withinBound(parent, child: p, year: untilYear) { continue }
                     seen.insert(parent.id)
                     next.append(parent)
                 }
@@ -56,6 +64,13 @@ extension GedcomFamilyGraph {
             frontier = next
         }
         return out
+    }
+
+    /// The `untilYear` rule, in one place so the prose can quote it.
+    public static func withinBound(_ parent: Person, child: Person, year: Int) -> Bool {
+        if let born = parent.birthYear { return born >= year }
+        if let childBorn = child.birthYear { return childBorn >= year }
+        return false
     }
 
     /// The pedigree generations PRUNED to the people who lie on a path

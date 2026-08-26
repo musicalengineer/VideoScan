@@ -99,8 +99,13 @@ enum ArchivistQuestionParser {
     static func hasAncestorPossessive(_ text: String) -> Bool {
         let lower = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
         guard let m = lower.firstMatch(
-            of: /(?:^|\s)(?:my|our|[a-z][a-z .'-]*?'s?)\s+(?:(?:maternal|paternal|mother'?s|father'?s)\s+)?((?:great[- ]?)*grand[a-z]+)\b/)
+            of: /(?:^|\s)(?:my|our|[a-z][a-z .'-]*?'s?)\s+(?:(?:maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+)\b/)
         else { return false }
+        // "3rd great grandfather" / "great great great grandpa" (2026-08-26)
+        // are ancestor asks the deep walk owns.
+        if let (greats, noun) = HallieLineageQuestion.greatCount(in: String(m.1)), greats >= 3 {
+            return HallieLineageQuestion.grandparentSex(noun) != nil
+        }
         let words = String(m.1).replacingOccurrences(of: "-", with: " ")
         return GedcomFamilyGraph.extendedRelation(fromPhrase: words)?.relation.startsAtParents == true
     }

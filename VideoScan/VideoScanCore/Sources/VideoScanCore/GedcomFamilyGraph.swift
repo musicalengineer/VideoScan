@@ -103,6 +103,10 @@ public struct GedcomFamilyGraph: Sendable {
     /// tree record. It is an ASSUMPTION — callers say so in their basis
     /// line. Nil for a tree with no people.
     public private(set) var rootPersonID: String?
+    /// `_FSFTID` → file-local pointer, built once at parse. FamilySearch's
+    /// identifier survives re-exports when @I…@ pointers move, so it is the
+    /// one stable way to say "this record is me" (2026-08-26, owner pin).
+    private var personIDByFamilySearchID: [String: String] = [:]
 
     /// Where this tree came from, when loaded from a file (2026-08-22,
     /// "what is GEDCOM / where does your tree come from"). Nil for a
@@ -124,7 +128,12 @@ public struct GedcomFamilyGraph: Sendable {
         var pendingFamilyEvent: String?
 
         func flush() {
-            if let person = currentIndi { people[person.id] = person }
+            if let person = currentIndi {
+                people[person.id] = person
+                if let fsid = person.familySearchID, personIDByFamilySearchID[fsid] == nil {
+                    personIDByFamilySearchID[fsid] = person.id
+                }
+            }
             if let fam = currentFam { families[fam.id] = fam.family }
             currentIndi = nil
             currentFam = nil
@@ -325,6 +334,16 @@ public struct GedcomFamilyGraph: Sendable {
 
     /// The root person record, when the tree has one (see `rootPersonID`).
     public var rootPerson: Person? { rootPersonID.flatMap { people[$0] } }
+
+    /// The person carrying this FamilySearch ID ("GVQV-NW3"), case- and
+    /// whitespace-tolerant. O(1) — indexed at parse. Nil for an empty or
+    /// malformed ID or one the tree does not carry.
+    public func person(familySearchID raw: String?) -> Person? {
+        guard let raw else { return nil }
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard Self.isFamilySearchID(key), let id = personIDByFamilySearchID[key] else { return nil }
+        return people[id]
+    }
 
     /// Tokens that are generational suffixes, not names: ignored on both
     /// sides of `people(namedLike:)`.

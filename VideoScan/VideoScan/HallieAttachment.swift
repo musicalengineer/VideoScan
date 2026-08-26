@@ -137,9 +137,10 @@ enum HallieAttachmentBuilder {
     static func lineage(of person: GedcomFamilyGraph.Person,
                         line: GedcomFamilyGraph.Line,
                         generations requested: Int,
+                        untilYear: Int? = nil,
                         in graph: GedcomFamilyGraph,
                         photo: (GedcomFamilyGraph.Person) -> URL? = { _ in nil }) -> HallieLineageCard {
-        let found = graph.ancestorLine(of: person, line: line, generations: requested)
+        let found = graph.ancestorLine(of: person, line: line, generations: requested, untilYear: untilYear)
         let lineWord: String
         switch line {
         case .maternal: lineWord = "maternal line"

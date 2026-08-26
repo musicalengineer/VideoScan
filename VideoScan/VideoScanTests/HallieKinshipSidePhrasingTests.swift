@@ -220,7 +220,10 @@ struct HallieKinshipSidePhrasingTests {
     // MARK: Live case 3 — "family tree from rick breen all the way back to 1600"
 
     @Test func aNamedStartAllTheWayBackIsAFullDepthAncestorWalk() throws {
+        // "back to 1600" is now a year bound on the walk (ITEM 2, 2026-08-26).
         #expect(Q.detect("tell me about the family tree from rick breen all the way back to 1600")
+                == .ancestorLine(person: "Rick Breen", line: .both, generations: Q.yearBoundGenerations, untilYear: 1600))
+        #expect(Q.detect("tell me about the family tree from rick breen all the way back")
                 == .ancestorLine(person: "Rick Breen", line: .both, generations: Q.maxGenerations))
         #expect(Q.detect("show the family tree of donna hudson as far back as you can go")
                 == .ancestorLine(person: "Donna Hudson", line: .both, generations: Q.maxGenerations))
