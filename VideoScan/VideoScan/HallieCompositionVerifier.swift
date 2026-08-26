@@ -48,6 +48,10 @@ enum HallieCompositionVerifier {
             /// "Two examples are Item 1 and Item 2" — the model echoed the
             /// plan's scaffolding instead of naming the files.
             case scaffoldLabel
+            /// The sentence opens with a bare surname although the claims
+            /// carry the full name: "McGill is Rick's great-great-grandfather"
+            /// reads as a first name (live 2026-08-26, spoken "Mic Gill").
+            case bareSurnameOpening
         }
         let text: String
         let reason: Reason
@@ -179,6 +183,10 @@ enum HallieCompositionVerifier {
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
             if let reason = leak(in: display, allowed: allowedTokens) {
                 dropped.append(Dropped(text: raw, reason: reason))
+                continue
+            }
+            if opensWithBareSurname(display, claims: plan.claims) {
+                dropped.append(Dropped(text: raw, reason: .bareSurnameOpening))
                 continue
             }
             guard kept.count < plan.maxSentences else {
@@ -442,6 +450,44 @@ enum HallieCompositionVerifier {
 
     /// The first leak found in a display sentence, or nil when every year,
     /// number, and mid-sentence capitalized word is vouched for by `allowed`.
+    /// True when the sentence's first word is a surname the claims only
+    /// ever state as the tail of a longer name ("Ann McGill"), and the word
+    /// after it is not capitalized (so "McGill Family Reunion.mov" and
+    /// "Sullivan Breen" are not bare). The person's full name is right
+    /// there in the facts; opening with half of it is a phrasing error.
+    static func opensWithBareSurname(_ sentence: String, claims: [HallieAnswerPlan.Claim]) -> Bool {
+        let words = sentence.split(separator: " ").map(String.init)
+        guard let first = words.first else { return false }
+        let opener = first.replacingOccurrences(of: "’s", with: "").replacingOccurrences(of: "'s", with: "")
+            .trimmingCharacters(in: .punctuationCharacters)
+        guard opener.first?.isUppercase == true, opener.count > 1 else { return false }
+        if words.count > 1, words[1].first?.isUppercase == true { return false }
+        let key = opener.lowercased()
+        return claims.contains { claim in surnamesOfFullNames(in: claim.text).contains(key) }
+    }
+
+    /// The last word of every run of two or more capitalized words in the
+    /// text, lowercased: "Ann McGill was born" → ["mcgill"]. Initials
+    /// ("H.") and suffixes ride along inside the run.
+    static func surnamesOfFullNames(in text: String) -> Set<String> {
+        var out: Set<String> = []
+        var run: [String] = []
+        func flush() {
+            if run.count >= 2, let last = run.last { out.insert(last.lowercased()) }
+            run = []
+        }
+        for raw in text.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init) {
+            let word = raw.replacingOccurrences(of: "’s", with: "").replacingOccurrences(of: "'s", with: "")
+                .trimmingCharacters(in: .punctuationCharacters)
+            guard word.first?.isUppercase == true else { flush(); continue }
+            run.append(word)
+            let isInitial = raw.hasSuffix(".") && word.count <= 2
+            if let last = raw.last, ".,;:!?".contains(last), !isInitial { flush() }
+        }
+        flush()
+        return out
+    }
+
     static func leak(in sentence: String, allowed: Set<String>) -> Dropped.Reason? {
         let words = sentence
             .replacingOccurrences(of: "’s", with: "")

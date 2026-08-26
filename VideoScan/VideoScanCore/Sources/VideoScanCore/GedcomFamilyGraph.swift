@@ -242,7 +242,7 @@ public struct GedcomFamilyGraph: Sendable {
     /// "breens" and "the breens" are accepted spellings of "Breen" because
     /// that is how people ask ("the family tree for the Breens").
     public func people(withSurname typed: String) -> [Person] {
-        var key = FamilyIdentityText.normalized(typed)
+        var key = FamilyIdentityText.normalized(FamilyNameNormalizer.normalizeSurname(typed))
         if key.hasPrefix("the ") { key.removeFirst(4) }
         key = key.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return [] }
@@ -271,7 +271,8 @@ public struct GedcomFamilyGraph: Sendable {
             return people.values.filter { $0.familySearchID == familySearchKey }
                 .sorted { $0.id < $1.id }
         }
-        let tokens = FamilyIdentityText.tokens(typed)
+        // Typed spellings meet the parsed ones: "Mc Gill" finds "McGill".
+        let tokens = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed))
         guard !tokens.isEmpty else { return [] }
         let matches = people.values.filter { person in
             // Identity lookup is token-exact, never substring based:
@@ -579,16 +580,24 @@ public struct GedcomFamilyGraph: Sendable {
         }
     }
 
+    /// Display and surname are the normalized spellings ("Mc Gill" →
+    /// "McGill", see FamilyNameNormalizer); the raw NAME line is not kept.
     private static func parseName(_ value: String) -> (display: String, surname: String?) {
-        let display = value.replacingOccurrences(of: "/", with: " ")
-            .split(separator: " ").joined(separator: " ")
         guard let open = value.firstIndex(of: "/"),
               let close = value[value.index(after: open)...].firstIndex(of: "/") else {
-            return (display, nil)
+            let display = value.split(separator: " ").joined(separator: " ")
+            return (FamilyNameNormalizer.normalizeName(display), nil)
         }
         let raw = value[value.index(after: open)..<close]
             .trimmingCharacters(in: .whitespaces)
-        return (display, raw.isEmpty ? nil : raw)
+        let surname = raw.isEmpty ? nil : FamilyNameNormalizer.normalizeSurname(raw)
+        // Rebuild the display from the three GEDCOM parts so the fused
+        // surname lands in it whether or not the given name is normalized.
+        let before = value[..<open].split(separator: " ").joined(separator: " ")
+        let after = value[value.index(after: close)...].split(separator: " ").joined(separator: " ")
+        let display = [FamilyNameNormalizer.normalizeName(before), surname ?? "", after]
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        return (display, surname)
     }
 
     private static func isFamilySearchID(_ value: String) -> Bool {

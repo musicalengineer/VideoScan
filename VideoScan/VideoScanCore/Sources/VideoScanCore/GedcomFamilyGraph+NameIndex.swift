@@ -15,7 +15,7 @@ extension GedcomFamilyGraph {
     /// Typed-name tokens after diminutive expansion, or nil when the name
     /// is nothing but generational suffixes ("Jr", "III").
     public static func namedLikeTokens(_ typed: String) -> [String]? {
-        let tokens = FamilyIdentityText.tokens(typed)
+        let tokens = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed))
             .map { diminutives[$0] ?? $0 }
         guard tokens.contains(where: { !nameSuffixes.contains($0) }) else { return nil }
         return tokens
