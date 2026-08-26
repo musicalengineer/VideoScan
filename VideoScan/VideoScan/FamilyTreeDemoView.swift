@@ -317,24 +317,56 @@ struct FamilyTreeDemoView: View {
     private var treeCanvas: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Text(canvasTitle)
+                Text(model.lineChain?.title ?? canvasTitle)
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
-                Button {
-                    if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
-                    zoom = 0.88
-                } label: {
-                    Label("Center", systemImage: "scope")
+                if model.lineChain != nil {
+                    Button {
+                        model.showFullTree()
+                    } label: {
+                        Label("Show full tree", systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
+                        zoom = 0.88
+                    } label: {
+                        Label("Center", systemImage: "scope")
+                    }
+                    .buttonStyle(.bordered)
+                    Slider(value: $zoom, in: 0.5...1.08)
+                        .frame(width: 130)
                 }
-                .buttonStyle(.bordered)
-                Slider(value: $zoom, in: 0.5...1.08)
-                    .frame(width: 130)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Color(red: 0.075, green: 0.08, blue: 0.09))
 
+            if let chain = model.lineChain {
+                // Chain mode: O(path length) cards, no tree layout at all.
+                FamilyTreeLineChainView(
+                    chain: chain,
+                    selectedID: model.selectedID,
+                    onSelect: { model.select($0) })
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.055, green: 0.065, blue: 0.075),
+                            Color(red: 0.075, green: 0.08, blue: 0.095)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            } else {
+                treeScroll
+            }
+        }
+    }
+
+    private var treeScroll: some View {
             GeometryReader { proxy in
                 let size = model.scene.size == .zero
                     ? CGSize(width: 600, height: 400) : model.scene.size
@@ -379,7 +411,6 @@ struct FamilyTreeDemoView: View {
                     )
                 )
             }
-        }
     }
 
     private var treeLines: some View {
@@ -454,6 +485,14 @@ struct FamilyTreeDemoView: View {
                     }
                     .padding(14)
                     .background(panelBackground)
+
+                    if !model.lineOptions.isEmpty {
+                        FamilyTreeLineToRow(options: model.lineOptions) { anchorID in
+                            model.showLine(to: anchorID)
+                        }
+                        .padding(14)
+                        .background(panelBackground)
+                    }
 
                     if !model.selectedRelatives.isEmpty {
                         relativesPanel(model.selectedRelatives)
@@ -721,14 +760,8 @@ struct FamilyTreeDemoView: View {
 
 // MARK: - Card
 
+// `accent` lives in FamilyTreeLineChainView.swift (shared with the chain).
 private extension FamilyTreeSex {
-    var accent: Color {
-        switch self {
-        case .male: return .cyan
-        case .female: return .pink
-        case .unknown: return .mint
-        }
-    }
     var symbol: String {
         switch self {
         case .male, .female: return "person.fill"

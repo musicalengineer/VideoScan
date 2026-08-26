@@ -100,6 +100,46 @@ struct FamilyTreeRelatives: Equatable {
     }
 }
 
+/// Someone a "Line to…" can end at: the tree root ("me") and the root's
+/// spouse(s). Built once at install; labels are the person's first given
+/// name, never a hard-coded "Rick"/"Donna".
+struct FamilyTreeAnchor: Identifiable, Equatable {
+    let id: String
+    let label: String
+    /// True for the root: the label reads "your …" instead of "Donna's …".
+    let isRoot: Bool
+}
+
+/// One "Line to X" button for the selected person: the path when they are
+/// an ancestor of the anchor, nil (disabled) when not.
+struct FamilyTreeLineOption: Identifiable, Equatable {
+    var id: String { anchor.id }
+    let anchor: FamilyTreeAnchor
+    /// Generations from the selected person down to the anchor (1 =
+    /// parent); nil when they are not an ancestor. The path itself is
+    /// built only when the chain is shown — it can be thousands long.
+    let generations: Int?
+    /// "your great-great-grandmother" — nil when `generations` is nil.
+    let relation: String?
+    var isAvailable: Bool { generations != nil }
+}
+
+/// The vertical chain the canvas draws in place of the tree.
+struct FamilyTreeLineChain: Equatable {
+    struct Card: Identifiable, Equatable {
+        var id: String { person.id }
+        let person: FamilyTreePersonSummary
+        /// Recorded spouse names, as a caption ("⚭ Eileen Latta").
+        let spouseNames: [String]
+        /// 0 = the ancestor at the top.
+        let generation: Int
+    }
+    let anchor: FamilyTreeAnchor
+    let title: String
+    let cards: [Card]
+    var personIDs: Set<String> { Set(cards.map { $0.person.id }) }
+}
+
 // MARK: - Model
 
 /// `@MainActor` ≈ "every member runs on the UI thread"; `ObservableObject`
@@ -136,6 +176,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedNotes: [FamilyTreeNote] = []
     /// Why the notes pane is empty when it is (no brain yet / unreadable).
     @Published private(set) var notesStatus: String?
+    /// "Line to…" targets, built once per install (root + root's spouses).
+    @Published private(set) var anchors: [FamilyTreeAnchor] = []
+    /// One option per anchor for the selected person; computed on
+    /// selection change (cached per person id), never in `body`.
+    @Published private(set) var lineOptions: [FamilyTreeLineOption] = []
+    /// Non-nil while the canvas shows a chain instead of the tree.
+    @Published private(set) var lineChain: FamilyTreeLineChain?
 
     /// Sidebar filter. Setting it refilters once (O(people)) — not in `body`.
     @Published var searchText = "" {
@@ -176,6 +223,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     private var notesResolver: FamilyTreeNotesResolver?
     private var brainIndex: CyberBrainIndex?
     private var notesGeneration = 0
+    /// selectedID → line options; cleared at install. Bounded by the number
+    /// of people visited this session (a few hundred entries at most).
+    private var lineCache: [String: [FamilyTreeLineOption]] = [:]
+    /// One upward BFS per anchor, built at install (O(ancestors) once) so a
+    /// selection change costs O(path length), not a graph walk.
+    private var anchorIndexes: [String: GedcomFamilyGraph.AncestorIndex] = [:]
 
     private let ancestorGenerations: Int
     private let descendantGenerations: Int
@@ -260,11 +313,19 @@ final class FamilyTreeLiveModel: ObservableObject {
         if let newGraph {
             sortedPeople = Self.sorted(Array(newGraph.people.values))
             peopleCount = sortedPeople.count
+            anchors = Self.anchors(in: newGraph)
+            anchorIndexes = Dictionary(uniqueKeysWithValues: anchors.map {
+                ($0.id, GedcomFamilyGraph.AncestorIndex(graph: newGraph, descendantID: $0.id))
+            })
         } else {
             sortedPeople = []
             peopleCount = FamilyTreeDemoData.people.count
+            anchors = []
+            anchorIndexes = [:]
         }
         loadState = .loaded(live: newGraph != nil)
+        lineCache.removeAll()
+        lineChain = nil
 
         let keep = selectedID.flatMap { id -> String? in
             guard isLive else {
@@ -310,6 +371,11 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadState = .unavailable
         notesResolver = nil
         selectedNotes = []
+        anchors = []
+        lineOptions = []
+        lineChain = nil
+        lineCache.removeAll()
+        anchorIndexes = [:]
     }
 
     nonisolated private static func sourceKey(_ graph: GedcomFamilyGraph) -> String {
@@ -424,6 +490,84 @@ final class FamilyTreeLiveModel: ObservableObject {
         map.reserveCapacity(filteredPeople.count)
         for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
         filteredIndexByID = map
+    }
+
+    // MARK: Line to… (direct descent chain)
+
+    /// Root ("me") first, then each recorded spouse of the root. A root
+    /// with two marriages yields two anchors — that IS the picker.
+    nonisolated static func anchors(in graph: GedcomFamilyGraph) -> [FamilyTreeAnchor] {
+        guard let root = graph.rootPerson else { return [] }
+        var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
+        var seen: Set<String> = [root.id]
+        for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
+            out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+        }
+        return out
+    }
+
+    /// "Richard Harding Breen Jr" → "Richard"; a lone surname or empty
+    /// name falls back to the whole (or "(unnamed)").
+    nonisolated static func firstGivenName(_ person: GedcomFamilyGraph.Person) -> String {
+        let tokens = person.name.split(separator: " ").map(String.init)
+        if let surname = person.surname,
+           let first = tokens.first(where: { $0.caseInsensitiveCompare(surname) != .orderedSame }) {
+            return first
+        }
+        return tokens.first ?? "(unnamed)"
+    }
+
+    /// Show the chain from the selected person down to `anchorID`.
+    func showLine(to anchorID: String) {
+        guard let graph, let id = selectedID,
+              let option = lineOptions.first(where: { $0.anchor.id == anchorID }),
+              option.isAvailable, let relation = option.relation,
+              let path = anchorIndexes[anchorID]?.path(from: id),
+              let ancestor = path.first else { return }
+        let cards = path.enumerated().map { index, person -> FamilyTreeLineChain.Card in
+            let spouses = graph.relatives(.spouse, of: person)
+            return FamilyTreeLineChain.Card(
+                person: Self.summary(person),
+                spouseNames: spouses.map { $0.name.isEmpty ? "(unnamed)" : $0.name },
+                generation: index)
+        }
+        let generations = path.count - 1
+        lineChain = FamilyTreeLineChain(
+            anchor: option.anchor,
+            title: "\(ancestor.name) → \(option.anchor.label): \(relation) (\(generations) generation\(generations == 1 ? "" : "s"))",
+            cards: cards)
+    }
+
+    func showFullTree() {
+        lineChain = nil
+    }
+
+    private func refreshLineOptions() {
+        guard graph != nil, let id = selectedID, isLive, !anchors.isEmpty else {
+            lineOptions = []
+            lineChain = nil
+            return
+        }
+        if let cached = lineCache[id] {
+            lineOptions = cached
+        } else {
+            let options = anchors.map { anchor -> FamilyTreeLineOption in
+                let generations = anchorIndexes[anchor.id]?.generations(from: id)
+                let relation = generations.map { n -> String in
+                    let possessive = anchor.isRoot ? "your" : anchor.label + "'s"
+                    return possessive + " " + GedcomFamilyGraph.generationLabel(
+                        generations: n, sex: graph?.people[id]?.sex ?? "")
+                }
+                return FamilyTreeLineOption(anchor: anchor, generations: generations, relation: relation)
+            }
+            lineCache[id] = options
+            lineOptions = options
+        }
+        // Selecting a card IN the chain keeps the chain; selecting anyone
+        // else (sidebar, relatives) returns to the tree.
+        if let chain = lineChain, !chain.personIDs.contains(id) {
+            lineChain = nil
+        }
     }
 
     // MARK: Archivist Notes (CyberBrain)
@@ -658,6 +802,7 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     private func rebuildSelection() {
         defer { refreshSelectedNotes() }
+        defer { refreshLineOptions() }
         if let graph, let id = selectedID, let person = graph.people[id] {
             selectedPerson = Self.summary(person)
             selectedRelatives = FamilyTreeRelatives(
