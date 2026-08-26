@@ -86,16 +86,16 @@ enum HallieSpeechChunker {
         }
 
         let middle = text.count / 2
-        var best: (index: Int, distance: Int)?
-        var fallback: (index: Int, distance: Int)?
+        var best = (index: 0, distance: Int.max)        // nearest gap outside a name
+        var fallback = (index: 0, distance: Int.max)    // nearest gap of any kind
         var offset = 0
         for index in 1..<words.count {
             offset += words[index - 1].count + 1
             let distance = abs(offset - middle)
-            if fallback == nil || distance < fallback!.distance { fallback = (index, distance) }
-            if !joinsName(index), best == nil || distance < best!.distance { best = (index, distance) }
+            if distance < fallback.distance { fallback = (index, distance) }
+            if !joinsName(index), distance < best.distance { best = (index, distance) }
         }
-        let cut = (best ?? fallback)!.index
+        let cut = best.index > 0 ? best.index : fallback.index
         let head = words[..<cut].joined(separator: " ")
         let tail = words[cut...].joined(separator: " ")
         return (head, tail)
