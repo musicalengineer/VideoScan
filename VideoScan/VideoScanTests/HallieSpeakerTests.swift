@@ -33,7 +33,7 @@ struct HallieSpeakerTests {
         #expect(HallieSpeaker.spokenText(displayed) ==
                 "EE-dith Breen appears beside Meredith Breen.")
         #expect(displayed == "Edith Breen appears beside Meredith Breen.")
-        #expect(HallieSpeaker.familyNamePronunciations.contains {
+        #expect(HalliePronunciationLexicon.shipped.entries.contains {
             $0.written == "Edith" && $0.spoken == "EE-dith"
         })
     }
