@@ -28,6 +28,13 @@ struct FamilyTreeDemoView: View {
     /// `@ObservedObject` ≈ observe-but-don't-own; the singleton owns itself.
     @ObservedObject private var pullCenter = FamilySearchPullCenter.shared
     @State private var showPullSheet = false
+    /// Archivist Notes draft + last save error (view-local, not persisted).
+    @State private var draftNote = ""
+    @State private var noteError: String?
+    /// Adjust Photo… sheet. `.sheet(item:)` shows it while this is non-nil
+    /// (the item-binding form, per the chained-sheet note in memory).
+    @State private var adjustSource: FamilyPhotoAdjustSource?
+    @State private var adjustError: String?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -80,6 +87,19 @@ struct FamilyTreeDemoView: View {
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
+        .sheet(item: $adjustSource) { source in
+            FamilyPhotoAdjustSheet(
+                source: source,
+                onSaved: { cropped, url in
+                    // The crop wins on the card immediately (session
+                    // override) and on relaunch (cardPhotoURL precedence).
+                    model.setPhotoOverride(NSImage(cgImage: cropped, size: .zero), for: source.personID)
+                    appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
+                    adjustError = nil
+                    adjustSource = nil
+                },
+                onCancel: { adjustSource = nil })
+        }
         .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
             // The coordinator is created in presentGetFamilyTree() before the
             // flag flips, so this `if let` only guards the impossible case.
@@ -98,6 +118,7 @@ struct FamilyTreeDemoView: View {
                 model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
             }
             await model.loadFromDisk()
+            await model.loadCyberBrain()
             handleIncomingHighlight()
         }
         .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
@@ -226,22 +247,45 @@ struct FamilyTreeDemoView: View {
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
+                // Return picks the first match; ↑/↓ walk the list without
+                // leaving the field. `.onKeyPress` returning `.handled` ≈
+                // "consumed, don't pass to the next responder".
+                .onSubmit { model.selectFirstFiltered() }
+                .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
+                .onKeyPress(.downArrow) { model.selectNext(); return .handled }
 
             Divider()
 
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(model.filteredPeople) { person in
-                        Button {
-                            model.select(person.id)
-                        } label: {
-                            FamilyTreeSidebarRow(
-                                person: person,
-                                isSelected: model.selectedID == person.id
-                            )
+            // `ScrollViewReader` ≈ a handle that lets code scroll to a row by
+            // id; the ids are the ForEach ids (person.id).
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(model.filteredPeople) { person in
+                            Button {
+                                model.select(person.id)
+                            } label: {
+                                FamilyTreeSidebarRow(
+                                    person: person,
+                                    isSelected: model.selectedID == person.id
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                }
+                // `.focusable()` lets the list itself take keyboard focus
+                // (click it, then use the arrows). Focus ring is hidden so
+                // the dark sidebar doesn't grow a blue border.
+                .focusable()
+                .focusEffectDisabled()
+                .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
+                .onKeyPress(.downArrow) { model.selectNext(); return .handled }
+                // Keep the selected row visible whether the change came from
+                // a keypress, a card click, or the People tab.
+                .onChange(of: model.selectedID) { _, id in
+                    guard let id, model.selectedFilteredIndex != nil else { return }
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
 
@@ -273,24 +317,56 @@ struct FamilyTreeDemoView: View {
     private var treeCanvas: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Text(canvasTitle)
+                Text(model.lineChain?.title ?? canvasTitle)
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
-                Button {
-                    if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
-                    zoom = 0.88
-                } label: {
-                    Label("Center", systemImage: "scope")
+                if model.lineChain != nil {
+                    Button {
+                        model.showFullTree()
+                    } label: {
+                        Label("Show full tree", systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
+                        zoom = 0.88
+                    } label: {
+                        Label("Center", systemImage: "scope")
+                    }
+                    .buttonStyle(.bordered)
+                    Slider(value: $zoom, in: 0.5...1.08)
+                        .frame(width: 130)
                 }
-                .buttonStyle(.bordered)
-                Slider(value: $zoom, in: 0.5...1.08)
-                    .frame(width: 130)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Color(red: 0.075, green: 0.08, blue: 0.09))
 
+            if let chain = model.lineChain {
+                // Chain mode: O(path length) cards, no tree layout at all.
+                FamilyTreeLineChainView(
+                    chain: chain,
+                    selectedID: model.selectedID,
+                    onSelect: { model.select($0) })
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.055, green: 0.065, blue: 0.075),
+                            Color(red: 0.075, green: 0.08, blue: 0.095)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            } else {
+                treeScroll
+            }
+        }
+    }
+
+    private var treeScroll: some View {
             GeometryReader { proxy in
                 let size = model.scene.size == .zero
                     ? CGSize(width: 600, height: 400) : model.scene.size
@@ -335,7 +411,6 @@ struct FamilyTreeDemoView: View {
                     )
                 )
             }
-        }
     }
 
     private var treeLines: some View {
@@ -390,15 +465,42 @@ struct FamilyTreeDemoView: View {
                                 Label("Apple Photos", systemImage: "photo.on.rectangle.angled")
                             }
                             .buttonStyle(.bordered)
+
+                            Button {
+                                presentAdjustPhoto(for: person)
+                            } label: {
+                                Label("Adjust Photo…", systemImage: "crop")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!model.isLive)
+                            .help("Center and crop this person's card photo; the original is kept")
                         }
                         .controlSize(.small)
+                        if let adjustError {
+                            Text(adjustError)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .padding(14)
                     .background(panelBackground)
 
+                    if !model.lineOptions.isEmpty {
+                        FamilyTreeLineToRow(options: model.lineOptions) { anchorID in
+                            model.showLine(to: anchorID)
+                        }
+                        .padding(14)
+                        .background(panelBackground)
+                    }
+
                     if !model.selectedRelatives.isEmpty {
                         relativesPanel(model.selectedRelatives)
                     }
+                }
+
+                if model.isLive, model.selectedPerson != nil {
+                    archivistNotesPanel
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -434,6 +536,84 @@ struct FamilyTreeDemoView: View {
             .padding(14)
         }
         .background(Color(red: 0.085, green: 0.09, blue: 0.10))
+    }
+
+    // MARK: Archivist Notes
+
+    /// What the family knowledge file says about the selected person, and
+    /// a box to add to it. Rows come from `model.selectedNotes` (resolved
+    /// once per selection in the model); nothing here touches the brain.
+    private var archivistNotesPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Archivist Notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    Task { await model.loadCyberBrain() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .help("Re-read the family knowledge file (after telling Hallie something)")
+            }
+
+            if model.selectedNotes.isEmpty {
+                Text(model.notesStatus ?? "Nothing recorded about this person yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(model.selectedNotes) { note in
+                    FamilyTreeNoteRow(note: note)
+                }
+            }
+
+            Divider()
+
+            // `TextEditor` ≈ NSTextView bound to a String; `$draftNote` is a
+            // two-way binding (think reference to the @State storage).
+            TextEditor(text: $draftNote)
+                .font(.system(size: 12))
+                .frame(minHeight: 60, maxHeight: 120)
+                .scrollContentBackground(.hidden)
+                .padding(4)
+                .background(Color.white.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+
+            HStack {
+                if let noteError {
+                    Text(noteError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Add note") { saveDraftNote() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Text("Saved to the family knowledge file as \(model.noteAuthor); Hallie can answer from it right away. Your GEDCOM is never changed.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(panelBackground)
+    }
+
+    private func saveDraftNote() {
+        let text = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        do {
+            try model.addNote(text)
+            draftNote = ""
+            noteError = nil
+        } catch {
+            noteError = error.localizedDescription
+        }
     }
 
     private func relativesPanel(_ relatives: FamilyTreeRelatives) -> some View {
@@ -527,6 +707,35 @@ struct FamilyTreeDemoView: View {
         model.setPhotoOverride(image, for: personID)
     }
 
+    /// Build the Adjust sheet's source: this session's override if the user
+    /// just picked one, else the first non-card photo in People/<person>/.
+    /// Decoding is bounded to 2048 px (≈ 16 MB) before the sheet sees it.
+    private func presentAdjustPhoto(for person: FamilyTreePersonSummary) {
+        guard let assetPerson = model.assetPerson(for: person.id) else {
+            adjustError = "Adjust Photo works on people from your GEDCOM."
+            return
+        }
+        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let originalURL = store.originalPhotoURL(for: assetPerson)
+        let image: CGImage?
+        if let override = model.photo(for: person.id),
+           let tiff = override.tiffRepresentation {
+            image = CropRenderer.boundedImage(data: tiff)
+        } else if let originalURL {
+            image = CropRenderer.boundedImage(at: originalURL)
+        } else {
+            image = nil
+        }
+        guard let image else {
+            adjustError = "No photo yet — use Pick Photo or Apple Photos first."
+            return
+        }
+        adjustError = nil
+        adjustSource = FamilyPhotoAdjustSource(
+            personID: person.id, personName: person.name,
+            assetPerson: assetPerson, image: image, originalURL: originalURL)
+    }
+
     private func importApplePhoto(_ item: PhotosPickerItem?) {
         guard let item, let targetID = model.selectedID else { return }
         Task {
@@ -551,14 +760,8 @@ struct FamilyTreeDemoView: View {
 
 // MARK: - Card
 
+// `accent` lives in FamilyTreeLineChainView.swift (shared with the chain).
 private extension FamilyTreeSex {
-    var accent: Color {
-        switch self {
-        case .male: return .cyan
-        case .female: return .pink
-        case .unknown: return .mint
-        }
-    }
     var symbol: String {
         switch self {
         case .male, .female: return "person.fill"
@@ -693,13 +896,61 @@ private struct FamilyAssetPortrait: View {
             let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
             let decoded = await Task.detached(priority: .utility) {
                 let store = configuration.makeStore()
-                guard let url = store.photoURLs(for: person).first,
+                // A saved "-card" crop wins over the original (Adjust Photo…).
+                guard let url = store.cardPhotoURL(for: person)
+                        ?? store.photoURLs(for: person).first,
                       let cg = store.makeThumbnail(for: url, maxPixelSize: 160)
                 else { return nil as NSImage? }
                 return NSImage(cgImage: cg, size: .zero)
             }.value
             if !Task.isCancelled { image = decoded }
         }
+    }
+}
+
+/// One Archivist Notes row: the passage, then who/when + two small badges.
+private struct FamilyTreeNoteRow: View {
+    let note: FamilyTreeNote
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(note.text)
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text(note.attribution)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                badge(note.confidence.rawValue, color: confidenceColor)
+                badge(note.privacy.rawValue, color: .gray)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var confidenceColor: Color {
+        switch note.confidence {
+        case .confirmed: return .green
+        case .probable: return .cyan
+        case .uncertain: return .yellow
+        case .disputed: return .orange
+        }
+    }
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.18))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
     }
 }
 

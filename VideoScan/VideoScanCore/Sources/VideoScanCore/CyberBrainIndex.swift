@@ -17,6 +17,8 @@ public struct CyberBrainIndex: Sendable {
     private let peopleByLookupToken: [String: [String]]
     private let sourcesByID: [String: CyberBrainSource]
     private let activeItemsByPersonID: [String: [CyberBrainItem]]
+    /// GEDCOM pointer → CyberBrain person ids that declare it (normally one).
+    private let peopleByGedcomID: [String: [String]]
 
     public init(archive: CyberBrainArchive) throws {
         try CyberBrainValidator.validate(archive)
@@ -25,6 +27,13 @@ public struct CyberBrainIndex: Sendable {
             archive.people.map { ($0.id, $0) })
         self.sourcesByID = Dictionary(uniqueKeysWithValues:
             archive.sources.map { ($0.id, $0) })
+        var byGedcom: [String: [String]] = [:]
+        for person in archive.people {
+            if let gedcomID = person.gedcomPersonID, !gedcomID.isEmpty {
+                byGedcom[gedcomID, default: []].append(person.id)
+            }
+        }
+        self.peopleByGedcomID = byGedcom.mapValues { $0.sorted() }
 
         var names: [String: Set<String>] = [:]
         var tokens: [String: Set<String>] = [:]
@@ -98,6 +107,19 @@ public struct CyberBrainIndex: Sendable {
     }
 
     public func person(id: String) -> CyberBrainPerson? { peopleByID[id] }
+
+    /// People whose record carries this GEDCOM pointer (Family Tree notes,
+    /// 2026-08-26). O(1); empty when nobody is linked.
+    public func people(gedcomPersonID: String) -> [CyberBrainPerson] {
+        (peopleByGedcomID[gedcomPersonID] ?? []).compactMap { peopleByID[$0] }
+    }
+
+    /// Every active, non-superseded item about a person, privacy included —
+    /// for the owner's own inspector, where the privacy level is shown as
+    /// a badge rather than used as a filter. Same order as `evidence`.
+    public func allActiveItems(for personID: String) -> [CyberBrainItem] {
+        activeItemsByPersonID[personID] ?? []
+    }
     public func source(id: String) -> CyberBrainSource? { sourcesByID[id] }
 
     public func evidence(

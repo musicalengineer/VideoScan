@@ -100,6 +100,46 @@ struct FamilyTreeRelatives: Equatable {
     }
 }
 
+/// Someone a "Line to…" can end at: the tree root ("me") and the root's
+/// spouse(s). Built once at install; labels are the person's first given
+/// name, never a hard-coded "Rick"/"Donna".
+struct FamilyTreeAnchor: Identifiable, Equatable {
+    let id: String
+    let label: String
+    /// True for the root: the label reads "your …" instead of "Donna's …".
+    let isRoot: Bool
+}
+
+/// One "Line to X" button for the selected person: the path when they are
+/// an ancestor of the anchor, nil (disabled) when not.
+struct FamilyTreeLineOption: Identifiable, Equatable {
+    var id: String { anchor.id }
+    let anchor: FamilyTreeAnchor
+    /// Generations from the selected person down to the anchor (1 =
+    /// parent); nil when they are not an ancestor. The path itself is
+    /// built only when the chain is shown — it can be thousands long.
+    let generations: Int?
+    /// "your great-great-grandmother" — nil when `generations` is nil.
+    let relation: String?
+    var isAvailable: Bool { generations != nil }
+}
+
+/// The vertical chain the canvas draws in place of the tree.
+struct FamilyTreeLineChain: Equatable {
+    struct Card: Identifiable, Equatable {
+        var id: String { person.id }
+        let person: FamilyTreePersonSummary
+        /// Recorded spouse names, as a caption ("⚭ Eileen Latta").
+        let spouseNames: [String]
+        /// 0 = the ancestor at the top.
+        let generation: Int
+    }
+    let anchor: FamilyTreeAnchor
+    let title: String
+    let cards: [Card]
+    var personIDs: Set<String> { Set(cards.map { $0.person.id }) }
+}
+
 // MARK: - Model
 
 /// `@MainActor` ≈ "every member runs on the UI thread"; `ObservableObject`
@@ -119,12 +159,30 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     @Published private(set) var loadState: LoadState = .idle
     @Published private(set) var peopleCount = 0
-    @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = []
+    /// The sidebar rows. `didSet` on a `@Published` property ≈ a setter hook
+    /// that fires after the value lands — here it keeps `filteredIndexByID`
+    /// in step so arrow keys never scan the 16k-row list.
+    @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = [] {
+        didSet { rebuildFilteredIndex() }
+    }
     @Published private(set) var selectedID: String?
     @Published private(set) var selectedPerson: FamilyTreePersonSummary?
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
     @Published private(set) var scene: FamilyTreeScene = .empty
     @Published private(set) var loadWarning: String?
+    /// "Archivist Notes": what the CyberBrain says about the selected
+    /// person. Rebuilt on selection change and after a save — never in
+    /// `body`.
+    @Published private(set) var selectedNotes: [FamilyTreeNote] = []
+    /// Why the notes pane is empty when it is (no brain yet / unreadable).
+    @Published private(set) var notesStatus: String?
+    /// "Line to…" targets, built once per install (root + root's spouses).
+    @Published private(set) var anchors: [FamilyTreeAnchor] = []
+    /// One option per anchor for the selected person; computed on
+    /// selection change (cached per person id), never in `body`.
+    @Published private(set) var lineOptions: [FamilyTreeLineOption] = []
+    /// Non-nil while the canvas shows a chain instead of the tree.
+    @Published private(set) var lineChain: FamilyTreeLineChain?
 
     /// Sidebar filter. Setting it refilters once (O(people)) — not in `body`.
     @Published var searchText = "" {
@@ -143,6 +201,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// inject a temp directory and nothing outside it is ever consulted.
     private(set) var originalsDirectory: URL
     private var sourceAccess: FamilyAssetStore.Access
+    /// Where cyberbrain.json lives. Production = App Support/VideoScan/
+    /// cyberbrain (the directory Hallie reads and telling mode writes);
+    /// tests inject a temp directory.
+    let cyberBrainRootURL: URL?
+    /// Who is writing notes — the owner name from the archivist settings.
+    var noteAuthor: String
 
     // MARK: Private state
 
@@ -150,8 +214,21 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Sorted by surname, then given name, then id (stable).
     private var sortedPeople: [GedcomFamilyGraph.Person] = []
     private var photoOverrides: [String: NSImage] = [:]
+    /// id → row index in `filteredPeople`. Rebuilt only when the filter
+    /// changes (O(rows) once), so each ↑/↓ keypress is one dictionary
+    /// lookup, not a linear scan.
+    private var filteredIndexByID: [String: Int] = [:]
     private var loadGeneration = 0
     private var installedSourceKey: String?
+    private var notesResolver: FamilyTreeNotesResolver?
+    private var brainIndex: CyberBrainIndex?
+    private var notesGeneration = 0
+    /// selectedID → line options; cleared at install. Bounded by the number
+    /// of people visited this session (a few hundred entries at most).
+    private var lineCache: [String: [FamilyTreeLineOption]] = [:]
+    /// One upward BFS per anchor, built at install (O(ancestors) once) so a
+    /// selection change costs O(path length), not a graph walk.
+    private var anchorIndexes: [String: GedcomFamilyGraph.AncestorIndex] = [:]
 
     private let ancestorGenerations: Int
     private let descendantGenerations: Int
@@ -165,10 +242,19 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     init(originalsDirectory: URL? = nil,
+         cyberBrainRootURL: URL? = nil,
+         noteAuthor: String? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A test that injects an originals directory but no brain gets NO
+        // brain, never the real one (isolation rule).
+        self.cyberBrainRootURL = cyberBrainRootURL
+            ?? (originalsDirectory == nil ? FamilyTreeNotesStorage.productionRootURL : nil)
+        self.noteAuthor = noteAuthor
+            ?? HallieTurnExecutor.Speakers.fromDefaults().ownerName
+            ?? HallieTurnExecutor.Speakers.defaultOwnerName
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
@@ -227,11 +313,19 @@ final class FamilyTreeLiveModel: ObservableObject {
         if let newGraph {
             sortedPeople = Self.sorted(Array(newGraph.people.values))
             peopleCount = sortedPeople.count
+            anchors = Self.anchors(in: newGraph)
+            anchorIndexes = Dictionary(uniqueKeysWithValues: anchors.map {
+                ($0.id, GedcomFamilyGraph.AncestorIndex(graph: newGraph, descendantID: $0.id))
+            })
         } else {
             sortedPeople = []
             peopleCount = FamilyTreeDemoData.people.count
+            anchors = []
+            anchorIndexes = [:]
         }
         loadState = .loaded(live: newGraph != nil)
+        lineCache.removeAll()
+        lineChain = nil
 
         let keep = selectedID.flatMap { id -> String? in
             guard isLive else {
@@ -243,6 +337,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         selectedID = keep ?? (isLive ? sortedPeople.first?.id : FamilyTreeDemoData.rootID)
         refilter()
+        scheduleNotesResolverRebuild()
         rebuildSelection()
     }
 
@@ -274,6 +369,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         scene = .empty
         loadWarning = nil
         loadState = .unavailable
+        notesResolver = nil
+        selectedNotes = []
+        anchors = []
+        lineOptions = []
+        lineChain = nil
+        lineCache.removeAll()
+        anchorIndexes = [:]
     }
 
     nonisolated private static func sourceKey(_ graph: GedcomFamilyGraph) -> String {
@@ -345,6 +447,236 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard graph?.people[id] != nil else { return false }
         select(id)
         return true
+    }
+
+    // MARK: Keyboard navigation (sidebar ↑ / ↓ / Return)
+
+    /// Row index of the current selection within `filteredPeople`, or nil
+    /// when the selected person is filtered out (or nothing is selected).
+    var selectedFilteredIndex: Int? {
+        selectedID.flatMap { filteredIndexByID[$0] }
+    }
+
+    /// ↓: move to the next row. No wrap; at the bottom this is a no-op.
+    /// When the selection is not in the list (filter changed underneath it)
+    /// the first row is selected so the keys always do something visible.
+    func selectNext() { step(by: 1) }
+
+    /// ↑: move to the previous row. No wrap; at the top this is a no-op.
+    func selectPrevious() { step(by: -1) }
+
+    /// Return in the search field: select the first match. Returns false
+    /// when the list is empty so the caller can leave the selection alone.
+    @discardableResult
+    func selectFirstFiltered() -> Bool {
+        guard let first = filteredPeople.first else { return false }
+        select(first.id)
+        return true
+    }
+
+    private func step(by delta: Int) {
+        guard !filteredPeople.isEmpty else { return }
+        guard let index = selectedFilteredIndex else {
+            select(filteredPeople[0].id)
+            return
+        }
+        let target = index + delta
+        guard filteredPeople.indices.contains(target) else { return }
+        select(filteredPeople[target].id)
+    }
+
+    private func rebuildFilteredIndex() {
+        var map: [String: Int] = [:]
+        map.reserveCapacity(filteredPeople.count)
+        for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
+        filteredIndexByID = map
+    }
+
+    // MARK: Line to… (direct descent chain)
+
+    /// Root ("me") first, then each recorded spouse of the root. A root
+    /// with two marriages yields two anchors — that IS the picker.
+    nonisolated static func anchors(in graph: GedcomFamilyGraph) -> [FamilyTreeAnchor] {
+        guard let root = graph.rootPerson else { return [] }
+        var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
+        var seen: Set<String> = [root.id]
+        for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
+            out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+        }
+        return out
+    }
+
+    /// "Richard Harding Breen Jr" → "Richard"; a lone surname or empty
+    /// name falls back to the whole (or "(unnamed)").
+    nonisolated static func firstGivenName(_ person: GedcomFamilyGraph.Person) -> String {
+        let tokens = person.name.split(separator: " ").map(String.init)
+        if let surname = person.surname,
+           let first = tokens.first(where: { $0.caseInsensitiveCompare(surname) != .orderedSame }) {
+            return first
+        }
+        return tokens.first ?? "(unnamed)"
+    }
+
+    /// Show the chain from the selected person down to `anchorID`.
+    func showLine(to anchorID: String) {
+        guard let graph, let id = selectedID,
+              let option = lineOptions.first(where: { $0.anchor.id == anchorID }),
+              option.isAvailable, let relation = option.relation,
+              let path = anchorIndexes[anchorID]?.path(from: id),
+              let ancestor = path.first else { return }
+        let cards = path.enumerated().map { index, person -> FamilyTreeLineChain.Card in
+            let spouses = graph.relatives(.spouse, of: person)
+            return FamilyTreeLineChain.Card(
+                person: Self.summary(person),
+                spouseNames: spouses.map { $0.name.isEmpty ? "(unnamed)" : $0.name },
+                generation: index)
+        }
+        let generations = path.count - 1
+        lineChain = FamilyTreeLineChain(
+            anchor: option.anchor,
+            title: "\(ancestor.name) → \(option.anchor.label): \(relation) (\(generations) generation\(generations == 1 ? "" : "s"))",
+            cards: cards)
+    }
+
+    func showFullTree() {
+        lineChain = nil
+    }
+
+    private func refreshLineOptions() {
+        guard graph != nil, let id = selectedID, isLive, !anchors.isEmpty else {
+            lineOptions = []
+            lineChain = nil
+            return
+        }
+        if let cached = lineCache[id] {
+            lineOptions = cached
+        } else {
+            let options = anchors.map { anchor -> FamilyTreeLineOption in
+                let generations = anchorIndexes[anchor.id]?.generations(from: id)
+                let relation = generations.map { n -> String in
+                    let possessive = anchor.isRoot ? "your" : anchor.label + "'s"
+                    return possessive + " " + GedcomFamilyGraph.generationLabel(
+                        generations: n, sex: graph?.people[id]?.sex ?? "")
+                }
+                return FamilyTreeLineOption(anchor: anchor, generations: generations, relation: relation)
+            }
+            lineCache[id] = options
+            lineOptions = options
+        }
+        // Selecting a card IN the chain keeps the chain; selecting anyone
+        // else (sidebar, relatives) returns to the tree.
+        if let chain = lineChain, !chain.personIDs.contains(id) {
+            lineChain = nil
+        }
+    }
+
+    // MARK: Archivist Notes (CyberBrain)
+
+    /// Read cyberbrain.json off the main thread and build the tree→brain
+    /// resolver. Safe to call again (after Hallie learns something).
+    func loadCyberBrain() async {
+        guard let root = cyberBrainRootURL else {
+            applyBrain(index: nil, status: "No family knowledge file is configured.")
+            return
+        }
+        notesGeneration &+= 1
+        let generation = notesGeneration
+        let outcome: Result<CyberBrainIndex?, Error> = await Task.detached(priority: .userInitiated) {
+            Result { try FamilyTreeNotesStorage.loadIndex(rootURL: root) }
+        }.value
+        guard generation == notesGeneration else { return }
+        switch outcome {
+        case .success(let index):
+            applyBrain(index: index, status: index == nil
+                ? "Hallie has not been told anything yet. Add a note below, or tell her in the chat window." : nil)
+        case .failure(let error):
+            applyBrain(index: nil, status: "Family knowledge file could not be read: \(error.localizedDescription)")
+        }
+    }
+
+    /// Synchronous variant for tests.
+    func loadCyberBrainNow() {
+        notesGeneration &+= 1
+        guard let root = cyberBrainRootURL else {
+            applyBrain(index: nil, status: "No family knowledge file is configured.")
+            return
+        }
+        do {
+            let index = try FamilyTreeNotesStorage.loadIndex(rootURL: root)
+            applyBrain(index: index, status: index == nil
+                ? "Hallie has not been told anything yet. Add a note below, or tell her in the chat window." : nil)
+        } catch {
+            applyBrain(index: nil, status: "Family knowledge file could not be read: \(error.localizedDescription)")
+        }
+    }
+
+    /// Save one note about the selected person through the same writer
+    /// Hallie's telling mode uses (atomic rename + backups/), then refresh
+    /// the pane from the archive the writer handed back — no re-read.
+    /// Throws the writer's error so the view can show it verbatim.
+    func addNote(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+        guard let root = cyberBrainRootURL else {
+            throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
+        }
+        guard let graph, let id = selectedID, let person = graph.people[id] else {
+            throw CyberBrainWriter.WriteError.emptySubject
+        }
+        let testimony = CyberBrainWriter.Testimony(
+            subjectName: person.name,
+            subjectAliases: person.alternateNames,
+            speakerName: noteAuthor,
+            text: text,
+            kind: kind,
+            date: date,
+            origin: .familyTreeNote,
+            gedcomPersonID: person.id)
+        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        notesGeneration &+= 1
+        applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
+    }
+
+    private func applyBrain(index: CyberBrainIndex?, status: String?) {
+        brainIndex = index
+        notesStatus = status
+        notesResolver = nil
+        if let index, let graph {
+            notesResolver = FamilyTreeNotesResolver(index: index, graph: graph)
+        }
+        refreshSelectedNotes()
+    }
+
+    /// The graph changed under an already-loaded brain: rebuild the
+    /// resolver off the main thread (NameIndex over 16k people is tens of
+    /// ms — not worth a hitch on every reload).
+    private func scheduleNotesResolverRebuild() {
+        notesResolver = nil
+        guard let index = brainIndex, let graph else {
+            refreshSelectedNotes()
+            return
+        }
+        notesGeneration &+= 1
+        let generation = notesGeneration
+        Task { [weak self] in
+            let resolver = await Task.detached(priority: .userInitiated) {
+                FamilyTreeNotesResolver(index: index, graph: graph)
+            }.value
+            guard let self, generation == self.notesGeneration else { return }
+            self.notesResolver = resolver
+            self.refreshSelectedNotes()
+        }
+    }
+
+    private func refreshSelectedNotes() {
+        guard let resolver = notesResolver, let id = selectedID, isLive else {
+            if !selectedNotes.isEmpty { selectedNotes = [] }
+            return
+        }
+        selectedNotes = resolver.notes(forGedcomID: id)
+    }
+
+    /// Store key for the selected person (folder lookup for photos).
+    func assetPerson(for personID: String) -> FamilyAssetPerson? {
+        graph?.people[personID].map(FamilyAssetPerson.init)
     }
 
     // MARK: Photos
@@ -469,6 +801,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     private func rebuildSelection() {
+        defer { refreshSelectedNotes() }
+        defer { refreshLineOptions() }
         if let graph, let id = selectedID, let person = graph.people[id] {
             selectedPerson = Self.summary(person)
             selectedRelatives = FamilyTreeRelatives(

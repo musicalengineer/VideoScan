@@ -7,9 +7,11 @@
 // What this is allowed to do is deliberately narrow: append one attributed,
 // recorded-but-unverified passage about one person, with a source that says
 // who told Hallie and when. It never edits or deletes an existing item, never
-// promotes anything to `confirmed` (a person who verifies later does that),
-// and never lets a model write the file — every field here is typed by a
-// family member or derived deterministically from what they typed.
+// promotes anything told in conversation to `confirmed` (a person who
+// verifies later does that; only the owner's own Family Tree notes start
+// confirmed — see `Testimony.Origin`), and never lets a model write the
+// file — every field here is typed by a family member or derived
+// deterministically from what they typed.
 //
 // Durability, per docs/cyberbrain_design.md §7: temp file in the same
 // directory → full validation of the NEW archive → fsync → atomic rename over
@@ -35,6 +37,25 @@ public enum CyberBrainWriter {
         public let kind: CyberBrainItem.Kind
         /// When they said it. Injected so tests are deterministic.
         public let date: Date
+        /// Where the words came from — decides the source record, the
+        /// item-id prefix and the starting confidence (see `Origin`).
+        public let origin: Origin
+        /// The family-tree pointer of the subject when the caller KNOWS it
+        /// (Family Tree notes pane, 2026-08-26). Resolution then prefers a
+        /// CyberBrain person already linked to that pointer, links an
+        /// unlinked name match, and otherwise creates a linked person —
+        /// so Hallie's "tell me about …" and the tree agree on who this is.
+        public let gedcomPersonID: String?
+
+        public enum Origin: String, Sendable, Equatable {
+            /// Told to Hallie in conversation ("let me tell you about…").
+            /// Recorded as `probable`: attributed, not yet verified.
+            case conversation
+            /// Typed by the archivist in the Family Tree inspector, about a
+            /// specific tree record. Recorded as `confirmed` — the owner's
+            /// own statement in their own tree (Rick, 2026-08-26).
+            case familyTreeNote
+        }
 
         public init(
             subjectName: String,
@@ -42,7 +63,9 @@ public enum CyberBrainWriter {
             speakerName: String,
             text: String,
             kind: CyberBrainItem.Kind = .biography,
-            date: Date
+            date: Date,
+            origin: Origin = .conversation,
+            gedcomPersonID: String? = nil
         ) {
             self.subjectName = subjectName
             self.subjectAliases = subjectAliases
@@ -50,6 +73,10 @@ public enum CyberBrainWriter {
             self.text = text
             self.kind = kind
             self.date = date
+            self.origin = origin
+            let trimmedPointer = gedcomPersonID?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.gedcomPersonID = trimmedPointer.isEmpty ? nil : trimmedPointer
         }
     }
 
@@ -114,42 +141,97 @@ public enum CyberBrainWriter {
         var people = archive.people
         let personID: String
         var createdPerson = false
-        switch index.resolve(subject) {
-        case .resolved(let person):
-            personID = person.id
-        case .ambiguous(let candidates):
-            throw WriteError.ambiguousSubject(candidates.map(\.canonicalName))
-        case .notFound:
-            personID = uniqueID(
-                base: "person." + slug(subject),
+        /// Set when a name-resolved person should acquire the caller's
+        /// GEDCOM pointer (they had none before).
+        var linkPointer: String?
+
+        func createPerson() -> String {
+            let id = uniqueID(
+                base: "person." + slug(subject)
+                    + (testimony.gedcomPersonID.map { "." + slug($0) } ?? ""),
                 taken: Set(people.map(\.id)))
             people.append(CyberBrainPerson(
-                id: personID,
+                id: id,
+                gedcomPersonID: testimony.gedcomPersonID,
                 canonicalName: subject,
                 aliases: normalizedAliases(testimony.subjectAliases, excluding: subject)))
             createdPerson = true
+            return id
+        }
+
+        if let pointer = testimony.gedcomPersonID,
+           let linked = index.people(gedcomPersonID: pointer).first {
+            // The tree record is already known to the brain: that wins over
+            // any name match, however the speaker spelled it.
+            personID = linked.id
+        } else {
+            switch index.resolve(subject) {
+            case .resolved(let person):
+                if let pointer = testimony.gedcomPersonID,
+                   let existing = person.gedcomPersonID, existing != pointer {
+                    // Same name, DIFFERENT tree record (Jr/Sr, cousins):
+                    // never merge them.
+                    personID = createPerson()
+                } else {
+                    personID = person.id
+                    if person.gedcomPersonID == nil { linkPointer = testimony.gedcomPersonID }
+                }
+            case .ambiguous(let candidates):
+                guard testimony.gedcomPersonID != nil else {
+                    throw WriteError.ambiguousSubject(candidates.map(\.canonicalName))
+                }
+                // A pointer disambiguates: a fresh, linked record.
+                personID = createPerson()
+            case .notFound:
+                personID = createPerson()
+            }
         }
 
         let dayStamp = dayString(testimony.date)
         let speaker = testimony.speakerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let speakerLabel = speaker.isEmpty ? "a family member" : speaker
         var sources = archive.sources
-        let sourceID = "source.told-by-" + slug(speakerLabel) + "." + dayStamp
-        if !sources.contains(where: { $0.id == sourceID }) {
-            sources.append(CyberBrainSource(
-                id: sourceID,
-                type: .familyWitness,
-                title: "Told to Hallie by \(speakerLabel), \(dayStamp)",
-                attribution: speakerLabel,
-                sourceDate: CyberBrainQualifiedDate(
-                    value: dayStamp, precision: .day, qualifier: .exact,
-                    displayText: dayStamp),
-                notes: "Recorded in conversation; not yet verified against documents."))
+        let sourceID: String
+        let itemPrefix: String
+        let confidence: CyberBrainItem.Confidence
+        switch testimony.origin {
+        case .conversation:
+            sourceID = "source.told-by-" + slug(speakerLabel) + "." + dayStamp
+            itemPrefix = "told"
+            // Recorded, attributed, NOT verified. Verification is a later,
+            // human step; nothing told in conversation starts as confirmed.
+            confidence = .probable
+            if !sources.contains(where: { $0.id == sourceID }) {
+                sources.append(CyberBrainSource(
+                    id: sourceID,
+                    type: .familyWitness,
+                    title: "Told to Hallie by \(speakerLabel), \(dayStamp)",
+                    attribution: speakerLabel,
+                    sourceDate: CyberBrainQualifiedDate(
+                        value: dayStamp, precision: .day, qualifier: .exact,
+                        displayText: dayStamp),
+                    notes: "Recorded in conversation; not yet verified against documents."))
+            }
+        case .familyTreeNote:
+            sourceID = "source.family-tree-notes-" + slug(speakerLabel) + "." + dayStamp
+            itemPrefix = "note"
+            confidence = .confirmed
+            if !sources.contains(where: { $0.id == sourceID }) {
+                sources.append(CyberBrainSource(
+                    id: sourceID,
+                    type: .profileNote,
+                    title: "Family Tree notes (\(speakerLabel))",
+                    attribution: speakerLabel,
+                    sourceDate: CyberBrainQualifiedDate(
+                        value: dayStamp, precision: .day, qualifier: .exact,
+                        displayText: dayStamp),
+                    notes: "Written in the Family Tree inspector about a specific GEDCOM record."))
+            }
         }
 
         let takenItemIDs = Set(people.flatMap(\.items).map(\.id))
         let itemID = uniqueID(
-            base: "told.\(slug(personID.replacingOccurrences(of: "person.", with: ""))).\(dayStamp)",
+            base: "\(itemPrefix).\(slug(personID.replacingOccurrences(of: "person.", with: ""))).\(dayStamp)",
             taken: takenItemIDs)
         let item = CyberBrainItem(
             id: itemID,
@@ -157,9 +239,7 @@ public enum CyberBrainWriter {
             text: text,
             subjectPersonIDs: [personID],
             sourceIDs: [sourceID],
-            // Recorded, attributed, NOT verified. Verification is a later,
-            // human step; nothing told in conversation starts as confirmed.
-            confidence: .probable,
+            confidence: confidence,
             privacy: .family,
             createdAt: testimony.date,
             updatedAt: testimony.date)
@@ -175,7 +255,7 @@ public enum CyberBrainWriter {
         }
         people[personIndex] = CyberBrainPerson(
             id: person.id,
-            gedcomPersonID: person.gedcomPersonID,
+            gedcomPersonID: person.gedcomPersonID ?? linkPointer,
             profileStableID: person.profileStableID,
             canonicalName: person.canonicalName,
             aliases: aliases,
