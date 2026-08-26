@@ -313,7 +313,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         if let newGraph {
             sortedPeople = Self.sorted(Array(newGraph.people.values))
             peopleCount = sortedPeople.count
-            anchors = Self.anchors(in: newGraph)
+            anchors = Self.anchors(
+                in: newGraph,
+                ownerFamilySearchID: UserDefaults.standard.string(
+                    forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey))
             anchorIndexes = Dictionary(uniqueKeysWithValues: anchors.map {
                 ($0.id, GedcomFamilyGraph.AncestorIndex(graph: newGraph, descendantID: $0.id))
             })
@@ -494,10 +497,13 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     // MARK: Line to… (direct descent chain)
 
-    /// Root ("me") first, then each recorded spouse of the root. A root
-    /// with two marriages yields two anchors — that IS the picker.
-    nonisolated static func anchors(in graph: GedcomFamilyGraph) -> [FamilyTreeAnchor] {
-        guard let root = graph.rootPerson else { return [] }
+    /// "Me" first, then each recorded spouse. "Me" is the person carrying
+    /// the configured FamilySearch ID (`hallie.ownerFamilySearchID`) when
+    /// the tree has it, else the tree root. A root with two marriages
+    /// yields two anchors — that IS the picker.
+    nonisolated static func anchors(in graph: GedcomFamilyGraph,
+                                    ownerFamilySearchID: String? = nil) -> [FamilyTreeAnchor] {
+        guard let root = graph.person(familySearchID: ownerFamilySearchID) ?? graph.rootPerson else { return [] }
         var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
         var seen: Set<String> = [root.id]
         for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {

@@ -101,6 +101,17 @@ re-pulling everything. Deep lines in the shared tree are user-submitted and
 thinly sourced the further back they go — worth checking before Hallie
 recites them as fact.
 
+### Telling Hallie which record is you
+
+getmyancestors writes every person's FamilySearch ID into the GEDCOM
+(`1 _FSFTID GVQV-NW3`). Give Hallie yours and "I" / "my" / your own name
+resolve to that exact record before any name matching: open your person page
+on FamilySearch (Family Tree → your name; the ID is shown under the name),
+then either type it in the chat window's "Who is talking to her…" sheet
+under **Your FamilySearch ID**, or run
+`defaults write Rick-Breen.VideoScan hallie.ownerFamilySearchID GVQV-NW3`.
+Leave it empty and she falls back to the tree root as before.
+
 ### Asking Hallie
 
 "Hallie, get more of the family tree" / "download the family tree from

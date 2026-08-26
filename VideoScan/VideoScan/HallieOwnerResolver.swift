@@ -33,7 +33,11 @@ enum HallieOwnerResolver {
         case none
     }
 
-    static func resolve(_ name: String, graph: GedcomFamilyGraph) -> Match {
+    static func resolve(_ name: String, graph: GedcomFamilyGraph,
+                        familySearchID: String? = nil) -> Match {
+        if let pinned = graph.person(familySearchID: familySearchID) {
+            return .one(pinned, note: "Basis: “you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? "")).")
+        }
         let like = graph.people(namedLike: name)
         if like.count == 1 {
             return .one(like[0], note: "Basis: “you” = \(like[0].name) (matched \(name) by name).")

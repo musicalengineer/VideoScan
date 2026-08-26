@@ -37,15 +37,21 @@ extension HallieTurnExecutor {
         /// May McGill") when the display name does not token-match her
         /// GEDCOM record. Empty → derived from `archivistName`.
         let archivistPersonName: String?
+        /// The owner's FamilySearch person ID ("GVQV-NW3"), when set. The
+        /// GEDCOM carries it as `1 _FSFTID`, so it pins "me" to one record
+        /// ahead of any name matching (2026-08-26). Empty → nil.
+        let ownerFamilySearchID: String?
 
         static let none = Speakers(ownerName: nil, archivistName: nil,
                                    archivistPersonName: nil)
 
         init(ownerName: String?, archivistName: String?,
-             archivistPersonName: String? = nil) {
+             archivistPersonName: String? = nil,
+             ownerFamilySearchID: String? = nil) {
             self.ownerName = Self.clean(ownerName)
             self.archivistName = Self.clean(archivistName)
             self.archivistPersonName = Self.clean(archivistPersonName)
+            self.ownerFamilySearchID = Self.clean(ownerFamilySearchID)?.uppercased()
         }
 
         /// The persisted `archivist.*` settings, same keys the chat window's
@@ -53,6 +59,10 @@ extension HallieTurnExecutor {
         static let ownerDefaultsKey = "archivist.ownerPersonName"
         static let archivistNameDefaultsKey = "archivist.name"
         static let archivistPersonNameDefaultsKey = "archivist.personName"
+        /// `hallie.ownerFamilySearchID` — set from the speaker settings
+        /// sheet or `defaults write Rick-Breen.VideoScan
+        /// hallie.ownerFamilySearchID GVQV-NW3`. Default empty.
+        static let ownerFamilySearchIDDefaultsKey = "hallie.ownerFamilySearchID"
         static let defaultOwnerName = "Rick Breen"
         static let defaultArchivistName = "Hallie Mae"
 
@@ -63,7 +73,8 @@ extension HallieTurnExecutor {
             return Speakers(
                 ownerName: owner,
                 archivistName: archivist == "Name TBD" ? defaultArchivistName : archivist,
-                archivistPersonName: defaults.string(forKey: archivistPersonNameDefaultsKey))
+                archivistPersonName: defaults.string(forKey: archivistPersonNameDefaultsKey),
+                ownerFamilySearchID: defaults.string(forKey: ownerFamilySearchIDDefaultsKey))
         }
 
         /// The spellings to try, most specific first, when resolving the

@@ -20,6 +20,10 @@ struct ArchivistSpeakerSettingsSheet: View {
     let archivistName: String
 
     @Environment(\.dismiss) private var dismiss
+    /// Pins "I" to one family-tree record by FamilySearch ID (the GEDCOM's
+    /// `_FSFTID`), ahead of any name matching. Optional.
+    @AppStorage(HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
+    private var ownerFamilySearchID = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,6 +40,18 @@ struct ArchivistSpeakerSettingsSheet: View {
                     TextField("Your name as the family tree knows you", text: $ownerPersonName)
                         .textFieldStyle(.roundedBorder)
                         .frame(minWidth: 280)
+                }
+                GridRow {
+                    Text("Your FamilySearch ID")
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("e.g. GVQV-NW3", text: $ownerFamilySearchID)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 280)
+                        Text("Optional. From your FamilySearch person page (Tree → your name → ID under the name). Pins “I” to that exact tree record even when the tree spells you differently.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 GridRow {
                     Text("“You” are")

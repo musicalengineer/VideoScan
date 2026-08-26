@@ -455,10 +455,11 @@ enum HallieLineageAnswer {
     ///   (iii) No hit at all → the tree root person (first INDI in file
     ///         order; getmyancestors/FamilySearch put the home person
     ///         first — an assumption, so the basis line says "tree root").
-    static func resolveOwner(_ name: String, graph: GedcomFamilyGraph) -> Resolved {
+    static func resolveOwner(_ name: String, graph: GedcomFamilyGraph,
+                             familySearchID: String? = nil) -> Resolved {
         // The chain itself lives in HallieOwnerResolver (shared with the
         // graph kinship route and "my dad" rebinding, 2026-08-26).
-        switch HallieOwnerResolver.resolve(name, graph: graph) {
+        switch HallieOwnerResolver.resolve(name, graph: graph, familySearchID: familySearchID) {
         case .one(let person, let note):
             return .success(person, note: note)
         case .many(let like):
@@ -481,6 +482,16 @@ enum HallieLineageAnswer {
                 prose: "Whose line would you like? For example: “show Donna’s maternal line back five generations.”",
                 basisLine: "Basis: no person named and no owner is signed in; nothing was looked up.",
                 queryDescription: "lineage: person missing", citations: [], catalogPersonName: nil))
+        }
+        // Step 0 (2026-08-26): the owner's FamilySearch ID pins "me" / the
+        // owner's own name to one record before any name or alias lookup.
+        let isOwnerSpelling = typed == nil
+            || HallieOwnerResolver.isOwnerSpelling(name, owner: context.speakers.ownerName)
+        if isOwnerSpelling,
+           case .one(let pinned, let note) = HallieOwnerResolver.resolve(
+               name, graph: graph, familySearchID: context.speakers.ownerFamilySearchID),
+           graph.person(familySearchID: context.speakers.ownerFamilySearchID) != nil {
+            return .success(pinned, note: note)
         }
         // Same bridge the kinship routes use: the family CyberBrain knows
         // that "Rick" is a particular GEDCOM record even when the tree
@@ -517,10 +528,9 @@ enum HallieLineageAnswer {
             // The owner ("my line", or their own name typed) gets the
             // fallback chain before the honest decline: the tree spells
             // Rick "Richard Harding Breen Jr" (live 2026-08-26).
-            let isOwner = typed == nil
-                || HallieOwnerResolver.isOwnerSpelling(name, owner: context.speakers.ownerName)
-            if isOwner {
-                let owner = resolveOwner(name, graph: graph)
+            if isOwnerSpelling {
+                let owner = resolveOwner(name, graph: graph,
+                                         familySearchID: context.speakers.ownerFamilySearchID)
                 if owner != .failure(nil) { return owner }
             }
             // The resolver's own honest answer (not found / which one?).

@@ -831,8 +831,20 @@ enum HallieTurnExecutor {
                     aliases: $0.aliases)
             })
         let selection: ArchivistGraphSubjectSelection
+        // Step 0 of the owner chain (2026-08-26): a configured FamilySearch
+        // ID pins the owner's own spelling to one record before any name
+        // matching — never applied to anyone else's name.
+        var ownerNote: String?
         switch request.selectedIdentity {
-        case nil: selection = .unresolved
+        case nil:
+            if let typed = payload.people.first,
+               HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
+               let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID) {
+                selection = .gedcomPersonID(pinned.id)
+                ownerNote = "“you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? ""))."
+            } else {
+                selection = .unresolved
+            }
         case .profileStableID(let id): selection = .profileStableID(id)
         case .gedcomPersonID(let id): selection = .gedcomPersonID(id)
         case .cyberBrainPersonID:
@@ -847,12 +859,12 @@ enum HallieTurnExecutor {
         // on one record — several Richards, or none under that spelling —
         // so pin the owner's record (root tie-break) and run again. Said in
         // the basis line; never applied to anyone else's name.
-        var ownerNote: String?
-        if request.selectedIdentity == nil,
+        if request.selectedIdentity == nil, ownerNote == nil,
            result.conclusion == .personNotFound || !result.ambiguityCandidates.isEmpty,
            let typed = payload.people.first,
            HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
-           case .one(let owner, let note) = HallieOwnerResolver.resolve(typed, graph: graph) {
+           case .one(let owner, let note) = HallieOwnerResolver.resolve(
+               typed, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
             result = try await detached {
                 execute(query, inputs, .gedcomPersonID(owner.id))
             }

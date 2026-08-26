@@ -79,7 +79,10 @@ extension HallieTurnExecutor {
             // ("Richard Harding Breen Jr"); fall back to the tree's own
             // name match.
             var owners: [GedcomFamilyGraph.Person] = []
-            if let cyberBrain, case .resolved(let person) = cyberBrain.resolve(owner),
+            if let pinned = graph.person(familySearchID: speakers.ownerFamilySearchID) {
+                owners = [pinned]
+                result.notes.append("“you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? ""))")
+            } else if let cyberBrain, case .resolved(let person) = cyberBrain.resolve(owner),
                let gedcomID = person.gedcomPersonID, let treePerson = graph.people[gedcomID] {
                 owners = [treePerson]
             } else {
@@ -88,7 +91,8 @@ extension HallieTurnExecutor {
                     // The shared owner chain (2026-08-26): diminutive/suffix
                     // tolerant, tree root as tie-breaker — the same rule the
                     // lineage and kinship routes apply to "me".
-                    switch HallieOwnerResolver.resolve(owner, graph: graph) {
+                    switch HallieOwnerResolver.resolve(
+                        owner, graph: graph, familySearchID: speakers.ownerFamilySearchID) {
                     case .one(let person, let note):
                         owners = [person]
                         result.notes.append(note.replacingOccurrences(of: "Basis: ", with: ""))
