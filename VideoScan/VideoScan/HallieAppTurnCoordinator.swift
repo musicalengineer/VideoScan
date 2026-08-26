@@ -104,6 +104,14 @@ enum HallieAppTurnCoordinator {
         /// records nothing so tests never touch the real CyberBrain; live
         /// writes through CyberBrainWriter.
         let recordTestimony: @Sendable (CyberBrainWriter.Testimony) throws -> Void
+        /// Durably record a photo caption ("this photo is me and Donna",
+        /// 2026-08-26). Default records nothing; live writes through
+        /// CyberBrainWriter.
+        let recordPhotoCaption: @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void
+        /// Mark a photo as NOT showing a tree person (photo, GEDCOM ID,
+        /// noted by, caption). Default does nothing; live writes the
+        /// `.notof.json` sidecar through FamilyAssetStore.
+        let excludePhoto: @Sendable (URL, String, String?, String?) throws -> Void
         /// Who "I" and "you" are (2026-08-18): the owner's name and the
         /// archivist's name from the `archivist.*` settings.
         let loadSpeakers: @Sendable () -> HallieTurnExecutor.Speakers
@@ -142,6 +150,8 @@ enum HallieAppTurnCoordinator {
             loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
             recordTestimony: @escaping @Sendable (CyberBrainWriter.Testimony) throws -> Void = { _ in },
+            recordPhotoCaption: @escaping @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void = { _ in },
+            excludePhoto: @escaping @Sendable (URL, String, String?, String?) throws -> Void = { _, _, _, _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
             },
@@ -182,6 +192,8 @@ enum HallieAppTurnCoordinator {
             self.loadGraph = loadGraph
             self.loadCyberBrain = loadCyberBrain
             self.recordTestimony = recordTestimony
+            self.recordPhotoCaption = recordPhotoCaption
+            self.excludePhoto = excludePhoto
             self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
             self.continueTurn = continueTurn
@@ -287,6 +299,22 @@ enum HallieAppTurnCoordinator {
                 let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
                 appLog.write("Hallie: kept testimony \(receipt.itemID) about \(receipt.canonicalName) (told by \(testimony.speakerName))")
             },
+            recordPhotoCaption: { caption in
+                guard let root = FileManager.default.urls(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask).first?.appendingPathComponent(
+                        "VideoScan/cyberbrain", isDirectory: true) else {
+                    throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
+                }
+                let receipt = try CyberBrainWriter.record(caption: caption, rootURL: root)
+                appLog.write("Hallie: kept photo caption \(receipt.itemID) for \(caption.subjects.count) people (\(caption.photoPath))")
+            },
+            excludePhoto: { photo, gedcomID, notedBy, caption in
+                let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+                let sidecar = try store.excludePhoto(
+                    photo, from: gedcomID, notedBy: notedBy, caption: caption)
+                appLog.write("Hallie: photo marked not-of \(gedcomID) → \(sidecar.path)")
+            },
             executeRequest: { request, context in
                 try await HallieTurnExecutor.execute(request, context: context)
             },
@@ -362,6 +390,13 @@ enum HallieAppTurnCoordinator {
         // the telling and falls through to ordinary answering.
         if let handled = tellingResponse(
             question: question, telling: telling,
+            referent: referent, dependencies: dependencies) {
+            return handled
+        }
+        // "This photo is me and my family" right after a photo was shown is
+        // a caption (and maybe a correction), never a search (2026-08-26).
+        if let handled = photoCaptionResponse(
+            question: question, memory: memory,
             referent: referent, dependencies: dependencies) {
             return handled
         }
@@ -755,8 +790,20 @@ enum HallieAppTurnCoordinator {
                let canonicalName = result.catalogPersonName {
                 photo = dependencies.resolveBiographyPhoto(canonicalName)
                 if photo == nil, result.outcome == .answered {
-                    let assets = FamilyAssetConfigurationCenter.shared
+                    var assets = FamilyAssetConfigurationCenter.shared
                         .snapshot().makeStore()
+                    if let graph = context.graph {
+                        // Identity-aware group folders (2026-08-26): who
+                        // "Rick" in RickDonnaBreenFamily is — the owner, by
+                        // FamilySearch ID / CyberBrain / People-tab aliases —
+                        // never a same-first-name relative. Published so the
+                        // lineage and tree cards share the same reading.
+                        let directory = FamilyAssetIdentityDirectory(
+                            graph: graph, speakers: context.speakers,
+                            cyberBrain: context.cyberBrain, profiles: context.profiles)
+                        assets.identity = directory
+                        FamilyAssetConfigurationCenter.shared.publishIdentity(directory)
+                    }
                     let graphMatches = context.graph?.people.values.filter {
                         $0.name.compare(
                             canonicalName,
@@ -769,7 +816,8 @@ enum HallieAppTurnCoordinator {
                         result = result.adding(attachments: [
                             .photo(HalliePhotoAttachment(
                                 personName: canonicalName,
-                                fileURL: url))
+                                fileURL: url,
+                                personGedcomID: person.gedcomID))
                         ])
                     } else {
                         do {

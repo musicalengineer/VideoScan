@@ -38,6 +38,10 @@ extension HallieTurnExecutor {
         /// Convenience context for callers: people and years of the last AST.
         private(set) var lastPeople: [String] = []
         private(set) var lastYears: ClosedRange<Int>?
+        /// The photo the previous answer showed, so "this photo is …" can
+        /// caption or correct it (2026-08-26). Cleared by the next archive
+        /// answer that shows no photo; follow-ups and tellings keep it.
+        private(set) var lastPhotoAttachment: HalliePhotoAttachment?
 
         init() {}
 
@@ -58,6 +62,18 @@ extension HallieTurnExecutor {
             switch result.route {
             case .presence, .cross, .aggregate, .temporal, .graph, .telling:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
+            default:
+                break
+            }
+            let shownPhoto = result.attachments.lazy.compactMap { attachment -> HalliePhotoAttachment? in
+                if case .photo(let photo) = attachment { return photo }
+                return nil
+            }.first
+            switch (shownPhoto, result.route) {
+            case (let photo?, _):
+                lastPhotoAttachment = photo
+            case (nil, .presence), (nil, .cross), (nil, .aggregate), (nil, .temporal), (nil, .graph):
+                lastPhotoAttachment = nil
             default:
                 break
             }
