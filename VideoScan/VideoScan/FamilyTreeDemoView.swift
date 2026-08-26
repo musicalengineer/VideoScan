@@ -22,10 +22,12 @@ struct FamilyTreeDemoView: View {
     private let usesInjectedModel: Bool
     @State private var zoom: Double = 0.88
     @State private var selectedPhotoItem: PhotosPickerItem?
-    /// Non-nil while the Get Family Tree sheet is up. `.sheet(item:)` rather
-    /// than a boolean so the coordinator and the sheet are created together
-    /// (the chained-sheet trap).
-    @State private var pullCoordinator: FamilySearchPullCoordinator?
+    /// The Get Family Tree coordinator is owned by the app-wide center, not
+    /// this view, so closing the sheet no longer kills the file watcher
+    /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
+    /// `@ObservedObject` ≈ observe-but-don't-own; the singleton owns itself.
+    @ObservedObject private var pullCenter = FamilySearchPullCenter.shared
+    @State private var showPullSheet = false
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -78,9 +80,17 @@ struct FamilyTreeDemoView: View {
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
-        .sheet(item: $pullCoordinator) { coordinator in
-            FamilySearchPullSheet(coordinator: coordinator) { _ in
-                Task { await model.loadFromDisk() }
+        .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
+            // The coordinator is created in presentGetFamilyTree() before the
+            // flag flips, so this `if let` only guards the impossible case.
+            if let coordinator = pullCenter.coordinator {
+                FamilySearchPullSheet(
+                    coordinator: coordinator,
+                    onInstalled: { _ in Task { await model.loadFromDisk() } },
+                    onForget: {
+                        showPullSheet = false
+                        pullCenter.forget()
+                    })
             }
         }
         .task(id: sourceRevision) {
@@ -132,12 +142,14 @@ struct FamilyTreeDemoView: View {
         incomingHighlight = ""
     }
 
-    /// Build the coordinator against whatever GEDCOM directory this session
-    /// resolved (archive when one is designated, Application Support when
-    /// not) so a downloaded tree always lands where the tab reads from.
+    /// Build (or re-surface) the coordinator against whatever GEDCOM
+    /// directory this session resolved (archive when one is designated,
+    /// Application Support when not) so a downloaded tree always lands where
+    /// the tab reads from. A pull already in flight comes back as the SAME
+    /// coordinator — the sheet reopens onto it.
     private func presentGetFamilyTree() {
-        pullCoordinator = FamilySearchPullCoordinator(
-            gedcomDirectory: model.originalsDirectory)
+        pullCenter.begin(gedcomDirectory: model.originalsDirectory)
+        showPullSheet = true
     }
 
     // MARK: Banner
@@ -203,16 +215,13 @@ struct FamilyTreeDemoView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.title3.weight(.semibold))
+                    .font(.title2.weight(.semibold))
                 Spacer()
-                Button {
-                    presentGetFamilyTree()
-                } label: {
-                    Label("Get Family Tree", systemImage: "arrow.down.circle")
-                        .labelStyle(.iconOnly)
-                }
-                .controlSize(.small)
-                .help("Download your tree from FamilySearch as a GEDCOM file")
+            }
+            // Full-width button on its own row; turns into a live status
+            // (spinner / ready / problem) while a download is in flight.
+            FamilySearchPullButtonRow(status: pullCenter.status) {
+                presentGetFamilyTree()
             }
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
