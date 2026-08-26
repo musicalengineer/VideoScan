@@ -606,6 +606,16 @@ enum ArchivistGraphExecutor {
             return .people(
                 exactPeople, profileRoute: nil, spellingCorrection: nil)
         }
+        // Diminutive- and suffix-tolerant ("rick breen" ~ "Richard Harding
+        // Breen Jr", live 2026-08-26). Unlike `people(matching:)` this
+        // RETURNS several candidates instead of collapsing them to
+        // not-found — the caller's ambiguity chips (or the owner chain)
+        // decide, never a silent pick.
+        let loosePeople = inputs.graph.people(namedLike: typedName)
+        if !loosePeople.isEmpty {
+            return .people(
+                loosePeople, profileRoute: nil, spellingCorrection: nil)
+        }
         let fuzzyIDs = HallieSpellingRecovery.bestMatches(
             typed: typedName,
             candidates: inputs.graph.people.values.map {
@@ -658,6 +668,10 @@ enum ArchivistGraphExecutor {
                     spellingCorrection: nil)
             }
         }
+        // Deliberately NO diminutive-tolerant pass here (2026-08-26): a
+        // profile's aliases would bridge the son "Timmy" to the brother
+        // "Tim /Breen/" and "Dad" (alias Dick) to Rick. The owner's own
+        // spelling gets its chain in the executor instead.
         return .people(
             [], profileRoute: profileRoute, spellingCorrection: nil)
     }

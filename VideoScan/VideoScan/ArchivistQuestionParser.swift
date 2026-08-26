@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 enum ArchivistGeneralQuestion: Equatable {
     case ancestry
@@ -33,6 +34,10 @@ enum ArchivistQuestionParser {
         // after it substitutes the father's canonical name, the rewritten
         // "Who was …?" question returns here for the biography answer.
         if kinship(text) != nil { return nil }
+        // Multi-hop possessives ("Rick's great great grandpa on his paternal
+        // side") are not biographies of a person called "Rick's great great
+        // grandpa" either; HallieLineageQuestion.kinshipQuestion owns them.
+        if hasAncestorPossessive(text) { return nil }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
@@ -86,6 +91,18 @@ enum ArchivistQuestionParser {
             relation: relation,
             relationWord: String(match.3),
             possessors: candidates)
+    }
+
+    /// "<person>'s [maternal|paternal] (great )*grand<x>" / "my grand<x>":
+    /// a multi-word ancestor relation the single-word `kinship` parser
+    /// cannot type. Mirrors HallieLineageQuestion.kinshipQuestion's shape.
+    static func hasAncestorPossessive(_ text: String) -> Bool {
+        let lower = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        guard let m = lower.firstMatch(
+            of: /(?:^|\s)(?:my|our|[a-z][a-z .'-]*?'s?)\s+(?:(?:maternal|paternal|mother'?s|father'?s)\s+)?((?:great[- ]?)*grand[a-z]+)\b/)
+        else { return false }
+        let words = String(m.1).replacingOccurrences(of: "-", with: " ")
+        return GedcomFamilyGraph.extendedRelation(fromPhrase: words)?.relation.startsAtParents == true
     }
 
     private static func cleanName(_ raw: String) -> String {

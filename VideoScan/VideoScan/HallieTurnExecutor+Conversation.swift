@@ -185,9 +185,21 @@ extension HallieTurnExecutor {
         // graph with a card attached (2026-08-22). A nil answer means the
         // shape was not really ours (e.g. "family tree for Donna" is a
         // person, not a surname) and the question continues as typed.
-        if let lineageAnswer, let lineage = HallieLineageQuestion.detect(question),
-           let answer = lineageAnswer(lineage) {
-            return .answer(answer)
+        if let lineage = HallieLineageQuestion.detect(question) {
+            // A multi-hop kinship phrase ("X's great great grandpa on his
+            // paternal side") is not answered by the lineage code: it is a
+            // ready-made graph intent, run by the ordinary kinship route so
+            // it keeps the chips, People-tab fallback and told knowledge.
+            if case .kinship(let person, let relation, let side) = lineage {
+                return .run(Intent(
+                    originalQuestion: question,
+                    ast: .graph(.init(people: [person ?? "me"], operation: .kinship,
+                                      relation: relation, side: side)),
+                    playAfterAnswer: playAfterAnswer))
+            }
+            if let lineageAnswer, let answer = lineageAnswer(lineage) {
+                return .answer(answer)
+            }
         }
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.

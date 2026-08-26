@@ -70,12 +70,13 @@ struct HallieFamilyKnowledgeSupplementTests {
         #expect(Supplement.latestBirthYear(in: graph()) == 1959)
     }
 
-    @Test func coverageNoteOnlyForDescendantsOfAnOldTree() {
+    /// Retired 2026-08-26: a max birth year is not the tree's reach
+    /// (FamilySearch strips living people's dates), so no relation gets
+    /// the "only goes up to people born in YYYY" note any more.
+    @Test func coverageNoteIsNeverGeneratedFromAMaxBirthYear() {
         let tree = graph()
-        #expect(Supplement.coverageNote(relation: .children, graph: tree)
-                == "The family tree I have only goes up to people born in 1959, so it may simply stop before them.")
-        #expect(Supplement.coverageNote(relation: .parents, graph: tree) == nil,
-                "missing parents are not explained by the tree ending late")
+        #expect(Supplement.coverageNote(relation: .children, graph: tree) == nil)
+        #expect(Supplement.coverageNote(relation: .parents, graph: tree) == nil)
         #expect(Supplement.coverageNote(relation: .children, graph: nil) == nil)
     }
 
@@ -98,7 +99,6 @@ struct HallieFamilyKnowledgeSupplementTests {
 
         #expect(enriched.outcome == .answered)
         #expect(enriched.prose == "The family tree doesn't record any children for Richard Harding Breen Jr. You can try another relationship or ask for the family tree. "
-                + "The family tree I have only goes up to people born in 1959, so it may simply stop before them. "
                 + "But Rick Breen told me: “Rick and Donna have four adult sons: two work in software development, one is a therapy counselor, and one is a bartender.”")
         #expect(enriched.knowledgeCitations.map(\.id) == ["source.rick"])
         #expect(enriched.basisLine.contains("Family knowledge: bio.sons."))
@@ -122,7 +122,7 @@ struct HallieFamilyKnowledgeSupplementTests {
         #expect(same == base, "no coverage note for parents, no passage about them → untouched")
     }
 
-    @Test func notFoundOffersTheTellingDoorAndExplainsTheTreesReach() {
+    @Test func notFoundOffersTheTellingDoorWithoutAReachClaim() {
         let base = HallieTurnExecutor.Result(
             route: .graph, outcome: .declined,
             prose: "I don't find “matt” in the family tree.",
@@ -130,7 +130,6 @@ struct HallieFamilyKnowledgeSupplementTests {
             citations: [], catalogPersonName: nil)
         let offered = Supplement.notFoundOffer(base, typed: "matt", graph: graph())
         #expect(offered.prose == "I don't find “matt” in the family tree. "
-                + "The tree I have covers people born up to 1959, so the younger generations aren't in it yet. "
                 + "If you tell me about Matt — “let me tell you about Matt” — I'll remember it.")
         #expect(offered.outcome == .declined)
     }

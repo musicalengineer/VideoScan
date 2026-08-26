@@ -36,6 +36,16 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// "show me a photo of X" — the stored portrait as an attachment;
     /// no language model involved.
     case personPhoto(person: String)
+    /// "tell me about Rick Breen's great great grandpa on his paternal
+    /// side" / "who was Donna's maternal grandmother" / "my great grandpa"
+    /// (live 2026-08-26: the line regex below swallowed "paternal side"
+    /// and made the whole prefix the person). A multi-hop ancestor
+    /// relation with an optional side, parsed deterministically and
+    /// handed to the ordinary graph kinship route as a ready-made AST —
+    /// same clarification chips, People-tab fallback and family-knowledge
+    /// supplement as a translated question. `person` nil = the owner.
+    case kinship(person: String?, relation: ArchivistQueryAST.Graph.Relation,
+                 side: ArchivistQueryAST.Graph.Side?)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -127,6 +137,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .originTrail(person: nil, country: nil, line: .both)
         }
 
+        // "X's great great grandpa on his paternal side" / "my maternal
+        // grandmother" — AFTER the trace shapes (where a kinship word is an
+        // apposition: "from my great great grandmother edith lucy parker")
+        // and BEFORE the line shape, which would otherwise read "paternal
+        // side" as a line request and swallow the kinship words into the
+        // person (live 2026-08-26).
+        if let kin = kinshipQuestion(in: lower) { return kin }
+
         // "(show me) rick's maternal line back 5 generations"
         if let m = lower.firstMatch(of: /(?:^|\s)(.*?)\b(maternal|paternal|mother'?s|father'?s)\s+(?:line|side|ancestors|ancestry|lineage)\b(.*)$/) {
             let line: GedcomFamilyGraph.Line = String(m.2).hasPrefix("m") ? .maternal : .paternal
@@ -141,6 +159,19 @@ enum HallieLineageQuestion: Equatable, Sendable {
                                  line: .both, generations: gens)
         }
 
+        // "the family tree from rick breen all the way back to 1600" (live
+        // 2026-08-26): a named start and a "back" → an ancestor walk at
+        // full depth. The year is a wish the walk cannot honour yet — the
+        // tree stops where it stops — so it is not parsed further.
+        let wantsDepth = trace != lower   // "… as far back as you can go" was stripped
+        if let m = trace.firstMatch(of: /family tree (?:for|of|from|starting (?:with|from|at)) (the )?([a-z][a-z .'-]+?)(\s+(?:all the way |as far )?back(?:wards?)?(?:\s+to\s+(?:the\s+)?(?:\d{4}|[a-z]+))?)?\s*$/),
+           m.3 != nil || wantsDepth {
+            let name = String(m.2).trimmingCharacters(in: .whitespaces)
+            if m.1 != nil {
+                return .surnameTree(surname: name.replacingOccurrences(of: " family", with: ""))
+            }
+            return .ancestorLine(person: capitalizedName(name), line: .both, generations: maxGenerations)
+        }
         // "family tree for the latta family" / "the lattas' family tree" /
         // "starting with the latta family" / "the hudson family tree"
         if let m = lower.firstMatch(of: /family tree (?:for|of|starting (?:with|from)) (?:the )?(?:current |present |whole |entire |modern |immediate |original |early )?([a-z][a-z'-]+)(?:'s?)?(?:\s+family|\s+clan|\s+side)?\s*$/) {
@@ -192,10 +223,26 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     /// "show me rick's" → "rick"; "my" / "our" / "me" → nil (the owner);
     /// "the family" → nil. Strips leading verbs and articles.
+    /// Words a question puts in front of the person that are not part of
+    /// the name. Longer forms first ("tell me about" before "tell me") so
+    /// "about" is not left behind as a first name (live 2026-08-26:
+    /// "About Rick Breen's …" was looked up in the tree).
+    static let leadWords = [
+        "please ", "hallie ", "show me ", "show ", "tell me about ", "tell me ", "tell us about ",
+        "give me ", "what about ", "what is ", "what's ", "who is ", "who was ", "who were ",
+        "who's ", "about ", "list ", "can you ", "could you ", "draw ", "display ", "trace ",
+        "find ",
+    ]
+
     static func possessor(in fragment: String) -> String? {
         var s = fragment.trimmingCharacters(in: .whitespaces)
-        for lead in ["please ", "hallie ", "show me ", "show ", "tell me ", "give me ", "what is ", "what's ", "list ", "can you ", "could you ", "draw ", "display ", "trace "] {
-            while s.hasPrefix(lead) { s = String(s.dropFirst(lead.count)) }
+        var stripped = true
+        while stripped {
+            stripped = false
+            for lead in leadWords where s.hasPrefix(lead) {
+                s = String(s.dropFirst(lead.count))
+                stripped = true
+            }
         }
         // Trailing nouns the question attached to the person: "rick's
         // ancestors" → "rick's"; "the family" → "the".
@@ -214,6 +261,38 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return owners.contains(name) ? nil : capitalizedName(name)
         }
         return nil
+    }
+
+    /// A possessive or first-person MULTI-HOP ancestor phrase:
+    ///   "<lead words> <person>'s [maternal|paternal] (great )*grand<x>
+    ///    [on his|her|my|the paternal|maternal|father's|mother's side]"
+    ///   "my/our (great )*grand<x> …"
+    /// Single-hop words (father, mother, brother…) are left to the
+    /// translator, whose closed vocabulary already handles them; this
+    /// exists because "great great grandpa on his paternal side" had no
+    /// deterministic home. The relation words come from the graph's own
+    /// `extendedRelation(fromPhrase:)` table so nothing is named here that
+    /// the traversal cannot walk; an unknown word ("grandson") → nil.
+    static func kinshipQuestion(in lower: String) -> HallieLineageQuestion? {
+        let pattern = /(?:^|\s)(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:great[- ]?)*grand[a-z]+)(?:\s+on\s+(?:his|her|my|our|their|the)\s+(paternal|maternal|father'?s|mother'?s)\s+side)?\b/
+        guard let m = lower.firstMatch(of: pattern) else { return nil }
+        // Only the whole question: more words after the relation ("…'s
+        // grandfather's farm", "… grandmother edith lucy parker") mean a
+        // different shape, and the translator or trace regexes own those.
+        let rest = lower[m.range.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard rest.isEmpty || rest.firstMatch(of: /^(?:please|hallie|thanks|for me)\b/) != nil else { return nil }
+        let words = String(m.4).replacingOccurrences(of: "-", with: " ")
+        guard let parsed = GedcomFamilyGraph.extendedRelation(fromPhrase: words),
+              parsed.relation.startsAtParents,
+              let relation = ArchivistQueryAST.Graph.Relation(rawValue: parsed.relation.rawValue)
+        else { return nil }
+        let sideWord = m.3.map(String.init) ?? m.5.map(String.init)
+        let side: ArchivistQueryAST.Graph.Side? = sideWord.map { $0.hasPrefix("m") ? .maternal : .paternal }
+        if m.1 != nil { return .kinship(person: nil, relation: relation, side: side) }
+        // possessor() strips the lead words ("tell me about"); nil means
+        // nobody in particular ("the family's") → not ours.
+        guard let person = possessor(in: String(m.2 ?? "") + "'s") else { return nil }
+        return .kinship(person: person, relation: relation, side: side)
     }
 
     /// Shape for the trace verbs once the start person is known. A NAMED
@@ -332,6 +411,10 @@ enum HallieLineageAnswer {
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
             return personPhoto(person, context: context)
+        case .kinship:
+            // Not answered here: preTranslation turns it into a graph
+            // kinship intent and the ordinary executor route runs it.
+            return nil
         case .surnameTree(let surname):
             guard let graph = context.graph else { return noTree() }
             return surnameTree(surname, graph: graph)
@@ -373,24 +456,20 @@ enum HallieLineageAnswer {
     ///         order; getmyancestors/FamilySearch put the home person
     ///         first — an assumption, so the basis line says "tree root").
     static func resolveOwner(_ name: String, graph: GedcomFamilyGraph) -> Resolved {
-        let like = graph.people(namedLike: name)
-        if like.count == 1 {
-            return .success(like[0], note: "Basis: “you” = \(like[0].name) (matched \(name) by name).")
-        }
-        if like.count > 1 {
-            if let root = graph.rootPerson, like.contains(where: { $0.id == root.id }) {
-                return .success(root, note: "Basis: “you” = \(root.name) (tree root).")
-            }
+        // The chain itself lives in HallieOwnerResolver (shared with the
+        // graph kinship route and "my dad" rebinding, 2026-08-26).
+        switch HallieOwnerResolver.resolve(name, graph: graph) {
+        case .one(let person, let note):
+            return .success(person, note: note)
+        case .many(let like):
             return .failure(Result(
                 route: .graph, outcome: .needsClarification,
                 prose: "Which \(name) do you mean — " + like.prefix(4).map(\.name).joined(separator: " or ") + "?",
                 basisLine: "Basis: the family tree has \(like.count) people matching \(name) and no root marker to prefer; nothing was looked up.",
                 queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
+        case .none:
+            return .failure(nil)
         }
-        if let root = graph.rootPerson {
-            return .success(root, note: "Basis: “you” = \(root.name) (tree root; \(name) has no tree record).")
-        }
-        return .failure(nil)
     }
 
     private static func resolve(_ typed: String?,
@@ -438,9 +517,8 @@ enum HallieLineageAnswer {
             // The owner ("my line", or their own name typed) gets the
             // fallback chain before the honest decline: the tree spells
             // Rick "Richard Harding Breen Jr" (live 2026-08-26).
-            let isOwner = typed == nil || context.speakers.ownerName.map {
-                FamilyIdentityText.tokens($0) == FamilyIdentityText.tokens(name)
-            } == true
+            let isOwner = typed == nil
+                || HallieOwnerResolver.isOwnerSpelling(name, owner: context.speakers.ownerName)
             if isOwner {
                 let owner = resolveOwner(name, graph: graph)
                 if owner != .failure(nil) { return owner }

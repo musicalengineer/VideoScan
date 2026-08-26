@@ -80,9 +80,14 @@ struct HallieSpeakerKinshipTests {
                                speakers: rick, graph: tree, cyberBrain: index)
         #expect(bound.failure == nil, Comment(rawValue: bound.failure ?? ""))
         #expect(bound.people == ["Richard Harding Breen Sr"])
+        // Without the brain the shared owner chain (2026-08-26) still finds
+        // him: "Rick Breen" ~ both Richards, the tree root (Jr) wins, and
+        // the note says so.
         let withoutBrain = Kin.rebind(people: ["me"], question: "videos of my dad",
                                       speakers: rick, graph: tree)
-        #expect(withoutBrain.failure?.hasPrefix("I don't find you (Rick Breen) in the family tree") == true)
+        #expect(withoutBrain.failure == nil, Comment(rawValue: withoutBrain.failure ?? ""))
+        #expect(withoutBrain.people == ["Richard Harding Breen Sr"])
+        #expect(withoutBrain.notes.first?.contains("tree root") == true)
     }
 
     @Test func onTheGraphRouteMyDadIsTheFatherNotTheOwner() async throws {

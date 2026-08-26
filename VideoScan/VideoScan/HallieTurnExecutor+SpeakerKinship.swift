@@ -84,6 +84,20 @@ extension HallieTurnExecutor {
                 owners = [treePerson]
             } else {
                 owners = graph.people(matching: owner)
+                if owners.count != 1 {
+                    // The shared owner chain (2026-08-26): diminutive/suffix
+                    // tolerant, tree root as tie-breaker — the same rule the
+                    // lineage and kinship routes apply to "me".
+                    switch HallieOwnerResolver.resolve(owner, graph: graph) {
+                    case .one(let person, let note):
+                        owners = [person]
+                        result.notes.append(note.replacingOccurrences(of: "Basis: ", with: ""))
+                    case .many(let people):
+                        owners = people
+                    case .none:
+                        owners = []
+                    }
+                }
             }
             guard owners.count == 1 else {
                 result.failure = owners.isEmpty

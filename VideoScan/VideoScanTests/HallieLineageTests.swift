@@ -254,6 +254,12 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("Show me my mother's side back three generations") == .ancestorLine(person: nil, line: .maternal, generations: 3))
         #expect(Q.detect("donna's paternal line") == .ancestorLine(person: "Donna", line: .paternal, generations: 5))
         #expect(Q.detect("my ancestors back 4 generations") == .ancestorLine(person: nil, line: .both, generations: 4))
+        // A kinship phrase in the possessive is NOT a line request (live
+        // 2026-08-26: "great great grandpa on his paternal side").
+        #expect(Q.detect("tell me about Rick Breen's great great grandpa on his paternal side")
+                == .kinship(person: "Rick Breen", relation: .greatGreatGrandfather, side: .paternal))
+        #expect(Q.possessor(in: "tell me about rick breen's") == "Rick Breen")
+        #expect(Q.possessor(in: "about rick's") == "Rick")
     }
 
     @Test func surnameTreeShapes() {
