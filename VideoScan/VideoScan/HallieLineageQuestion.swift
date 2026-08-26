@@ -19,7 +19,13 @@ import VideoScanCore
 enum HallieLineageQuestion: Equatable, Sendable {
     /// `person` nil = the owner ("my", "Rick's" when Rick is the owner is
     /// still a name and resolves normally).
-    case ancestorLine(person: String?, line: GedcomFamilyGraph.Line, generations: Int)
+    /// `untilYear` = "… back to 1600" / "before 1700" / "until the 1600s"
+    /// (2026-08-26): the walk stops at that year instead of where the
+    /// tree ends. C++ readers: an associated value with a default is like
+    /// a defaulted constructor argument — `.ancestorLine(person:line:
+    /// generations:)` still builds the case.
+    case ancestorLine(person: String?, line: GedcomFamilyGraph.Line, generations: Int,
+                      untilYear: Int? = nil)
     case surnameTree(surname: String)
     case originTrail(person: String?, country: String?, line: GedcomFamilyGraph.Line)
     case gedcomAwareness
@@ -49,6 +55,9 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
+    /// A year bound replaces the generation cap: 1959 → 1600 is ~13
+    /// generations, more than the card's usual 12.
+    static let yearBoundGenerations = 40
     static let treeDepth = 6
 
     // MARK: Detection (pure text)
@@ -56,7 +65,37 @@ enum HallieLineageQuestion: Equatable, Sendable {
     static func detect(_ text: String) -> HallieLineageQuestion? {
         let lower = normalize(text)
         guard !lower.isEmpty else { return nil }
+        // A year bound ("… back to 1600", 2026-08-26) is peeled off first
+        // so every shape below parses the sentence it always did; it is
+        // then re-attached to the ancestor walk. A trace with no country
+        // and a year is an ancestor walk too ("trace my line back to 1700").
+        guard let year = yearBound(in: lower) else { return detectShape(lower) }
+        let stripped = lower.replacing(yearBoundPhrase, with: "")
+            .trimmingCharacters(in: .whitespaces)
+        switch detectShape(stripped) {
+        case .ancestorLine(let person, let line, _, _)?:
+            let gens = generations(in: lower) ?? yearBoundGenerations
+            return .ancestorLine(person: person, line: line, generations: gens, untilYear: year)
+        case .originTrail(let person, nil, let line)?:
+            return .ancestorLine(person: person, line: line, generations: yearBoundGenerations, untilYear: year)
+        case nil:
+            // "rick's ancestors before 1800" — no generation count, no
+            // trace verb; the year is the whole ask. Ancestry words only
+            // (never "family" alone: "videos of the family from 1990 to
+            // 1995" is a media question).
+            if stripped.firstMatch(of: /\b(?:video|photo|picture|clip|movie|footage|film|image)s?\b/) == nil,
+               let m = stripped.firstMatch(of: /^(.*?)\b(?:ancest\w*|pedigree|lineage|line|family tree)\b/) {
+                return .ancestorLine(person: possessor(in: String(m.1)) ?? namedTarget(in: stripped),
+                                     line: lineWord(in: stripped),
+                                     generations: yearBoundGenerations, untilYear: year)
+            }
+            return nil
+        case let other:
+            return other
+        }
+    }
 
+    private static func detectShape(_ lower: String) -> HallieLineageQuestion? {
         if isGetFamilyTree(lower) { return .getFamilyTree }
         if isGedcomAwareness(lower) { return .gedcomAwareness }
 
@@ -161,10 +200,9 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
         // "the family tree from rick breen all the way back to 1600" (live
         // 2026-08-26): a named start and a "back" → an ancestor walk at
-        // full depth. The year is a wish the walk cannot honour yet — the
-        // tree stops where it stops — so it is not parsed further.
+        // full depth; "back to <year>" stops the walk at that year.
         let wantsDepth = trace != lower   // "… as far back as you can go" was stripped
-        if let m = trace.firstMatch(of: /family tree (?:for|of|from|starting (?:with|from|at)) (the )?([a-z][a-z .'-]+?)(\s+(?:all the way |as far )?back(?:wards?)?(?:\s+to\s+(?:the\s+)?(?:\d{4}|[a-z]+))?)?\s*$/),
+        if let m = trace.firstMatch(of: /family tree (?:for|of|from|starting (?:with|from|at)) (the )?([a-z][a-z .'-]+?)(\s+(?:all the way |as far )?back(?:wards?)?(?:\s+to\s+(?:the\s+)?(?:\d{4}s?|[a-z]+))?)?\s*$/),
            m.3 != nil || wantsDepth {
             let name = String(m.2).trimmingCharacters(in: .whitespaces)
             if m.1 != nil {
@@ -392,6 +430,18 @@ enum HallieLineageQuestion: Equatable, Sendable {
     static func possessive(_ name: String) -> String {
         name.hasSuffix("s") ? name + "’" : name + "’s"
     }
+
+    /// "back to 1600" / "before 1700" / "until the 1600s" / "as far as
+    /// 1750" → the year. "the 1600s" reads as 1600 (the start of that
+    /// century). Only four-digit years between 1000 and 2100.
+    /// Deliberately without "back": stripping "to 1600" from "all the way
+    /// back to 1600" leaves the "back" the depth shapes key on.
+    static let yearBoundPhrase = /\s*\b(?:before|until|till|up to|as far back as|as far as|to)\s+(?:the\s+)?(\d{4})s?\b/
+    static func yearBound(in text: String) -> Int? {
+        guard let m = text.firstMatch(of: yearBoundPhrase),
+              let year = Int(m.1), (1000...2100).contains(year) else { return nil }
+        return year
+    }
 }
 
 // MARK: - Answers
@@ -418,12 +468,13 @@ enum HallieLineageAnswer {
         case .surnameTree(let surname):
             guard let graph = context.graph else { return noTree() }
             return surnameTree(surname, graph: graph)
-        case .ancestorLine(let person, let line, let generations):
+        case .ancestorLine(let person, let line, let generations, let untilYear):
             guard let graph = context.graph else { return noTree() }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
-                return ancestorLine(of: p, line: line, generations: generations, graph: graph, basisNote: note)
+                return ancestorLine(of: p, line: line, generations: generations, untilYear: untilYear,
+                                    graph: graph, basisNote: note)
             }
         case .originTrail(let person, let country, let line):
             guard let graph = context.graph else { return noTree() }
@@ -547,18 +598,24 @@ enum HallieLineageAnswer {
     static func ancestorLine(of person: GedcomFamilyGraph.Person,
                              line: GedcomFamilyGraph.Line,
                              generations: Int,
+                             untilYear: Int? = nil,
                              graph: GedcomFamilyGraph,
                              basisNote: String? = nil) -> Result {
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
         let card = HallieAttachmentBuilder.lineage(
-            of: person, line: line, generations: generations, in: graph,
+            of: person, line: line, generations: generations, untilYear: untilYear, in: graph,
             photo: { assets.photoURLs(for: $0).first })
         var sentences: [String] = []
         if card.generations.isEmpty {
             let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
-            sentences.append("The family tree doesn’t record \(HallieLineageQuestion.possessive(person.name)) \(who), so I can’t walk that line.")
+            if let untilYear {
+                sentences.append("The family tree records no \(who) for \(person.name) born in or after \(untilYear), so there is nothing to walk back to \(untilYear).")
+            } else {
+                sentences.append("The family tree doesn’t record \(HallieLineageQuestion.possessive(person.name)) \(who), so I can’t walk that line.")
+            }
         } else {
-            sentences.append("Here is \(card.title), \(card.generations.count) generation\(card.generations.count == 1 ? "" : "s") back:")
+            let bound = untilYear.map { " back to \($0)" } ?? ""
+            sentences.append("Here is \(card.title)\(bound), \(card.generations.count) generation\(card.generations.count == 1 ? "" : "s") back:")
             for gen in card.generations {
                 let names = gen.people.map { p -> String in
                     var s = p.name
@@ -568,7 +625,19 @@ enum HallieLineageAnswer {
                 }.joined(separator: "; ")
                 sentences.append("\(gen.label.capitalized): \(names).")
             }
-            if !card.reachedAll, let last = card.generations.last?.people.first {
+            if let untilYear {
+                // Stopped by the year, by the tree, or both — say which.
+                let last = card.generations.last?.people ?? []
+                let beyond = last.contains { card in
+                    guard let p = graph.people[card.gedcomID] else { return false }
+                    return graph.relatives(.parents, of: p).contains {
+                        !GedcomFamilyGraph.withinBound($0, child: p, year: untilYear)
+                    }
+                }
+                sentences.append(beyond
+                    ? "I stopped at \(untilYear) as you asked; the tree goes further back."
+                    : "That is as far as the tree reaches on that line before \(untilYear).")
+            } else if !card.reachedAll, let last = card.generations.last?.people.first {
                 let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
                 sentences.append("The tree stops there — no \(who) recorded for \(last.name).")
             }
@@ -577,7 +646,8 @@ enum HallieLineageAnswer {
             route: .graph, outcome: card.generations.isEmpty ? .declined : .answered,
             prose: sentences.joined(separator: " "),
             basisLine: ArchivistBiographyPolicy.gedcomBasis + (basisNote.map { " " + $0 } ?? ""),
-            queryDescription: "lineage \(line.rawValue) ×\(generations): \(person.name)",
+            queryDescription: "lineage \(line.rawValue) ×\(generations)"
+                + (untilYear.map { " until \($0)" } ?? "") + ": \(person.name)",
             citations: [], catalogPersonName: person.name,
             offeredActions: [.openFamilyTreePerson(
                 personID: person.id, personName: person.name)],
