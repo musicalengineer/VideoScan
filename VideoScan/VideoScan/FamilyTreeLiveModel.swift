@@ -119,7 +119,12 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     @Published private(set) var loadState: LoadState = .idle
     @Published private(set) var peopleCount = 0
-    @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = []
+    /// The sidebar rows. `didSet` on a `@Published` property ≈ a setter hook
+    /// that fires after the value lands — here it keeps `filteredIndexByID`
+    /// in step so arrow keys never scan the 16k-row list.
+    @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = [] {
+        didSet { rebuildFilteredIndex() }
+    }
     @Published private(set) var selectedID: String?
     @Published private(set) var selectedPerson: FamilyTreePersonSummary?
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
@@ -150,6 +155,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Sorted by surname, then given name, then id (stable).
     private var sortedPeople: [GedcomFamilyGraph.Person] = []
     private var photoOverrides: [String: NSImage] = [:]
+    /// id → row index in `filteredPeople`. Rebuilt only when the filter
+    /// changes (O(rows) once), so each ↑/↓ keypress is one dictionary
+    /// lookup, not a linear scan.
+    private var filteredIndexByID: [String: Int] = [:]
     private var loadGeneration = 0
     private var installedSourceKey: String?
 
@@ -345,6 +354,49 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard graph?.people[id] != nil else { return false }
         select(id)
         return true
+    }
+
+    // MARK: Keyboard navigation (sidebar ↑ / ↓ / Return)
+
+    /// Row index of the current selection within `filteredPeople`, or nil
+    /// when the selected person is filtered out (or nothing is selected).
+    var selectedFilteredIndex: Int? {
+        selectedID.flatMap { filteredIndexByID[$0] }
+    }
+
+    /// ↓: move to the next row. No wrap; at the bottom this is a no-op.
+    /// When the selection is not in the list (filter changed underneath it)
+    /// the first row is selected so the keys always do something visible.
+    func selectNext() { step(by: 1) }
+
+    /// ↑: move to the previous row. No wrap; at the top this is a no-op.
+    func selectPrevious() { step(by: -1) }
+
+    /// Return in the search field: select the first match. Returns false
+    /// when the list is empty so the caller can leave the selection alone.
+    @discardableResult
+    func selectFirstFiltered() -> Bool {
+        guard let first = filteredPeople.first else { return false }
+        select(first.id)
+        return true
+    }
+
+    private func step(by delta: Int) {
+        guard !filteredPeople.isEmpty else { return }
+        guard let index = selectedFilteredIndex else {
+            select(filteredPeople[0].id)
+            return
+        }
+        let target = index + delta
+        guard filteredPeople.indices.contains(target) else { return }
+        select(filteredPeople[target].id)
+    }
+
+    private func rebuildFilteredIndex() {
+        var map: [String: Int] = [:]
+        map.reserveCapacity(filteredPeople.count)
+        for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
+        filteredIndexByID = map
     }
 
     // MARK: Photos

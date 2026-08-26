@@ -226,22 +226,45 @@ struct FamilyTreeDemoView: View {
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
+                // Return picks the first match; ↑/↓ walk the list without
+                // leaving the field. `.onKeyPress` returning `.handled` ≈
+                // "consumed, don't pass to the next responder".
+                .onSubmit { model.selectFirstFiltered() }
+                .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
+                .onKeyPress(.downArrow) { model.selectNext(); return .handled }
 
             Divider()
 
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(model.filteredPeople) { person in
-                        Button {
-                            model.select(person.id)
-                        } label: {
-                            FamilyTreeSidebarRow(
-                                person: person,
-                                isSelected: model.selectedID == person.id
-                            )
+            // `ScrollViewReader` ≈ a handle that lets code scroll to a row by
+            // id; the ids are the ForEach ids (person.id).
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(model.filteredPeople) { person in
+                            Button {
+                                model.select(person.id)
+                            } label: {
+                                FamilyTreeSidebarRow(
+                                    person: person,
+                                    isSelected: model.selectedID == person.id
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                }
+                // `.focusable()` lets the list itself take keyboard focus
+                // (click it, then use the arrows). Focus ring is hidden so
+                // the dark sidebar doesn't grow a blue border.
+                .focusable()
+                .focusEffectDisabled()
+                .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
+                .onKeyPress(.downArrow) { model.selectNext(); return .handled }
+                // Keep the selected row visible whether the change came from
+                // a keypress, a card click, or the People tab.
+                .onChange(of: model.selectedID) { _, id in
+                    guard let id, model.selectedFilteredIndex != nil else { return }
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
 
