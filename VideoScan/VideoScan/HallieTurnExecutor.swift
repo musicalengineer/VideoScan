@@ -839,8 +839,27 @@ enum HallieTurnExecutor {
             return invalidContinuationResult(for: ast)
         }
         let execute = dependencies.executeGraph
-        let result = try await detached {
+        var result = try await detached {
             execute(query, inputs, selection)
+        }
+        // The owner chain (2026-08-26): the subject is one of the owner's
+        // own spellings ("rick", "Rick Breen") and the tree could not settle
+        // on one record — several Richards, or none under that spelling —
+        // so pin the owner's record (root tie-break) and run again. Said in
+        // the basis line; never applied to anyone else's name.
+        var ownerNote: String?
+        if request.selectedIdentity == nil,
+           result.conclusion == .personNotFound || !result.ambiguityCandidates.isEmpty,
+           let typed = payload.people.first,
+           HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
+           case .one(let owner, let note) = HallieOwnerResolver.resolve(typed, graph: graph) {
+            result = try await detached {
+                execute(query, inputs, .gedcomPersonID(owner.id))
+            }
+            ownerNote = note.replacingOccurrences(of: "Basis: ", with: "")
+        }
+        func withOwnerNote(_ r: Result) -> Result {
+            ownerNote.map { r.prefixingBasis($0) } ?? r
         }
         if !result.ambiguityCandidates.isEmpty {
             let choices = result.ambiguityCandidates.map { candidate in
@@ -931,9 +950,9 @@ enum HallieTurnExecutor {
             }
             return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
         }
-        return FamilyKnowledgeSupplement.apply(
+        return withOwnerNote(FamilyKnowledgeSupplement.apply(
             to: base, payload: payload, graphResult: result,
-            graph: graph, context: context)
+            graph: graph, context: context))
     }
 
     /// The privacy ceiling the app grants its own Family Archivist. Every

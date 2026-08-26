@@ -265,15 +265,15 @@ extension HallieTurnExecutor {
             return "The note on the profile says: “\(trimmed)” — that's a note, not something I've verified."
         }
 
+        /// Never "the tree only goes up to people born in YYYY" (live
+        /// 2026-08-26): FamilySearch strips living people's dates, so the
+        /// latest birth year says nothing about who is in the tree — Rick
+        /// IS in it, undated. Only the honest fact: no record matched.
         static func treeSentence(for name: String, graph: GedcomFamilyGraph?) -> String {
             guard let graph, !graph.people.isEmpty else {
                 return "I don't have an imported family tree to place \(name) in."
             }
-            if let year = FamilyKnowledgeSupplement.latestBirthYear(in: graph),
-               year < Calendar.current.component(.year, from: Date()) - 25 {
-                return "The family tree I have only goes up to people born in \(year), so \(name) isn't in it yet."
-            }
-            return "\(name) isn't in the family tree I have."
+            return "I couldn't match \(name) to a record in the family tree I have."
         }
     }
 }

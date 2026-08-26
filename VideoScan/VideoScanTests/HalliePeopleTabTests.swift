@@ -93,7 +93,8 @@ struct HalliePeopleTabTests {
         // is the gallery's own ambiguity, reported as the data says it.
         #expect(result.prose.contains("tagged in 3 catalog videos"))
         #expect(result.prose.contains("The note on the profile says: “Number four son, sometimes wears glasses” — that's a note, not something I've verified."))
-        #expect(result.prose.contains("only goes up to people born in 1959, so Timmy isn't in it yet"))
+        #expect(result.prose.contains("I couldn't match Timmy to a record in the family tree I have."))
+        #expect(!result.prose.contains("goes up to people born"), "no max-birth-year reach claim (2026-08-26)")
         #expect(result.prose.hasSuffix("If you tell me more about Timmy — “let me tell you about Timmy” — I'll remember it."))
         #expect(!result.prose.contains("don't find"))
         #expect(result.basisLine.contains("People profile “Timmy”"))
@@ -145,7 +146,8 @@ struct HalliePeopleTabTests {
             context: context)
         #expect(result.outcome == .declined)
         #expect(result.prose.hasPrefix("Timmy is in the People tab (also known as Tim), so I know the name — but I can't trace father for Timmy yet."))
-        #expect(result.prose.contains("1959"))
+        #expect(result.prose.contains("I couldn't match Timmy to a record in the family tree I have."))
+        #expect(!result.prose.contains("1959"), "no max-birth-year reach claim (2026-08-26)")
         #expect(!result.prose.contains("don't find"))
     }
 

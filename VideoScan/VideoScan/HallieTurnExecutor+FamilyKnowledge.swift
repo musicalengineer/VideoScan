@@ -18,12 +18,6 @@ extension HallieTurnExecutor {
 
     enum FamilyKnowledgeSupplement {
 
-        /// Descendant relations are the ones a tree that stops in 1959 is
-        /// most likely to be missing; for those the coverage note applies.
-        private static let descendantRelations: Set<String> = [
-            "son", "daughter", "children", "grandson", "granddaughter", "grandchildren",
-        ]
-
         private static func keywords(for relation: ArchivistQueryAST.Graph.Relation?) -> [String] {
             switch relation?.rawValue ?? "" {
             case "son", "daughter", "children":
@@ -70,18 +64,13 @@ extension HallieTurnExecutor {
             return best
         }
 
-        /// "The family tree I have only goes up to people born in 1959, so
-        /// it may simply stop before them." — only when the missing relation
-        /// is a descendant one and the tree really does end early.
+        /// Retired 2026-08-26 (live: "The family tree I have only goes up to
+        /// people born in 1959, so Rick isn't in it yet" — Rick is in it,
+        /// undated, because FamilySearch strips living people's dates). A
+        /// max-birth-year is not evidence of coverage; nothing is said.
         static func coverageNote(relation: ArchivistQueryAST.Graph.Relation?,
                                  graph: GedcomFamilyGraph?) -> String? {
-            guard let graph, let relation,
-                  descendantRelations.contains(relation.rawValue),
-                  let year = latestBirthYear(in: graph),
-                  year < Calendar.current.component(.year, from: Date()) - 25 else {
-                return nil
-            }
-            return "The family tree I have only goes up to people born in \(year), so it may simply stop before them."
+            nil
         }
 
         /// Family-told passages about the subject that mention the missing
@@ -200,11 +189,9 @@ extension HallieTurnExecutor {
         /// one thing that would fix it: telling Hallie about the person.
         static func notFoundOffer(_ result: Result, typed: String,
                                   graph: GedcomFamilyGraph?) -> Result {
+            // No "covers people born up to YYYY" here either (see
+            // coverageNote): the tree's latest date is not its reach.
             var prose = result.prose
-            if let graph, let year = latestBirthYear(in: graph),
-               year < Calendar.current.component(.year, from: Date()) - 25 {
-                prose += " The tree I have covers people born up to \(year), so the younger generations aren't in it yet."
-            }
             let name = typed.prefix(1).uppercased() + typed.dropFirst()
             prose += " If you tell me about \(name) — “let me tell you about \(name)” — I'll remember it."
             return Result(

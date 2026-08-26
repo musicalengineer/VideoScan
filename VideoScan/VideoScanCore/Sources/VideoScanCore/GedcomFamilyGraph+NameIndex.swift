@@ -14,7 +14,7 @@ extension GedcomFamilyGraph {
 
     /// Typed-name tokens after diminutive expansion, or nil when the name
     /// is nothing but generational suffixes ("Jr", "III").
-    static func namedLikeTokens(_ typed: String) -> [String]? {
+    public static func namedLikeTokens(_ typed: String) -> [String]? {
         let tokens = FamilyIdentityText.tokens(typed)
             .map { diminutives[$0] ?? $0 }
         guard tokens.contains(where: { !nameSuffixes.contains($0) }) else { return nil }
@@ -23,7 +23,7 @@ extension GedcomFamilyGraph {
 
     /// The `people(namedLike:)` predicate for one person: some single NAME
     /// record (preferred or alternate) contains every typed token.
-    static func personMatches(_ person: Person, namedLikeTokens tokens: [String]) -> Bool {
+    public static func personMatches(_ person: Person, namedLikeTokens tokens: [String]) -> Bool {
         ([person.name] + person.alternateNames).contains { candidate in
             let nameTokens = Set(FamilyIdentityText.tokens(candidate)
                 .map { diminutives[$0] ?? $0 })
