@@ -775,6 +775,21 @@ enum HallieTurnExecutor {
                 payload: payload, request: request, context: context,
                 dependencies: dependencies)
         }
+        // The model read "rick's grandma muriel" as TWO people (live
+        // 2026-08-26). A kinship with two names is one person named twice:
+        // the second name filters the relation set. Same answerer as the
+        // model-free parse; never the executor's people-count guard.
+        if payload.operation == .kinship, payload.people.count == 2,
+           let relation = payload.relation,
+           let kin = HallieKinshipApposition.Kin(astRelation: relation, side: payload.side) {
+            let owner = payload.people[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let isPronoun = ["me", "i", "my", "myself", "you"].contains(owner.lowercased())
+            let apposition = HallieKinshipApposition(
+                possessor: isPronoun ? nil : HallieLineageQuestion.capitalizedName(owner), kin: kin,
+                relationWord: (payload.side.map { "\($0.rawValue) " } ?? "") + relation.rawValue.replacingOccurrences(of: "-", with: " "),
+                name: payload.people[1].trimmingCharacters(in: .whitespacesAndNewlines))
+            return HallieLineageAnswer.kinshipApposition(apposition, context: context)
+        }
         // CyberBrain answers only when it knows the requested identity.
         // A `nil` here means CyberBrain has no opinion, and the turn
         // continues on the pre-existing profiles + GEDCOM path exactly

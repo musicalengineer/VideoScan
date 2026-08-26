@@ -346,9 +346,16 @@ enum ArchivistGraphExecutor {
                 floatingSelection: selection)
         }
         guard query.people.count == 1 else {
+            // Honest, user-facing (live 2026-08-26: the old "must identify
+            // exactly one person" guard sentence reached the chat).
+            let names = query.people.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let prose = names.count >= 2
+                ? "I wasn't sure which person you meant — " + names.joined(separator: " or ") + "? Ask about one of them and I'll look them up."
+                : "Who would you like to know about? Give me one name and I'll look in the family tree."
             return decline(
                 .unsupportedPeopleCount(query.people.count),
-                prose: "A family-tree question must identify exactly one person.",
+                prose: prose,
                 basis: queryValidationBasis)
         }
 
@@ -357,14 +364,14 @@ enum ArchivistGraphExecutor {
         guard !typedName.isEmpty else {
             return decline(
                 .invalidPerson,
-                prose: "A family-tree question needs a person's name.",
+                prose: "Who would you like to know about? Give me a name and I'll look in the family tree.",
                 basis: queryValidationBasis)
         }
 
         if query.operation == .kinship, query.relation == nil {
             return decline(
                 .missingRelation,
-                prose: "A kinship question must specify a relationship.",
+                prose: "Which relationship do you mean — for example Rick's mother, or Donna's grandfather?",
                 basis: queryValidationBasis)
         }
         if query.operation != .kinship, query.relation != nil || query.side != nil {
@@ -379,9 +386,44 @@ enum ArchivistGraphExecutor {
             let result = executeResolved(
                 query, person: person, graph: inputs.graph,
                 identityBridge: bridge)
-            return applyingSpellingCorrection(
-                correction, canonicalName: person.name, to: result)
+            return applyingMarriedName(
+                typed: typedName, person: person, graph: inputs.graph,
+                to: applyingSpellingCorrection(
+                    correction, canonicalName: person.name, to: result))
         }
+    }
+
+    /// "muriel lamb breen" / "muriel breen" found Muriel /Lamb/ through her
+    /// husband's surname (FamilySearch records women under the maiden name
+    /// only, live 2026-08-26). Say so: the prose names her "Muriel Lamb
+    /// (Breen)" and the basis line says which marriage supplied the name.
+    static func applyingMarriedName(
+        typed: String,
+        person: GedcomFamilyGraph.Person,
+        graph: GedcomFamilyGraph,
+        to result: ArchivistGraphResult
+    ) -> ArchivistGraphResult {
+        guard let tokens = GedcomFamilyGraph.namedLikeTokens(typed),
+              let married = graph.marriedSurname(of: person, satisfying: tokens),
+              let range = result.prose.range(of: person.name) else { return result }
+        let shown = "\(person.name) (\(married))"
+        let husbands = graph.relatives(.husband, of: person)
+            .filter { ($0.surname.map(FamilyIdentityText.normalized) == married.lowercased())
+                || $0.alternateSurnames.contains { FamilyIdentityText.normalized($0) == married.lowercased() } }
+            .map(\.name)
+        let note = "“\(typed)” is \(person.name) by her married name"
+            + (husbands.isEmpty ? "." : " (married \(husbands.joined(separator: ", "))).")
+        return ArchivistGraphResult(
+            conclusion: result.conclusion,
+            prose: result.prose.replacingCharacters(in: range, with: shown),
+            basisLine: note + " " + result.basisLine,
+            evidence: result.evidence,
+            candidates: result.candidates,
+            profileCandidates: result.profileCandidates,
+            ambiguityCandidates: result.ambiguityCandidates,
+            catalogPersonName: result.catalogPersonName,
+            familyTreeFocus: result.familyTreeFocus,
+            subjectIndex: result.subjectIndex)
     }
 
     /// Outcome of resolving ONE typed name: the unique GEDCOM person (with
@@ -737,14 +779,14 @@ enum ArchivistGraphExecutor {
             // resolution. Reaching here means a caller misrouted it.
             return decline(
                 .unsupportedPeopleCount(1),
-                prose: "A relationship question needs two people.",
+                prose: "To work out how two people are related I need both names — for example, how is Donna related to Thankful Pratt?",
                 basis: queryValidationBasis)
 
         case .kinship:
             guard let relation = query.relation else {
                 return decline(
                     .missingRelation,
-                    prose: "A kinship question must specify a relationship.",
+                    prose: "Which relationship do you mean — for example Rick's mother, or Donna's grandfather?",
                     basis: queryValidationBasis)
             }
             if let graphRelation = relation.singleHop {
@@ -760,7 +802,7 @@ enum ArchivistGraphExecutor {
             guard let extended = relation.extended else {
                 return decline(
                     .missingRelation,
-                    prose: "A kinship question must specify a relationship.",
+                    prose: "Which relationship do you mean — for example Rick's mother, or Donna's grandfather?",
                     basis: queryValidationBasis)
             }
             return executeExtended(

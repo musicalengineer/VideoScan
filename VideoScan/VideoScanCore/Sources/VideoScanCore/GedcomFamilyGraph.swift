@@ -364,8 +364,56 @@ public struct GedcomFamilyGraph: Sendable {
         // Predicate shared with `NameIndex` (see +NameIndex.swift) so the
         // indexed and linear paths can never drift apart.
         guard let tokens = Self.namedLikeTokens(typed) else { return [] }
-        return people.values.filter { Self.personMatches($0, namedLikeTokens: tokens) }
+        return people.values.filter { matches($0, namedLikeTokens: tokens) }
         .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+    }
+
+    /// Surnames a woman may be known by that her NAME records do not
+    /// carry: each spouse's surname (any marriage), lowercased tokens.
+    /// FamilySearch records women under the maiden name only (live
+    /// 2026-08-26: "muriel lamb breen" → not found, "muriel lamb" → found),
+    /// yet the family says "Muriel Breen". Empty for men and for anyone
+    /// whose own names already include the surname — a man is never found
+    /// by his wife's maiden name unless a NAME record says so.
+    public func marriedSurnames(of person: Person) -> [String] {
+        guard person.sex == "F" else { return [] }
+        let own = Set(Self.allNames(of: person).flatMap { FamilyIdentityText.tokens($0) })
+        var out: [String] = []
+        for marriage in marriages(of: person) {
+            guard let spouse = marriage.spouse else { continue }
+            for surname in [spouse.surname].compactMap({ $0 }) + spouse.alternateSurnames {
+                for token in FamilyIdentityText.tokens(surname) where !own.contains(token) && !out.contains(token) {
+                    out.append(token)
+                }
+            }
+        }
+        return out
+    }
+
+    /// The `people(namedLike:)` predicate WITH the married-surname rule:
+    /// the strict per-NAME-record check first; failing that, a woman also
+    /// matches when every typed token is either in one of her NAME
+    /// records or is a spouse's surname, and at least one typed token is
+    /// from the NAME record itself ("Breen" alone never means every wife
+    /// of a Breen). "Muriel Lamb Breen", "Muriel Breen" → Muriel /Lamb/
+    /// married to George /Breen/; "Muriel Smith" → no.
+    public func matches(_ person: Person, namedLikeTokens tokens: [String]) -> Bool {
+        if Self.personMatches(person, namedLikeTokens: tokens) { return true }
+        return marriedSurname(of: person, satisfying: tokens) != nil
+    }
+
+    /// The spouse surname that made `matches` true for these typed tokens,
+    /// or nil when the strict rule already holds (or nothing matches).
+    /// Callers use it to say "Muriel Lamb (Breen)" — the record's own name
+    /// with the name the family used.
+    public func marriedSurname(of person: Person, satisfying tokens: [String]) -> String? {
+        let married = marriedSurnames(of: person)
+        guard !married.isEmpty else { return nil }
+        let bySurname = tokens.filter { married.contains($0) }
+        let byName = tokens.filter { !married.contains($0) }
+        guard let used = bySurname.first, !byName.isEmpty,
+              Self.personMatches(person, namedLikeTokens: byName) else { return nil }
+        return used.capitalized
     }
 
     /// Curated diminutive → formal-name table (lowercased tokens). Data,

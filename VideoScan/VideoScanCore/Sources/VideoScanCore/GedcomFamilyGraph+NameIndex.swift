@@ -40,6 +40,7 @@ extension GedcomFamilyGraph {
     public struct NameIndex: Sendable {
         private let idsByToken: [String: Set<String>]
         private let people: [String: Person]
+        private let graph: GedcomFamilyGraph
 
         public init(graph: GedcomFamilyGraph) {
             var idsByToken: [String: Set<String>] = [:]
@@ -49,9 +50,16 @@ extension GedcomFamilyGraph {
                         idsByToken[GedcomFamilyGraph.diminutives[token] ?? token, default: []].insert(id)
                     }
                 }
+                // A wife is also reachable under her husband's surname
+                // (see `marriedSurnames(of:)`); the exact predicate below
+                // still decides.
+                for token in graph.marriedSurnames(of: person) {
+                    idsByToken[token, default: []].insert(id)
+                }
             }
             self.idsByToken = idsByToken
             self.people = graph.people
+            self.graph = graph
         }
 
         /// Same result, same order, as `graph.people(namedLike:)`.
@@ -69,7 +77,7 @@ extension GedcomFamilyGraph {
             }
             // Confirm with the exact per-NAME-record predicate.
             return candidates.compactMap { people[$0] }
-                .filter { GedcomFamilyGraph.personMatches($0, namedLikeTokens: tokens) }
+                .filter { graph.matches($0, namedLikeTokens: tokens) }
                 .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
         }
     }
