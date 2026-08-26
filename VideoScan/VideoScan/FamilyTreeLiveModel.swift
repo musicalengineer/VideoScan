@@ -530,6 +530,11 @@ final class FamilyTreeLiveModel: ObservableObject {
         selectedNotes = resolver.notes(forGedcomID: id)
     }
 
+    /// Store key for the selected person (folder lookup for photos).
+    func assetPerson(for personID: String) -> FamilyAssetPerson? {
+        graph?.people[personID].map(FamilyAssetPerson.init)
+    }
+
     // MARK: Photos
 
     func setPhotoOverride(_ image: NSImage, for personID: String) {

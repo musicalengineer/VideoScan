@@ -31,6 +31,10 @@ struct FamilyTreeDemoView: View {
     /// Archivist Notes draft + last save error (view-local, not persisted).
     @State private var draftNote = ""
     @State private var noteError: String?
+    /// Adjust Photo… sheet. `.sheet(item:)` shows it while this is non-nil
+    /// (the item-binding form, per the chained-sheet note in memory).
+    @State private var adjustSource: FamilyPhotoAdjustSource?
+    @State private var adjustError: String?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -82,6 +86,19 @@ struct FamilyTreeDemoView: View {
         .preferredColorScheme(.dark)
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
+        }
+        .sheet(item: $adjustSource) { source in
+            FamilyPhotoAdjustSheet(
+                source: source,
+                onSaved: { cropped, url in
+                    // The crop wins on the card immediately (session
+                    // override) and on relaunch (cardPhotoURL precedence).
+                    model.setPhotoOverride(NSImage(cgImage: cropped, size: .zero), for: source.personID)
+                    appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
+                    adjustError = nil
+                    adjustSource = nil
+                },
+                onCancel: { adjustSource = nil })
         }
         .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
             // The coordinator is created in presentGetFamilyTree() before the
@@ -417,8 +434,23 @@ struct FamilyTreeDemoView: View {
                                 Label("Apple Photos", systemImage: "photo.on.rectangle.angled")
                             }
                             .buttonStyle(.bordered)
+
+                            Button {
+                                presentAdjustPhoto(for: person)
+                            } label: {
+                                Label("Adjust Photo…", systemImage: "crop")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!model.isLive)
+                            .help("Center and crop this person's card photo; the original is kept")
                         }
                         .controlSize(.small)
+                        if let adjustError {
+                            Text(adjustError)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .padding(14)
                     .background(panelBackground)
@@ -636,6 +668,35 @@ struct FamilyTreeDemoView: View {
         model.setPhotoOverride(image, for: personID)
     }
 
+    /// Build the Adjust sheet's source: this session's override if the user
+    /// just picked one, else the first non-card photo in People/<person>/.
+    /// Decoding is bounded to 2048 px (≈ 16 MB) before the sheet sees it.
+    private func presentAdjustPhoto(for person: FamilyTreePersonSummary) {
+        guard let assetPerson = model.assetPerson(for: person.id) else {
+            adjustError = "Adjust Photo works on people from your GEDCOM."
+            return
+        }
+        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let originalURL = store.originalPhotoURL(for: assetPerson)
+        let image: CGImage?
+        if let override = model.photo(for: person.id),
+           let tiff = override.tiffRepresentation {
+            image = CropRenderer.boundedImage(data: tiff)
+        } else if let originalURL {
+            image = CropRenderer.boundedImage(at: originalURL)
+        } else {
+            image = nil
+        }
+        guard let image else {
+            adjustError = "No photo yet — use Pick Photo or Apple Photos first."
+            return
+        }
+        adjustError = nil
+        adjustSource = FamilyPhotoAdjustSource(
+            personID: person.id, personName: person.name,
+            assetPerson: assetPerson, image: image, originalURL: originalURL)
+    }
+
     private func importApplePhoto(_ item: PhotosPickerItem?) {
         guard let item, let targetID = model.selectedID else { return }
         Task {
@@ -802,7 +863,9 @@ private struct FamilyAssetPortrait: View {
             let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
             let decoded = await Task.detached(priority: .utility) {
                 let store = configuration.makeStore()
-                guard let url = store.photoURLs(for: person).first,
+                // A saved "-card" crop wins over the original (Adjust Photo…).
+                guard let url = store.cardPhotoURL(for: person)
+                        ?? store.photoURLs(for: person).first,
                       let cg = store.makeThumbnail(for: url, maxPixelSize: 160)
                 else { return nil as NSImage? }
                 return NSImage(cgImage: cg, size: .zero)

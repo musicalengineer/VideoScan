@@ -613,7 +613,94 @@ struct FamilyAssetStore {
             return f.string(from: importClock())
         }()
         let stem = target.lastPathComponent + "-from-Photos-" + stamp
+        return try writePersonPhotoData(data, stem: stem, ext: ext, into: target)
+    }
 
+    // MARK: Card photo (Adjust Photo…, 2026-08-26)
+
+    /// A card photo is the cropped/centred portrait the card prefers:
+    /// `<stem>-card.<ext>` next to the original in the person's folder.
+    static func isCardPhoto(_ url: URL) -> Bool {
+        cardStem(url.deletingPathExtension().lastPathComponent) != nil
+    }
+
+    /// "portrait-card" / "portrait-card-2" → "portrait"; nil when the stem
+    /// is not a card name at all.
+    static func cardStem(_ stem: String) -> String? {
+        var base = stem
+        // Drop the never-overwrite counter first ("-2", "-17").
+        if let dash = base.lastIndex(of: "-"),
+           base[base.index(after: dash)...].allSatisfy(\.isNumber),
+           base.index(after: dash) < base.endIndex {
+            base = String(base[..<dash])
+        }
+        guard base.lowercased().hasSuffix("-card"), base.count > 5 else { return nil }
+        return String(base.dropLast(5))
+    }
+
+    /// Precedence rule for the card: the NEWEST `*-card.*` image in the
+    /// person's own folder, else nil (callers fall back to `photoURLs.first`).
+    /// The original is never removed or renamed, so "Adjust" is reversible
+    /// by deleting the card file in Finder.
+    func cardPhotoURL(for person: FamilyAssetPerson) -> URL? {
+        guard access != .unavailable,
+              let folder = resolvedPersonFolder(for: person) else { return nil }
+        let cards = verifiedImages(in: folder).filter(Self.isCardPhoto)
+        // FileManager, not URL.resourceValues: NSURL caches resource values
+        // per instance and a just-touched file can read back stale.
+        func modified(_ url: URL) -> Date {
+            (try? fileManager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+                ?? .distantPast
+        }
+        return cards.max { lhs, rhs in
+            let l = modified(lhs), r = modified(rhs)
+            return l == r ? Self.stableURLOrder(lhs, rhs) : l < r
+        }
+    }
+
+    /// The photo "Adjust" starts from: the first non-card image in the
+    /// person's own folder (never a previous crop of a crop).
+    func originalPhotoURL(for person: FamilyAssetPerson) -> URL? {
+        guard access != .unavailable,
+              let folder = resolvedPersonFolder(for: person) else { return nil }
+        return verifiedImages(in: folder).first { !Self.isCardPhoto($0) }
+    }
+
+    /// Write cropped JPEG bytes as `<stem>-card.jpg` beside `original` (or
+    /// into the person's request folder when there is no original on disk
+    /// yet). Same hardening as `importPersonPhoto`: bytes validated in
+    /// memory first, descriptor-anchored write, never overwrites — a second
+    /// adjust yields `-card-2.jpg`, and `cardPhotoURL` picks the newest.
+    @discardableResult
+    func saveCardPhoto(_ data: Data, for person: FamilyAssetPerson,
+                       nextTo original: URL?) throws -> URL {
+        try requireWriteAccess()
+        let folder: URL
+        if let original,
+           let live = revalidatedPhotoRequestFolder(original.deletingLastPathComponent()) {
+            folder = live
+        } else {
+            folder = try folderForPhotoRequest(person: person)
+        }
+        guard let target = revalidatedPhotoRequestFolder(folder) else {
+            throw StoreError.unsafeDirectory(folder)
+        }
+        guard data.count <= Self.maxImportBytes else {
+            throw StoreError.imageTooLarge(bytes: data.count)
+        }
+        guard FamilyAssetImageValidator.isVerifiedImageData(data) else {
+            throw StoreError.sourceIsNotARegularImage(target.appendingPathComponent("card.jpg"))
+        }
+        let rawStem = original.map { $0.deletingPathExtension().lastPathComponent }
+            ?? target.lastPathComponent
+        let stem = Self.cardStem(rawStem) ?? rawStem
+        return try writePersonPhotoData(data, stem: stem + "-card", ext: "jpg", into: target)
+    }
+
+    /// Descriptor-anchored, never-overwrite write of validated image bytes
+    /// into a live People/ folder. Shared by Photos import and card save.
+    private func writePersonPhotoData(_ data: Data, stem: String, ext: String,
+                                      into target: URL) throws -> URL {
         // Anchor on descriptors, not paths (codex #675: the folder could be
         // swapped for a symlink between `revalidatedPhotoRequestFolder`
         // and the write). Root is opened O_DIRECTORY|O_NOFOLLOW, every
