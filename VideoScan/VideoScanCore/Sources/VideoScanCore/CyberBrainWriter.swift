@@ -282,6 +282,258 @@ public enum CyberBrainWriter {
             createdPerson: createdPerson)
     }
 
+    // MARK: - Photo captions (2026-08-26: "this photo is me and my family")
+
+    /// What a family member said about a photo Hallie had just shown. One
+    /// `.note` item shared by every named person, cited to the photo file
+    /// itself and to the told-by source — so "what do we know about this
+    /// photo?" and "tell me about Donna" both find it later.
+    public struct PhotoCaption: Sendable, Equatable {
+        public struct Subject: Sendable, Equatable {
+            public let name: String
+            /// The tree pointer when the caller resolved one ("me" → the
+            /// owner's record). Nil keeps the subject as a name only.
+            public let gedcomPersonID: String?
+            public init(name: String, gedcomPersonID: String? = nil) {
+                self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmed = gedcomPersonID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                self.gedcomPersonID = trimmed.isEmpty ? nil : trimmed
+            }
+        }
+        /// At least one; at most `CyberBrainWriter.maxCaptionSubjects`.
+        public let subjects: [Subject]
+        public let speakerName: String
+        /// The caption as spoken ("me and my family with Donna and the boys").
+        public let text: String
+        /// Absolute path of the photo file — the source locator.
+        public let photoPath: String
+        public let date: Date
+
+        public init(subjects: [Subject], speakerName: String, text: String,
+                    photoPath: String, date: Date) {
+            self.subjects = subjects
+            self.speakerName = speakerName
+            self.text = text
+            self.photoPath = photoPath
+            self.date = date
+        }
+    }
+
+    /// The validator allows 1…8 subject pointers per item.
+    public static let maxCaptionSubjects = 8
+
+    /// Pure: append the caption to an in-memory archive. Each subject is
+    /// resolved (or created) exactly as a testimony subject would be, so the
+    /// same person is never minted twice. The receipt names the first
+    /// subject; `sourceID` is the photo source.
+    public static func appending(
+        caption: PhotoCaption,
+        to existing: CyberBrainArchive?
+    ) throws -> Receipt {
+        let text = caption.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw WriteError.emptyText }
+        let subjects = caption.subjects.filter { !$0.name.isEmpty }.prefix(maxCaptionSubjects)
+        guard !subjects.isEmpty else { throw WriteError.emptySubject }
+
+        var archive = existing ?? CyberBrainArchive(
+            archiveID: defaultArchiveID,
+            displayName: defaultDisplayName,
+            people: [],
+            sources: [])
+        var people = archive.people
+        var subjectIDs: [String] = []
+        var createdAny = false
+        for subject in subjects {
+            // Re-index after every creation so a second mention of a newly
+            // minted person finds them instead of minting a twin.
+            let index = try CyberBrainIndex(archive: CyberBrainArchive(
+                schemaVersion: archive.schemaVersion, archiveID: archive.archiveID,
+                displayName: archive.displayName, people: people, sources: archive.sources))
+            let resolved = try resolveSubject(
+                subject.name, gedcomPersonID: subject.gedcomPersonID,
+                aliases: [], index: index, people: &people)
+            createdAny = createdAny || resolved.created
+            if !subjectIDs.contains(resolved.id) { subjectIDs.append(resolved.id) }
+        }
+
+        let dayStamp = dayString(caption.date)
+        let speaker = caption.speakerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speakerLabel = speaker.isEmpty ? "a family member" : speaker
+        var sources = archive.sources
+        let photoURL = URL(fileURLWithPath: caption.photoPath)
+        let photoSourceID = "source.photo." + slug(
+            photoURL.deletingLastPathComponent().lastPathComponent + "-" + photoURL.lastPathComponent)
+        if !sources.contains(where: { $0.id == photoSourceID }) {
+            sources.append(CyberBrainSource(
+                id: photoSourceID,
+                type: .mediaEvidence,
+                title: "Photo: \(photoURL.lastPathComponent)",
+                attribution: speakerLabel,
+                sourceDate: nil,
+                locator: photoLocator(caption.photoPath),
+                notes: "A photo in the family archive, captioned in conversation. Full path when captioned: \(caption.photoPath)"))
+        }
+        let toldSourceID = "source.told-by-" + slug(speakerLabel) + "." + dayStamp
+        if !sources.contains(where: { $0.id == toldSourceID }) {
+            sources.append(CyberBrainSource(
+                id: toldSourceID,
+                type: .familyWitness,
+                title: "Told to Hallie by \(speakerLabel), \(dayStamp)",
+                attribution: speakerLabel,
+                sourceDate: CyberBrainQualifiedDate(
+                    value: dayStamp, precision: .day, qualifier: .exact,
+                    displayText: dayStamp),
+                notes: "Recorded in conversation; not yet verified against documents."))
+        }
+
+        let firstID = subjectIDs[0]
+        let takenItemIDs = Set(people.flatMap(\.items).map(\.id))
+        let itemID = uniqueID(
+            base: "caption.\(slug(firstID.replacingOccurrences(of: "person.", with: ""))).\(dayStamp)",
+            taken: takenItemIDs)
+        let item = CyberBrainItem(
+            id: itemID,
+            kind: .note,
+            text: text,
+            subjectPersonIDs: subjectIDs,
+            sourceIDs: [photoSourceID, toldSourceID],
+            confidence: .probable,
+            privacy: .family,
+            createdAt: caption.date,
+            updatedAt: caption.date)
+        guard let personIndex = people.firstIndex(where: { $0.id == firstID }) else {
+            throw WriteError.emptySubject
+        }
+        let person = people[personIndex]
+        people[personIndex] = CyberBrainPerson(
+            id: person.id,
+            gedcomPersonID: person.gedcomPersonID,
+            profileStableID: person.profileStableID,
+            canonicalName: person.canonicalName,
+            aliases: person.aliases,
+            terminology: person.terminology,
+            biographyPassages: person.biographyPassages,
+            anecdotes: person.anecdotes,
+            lifeEvents: person.lifeEvents,
+            notes: person.notes + [item])
+        archive = CyberBrainArchive(
+            schemaVersion: archive.schemaVersion,
+            archiveID: archive.archiveID,
+            displayName: archive.displayName,
+            people: people,
+            sources: sources)
+        try CyberBrainValidator.validate(archive)
+        return Receipt(
+            archive: archive,
+            personID: firstID,
+            canonicalName: person.canonicalName,
+            itemID: itemID,
+            sourceID: photoSourceID,
+            createdPerson: createdAny)
+    }
+
+    /// Source locators are archive-relative by contract (the validator
+    /// refuses absolute paths): `People/<folder>/<file>` when the photo is
+    /// under a People directory, else the file name alone.
+    public static func photoLocator(_ path: String) -> String {
+        let parts = path.split(separator: "/").map(String.init)
+        if let at = parts.lastIndex(of: "People"), at < parts.count - 1 {
+            return parts[at...].joined(separator: "/")
+        }
+        return parts.last ?? "photo"
+    }
+
+    /// Durable form of `appending(caption:to:)`; same atomic save as `record`.
+    public static func record(
+        caption: PhotoCaption,
+        rootURL: URL
+    ) throws -> Receipt {
+        let (root, existing) = try prepareRoot(rootURL)
+        let receipt = try appending(caption: caption, to: existing)
+        try save(receipt.archive, root: root, hadExisting: existing != nil)
+        return receipt
+    }
+
+    /// Subject → CyberBrain person id, minting one when nobody matches. The
+    /// resolution ladder shared by testimony and captions: a known GEDCOM
+    /// pointer wins; a name match that carries a DIFFERENT pointer is
+    /// somebody else (Jr/Sr); an unlinked name match acquires the pointer.
+    private static func resolveSubject(
+        _ subject: String,
+        gedcomPersonID: String?,
+        aliases: [String],
+        index: CyberBrainIndex,
+        people: inout [CyberBrainPerson]
+    ) throws -> (id: String, created: Bool) {
+        func createPerson() -> String {
+            let id = uniqueID(
+                base: "person." + slug(subject)
+                    + (gedcomPersonID.map { "." + slug($0) } ?? ""),
+                taken: Set(people.map(\.id)))
+            people.append(CyberBrainPerson(
+                id: id,
+                gedcomPersonID: gedcomPersonID,
+                canonicalName: subject,
+                aliases: normalizedAliases(aliases, excluding: subject)))
+            return id
+        }
+        if let pointer = gedcomPersonID,
+           let linked = index.people(gedcomPersonID: pointer).first {
+            return (linked.id, false)
+        }
+        switch index.resolve(subject) {
+        case .resolved(let person):
+            if let pointer = gedcomPersonID,
+               let existing = person.gedcomPersonID, existing != pointer {
+                return (createPerson(), true)
+            }
+            if person.gedcomPersonID == nil, let pointer = gedcomPersonID,
+               let at = people.firstIndex(where: { $0.id == person.id }) {
+                let p = people[at]
+                people[at] = CyberBrainPerson(
+                    id: p.id, gedcomPersonID: pointer, profileStableID: p.profileStableID,
+                    canonicalName: p.canonicalName, aliases: p.aliases, terminology: p.terminology,
+                    biographyPassages: p.biographyPassages, anecdotes: p.anecdotes,
+                    lifeEvents: p.lifeEvents, notes: p.notes)
+            }
+            return (person.id, false)
+        case .ambiguous(let candidates):
+            guard gedcomPersonID != nil else {
+                throw WriteError.ambiguousSubject(candidates.map(\.canonicalName))
+            }
+            return (createPerson(), true)
+        case .notFound:
+            return (createPerson(), true)
+        }
+    }
+
+    /// Validate the root directory and load what is there (nil when the
+    /// archive does not exist yet). Shared by both durable writers.
+    private static func prepareRoot(_ rootURL: URL) throws -> (URL, CyberBrainArchive?) {
+        let root = rootURL.standardizedFileURL
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: root.path) {
+            do {
+                try fileManager.createDirectory(
+                    at: root, withIntermediateDirectories: true)
+            } catch {
+                throw WriteError.ioFailure(error.localizedDescription)
+            }
+        }
+        let values = try? root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+        guard values?.isDirectory == true, values?.isSymbolicLink != true else {
+            throw WriteError.unsafeRoot(root.path)
+        }
+        let loader = CyberBrainLoader(rootURL: root)
+        do {
+            return (root, try loader.load())
+        } catch CyberBrainError.missingArchive {
+            return (root, nil)
+        }
+        // Any other loader error propagates: a corrupt or unsafe archive must
+        // never be silently replaced by a fresh one.
+    }
+
     // MARK: - Durable write
 
     /// Load (or start) the archive at `rootURL`, append, and save atomically.
