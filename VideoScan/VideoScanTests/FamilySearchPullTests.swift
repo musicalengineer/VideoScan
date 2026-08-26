@@ -192,8 +192,12 @@ private func request(
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
+    // `candidatePaths: []` confines the search to the sandbox. Without it the
+    // override falls through to the real ~/dev/VideoScan/venv-genealogy install
+    // and the test passes or fails depending on the host machine.
     let locator = FamilySearchToolLocator(
-        overridePath: directory.appendingPathComponent("getmyancestors").path)
+        overridePath: directory.appendingPathComponent("getmyancestors").path,
+        candidatePaths: [])
     #expect(locator.locate() == nil)
 }
 
@@ -205,7 +209,7 @@ private func request(
     let planted = directory.appendingPathComponent("getmyancestors")
     try "not a program".write(to: planted, atomically: true, encoding: .utf8)
 
-    let locator = FamilySearchToolLocator(overridePath: planted.path)
+    let locator = FamilySearchToolLocator(overridePath: planted.path, candidatePaths: [])
     #expect(locator.locate() == nil)
 }
 
@@ -216,8 +220,42 @@ private func request(
     try FileManager.default.createDirectory(at: planted, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    let locator = FamilySearchToolLocator(overridePath: planted.path)
+    let locator = FamilySearchToolLocator(overridePath: planted.path, candidatePaths: [])
     #expect(locator.locate() == nil)
+}
+
+// SENSOR: the production search order. If someone reorders or drops a
+// location this fails on purpose — the dedicated venv must win so a broken
+// genealogy dependency can never take VideoScan's own venv down with it.
+@Test func locatorDefaultSearchOrderIsUnchanged() {
+    let expected = [
+        "~/dev/VideoScan/venv-genealogy/bin/getmyancestors",
+        "~/dev/VideoScan/venv/bin/getmyancestors",
+        "/opt/homebrew/bin/getmyancestors",
+        "/usr/local/bin/getmyancestors",
+    ]
+    #expect(FamilySearchToolLocator.defaultCandidatePaths == expected)
+    // A plain `FamilySearchToolLocator()` (what the coordinator builds) must
+    // use exactly that list, with no override.
+    let production = FamilySearchToolLocator()
+    #expect(production.candidatePaths == expected)
+    #expect(production.overridePath == nil)
+}
+
+// SENSOR: an override that is usable wins over the candidate list.
+@Test func locatorPrefersAUsableOverride() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let planted = directory.appendingPathComponent("getmyancestors")
+    try "#!/bin/sh\nexit 0\n".write(to: planted, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: planted.path)
+
+    let locator = FamilySearchToolLocator(
+        overridePath: planted.path,
+        candidatePaths: ["/bin/sh"])   // a real executable that must NOT be chosen
+    #expect(locator.locate()?.path == planted.path)
 }
 
 // MARK: - ISOLATION: a stale export is never adopted

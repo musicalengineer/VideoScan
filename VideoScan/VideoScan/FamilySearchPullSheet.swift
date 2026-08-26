@@ -15,6 +15,10 @@ struct FamilySearchPullSheet: View {
     @ObservedObject var coordinator: FamilySearchPullCoordinator
     /// Called after a successful install so the tab can reload the tree.
     var onInstalled: (URL) -> Void
+    /// "Forget this download": the owner (FamilySearchPullCenter) drops the
+    /// coordinator. Closing the sheet does NOT do this — the watcher keeps
+    /// running behind the sheet (2026-08-25).
+    var onForget: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
     @State private var validationMessage: String?
@@ -254,7 +258,11 @@ struct FamilySearchPullSheet: View {
                 Text("Waiting for Terminal to finish…")
                     .font(.system(size: 13, weight: .medium))
             }
-            Text("Switch to the Terminal window, check the command, press Return, and enter your FamilySearch password. A deep pull can take tens of minutes — you can leave this sheet open.")
+            Text("Switch to the Terminal window, check the command, press Return, and enter your FamilySearch password. A deep pull can take most of a night (20 generations took 9½ hours); the file is written all at once at the end.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("You can close this window — the download keeps going and the Family Tree tab will show when it's ready.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -390,7 +398,11 @@ struct FamilySearchPullSheet: View {
                 .disabled(!coordinator.toolIsInstalled || validationMessage != nil)
             case .waiting:
                 Button("Install from file…") { chooseExistingGedcom() }
-                Button("Stop waiting") { coordinator.cancel() }
+                Button("Forget this download") {
+                    coordinator.cancel()
+                    onForget()
+                }
+                .help("Stops watching for the file. The Terminal download keeps running; use Install from file when it finishes.")
             case .ready(_, _, let current, _):
                 Button("Keep current") { coordinator.cancel() }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {

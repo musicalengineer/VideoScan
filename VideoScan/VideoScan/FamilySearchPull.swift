@@ -115,7 +115,7 @@ struct FamilySearchToolLocator {
     /// Searched in order. The dedicated venv first: keeping the tool out of
     /// the project venv means a broken genealogy dependency can never take
     /// VideoScan's own Python scripts down with it.
-    static let candidatePaths: [String] = [
+    static let defaultCandidatePaths: [String] = [
         "~/dev/VideoScan/venv-genealogy/bin/getmyancestors",
         "~/dev/VideoScan/venv/bin/getmyancestors",
         "/opt/homebrew/bin/getmyancestors",
@@ -124,10 +124,16 @@ struct FamilySearchToolLocator {
 
     var fileManager: FileManager = .default
     /// Overrides the search when the user has pointed us at a copy by hand.
+    /// Consulted first; the candidate list is still searched if it is absent
+    /// or unusable.
     var overridePath: String? = nil
+    /// The well-known install locations searched after `overridePath`.
+    /// Injectable so tests can confine the search to a sandbox instead of
+    /// falling through to whatever is really installed on this machine.
+    var candidatePaths: [String] = FamilySearchToolLocator.defaultCandidatePaths
 
     func locate() -> URL? {
-        let paths = (overridePath.map { [$0] } ?? []) + Self.candidatePaths
+        let paths = (overridePath.map { [$0] } ?? []) + candidatePaths
         for path in paths {
             let expanded = (path as NSString).expandingTildeInPath
             var isDirectory: ObjCBool = false

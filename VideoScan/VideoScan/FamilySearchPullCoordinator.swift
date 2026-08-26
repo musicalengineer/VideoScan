@@ -40,6 +40,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     }
 
     @Published private(set) var phase: Phase = .idle
+    /// When `launch()` handed the script to Terminal — the sidebar shows
+    /// "since 7:36 PM" from this. Nil until a launch happens.
+    @Published private(set) var startedAt: Date?
     /// Echoed under the sheet's button so the user reads the exact command
     /// before it runs — the verification step Rick asked for.
     @Published private(set) var previewLine: String = ""
@@ -59,10 +62,19 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     private var launchDate: Date = .distantPast
     private var watchTask: Task<Void, Never>?
 
-    /// Poll interval and give-up horizon. A deep pull genuinely takes tens
-    /// of minutes; the user can cancel at any point.
+    /// Poll interval and give-up horizon. A real 20-generation pull took
+    /// ~2 h (2026-08-25) and the coordinator now outlives the sheet, so
+    /// the horizon is a safety net, not a UX budget. Stall detection
+    /// (below) is what catches a run that actually died.
     private let pollInterval: Duration
-    private let timeout: Duration
+    let timeout: Duration
+
+    /// 7 days — effectively "never". A real 20-generation pull took 9.5 h
+    /// (2026-08-25 19:36 → 08-26 05:07); the poll is a 2 s stat(), so a clock
+    /// deadline only adds a way to give up on a run that is still working.
+    /// Completion is the `0 TRLR` trailer; death is the stall detector.
+    /// Pinned by `FamilySearchPullCenterTests.defaultTimeoutCoversAnOvernightPull`.
+    static let defaultTimeout: Duration = .seconds(7 * 24 * 60 * 60)
 
     init(
         gedcomDirectory: URL,
@@ -72,7 +84,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         fileManager: FileManager = .default,
         launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
         pollInterval: Duration = .seconds(2),
-        timeout: Duration = .seconds(90 * 60)
+        timeout: Duration = FamilySearchPullCoordinator.defaultTimeout
     ) {
         self.gedcomDirectory = gedcomDirectory
         self.locator = locator
@@ -155,6 +167,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             try script.write(fileManager: fileManager)
 
             launchDate = Date()
+            startedAt = launchDate
             workspace.open(scriptURL)
             phase = .waiting(output: request.outputURL)
             startWatching(output: request.outputURL)

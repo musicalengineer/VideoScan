@@ -8,6 +8,9 @@ struct ContentView: View {
     @StateObject private var personFinderModel = PersonFinderModel()
     @StateObject private var identifyFamilyModel = IdentifyFamilyModel()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
+    /// Family Tree tab dot: pulsing while a FamilySearch download runs in
+    /// Terminal, green when it's ready to install, orange on a problem.
+    @ObservedObject private var pullCenter = FamilySearchPullCenter.shared
     private let tabFontSize: Double = 18
 
     private let tabs: [(label: String, icon: String, tag: Int)] = [
@@ -47,6 +50,12 @@ struct ContentView: View {
                             Label(tab.label, systemImage: tab.icon)
                                 .font(.system(size: tabFontSize, weight: selectedTab == tab.tag ? .bold : .regular))
                                 .foregroundStyle(selectedTab == tab.tag ? .primary : .secondary)
+                                .overlay(alignment: .topTrailing) {
+                                    if tab.tag == 5 {
+                                        FamilySearchPullStatusDot(status: pullCenter.status)
+                                            .offset(x: 6, y: -4)
+                                    }
+                                }
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
                                 .contentShape(Rectangle())
