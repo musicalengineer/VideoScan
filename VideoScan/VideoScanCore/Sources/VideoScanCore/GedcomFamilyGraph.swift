@@ -341,16 +341,10 @@ public struct GedcomFamilyGraph: Sendable {
     /// (the tree root) and otherwise asks which one. Never
     /// substring-matches: "ann" still does not find "Joanne".
     public func people(namedLike typed: String) -> [Person] {
-        let tokens = FamilyIdentityText.tokens(typed)
-            .map { Self.diminutives[$0] ?? $0 }
-        guard tokens.contains(where: { !Self.nameSuffixes.contains($0) }) else { return [] }
-        return people.values.filter { person in
-            Self.allNames(of: person).contains { candidate in
-                let nameTokens = Set(FamilyIdentityText.tokens(candidate)
-                    .map { Self.diminutives[$0] ?? $0 })
-                return tokens.allSatisfy { nameTokens.contains($0) }
-            }
-        }
+        // Predicate shared with `NameIndex` (see +NameIndex.swift) so the
+        // indexed and linear paths can never drift apart.
+        guard let tokens = Self.namedLikeTokens(typed) else { return [] }
+        return people.values.filter { Self.personMatches($0, namedLikeTokens: tokens) }
         .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
     }
 

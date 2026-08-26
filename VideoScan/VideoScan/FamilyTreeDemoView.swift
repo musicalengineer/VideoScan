@@ -28,6 +28,9 @@ struct FamilyTreeDemoView: View {
     /// `@ObservedObject` ≈ observe-but-don't-own; the singleton owns itself.
     @ObservedObject private var pullCenter = FamilySearchPullCenter.shared
     @State private var showPullSheet = false
+    /// Archivist Notes draft + last save error (view-local, not persisted).
+    @State private var draftNote = ""
+    @State private var noteError: String?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -98,6 +101,7 @@ struct FamilyTreeDemoView: View {
                 model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
             }
             await model.loadFromDisk()
+            await model.loadCyberBrain()
             handleIncomingHighlight()
         }
         .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
@@ -424,6 +428,10 @@ struct FamilyTreeDemoView: View {
                     }
                 }
 
+                if model.isLive, model.selectedPerson != nil {
+                    archivistNotesPanel
+                }
+
                 VStack(alignment: .leading, spacing: 10) {
                     Text("FamilySearch Lookup")
                         .font(.caption.weight(.semibold))
@@ -457,6 +465,84 @@ struct FamilyTreeDemoView: View {
             .padding(14)
         }
         .background(Color(red: 0.085, green: 0.09, blue: 0.10))
+    }
+
+    // MARK: Archivist Notes
+
+    /// What the family knowledge file says about the selected person, and
+    /// a box to add to it. Rows come from `model.selectedNotes` (resolved
+    /// once per selection in the model); nothing here touches the brain.
+    private var archivistNotesPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Archivist Notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    Task { await model.loadCyberBrain() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .help("Re-read the family knowledge file (after telling Hallie something)")
+            }
+
+            if model.selectedNotes.isEmpty {
+                Text(model.notesStatus ?? "Nothing recorded about this person yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(model.selectedNotes) { note in
+                    FamilyTreeNoteRow(note: note)
+                }
+            }
+
+            Divider()
+
+            // `TextEditor` ≈ NSTextView bound to a String; `$draftNote` is a
+            // two-way binding (think reference to the @State storage).
+            TextEditor(text: $draftNote)
+                .font(.system(size: 12))
+                .frame(minHeight: 60, maxHeight: 120)
+                .scrollContentBackground(.hidden)
+                .padding(4)
+                .background(Color.white.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+
+            HStack {
+                if let noteError {
+                    Text(noteError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Add note") { saveDraftNote() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Text("Saved to the family knowledge file as \(model.noteAuthor); Hallie can answer from it right away. Your GEDCOM is never changed.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(panelBackground)
+    }
+
+    private func saveDraftNote() {
+        let text = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        do {
+            try model.addNote(text)
+            draftNote = ""
+            noteError = nil
+        } catch {
+            noteError = error.localizedDescription
+        }
     }
 
     private func relativesPanel(_ relatives: FamilyTreeRelatives) -> some View {
@@ -723,6 +809,52 @@ private struct FamilyAssetPortrait: View {
             }.value
             if !Task.isCancelled { image = decoded }
         }
+    }
+}
+
+/// One Archivist Notes row: the passage, then who/when + two small badges.
+private struct FamilyTreeNoteRow: View {
+    let note: FamilyTreeNote
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(note.text)
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text(note.attribution)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                badge(note.confidence.rawValue, color: confidenceColor)
+                badge(note.privacy.rawValue, color: .gray)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var confidenceColor: Color {
+        switch note.confidence {
+        case .confirmed: return .green
+        case .probable: return .cyan
+        case .uncertain: return .yellow
+        case .disputed: return .orange
+        }
+    }
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.18))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
     }
 }
 

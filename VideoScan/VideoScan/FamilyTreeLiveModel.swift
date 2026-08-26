@@ -130,6 +130,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
     @Published private(set) var scene: FamilyTreeScene = .empty
     @Published private(set) var loadWarning: String?
+    /// "Archivist Notes": what the CyberBrain says about the selected
+    /// person. Rebuilt on selection change and after a save — never in
+    /// `body`.
+    @Published private(set) var selectedNotes: [FamilyTreeNote] = []
+    /// Why the notes pane is empty when it is (no brain yet / unreadable).
+    @Published private(set) var notesStatus: String?
 
     /// Sidebar filter. Setting it refilters once (O(people)) — not in `body`.
     @Published var searchText = "" {
@@ -148,6 +154,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// inject a temp directory and nothing outside it is ever consulted.
     private(set) var originalsDirectory: URL
     private var sourceAccess: FamilyAssetStore.Access
+    /// Where cyberbrain.json lives. Production = App Support/VideoScan/
+    /// cyberbrain (the directory Hallie reads and telling mode writes);
+    /// tests inject a temp directory.
+    let cyberBrainRootURL: URL?
+    /// Who is writing notes — the owner name from the archivist settings.
+    var noteAuthor: String
 
     // MARK: Private state
 
@@ -161,6 +173,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     private var filteredIndexByID: [String: Int] = [:]
     private var loadGeneration = 0
     private var installedSourceKey: String?
+    private var notesResolver: FamilyTreeNotesResolver?
+    private var brainIndex: CyberBrainIndex?
+    private var notesGeneration = 0
 
     private let ancestorGenerations: Int
     private let descendantGenerations: Int
@@ -174,10 +189,19 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     init(originalsDirectory: URL? = nil,
+         cyberBrainRootURL: URL? = nil,
+         noteAuthor: String? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A test that injects an originals directory but no brain gets NO
+        // brain, never the real one (isolation rule).
+        self.cyberBrainRootURL = cyberBrainRootURL
+            ?? (originalsDirectory == nil ? FamilyTreeNotesStorage.productionRootURL : nil)
+        self.noteAuthor = noteAuthor
+            ?? HallieTurnExecutor.Speakers.fromDefaults().ownerName
+            ?? HallieTurnExecutor.Speakers.defaultOwnerName
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
@@ -252,6 +276,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         selectedID = keep ?? (isLive ? sortedPeople.first?.id : FamilyTreeDemoData.rootID)
         refilter()
+        scheduleNotesResolverRebuild()
         rebuildSelection()
     }
 
@@ -283,6 +308,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         scene = .empty
         loadWarning = nil
         loadState = .unavailable
+        notesResolver = nil
+        selectedNotes = []
     }
 
     nonisolated private static func sourceKey(_ graph: GedcomFamilyGraph) -> String {
@@ -397,6 +424,110 @@ final class FamilyTreeLiveModel: ObservableObject {
         map.reserveCapacity(filteredPeople.count)
         for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
         filteredIndexByID = map
+    }
+
+    // MARK: Archivist Notes (CyberBrain)
+
+    /// Read cyberbrain.json off the main thread and build the tree→brain
+    /// resolver. Safe to call again (after Hallie learns something).
+    func loadCyberBrain() async {
+        guard let root = cyberBrainRootURL else {
+            applyBrain(index: nil, status: "No family knowledge file is configured.")
+            return
+        }
+        notesGeneration &+= 1
+        let generation = notesGeneration
+        let outcome: Result<CyberBrainIndex?, Error> = await Task.detached(priority: .userInitiated) {
+            Result { try FamilyTreeNotesStorage.loadIndex(rootURL: root) }
+        }.value
+        guard generation == notesGeneration else { return }
+        switch outcome {
+        case .success(let index):
+            applyBrain(index: index, status: index == nil
+                ? "Hallie has not been told anything yet. Add a note below, or tell her in the chat window." : nil)
+        case .failure(let error):
+            applyBrain(index: nil, status: "Family knowledge file could not be read: \(error.localizedDescription)")
+        }
+    }
+
+    /// Synchronous variant for tests.
+    func loadCyberBrainNow() {
+        notesGeneration &+= 1
+        guard let root = cyberBrainRootURL else {
+            applyBrain(index: nil, status: "No family knowledge file is configured.")
+            return
+        }
+        do {
+            let index = try FamilyTreeNotesStorage.loadIndex(rootURL: root)
+            applyBrain(index: index, status: index == nil
+                ? "Hallie has not been told anything yet. Add a note below, or tell her in the chat window." : nil)
+        } catch {
+            applyBrain(index: nil, status: "Family knowledge file could not be read: \(error.localizedDescription)")
+        }
+    }
+
+    /// Save one note about the selected person through the same writer
+    /// Hallie's telling mode uses (atomic rename + backups/), then refresh
+    /// the pane from the archive the writer handed back — no re-read.
+    /// Throws the writer's error so the view can show it verbatim.
+    func addNote(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+        guard let root = cyberBrainRootURL else {
+            throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
+        }
+        guard let graph, let id = selectedID, let person = graph.people[id] else {
+            throw CyberBrainWriter.WriteError.emptySubject
+        }
+        let testimony = CyberBrainWriter.Testimony(
+            subjectName: person.name,
+            subjectAliases: person.alternateNames,
+            speakerName: noteAuthor,
+            text: text,
+            kind: kind,
+            date: date,
+            origin: .familyTreeNote,
+            gedcomPersonID: person.id)
+        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        notesGeneration &+= 1
+        applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
+    }
+
+    private func applyBrain(index: CyberBrainIndex?, status: String?) {
+        brainIndex = index
+        notesStatus = status
+        notesResolver = nil
+        if let index, let graph {
+            notesResolver = FamilyTreeNotesResolver(index: index, graph: graph)
+        }
+        refreshSelectedNotes()
+    }
+
+    /// The graph changed under an already-loaded brain: rebuild the
+    /// resolver off the main thread (NameIndex over 16k people is tens of
+    /// ms — not worth a hitch on every reload).
+    private func scheduleNotesResolverRebuild() {
+        notesResolver = nil
+        guard let index = brainIndex, let graph else {
+            refreshSelectedNotes()
+            return
+        }
+        notesGeneration &+= 1
+        let generation = notesGeneration
+        Task { [weak self] in
+            let resolver = await Task.detached(priority: .userInitiated) {
+                FamilyTreeNotesResolver(index: index, graph: graph)
+            }.value
+            guard let self, generation == self.notesGeneration else { return }
+            self.notesResolver = resolver
+            self.refreshSelectedNotes()
+        }
+    }
+
+    private func refreshSelectedNotes() {
+        guard let resolver = notesResolver, let id = selectedID, isLive else {
+            if !selectedNotes.isEmpty { selectedNotes = [] }
+            return
+        }
+        selectedNotes = resolver.notes(forGedcomID: id)
     }
 
     // MARK: Photos
@@ -521,6 +652,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     private func rebuildSelection() {
+        defer { refreshSelectedNotes() }
         if let graph, let id = selectedID, let person = graph.people[id] {
             selectedPerson = Self.summary(person)
             selectedRelatives = FamilyTreeRelatives(
