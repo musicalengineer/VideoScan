@@ -744,6 +744,69 @@ enum ArchivistPresenceAnswerComposer {
     /// step (Rick 2026-08-21: a bare "I don't have evidence for that" is
     /// the worst answer she gives — it reads as a shrug). Built only from
     /// the executed query's own description, so it can never name a fact.
+    /// A keyword-only hit says WHAT matched (live 2026-08-26: "I found 1
+    /// catalog item matching that." for a transcript hit on "oldest photo"
+    /// was useless): "1 video where someone says “oldest photo” —
+    /// Christmas1997-clip2.mov (1997)." Nil when a person was asked for
+    /// (the person template stands) or nothing keyword-based is cited.
+    static func keywordOnlyProse(_ result: ArchivistPresenceResult) -> String? {
+        guard !result.interpretedQuery.contains("person="),
+              let first = result.evidence.citations.first else { return nil }
+        // How the first cited item matched: transcript beats caption
+        // beats a catalog field, so the sentence names the strongest kind.
+        var says: String?
+        var captioned: String?
+        var field: (String, String)?
+        for basis in first.bases {
+            switch basis {
+            case .transcriptMention(let term, _):
+                says = says ?? term
+            case .keywordTokens(let f, let term, _, _, _, _):
+                if f.lowercased().contains("transcript") { says = says ?? term }
+                else if f.lowercased().contains("caption") { captioned = captioned ?? term }
+                else { field = field ?? (f, term) }
+            case .caption(let term, _, _, _):
+                captioned = captioned ?? term
+            case .catalogField(let f, let term, _):
+                field = field ?? (f, term)
+            default:
+                break
+            }
+        }
+        let count = result.evidence.totalMatchCount
+        let noun = count == 1 ? "1 video" : "\(count) videos"
+        let how: String
+        if let says { how = "\(noun) where someone says “\(says)”" }
+        else if let captioned { how = "\(noun) captioned with “\(captioned)”" }
+        else if let field { how = "\(noun) with “\(field.1)” in the \(field.0)" }
+        else { return nil }
+        let shown = result.evidence.citations.prefix(3).map { citation -> String in
+            citation.filename + (Self.year(of: citation).map { " (\($0))" } ?? "")
+        }
+        let more = count > shown.count ? ", and \(count - shown.count) more" : ""
+        return how + " — " + shown.joined(separator: ", ") + more + "."
+    }
+
+    /// The year the cited bases prove, else the first 19xx/20xx run in the
+    /// file name (the same reading the path-year basis uses).
+    static func year(of citation: ArchivistEvidenceCitation) -> Int? {
+        for basis in citation.bases {
+            switch basis {
+            case .fileDate(_, let year, _), .pathYear(let year, _), .inferredDate(let year, _):
+                return year
+            default:
+                continue
+            }
+        }
+        var digits = ""
+        for character in citation.filename + " " {
+            if character.isNumber { digits.append(character); continue }
+            if digits.count == 4, let year = Int(digits), (1900...2099).contains(year) { return year }
+            digits.removeAll(keepingCapacity: true)
+        }
+        return nil
+    }
+
     static func noEvidenceAnswer(for interpretedQuery: String) -> String {
         var people: [String] = []
         var years: String?
@@ -804,9 +867,9 @@ enum ArchivistPresenceAnswerComposer {
         case .present:
             let count = result.evidence.totalMatchCount
             return ArchivistFactualAnswer(
-                prose: count == 1
+                prose: keywordOnlyProse(result) ?? (count == 1
                     ? "I found 1 catalog item matching that."
-                    : "I found \(count) catalog items matching that.",
+                    : "I found \(count) catalog items matching that."),
                 basisLine: "Basis: \(result.evidence.citations.count) cited of "
                     + "\(count) matching catalog items.",
                 evidence: result.evidence)
