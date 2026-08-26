@@ -60,7 +60,13 @@ final class HallieSpeaker: NSObject, ObservableObject {
     private var neuralEngine: AVAudioEngine?
     private var neuralNode: AVAudioPlayerNode?
     private var neuralPlaybackID = UUID()
-    private var neuralAudioURL: URL?
+    private var neuralAudioURLs: [URL] = []
+    private var neuralChunksScheduled = 0
+    private var neuralChunksPlayed = 0
+    private var neuralSynthesisFinished = false
+    /// Chunks the Apple voice reads once Bella's queued audio has played,
+    /// set only when a later chunk failed after playback had begun.
+    private var appleContinuation: [String] = []
     private var speechGeneration: UInt = 0
 
     override private init() {
@@ -216,67 +222,143 @@ final class HallieSpeaker: NSObject, ObservableObject {
         isSpeaking = true
     }
 
+    /// Kokoro caps one utterance at 510 phoneme tokens, so the answer is
+    /// chunked first (HallieSpeechChunker) and each chunk is synthesized in
+    /// turn and queued on the same player node — AVAudioPlayerNode plays
+    /// scheduled files back-to-back with no gap, so Bella starts on chunk 1
+    /// while chunks 2..n are still being made. A chunk that still overflows
+    /// is halved at a space outside any name and retried; only a chunk that
+    /// fails after that hands the rest of the answer to the Apple voice.
     private func speakNeural(_ text: String, voice: HallieNeuralVoice, speed: Float) {
         isSpeaking = true
         let generation = speechGeneration
-        let job = HallieNeuralSpeech.job(for: text, voice: voice, speed: speed)
-        neuralJob = job
+        var chunks = HallieSpeechChunker.chunks(sentences: Self.sentences(text))
         neuralTask = Task { [weak self] in
-            var synthesizedAudioURL: URL?
             let started = Date()
+            var engine: AVAudioEngine?
+            var node: AVAudioPlayerNode?
+            var bufferNote = ""
+            var playbackID = UUID()
+            var totalFrames: Int64 = 0
+            var sampleRate = 0.0
+            var index = 0
+            var retries = 0
+            let abandoned = { @MainActor [weak self] () -> Bool in
+                guard let self else { return true }
+                return generation != self.speechGeneration || Task.isCancelled
+            }
             do {
-                let audioURL = try await job.synthesize()
-                synthesizedAudioURL = audioURL
-                guard let self, generation == self.speechGeneration, !Task.isCancelled else {
-                    HallieNeuralSpeech.removeTemporaryAudio(audioURL)
-                    return
-                }
-                let file = try AVAudioFile(forReading: audioURL)
-                let engine = AVAudioEngine()
-                let node = AVAudioPlayerNode()
-                engine.attach(node)
-                engine.connect(node, to: engine.mainMixerNode, format: file.processingFormat)
-                // Raise the device buffer BEFORE the engine starts its
-                // I/O cycle so the larger size applies from the first frame.
-                let buffer = HallieOutputBuffer.ensureMinimum()
-                engine.prepare()
-                try engine.start()
-                let playbackID = UUID()
-                self.neuralPlaybackID = playbackID
-                self.neuralAudioURL = audioURL
-                self.neuralEngine = engine
-                self.neuralNode = node
-                self.neuralJob = nil
-                node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                    Task { @MainActor in
-                        guard let self, self.neuralPlaybackID == playbackID else { return }
-                        self.finishNeuralPlayback()
+                while index < chunks.count {
+                    let chunk = chunks[index]
+                    guard let self, !abandoned() else { return }
+                    let job = HallieNeuralSpeech.job(for: chunk, voice: voice, speed: speed)
+                    self.neuralJob = job
+                    let audioURL: URL
+                    do {
+                        audioURL = try await job.synthesize()
+                    } catch let error where Self.isTokenOverflow(error) {
+                        let (head, tail) = HallieSpeechChunker.halve(chunk)
+                        guard let tail else { throw error }
+                        retries += 1
+                        appLog.write("[hallie-voice] chunk \(index + 1) of \(chunks.count) "
+                                     + "(\(chunk.count) chars, ~\(HallieSpeechChunker.estimatedTokens(chunk)) est. tokens) "
+                                     + "overflowed Kokoro's \(HallieSpeechChunker.kokoroMaxTokens)-token cap; split and retrying")
+                        chunks.replaceSubrange(index...index, with: [head, tail])
+                        continue
                     }
+                    guard !abandoned() else {
+                        HallieNeuralSpeech.removeTemporaryAudio(audioURL)
+                        return
+                    }
+                    self.neuralAudioURLs.append(audioURL)
+                    let file = try AVAudioFile(forReading: audioURL)
+                    if engine == nil {
+                        let newEngine = AVAudioEngine()
+                        let newNode = AVAudioPlayerNode()
+                        newEngine.attach(newNode)
+                        newEngine.connect(newNode, to: newEngine.mainMixerNode, format: file.processingFormat)
+                        // Raise the device buffer BEFORE the engine starts its
+                        // I/O cycle so the larger size applies from the first frame.
+                        bufferNote = HallieOutputBuffer.ensureMinimum()
+                        newEngine.prepare()
+                        try newEngine.start()
+                        playbackID = UUID()
+                        self.neuralPlaybackID = playbackID
+                        self.neuralEngine = newEngine
+                        self.neuralNode = newNode
+                        self.neuralChunksScheduled = 0
+                        self.neuralChunksPlayed = 0
+                        self.neuralSynthesisFinished = false
+                        engine = newEngine
+                        node = newNode
+                    }
+                    guard let node else { return }
+                    self.neuralChunksScheduled += 1
+                    let id = playbackID
+                    node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                        Task { @MainActor in
+                            guard let self, self.neuralPlaybackID == id else { return }
+                            self.neuralChunksPlayed += 1
+                            if self.neuralSynthesisFinished,
+                               self.neuralChunksPlayed >= self.neuralChunksScheduled {
+                                self.finishNeuralPlayback()
+                            }
+                        }
+                    }
+                    if !node.isPlaying { node.play() }
+                    totalFrames += file.length
+                    sampleRate = file.processingFormat.sampleRate
+                    index += 1
                 }
-                node.play()
-                let duration = Double(file.length) / file.processingFormat.sampleRate
+                guard let self, let engine, !abandoned() else { return }
+                self.neuralJob = nil
+                self.neuralSynthesisFinished = true
+                if self.neuralChunksPlayed >= self.neuralChunksScheduled { self.finishNeuralPlayback() }
+                let duration = sampleRate > 0 ? Double(totalFrames) / sampleRate : 0
                 appLog.write(String(
-                    format: "[hallie-voice] %@ synthesized %.1fs of %d Hz audio in %.1fs (%@); engine → %@; %@",
-                    voice.displayName, duration, Int(file.processingFormat.sampleRate),
+                    format: "[hallie-voice] %@ synthesized %.1fs of %d Hz audio in %.1fs (%@; %d chunk%@%@); engine → %@; %@",
+                    voice.displayName, duration, Int(sampleRate),
                     Date().timeIntervalSince(started),
                     HallieNeuralSpeech.supportsWarmWorker ? "warm worker" : "one-shot helper",
+                    chunks.count, chunks.count == 1 ? "" : "s",
+                    retries > 0 ? ", \(retries) split on overflow" : "",
                     "\(Int(engine.outputNode.outputFormat(forBus: 0).sampleRate)) Hz",
-                    buffer))
+                    bufferNote))
             } catch {
-                HallieNeuralSpeech.removeTemporaryAudio(synthesizedAudioURL)
-                guard let self, generation == self.speechGeneration, !Task.isCancelled else { return }
+                guard let self, !abandoned() else { return }
                 HallieNeuralSpeechDiagnostics.shared.recordFailure(error.localizedDescription)
+                let failed = index < chunks.count ? chunks[index] : ""
                 // In the app log, not just NSLog: live 8/25 the voice fell back
                 // to Apple speech and nothing on disk said why.
                 appLog.write("[hallie-voice] neural voice unavailable; using Apple speech — "
-                             + "\(error.localizedDescription)")
+                             + "\(error.localizedDescription) "
+                             + "[chunk \(index + 1) of \(chunks.count), \(failed.count) chars, "
+                             + "~\(HallieSpeechChunker.estimatedTokens(failed)) est. tokens]")
                 NSLog("VideoScan: Hallie neural voice unavailable; using Apple speech: %@",
                       error.localizedDescription)
                 self.neuralTask = nil
                 self.neuralJob = nil
-                self.speakWithApple(Self.sentences(text))
+                let remaining = Array(chunks[index...])
+                if engine != nil, !self.neuralSynthesisFinished {
+                    // Bella is mid-answer: let what is queued finish, then Apple
+                    // reads the rest rather than cutting her off mid-sentence.
+                    self.neuralSynthesisFinished = true
+                    self.appleContinuation = remaining
+                    if self.neuralChunksPlayed >= self.neuralChunksScheduled { self.finishNeuralPlayback() }
+                } else {
+                    self.speakWithApple(remaining.isEmpty ? Self.sentences(text) : remaining)
+                }
             }
         }
+    }
+
+    /// KokoroSwift's `tooManyTokens`, as it reaches us from either helper
+    /// mode: the one-shot helper's stderr names the case; a worker-mode
+    /// helper built before the helper learned to describe its errors
+    /// reports the enum's bare Foundation description ("error 0").
+    nonisolated static func isTokenOverflow(_ error: Error) -> Bool {
+        let detail = error.localizedDescription
+        return detail.contains("tooManyTokens") || detail.contains("KokoroTTSError error 0")
     }
 
     func stop() {
@@ -296,16 +378,25 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralEngine?.stop()
         neuralNode = nil
         neuralEngine = nil
-        HallieNeuralSpeech.removeTemporaryAudio(neuralAudioURL)
-        neuralAudioURL = nil
+        for url in neuralAudioURLs { HallieNeuralSpeech.removeTemporaryAudio(url) }
+        neuralAudioURLs = []
+        neuralChunksScheduled = 0
+        neuralChunksPlayed = 0
+        neuralSynthesisFinished = false
+        appleContinuation = []
     }
 
-    /// Natural end of Bella's file (engine completion, data played back).
+    /// Natural end of Bella's audio (every scheduled chunk played back).
     private func finishNeuralPlayback() {
+        let continuation = appleContinuation
         tearDownNeuralPlayback()
         neuralTask = nil
         neuralJob = nil
-        isSpeaking = false
+        if continuation.isEmpty {
+            isSpeaking = false
+        } else {
+            speakWithApple(continuation)
+        }
     }
 
     /// A short line so a newly chosen voice can be judged.

@@ -132,7 +132,7 @@ private func writeResponse(_ response: WorkerResponse) {
 
 @main
 private enum HallieKokoroHelper {
-    static func main() throws {
+    static func main() {
         do {
             let arguments = try Arguments(Array(CommandLine.arguments.dropFirst()))
             let modelURL = URL(fileURLWithPath: arguments.modelPath)
@@ -163,9 +163,12 @@ private enum HallieKokoroHelper {
                             text: request.text)
                         writeResponse(WorkerResponse(id: request.id, ok: true, error: nil))
                     } catch {
+                        // `String(describing:)` names the enum case
+                        // ("tooManyTokens"); localizedDescription only says
+                        // "KokoroTTSError error 0".
                         writeResponse(WorkerResponse(
                             id: request.id, ok: false,
-                            error: error.localizedDescription))
+                            error: String(describing: error)))
                     }
                 }
                 return
@@ -186,6 +189,13 @@ private enum HallieKokoroHelper {
                 + "(--worker | --output DIR [--voice NAME] [--speed 0.92] [--text TEXT])\n"
             FileHandle.standardError.write(Data(usage.utf8))
             Foundation.exit(2)
+        } catch {
+            // Never let a synthesis error escape `main`: Swift turns that into
+            // a fatal trap (SIGTRAP, status 5) and the app only sees a crash.
+            // Exit cleanly with the case name so the app can attribute it
+            // (e.g. KokoroTTSError.tooManyTokens → split the chunk and retry).
+            FileHandle.standardError.write(Data("error: \(String(describing: error))\n".utf8))
+            Foundation.exit(3)
         }
     }
 }
