@@ -160,6 +160,31 @@ extension HallieTurnExecutor {
         case answer(Result)
     }
 
+    /// "photo of the oldest person in the tree" (live 2026-08-26): resolve
+    /// the PERSON first, then hand "photo/video of <name>" to the
+    /// person-media routes — never a keyword search on the superlative
+    /// words. Photos go to the portrait route with the ranking sentence in
+    /// front; videos become "videos of <name>" for the presence route.
+    static func superlativeMediaTurn(
+        _ lineage: HallieLineageQuestion,
+        media: String,
+        question: String,
+        playAfterAnswer: Bool,
+        lineageAnswer: (HallieLineageQuestion) -> Result?
+    ) -> PreTranslation {
+        guard let found = lineageAnswer(lineage) else {
+            return .translate(question: question, playAfterAnswer: playAfterAnswer)
+        }
+        guard found.outcome == .answered, let name = found.catalogPersonName else {
+            return .answer(found)
+        }
+        if ["photo", "picture", "portrait", "image", "snapshot"].contains(media) {
+            guard let photo = lineageAnswer(.personPhoto(person: name)) else { return .answer(found) }
+            return .answer(HallieLineageAnswer.prefixing(found.prose, to: photo))
+        }
+        return .translate(question: "videos of \(name)", playAfterAnswer: playAfterAnswer)
+    }
+
     /// Runs the model-free resolvers in order: help / small talk / reset →
     /// capability question → follow-up on the last answer → nothing. Pure
     /// given its inputs.
@@ -196,6 +221,11 @@ extension HallieTurnExecutor {
                     ast: .graph(.init(people: [person ?? "me"], operation: .kinship,
                                       relation: relation, side: side)),
                     playAfterAnswer: playAfterAnswer))
+            }
+            if case .superlative(_, _, let media?) = lineage, let lineageAnswer {
+                return superlativeMediaTurn(
+                    lineage, media: media, question: question,
+                    playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
             }
             if let lineageAnswer, let answer = lineageAnswer(lineage) {
                 return .answer(answer)

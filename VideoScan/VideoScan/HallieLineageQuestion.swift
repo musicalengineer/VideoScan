@@ -63,6 +63,28 @@ enum HallieLineageQuestion: Equatable, Sendable {
     case deepAncestor(person: String?, depth: Int, sex: String?,
                       side: ArchivistQueryAST.Graph.Side?)
 
+    /// "the oldest person in the tree" / "who lived the longest" / "the
+    /// deepest ancestor of Rick" / "first born in Ireland" (live
+    /// 2026-08-26: the first answered with the tree SUMMARY, the second —
+    /// "oldest photo of the oldest person" — became a transcript search
+    /// for "oldest photo"). A ranking over the graph, answered with the
+    /// person (ties → up to 3) and the who-is biography sentence. `media`
+    /// = the noun when the person phrase sits inside a media request
+    /// ("photo of the oldest person in the tree"): the person is resolved
+    /// FIRST and the media ask is re-issued with the name.
+    enum SuperlativeKind: Equatable, Sendable {
+        case earliestBorn, latestBorn, longestLived, latestDied, earliestMarried
+        case mostChildren, deepestAncestor
+        case firstBornIn(place: String)
+    }
+    enum SuperlativeScope: Equatable, Sendable {
+        case wholeTree
+        case surname(String)
+        /// nil = the owner.
+        case ancestorsOf(String?)
+    }
+    case superlative(kind: SuperlativeKind, scope: SuperlativeScope, media: String? = nil)
+
     static let defaultGenerations = 5
     static let maxGenerations = 12
     /// A year bound replaces the generation cap: 1959 → 1600 is ~13
@@ -109,6 +131,10 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if isGetFamilyTree(lower) { return .getFamilyTree }
         if isGedcomAwareness(lower) { return .gedcomAwareness }
 
+        // Superlatives BEFORE the photo shape: "photo of the oldest person
+        // in the tree" is a person to find first, not a person named "the
+        // oldest person in the tree".
+        if let sup = superlativeQuestion(in: lower) { return sup }
         // "show me a photo of Fred Lamb" (typos in the lead words are the
         // translator's problem no longer — this is deterministic).
         if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image)s?\s+of\s+([a-z][a-z .'-]+?)\s*$/),
@@ -395,6 +421,98 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
     }
 
+    // MARK: Superlatives
+
+    static let mediaNoun = /\b(photo|picture|portrait|image|video|clip|movie|footage|film|snapshot)s?\b/
+
+    static func superlativeQuestion(in lower: String) -> HallieLineageQuestion? {
+        // Media wrapper: "<anything> photo of (the) <person phrase>".
+        if let m = lower.firstMatch(of: /\b(photo|picture|portrait|image|video|clip|movie|footage|film|snapshot)s?\s+of\s+(.+)$/) {
+            let phrase = String(m.2).trimmingCharacters(in: .whitespaces)
+            guard phrase.firstMatch(of: mediaNoun) == nil,
+                  let parsed = superlativeKindAndScope(in: phrase) else { return nil }
+            return .superlative(kind: parsed.0, scope: parsed.1, media: String(m.1))
+        }
+        // A media question that is not the wrapper shape ("oldest video in
+        // the catalog") belongs to the catalog routes.
+        guard lower.firstMatch(of: mediaNoun) == nil,
+              let parsed = superlativeKindAndScope(in: lower) else { return nil }
+        return .superlative(kind: parsed.0, scope: parsed.1, media: nil)
+    }
+
+    private static let superlativeWords = /\b(?:oldest|eldest|youngest|earliest|latest|first|last|longest|most|deepest|farthest|furthest|distant|largest|biggest|recent(?:ly)?|how far back)\b/
+
+    /// The kind and scope of a superlative person phrase, or nil when
+    /// the phrase is not one ("who was rick's oldest son" is a kinship
+    /// question the translator lists in full).
+    static func superlativeKindAndScope(in text: String) -> (SuperlativeKind, SuperlativeScope)? {
+        guard text.firstMatch(of: superlativeWords) != nil else { return nil }
+        // A superlative on a kin word ("oldest son", "first cousin") or on
+        // a thing ("oldest house") is not a ranking over the tree.
+        if text.firstMatch(of: /\b(?:oldest|eldest|youngest|first|last)\s+(?:born\s+)?(?:son|daughter|child|kid|brother|sister|sibling|grand\w+|boy|girl|cousin|uncle|aunt|nephew|niece|wife|husband|marriage)\b/) != nil {
+            return nil
+        }
+        let kind: SuperlativeKind
+        if let m = text.firstMatch(of: /\b(?:first|earliest|oldest)\b.*\bborn\s+in\s+(?:the\s+)?([a-z][a-z .'-]+?)\s*$/) {
+            kind = .firstBornIn(place: capitalizedName(String(m.1).trimmingCharacters(in: .whitespaces)))
+        } else if text.firstMatch(of: /\b(?:deepest|farthest|furthest|most distant|remotest)\b[a-z' ]*\bancestors?\b/) != nil
+                    || text.firstMatch(of: /\bancestors?\b.*\b(?:farthest|furthest|deepest|most distant)\s+back\b/) != nil
+                    || text.firstMatch(of: /\bhow far back\b.*\b(?:go|goes|reach|reaches)\b/) != nil {
+            kind = .deepestAncestor
+        } else if text.firstMatch(of: /\b(?:lived?|living)\s+(?:the\s+)?longest\b|\blongest[- ](?:lived|living|life)\b|\b(?:oldest|greatest|highest)\s+age\b|\bmost\s+years\b/) != nil {
+            kind = .longestLived
+        } else if text.firstMatch(of: /\b(?:most\s+recent(?:ly)?|last|latest)\b[a-z' ]*\b(?:died|death|passed|die)\b|\b(?:died|passed(?: away)?)\s+(?:most\s+recently|last|latest)\b/) != nil {
+            kind = .latestDied
+        } else if text.firstMatch(of: /\b(?:earliest|first|oldest)\b[a-z' ]*\b(?:married|marriage|marry|wedding|wed)\b|\b(?:married|wed)\s+(?:first|earliest)\b/) != nil {
+            kind = .earliestMarried
+        } else if text.firstMatch(of: /\bmost\s+(?:children|kids|sons|daughters|offspring|descendants)\b|\b(?:largest|biggest)\s+(?:family|brood|household)\b/) != nil {
+            kind = .mostChildren
+        } else if text.firstMatch(of: /\byoungest\b|\b(?:latest|most\s+recent(?:ly)?|last)\s+(?:born|birth)\b|\bborn\s+(?:last|most\s+recently|latest)\b/) != nil {
+            kind = .latestBorn
+        } else if text.firstMatch(of: /\boldest\b|\beldest\b|\bearliest\s+(?:birth|born)\b|\bborn\s+(?:first|earliest)\b|\bfirst\s+(?:person\s+|one\s+)?born\b|\bearliest\b[a-z' ]*\bbirth\b/) != nil {
+            // "oldest" alone must be about a person: "oldest person", "the
+            // oldest breen", "oldest member of the family"…
+            guard text.firstMatch(of: /\b(?:persons?|people|members?|relatives?|ancestors?|forebears?|ones?|man|men|woman|women|male|female|birth|born|individuals?|humans?|guys?|lady|family|tree|surname|named|lineage|line)\b/) != nil
+                || text.firstMatch(of: /\b(?:oldest|eldest)\s+[a-z]+s?\s*$/) != nil else { return nil }
+            kind = .earliestBorn
+        } else {
+            return nil
+        }
+
+        // Scope. Deepest-ancestor is always "of somebody" (default: owner).
+        var scope: SuperlativeScope = .wholeTree
+        // "my/our family tree" is the whole tree, not an ancestor scope.
+        if let m = text.firstMatch(of: /\b(?:of|among|in|from)\s+(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:ancestors|ancestry|forebears|line|lineage|pedigree)\b/) {
+            scope = .ancestorsOf(m.1 != nil ? nil : possessor(in: String(m.2 ?? "") + "'s"))
+            if case .ancestorsOf(nil) = scope, m.2 != nil { scope = .wholeTree }
+        } else if let m = text.firstMatch(of: /\bancestors?\s+of\s+(?:(me|mine|myself|ours|us)|([a-z][a-z .'-]*?))\s*$/) {
+            scope = .ancestorsOf(m.1 != nil ? nil : capitalizedName(String(m.2 ?? "")))
+        } else if let m = text.firstMatch(of: /\b(?:my|our)\s+(?:oldest|earliest|deepest|farthest|furthest|most distant|remotest)\s+ancestor/) {
+            _ = m; scope = .ancestorsOf(nil)
+        } else if let m = text.firstMatch(of: /\b(?:named|surnamed|called|with the (?:last name|surname|family name))\s+([a-z]+)\b/) {
+            scope = .surname(String(m.1))
+        } else if let m = text.firstMatch(of: /\b(?:in|of|among)\s+the\s+([a-z]+)\s+(?:family|clan|line)\b/) {
+            scope = .surname(String(m.1))
+        } else if let m = text.firstMatch(of: /\b(?:of|among|in)\s+the\s+([a-z]+)s\s*$/) {
+            scope = .surname(String(m.1))   // "of the breens"
+        } else if let m = text.firstMatch(of: /\b(?:oldest|eldest|youngest|earliest|first|last)\s+([a-z]+)\b/),
+                  !superlativeStopWords.contains(String(m.1)) {
+            scope = .surname(String(m.1))   // "the oldest breen"
+        }
+        if kind == .deepestAncestor, case .wholeTree = scope { scope = .ancestorsOf(nil) }
+        return (kind, scope)
+    }
+
+    /// Words that follow "oldest" without naming a surname.
+    private static let superlativeStopWords: Set<String> = [
+        "person", "people", "member", "members", "one", "ones", "ancestor", "ancestors", "relative",
+        "relatives", "man", "woman", "male", "female", "birth", "born", "living", "recorded", "known",
+        "age", "family", "married", "marriage", "child", "children", "kid", "kids", "of", "in", "the",
+        "generation", "individual", "human", "guy", "lady", "to", "and", "with", "that", "who", "whom",
+        "year", "years", "date", "dated", "death", "died", "life", "lived", "surviving", "known", "name",
+        "named", "entry", "record", "records", "recorded", "surname", "tree", "line", "photo", "picture",
+    ]
+
     /// Shape for the trace verbs once the start person is known. A NAMED
     /// start with no destination ("trace the tree from Edith Lucy Parker
     /// as far back as you can go") is an ancestor walk at full depth —
@@ -527,6 +645,9 @@ enum HallieLineageAnswer {
             // Not answered here: preTranslation turns it into a graph
             // kinship intent and the ordinary executor route runs it.
             return nil
+        case .superlative(let kind, let scope, _):
+            guard let graph = context.graph else { return noTree() }
+            return superlative(kind, scope: scope, graph: graph, context: context)
         case .deepAncestor(let person, let depth, let sex, let side):
             guard let graph = context.graph else { return noTree() }
             switch resolve(person, context: context, graph: graph) {
@@ -721,6 +842,186 @@ enum HallieLineageAnswer {
             offeredActions: [.openFamilyTreePerson(
                 personID: person.id, personName: person.name)],
             attachments: card.generations.isEmpty ? [] : [.lineage(card)])
+    }
+
+    // MARK: Superlatives
+
+    /// First four-digit run in a raw GEDCOM date ("12 JUN 1888" → 1888).
+    static func year(in raw: String?) -> Int? {
+        guard let raw, let m = raw.firstMatch(of: /(\d{4})/) else { return nil }
+        return Int(m.1)
+    }
+
+    static func scopePhrase(_ scope: HallieLineageQuestion.SuperlativeScope, person: GedcomFamilyGraph.Person?) -> String {
+        switch scope {
+        case .wholeTree: return "the family tree"
+        case .surname(let s): return "the \(s.capitalized) family"
+        case .ancestorsOf: return "\(HallieLineageQuestion.possessive(person?.name ?? "your")) ancestors"
+        }
+    }
+
+    static func superlative(_ kind: HallieLineageQuestion.SuperlativeKind,
+                            scope: HallieLineageQuestion.SuperlativeScope,
+                            graph: GedcomFamilyGraph,
+                            context: HallieTurnExecutor.Context) -> Result {
+        // The people to rank, plus (for an ancestor scope) how many
+        // generations up each one sits.
+        var pool: [GedcomFamilyGraph.Person] = []
+        var generationOf: [String: Int] = [:]
+        var anchor: GedcomFamilyGraph.Person? = nil
+        var basisNote: String? = nil
+        var scopeLabel = ""
+        switch scope {
+        case .wholeTree:
+            pool = Array(graph.people.values)
+        case .surname(let typed):
+            let resolved = resolvedSurname(typed, graph: graph)
+            pool = graph.people(withSurname: resolved)
+            guard !pool.isEmpty else {
+                return Result(route: .graph, outcome: .declined,
+                              prose: "I don’t find anyone named \(typed.capitalized) in the family tree.",
+                              basisLine: ArchivistBiographyPolicy.gedcomBasis,
+                              queryDescription: "superlative: \(kind) surname=\(typed)", citations: [], catalogPersonName: nil)
+            }
+        case .ancestorsOf(let typed):
+            switch resolve(typed, context: context, graph: graph) {
+            case .failure(let r):
+                return r ?? Result(route: .graph, outcome: .declined,
+                                   prose: "I don’t find \(typed ?? "you") in the family tree.",
+                                   basisLine: ArchivistBiographyPolicy.gedcomBasis,
+                                   queryDescription: "superlative: \(kind) ancestors of \(typed ?? "owner")",
+                                   citations: [], catalogPersonName: nil)
+            case .success(let p, let note):
+                anchor = p
+                basisNote = note
+                for gen in graph.ancestorLine(of: p, line: .both, generations: 60) {
+                    for a in gen.people { pool.append(a); generationOf[a.id] = gen.generation }
+                }
+                guard !pool.isEmpty else {
+                    return Result(route: .graph, outcome: .declined,
+                                  prose: "The family tree records no parents for \(p.name), so there are no ancestors to rank.",
+                                  basisLine: ArchivistBiographyPolicy.gedcomBasis + (note.map { " " + $0 } ?? ""),
+                                  queryDescription: "superlative: \(kind) ancestors of \(p.name)",
+                                  citations: [], catalogPersonName: p.name,
+                                  offeredActions: [.openFamilyTreePerson(personID: p.id, personName: p.name)])
+                }
+            }
+        }
+        scopeLabel = scopePhrase(scope, person: anchor)
+
+        // The ranking key per kind; nil = the record lacks the fact and
+        // is not ranked. `higherIsBetter` picks max vs min.
+        let key: (GedcomFamilyGraph.Person) -> Int?
+        let higherIsBetter: Bool
+        let fact: String            // what the key measures, for the prose
+        let describeKey: (Int) -> String
+        switch kind {
+        case .earliestBorn:
+            key = { $0.birthYear }; higherIsBetter = false; fact = "earliest birth year"
+            describeKey = { "born \($0)" }
+        case .latestBorn:
+            key = { $0.birthYear }; higherIsBetter = true; fact = "latest birth year"
+            describeKey = { "born \($0)" }
+        case .longestLived:
+            key = { p in
+                guard let b = p.birthYear, let d = p.deathYear, d >= b else { return nil }
+                return d - b
+            }
+            higherIsBetter = true; fact = "longest recorded life"
+            describeKey = { "about \($0) years" }
+        case .latestDied:
+            key = { $0.deathYear }; higherIsBetter = true; fact = "most recent death"
+            describeKey = { "died \($0)" }
+        case .earliestMarried:
+            key = { graph.marriages(of: $0).compactMap { Self.year(in: $0.date) }.min() }
+            higherIsBetter = false; fact = "earliest recorded marriage"
+            describeKey = { "married \($0)" }
+        case .mostChildren:
+            key = { let n = graph.relatives(.children, of: $0).count; return n > 0 ? n : nil }
+            higherIsBetter = true; fact = "most recorded children"
+            describeKey = { "\($0) child\($0 == 1 ? "" : "ren")" }
+        case .deepestAncestor:
+            key = { generationOf[$0.id] }; higherIsBetter = true; fact = "deepest recorded ancestor"
+            describeKey = { "\($0) generations back" }
+        case .firstBornIn(let place):
+            let token = GedcomFamilyGraph.normalizedPlaceToken(place)
+            key = { p in
+                guard let where_ = p.birthPlace, GedcomFamilyGraph.place(where_, mentions: token) else { return nil }
+                return p.birthYear
+            }
+            higherIsBetter = false; fact = "earliest birth in \(place)"
+            describeKey = { "born \($0)" }
+        }
+        let ranked = pool.compactMap { p -> (GedcomFamilyGraph.Person, Int)? in
+            key(p).map { (p, $0) }
+        }
+        guard let best = (higherIsBetter ? ranked.map(\.1).max() : ranked.map(\.1).min()) else {
+            let what: String
+            switch kind {
+            case .firstBornIn(let place): what = "a birthplace in \(place)"
+            case .longestLived: what = "both a birth and a death year"
+            case .earliestMarried: what = "a marriage date"
+            case .mostChildren: what = "any children"
+            case .latestDied: what = "a death year"
+            default: what = "a birth year"
+            }
+            return Result(route: .graph, outcome: .declined,
+                          prose: "Nobody in \(scopeLabel) has \(what) recorded, so I can’t rank them by that.",
+                          basisLine: ArchivistBiographyPolicy.gedcomBasis + " Looked at \(pool.count) people." + (basisNote.map { " " + $0 } ?? ""),
+                          queryDescription: "superlative: \(kind) scope=\(scope)", citations: [], catalogPersonName: nil)
+        }
+        var winners: [GedcomFamilyGraph.Person] = []
+        for (person, value) in ranked where value == best { winners.append(person) }
+        winners.sort { a, b in a.name == b.name ? a.id < b.id : a.name < b.name }
+        let shown: [GedcomFamilyGraph.Person] = Array(winners.prefix(3))
+        func bio(_ p: GedcomFamilyGraph.Person) -> String {
+            ArchivistBiographyPolicy.biography(personID: p.id, in: graph).text
+        }
+        var sentences: [String] = []
+        let keyText = describeKey(best)
+        if shown.count == 1 {
+            sentences.append("The \(fact) in \(scopeLabel) is \(keyText): \(bio(shown[0]))")
+        } else {
+            let bios: String = shown.map(bio).joined(separator: " ")
+            let more: String = winners.count > shown.count ? " And \(winners.count - shown.count) more." : ""
+            sentences.append("\(winners.count) people share the \(fact) in \(scopeLabel) (\(keyText)): " + bios + more)
+        }
+        if case .firstBornIn = kind, let place = shown[0].birthPlace {
+            sentences.append("The record says \(place).")
+        }
+        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        var attachments: [HallieAttachment] = []
+        if let url = assets.photoURLs(for: shown[0]).first {
+            attachments.append(.photo(HalliePhotoAttachment(personName: shown[0].name, fileURL: url)))
+        }
+        let names: String = shown.map { $0.name }.joined(separator: ", ")
+        let basis: String = ArchivistBiographyPolicy.gedcomBasis
+            + " Ranked \(ranked.count) of \(pool.count) people in \(scopeLabel) that record the fact."
+            + (basisNote.map { " " + $0 } ?? "")
+        let chips: [HallieTurnExecutor.OfferedAction] = shown.map {
+            HallieTurnExecutor.OfferedAction.openFamilyTreePerson(personID: $0.id, personName: $0.name)
+        }
+        return Result(
+            route: .graph, outcome: .answered,
+            prose: sentences.joined(separator: " "),
+            basisLine: basis,
+            queryDescription: "superlative: \(kind) scope=\(scope) → \(names)",
+            citations: [], catalogPersonName: shown[0].name,
+            offeredActions: chips,
+            attachments: attachments)
+    }
+
+    /// `lead` in front of another answer's prose; everything else (route,
+    /// chips, attachments, basis) is the other answer's.
+    static func prefixing(_ lead: String, to r: Result) -> Result {
+        Result(route: r.route, outcome: r.outcome, prose: lead + " " + r.prose,
+               basisLine: r.basisLine, queryDescription: r.queryDescription,
+               citations: r.citations, knowledgeCitations: r.knowledgeCitations,
+               catalogPersonName: r.catalogPersonName, clarification: r.clarification,
+               matchCount: r.matchCount, mediaAction: r.mediaAction,
+               offeredActions: r.offeredActions, answerPlan: r.answerPlan,
+               composedBy: r.composedBy, transcriptText: r.transcriptText,
+               attachments: r.attachments)
     }
 
     // MARK: Deep ancestors (great × 3 and beyond)
