@@ -932,3 +932,135 @@ struct HallieCompositionCountSentenceTests {
         #expect(outcome.note == "model")
     }
 }
+
+// MARK: - Subject naming + life dates (live 2026-08-26)
+
+@Suite("Hallie composition names the subject and keeps life dates")
+struct HallieCompositionSubjectLeadTests {
+
+    /// Biography plan in the CyberBrain shape: c1 is the life-dates claim.
+    private func bioPlan() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .graph, shape: .biography, subject: "Richard Harding Breen Sr",
+            claims: [
+                .init(id: "c1", text: "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008.", evidenceIDs: ["cb:1"]),
+                .init(id: "c2", text: "Richard Harding Breen Sr's parents were George Breen and Muriel Lamb.", evidenceIDs: ["cb:2"]),
+                .init(id: "c3", text: "Richard Harding Breen Sr married Eileen Latta and they had a son, Richard Harding Breen Jr.", evidenceIDs: ["cb:3"]),
+            ],
+            fallbackText: "Here is what the family archive currently supports about Richard Harding Breen Sr. …")
+    }
+
+    /// Kinship plan as `derive` builds it: c1 is the template's first sentence.
+    private func kinPlan() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .graph, shape: .fact, subject: "John McGill",
+            claims: [.init(id: "c1", text: "John McGill is Rick Breen's great-great-grandfather.")],
+            fallbackText: "John McGill is Rick Breen's great-great-grandfather.")
+    }
+
+    private func compose(_ plan: HallieAnswerPlan, _ reply: String) async -> HallieGroundedComposer.Outcome {
+        await HallieGroundedComposer(personaName: "Hallie Mae") { _, _ in reply }
+            .compose(plan: plan, history: [])
+    }
+
+    @Test func subjectNameDetectionIsWholeNameTokenRun() {
+        #expect(HallieAnswerPlan.names("Richard Harding Breen Sr", in: "Richard Harding Breen Sr. was born in 1929."))
+        #expect(HallieAnswerPlan.names("John McGill", in: "Rick's ancestor John McGill's farm."))
+        #expect(!HallieAnswerPlan.names("John McGill", in: "Mc Gill is the great-great-grandfather."))
+        #expect(!HallieAnswerPlan.names("John McGill", in: "McGill is the great-great-grandfather."))
+        #expect(!HallieAnswerPlan.names("Richard Harding Breen Sr", in: "He was the son of George Breen."))
+    }
+
+    @Test func lifeDatesClaimsNeedAYearAndLifeVocabularyAndNoAttribution() {
+        #expect(bioPlan().lifeDatesClaims.map(\.id) == ["c1"])
+        let told = HallieAnswerPlan(
+            route: .graph, shape: .biography, subject: "Ellen Breen",
+            claims: [.init(id: "c1", text: "Ellen Breen was born in 1920.", attribution: "Rick Breen"),
+                     .init(id: "c2", text: "Ellen Breen had 3 children in 1950.")],
+            fallbackText: "x")
+        #expect(told.lifeDatesClaims.isEmpty)
+    }
+
+    /// The live 2026-08-26 answer: pronoun opening AND the dates sentence
+    /// dropped by the verifier. The dates come back verbatim in front, which
+    /// also gives "He" its antecedent.
+    @Test func droppedDatesClaimIsReinsertedDeterministically() async {
+        let outcome = await compose(bioPlan(),
+            "He was born in Boston, Massachusetts in 1929 and died in 2008 [c1]. "
+            + "He was the son of George Breen and Muriel Lamb [c2]. "
+            + "Richard married Eileen Latta and they had a son named Richard Harding Breen Jr [c3].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.dropped.count == 1)
+        #expect(outcome.dropped.first?.reason == .leakedName)
+        #expect(outcome.displayText.hasPrefix("Richard Harding Breen Sr was born in Boston in 1929 and died in 2008. He was the son of"),
+                Comment(rawValue: outcome.displayText))
+        #expect(outcome.transcriptText.hasPrefix("Richard Harding Breen Sr was born in Boston in 1929 and died in 2008. [c1] He was"))
+        #expect(outcome.note == "model (life dates restored: c1)")
+    }
+
+    @Test func pronounOpeningWithDatesKeptGetsTheSubjectLeadPrepended() async {
+        let outcome = await compose(bioPlan(),
+            "He was the son of George Breen and Muriel Lamb [c2]. "
+            + "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008 [c1].")
+        // c1 is cited, so nothing is re-inserted as missing; the first
+        // sentence still lacks the name, so the lead (c1) goes in front and
+        // the pronoun sentence is kept behind it (it adds c2).
+        #expect(outcome.displayText.hasPrefix("Richard Harding Breen Sr was born in Boston in 1929 and died in 2008. He was the son of"),
+                Comment(rawValue: outcome.displayText))
+        #expect(outcome.dropped.isEmpty)
+        #expect(outcome.note == "model (subject lead prepended)")
+    }
+
+    @Test func bareSurnameOpeningIsReplacedByTheTemplateSentence() async {
+        let outcome = await compose(kinPlan(),
+            "McGill is the great-great-grandfather of Rick Breen [c1].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.displayText == "John McGill is Rick Breen's great-great-grandfather.")
+        #expect(outcome.transcriptText == "John McGill is Rick Breen's great-great-grandfather. [c1]")
+        #expect(outcome.dropped == [.init(
+            text: "McGill is the great-great-grandfather of Rick Breen [c1].",
+            reason: .subjectNotNamed)])
+        #expect(outcome.note == "model (opening replaced by subject lead)")
+    }
+
+    @Test func answerThatAlreadyNamesTheSubjectIsUntouched() async {
+        let reply = "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008 [c1]. "
+            + "His parents were George Breen and Muriel Lamb [c2]."
+        let outcome = await compose(bioPlan(), reply)
+        #expect(outcome.transcriptText == reply)
+        #expect(outcome.displayText == "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008. His parents were George Breen and Muriel Lamb.")
+        #expect(outcome.dropped.isEmpty)
+        #expect(outcome.note == "model")
+    }
+
+    @Test func listAnswersAreNeverGivenASubjectLead() async {
+        let plan = HallieAnswerPlan(
+            route: .presence, shape: .list, subject: "Donna",
+            claims: [.init(id: "c1", text: "I found 7 catalog items matching that.")],
+            fallbackText: "I found 7 catalog items matching that.")
+        let outcome = await compose(plan, "There are 7 of them [c1].")
+        #expect(outcome.displayText == "There are 7 of them.")
+        #expect(outcome.note == "model")
+    }
+
+    @Test func droppedClaimLogLineFormatAndTruncation() {
+        let plan = bioPlan()
+        let long = String(repeating: "Boston, Massachusetts ", count: 20)
+        let lines = HallieGroundedComposer.droppedLogLines([
+            .init(text: "He was born in Boston, Massachusetts in 1929 [c1].", reason: .leakedName),
+            .init(text: "Something with no tag.", reason: .untagged),
+            .init(text: "He lived in \(long) [c1][c2].", reason: .leakedName),
+        ], plan: plan)
+        #expect(lines[0] == "[hallie-phrase] dropped: c1 (life dates) — reason: leakedName — \"He was born in Boston, Massachusetts in 1929 [c1].\"")
+        #expect(lines[1] == "[hallie-phrase] dropped: untagged — reason: untagged — \"Something with no tag.\"")
+        #expect(lines[2].hasPrefix("[hallie-phrase] dropped: c1 (life dates),c2 — reason: leakedName — \"He lived in"))
+        #expect(lines[2].count == HallieGroundedComposer.droppedLogLineLimit)
+        #expect(lines[2].hasSuffix("…"))
+    }
+
+    @Test func promptTellsTheModelToOpenWithTheFullNameAndKeepDates() {
+        let system = HallieGroundedComposer.systemPrompt(personaName: "Hallie Mae")
+        #expect(system.contains("FIRST sentence must state the subject's full name"))
+        #expect(system.contains("birth and death dates"))
+    }
+}

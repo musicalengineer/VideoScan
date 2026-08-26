@@ -279,3 +279,75 @@ struct HallieAnswerPlan: Sendable, Equatable {
             fallbackText: fallbackText)
     }
 }
+
+// MARK: - Subject naming + life dates (live 2026-08-26)
+//
+// A biography or kinship answer must open by naming its subject in full and
+// must not lose the subject's life dates to the verifier. Both rules are
+// decided on plan text only; the model's wording is never consulted for
+// facts. (C++ reader: these are const member helpers on a value type — no
+// state, no side effects.)
+
+extension HallieAnswerPlan {
+
+    /// Whether `sentence` contains the full subject name as a contiguous run
+    /// of tokens ("Richard Harding Breen Sr." matches "richard harding breen
+    /// sr"; "Mc Gill" does not match "McGill"; a bare "Breen" never matches
+    /// a two-word subject).
+    static func names(_ subject: String, in sentence: String) -> Bool {
+        let want = HallieCompositionVerifier.tokens(of: subject)
+        guard !want.isEmpty else { return false }
+        let have = HallieCompositionVerifier.tokens(of: sentence)
+        guard have.count >= want.count else { return false }
+        for start in 0...(have.count - want.count)
+        where Array(have[start..<(start + want.count)]) == want {
+            return true
+        }
+        return false
+    }
+
+    /// Words that mark a claim as being about when someone lived.
+    private static let lifeDateWords: Set<String> = [
+        "born", "birth", "birthdate", "birthday", "died", "death", "passed",
+        "lived", "buried", "b", "d",
+    ]
+
+    /// Claims that state the subject's birth or death: they carry a
+    /// four-digit year and life-date vocabulary. Attributed testimony is
+    /// excluded — only documented facts may be re-inserted as bare fact.
+    var lifeDatesClaims: [Claim] {
+        claims.filter { claim in
+            guard claim.attribution == nil else { return false }
+            let tokens = HallieCompositionVerifier.tokens(of: claim.text)
+            let hasYear = tokens.contains { $0.count == 4 && $0.allSatisfy(\.isNumber) }
+            return hasYear && tokens.contains { Self.lifeDateWords.contains($0) }
+        }
+    }
+
+    /// The deterministic sentence that names the subject in full: the first
+    /// life-dates claim naming them, else any claim naming them, else the
+    /// template's own first sentence (a biography's "Here is what the family
+    /// archive currently supports about NAME."). Returns nil when the plan
+    /// has no subject or nothing in it names the subject.
+    var subjectLeadSentence: (text: String, claimIDs: [String])? {
+        guard let subject, !subject.isEmpty else { return nil }
+        if let claim = lifeDatesClaims.first(where: { Self.names(subject, in: $0.text) })
+            ?? claims.first(where: { $0.attribution == nil && Self.names(subject, in: $0.text) }) {
+            return (claim.text, [claim.id])
+        }
+        if let first = HallieCompositionVerifier.splitSentences(fallbackText).first,
+           Self.names(subject, in: first) {
+            return (first, [])
+        }
+        return nil
+    }
+
+    /// The claim IDs a dropped or kept sentence cites, described for a log
+    /// line: "c1 (life dates)" when it is the subject's dates claim.
+    func describeClaimIDs(_ ids: [String]) -> String {
+        guard !ids.isEmpty else { return "untagged" }
+        let dates = Set(lifeDatesClaims.map(\.id))
+        return ids.map { dates.contains($0) ? "\($0) (life dates)" : $0 }
+            .joined(separator: ",")
+    }
+}

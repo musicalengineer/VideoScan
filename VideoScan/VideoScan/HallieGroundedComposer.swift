@@ -128,13 +128,96 @@ struct HallieGroundedComposer: Sendable {
         guard !verification.kept.isEmpty else {
             return .template(plan, note: "template: no sentence survived verification")
         }
-        let restored = Self.restoringCountSentence(verification, plan: plan)
+        var notes: [String] = []
+        let counted = Self.restoringCountSentence(verification, plan: plan)
+        if counted.kept.count != verification.kept.count { notes.append("count sentence restored") }
+        let restored = Self.restoringSubjectAndLifeDates(counted, plan: plan, notes: &notes)
         return Outcome(
             displayText: restored.displayText,
             transcriptText: restored.transcriptText,
             composedBy: .model,
             dropped: restored.dropped,
-            note: restored.kept.count == verification.kept.count ? "model" : "model (count sentence restored)")
+            note: notes.isEmpty ? "model" : "model (\(notes.joined(separator: "; ")))")
+    }
+
+    /// A biography or kinship answer must open with the subject's full name
+    /// and must keep the subject's life dates. Live 2026-08-26: "tell me
+    /// about richard harding breen sr" → "He was the son of George Breen and
+    /// Muriel Lamb …" — the name never appeared and the verifier had dropped
+    /// the dates sentence; earlier "Mc Gill is the great-great-grandfather …"
+    /// opened with a mangled bare surname.
+    ///
+    /// Two deterministic repairs, both drawn only from the plan:
+    ///   1. Every life-dates claim no kept sentence cites is re-inserted
+    ///      verbatim (tagged) at the front. Facts are ground truth; only the
+    ///      model's wording of them was untrusted.
+    ///   2. If the first sentence still does not name the subject in full, the
+    ///      plan's lead sentence (`subjectLeadSentence`) goes in front. When the
+    ///      model's opening cited nothing beyond what the lead carries it is
+    ///      replaced (dropped as `.subjectNotNamed`); otherwise it is kept
+    ///      behind the lead, where "He …" now has an antecedent.
+    /// List answers are untouched; they have no subject to name.
+    static func restoringSubjectAndLifeDates(
+        _ verification: HallieCompositionVerifier.Verification,
+        plan: HallieAnswerPlan,
+        notes: inout [String]
+    ) -> HallieCompositionVerifier.Verification {
+        guard plan.shape == .biography || plan.shape == .fact,
+              let subject = plan.subject, !subject.isEmpty,
+              !verification.kept.isEmpty else { return verification }
+        typealias Sentence = HallieCompositionVerifier.Sentence
+        var kept = verification.kept
+        var dropped = verification.dropped
+
+        let cited = Set(kept.flatMap(\.claimIDs))
+        let missingDates = plan.lifeDatesClaims.filter { !cited.contains($0.id) }
+        if !missingDates.isEmpty {
+            let restored = missingDates.map {
+                Sentence(display: $0.text, tagged: $0.text + " [\($0.id)]", claimIDs: [$0.id])
+            }
+            kept = restored + kept
+            notes.append("life dates restored: \(missingDates.map(\.id).joined(separator: ","))")
+        }
+
+        if let first = kept.first, !HallieAnswerPlan.names(subject, in: first.display),
+           let lead = plan.subjectLeadSentence {
+            let leadSentence = Sentence(
+                display: lead.text,
+                tagged: lead.claimIDs.isEmpty
+                    ? lead.text + " [template]"
+                    : lead.text + " [\(lead.claimIDs.joined(separator: "]["))]",
+                claimIDs: lead.claimIDs)
+            let redundant = !first.claimIDs.isEmpty
+                && Set(first.claimIDs).isSubset(of: Set(lead.claimIDs))
+            if redundant {
+                dropped.append(.init(text: first.tagged, reason: .subjectNotNamed))
+                kept.removeFirst()
+                notes.append("opening replaced by subject lead")
+            } else {
+                notes.append("subject lead prepended")
+            }
+            kept.insert(leadSentence, at: 0)
+        }
+        return HallieCompositionVerifier.Verification(kept: kept, dropped: dropped)
+    }
+
+    /// One app-log line per dropped sentence, so a "dropped 1" in the
+    /// transcript summary can always be traced to which claim and why.
+    /// Format: `[hallie-phrase] dropped: <claim ids> — reason: <reason> — "<text>"`,
+    /// truncated to 200 characters.
+    static let droppedLogLineLimit = 200
+
+    static func droppedLogLines(
+        _ dropped: [HallieCompositionVerifier.Dropped],
+        plan: HallieAnswerPlan
+    ) -> [String] {
+        dropped.map { item in
+            let ids = HallieCompositionVerifier.claimTags(in: item.text)
+            let line = "[hallie-phrase] dropped: \(plan.describeClaimIDs(ids)) — reason: "
+                + "\(item.reason.rawValue) — \"\(item.text)\""
+            guard line.count > droppedLogLineLimit else { return line }
+            return String(line.prefix(droppedLogLineLimit - 1)) + "…"
+        }
     }
 
     /// A list answer must say how many. The model sometimes phrases only
@@ -193,6 +276,11 @@ struct HallieGroundedComposer: Sendable {
         remembers …" — never as bare fact. When such an account describes a \
         person's character or appearance, include one warm sentence of it in a \
         biography; families want their people described, not just dated.
+        - When a Subject is given, your FIRST sentence must state the subject's \
+        full name exactly as written in Subject. Never open with "He", "She", \
+        "They", or a surname alone.
+        - Keep the subject's birth and death dates and birthplace from the \
+        claims; they are the facts the reader wants first.
         - Keep it short: at most 3 sentences for a list of items, at most 6 for \
         a biography.
         - Plain text only. No headings, bullets, markdown, or preamble.

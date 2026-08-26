@@ -48,6 +48,13 @@ enum HallieCompositionVerifier {
             /// "Two examples are Item 1 and Item 2" — the model echoed the
             /// plan's scaffolding instead of naming the files.
             case scaffoldLabel
+            /// The model's opening sentence did not name the subject ("He
+            /// was the son of …", "Mc Gill is the great-great-grandfather
+            /// …") and it only restated the claim the deterministic lead
+            /// sentence already carries, so the lead replaced it (live
+            /// 2026-08-26). A pronoun opening that adds a different claim is
+            /// kept behind the lead instead.
+            case subjectNotNamed
         }
         let text: String
         let reason: Reason
