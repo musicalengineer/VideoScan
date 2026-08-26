@@ -101,6 +101,51 @@ private let tree = """
 0 TRLR
 """
 
+/// FamilySearch/getmyancestors spelling: the home person first, "Jr"/"Sr"
+/// suffixes, middle names, and an ancestor Rick will ask about by name.
+private func makeFamilySearchTree(rootFirst: Bool = true) -> String {
+    let rick = """
+    0 @I1@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 SEX M
+    1 FAMC @F1@
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 SEX M
+    1 FAMC @F2@
+    1 FAMS @F1@
+    0 @I3@ INDI
+    1 NAME George /Breen/
+    1 SEX M
+    1 FAMS @F2@
+    """
+    let edith = """
+    0 @I4@ INDI
+    1 NAME Edith Lucy /Parker/
+    1 SEX F
+    1 FAMC @F3@
+    0 @I5@ INDI
+    1 NAME Thomas /Parker/
+    1 SEX M
+    1 FAMS @F3@
+    """
+    let fams = """
+    0 @F1@ FAM
+    1 HUSB @I2@
+    1 CHIL @I1@
+    0 @F2@ FAM
+    1 HUSB @I3@
+    1 CHIL @I2@
+    0 @F3@ FAM
+    1 HUSB @I5@
+    1 CHIL @I4@
+    0 TRLR
+    """
+    // Multi-line literals carry no trailing newline — join explicitly.
+    return (["0 HEAD"] + (rootFirst ? [rick, edith] : [edith, rick]) + [fams]).joined(separator: "\n")
+}
+private let familySearchTree = makeFamilySearchTree()
+
 @Suite("Lineage — graph walks")
 struct GedcomLineageTests {
     let graph = GedcomFamilyGraph(gedcomText: tree)
@@ -238,6 +283,42 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("where does your family tree come from") == .gedcomAwareness)
     }
 
+    /// Live 2026-08-26: all three declined with "I don't find “Rick Breen”"
+    /// because "from <name>" was dropped and the owner fell through. The
+    /// explicitly named target wins over the kinship apposition ("my great
+    /// great grandmother X", "Richard Breen Sr great grandmother X" → X);
+    /// "edit" is Rick's typo and is left for the resolver's prefix match.
+    @Test func traceFromANamedPersonNamesThatPerson() {
+        let deep = HallieLineageQuestion.maxGenerations
+        #expect(Q.detect("trace the parker family tree from my great great grandmother edit lucy parker")
+                == .ancestorLine(person: "Edit Lucy Parker", line: .both, generations: deep))
+        #expect(Q.detect("trace the parker family tree from Richard Breen Sr great grandmother edit lucy parker")
+                == .ancestorLine(person: "Edit Lucy Parker", line: .both, generations: deep))
+        #expect(Q.detect("trace the parker family tree from edith lucy parker as far back as you can go")
+                == .ancestorLine(person: "Edith Lucy Parker", line: .both, generations: deep))
+        // Other prepositions, and a destination keeps the origin-trail shape.
+        #expect(Q.detect("trace the family starting with david latta back to ireland")
+                == .originTrail(person: "David Latta", country: "Ireland", line: .both))
+        #expect(Q.detect("trace the ancestors of donna hudson back")
+                == .ancestorLine(person: "Donna Hudson", line: .both, generations: deep))
+        #expect(Q.detect("show the maternal line from donna back 3 generations")
+                == .ancestorLine(person: "Donna", line: .maternal, generations: 3))
+        // Possessive and unnamed forms are unchanged (regression).
+        #expect(Q.detect("trace rick's ancestors back to england") == .originTrail(person: "Rick", country: "England", line: .both))
+        #expect(Q.detect("trace the family back to Ireland") == .originTrail(person: nil, country: "Ireland", line: .both))
+        #expect(Q.detect("trace the family tree of the lattas back to ireland") == .originTrail(person: nil, country: "Ireland", line: .both))
+        #expect(Q.detect("trace our heritage back as far as you can") == .originTrail(person: nil, country: nil, line: .both))
+    }
+
+    @Test func namedTargetHelper() {
+        #expect(Q.namedTarget(in: " from my great great grandmother edit lucy parker") == "Edit Lucy Parker")
+        #expect(Q.namedTarget(in: "from rick's family") == "Rick")
+        #expect(Q.namedTarget(in: "for me") == nil)
+        #expect(Q.namedTarget(in: "of the breens") == nil)
+        #expect(Q.namedTarget(in: "from my grandmother") == nil)
+        #expect(Q.namedTarget(in: "no preposition here") == nil)
+    }
+
     @Test func notOurs() {
         #expect(Q.detect("show me Donna at the Cape in the 90s") == nil)
         #expect(Q.detect("who was rick's father") == nil)
@@ -275,6 +356,54 @@ struct HallieLineageAnswerTests {
         let noOwner = HallieTurnExecutor.Context(profiles: [], graph: graph, speakers: .none)
         let ask = try #require(HallieLineageAnswer.answer(.ancestorLine(person: nil, line: .paternal, generations: 2), context: noOwner))
         #expect(ask.outcome == .needsClarification)
+    }
+
+    /// FamilySearch spelling (live 2026-08-26): the owner is "Rick Breen"
+    /// in settings but "Richard Harding /Breen/ Jr" in the tree, with a
+    /// "Sr" beside him. No CyberBrain link → the tree root wins and says so.
+    @Test func ownerFallsBackToTheTreeRootUnderFamilySearchSpelling() throws {
+        let fs = GedcomFamilyGraph(gedcomText: familySearchTree)
+        let ctx = HallieTurnExecutor.Context(profiles: [], graph: fs, speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(.ancestorLine(person: nil, line: .paternal, generations: 2), context: ctx))
+        #expect(r.outcome == .answered)
+        #expect(r.prose.contains("Richard Harding Breen Sr"))
+        #expect(r.basisLine.contains("“you” = Richard Harding Breen Jr (tree root)"))
+        #expect(r.offeredActions == [.openFamilyTreePerson(personID: "@I1@", personName: "Richard Harding Breen Jr")])
+        // The owner's own name typed resolves the same way as "my".
+        let typed = try #require(HallieLineageAnswer.answer(.ancestorLine(person: "Rick Breen", line: .paternal, generations: 2), context: ctx))
+        #expect(typed.prose == r.prose)
+        // A named target with Rick's typo resolves by unique prefix, not the owner chain.
+        let edith = try #require(HallieLineageAnswer.answer(.ancestorLine(person: "Edit Lucy Parker", line: .both, generations: 12), context: ctx))
+        #expect(edith.outcome == .answered)
+        #expect(edith.prose.contains("Edith Lucy Parker"))
+        #expect(edith.prose.contains("Thomas Parker"))
+        #expect(!edith.basisLine.contains("“you”"))
+    }
+
+    @Test func ownerFallbackAsksWhichOneWhenTheRootIsNotACandidate() throws {
+        // Same people, but the file starts with Edith — no root to prefer.
+        let fs = GedcomFamilyGraph(gedcomText: makeFamilySearchTree(rootFirst: false))
+        #expect(fs.rootPerson?.name == "Edith Lucy Parker")
+        let ctx = HallieTurnExecutor.Context(profiles: [], graph: fs, speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(.ancestorLine(person: nil, line: .paternal, generations: 2), context: ctx))
+        #expect(r.outcome == .needsClarification)
+        #expect(r.prose.contains("Richard Harding Breen Jr"))
+        #expect(r.prose.contains("Richard Harding Breen Sr"))
+        // A stranger's name typed never takes the owner chain.
+        let stranger = try #require(HallieLineageAnswer.answer(.ancestorLine(person: "Zelda Nobody", line: .both, generations: 2), context: ctx))
+        #expect(stranger.outcome == .declined)
+        #expect(!stranger.prose.contains("Richard"))
+    }
+
+    @Test func resolveOwnerChainDirectly() {
+        let fs = GedcomFamilyGraph(gedcomText: familySearchTree)
+        guard case .success(let p, let note) = HallieLineageAnswer.resolveOwner("Rick Breen", graph: fs) else { Issue.record("expected root"); return }
+        #expect(p.id == "@I1@")
+        #expect(note?.contains("tree root") == true)
+        guard case .success(let q, let n2) = HallieLineageAnswer.resolveOwner("Nobody Here", graph: fs) else { Issue.record("expected root fallback"); return }
+        #expect(q.id == "@I1@")
+        #expect(n2?.contains("has no tree record") == true)
+        #expect(HallieLineageAnswer.resolveOwner("Nobody", graph: GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR")) == .failure(nil))
     }
 
     @Test func surnameTreeAnswerOrFallsThrough() throws {
