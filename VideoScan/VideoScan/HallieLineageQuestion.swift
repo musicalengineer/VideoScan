@@ -1443,14 +1443,14 @@ enum HallieLineageAnswer {
                     offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
                     attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
             }
-            // Before photography (WorldKnowledge): the honest line, and no
-            // folder card — there is nothing to ask the family for except
-            // a painting, which the line already says.
+            // Died before photography (WorldKnowledge, photograph medium):
+            // the honest line, and no folder card — there is nothing to ask
+            // the family for except a painting, which the line already says.
             if let line = photographyFloorLine(person, medium: .photograph) {
                 return Result(
                     route: .graph, outcome: .declined,
                     prose: line,
-                    basisLine: "Basis: family tree dates; \(WorldKnowledge.photography.firstPersonInPhotograph.statement) No search was run.",
+                    basisLine: "Basis: family tree dates; \(WorldKnowledge.Medium.photograph.fact.statement) No search was run.",
                     queryDescription: "photo: \(person.name) (before photography)",
                     citations: [], catalogPersonName: person.name,
                     offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
@@ -1466,10 +1466,12 @@ enum HallieLineageAnswer {
         }
     }
 
-    /// "videos of X" for a tree person who predates photography: one
-    /// honest line instead of a presence search. Nil (= continue as typed)
-    /// for anyone else, for an unresolved name, and for an ambiguous one —
-    /// the presence route already owns those conversations.
+    /// "videos of X" for a tree person who died before motion pictures
+    /// (WorldKnowledge, FILM medium — its own fact, 1888, not the
+    /// photograph's): one honest line instead of a presence search. Nil
+    /// (= continue as typed) for anyone else, for an unresolved name, for
+    /// an ambiguous one, and for an unknown death year — the presence
+    /// route already owns those conversations.
     static func personVideos(_ typed: String,
                              context: HallieTurnExecutor.Context) -> Result? {
         guard let graph = context.graph,
@@ -1478,20 +1480,21 @@ enum HallieLineageAnswer {
         return Result(
             route: .graph, outcome: .declined,
             prose: line,
-            basisLine: "Basis: family tree dates; \(WorldKnowledge.photography.firstPersonInPhotograph.statement) No search was run.",
-            queryDescription: "videos: \(person.name) (before photography)",
+            basisLine: "Basis: family tree dates; \(WorldKnowledge.Medium.film.fact.statement) No search was run.",
+            queryDescription: "videos: \(person.name) (before motion pictures)",
             citations: [], catalogPersonName: person.name,
             offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
     }
 
-    /// The WorldKnowledge photography floor, logged once per suppressed
-    /// offer ("[hallie] photo offer suppressed: Nathaniel Parker Sr (d. 1737)").
-    /// Nil when the person could have been photographed.
+    /// The WorldKnowledge floor for ONE medium, logged once per suppressed
+    /// offer ("[hallie] film offer suppressed: Nathaniel Parker Sr (d. 1737
+    /// < film 1888)"). Nil unless the person's KNOWN death year precedes
+    /// that medium — an unknown death never suppresses.
     static func photographyFloorLine(_ person: GedcomFamilyGraph.Person,
-                                     medium: WorldKnowledge.photography.Medium) -> String? {
+                                     medium: WorldKnowledge.Medium) -> String? {
         guard let line = WorldKnowledge.photography.impossibilityLine(person: person, medium: medium),
-              let note = WorldKnowledge.photography.impossibilityNote(person: person) else { return nil }
-        appLog.write("[hallie] photo offer suppressed: \(person.name) (\(note))")
+              let note = WorldKnowledge.photography.impossibilityNote(person: person, medium: medium) else { return nil }
+        appLog.write("[hallie] \(medium.rawValue) offer suppressed: \(person.name) (\(note))")
         return line
     }
 

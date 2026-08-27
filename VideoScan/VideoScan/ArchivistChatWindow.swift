@@ -1666,16 +1666,18 @@ struct ArchivistChatWindow: View {
     }
 
     /// Load from the same authorized source as cards and the Family Tree tab.
-    /// The WorldKnowledge photography floor for the legacy "Videos of X"
-    /// chip: a uniquely named tree person who predates photography gets no
-    /// media offer. Unknown or ambiguous names keep the chip (never guess).
+    /// The WorldKnowledge floor for the legacy "Videos of X" chip — a
+    /// VIDEO offer, so it is the FILM medium's fact (1888) that decides: a
+    /// uniquely named tree person whose known death precedes motion
+    /// pictures gets no chip. Unknown or ambiguous names, and unknown
+    /// death years, keep the chip (never guess).
     static func mayOfferMedia(for canonicalName: String, in graph: GedcomFamilyGraph) -> Bool {
         let matches = graph.people.values.filter {
             $0.name.compare(canonicalName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         guard matches.count == 1 else { return true }
-        if let note = WorldKnowledge.photography.impossibilityNote(person: matches[0]) {
-            appLog.write("[hallie] photo offer suppressed: \(canonicalName) (\(note))")
+        if let note = WorldKnowledge.photography.impossibilityNote(person: matches[0], medium: .film) {
+            appLog.write("[hallie] film offer suppressed: \(canonicalName) (\(note))")
             return false
         }
         return true
