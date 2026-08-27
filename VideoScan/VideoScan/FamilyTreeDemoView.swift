@@ -160,11 +160,13 @@ struct FamilyTreeDemoView: View {
         if !incomingSearchText.isEmpty {
             let text = incomingSearchText.trimmingCharacters(in: .whitespaces)
             model.searchText = text
-            model.focus(onName: text)
+            model.focus(onName: text, profiles: POIProfile.listAll())
             incomingSearchText = ""
         }
         guard !incomingHighlight.isEmpty else { return }
-        model.focus(onName: incomingHighlight)
+        // People-tab names are profile names ("Rick"); the profiles carry
+        // the aliases that bridge them to the tree ("Richard Breen").
+        model.focus(onName: incomingHighlight, profiles: POIProfile.listAll())
         incomingHighlight = ""
     }
 
@@ -258,6 +260,15 @@ struct FamilyTreeDemoView: View {
                 .onSubmit { model.selectFirstFiltered() }
                 .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
                 .onKeyPress(.downArrow) { model.selectNext(); return .handled }
+            // Honest miss for "Show X in Family Tree" / Hallie hints: the
+            // name is already in the field above; say so instead of leaving
+            // the default person looking like the answer.
+            if let miss = model.focusMissName {
+                Text("No one named \u{201C}\(miss)\u{201D} in the tree")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("ft.focusMissNotice")
+            }
 
             Divider()
 

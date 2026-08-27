@@ -447,6 +447,48 @@ struct FamilyTreeModelBehaviourTests {
         #expect(!model.focus(onName: "   "))
     }
 
+    /// 2026-08-27 live bug: People tab → "Show Rick in Family Tree" opened on
+    /// Jane Allen (surname-alphabetical first) because the miss was silent.
+    @Test func unmatchedFocusIsAnHonestMissNotTheDefaultPerson() {
+        let model = liveModel()
+        let sortedFirst = model.filteredPeople.first?.id
+        model.select("@I7@")
+        #expect(!model.focus(onName: "Rick"))
+        // Selection untouched — never the sorted-first person.
+        #expect(model.selectedID == "@I7@")
+        #expect(model.selectedID != sortedFirst)
+        // The miss is visible: name in the filter, empty list, notice set.
+        #expect(model.searchText == "Rick")
+        #expect(model.filteredPeople.isEmpty)
+        #expect(model.focusMissName == "Rick")
+        // Next search edit clears the notice.
+        model.searchText = "Breen"
+        #expect(model.focusMissName == nil)
+        #expect(!model.filteredPeople.isEmpty)
+        // A later hit clears it too.
+        #expect(!model.focus(onName: "Nobody Here"))
+        #expect(model.focusMissName == "Nobody Here")
+        #expect(model.focus(onName: "Donna Hudson"))
+        #expect(model.focusMissName == nil)
+        #expect(model.selectedID == "@I14@")
+    }
+
+    @Test func focusBridgesPeopleTabNicknameThroughProfileAliases() {
+        let model = liveModel()
+        let profiles = [POIProfile(name: "Rick", referencePath: "/synthetic",
+                                   aliases: ["Richard Breen"])]
+        // Fixture has Richard Breen (@I7@) AND Richard Hardin Breen (@I3@):
+        // the alias is a complete canonical name, so exactly one resolves.
+        #expect(model.focus(onName: "Rick", profiles: profiles))
+        #expect(model.selectedID == "@I7@")
+        #expect(model.focusMissName == nil)
+        #expect(model.searchText.isEmpty)
+        // Same profiles, a name they don't bridge → still an honest miss.
+        #expect(!model.focus(onName: "Goldilocks", profiles: profiles))
+        #expect(model.selectedID == "@I7@")
+        #expect(model.focusMissName == "Goldilocks")
+    }
+
     @Test func exactGEDCOMIDFocusDoesNotGuessByDuplicateName() {
         let model = liveModel()
         #expect(model.focus(onID: "@I14@"))

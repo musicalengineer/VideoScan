@@ -192,7 +192,12 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     /// Sidebar filter. Setting it refilters once (O(people)) — not in `body`.
     @Published var searchText = "" {
-        didSet { if searchText != oldValue { refilter() } }
+        didSet {
+            if searchText != oldValue {
+                focusMissName = nil
+                refilter()
+            }
+        }
     }
 
     var isLive: Bool { graph != nil }
@@ -442,41 +447,66 @@ final class FamilyTreeLiveModel: ObservableObject {
         rebuildSelection()
     }
 
+    /// Name a `focus(onName:)` miss dropped into the sidebar filter, so the
+    /// tab can say "No one named X in the tree" instead of leaving the
+    /// default (surname-alphabetical first) person looking like the answer
+    /// (2026-08-27: "Show Rick in Family Tree" opened on Jane Allen).
+    /// Cleared by the next search edit or a successful focus.
+    @Published private(set) var focusMissName: String?
+
     /// Hallie / People-tab focus: exact preferred name first, then one
-    /// unambiguous preferred/alternate name or FamilySearch ID, then surname
-    /// holders (first by sort order). Returns false when nothing matched so
-    /// the caller can leave the current selection alone.
+    /// unambiguous preferred/alternate name or FamilySearch ID, then the
+    /// People-tab nickname bridge (`profiles`, the same alias resolver
+    /// Hallie uses), then surname holders (first by sort order).
+    ///
+    /// Returns false when nothing matched. The selection is left alone, but
+    /// the miss is made visible: the name becomes the sidebar search text
+    /// (so the list shows the empty/ambiguous filter), `focusMissName` is
+    /// set for the tab's notice, and one line goes to videoscan.log.
     @discardableResult
-    func focus(onName raw: String) -> Bool {
+    func focus(onName raw: String, profiles: [POIProfile] = []) -> Bool {
         let wanted = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return false }
 
-        if let graph {
-            if let exact = sortedPeople.first(where: {
-                $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
-            }) {
-                select(exact.id)
-                return true
-            }
-            let identityMatches = graph.people(matching: wanted)
-            if identityMatches.count == 1, let identity = identityMatches.first {
-                select(identity.id)
-                return true
-            }
-            if let bySurname = Self.sorted(graph.people(withSurname: wanted)).first {
-                select(bySurname.id)
-                return true
-            }
-            return false
-        }
-
-        if let demo = FamilyTreeDemoData.people.first(where: {
-            $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
-        }) {
-            select(demo.id)
+        if let id = resolveFocus(wanted, profiles: profiles) {
+            select(id)
+            focusMissName = nil
             return true
         }
+        appLog.write("[family-tree] focus(onName:) no match for '\(wanted)'")
+        searchText = wanted          // didSet clears focusMissName; set it after
+        focusMissName = wanted
         return false
+    }
+
+    private func resolveFocus(_ wanted: String, profiles: [POIProfile]) -> String? {
+        guard let graph else {
+            return FamilyTreeDemoData.people.first(where: {
+                $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
+            })?.id
+        }
+        if let exact = sortedPeople.first(where: {
+            $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
+        }) {
+            return exact.id
+        }
+        let identityMatches = graph.people(matching: wanted)
+        if identityMatches.count == 1, let identity = identityMatches.first {
+            return identity.id
+        }
+        // People-tab nickname → tree person through the SAME bridge Hallie
+        // uses (FamilyTreeIdentityResolver: profile aliases, one specificity
+        // tier at a time). Only an unambiguous hit is taken.
+        if !profiles.isEmpty,
+           case .people(let bridged) = FamilyTreeIdentityResolver(
+               graph: graph, profiles: profiles).resolve(wanted),
+           bridged.count == 1, let one = bridged.first {
+            return one.id
+        }
+        if let bySurname = Self.sorted(graph.people(withSurname: wanted)).first {
+            return bySurname.id
+        }
+        return nil
     }
 
     func focus(onID id: String) -> Bool {
