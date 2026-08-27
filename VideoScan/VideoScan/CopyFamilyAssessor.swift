@@ -194,7 +194,14 @@ enum CopyFamilyAction: String, Sendable, Equatable, CaseIterable {
     case createAndPromoteCompanion      = "Create + Promote Lossless Companion"
     case promoteOriginalAndCompanion    = "Promote Original + Companion"
     case createAccessCopy               = "Create Access Copy"
-    case verifyAudioFirst               = "Verify Audio First"
+    /// Diagnose the recommended copy's audio track (the Helper offers
+    /// Balance Audio inline when the verdict is one-sided/mono —
+    /// HelperAudioRepair.swift).
+    case verifyAudioFirst               = "Verify Audio"
+    /// Overlay action, never produced by the assessor itself: added by
+    /// HelperAudioActions.compose once a diagnosis says the track is
+    /// fixable (2026-08-26).
+    case balanceAudio                   = "Balance Audio"
 }
 
 struct CopyFamilyAssessment: Sendable, Equatable {
@@ -276,6 +283,7 @@ enum CopyFamilyAssessor {
 
     // MARK: Entry point
 
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
     static func assess(_ inputs: [CopyFamilyInput]) -> CopyFamilyAssessment {
         var out = CopyFamilyAssessment()
         out.locationCount = inputs.count

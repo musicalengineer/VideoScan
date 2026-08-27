@@ -9,7 +9,14 @@
 // the pure `CopyFamilyAssessor` off-main, and publishes the
 // `CopyFamilyAssessment` for `AssessCopiesDetailView`. No media I/O —
 // it finishes in milliseconds; the actions it offers (Promote, Verify
-// Audio, Transcode) are the existing verbs, launched from the panel.
+// Audio, Balance Audio, Transcode) are the existing verbs, launched
+// from the panel.
+//
+// 2026-08-26 (Rick: "the helper should have a button Verify/Fix Audio"):
+// the job also OWNS one `VerifyThenBalanceCoordinator` per record it
+// verifies, and can RE-ASSESS its family from the live catalog once a
+// verify verdict lands or a balanced copy is catalogued — the panel then
+// shows Promote Original + Repaired Copy without a second Helper run.
 
 import Combine
 import Foundation
@@ -33,13 +40,21 @@ final class AssessCopiesJob: @MainActor MediaFileOperationJob {
     /// The record the user right-clicked.
     let seed: VideoRecord
     /// Family members by id (for the panel's actions → records).
+    /// Refreshed by `reassess(model:)`.
     private(set) var familyByID: [UUID: VideoRecord]
-    private let inputs: [CopyFamilyInput]
+    private var inputs: [CopyFamilyInput]
 
     @Published private(set) var assessment: CopyFamilyAssessment?
     @Published private(set) var state: MediaFileOperationState = .running
     @Published private(set) var finishedAt: Date?
     private(set) var task: Task<Void, Never>?
+
+    /// Verify/Balance coordinators keyed by record id — kept on the job
+    /// (not the view) so they survive the panel collapsing/re-expanding
+    /// while a verify or balance is still running.
+    private var audioCoordinators: [UUID: VerifyThenBalanceCoordinator] = [:]
+    /// Coordinator→job change relay (progress repaints the row).
+    private var coordinatorRelays: [UUID: AnyCancellable] = [:]
 
     var title: String { "Archive Helper: \(seed.filename)" }
     var subtitle: String {
@@ -78,6 +93,56 @@ final class AssessCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     func record(for id: UUID) -> VideoRecord? { familyByID[id] }
+
+    // MARK: - Re-assess (after a verify verdict / a balanced copy)
+
+    /// Re-collect the family from the LIVE catalog and re-run the
+    /// assessor, publishing a fresh assessment in place. Cheap (ms), so
+    /// it runs inline on the main actor — the family snapshot is what
+    /// changes: a just-catalogued `_balanced` copy joins via its
+    /// `derivedFrom` link, a just-persisted verify status changes the
+    /// audio caution. The job's terminal state is untouched.
+    func reassess(model: VideoScanModel, reason: String) {
+        let family = Self.collectFamily(seed: seed, model: model)
+        familyByID = Dictionary(uniqueKeysWithValues: family.map { ($0.id, $0) })
+        inputs = Self.projectInputs(family, model: model)
+        let result = CopyFamilyAssessor.assess(inputs)
+        assessment = result
+        fileOpsLog.info("assess copies re-assessed (\(reason, privacy: .public)): \(self.seed.filename, privacy: .public) — \(result.headline, privacy: .public)")
+        model.log("assess copies re-assessed (\(reason)): \(seed.filename) — \(result.headline)")
+    }
+
+    // MARK: - Verify / Balance coordinators
+
+    /// The coordinator for `record`, created on first use. Its finish
+    /// hooks re-assess this job's family so the panel's actions follow
+    /// the verdict (fixable → Balance Audio; balanced → Promote
+    /// Original + Repaired Copy).
+    func audioCoordinator(for record: VideoRecord,
+                          center: MediaFileOperationsCenter,
+                          model: VideoScanModel) -> VerifyThenBalanceCoordinator {
+        if let existing = audioCoordinators[record.id] { return existing }
+        let c = VerifyThenBalanceCoordinator(record: record, center: center, model: model)
+        c.onVerifyFinished = { [weak self, weak model] in
+            guard let self, let model else { return }
+            self.reassess(model: model, reason: "verify audio done")
+        }
+        c.onBalanceFinished = { [weak self, weak model] in
+            guard let self, let model else { return }
+            self.reassess(model: model, reason: "balance audio done")
+        }
+        coordinatorRelays[record.id] = c.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        audioCoordinators[record.id] = c
+        return c
+    }
+
+    /// Existing coordinator, if any (no creation) — for tests and the
+    /// panel's read-only state checks.
+    func existingAudioCoordinator(for recordID: UUID) -> VerifyThenBalanceCoordinator? {
+        audioCoordinators[recordID]
+    }
 
     // MARK: - Family discovery + projection (main actor)
 
