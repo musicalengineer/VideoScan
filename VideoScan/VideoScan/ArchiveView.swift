@@ -74,8 +74,13 @@ struct ArchiveView: View {
         // One resolver decides what to show (ArchiveHomeState) — it used
         // to be three independent writers, and the focus-restore one
         // landed the tab in a file list nearly every time (Rick 2026-08-26).
-        .onAppear { applyEntry() }
-        .onChange(of: model.pendingArchiveSelection) { applyEntry() }
+        .onAppear { applyEntry(.appear) }
+        // Consuming the request sets it to nil, which fires this again;
+        // ArchiveEntryController makes that transition a no-op so the
+        // first resolution (with its search) is what stays on screen.
+        .onChange(of: model.pendingArchiveSelection) { _, newValue in
+            applyEntry(.pendingSelectionChanged(newValue))
+        }
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
@@ -115,25 +120,28 @@ struct ArchiveView: View {
         isArchived(id) ? .archived : .notYetArchived
     }
 
-    /// Tab entry + "Show in Archive" hand-off. Gathers the model's
-    /// one-shot requests, consumes them, and applies the resolved state.
-    private func applyEntry() {
-        let entry = ArchiveTabEntry(pendingSelection: model.pendingArchiveSelection,
-                                    pendingSearch: model.pendingArchiveSearch,
-                                    focusedIDs: model.focusedMediaIDs,
-                                    persistedViewMode: archiveViewMode)
-        let state = ArchiveHomeState.resolveEntry(entry,
-                                                  isArchived: isArchived,
-                                                  category: category(containing:),
-                                                  focusSet: model.focusSet(for:))
-        if let id = model.pendingArchiveSelection {
-            // Consume the one-shot request; the focus set persists so a
-            // round-trip to the Catalog and back lands on the same item.
-            model.pendingArchiveSelection = nil
-            model.pendingArchiveSearch = nil
-            model.focusedMediaIDs = model.focusSet(for: id)
+    /// Tab entry + "Show in Archive" hand-off. Snapshots the model's
+    /// one-shot requests, lets ArchiveEntryController consume and resolve
+    /// them, writes the consumed snapshot back once, and applies the state.
+    private func applyEntry(_ trigger: ArchiveEntryController.Trigger) {
+        var request = ArchiveEntryRequest(pendingSelection: model.pendingArchiveSelection,
+                                          pendingSearch: model.pendingArchiveSearch,
+                                          focusedIDs: model.focusedMediaIDs)
+        guard let outcome = ArchiveEntryController.handle(trigger,
+                                                          request: &request,
+                                                          persistedViewMode: archiveViewMode,
+                                                          isArchived: isArchived,
+                                                          category: category(containing:),
+                                                          focusSet: model.focusSet(for:))
+        else { return }
+        if outcome.consumed {
+            // Order matters: the selection write fires onChange(nil), a
+            // no-op above, so nothing re-resolves from the cleared model.
+            model.pendingArchiveSearch = request.pendingSearch
+            model.focusedMediaIDs = request.focusedIDs
+            model.pendingArchiveSelection = request.pendingSelection
         }
-        apply(state)
+        apply(outcome.state)
     }
 
     /// Copy a resolved state into the view's storage. The only place
