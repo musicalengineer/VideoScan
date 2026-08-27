@@ -751,13 +751,68 @@ enum ArchivistPresenceAnswerComposer {
     /// (the person template stands) or nothing keyword-based is cited.
     static func keywordOnlyProse(_ result: ArchivistPresenceResult) -> String? {
         guard !result.interpretedQuery.contains("person="),
-              let first = result.evidence.citations.first else { return nil }
-        // How the first cited item matched: transcript beats caption
-        // beats a catalog field, so the sentence names the strongest kind.
+              !result.evidence.citations.isEmpty else { return nil }
+        // One bucket per evidence KIND, in first-seen order (codex #707
+        // item 8: the first citation's kind used to be attributed to every
+        // match — "5 videos where someone says X" when four were file-name
+        // hits). A citation with no keyword-ish basis is counted apart.
+        var kinds: [KeywordMatchKind] = []
+        var counts: [KeywordMatchKind: Int] = [:]
+        var firstFile: [KeywordMatchKind: String] = [:]
+        var unclassified = 0
+        for citation in result.evidence.citations {
+            guard let kind = keywordMatchKind(of: citation) else { unclassified += 1; continue }
+            if counts[kind] == nil { kinds.append(kind); firstFile[kind] = shownName(citation) }
+            counts[kind, default: 0] += 1
+        }
+        guard !kinds.isEmpty else { return nil }
+        let count = result.evidence.totalMatchCount
+        let noun = count == 1 ? "1 video" : "\(count) videos"
+        // Single kind: the template the ~30 existing sensors pin, unchanged.
+        if kinds.count == 1, unclassified == 0 {
+            let how = noun + " " + kinds[0].phrase
+            let shown = result.evidence.citations.prefix(3).map(shownName)
+            let more = count > shown.count ? ", and \(count - shown.count) more" : ""
+            return how + " — " + shown.joined(separator: ", ") + more + "."
+        }
+        // Mixed kinds: qualified per-kind counts, first file named per kind.
+        // The per-kind counts cover the CITED page; the headline count is
+        // the true total, so the remainder is said plainly.
+        var parts = kinds.map { kind -> String in
+            let n = counts[kind] ?? 0
+            return "\(n) \(kind.phrase) — \(firstFile[kind] ?? "")"
+        }
+        if unclassified > 0 {
+            parts.append("\(unclassified) matched another way")
+        }
+        let cited = result.evidence.citations.count
+        let more = count > cited ? ", and \(count - cited) more" : ""
+        return noun + ": " + parts.joined(separator: "; ") + more + "."
+    }
+
+    /// How a cited item matched a keyword. Transcript beats caption beats
+    /// a catalog field, so an item that matched several ways is counted
+    /// under its strongest kind (the same precedence the old single-kind
+    /// sentence used).
+    enum KeywordMatchKind: Hashable {
+        case says(String)
+        case captioned(String)
+        case field(name: String, term: String)
+
+        var phrase: String {
+            switch self {
+            case .says(let term): return "where someone says “\(term)”"
+            case .captioned(let term): return "captioned with “\(term)”"
+            case .field(let name, let term): return "with “\(term)” in the \(name)"
+            }
+        }
+    }
+
+    static func keywordMatchKind(of citation: ArchivistEvidenceCitation) -> KeywordMatchKind? {
         var says: String?
         var captioned: String?
         var field: (String, String)?
-        for basis in first.bases {
+        for basis in citation.bases {
             switch basis {
             case .transcriptMention(let term, _):
                 says = says ?? term
@@ -773,18 +828,14 @@ enum ArchivistPresenceAnswerComposer {
                 break
             }
         }
-        let count = result.evidence.totalMatchCount
-        let noun = count == 1 ? "1 video" : "\(count) videos"
-        let how: String
-        if let says { how = "\(noun) where someone says “\(says)”" }
-        else if let captioned { how = "\(noun) captioned with “\(captioned)”" }
-        else if let field { how = "\(noun) with “\(field.1)” in the \(field.0)" }
-        else { return nil }
-        let shown = result.evidence.citations.prefix(3).map { citation -> String in
-            citation.filename + (Self.year(of: citation).map { " (\($0))" } ?? "")
-        }
-        let more = count > shown.count ? ", and \(count - shown.count) more" : ""
-        return how + " — " + shown.joined(separator: ", ") + more + "."
+        if let says { return .says(says) }
+        if let captioned { return .captioned(captioned) }
+        if let field { return .field(name: field.0, term: field.1) }
+        return nil
+    }
+
+    private static func shownName(_ citation: ArchivistEvidenceCitation) -> String {
+        citation.filename + (year(of: citation).map { " (\($0))" } ?? "")
     }
 
     /// The year the cited bases prove, else the first 19xx/20xx run in the

@@ -182,6 +182,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedPronunciations: [FamilyTreePronunciationChip] = []
     /// "Line to…" targets, built once per install (root + root's spouses).
     @Published private(set) var anchors: [FamilyTreeAnchor] = []
+    /// Why there are no anchors when a tree is installed (stale owner pin).
+    @Published private(set) var anchorsCaption: String?
     /// One option per anchor for the selected person; computed on
     /// selection change (cached per person id), never in `body`.
     @Published private(set) var lineOptions: [FamilyTreeLineOption] = []
@@ -337,10 +339,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         if let newGraph {
             sortedPeople = Self.sorted(Array(newGraph.people.values))
             peopleCount = sortedPeople.count
-            anchors = Self.anchors(
-                in: newGraph,
-                ownerFamilySearchID: UserDefaults.standard.string(
-                    forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey))
+            let ownerFamilySearchID = UserDefaults.standard.string(
+                forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
+            anchors = Self.anchors(in: newGraph, ownerFamilySearchID: ownerFamilySearchID)
+            anchorsCaption = Self.staleOwnerPinCaption(in: newGraph, ownerFamilySearchID: ownerFamilySearchID)
             anchorIndexes = Dictionary(uniqueKeysWithValues: anchors.map {
                 ($0.id, GedcomFamilyGraph.AncestorIndex(graph: newGraph, descendantID: $0.id))
             })
@@ -348,6 +350,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             sortedPeople = []
             peopleCount = FamilyTreeDemoData.people.count
             anchors = []
+            anchorsCaption = nil
             anchorIndexes = [:]
         }
         loadState = .loaded(live: newGraph != nil)
@@ -399,6 +402,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         notesResolver = nil
         selectedNotes = []
         anchors = []
+        anchorsCaption = nil
         lineOptions = []
         lineChain = nil
         lineCache.removeAll()
@@ -525,8 +529,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// the configured FamilySearch ID (`hallie.ownerFamilySearchID`) when
     /// the tree has it, else the tree root. A root with two marriages
     /// yields two anchors — that IS the picker.
+    /// A configured ID the tree does NOT carry yields NO anchors (codex
+    /// #707): the root is never silently substituted for a stale pin; the
+    /// inspector shows `anchorsCaption` instead of a "Line to" row.
     nonisolated static func anchors(in graph: GedcomFamilyGraph,
                                     ownerFamilySearchID: String? = nil) -> [FamilyTreeAnchor] {
+        if staleOwnerPinCaption(in: graph, ownerFamilySearchID: ownerFamilySearchID) != nil { return [] }
         guard let root = graph.person(familySearchID: ownerFamilySearchID) ?? graph.rootPerson else { return [] }
         var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
         var seen: Set<String> = [root.id]
@@ -534,6 +542,14 @@ final class FamilyTreeLiveModel: ObservableObject {
             out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
         }
         return out
+    }
+
+    /// The caption shown in place of the "Line to" row when the owner's
+    /// configured FamilySearch ID is not in the tree; nil otherwise.
+    nonisolated static func staleOwnerPinCaption(in graph: GedcomFamilyGraph,
+                                                 ownerFamilySearchID: String?) -> String? {
+        HallieOwnerResolver.stalePinLine(familySearchID: ownerFamilySearchID, graph: graph)
+            .map { $0 + " No “Line to” anchors until then." }
     }
 
     /// "Richard Harding Breen Jr" → "Richard"; a lone surname or empty

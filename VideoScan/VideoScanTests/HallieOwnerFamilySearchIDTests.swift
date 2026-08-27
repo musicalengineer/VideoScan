@@ -61,20 +61,41 @@ struct HallieOwnerFamilySearchIDTests {
         }
     }
 
-    @Test func missingIDFallsBackToRootAsBefore() {
+    @Test func absentIDFallsBackToRootAsBefore() {
         // No ID configured → the 2026-08-26 chain unchanged: several
         // Richards, root among them → root (the Sr here, by file order).
-        switch HallieOwnerResolver.resolve("Rick Breen", graph: graph, familySearchID: nil) {
-        case .one(let p, let note):
-            #expect(p.id == "@I2@")
-            #expect(note.contains("tree root"))
-        default:
-            Issue.record("expected the root fallback")
+        for absent in [nil, "", "  "] {
+            switch HallieOwnerResolver.resolve("Rick Breen", graph: graph, familySearchID: absent) {
+            case .one(let p, let note):
+                #expect(p.id == "@I2@")
+                #expect(note.contains("tree root"))
+            default:
+                Issue.record("expected the root fallback for \(String(describing: absent))")
+            }
         }
-        // An ID the tree does not carry behaves like no ID.
-        if case .one(let p, _) = HallieOwnerResolver.resolve("Rick Breen", graph: graph, familySearchID: "NOPE-000") {
-            #expect(p.id == "@I2@")
-        } else { Issue.record("expected the root fallback") }
+    }
+
+    @Test func staleExplicitIDFailsClosedWithAnHonestLine() {
+        // codex #707: a CONFIGURED ID the tree does not carry must never
+        // fall through to the name/root chain (that silently bound the Sr).
+        #expect(HallieOwnerResolver.stalePinLine(familySearchID: nil, graph: graph) == nil)
+        #expect(HallieOwnerResolver.stalePinLine(familySearchID: "GVQV-NW3", graph: graph) == nil)
+        let line = HallieOwnerResolver.stalePinLine(familySearchID: "nope-000", graph: graph)
+        #expect(line == "Your FamilySearch ID NOPE-000 isn't in the installed tree — check Hallie's settings or re-download the tree.")
+        switch HallieOwnerResolver.resolve("Rick Breen", graph: graph, familySearchID: "NOPE-000") {
+        case .none(let reason):
+            #expect(reason == line)
+        case .one(let p, _):
+            Issue.record("stale pin silently bound \(p.name)")
+        case .many:
+            Issue.record("stale pin should not ask which one")
+        }
+        // Every owner-resolving route fails closed the same way.
+        let stale = HallieTurnExecutor.Speakers(
+            ownerName: "Rick Breen", archivistName: nil, ownerFamilySearchID: "NOPE-000")
+        #expect(FamilyAssetIdentityDirectory.owner(in: graph, speakers: stale, cyberBrain: nil) == nil)
+        let absent = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: nil)
+        #expect(FamilyAssetIdentityDirectory.owner(in: graph, speakers: absent, cyberBrain: nil)?.id == "@I2@")
     }
 
     @Test func lineageOwnerResolutionUsesTheID() throws {
@@ -99,6 +120,17 @@ struct HallieOwnerFamilySearchIDTests {
         #expect(FamilyTreeLiveModel.anchors(in: graph).map(\.id) == ["@I2@"])
         #expect(FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: "GVQV-NW3").map(\.id) == ["@I1@", "@I9@"])
         #expect(FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: "GVQV-NW3").map(\.label) == ["Richard", "Donna"])
+        #expect(FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: "GVQV-NW3") == nil)
+        #expect(FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: nil) == nil)
+    }
+
+    @Test func familyTreeAnchorsRefuseAStaleID() {
+        // codex #707: no silent root substitution — no "Line to" anchor at
+        // all, and a caption that says why.
+        #expect(FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: "NOPE-000").isEmpty)
+        let caption = FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: "NOPE-000")
+        #expect(caption?.contains("NOPE-000 isn't in the installed tree") == true)
+        #expect(caption?.hasSuffix("No “Line to” anchors until then.") == true)
     }
 
     @Test func emptyDefaultIsNil() {

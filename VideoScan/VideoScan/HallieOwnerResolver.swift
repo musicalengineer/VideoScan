@@ -16,11 +16,20 @@
 //   (iii) No hit → the tree root (first INDI; getmyancestors/FamilySearch
 //         put the home person first — an assumption, so the note says
 //         "tree root").
+// Step 0 (codex #707, 2026-08-26): an EXPLICIT FamilySearch ID pin fails
+// closed. Configured but not in the installed tree → `.none(reason:)` with
+// an honest line, never a silent fall-through to name/root that could bind
+// the wrong "me". Only an ABSENT pin enters the chain above.
 // C++ readers: `Match` is a tagged union (std::variant) — the compiler
-// makes every caller handle all three arms.
+// makes every caller handle all three arms. `.none` carries an optional
+// payload with a default, so `case .none:` and `.none` still compile for
+// callers that don't care why.
 
 import Foundation
+import OSLog
 import VideoScanCore
+
+private let ownerLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "hallie.owner")
 
 enum HallieOwnerResolver {
 
@@ -29,14 +38,30 @@ enum HallieOwnerResolver {
         case one(GedcomFamilyGraph.Person, note: String)
         /// Several candidates and no root to prefer — ask which one.
         case many([GedcomFamilyGraph.Person])
-        /// Nothing at all, not even a root person.
-        case none
+        /// Nothing at all, not even a root person — or (with `reason`) an
+        /// explicit FamilySearch ID pin that the installed tree does not
+        /// carry, in which case `reason` is the honest line to show.
+        case none(reason: String? = nil)
+    }
+
+    /// The honest line for a configured-but-stale FamilySearch ID; nil when
+    /// no ID is configured or the tree carries it. Callers that short-cut
+    /// `resolve` (identity directory, speaker kinship, tree anchors) use
+    /// this so every route fails closed the same way.
+    static func stalePinLine(familySearchID: String?, graph: GedcomFamilyGraph) -> String? {
+        guard let id = familySearchID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty, graph.person(familySearchID: id) == nil else { return nil }
+        ownerLog.warning("Owner FamilySearch ID \(id, privacy: .public) is configured but not in the installed tree (\(graph.people.count) people); owner left unresolved.")
+        return "Your FamilySearch ID \(id.uppercased()) isn't in the installed tree — check Hallie's settings or re-download the tree."
     }
 
     static func resolve(_ name: String, graph: GedcomFamilyGraph,
                         familySearchID: String? = nil) -> Match {
         if let pinned = graph.person(familySearchID: familySearchID) {
             return .one(pinned, note: "Basis: “you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? "")).")
+        }
+        if let stale = stalePinLine(familySearchID: familySearchID, graph: graph) {
+            return .none(reason: stale)
         }
         let like = graph.people(namedLike: name)
         if like.count == 1 {
@@ -51,7 +76,7 @@ enum HallieOwnerResolver {
         if let root = graph.rootPerson {
             return .one(root, note: "Basis: “you” = \(root.name) (tree root; \(name) has no tree record).")
         }
-        return .none
+        return .none()
     }
 
     /// True when `typed` is one of the ways the owner refers to themself:

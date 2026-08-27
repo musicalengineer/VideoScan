@@ -497,6 +497,15 @@ struct FamilyTreeDemoView: View {
                         }
                         .padding(14)
                         .background(panelBackground)
+                    } else if let caption = model.anchorsCaption {
+                        // Stale owner FamilySearch ID (codex #707): say why
+                        // there is no "Line to" row instead of guessing root.
+                        Text(caption)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .background(panelBackground)
                     }
 
                     if !model.selectedRelatives.isEmpty {

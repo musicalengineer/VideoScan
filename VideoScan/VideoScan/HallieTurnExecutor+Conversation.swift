@@ -249,16 +249,7 @@ extension HallieTurnExecutor {
                 isKnownPerson: isKnownPerson, catalogStats: catalogStats,
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
             if case .answer(let b) = secondTurn, b.route != .reset {
-                return .answer(Result(
-                    route: b.route, outcome: b.outcome,
-                    prose: a.prose + "\n\n" + b.prose,
-                    basisLine: a.basisLine + " " + b.basisLine,
-                    queryDescription: "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")",
-                    citations: b.citations, knowledgeCitations: b.knowledgeCitations,
-                    catalogPersonName: b.catalogPersonName, clarification: b.clarification,
-                    matchCount: b.matchCount, mediaAction: b.mediaAction,
-                    offeredActions: a.offeredActions + b.offeredActions,
-                    attachments: a.attachments + b.attachments))
+                return .answer(joinedTwoQuestionAnswer(a, b))
             }
             let label = second.prefix(1).uppercased() + second.dropFirst()
             return .answer(Result(
@@ -276,6 +267,99 @@ extension HallieTurnExecutor {
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, catalogStats: catalogStats,
             rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
+    }
+
+    /// Both answers' facts survive the join (codex #707 item 5: only b's
+    /// citations used to be kept). Media and knowledge citations are
+    /// unioned in order; the two answer plans are concatenated with b's
+    /// claim tags renumbered after a's (a keeps c1…cK, b becomes cK+1…) so
+    /// the transcript log and the verifier never see two different "[c1]"s.
+    static func joinedTwoQuestionAnswer(_ a: Result, _ b: Result) -> Result {
+        var citations = a.citations
+        for c in b.citations where !citations.contains(c) { citations.append(c) }
+        var knowledge = a.knowledgeCitations
+        for k in b.knowledgeCitations where !knowledge.contains(where: { $0.id == k.id }) {
+            knowledge.append(k)
+        }
+        let prose = a.prose + "\n\n" + b.prose
+        // Plans: derive each side's plan the way the client would, then
+        // shift b's IDs. `.fixed` (wording IS the answer) wins for the pair
+        // — a half-composable answer is not composable.
+        var plan: HallieAnswerPlan?
+        var transcript: String?
+        if a.answerPlan != nil || b.answerPlan != nil || a.transcriptText != nil || b.transcriptText != nil {
+            let planA = HallieAnswerPlan.derive(from: a)
+            let planB = HallieAnswerPlan.derive(from: b)
+            let offset = planA.claims.count
+            let shifted = planB.claims.map { claim in
+                HallieAnswerPlan.Claim(
+                    id: shiftClaimID(claim.id, by: offset), text: claim.text,
+                    evidenceIDs: claim.evidenceIDs, attribution: claim.attribution)
+            }
+            plan = HallieAnswerPlan(
+                route: b.route,
+                shape: (planA.shape == .fixed || planB.shape == .fixed) ? .fixed : planB.shape,
+                subject: b.catalogPersonName ?? a.catalogPersonName,
+                claims: planA.claims + shifted,
+                counts: planA.counts + planB.counts,
+                fallbackText: prose)
+            if a.transcriptText != nil || b.transcriptText != nil {
+                transcript = (a.transcriptText ?? a.prose) + "\n\n"
+                    + shiftClaimTags(in: b.transcriptText ?? b.prose, by: offset)
+            }
+        }
+        let matchCount: Int?
+        switch (a.matchCount, b.matchCount) {
+        case (let x?, let y?): matchCount = x + y
+        case (let x?, nil), (nil, let x?): matchCount = x
+        default: matchCount = nil
+        }
+        return Result(
+            route: b.route, outcome: b.outcome,
+            prose: prose,
+            basisLine: a.basisLine + " " + b.basisLine,
+            queryDescription: "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")",
+            citations: citations, knowledgeCitations: knowledge,
+            catalogPersonName: b.catalogPersonName ?? a.catalogPersonName,
+            clarification: b.clarification,
+            matchCount: matchCount, mediaAction: b.mediaAction ?? a.mediaAction,
+            offeredActions: a.offeredActions + b.offeredActions,
+            answerPlan: plan, composedBy: b.composedBy, transcriptText: transcript,
+            attachments: a.attachments + b.attachments)
+    }
+
+    /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
+    /// untouched.
+    static func shiftClaimID(_ id: String, by offset: Int) -> String {
+        guard offset > 0, id.hasPrefix("c"), id.count > 1,
+              let n = Int(id.dropFirst()) else { return id }
+        return "c\(n + offset)"
+    }
+
+    /// Renumber every claim tag inside "[…]" groups: "[c1][c2, c3]" with
+    /// offset 4 → "[c5][c6, c7]". Text outside brackets is untouched.
+    static func shiftClaimTags(in text: String, by offset: Int) -> String {
+        guard offset > 0 else { return text }
+        var out = ""
+        var rest = Substring(text)
+        while let open = rest.firstIndex(of: "["),
+              let close = rest[open...].firstIndex(of: "]") {
+            out += rest[..<open]
+            let inner = rest[rest.index(after: open)..<close]
+            // Keep the original separators: split on the boundary between a
+            // token and a separator by rewriting token runs in place.
+            var rewritten = ""
+            var token = ""
+            func flush() { rewritten += shiftClaimID(token, by: offset); token = "" }
+            for ch in inner {
+                if ch == "," || ch == " " { flush(); rewritten.append(ch) } else { token.append(ch) }
+            }
+            flush()
+            out += "[" + rewritten + "]"
+            rest = rest[rest.index(after: close)...]
+        }
+        out += rest
+        return out
     }
 
     private static func preTranslationSingle(

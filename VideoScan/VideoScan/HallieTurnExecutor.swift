@@ -889,6 +889,15 @@ enum HallieTurnExecutor {
             }
             ownerNote = note.replacingOccurrences(of: "Basis: ", with: "")
         }
+        // The pinned owner ID is stale (codex #707): say so in the basis
+        // line rather than letting the name/root chain guess at "me".
+        if request.selectedIdentity == nil, ownerNote == nil,
+           let typed = payload.people.first,
+           HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
+           let stale = HallieOwnerResolver.stalePinLine(
+               familySearchID: context.speakers.ownerFamilySearchID, graph: graph) {
+            ownerNote = stale
+        }
         func withOwnerNote(_ r: Result) -> Result {
             ownerNote.map { r.prefixingBasis($0) } ?? r
         }
