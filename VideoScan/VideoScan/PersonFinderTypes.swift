@@ -658,18 +658,57 @@ struct POIProfile: Codable, Identifiable, Equatable {
     static func listAll() -> [POIProfile] {
         // Trigger lazy migration on first read.
         _ = POIStorage.migrateLegacyIfNeeded()
-        return POIStorage.allPOIFolders().compactMap { folder in
+        return decodeProfiles(in: POIStorage.allPOIFolders())
+    }
+
+    /// Decode profile.json in each folder; corrupt/missing entries are
+    /// skipped, referencePath is healed to the folder (authoritative).
+    private static func decodeProfiles(in folders: [URL]) -> [POIProfile] {
+        folders.compactMap { folder in
             let profileURL = folder.appendingPathComponent("profile.json")
             guard let data = try? Data(contentsOf: profileURL),
                   var p = try? JSONDecoder().decode(POIProfile.self, from: data)
             else { return nil }
-            // Heal referencePath on read — the folder location is authoritative.
             p.referencePath = folder.path
             return p
         }.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+    }
+
+    // MARK: Read-only snapshot (no migration)
+
+    /// Cache for `cachedSnapshot`: the profile.json modification dates seen
+    /// last time, and what they decoded to. A plain static ≈ a C++ function
+    /// static; main-actor only (every caller is UI).
+    @MainActor private static var snapshotKey: [String: Date] = [:]
+    @MainActor private static var snapshotValue: [POIProfile] = []
+
+    /// Profiles as currently on disk WITHOUT triggering the legacy
+    /// migration (which can copy photos) — for hint handlers that run on
+    /// the main actor (Family Tree focus). Re-decodes only when a
+    /// profile.json appeared, vanished, or changed; otherwise returns the
+    /// cached array. `root` is injectable for tests (never the real store).
+    @MainActor
+    static func cachedSnapshot(root: URL = POIStorage.storeDir) -> [POIProfile] {
+        let fm = FileManager.default
+        let folders = ((try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+        var key: [String: Date] = [:]
+        for folder in folders {
+            let url = folder.appendingPathComponent("profile.json")
+            if let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate {
+                key[url.path] = date
+            }
+        }
+        if key == snapshotKey, !key.isEmpty { return snapshotValue }
+        let value = decodeProfiles(in: folders)
+        snapshotKey = key
+        snapshotValue = value
+        return value
     }
 
     /// Resolve the cover image to an NSImage by looking in the reference folder.

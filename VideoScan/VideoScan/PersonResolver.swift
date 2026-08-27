@@ -345,28 +345,26 @@ struct FamilyTreeIdentityResolver {
                 PersonResolver.normalize($0.name)
                     == PersonResolver.normalize(canonicalName)
             }
-            // A unique formal profile name is stronger evidence than a
-            // nickname. Consult one specificity tier at a time so a broad
-            // alias such as "Richard" cannot contaminate an exact
-            // "Richard Breen" GEDCOM match with unrelated Richards.
-            let canonicalMatches = graph.people(matching: canonicalName)
-            if !canonicalMatches.isEmpty {
-                return .people(canonicalMatches)
-            }
-
-            let fallbackTerms = ([typedName]
-                + matchingProfiles.flatMap(\.aliases))
-                .filter {
-                    PersonResolver.normalize($0)
-                        != PersonResolver.normalize(canonicalName)
-                }
+            // Try the profile's spellings MOST SPECIFIC FIRST (more words,
+            // then longer), canonical name breaking ties. A formal
+            // "Richard Breen" alias therefore beats a one-word canonical
+            // nickname "Rick" (2026-08-27, codex #756: a literal GEDCOM
+            // "Rick Smith" must not override the configured identity),
+            // and a broad "Richard" alias still cannot contaminate an exact
+            // "Richard Breen" match because it is tried after it.
+            let terms = ([canonicalName] + matchingProfiles.flatMap(\.aliases) + [typedName])
+            var seen = Set<String>()
+            let ordered = terms.filter { seen.insert(PersonResolver.normalize($0)).inserted }
+                .enumerated()
                 .sorted { lhs, rhs in
-                    let lhsWords = lhs.split(whereSeparator: \.isWhitespace).count
-                    let rhsWords = rhs.split(whereSeparator: \.isWhitespace).count
+                    let lhsWords = lhs.element.split(whereSeparator: \.isWhitespace).count
+                    let rhsWords = rhs.element.split(whereSeparator: \.isWhitespace).count
                     if lhsWords != rhsWords { return lhsWords > rhsWords }
-                    return lhs.count > rhs.count
+                    if lhs.element.count != rhs.element.count { return lhs.element.count > rhs.element.count }
+                    return lhs.offset < rhs.offset
                 }
-            for term in fallbackTerms {
+                .map(\.element)
+            for term in ordered {
                 let matches = graph.people(matching: term)
                 if !matches.isEmpty { return .people(matches) }
             }

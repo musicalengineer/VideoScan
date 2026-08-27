@@ -441,9 +441,12 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.focus(onName: "the Lattas"))
         #expect(model.selectedPerson?.surname == "Latta")
         #expect(model.selectedPerson?.name == "David McGill Latta")
-        // Nothing matches → selection untouched, false returned.
+        // Nothing matches → false, and the miss is honest: no card selected
+        // (never the previous or sorted-first person), name in the filter.
         #expect(!model.focus(onName: "Nobody Here"))
-        #expect(model.selectedID == "@I5@")
+        #expect(model.selectedID == nil)
+        #expect(model.selectedPerson == nil)
+        #expect(model.scene.cards.isEmpty)
         #expect(!model.focus(onName: "   "))
     }
 
@@ -454,23 +457,44 @@ struct FamilyTreeModelBehaviourTests {
         let sortedFirst = model.filteredPeople.first?.id
         model.select("@I7@")
         #expect(!model.focus(onName: "Rick"))
-        // Selection untouched — never the sorted-first person.
-        #expect(model.selectedID == "@I7@")
-        #expect(model.selectedID != sortedFirst)
+        // No card pretends to be the answer — not the previous, not the first.
+        #expect(model.selectedID == nil)
+        #expect(sortedFirst != nil)
+        #expect(model.selectedPerson == nil)
         // The miss is visible: name in the filter, empty list, notice set.
         #expect(model.searchText == "Rick")
         #expect(model.filteredPeople.isEmpty)
         #expect(model.focusMissName == "Rick")
+        #expect(model.focusMissNotice == "No one named \u{201C}Rick\u{201D} in the tree")
         // Next search edit clears the notice.
         model.searchText = "Breen"
-        #expect(model.focusMissName == nil)
+        #expect(model.focusMissNotice == nil)
         #expect(!model.filteredPeople.isEmpty)
-        // A later hit clears it too.
+    }
+
+    /// Codex #755: a hit after a miss must restore a consistent list — the
+    /// filter WE set is cleared so the selected person is visible.
+    @Test func hitAfterMissClearsTheMissFilterByNameAndByID() {
+        let model = liveModel()
         #expect(!model.focus(onName: "Nobody Here"))
-        #expect(model.focusMissName == "Nobody Here")
+        #expect(model.searchText == "Nobody Here")
         #expect(model.focus(onName: "Donna Hudson"))
-        #expect(model.focusMissName == nil)
         #expect(model.selectedID == "@I14@")
+        #expect(model.searchText.isEmpty)
+        #expect(model.filteredPeople.contains { $0.id == "@I14@" })
+        #expect(model.focusMissNotice == nil)
+
+        #expect(!model.focus(onName: "Nobody Here"))
+        #expect(model.focus(onID: "@I7@"))
+        #expect(model.selectedID == "@I7@")
+        #expect(model.searchText.isEmpty)
+        #expect(model.filteredPeople.contains { $0.id == "@I7@" })
+        #expect(model.focusMissNotice == nil)
+
+        // A filter the USER typed survives a hit.
+        model.searchText = "Breen"
+        #expect(model.focus(onName: "Donna Hudson"))
+        #expect(model.searchText == "Breen")
     }
 
     @Test func focusBridgesPeopleTabNicknameThroughProfileAliases() {
@@ -481,12 +505,71 @@ struct FamilyTreeModelBehaviourTests {
         // the alias is a complete canonical name, so exactly one resolves.
         #expect(model.focus(onName: "Rick", profiles: profiles))
         #expect(model.selectedID == "@I7@")
-        #expect(model.focusMissName == nil)
+        #expect(model.focusMissNotice == nil)
         #expect(model.searchText.isEmpty)
         // Same profiles, a name they don't bridge → still an honest miss.
         #expect(!model.focus(onName: "Goldilocks", profiles: profiles))
-        #expect(model.selectedID == "@I7@")
+        #expect(model.selectedID == nil)
         #expect(model.focusMissName == "Goldilocks")
+    }
+
+    /// Codex #756: the configured identity beats a literal GEDCOM "Rick".
+    @Test func profileAliasBeatsConflictingLiteralGedcomName() {
+        let model = liveModel()
+        model.install(graph: GedcomFamilyGraph(gedcomText: """
+        0 @I1@ INDI
+        1 NAME Rick /Smith/
+        0 @I2@ INDI
+        1 NAME Richard /Breen/
+        0 TRLR
+        """))
+        // Without profiles the literal is the only "Rick".
+        #expect(model.focus(onName: "Rick"))
+        #expect(model.selectedID == "@I1@")
+        let profiles = [POIProfile(name: "Rick", referencePath: "/synthetic",
+                                   aliases: ["Richard Breen"])]
+        #expect(model.focus(onName: "Rick", profiles: profiles))
+        #expect(model.selectedID == "@I2@")
+    }
+
+    /// Codex #756: profile ambiguity is terminal — never the first surname
+    /// holder, even when the surname exists.
+    @Test func ambiguousProfileAliasIsAnHonestMissNotASurnameGuess() {
+        let model = liveModel()
+        model.select("@I7@")
+        let profiles = [
+            POIProfile(name: "David McGill Latta", referencePath: "/synthetic", aliases: ["Latta"]),
+            POIProfile(name: "Eileen Latta", referencePath: "/synthetic", aliases: ["Latta"]),
+        ]
+        // Sanity: without profiles the surname fallback picks a Latta.
+        #expect(model.focus(onName: "Latta"))
+        #expect(model.selectedPerson?.surname == "Latta")
+        model.select("@I7@")
+        #expect(!model.focus(onName: "Latta", profiles: profiles))
+        #expect(model.selectedID == nil)
+        #expect(model.searchText == "Latta")
+        #expect(model.focusMissNotice?.hasPrefix("More than one \u{201C}Latta\u{201D}") == true)
+        // Ambiguity through the bridge itself: one alias token-matches two
+        // tree people (Son Breen One / Son Breen Two).
+        let shared = [POIProfile(name: "Sons", referencePath: "/synthetic",
+                                 aliases: ["Son Breen"])]
+        #expect(!model.focus(onName: "Sons", profiles: shared))
+        #expect(model.selectedID == nil)
+        #expect(model.focusMissNotice?.hasPrefix("More than one") == true)
+    }
+
+    /// Codex #756: a stale GEDCOM pointer is the same honest miss.
+    @Test func staleRecordIDIsAnHonestMiss() {
+        let model = liveModel()
+        model.select("@I7@")
+        #expect(!model.focus(onID: "@I999@"))
+        #expect(model.selectedID == "@I7@")   // focus(onID:) itself is a pure lookup
+        model.reportMissingRecord(id: "@I999@", displayName: "Great Aunt Zelda")
+        #expect(model.selectedID == nil)
+        #expect(model.searchText == "Great Aunt Zelda")
+        #expect(model.focusMissNotice == "That record for \u{201C}Great Aunt Zelda\u{201D} isn\u{2019}t in the current tree")
+        model.reportMissingRecord(id: "@I999@", displayName: nil)
+        #expect(model.focusMissNotice == "That record isn\u{2019}t in the current tree")
     }
 
     @Test func exactGEDCOMIDFocusDoesNotGuessByDuplicateName() {
@@ -556,6 +639,97 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.selectedID == "@I7@")
         model.install(graph: GedcomFamilyGraph(gedcomText: "0 @X@ INDI\n1 NAME Only /One/"))
         #expect(model.selectedID == "@X@")
+    }
+}
+
+// MARK: - Profile snapshot (isolation)
+
+/// `POIProfile.cachedSnapshot(root:)` feeds the hint path. Everything here
+/// runs against an injected temp root — never the real POI store.
+@Suite("Family tree model — profile snapshot isolation")
+@MainActor
+struct FamilyTreeProfileSnapshotTests {
+
+    private func liveModel() -> FamilyTreeLiveModel {
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        model.install(graph: fixtureGraph())
+        return model
+    }
+
+    private func writeProfile(_ profile: POIProfile, in root: URL) throws {
+        let folder = root.appendingPathComponent(profile.name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(profile)
+            .write(to: folder.appendingPathComponent("profile.json"))
+    }
+
+    private func sandbox() throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ft-snapshot-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    @Test func duplicateAliasesAcrossProfilesResolveToAmbiguityNotACrash() throws {
+        let root = try sandbox()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeProfile(POIProfile(name: "Daniel Breen", referencePath: "", aliases: ["birthday boy"]), in: root)
+        try writeProfile(POIProfile(name: "Matthew Breen", referencePath: "", aliases: ["birthday boy"]), in: root)
+        let profiles = POIProfile.cachedSnapshot(root: root)
+        #expect(profiles.map(\.name) == ["Daniel Breen", "Matthew Breen"])
+        let model = liveModel()
+        #expect(!model.focus(onName: "birthday boy", profiles: profiles))
+        #expect(model.selectedID == nil)
+        #expect(model.focusMissNotice?.hasPrefix("More than one") == true)
+    }
+
+    @Test func corruptProfileEntryIsSkipped() throws {
+        let root = try sandbox()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeProfile(POIProfile(name: "Rick", referencePath: "", aliases: ["Richard Breen"]), in: root)
+        let bad = root.appendingPathComponent("Broken", isDirectory: true)
+        try FileManager.default.createDirectory(at: bad, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: bad.appendingPathComponent("profile.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("NoProfile"),
+                                                withIntermediateDirectories: true)
+        let profiles = POIProfile.cachedSnapshot(root: root)
+        #expect(profiles.map(\.name) == ["Rick"])
+        // referencePath is healed to the folder, as listAll does.
+        #expect(profiles.first.map { URL(fileURLWithPath: $0.referencePath).resolvingSymlinksInPath() }
+                == root.appendingPathComponent("Rick", isDirectory: true).resolvingSymlinksInPath())
+        let model = liveModel()
+        #expect(model.focus(onName: "Rick", profiles: profiles))
+        #expect(model.selectedID == "@I7@")
+    }
+
+    /// Poisoned state: a perfectly good profile next door (a sibling
+    /// directory, a nested folder, a missing root) must not be read, and a
+    /// change on disk must invalidate the cache.
+    @Test func snapshotReadsOnlyTheInjectedRootAndTracksChanges() throws {
+        let root = try sandbox()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = root.appendingPathComponent("store", isDirectory: true)
+        let poison = root.appendingPathComponent("poison", isDirectory: true)
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try writeProfile(POIProfile(name: "Rick", referencePath: "", aliases: ["Richard Breen"]), in: poison)
+        try writeProfile(POIProfile(name: "Rick", referencePath: "", aliases: ["Richard Breen"]),
+                         in: store.appendingPathComponent("nested", isDirectory: true))
+        #expect(POIProfile.cachedSnapshot(root: store).isEmpty)
+        #expect(POIProfile.cachedSnapshot(root: root.appendingPathComponent("missing")).isEmpty)
+
+        try writeProfile(POIProfile(name: "Donna", referencePath: "", aliases: ["Goldilocks"]), in: store)
+        #expect(POIProfile.cachedSnapshot(root: store).map(\.name) == ["Donna"])
+        // Edit in place (bump the modification date) → re-read.
+        var edited = POIProfile(name: "Donna", referencePath: "", aliases: ["Goldilocks", "Mom"])
+        edited.sortOrder = 1
+        try writeProfile(edited, in: store)
+        let url = store.appendingPathComponent("Donna/profile.json")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)],
+                                              ofItemAtPath: url.path)
+        #expect(POIProfile.cachedSnapshot(root: store).first?.aliases == ["Goldilocks", "Mom"])
+        try FileManager.default.removeItem(at: store.appendingPathComponent("Donna"))
+        #expect(POIProfile.cachedSnapshot(root: store).isEmpty)
     }
 }
 
