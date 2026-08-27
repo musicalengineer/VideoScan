@@ -47,3 +47,6 @@ pandas
 # ---- Utilities ----
 tqdm
 lizard
+
+# Python test runner (Rick 2026-08-27: pytest for all Python-side tests — qwen-bench harness, hallie_eval, personfinder runner)
+pytest>=9.1
