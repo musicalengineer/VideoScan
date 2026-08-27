@@ -121,7 +121,8 @@ extension HallieTellingMode {
         }
     }
 
+    /// No "Got it": nothing was kept. The reason is the error's own words.
     static func pronunciationFailureReply(_ telling: PronunciationTelling, error: String) -> String {
-        "I couldn't save how to say \(telling.word) (\(error)), so it won't stick past this answer — sorry."
+        "I couldn't save that — \(error). Saying \(telling.word) as \(telling.saidAs) won't stick past this answer, sorry."
     }
 }

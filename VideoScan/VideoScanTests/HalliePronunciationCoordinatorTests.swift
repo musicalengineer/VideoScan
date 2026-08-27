@@ -109,6 +109,11 @@ struct HalliePronunciationCoordinatorTests {
         #expect(recorder.writes.isEmpty)
         #expect(response.result.prose.contains("read-only volume"))
         #expect(response.result.prose.contains("won't stick"))
+        // codex #700: a failed save is not an answer and never says "Got it".
+        #expect(response.result.outcome == .failed)
+        #expect(!response.result.prose.contains("Got it"))
+        #expect(response.result.basisLine.contains("NOT kept"))
+        #expect(!response.result.basisLine.contains("pronunciation kept"))
         #expect(response.telling == session)
     }
 
