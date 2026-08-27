@@ -42,6 +42,12 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// "show me a photo of X" — the stored portrait as an attachment;
     /// no language model involved.
     case personPhoto(person: String)
+    /// "videos of X" where X turns out to be a family-tree person who
+    /// predates photography (WorldKnowledge, Rick 2026-08-26): answered
+    /// with one honest line, never a keyword search. For everyone else the
+    /// answer is nil and the question continues to the presence route as
+    /// typed — this shape only ever SUPPRESSES a search, it never runs one.
+    case personVideos(person: String)
     /// "tell me about Rick Breen's great great grandpa on his paternal
     /// side" / "who was Donna's maternal grandmother" / "my great grandpa"
     /// (live 2026-08-26: the line regex below swallowed "paternal side"
@@ -267,6 +273,14 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
         if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+) family(?:'s)? tree\b/) {
             return .surnameTree(surname: String(m.1))
+        }
+        // "videos of nathaniel parker sr" — last, and only so the answer
+        // can decline for a pre-photography person; see `.personVideos`.
+        if let m = lower.firstMatch(of: /\b(?:videos?|films?|footage|movies?|clips?|home movies)\s+of\s+([a-z][a-z .'-]+?)\s*$/) {
+            let name = String(m.1).trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, name.split(separator: " ").count <= 5 {
+                return .personVideos(person: HallieLineageQuestion.capitalizedName(name))
+            }
         }
         return nil
     }
@@ -651,6 +665,8 @@ enum HallieLineageAnswer {
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
             return personPhoto(person, context: context)
+        case .personVideos(let person):
+            return personVideos(person, context: context)
         case .kinship:
             // Not answered here: preTranslation turns it into a graph
             // kinship intent and the ordinary executor route runs it.
@@ -1427,6 +1443,18 @@ enum HallieLineageAnswer {
                     offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
                     attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
             }
+            // Before photography (WorldKnowledge): the honest line, and no
+            // folder card — there is nothing to ask the family for except
+            // a painting, which the line already says.
+            if let line = photographyFloorLine(person, medium: .photograph) {
+                return Result(
+                    route: .graph, outcome: .declined,
+                    prose: line,
+                    basisLine: "Basis: family tree dates; \(WorldKnowledge.photography.firstPersonInPhotograph.statement) No search was run.",
+                    queryDescription: "photo: \(person.name) (before photography)",
+                    citations: [], catalogPersonName: person.name,
+                    offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
+            }
             let folder = try? store.folderForPhotoRequest(person: person)
             return Result(
                 route: .graph, outcome: .declined,
@@ -1436,6 +1464,35 @@ enum HallieLineageAnswer {
                 citations: [], catalogPersonName: person.name,
                 attachments: folder.map { [.photoRequest(personName: person.name, folderURL: $0)] } ?? [])
         }
+    }
+
+    /// "videos of X" for a tree person who predates photography: one
+    /// honest line instead of a presence search. Nil (= continue as typed)
+    /// for anyone else, for an unresolved name, and for an ambiguous one —
+    /// the presence route already owns those conversations.
+    static func personVideos(_ typed: String,
+                             context: HallieTurnExecutor.Context) -> Result? {
+        guard let graph = context.graph,
+              case .success(let person, _) = resolve(typed, context: context, graph: graph),
+              let line = photographyFloorLine(person, medium: .film) else { return nil }
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: line,
+            basisLine: "Basis: family tree dates; \(WorldKnowledge.photography.firstPersonInPhotograph.statement) No search was run.",
+            queryDescription: "videos: \(person.name) (before photography)",
+            citations: [], catalogPersonName: person.name,
+            offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
+    }
+
+    /// The WorldKnowledge photography floor, logged once per suppressed
+    /// offer ("[hallie] photo offer suppressed: Nathaniel Parker Sr (d. 1737)").
+    /// Nil when the person could have been photographed.
+    static func photographyFloorLine(_ person: GedcomFamilyGraph.Person,
+                                     medium: WorldKnowledge.photography.Medium) -> String? {
+        guard let line = WorldKnowledge.photography.impossibilityLine(person: person, medium: medium),
+              let note = WorldKnowledge.photography.impossibilityNote(person: person) else { return nil }
+        appLog.write("[hallie] photo offer suppressed: \(person.name) (\(note))")
+        return line
     }
 
     /// Deterministic pointer at the Get Family Tree sheet. Says what will
