@@ -378,7 +378,7 @@ struct FamilyTreePronunciationRoundTripTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let model = FamilyTreeLiveModel(
             originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"),
-            cyberBrainRootURL: root, noteAuthor: "Rick", pronunciationFallback: .shipped)
+            cyberBrainRootURL: root, noteAuthor: "Rick", pronunciationFallback: { .shipped })
         model.install(graph: treeGraph())
         model.loadCyberBrainNow()
 
@@ -411,5 +411,39 @@ struct FamilyTreePronunciationRoundTripTests {
         // Another person is untouched.
         model.select("@I1@")
         #expect(model.selectedPronunciations.allSatisfy { !$0.isSet })
+    }
+}
+
+extension FamilyTreePronunciationRoundTripTests {
+
+    /// QA 2026-08-26: the fallback lexicon was captured once at init, so
+    /// the inspector's `inherited` hint went stale after a file-level
+    /// telling. It is now computed on every refresh.
+    @Test func inheritedChipFollowsTheFileLayerAfterAFileLevelTelling() throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("Hallie/pronunciations.json")
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"),
+            cyberBrainRootURL: root, noteAuthor: "Rick",
+            pronunciationFallback: { .merged([.load(from: fileURL, log: nil), .shipped]) })
+        // Init wrote nothing: the default file appears on the first
+        // refresh (install selects a root person), not before.
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        model.install(graph: treeGraph())
+        model.loadCyberBrainNow()
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+
+        model.select("@I2@")
+        #expect(model.selectedPronunciations[1].word == "Latta")
+        #expect(model.selectedPronunciations[1].inherited == "LAT-uh")
+
+        // "Say Latta as LAH-tuh" told to Hallie for a name several people
+        // carry lands in pronunciations.json, on nobody's record.
+        try HalliePronunciationLexicon.setFileEntry(written: "Latta", spoken: "LAH-tuh", url: fileURL, log: nil)
+        model.select("@I1@")
+        model.select("@I2@")
+        #expect(model.selectedPronunciations[1].inherited == "LAH-tuh")
+        #expect(!model.selectedPronunciations[1].isSet)   // inherited, not the person's own
     }
 }

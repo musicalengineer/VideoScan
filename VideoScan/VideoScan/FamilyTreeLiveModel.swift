@@ -212,8 +212,14 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Who is writing notes — the owner name from the archivist settings.
     var noteAuthor: String
     /// What the voice says for a word with no person-level entry (file +
-    /// shipped layers). Tests inject `.shipped` so no real file is touched.
-    private let pronunciationFallback: HalliePronunciationLexicon
+    /// shipped layers). A PROVIDER, not a value: it is called in
+    /// refreshSelectedNotes() so a file-level telling ("say Latta as
+    /// LAH-tuh" for a name several people share) shows on the next
+    /// selection instead of the table captured at init (QA 2026-08-26).
+    /// Production reads pronunciations.json (tiny) — and, on first use,
+    /// writes the shipped default there — lazily, never in init. Tests
+    /// inject `{ .shipped }` so no real file is touched.
+    private let pronunciationFallback: () -> HalliePronunciationLexicon
 
     // MARK: Private state
 
@@ -251,7 +257,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     init(originalsDirectory: URL? = nil,
          cyberBrainRootURL: URL? = nil,
          noteAuthor: String? = nil,
-         pronunciationFallback: HalliePronunciationLexicon? = nil,
+         pronunciationFallback: (() -> HalliePronunciationLexicon)? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
@@ -265,8 +271,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             ?? HallieTurnExecutor.Speakers.defaultOwnerName
         self.pronunciationFallback = pronunciationFallback
             ?? (originalsDirectory == nil
-                ? HalliePronunciationLexicon.merged([.load(), .shipped])
-                : .shipped)
+                ? { HalliePronunciationLexicon.merged([.load(), .shipped]) }
+                : { .shipped })
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
@@ -700,7 +706,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         selectedPronunciations = FamilyTreePronunciationChips.make(
             name: person.name,
             people: notesResolver?.cyberBrainPeople(forGedcomID: id) ?? [],
-            fallback: pronunciationFallback)
+            fallback: pronunciationFallback())
         guard let resolver = notesResolver else {
             if !selectedNotes.isEmpty { selectedNotes = [] }
             return
