@@ -737,8 +737,16 @@ enum HallieLineageAnswer {
                 prose: "Which \(name) do you mean — " + like.prefix(4).map(\.name).joined(separator: " or ") + "?",
                 basisLine: "Basis: the family tree has \(like.count) people matching \(name) and no root marker to prefer; nothing was looked up.",
                 queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
-        case .none:
-            return .failure(nil)
+        case .none(let reason):
+            // A stale explicit FamilySearch pin fails closed with the honest
+            // line (codex #707 item 4); an ordinary miss keeps the generic
+            // decline from the caller.
+            guard let reason else { return .failure(nil) }
+            return .failure(Result(
+                route: .graph, outcome: .declined,
+                prose: reason,
+                basisLine: "Basis: the configured FamilySearch ID is not in the installed tree; nothing was looked up.",
+                queryDescription: "lineage: stale owner pin", citations: [], catalogPersonName: nil))
         }
     }
 
