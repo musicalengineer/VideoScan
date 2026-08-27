@@ -1,11 +1,11 @@
 # Hallie — from parser to proposer-with-tools
 
-*Design, 2026-08-26. Rev 4 (early 08-27) resolves codex's overnight review #719/#722/#723 — shared GuardPolicy, disable-don't-delete, tighter inference rules, confirmed-tag-only media facts, no proposer actions, token/cache budgets, endpoint policy. Rev 3 added the phase-0 contract: typed claims + validation table, CyberBrain as the bridge, tool schemas, worked examples. Rev 2 incorporated codex's review #701. Status: PROPOSED — Rick reviews before any code. Author: Claude (Manager). Reviewer: codex.*
+*Design, 2026-08-26. Rev 5 (08-27 15:00) — measured: qwen3.6:35b-a3b one-turn tool selection 82.6% native / 78.0% constrained-JSON, two-turn agentic loop 0/16 under a 20 s deadline (codex #736). The model leaves the control loop: ONE turn emits a typed ToolPlan, Swift executes, an optional second turn proposes claims, Swift verifies. Rev 4 (early 08-27) resolves codex's overnight review #719/#722/#723 — shared GuardPolicy, disable-don't-delete, tighter inference rules, confirmed-tag-only media facts, no proposer actions, token/cache budgets, endpoint policy. Rev 3 added the phase-0 contract: typed claims + validation table, CyberBrain as the bridge, tool schemas, worked examples. Rev 2 incorporated codex's review #701. Status: PROPOSED — Rick reviews before any code. Author: Claude (Manager). Reviewer: codex.*
 
 
 ## 0. Decisions for Rick (rev 3)
 
-1. **Transport**: Ollama native tool-calling vs constrained-JSON — decided by codex's measurement (`test/qwen-tool-reliability`), not by taste. Needs your direct ask in the Codex session.
+1. **Transport**: DECIDED by measurement (codex #736): native tool-calling for the planner turn (82.6% vs 78.0%); the ToolPlan is a single native tool call named `plan` whose arguments are the plan. Re-measure with the rev-5 ToolPlan shape before phase 1 (codex).
 2. **Inference in family mode**: speak permitted inferences ("it looks like…") to family viewers, or dev-mode only? (Recommendation: dev-mode only until the eval shows zero unverified facts for 2 weeks.)
 3. **Private CyberBrain items**: never enter the prompt unless the current viewer's privacy level allows — confirm that the web/iPad viewer counts as `family`, not `private`.
 4. **Heuristics registry** now (small, ~1 day) or after phase 1? (Recommendation: phase 0, because the verifier needs the thresholds to be inspectable.)
@@ -34,7 +34,28 @@ A new parsing regex after this date must carry a `// TEMPORARY: retire when eval
 
 Today: `text → QueryAST (model) → deterministic executor → AnswerPlan → phrase (model) → verify (Swift)`.
 
-Target: the model becomes a **proposer with tools**.
+Target (rev 5): the model becomes a **planner, then a proposer — never a controller**.
+
+```
+user text
+  └─► Turn A — Planner (local model, ONE call, timeboxed ~6 s)
+         input : question + tool catalog (schemas) + conversation subject
+         output: ToolPlan { calls: [ {tool, args} ]  (≤ 6, ordered), intendedClaims: [ClaimKind] }
+                 — a single JSON object; schema-validated; no tool results seen by the model here
+  └─► Swift executes the plan deterministically
+         privacy ceiling at each tool, budgets (§8b), cancellation, revision-keyed cache;
+         a plan that names an unknown tool / bad args → deterministic lane, reason logged
+  └─► Turn B — Proposer (local model, ONE call, optional, timeboxed ~8 s)
+         input : tool results (as data) + allowed claim kinds
+         output: AnswerProposal { claims: [typed ClaimPayload], prose, actionIntents }
+  └─► Verifier (Swift) — as before: re-derive every claim from cited ids; drop the unverifiable;
+         GuardPolicy; canonical sentences; if Turn B times out or fails → deterministic template
+         over the SAME tool results (the answer is still correct, just plainer)
+```
+
+Why: codex's benchmark (#736) — the model picks tools and arguments well in one shot, and collapses when asked to run a multi-call loop under a real deadline. Keeping it out of the control loop turns its failure mode from "wrong" into "plainer".
+
+*(Rev 3/4 text below is retained; where it says the proposer "calls" tools, read: the planner names them and Swift calls them.)*
 
 ```
 user text
