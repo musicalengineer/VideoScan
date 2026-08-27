@@ -125,7 +125,13 @@ struct HallieGroundedComposer: Sendable {
             let reasons = verification.dropped.map(\.reason.rawValue).joined(separator: ",")
             composerLog.notice("verifier dropped \(verification.dropped.count, privacy: .public) sentence(s): \(reasons, privacy: .public)")
         }
-        guard !verification.kept.isEmpty else {
+        // A reply whose only sentence opened with a bare surname is dropped
+        // whole by the verifier (`.bareSurnameOpening`), but the plan's own
+        // lead sentence can stand in for it — that is the same repair
+        // `restoringSubjectAndLifeDates` makes when the opening survives
+        // unnamed. Fall back to the template only when neither applies.
+        guard !verification.kept.isEmpty
+                || Self.subjectLeadCanStandIn(for: verification, plan: plan) else {
             return .template(plan, note: "template: no sentence survived verification")
         }
         var notes: [String] = []
@@ -163,8 +169,14 @@ struct HallieGroundedComposer: Sendable {
         notes: inout [String]
     ) -> HallieCompositionVerifier.Verification {
         guard plan.shape == .biography || plan.shape == .fact,
-              let subject = plan.subject, !subject.isEmpty,
-              !verification.kept.isEmpty else { return verification }
+              let subject = plan.subject, !subject.isEmpty else { return verification }
+        // The verifier may already have removed the bare-surname opening
+        // (`.bareSurnameOpening`, 4c801a4a). When that emptied the answer the
+        // lead sentence still has to go in — otherwise the whole reply is
+        // lost to the template. Whichever rule fired first keeps its reason.
+        let openingAlreadyDropped = verification.kept.isEmpty
+            && verification.dropped.contains { $0.reason == .bareSurnameOpening }
+        guard !verification.kept.isEmpty || openingAlreadyDropped else { return verification }
         typealias Sentence = HallieCompositionVerifier.Sentence
         var kept = verification.kept
         var dropped = verification.dropped
@@ -179,26 +191,50 @@ struct HallieGroundedComposer: Sendable {
             notes.append("life dates restored: \(missingDates.map(\.id).joined(separator: ","))")
         }
 
-        if let first = kept.first, !HallieAnswerPlan.names(subject, in: first.display),
-           let lead = plan.subjectLeadSentence {
+        let firstNamesSubject = kept.first.map { HallieAnswerPlan.names(subject, in: $0.display) } ?? false
+        if !firstNamesSubject, let lead = plan.subjectLeadSentence {
             let leadSentence = Sentence(
                 display: lead.text,
                 tagged: lead.claimIDs.isEmpty
                     ? lead.text + " [template]"
                     : lead.text + " [\(lead.claimIDs.joined(separator: "]["))]",
                 claimIDs: lead.claimIDs)
-            let redundant = !first.claimIDs.isEmpty
-                && Set(first.claimIDs).isSubset(of: Set(lead.claimIDs))
-            if redundant {
-                dropped.append(.init(text: first.tagged, reason: .subjectNotNamed))
-                kept.removeFirst()
-                notes.append("opening replaced by subject lead")
+            if let first = kept.first {
+                let redundant = !first.claimIDs.isEmpty
+                    && Set(first.claimIDs).isSubset(of: Set(lead.claimIDs))
+                if redundant {
+                    dropped.append(.init(text: first.tagged, reason: .subjectNotNamed))
+                    kept.removeFirst()
+                    notes.append("opening replaced by subject lead")
+                } else {
+                    notes.append("subject lead prepended")
+                }
             } else {
-                notes.append("subject lead prepended")
+                // Nothing kept: the verifier already dropped the opening.
+                notes.append("opening replaced by subject lead")
             }
             kept.insert(leadSentence, at: 0)
+        } else if openingAlreadyDropped, !kept.isEmpty {
+            // Life dates alone re-opened the answer with the subject's name.
+            notes.append("opening replaced by subject lead")
         }
         return HallieCompositionVerifier.Verification(kept: kept, dropped: dropped)
+    }
+
+    /// True when the verifier kept nothing but dropped a bare-surname
+    /// opening that `restoringSubjectAndLifeDates` can replace with the
+    /// plan's subject lead (biography/kinship shapes with a subject only).
+    static func subjectLeadCanStandIn(
+        for verification: HallieCompositionVerifier.Verification,
+        plan: HallieAnswerPlan
+    ) -> Bool {
+        guard plan.shape == .biography || plan.shape == .fact,
+              let subject = plan.subject, !subject.isEmpty,
+              verification.kept.isEmpty,
+              verification.dropped.contains(where: { $0.reason == .bareSurnameOpening })
+        else { return false }
+        return plan.subjectLeadSentence != nil
+            || !plan.lifeDatesClaims.isEmpty
     }
 
     /// One app-log line per dropped sentence, so a "dropped 1" in the

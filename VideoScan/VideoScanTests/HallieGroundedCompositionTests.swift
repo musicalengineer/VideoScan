@@ -1011,6 +1011,11 @@ struct HallieCompositionSubjectLeadTests {
         #expect(outcome.note == "model (subject lead prepended)")
     }
 
+    /// The bare-surname sentence is the ONLY sentence. The verifier
+    /// (`.bareSurnameOpening`, 4c801a4a) fires before the composer's lead
+    /// restore (78873ceb) and empties the answer; the lead must still stand
+    /// in — never the template. The reason is the verifier's, because it
+    /// fired first (nightly 2026-08-27 regression).
     @Test func bareSurnameOpeningIsReplacedByTheTemplateSentence() async {
         let outcome = await compose(kinPlan(),
             "McGill is the great-great-grandfather of Rick Breen [c1].")
@@ -1019,7 +1024,46 @@ struct HallieCompositionSubjectLeadTests {
         #expect(outcome.transcriptText == "John McGill is Rick Breen's great-great-grandfather. [c1]")
         #expect(outcome.dropped == [.init(
             text: "McGill is the great-great-grandfather of Rick Breen [c1].",
-            reason: .subjectNotNamed)])
+            reason: .bareSurnameOpening)])
+        #expect(outcome.note == "model (opening replaced by subject lead)")
+    }
+
+    @Test func bareSurnameOnlySentenceNeverFallsBackToTemplate() async {
+        let outcome = await compose(kinPlan(),
+            "McGill is Rick Breen's great-great-grandfather [c1].")
+        #expect(outcome.composedBy == .model, Comment(rawValue: outcome.note))
+        #expect(!outcome.note.hasPrefix("template"))
+        #expect(outcome.displayText == "John McGill is Rick Breen's great-great-grandfather.")
+        #expect(outcome.dropped.count == 1)
+        #expect(outcome.dropped.first?.reason == .bareSurnameOpening)
+    }
+
+    /// Bare-surname opening followed by a pronoun sentence: the verifier
+    /// drops sentence one, the lead goes in front of sentence two.
+    @Test func bareSurnameOpeningFollowedByAnotherSentenceKeepsTheRest() async {
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact, subject: "John McGill",
+            claims: [.init(id: "c1", text: "John McGill is Rick Breen's great-great-grandfather."),
+                     .init(id: "c2", text: "John McGill was born in Ireland.")],
+            fallbackText: "John McGill is Rick Breen's great-great-grandfather.")
+        let outcome = await compose(plan,
+            "McGill is the great-great-grandfather of Rick Breen [c1]. He was born in Ireland [c2].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.displayText == "John McGill is Rick Breen's great-great-grandfather. He was born in Ireland.",
+                Comment(rawValue: outcome.displayText))
+        #expect(outcome.dropped.map(\.reason) == [.bareSurnameOpening])
+        #expect(outcome.note == "model (subject lead prepended)")
+    }
+
+    /// The composer's own rule still owns the pronoun case: nothing for the
+    /// verifier to reject, the redundant opening is dropped as
+    /// `.subjectNotNamed`.
+    @Test func pronounOnlyOpeningIsDroppedAsSubjectNotNamed() async {
+        let outcome = await compose(kinPlan(),
+            "He is the great-great-grandfather of Rick Breen [c1].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.displayText == "John McGill is Rick Breen's great-great-grandfather.")
+        #expect(outcome.dropped.map(\.reason) == [.subjectNotNamed])
         #expect(outcome.note == "model (opening replaced by subject lead)")
     }
 
