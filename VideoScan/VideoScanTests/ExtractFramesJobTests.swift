@@ -118,7 +118,7 @@ struct ExtractFramesJobStateTests {
     @Test func cancelWithNothingSavedSaysNoFrames() {
         let job = makeJob()
         job.cancel()
-        #expect(job.subtitle == "Stopped — no frames saved")
+        #expect(job.subtitle == "Cancelled — no frames saved")
     }
 
     // Negative: a success that landed before cancel wins — the work IS

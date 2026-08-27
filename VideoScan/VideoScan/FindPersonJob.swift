@@ -1079,7 +1079,12 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         guard state.isActive else { return }
         warmTask?.cancel()
         warmTask = nil
-        if cancelled {
+        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
+        // .failed — a scoring error that lands while the batch unwinds
+        // (or "every file errored" because Stop killed the decoders) is
+        // the user's Stop, not a failure. See
+        // MediaFileOperationState.cancelWasRequested.
+        if cancelled || state.cancelWasRequested {
             state = .cancelled
             // Actionable total, never the selected count — "19 of 7,894"
             // reads as a barely-started run when the batch was 2,988.

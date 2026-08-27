@@ -187,11 +187,11 @@ final class RipAllFramesJob: @MainActor MediaFileOperationJob {
             // kept, and the row says so explicitly (with the size, since
             // disk usage is this verb's whole risk profile).
             if ripper.framesWritten > 0, let dest = ripper.completedDestination {
-                return "Stopped — \(ripper.framesWritten.formatted()) frame(s) (\(Formatting.humanSize(ripper.bytesWritten))) kept in \(dest.lastPathComponent)"
+                return "Cancelled — \(ripper.framesWritten.formatted()) frame(s) (\(Formatting.humanSize(ripper.bytesWritten))) kept in \(dest.lastPathComponent)"
             }
-            return "Stopped — no frames written"
+            return "Cancelled — no frames written"
         case .cancelling:
-            return "Stopping…"
+            return "Cancelling…"
         case .running:
             return ripper.statusText.isEmpty ? "Starting…" : ripper.statusText
         }
@@ -213,16 +213,19 @@ final class RipAllFramesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Derived from ripper state + the explicit cancel flag.
-    /// Precedence mirrors ExtractFramesJob: an error that landed before
-    /// cancel wins; a successful destination only counts as finished
-    /// when the user didn't cancel (a cancelled export also sets
-    /// `completedDestination` so Reveal works on the partial output).
+    /// Precedence mirrors ExtractFramesJob: an error that landed BEFORE
+    /// cancel wins (cancel() is a no-op on a terminal state); an error
+    /// that lands AFTER cancel — the SIGTERM'd ffmpeg's non-zero exit —
+    /// is the user's Stop, not a failure (Rick 2026-08-26). A successful
+    /// destination only counts as finished when the user didn't cancel
+    /// (a cancelled export also sets `completedDestination` so Reveal
+    /// works on the partial output).
     var state: MediaFileOperationState {
-        if let error = ripper.lastError {
-            return .failed(message: error)
-        }
         if wasCancelled {
             return ripper.isRunning ? .cancelling : .cancelled
+        }
+        if let error = ripper.lastError {
+            return .failed(message: error)
         }
         if ripper.completedDestination != nil {
             return .finished(summary: "\(ripper.framesWritten.formatted()) frame\(ripper.framesWritten == 1 ? "" : "s"), \(Formatting.humanSize(ripper.bytesWritten))")
