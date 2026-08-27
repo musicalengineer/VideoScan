@@ -248,6 +248,52 @@ enum MediaFileOperationState: Equatable {
     }
 }
 
+// MARK: - First terminal cause (stored-state jobs)
+
+/// The FIRST terminal cause a stored-state job saw — a set-once ledger
+/// shared by every job that runs a stall watchdog (Balance, Cleanup,
+/// FindPerson, Rebuild, Reformat, Trim, Transcode).
+///
+/// Why (codex gate 2026-08-26): the watchdog records its reason and
+/// cancels the Task while `state` stays `.running`. If the user clicked
+/// Stop before the run epilogue, `cancel()` flipped `state` to
+/// `.cancelling` and `finish(failed: stallReason)`'s cancel diversion
+/// (06b8ce2f) repainted a KNOWN stall as "Cancelled". Ordering must be
+/// explicit: whichever event lands first owns the terminal.
+///
+///   - watchdog:   `record(.stall(reason:))` then cancel the Task
+///   - user Stop:  `record(.cancel)` — refused (returns false) after a
+///                 stall, so `state` never leaves `.running` for it
+///   - finish(failed:) diverts to Cancelled ONLY when `isCancel`
+///   - every cancelled-terminal path re-checks `stallReason` first
+///
+/// ≈ C++: a tiny value-type state machine member with set-once
+/// semantics enforced by `record`; `first` is an `std::optional<variant>`.
+struct MFOTerminalCause: Equatable {
+    enum Kind: Equatable {
+        case stall(reason: String)
+        case cancel
+    }
+
+    private(set) var first: Kind?
+
+    /// Records `kind` only when nothing was recorded before. Returns
+    /// whether it won.
+    @discardableResult
+    mutating func record(_ kind: Kind) -> Bool {
+        guard first == nil else { return false }
+        first = kind
+        return true
+    }
+
+    var stallReason: String? {
+        if case .stall(let reason)? = first { return reason }
+        return nil
+    }
+    var isStall: Bool { stallReason != nil }
+    var isCancel: Bool { first == .cancel }
+}
+
 // MARK: - Duration clock (pure)
 
 /// PURE duration math for the operations window's row clock — no I/O

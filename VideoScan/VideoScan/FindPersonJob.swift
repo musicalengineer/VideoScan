@@ -110,7 +110,10 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
     private(set) var skipped = 0    // veto/confirmed/no-change
     private(set) var errors = 0
     private(set) var completed = 0
-    private var stallReason: String?
+    /// Set-once ledger of the first terminal cause (watchdog stall vs the
+    /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
+    private var terminalCause = MFOTerminalCause()
+    private var stallReason: String? { terminalCause.stallReason }
 
     // MARK: Expanded-row context (Rick 2026-08-04: like the compare row)
 
@@ -317,8 +320,14 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
 
     func cancel() {
         guard state.isActive else { return }
-        state = .cancelling
-        subtitleText = "Cancelling…"
+        // A stall recorded first owns the terminal (codex gate 2026-08-26):
+        // the row ends Failed with the stall reason, never Cancelled. The
+        // release work below still runs — a Stop after a stall must still
+        // free a wedged score race.
+        if terminalCause.record(.cancel) {
+            state = .cancelling
+            subtitleText = "Cancelling…"
+        }
         // Durable trace FIRST — a cancel that then wedges must be
         // attributable from the log alone (codex #284).
         appLog.write("Find \(person) cancel requested (\(completed)/\(actionableTotal) done)")
@@ -477,22 +486,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
 
         let monitor = stallMonitorFactory("find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
-                // .running ONLY (not .cancelling): a stall firing after
-                // the user's cancel must not wedge-log or abandon —
-                // cancel already released the race (codex #285).
-                guard let self, self.state == .running, self.stallReason == nil else { return }
-                // Wedged CLIP first (GH #156): abandon it, log it, keep
-                // the batch moving. Falls through to the batch-fail path
-                // when abandonment isn't possible (python arm) or the
-                // wedges are a pattern (consecutive cap — sick volume).
-                if self.abandonCurrentClip(silentFor: silentFor) { return }
-                self.stallReason = Self.stallDescription(
-                    silentSeconds: silentFor,
-                    completed: self.completed,
-                    total: self.actionableTotal,
-                    currentFilename: self.currentClipName)
-                appLog.write("Find \(self.person) STALL: \(self.stallReason ?? "recipe engine stalled")")
-                self.task?.cancel()
+                self?.handleStall(silentFor: silentFor)
             }
         }
         stallMonitor = monitor
@@ -513,7 +507,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
     /// Shared run epilogue — the stall/cancel/success ladder both engine
     /// arms end with. `failure` is an engine-specific setup failure (nil
     /// on success).
-    private func finishRun(failure: String?) {
+    func finishRun(failure: String?) {
         if let stallReason {
             finish(failed: stallReason)
             return
@@ -1072,6 +1066,29 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         return "\(s)s"
     }
 
+    // MARK: Stall handling
+
+    /// Invoked (on the main actor) by the stall monitor. `.running` ONLY
+    /// (not `.cancelling`) and only when no terminal cause is recorded
+    /// yet: a stall firing after the user's cancel must not wedge-log or
+    /// abandon — cancel already released the race (codex #285).
+    func handleStall(silentFor: Double) {
+        guard state == .running, terminalCause.first == nil else { return }
+        // Wedged CLIP first (GH #156): abandon it, log it, keep the batch
+        // moving. Falls through to the batch-fail path when abandonment
+        // isn't possible (python arm) or the wedges are a pattern
+        // (consecutive cap — sick volume).
+        if abandonCurrentClip(silentFor: silentFor) { return }
+        let reason = Self.stallDescription(
+            silentSeconds: silentFor,
+            completed: completed,
+            total: actionableTotal,
+            currentFilename: currentClipName)
+        terminalCause.record(.stall(reason: reason))
+        appLog.write("Find \(person) STALL: \(reason)")
+        task?.cancel()
+    }
+
     // MARK: Finish
 
     private func finish(summary: String? = nil, failed: String? = nil,
@@ -1079,12 +1096,14 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         guard state.isActive else { return }
         warmTask?.cancel()
         warmTask = nil
-        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
-        // .failed — a scoring error that lands while the batch unwinds
-        // (or "every file errored" because Stop killed the decoders) is
-        // the user's Stop, not a failure. See
-        // MediaFileOperationState.cancelWasRequested.
-        if cancelled || state.cancelWasRequested {
+        // A stall recorded before anything else is THE cause, whatever
+        // path reached here (codex gate 2026-08-26) — see MFOTerminalCause.
+        let failed = terminalCause.stallReason ?? failed
+        // Rick 2026-08-26: a job whose cancel was the FIRST terminal cause
+        // NEVER ends .failed — a scoring error that lands while the batch
+        // unwinds (or "every file errored" because Stop killed the
+        // decoders) is the user's Stop, not a failure.
+        if terminalCause.isCancel || (cancelled && !terminalCause.isStall) {
             state = .cancelled
             // Actionable total, never the selected count — "19 of 7,894"
             // reads as a barely-started run when the batch was 2,988.

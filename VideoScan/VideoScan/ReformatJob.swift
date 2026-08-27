@@ -114,7 +114,10 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// watchdog kill (→ `.failed` with a specific reason) from a user cancel
     /// (→ `.cancelled`). Checked before the generic cancel branch because
     /// the watchdog cancels the Task, which also sets `Task.isCancelled`.
-    private var stallReason: String?
+    /// Set-once ledger of the first terminal cause (watchdog stall vs the
+    /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
+    private var terminalCause = MFOTerminalCause()
+    private var stallReason: String? { terminalCause.stallReason }
 
     /// MediaFileOperationJob requires `objectWillChange` ==
     /// ObservableObjectPublisher, which is the default for ObservableObject.
@@ -161,8 +164,14 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// ProcessRunner.runStreaming which terminates the subprocess.
     func cancel() {
         guard state.isActive else { return }
-        state = .cancelling
-        subtitleText = "Cancelling…"
+        // A stall recorded first owns the terminal (codex gate 2026-08-26):
+        // the watchdog is already killing the Task, the row keeps
+        // "Stalled — stopping…" and ends Failed with the stall reason —
+        // never Cancelled. Otherwise the user's Stop is the first cause.
+        if terminalCause.record(.cancel) {
+            state = .cancelling
+            subtitleText = "Cancelling…"
+        }
         task?.cancel()
     }
 
@@ -331,11 +340,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// flatlines. Records a SPECIFIC failure reason — with volume-drop vs
     /// file-error attribution (#6.4) — and cancels the run, which kills the
     /// ffmpeg child through ProcessRunner's SIGTERM→SIGKILL escalation.
-    private func handleStall(inputPath: String, silentFor: Double) {
-        guard state.isActive, stallReason == nil else { return }
+    func handleStall(inputPath: String, silentFor: Double) {
+        guard state.isActive, terminalCause.first == nil else { return }
         let attribution = StallMonitor.attribution(forPaths: [inputPath])
         let reason = "Stalled — no ffmpeg progress for \(Int(silentFor))s during reformat. \(attribution)"
-        stallReason = reason
+        terminalCause.record(.stall(reason: reason))
         subtitleText = "Stalled — stopping…"
         reformatLog.error("reformat WATCHDOG: killing \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
         appLog.write("reformat watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing ffmpeg")
@@ -411,12 +420,12 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     }
 
     private func finish(failed: String) async {
-        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
-        // .failed — the SIGTERM'd child's non-zero exit, or any typed error
-        // thrown while the Task unwinds, is the user's Stop, not a failure.
-        // (Stalls are unaffected: the watchdog cancels the Task but never
-        // sets .cancelling — see MediaFileOperationState.cancelWasRequested.)
-        if state.cancelWasRequested { await finish(cancelled: true); return }
+        // Rick 2026-08-26: a job whose cancel was the FIRST terminal cause
+        // NEVER ends .failed — the SIGTERM'd child's non-zero exit, or any
+        // typed error thrown while the Task unwinds, is the user's Stop,
+        // not a failure. A stall recorded before the Stop is not diverted
+        // (codex gate 2026-08-26) — see MFOTerminalCause.
+        if terminalCause.isCancel { await finish(cancelled: true); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false
@@ -424,6 +433,9 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     }
 
     private func finish(cancelled: Bool) async {
+        // An earlier stall is the cause of THIS cancellation (the watchdog
+        // cancelled the Task) — report it, not "Cancelled".
+        if let reason = terminalCause.stallReason { await finish(failed: reason); return }
         state = .cancelled
         subtitleText = "Cancelled"
         isIndeterminateValue = false
