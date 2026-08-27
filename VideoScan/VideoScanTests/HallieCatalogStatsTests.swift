@@ -174,7 +174,7 @@ struct HallieCatalogStatsTests {
             }
             #expect(result.route == .aggregate, Comment(rawValue: text))
             #expect(result.queryDescription == "catalog-stats archived", Comment(rawValue: text))
-            #expect(result.prose == "1 file has a verified copy in the Master Archive — 50% of the 2 unique media files. 1 are still to be promoted.")
+            #expect(result.prose == "1 file has a verified copy in the Master Archive — 50% of the 2 unique media files. 1 is still to be promoted.")
             #expect(result.basisLine.contains("catalog totals"))
         }
     }
@@ -210,9 +210,92 @@ struct HallieCatalogStatsTests {
         let stats = HallieCatalogStats.compute(records: records)
         let elapsed = Date().timeIntervalSince(start)
         #expect(totals.verified == 100)
+        #expect(totals.unverified == 100)
         #expect(stats.archivedVerified == totals.verified)
-        #expect(HallieCatalogStats.answer(.archived, stats: stats).prose.hasPrefix("100 files have a verified copy"))
+        #expect(stats.archivedUnverified == totals.unverified)
+        let tab = ArchiveProgress.from(totals: totals, storage: CatalogStorageTotalsCalculator.compute(records: records))
+        #expect(stats.archiveProgress.total == tab.total, "Hallie's arithmetic IS the Archive tab's")
+        #expect(stats.archiveProgress.remaining == tab.remaining)
+        #expect(stats.archiveProgress.percentText == tab.percentText)
+        #expect(HallieCatalogStats.answer(.archived, stats: stats).prose.hasPrefix("200 files have been promoted to the Master Archive, of which 100 are verified"))
         #expect(elapsed < 3.0, "took \(elapsed)s")
+    }
+
+    // MARK: codex #717/#718 — promoted vs verified, and arithmetic that cannot pass 100%
+
+    private func stats(verified: Int, unverified: Int, unique: Int) -> HallieCatalogStats {
+        HallieCatalogStats(fileCount: unique, uniqueFileCount: unique, grossBytes: 0, uniqueBytes: 0,
+                           duplicateFiles: 0, duplicateBytes: 0, volumeCount: 1,
+                           archivedVerified: verified, archivedUnverified: unverified,
+                           totalDurationSeconds: 0, earliestYear: nil, latestYear: nil)
+    }
+
+    @Test func promotedAndVerifiedAreBothAnsweredAndRemainingSubtractsBoth() {
+        let both = HallieCatalogStats.answer(.archived, stats: stats(verified: 3, unverified: 2, unique: 10)).prose
+        #expect(both == "5 files have been promoted to the Master Archive, of which 3 are verified — 30% of the 10 unique media files verified; 2 are copied but not yet verified. 5 are still to be promoted.", Comment(rawValue: both))
+        // The old answer said "7 are still to be promoted" — it ignored the two unverified copies.
+        #expect(!both.contains("7 are still"))
+        // "how many verified" and "how many promoted" both reach .archived and both figures are in the one answer.
+        #expect(HallieCatalogStats.detect("how many are verified") == .archived)
+        #expect(HallieCatalogStats.detect("how many have been promoted") == .archived)
+        #expect(both.contains("5 files have been promoted") && both.contains("3 are verified"))
+        // Unverified only: no verified copy yet, but not "nothing promoted".
+        let unverifiedOnly = HallieCatalogStats.answer(.archived, stats: stats(verified: 0, unverified: 4, unique: 10)).prose
+        #expect(unverifiedOnly == "4 files have been promoted to the Master Archive, of which 0 are verified — 0% of the 10 unique media files verified; 4 are copied but not yet verified. 6 are still to be promoted.", Comment(rawValue: unverifiedOnly))
+    }
+
+    @Test func percentageCannotExceedOneHundred() {
+        // verified + unverified > uniqueTotal (archived junk, or a unique
+        // count that excludes what was promoted): the denominator grows,
+        // the percentage caps, remaining is zero, not negative.
+        let over = HallieCatalogStats.answer(.archived, stats: stats(verified: 12, unverified: 3, unique: 10)).prose
+        #expect(over.contains("80% of the 15 unique media files verified"), Comment(rawValue: over))
+        #expect(over.hasSuffix("Nothing is left to promote."))
+        #expect(!over.contains("120%") && !over.contains("-"))
+        let allVerified = HallieCatalogStats.answer(.archived, stats: stats(verified: 12, unverified: 0, unique: 10)).prose
+        #expect(allVerified == "12 files have a verified copy in the Master Archive — 100% of the 12 unique media files. Nothing is left to promote.", Comment(rawValue: allVerified))
+        // Nearly done never rounds to a false finish.
+        let nearly = HallieCatalogStats.answer(.archived, stats: stats(verified: 999, unverified: 0, unique: 1000)).prose
+        #expect(nearly.contains("over 99% of the 1,000"), Comment(rawValue: nearly))
+        let tiny = HallieCatalogStats.answer(.archived, stats: stats(verified: 1, unverified: 0, unique: 1000)).prose
+        #expect(tiny.contains("under 1% of the 1,000"), Comment(rawValue: tiny))
+    }
+
+    // codex #725 poisoned-row sensor: a manually-deleted row (hidden by the
+    // catalog view, excluded from the footer) must not move Hallie's
+    // footage total or earliest year either — one population for every figure.
+    @Test func manuallyDeletedRowsMoveNoFigure() {
+        let clean = [
+            record("a.mov", bytes: 1_000, seconds: 3600, year: 1991),
+            record("b.mov", bytes: 2_000, seconds: 1800, year: 2005),
+        ]
+        let poison = record("ghost.mov", bytes: 5_000_000_000_000, seconds: 9_000_000, year: 1800)
+        poison.archiveStage = .manuallyDeleted
+        let before = HallieCatalogStats.compute(records: clean)
+        let after = HallieCatalogStats.compute(records: clean + [poison])
+        #expect(after == before, "a hidden row changed a catalog-wide answer")
+        #expect(after.totalDurationSeconds == 5400)
+        #expect(after.earliestYear == 1991)
+        #expect(after.fileCount == 2 && after.grossBytes == 3_000)
+        // The footer's own population agrees, by construction.
+        let storage = CatalogStorageTotalsCalculator.compute(records: clean + [poison])
+        #expect(storage.fileCount == 2 && storage.manuallyDeletedFiles == 1)
+        #expect(HallieCatalogStats.compute(records: clean + [poison], storage: storage) == after)
+        // Set-aside / purged / superseded rows are outside the population too.
+        let aside = record("aside.mov", bytes: 7, seconds: 7_000_000, year: 1801)
+        aside.setAsideReason = "test"
+        #expect(HallieCatalogStats.compute(records: clean + [aside]) == before)
+    }
+
+    @Test func grammarFollowsTheCount() {
+        #expect(HallieCatalogStats.answer(.archived, stats: stats(verified: 1, unverified: 0, unique: 2)).prose
+                == "1 file has a verified copy in the Master Archive — 50% of the 2 unique media files. 1 is still to be promoted.")
+        #expect(HallieCatalogStats.answer(.archived, stats: stats(verified: 2, unverified: 0, unique: 4)).prose
+                == "2 files have a verified copy in the Master Archive — 50% of the 4 unique media files. 2 are still to be promoted.")
+        #expect(HallieCatalogStats.answer(.archived, stats: stats(verified: 1, unverified: 1, unique: 4)).prose
+                == "2 files have been promoted to the Master Archive, of which 1 is verified — 25% of the 4 unique media files verified; 1 is copied but not yet verified. 2 are still to be promoted.")
+        #expect(HallieCatalogStats.answer(.archived, stats: stats(verified: 0, unverified: 0, unique: 4)).prose
+                == "Nothing has a verified copy in the Master Archive yet — of 4 unique media files.")
     }
 
     @Test func hundredThousandRecordsComputeWithinBudget() {

@@ -345,29 +345,40 @@ enum CatalogStorageTotalsCalculator {
     ///   never run inside an O(records) loop. `nil` means "don't know",
     ///   which reports onlineBytes == grossBytes rather than zero: an
     ///   unknown reachability should not make the catalog look empty.
+    /// THE population every catalog-wide figure describes: active
+    /// records (not purged / set aside / superseded) minus the rows
+    /// marked `.manuallyDeleted`, which the catalog view hides. One
+    /// predicate, one place (codex #725: Hallie's footage and year span
+    /// used `pfActiveRecords` alone while file count and bytes used this,
+    /// so two answers in one sentence described two catalogs). The
+    /// deleted rows come back separately for the honesty caption.
+    nonisolated static func partition(_ records: [VideoRecord])
+        -> (counted: [VideoRecord], manuallyDeleted: [VideoRecord]) {
+        var counted: [VideoRecord] = []
+        var deleted: [VideoRecord] = []
+        counted.reserveCapacity(records.count)
+        for rec in records where !rec.isPurged && !rec.isSetAside && !rec.isSuperseded {
+            if isManuallyDeleted(rec) { deleted.append(rec) } else { counted.append(rec) }
+        }
+        return (counted, deleted)
+    }
+
     static func compute(
         records: [VideoRecord],
         onlineVolumes: Set<String>? = nil
     ) -> CatalogStorageTotals {
-        let present = pfActiveRecords(records)
-        guard !present.isEmpty else { return CatalogStorageTotals() }
-
-        var t = CatalogStorageTotals()
-
         // Manually-deleted records leave the storage arithmetic here —
         // the catalog view hides them, so the footer must not count
         // them (Rick 2026-08-18: the two numbers disagreed by ~1.1 TB).
         // Their bytes are tallied separately for the honesty caption.
         // One partition pass; `active` is what every figure below sees.
-        var active: [VideoRecord] = []
-        active.reserveCapacity(present.count)
-        for rec in present {
-            if isManuallyDeleted(rec) {
-                t.manuallyDeletedBytes += max(0, rec.sizeBytes)
-                t.manuallyDeletedFiles += 1
-            } else {
-                active.append(rec)
-            }
+        let (active, deleted) = partition(records)
+        guard !active.isEmpty || !deleted.isEmpty else { return CatalogStorageTotals() }
+
+        var t = CatalogStorageTotals()
+        for rec in deleted {
+            t.manuallyDeletedBytes += max(0, rec.sizeBytes)
+            t.manuallyDeletedFiles += 1
         }
         guard !active.isEmpty else { return t }
 
