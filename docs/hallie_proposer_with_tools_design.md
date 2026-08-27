@@ -1,6 +1,6 @@
 # Hallie — from parser to proposer-with-tools
 
-*Design, 2026-08-26. Rev 3 (overnight 08-26→27) adds the phase-0 contract: typed claims + validation table, CyberBrain as the bridge, tool schemas, worked examples. Rev 2 incorporated codex's review #701. Status: PROPOSED — Rick reviews before any code. Author: Claude (Manager). Reviewer: codex.*
+*Design, 2026-08-26. Rev 4 (early 08-27) resolves codex's overnight review #719/#722/#723 — shared GuardPolicy, disable-don't-delete, tighter inference rules, confirmed-tag-only media facts, no proposer actions, token/cache budgets, endpoint policy. Rev 3 added the phase-0 contract: typed claims + validation table, CyberBrain as the bridge, tool schemas, worked examples. Rev 2 incorporated codex's review #701. Status: PROPOSED — Rick reviews before any code. Author: Claude (Manager). Reviewer: codex.*
 
 
 ## 0. Decisions for Rick (rev 3)
@@ -10,6 +10,7 @@
 3. **Private CyberBrain items**: never enter the prompt unless the current viewer's privacy level allows — confirm that the web/iPad viewer counts as `family`, not `private`.
 4. **Heuristics registry** now (small, ~1 day) or after phase 1? (Recommendation: phase 0, because the verifier needs the thresholds to be inspectable.)
 5. **WorldFact resource**: JSON in the app bundle, editable copy in Application Support (like pronunciations), or CyberBrain-adjacent? (Recommendation: bundle + read-only; edits go through a PR.)
+7. **Remote endpoints** ever allowed for private context? (Recommendation: no; remote = public-knowledge questions only, with redaction.)
 6. **Model choice policy**: pin `qwen3.6:35b-a3b` for the eval baseline; upgrades are a golden-answer run (same rule as Hallie model management, 8/16).
 
 ## 1. Why
@@ -39,7 +40,9 @@ Target: the model becomes a **proposer with tools**.
 user text
   └─► Proposer (local model, tool-calling)
          tools: familyGraph.*, cyberBrain.*, worldKnowledge.*, catalog.*, people.*
-         output: AnswerProposal { claims: [Claim], prose: String, actions: [OfferedAction] }
+         output: AnswerProposal { claims: [Claim], prose: String, actionIntents: [ActionIntent] }
+               ActionIntent = typed, NON-authoritative hint (openFamilyTree(personID) | playMedia(recordID) | …);
+               Swift derives every OfferedAction itself from VERIFIED claims and may ignore intents (rev 4, codex #722)
                Claim = TYPED payload, never free text (rev 2, codex S1):
                  birthDate(personID, value) · deathDate(personID, value) · place(personID, event, value)
                  relationship(subjectID, relation, objectID, pathIDs) · catalogCount(queryID, count)
@@ -57,7 +60,8 @@ user text
            inference   → allowed only if proposed AS inference, every premise claim verified,
                          the inference kind is on the permitted list, and it can never drive
                          an action, a suppression, or a write
-         guard rules run here (photography floor, name-first, bare-surname, …)
+         GuardPolicy (shared, pure) runs here — AND in the legacy/fallback lane (rev 4, codex #719 §1):
+         a timeout or malformed proposal must never bypass a guard
   └─► Composer (existing plan→phrase→verify; prose already proposed, so phrase step is optional)
 ```
 
@@ -93,13 +97,15 @@ enum ClaimPayload: Codable, Equatable {
 | eventPlace | `gedcom:@I…@` | event's PLAC equals value after `FamilyNameNormalizer`-style place normalization | "…born in ‹place›." |
 | relationship | `gedcom:` path ids | `GedcomFamilyGraph.relationshipPath(subject, object)` reproduces `pathIDs` and yields `relation` | "‹A› is ‹B›'s ‹relation› (‹A› → … → ‹B›)." |
 | familyItem | `brain:<itemID>` | item exists, `status == active`, privacy ≤ viewer, every `personIDs` ∈ `subjectPersonIDs` | item text verbatim + attribution ("Told to Hallie by Rick, Aug 21") |
-| mediaFor | `catalog:<uuid>` | each record exists and carries the person tag (or verified face/voice evidence ≥ threshold from the Heuristics registry) | "There are ‹n› videos with ‹Name›: …" |
+| mediaFor | `catalog:<uuid>` | each record exists and carries a **human-confirmed** person tag. ML face/voice candidates are a separate claim kind `mediaCandidate(personID, recordID, engine, version, score)` spoken as "possible match" (rev 4, codex #719 §4) | "There are ‹n› videos with ‹Name›: …" / "…and ‹m› possible matches" |
 | catalogCount | `queryID` from a tool result | re-run the deterministic query; count equal | "I found ‹n› items…" |
 | mediumFeasibility | `world:<factID>` | `MediumFeasibility.assess(person, medium)` returns the same verdict | the medium's `spokenClause` line |
 | worldFact | `world:<id>@<version>` | id + version exist in the resource | fact's `statement` |
 | inference | premise claim ids | all premises verified; `kind` ∈ whitelist; text ≤ 2 sentences; no ids not in premises | "It looks like ‹text›." (never a fact sentence) |
 
-Rules: a claim whose re-derivation fails is **dropped** (logged `[hallie-verify] dropped <kind> <reason>`); model prose may reference only surviving claim ids; any prose sentence that cites nothing and contains a name, number, date, or place is dropped (today's `HallieCompositionVerifier` rule, kept). Guard rules (photography floor, name-first, bare-surname, "me" = FS ID) run after validation on the surviving set.
+Dates: every GEDCOM date is carried as an **interval with its qualifier** (`GedcomYearInterval`); exact comparisons are allowed only for unqualified dates; feasibility vetoes use the interval's upper/lower bounds; contradictory intervals → `unknown` (rev 4, codex #721/#723 — a live blocker: "AFT 1837" had been stripped to 1837).
+
+Rules: a claim whose re-derivation fails is **dropped** (logged `[hallie-verify] dropped <kind> <reason>`); model prose may reference only surviving claim ids; any prose sentence that cites nothing and contains a name, number, date, or place is dropped (today's `HallieCompositionVerifier` rule, kept). `GuardPolicy` (photography floor, name-first, bare-surname, "me" = FS ID, no keyword search on superlatives) is ONE pure module invoked by **both** lanes — the proposer verifier and today's deterministic executor — so the fallback path is never a bypass (rev 4).
 
 ## 4. Knowledge tiers (where facts live)
 
@@ -169,21 +175,23 @@ Tool results are wrapped as data (`<tool-result id=…>` … `</tool-result>`) a
 - **Facts** (dates, relations, places, counts): re-derived exactly from the cited source; mismatch = drop.
 - **Inferences** ("probably named after her grandmother"): allowed only as `inference`, spoken with "I think" / "it looks like", never as fact; must cite the facts it rests on.
 
-Permitted inference kinds (phase 0 whitelist; anything else is dropped): `namesake` ("named after her grandmother" — premises: two birthDate/relationship claims + shared given name), `ageAtEvent` (arithmetic over two verified dates), `sameHousehold` (two people share a FAMS/FAMC id), `eraContext` (a verified date + a worldFact). No inference may cite a `catalog.search` result (keyword hits are not evidence about people).
+Permitted inference kinds (rev 4 whitelist; anything else is dropped): `ageAtEvent` — computed over **date intervals** (GEDCOM qualifiers ABT/BEF/AFT/BET/EST/CAL become intervals; the result is an interval or "about", never exact arithmetic on a qualified date); `sameFamilyUnit` (two people share a FAM record — this proves a family-unit record, *not* a household; wording says "in the same family record"); `eraContext` (a verified date + a worldFact). **Removed**: `namesake` — a shared given name plus a relationship is speculation, not evidence; if ever spoken it is a labeled speculation in dev mode only (D2). No inference may cite a `catalog.search` result, drive an action, or suppress anything.
 
 - **Opinions** (Hallie's warmth): no citations required; verifier only checks guard rules.
 - **Optional critic pass** (cheap): after composition, ask the model "anything implausible?" — logged, never a veto.
 
 ## 7. Control: the eval harness decides
 
-`scripts/hallie_eval.py` is the arbiter. Each question category (kinship, lineage, superlative, biography, media-by-person, small talk, telling) gets two lanes: `regex` and `proposer`. A category's regex route is retired when `proposer ≥ regex` on accuracy **and** `unverified-fact == 0` over the golden set — necessary, not sufficient (rev 2, codex): also report repeated-run variance (3 runs), schema-valid and tool-choice rates, p50/p95 latency, timeout/fallback rate, adversarial-injection outcomes, privacy isolation, and cost at 100k catalog records. Deterministic fast paths that are materially faster or more reliable are *kept*; deleting regexes is not the goal, trustworthy answers are. Today's live utterances (2026-08-25/26) are the first golden cases (codex #696 item 7).
+`scripts/hallie_eval.py` is the arbiter. Each question category (kinship, lineage, superlative, biography, media-by-person, small talk, telling) gets two lanes: `regex` and `proposer`. A category's regex route is retired when `proposer ≥ regex` on accuracy **and** `unverified-fact == 0` over the golden set — necessary, not sufficient (rev 2, codex): also report repeated-run variance (3 runs), schema-valid and tool-choice rates, p50/p95 latency, timeout/fallback rate, adversarial-injection outcomes, privacy isolation, and cost at 100k catalog records. Deterministic fast paths that are materially faster or more reliable are *kept*; deleting regexes is not the goal, trustworthy answers are.
+
+Minimums for any retirement or for the "0 unverified facts" family gate (rev 4, codex #719 §5): ≥ 200 evaluated questions per category, ≥ 3 seeds/repeats, every category represented, corpus version + model digest + prompt/schema versions recorded in the report. Two quiet weeks with a thin corpus is not evidence. Today's live utterances (2026-08-25/26) are the first golden cases (codex #696 item 7).
 
 ## 8. Phases
 
 0. **Contract + fixtures** (no model): `AnswerProposal`/`Claim`/`Citation` types; verifier over hand-written proposals against the synthetic 5-generation fixture; guard rules moved behind the verifier. Tests only.
 1. **Proposer behind a flag**: `hallie.proposer.enabled` (default off). Tool-calling via Ollama's tool API (or a JSON-schema prompt if the model's tool support is weak); timeout → deterministic fallback. Eval lane added.
 2. **Shadow mode**: proposer runs alongside the regex path in the eval harness only; report per-category deltas nightly.
-3. **Category cutover**: flip categories by the §7 rule; delete the regex route in the same commit.
+3. **Category cutover**: flip categories by the §7 rule; **disable** the regex route behind the route registry (flag), keep its code and tests until the proposer's *fallback* can answer that category without the model (a timeout must never regress to no answer). Delete only after two cutover cycles with zero fallback-to-regex events (rev 4, codex #719 §2).
 4. **Bigger box**: nothing changes but the model name and the numbers.
 
 
@@ -206,11 +214,11 @@ Phase 1 (proposer behind `hallie.proposer.enabled`) starts only after 0.2 and 0.
 ## 8b. Bounded orchestration (rev 2, codex)
 
 - Typed capability registry: the proposer sees only registered tools with schemas; Swift owns every `OfferedAction`.
-- Budgets: max tool turns, max tool calls, max result bytes per call, one end-to-end deadline; cancellation propagates to Ollama and to tool tasks.
+- Budgets: max tool turns, max tool calls, max result bytes per call, **and one aggregate prompt budget** (tokens + bytes) covering system prompt + history + schemas + all tool results, with a reserved response allowance; adapters rank and truncate against the *remaining* budget (six 64 KB results would exceed a 64k-token context — rev 4, codex #723). One end-to-end deadline; cancellation propagates to Ollama and to tool tasks. Eval records worst-case six-call prompt size and fallback latency.
 - Deterministic fallback on any budget breach, timeout, or schema failure; the eval logs the reason.
-- Endpoint policy: local/private hosts only (fleet list), never a public endpoint by default.
+- Endpoint policy (rev 4, codex #719 §6): hosts are classified `local | private-lan | remote`; private-context turns (anything touching CyberBrain or the catalog) run **local/private-lan only** by default; remote requires explicit opt-in **and** redaction of family data; a poisoned-endpoint isolation sensor proves a remote host never receives private context.
 - Tool results are **data, not instructions**: prompt-injection treatment (delimited, labeled, never executed), tested adversarially.
-- Cache key = evidence hashes + graph/brain/world/prompt/schema/model versions; a stale key is a miss, never a wrong answer.
+- Cache (rev 4, codex #723): actor-isolated; key = catalog/graph/brain/world **revision ids** + returned-evidence hashes + prompt/schema/model versions + **viewer privacy ceiling**; hard entry and byte bounds, LRU + TTL, explicit negative-result policy, cancellation-safe. Never hash 100k inputs per turn — use revisions. Sensors: churn/eviction, privacy partition, 100k-key cost. Tool perf matrix includes 100k catalog records, not only the 16,383-person graph.
 
 
 ## 11. Worked examples (rev 3)
