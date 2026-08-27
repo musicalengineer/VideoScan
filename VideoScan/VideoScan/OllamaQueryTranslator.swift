@@ -532,7 +532,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
 
     private static let astMediaKind: [String: Any] = [
         "type": "string",
-        "enum": ["video", "video-only", "audio", "both"],
+        "enum": ["video", "video-only", "audio", "both", "photo"],
     ]
 
     private static let astCatalogProperties: [String: Any] = [
@@ -854,8 +854,9 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     - yearStart/yearEnd: only when a year or era is stated. "from 1992 to \
     1995" -> 1992/1995. "the 90s" -> 1990/1999. "in 1987" -> 1987/1987. \
     Otherwise null.
-    - mediaKind: "video", "video-only", "audio", or "both" — only when the \
-    user constrains the kind ("videos", "audio recordings"). Otherwise null.
+    - mediaKind: "video", "video-only", "audio", "both", or "photo" — only \
+    when the user constrains the kind ("videos", "audio recordings", \
+    "photos of"). Otherwise null.
     - transcript: words the user says were SPOKEN in the recording \
     ("where someone says happy birthday" -> ["happy", "birthday"]).
     - keywords: remaining meaningful topics — places, events, objects \

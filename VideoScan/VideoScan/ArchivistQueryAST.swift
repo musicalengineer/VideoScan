@@ -32,6 +32,12 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
         case videoOnly = "video-only"
         case audio
         case both
+        /// "photos of X" (live 2026-08-27: the model's right reading was
+        /// rejected as an unknown value). No catalog record is a photo; a
+        /// photo ask about a family-tree person goes to the portrait /
+        /// photography-floor path (HallieTurnExecutor+PhotoAsk), anyone
+        /// else searches and finds nothing, honestly.
+        case photo
     }
 
     struct Presence: Codable, Equatable, Sendable {

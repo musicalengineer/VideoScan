@@ -736,7 +736,10 @@ enum HallieAppTurnCoordinator {
                 // spelling recovery ("rick brren" → profile tag "Rick").
                 // GEDCOM is larger and remains age-phrase-only here.
                 profiles = dependencies.loadProfiles()
-                graph = needsBirthYear ? dependencies.loadGraph() : nil
+                // A photo ask needs the tree too: the portrait / photography
+                // floor path resolves the person there (+PhotoAsk).
+                graph = needsBirthYear || HallieTurnExecutor.isPhotoAsk(ast)
+                    ? dependencies.loadGraph() : nil
                 cyberBrain = dependencies.loadCyberBrain()
             case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:

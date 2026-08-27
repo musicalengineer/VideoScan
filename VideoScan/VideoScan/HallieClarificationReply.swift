@@ -93,9 +93,11 @@ extension HallieTurnExecutor {
 
         func labeledYear(_ candidate: Candidate, birth: Bool) -> Int? {
             let label = candidate.label.lowercased()
+            // "b. 1785" and the full-date label "b. 16 MAY 1651" alike:
+            // the first year after the marker.
             let match = birth
-                ? label.firstMatch(of: /\b(?:born|b\.)\s*(1[0-9]{3}|20[0-9]{2})\b/)
-                : label.firstMatch(of: /\b(?:died|d\.)\s*(1[0-9]{3}|20[0-9]{2})\b/)
+                ? label.firstMatch(of: /\b(?:born|b\.).*?\b(1[0-9]{3}|20[0-9]{2})\b/)
+                : label.firstMatch(of: /\b(?:died|d\.).*?\b(1[0-9]{3}|20[0-9]{2})\b/)
             return match.flatMap { Int($0.1) }
         }
 
