@@ -569,12 +569,27 @@ final class CatalogLockRobustnessTests: XCTestCase {
         XCTAssertEqual(proc.terminationStatus, 0, "reducer failed:\n\(scriptOut.suffix(500))")
         XCTAssertTrue(scriptOut.contains("WRITTEN"), "reducer must have applied:\n\(scriptOut.suffix(500))")
 
+        // The reducer deliberately keeps records on volumes mounted at run
+        // time. Capture what it actually emitted instead of freezing the
+        // mount topology from August 14 (8,760 records): mounting LACIE500,
+        // for example, correctly adds its 702 records.
+        let emittedCount: Int = try autoreleasepool {
+            let rawOutput = try JSONSerialization.jsonObject(
+                with: Data(contentsOf: catalogURL))
+            let outputDocument = try XCTUnwrap(rawOutput as? [String: Any])
+            let outputRecords = try XCTUnwrap(outputDocument["records"] as? [Any])
+            return outputRecords.count
+        }
+        XCTAssertGreaterThan(emittedCount, 0,
+                             "the reducer must not emit an empty catalog")
+
         let store = CatalogStore(directory: dir)
         let loaded = store.load()
         XCTAssertEqual(store.lastLoadOutcome, .loaded(fromBackup: false),
                        "the app REJECTED the reducer's real output — outcome \(store.lastLoadOutcome). "
                        + "The decoder's error is in this test run's NSLog output; read it.")
-        XCTAssertEqual(loaded.count, 8_760, "expected the reduced record count")
+        XCTAssertEqual(loaded.count, emittedCount,
+                       "the app must decode every record the reducer emitted")
     }
 
     // MARK: - Isolation

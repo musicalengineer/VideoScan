@@ -142,7 +142,7 @@ struct ArchivistQueryASTTranslatorTests {
         }
     }
 
-    @Test func invalidV2OutputDoesNotWalkTheFleet() async {
+    @Test func invalidV2OutputDoesNotWalkTheFleet() async throws {
         let recorder = ASTRequestRecorder()
         var template = OllamaQueryTranslator()
         template.transport = .fake { url, body in
@@ -169,8 +169,16 @@ struct ArchivistQueryASTTranslatorTests {
         }
 
         let requests = await recorder.snapshot()
-        #expect(requests.count == 1)
-        #expect(requests[0].0.contains("first.local"))
+        try #require(requests.count == 2,
+                     "one rejected v2 answer earns one same-host repair")
+        #expect(requests.allSatisfy { $0.0.contains("first.local") },
+                "bad model output must never walk to second.local")
+
+        let firstBody = String(decoding: requests[0].1, as: UTF8.self)
+        let repairBody = String(decoding: requests[1].1, as: UTF8.self)
+        #expect(!firstBody.contains("PREVIOUS ANSWER WAS REJECTED"))
+        #expect(repairBody.contains("PREVIOUS ANSWER WAS REJECTED"),
+                "the bounded retry must carry the strict decoder's complaint")
     }
 
     @Test func v2HostErrorFailsOverAndReportsResponder() async throws {
@@ -188,14 +196,18 @@ struct ArchivistQueryASTTranslatorTests {
             template: template,
             onResponder: { responder.set($0) })
         failover.probeBeforeRequest = false
+        failover.connectionRetryDelay = .zero
 
         _ = try await failover.translateAST("How old was Timmy here?")
 
         let requests = await recorder.snapshot()
+        try #require(requests.count == 3,
+                     "one transient 5xx retry must precede fleet failover")
         let urls = requests.map(\.0)
-        #expect(urls.count == 2)
         #expect(urls[0].contains("sick.local"))
-        #expect(urls[1].contains("healthy.local"))
+        #expect(urls[1].contains("sick.local"),
+                "a transient 5xx earns one bounded same-host retry")
+        #expect(urls[2].contains("healthy.local"))
         #expect(responder.get() == "healthy.local")
     }
 
