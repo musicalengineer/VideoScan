@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "corpusID": "hallie-interaction-200-v1",
-  "turnCount": 201,
+  "turnCount": 200,
   "description": "A balanced live, read-only evaluation of Hallie's manners, ordinary conversation, archive grounding, family knowledge, continuity, and failure hygiene.",
   "releaseGate": {
     "minimumOverallPassRate": 0.9,
@@ -193,7 +193,6 @@
         "Show the Breen family tree.",
         "Show the McGill family tree.",
         "Show the family tree.",
-        "Can we trace the Hudson line from Donna or did we only get the GEDCOM for Rick?",
         "How am I related to you?",
         "How is Donna related to Thankful Pratt?",
         "How are Rick and Donna related?",

@@ -539,29 +539,76 @@ struct HallieLineageAnswerTests {
 
     @Test func gedcomProvenanceAnswerNamesTheSourceAndCounts() {
         let bare = HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, graph: graph)
-        // Zero case: nobody in the fixture is a Zylstra.
-        let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "zylstra", graph: graph)
-        #expect(r.route == .graph)
-        #expect(r.outcome == .answered)
-        #expect(r.prose.contains("Rick Breen"), "the tree's root (home) person is named")
-        #expect(r.prose.contains("Donna"))
-        #expect(r.prose.contains("Zylstra"))
-        #expect(r.prose.lowercased().contains("no one"), "zero Zylstras is said plainly")
-        #expect(r.offeredActions == [.getFamilyTree])
-        #expect(r.basisLine.contains("GEDCOM"))
-
-        // Present case: the fixture has Hudsons (Donna's line).
-        let present = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", graph: graph)
-        #expect(present.prose.contains("Rick Breen"))
-        #expect(present.prose.contains("Hudson"))
-        #expect(!present.prose.lowercased().contains("no one"))
-        #expect(present.offeredActions.isEmpty)
-        print("PROSE-ZERO: " + r.prose)
-        print("PROSE-PRESENT: " + present.prose)
-        print("PROSE-BARE: " + bare.prose)
-
-        #expect(bare.prose.contains("Rick Breen"))
+        #expect(bare.route == .graph)
+        #expect(bare.outcome == .answered)
+        #expect(bare.prose.contains("first record is Rick Breen"), "the root is stated as the assumption it is")
+        #expect(bare.prose.contains("home person first"))
+        #expect(!bare.prose.contains("rooted on"))
+        #expect(bare.basisLine.contains("assumed"))
+        #expect(bare.offeredActions.isEmpty)
         #expect(HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, graph: nil).outcome == .declined)
+
+        // Zero surname, connected person: Rick has parents, no Zylstras anywhere.
+        let zero = HallieLineageAnswer.gedcomProvenance(person: "Rick", surname: "zylstra", graph: graph)
+        #expect(zero.prose.contains("I can trace"))
+        #expect(zero.prose.contains("No one in it carries the surname Zylstra"))
+        #expect(zero.offeredActions.isEmpty, "the walk succeeded; nothing to fetch")
+
+        // Bare surname, no person: a count, never a traceability claim.
+        let count = HallieLineageAnswer.gedcomProvenance(person: nil, surname: "latta", graph: graph)
+        #expect(count.prose.contains("carry the surname Latta"))
+        #expect(!count.prose.contains("I can trace"))
+    }
+
+    /// codex on 0508bdab: surname presence is not a path. The fixture's
+    /// Donna Hudson has no parents (as the real one does tonight), and a
+    /// second, unrelated Hudson sits elsewhere in the tree. The answer
+    /// must not claim her line is traceable; with parents attached it may.
+    @Test func gedcomProvenanceNeverClaimsTraceabilityFromSurnameAlone() {
+        let strayHudson = tree + """
+
+        0 @I90@ INDI
+        1 NAME Ezekiel /Hudson/
+        1 SEX M
+        1 BIRT
+        2 DATE 1840
+        """
+        let disconnected = GedcomFamilyGraph(gedcomText: strayHudson)
+        #expect(disconnected.people(withSurname: "hudson").count == 2)
+        let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", graph: disconnected)
+        #expect(r.prose.contains("Donna is in it"))
+        #expect(!r.prose.contains("I can trace"), "no parents → no traceability claim")
+        #expect(r.prose.contains("no parents attached"))
+        #expect(r.prose.contains("Hudson line stops there"))
+        #expect(r.prose.contains("pull rooted on her side"))
+        #expect(r.prose.contains("other Hudson in the tree isn’t connected to Donna"))
+        #expect(r.offeredActions == [.getFamilyTree])
+
+        // Attach parents to Donna and the walk earns the claim.
+        let withFAMC = strayHudson.replacingOccurrences(of: "1 NAME Donna /Hudson/\n1 SEX F",
+                                                         with: "1 NAME Donna /Hudson/\n1 SEX F\n1 FAMC @F90@")
+        #expect(withFAMC != strayHudson)
+        let connected = GedcomFamilyGraph(gedcomText: withFAMC + """
+
+        0 @I91@ INDI
+        1 NAME Walter /Hudson/
+        1 SEX M
+        1 FAMS @F90@
+        0 @I92@ INDI
+        1 NAME Ruth /Perry/
+        1 SEX F
+        1 FAMS @F90@
+        0 @F90@ FAM
+        1 HUSB @I91@
+        1 WIFE @I92@
+        1 CHIL @I9@
+        """)
+        let c = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", graph: connected)
+        #expect(c.prose.contains("I can trace 1 generation back from Donna"))
+        #expect(c.prose.contains("1 of her recorded ancestors carries the surname Hudson"))
+        #expect(c.prose.contains("other Hudson in the tree isn’t among her recorded ancestors"))
+        #expect(!c.prose.contains("no parents attached"))
+        #expect(c.offeredActions.isEmpty)
     }
 
     @Test func getFamilyTreeAnswerOffersTheSheetAndChangesNothing() {

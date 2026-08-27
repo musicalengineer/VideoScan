@@ -31,6 +31,19 @@ class HallieEvalTests(unittest.TestCase):
         })
 
 
+    def test_live_misses_lane_loads_with_the_interaction_schema(self):
+        # A second, growing corpus for pinned live misses; the fixed
+        # 200-turn corpus above is never edited for these.
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        self.assertGreaterEqual(len(turns), 1)
+        self.assertEqual(len({turn["id"] for turn in turns}), len(turns))
+        live = [t for t in turns if "Hudson line" in t["text"]]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(live[0]["expectedRoutes"], ["graph", "follow-up"])
+        self.assertIn("family_tree_live", live[0]["id"])
+
     def test_batch_input_resets_between_scenarios_but_not_followup_turns(self):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_interaction_corpus.json"

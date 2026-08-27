@@ -1780,11 +1780,13 @@ enum HallieLineageAnswer {
     }
 
     /// "did we only get the gedcom for Rick?" — what the loaded tree
-    /// covers: its file, whom it was pulled for (the GEDCOM's first
-    /// person = the home person of a FamilySearch export), whether the
-    /// named person is in it, how many carry the surname. Zero is said
-    /// plainly and the Get Family Tree sheet is offered for the missing
-    /// side. Deterministic; no model call.
+    /// covers: its file, its first record (stated as the assumption it
+    /// is), whether the named person is in it, and — the part that
+    /// matters — how far the graph can actually WALK back from that
+    /// person. Surname presence is never a traceability claim (codex on
+    /// 0508bdab: the real Donna Hudson has no parents attached, and a
+    /// 16k-person GEDCOM can hold unrelated Hudsons). Only the ancestor
+    /// walk earns "I can trace". Deterministic; no model call.
     static func gedcomProvenance(person: String?, surname: String?, graph: GedcomFamilyGraph?) -> Result {
         guard let graph else { return noTree() }
         var parts: [String] = []
@@ -1793,9 +1795,10 @@ enum HallieLineageAnswer {
         let fromFamilySearch = graph.people.values.contains { $0.familySearchID != nil }
         if let root = graph.rootPerson {
             let born = root.birthYear.map { " (b. \($0))" } ?? ""
+            source += ", whose first record is \(root.name)\(born)"
             source += fromFamilySearch
-                ? ", a FamilySearch ancestry pull rooted on \(root.name)\(born)"
-                : ", whose first record is \(root.name)\(born)"
+                ? " (FamilySearch exports put the home person first)"
+                : " (GEDCOM exports usually put the home person first)"
         } else if fromFamilySearch {
             source += ", a FamilySearch export"
         }
@@ -1803,38 +1806,81 @@ enum HallieLineageAnswer {
         parts.append(source)
 
         var offer = false
+        let carriers = surname.map { graph.people(withSurname: $0) } ?? []
+        let surnameDisplay = surname.map { carriers.first?.surname ?? HallieLineageQuestion.capitalizedName($0) }
+        var ancestorIDs: Set<String> = []     // everyone the walk reached
+        var selfIDs: Set<String> = []         // the named person's own record(s)
+        var personFound = false
+
         if let person {
             let found = graph.people(namedLike: person)
             if found.isEmpty {
                 parts.append("I don’t find “\(person)” in it.")
                 offer = true
             } else {
+                personFound = true
                 let shown = found.prefix(3).map { p in
                     p.name + (p.birthYear.map { " (b. \($0))" } ?? "")
                 }.joined(separator: ", ")
                 let more = found.count > 3 ? " and \(found.count - 3) more" : ""
                 parts.append("\(person) is in it: \(shown)\(more).")
+                // The walk is the evidence. Several namesakes → the
+                // deepest one speaks for the name.
+                var deepest = 0
+                for p in found {
+                    let walked = graph.ancestorLine(of: p, line: .both, generations: 60)
+                    deepest = max(deepest, walked.count)
+                    selfIDs.insert(p.id)
+                    for gen in walked { for a in gen.people { ancestorIDs.insert(a.id) } }
+                }
+                let pronoun: String
+                switch found.first?.sex {
+                case "F": pronoun = "her"
+                case "M": pronoun = "his"
+                default: pronoun = "their"
+                }
+                if deepest > 0 {
+                    parts.append("I can trace \(deepest) generation\(deepest == 1 ? "" : "s") back from \(person).")
+                    if let surnameDisplay {
+                        let connected = carriers.filter { ancestorIDs.contains($0.id) }.count
+                        let stray = carriers.filter { !ancestorIDs.contains($0.id) && !selfIDs.contains($0.id) }.count
+                        if connected > 0 {
+                            parts.append("\(connected) of \(pronoun) recorded ancestors carr\(connected == 1 ? "ies" : "y") the surname \(surnameDisplay).")
+                        } else if carriers.isEmpty {
+                            parts.append("No one in it carries the surname \(surnameDisplay).")
+                        }
+                        if stray > 0 {
+                            parts.append("The \(stray) other \(surnameDisplay)\(stray == 1 ? "" : "s") in the tree \(stray == 1 ? "isn’t" : "aren’t") among \(pronoun) recorded ancestors, so I can’t say they connect to \(person).")
+                        }
+                    }
+                } else {
+                    let lineName = surnameDisplay.map { "\($0) line" } ?? "line"
+                    parts.append("But \(pronoun) record has no parents attached, so \(pronoun) \(lineName) stops there — the tree needs a pull rooted on \(pronoun) side.")
+                    let stray = carriers.filter { !selfIDs.contains($0.id) }.count
+                    if let surnameDisplay, stray > 0 {
+                        parts.append("The \(stray) other \(surnameDisplay)\(stray == 1 ? "" : "s") in the tree \(stray == 1 ? "isn’t" : "aren’t") connected to \(person).")
+                    }
+                    offer = true
+                }
             }
         }
-        if let surname {
-            let carriers = graph.people(withSurname: surname)
-            let display = carriers.first?.surname ?? HallieLineageQuestion.capitalizedName(surname)
+        if let surnameDisplay, !personFound {
             if carriers.isEmpty {
                 let whose = graph.rootPerson.map { HallieLineageQuestion.possessive($0.name) + " ancestry" } ?? "this pull"
-                parts.append("No one in it carries the surname \(display) — that line isn’t in \(whose), so I can’t trace it yet.")
+                parts.append("No one in it carries the surname \(surnameDisplay) — that line isn’t in \(whose), so I can’t trace it yet.")
                 offer = true
             } else {
-                parts.append("\(carriers.count) \(carriers.count == 1 ? "person carries" : "people carry") the surname \(display), so I can trace that line.")
+                parts.append("\(carriers.count) \(carriers.count == 1 ? "person carries" : "people carry") the surname \(surnameDisplay); whether they connect to anyone you mean, I can only tell from a named person’s record.")
             }
         }
         if offer {
             let side = person.map { HallieLineageQuestion.possessive($0) + " side" } ?? "that side"
-            parts.append("To cover \(side), the tree needs a pull rooted on someone from it — tap Get Family Tree to add one.")
+            parts.append("To cover \(side), tap Get Family Tree and start the pull from someone on it.")
         }
         return Result(
             route: .graph, outcome: .answered,
             prose: parts.joined(separator: " "),
-            basisLine: "Basis: the loaded GEDCOM’s file name, first record and name/surname counts; nothing was downloaded or changed; no model call.",
+            basisLine: "Basis: the loaded GEDCOM’s file name, first record (assumed to be the home person), name/surname counts and an ancestor walk from the named person; nothing was downloaded or changed; no model call.",
             queryDescription: "lineage: gedcom provenance" + (person.map { " person=\($0)" } ?? "") + (surname.map { " surname=\($0)" } ?? ""),
             citations: [], catalogPersonName: nil,
             offeredActions: offer ? [.getFamilyTree] : [])
