@@ -146,25 +146,29 @@ struct FamilyTreeDemoView: View {
         // is picked up again by the loadState onChange.
         guard case .loaded = model.loadState else { return }
         if !incomingPersonID.isEmpty {
-            if model.focus(onID: incomingPersonID) {
-                incomingPersonID = ""
-                incomingHighlight = ""
-            } else {
+            if !model.focus(onID: incomingPersonID) {
                 // GEDCOM pointers are file-local. Never guess by display name
-                // if an action's exact pointer is absent after a new export.
-                incomingPersonID = ""
-                incomingHighlight = ""
+                // if an action's exact pointer is absent after a new export —
+                // but say so, don't leave the default person on screen.
+                model.reportMissingRecord(id: incomingPersonID,
+                                          displayName: incomingHighlight)
             }
+            incomingPersonID = ""
+            incomingHighlight = ""
             return
         }
         if !incomingSearchText.isEmpty {
             let text = incomingSearchText.trimmingCharacters(in: .whitespaces)
             model.searchText = text
-            model.focus(onName: text)
+            model.focus(onName: text, profiles: POIProfile.cachedSnapshot())
             incomingSearchText = ""
         }
         guard !incomingHighlight.isEmpty else { return }
-        model.focus(onName: incomingHighlight)
+        // People-tab names are profile names ("Rick"); the profiles carry
+        // the aliases that bridge them to the tree ("Richard Breen"). The
+        // snapshot is a read-only cache — listAll() can run a legacy
+        // migration (photo copies) and this runs on the main actor.
+        model.focus(onName: incomingHighlight, profiles: POIProfile.cachedSnapshot())
         incomingHighlight = ""
     }
 
@@ -258,6 +262,15 @@ struct FamilyTreeDemoView: View {
                 .onSubmit { model.selectFirstFiltered() }
                 .onKeyPress(.upArrow) { model.selectPrevious(); return .handled }
                 .onKeyPress(.downArrow) { model.selectNext(); return .handled }
+            // Honest miss for "Show X in Family Tree" / Hallie hints: the
+            // name is already in the field above; say so instead of leaving
+            // the default person looking like the answer.
+            if let notice = model.focusMissNotice {
+                Text(notice)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("ft.focusMissNotice")
+            }
 
             Divider()
 

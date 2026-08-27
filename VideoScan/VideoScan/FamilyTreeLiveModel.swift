@@ -192,7 +192,14 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     /// Sidebar filter. Setting it refilters once (O(people)) — not in `body`.
     @Published var searchText = "" {
-        didSet { if searchText != oldValue { refilter() } }
+        didSet {
+            if searchText != oldValue {
+                focusMissName = nil
+                focusMissNotice = nil
+                searchTextSetByMiss = false
+                refilter()
+            }
+        }
     }
 
     var isLive: Bool { graph != nil }
@@ -442,47 +449,147 @@ final class FamilyTreeLiveModel: ObservableObject {
         rebuildSelection()
     }
 
-    /// Hallie / People-tab focus: exact preferred name first, then one
-    /// unambiguous preferred/alternate name or FamilySearch ID, then surname
-    /// holders (first by sort order). Returns false when nothing matched so
-    /// the caller can leave the current selection alone.
+    /// Name a focus miss dropped into the sidebar filter, and the notice the
+    /// tab shows for it, so the miss is visible instead of leaving the default
+    /// (surname-alphabetical first) person looking like the answer
+    /// (2026-08-27: "Show Rick in Family Tree" opened on Jane Allen).
+    /// Cleared by the next search edit or a successful focus.
+    @Published private(set) var focusMissName: String?
+    @Published private(set) var focusMissNotice: String?
+    /// True while `searchText` holds a name WE put there for a miss, so a
+    /// later hit can restore the list without clobbering a user-typed filter.
+    private var searchTextSetByMiss = false
+
+    /// Hallie / People-tab focus. Resolution order:
+    ///   1. exact canonical name;
+    ///   2. the People-tab bridge (`profiles` through PersonResolver +
+    ///      FamilyTreeIdentityResolver — the SAME alias resolver Hallie uses):
+    ///      a configured identity ("Rick" → Richard Breen) beats a literal
+    ///      GEDCOM "Rick"; profile ambiguity is TERMINAL, never a guess;
+    ///   3. one unambiguous GEDCOM name / alternate name / FamilySearch ID;
+    ///   4. surname holders (first by sort order) — Hallie's "the Breens".
+    ///
+    /// Returns false when nothing matched. The miss is made visible: the
+    /// selection is cleared (no card pretends to be the answer), the name
+    /// becomes the sidebar search text, `focusMissNotice` is set, and one
+    /// line goes to videoscan.log.
     @discardableResult
-    func focus(onName raw: String) -> Bool {
+    func focus(onName raw: String, profiles: [POIProfile] = []) -> Bool {
         let wanted = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return false }
 
-        if let graph {
-            if let exact = sortedPeople.first(where: {
-                $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
-            }) {
-                select(exact.id)
-                return true
-            }
-            let identityMatches = graph.people(matching: wanted)
-            if identityMatches.count == 1, let identity = identityMatches.first {
-                select(identity.id)
-                return true
-            }
-            if let bySurname = Self.sorted(graph.people(withSurname: wanted)).first {
-                select(bySurname.id)
-                return true
-            }
+        switch resolveFocus(wanted, profiles: profiles) {
+        case .hit(let id):
+            clearMissState()
+            select(id)
+            return true
+        case .ambiguous:
+            recordMiss(name: wanted, reason: "ambiguous",
+                       notice: "More than one \u{201C}\(wanted)\u{201D} in the tree \u{2014} search to pick one")
+            return false
+        case .miss:
+            recordMiss(name: wanted, reason: "no match",
+                       notice: "No one named \u{201C}\(wanted)\u{201D} in the tree")
             return false
         }
-
-        if let demo = FamilyTreeDemoData.people.first(where: {
-            $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
-        }) {
-            select(demo.id)
-            return true
-        }
-        return false
     }
 
     func focus(onID id: String) -> Bool {
         guard graph?.people[id] != nil else { return false }
+        clearMissState()
         select(id)
         return true
+    }
+
+    /// A GEDCOM pointer that no longer exists on this tree (file-local IDs
+    /// after a new export). Same honest-miss handling as an unmatched name;
+    /// `displayName` (when the hint carried one) goes into the filter.
+    func reportMissingRecord(id: String, displayName: String?) {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let notice = name.isEmpty
+            ? "That record isn\u{2019}t in the current tree"
+            : "That record for \u{201C}\(name)\u{201D} isn\u{2019}t in the current tree"
+        appLog.write("[family-tree] focus(onID:) record \(id) not in current tree" +
+                     (name.isEmpty ? "" : " (display name '\(name)')"))
+        applyMiss(name: name, notice: notice)
+    }
+
+    private enum FocusResolution { case hit(String), ambiguous, miss }
+
+    private func resolveFocus(_ wanted: String, profiles: [POIProfile]) -> FocusResolution {
+        guard let graph else {
+            if let demo = FamilyTreeDemoData.people.first(where: {
+                $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
+            }) { return .hit(demo.id) }
+            return .miss
+        }
+        if let exact = sortedPeople.first(where: {
+            $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
+        }) {
+            return .hit(exact.id)
+        }
+        // 2. People-tab bridge. Only consulted when a profile actually claims
+        // the spelling; an unknown spelling falls through to GEDCOM so a
+        // surname hint ("Breens") is not turned into a false ambiguity.
+        if !profiles.isEmpty {
+            switch PersonResolver(profiles: profiles).resolve(wanted) {
+            case .ambiguous:
+                return .ambiguous
+            case .resolved:
+                switch FamilyTreeIdentityResolver(graph: graph, profiles: profiles).resolve(wanted) {
+                case .profileAmbiguous:
+                    return .ambiguous
+                case .people(let bridged):
+                    if bridged.count == 1, let one = bridged.first { return .hit(one.id) }
+                    if bridged.count > 1 { return .ambiguous }
+                    // A profile claims the name but nothing on the tree
+                    // carries it or its aliases: keep looking below.
+                }
+            case .unknown:
+                break
+            }
+        }
+        let identityMatches = graph.people(matching: wanted)
+        if identityMatches.count == 1, let identity = identityMatches.first {
+            return .hit(identity.id)
+        }
+        if let bySurname = Self.sorted(graph.people(withSurname: wanted)).first {
+            return .hit(bySurname.id)
+        }
+        return .miss
+    }
+
+    private func recordMiss(name: String, reason: String, notice: String) {
+        appLog.write("[family-tree] focus(onName:) \(reason) for '\(name)'")
+        applyMiss(name: name, notice: notice)
+    }
+
+    /// Miss state: filter shows the name, notice shows why, and NO card is
+    /// selected so the canvas/inspector can't present the previous or
+    /// default person as if they were the answer.
+    private func applyMiss(name: String, notice: String) {
+        if !name.isEmpty {
+            searchText = name            // didSet clears the flags; set them after
+            searchTextSetByMiss = true
+        }
+        focusMissName = name.isEmpty ? nil : name
+        focusMissNotice = notice
+        if selectedID != nil {
+            selectedID = nil
+            rebuildSelection()
+        }
+    }
+
+    /// Every successful focus (name or ID) restores consistent state: the
+    /// notice goes away and a filter WE set for a miss is cleared so the
+    /// newly selected person is visible in the list.
+    private func clearMissState() {
+        focusMissName = nil
+        focusMissNotice = nil
+        if searchTextSetByMiss {
+            searchText = ""              // didSet resets searchTextSetByMiss
+        }
+        searchTextSetByMiss = false
     }
 
     // MARK: Keyboard navigation (sidebar ↑ / ↓ / Return)
