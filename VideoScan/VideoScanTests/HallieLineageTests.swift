@@ -508,6 +508,62 @@ struct HallieLineageAnswerTests {
         #expect(HallieLineageQuestion.detect("get me a photo of donna") != .getFamilyTree)
     }
 
+    // MARK: GEDCOM provenance (live 2026-08-27, asked twice)
+
+    /// "did we only get the gedcom for Rick" is a question about what we
+    /// HAVE, not an imperative to download; the fetch verb sits inside an
+    /// interrogative/past clause and must not reach the Get Family Tree
+    /// pitch.
+    @Test func interrogativeFetchClausesAreNotFetches() {
+        let live = "can we trace the hudson line from donna or did we only get the gedcom for Rick?"
+        #expect(HallieLineageQuestion.detect(live) != .getFamilyTree)
+        #expect(HallieLineageQuestion.detect(live) == .gedcomProvenance(person: "Donna", surname: "hudson"))
+        #expect(HallieLineageQuestion.detect("did we only get the gedcom for rick")
+                == .gedcomProvenance(person: "Rick", surname: nil))
+        #expect(HallieLineageQuestion.detect("have we pulled the tree for donna's side")
+                == .gedcomProvenance(person: "Donna", surname: nil))
+        #expect(HallieLineageQuestion.detect("do we have the gedcom for the hudsons")
+                == .gedcomProvenance(person: nil, surname: "hudsons"))
+        for text in ["did you get the family tree from familysearch yet", "have you downloaded the gedcom"] {
+            #expect(HallieLineageQuestion.detect(text) != .getFamilyTree, Comment(rawValue: text))
+        }
+    }
+
+    @Test func imperativeFetchesStillRouteToGetFamilyTree() {
+        for text in ["get the family tree", "pull more generations",
+                     "can you fetch my ancestors from familysearch", "download the gedcom",
+                     "could you get the gedcom for donna"] {
+            #expect(HallieLineageQuestion.detect(text) == .getFamilyTree, Comment(rawValue: text))
+        }
+    }
+
+    @Test func gedcomProvenanceAnswerNamesTheSourceAndCounts() {
+        let bare = HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, graph: graph)
+        // Zero case: nobody in the fixture is a Zylstra.
+        let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "zylstra", graph: graph)
+        #expect(r.route == .graph)
+        #expect(r.outcome == .answered)
+        #expect(r.prose.contains("Rick Breen"), "the tree's root (home) person is named")
+        #expect(r.prose.contains("Donna"))
+        #expect(r.prose.contains("Zylstra"))
+        #expect(r.prose.lowercased().contains("no one"), "zero Zylstras is said plainly")
+        #expect(r.offeredActions == [.getFamilyTree])
+        #expect(r.basisLine.contains("GEDCOM"))
+
+        // Present case: the fixture has Hudsons (Donna's line).
+        let present = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", graph: graph)
+        #expect(present.prose.contains("Rick Breen"))
+        #expect(present.prose.contains("Hudson"))
+        #expect(!present.prose.lowercased().contains("no one"))
+        #expect(present.offeredActions.isEmpty)
+        print("PROSE-ZERO: " + r.prose)
+        print("PROSE-PRESENT: " + present.prose)
+        print("PROSE-BARE: " + bare.prose)
+
+        #expect(bare.prose.contains("Rick Breen"))
+        #expect(HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, graph: nil).outcome == .declined)
+    }
+
     @Test func getFamilyTreeAnswerOffersTheSheetAndChangesNothing() {
         let result = HallieLineageAnswer.getFamilyTreeAnswer(nil)
         #expect(result.outcome == .answered)
