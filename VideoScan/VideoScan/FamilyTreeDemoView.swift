@@ -98,7 +98,7 @@ struct FamilyTreeDemoView: View {
                 onSaved: { cropped, url in
                     // The crop wins on the card immediately (session
                     // override) and on relaunch (cardPhotoURL precedence).
-                    model.setPhotoOverride(NSImage(cgImage: cropped, size: .zero), for: source.personID)
+                    model.setPhotoOverride(cropped, for: source.personID)
                     appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
                     adjustError = nil
                     adjustSource = nil
@@ -831,15 +831,26 @@ struct FamilyTreeDemoView: View {
         panel.allowedContentTypes = [.image]
         panel.prompt = "Choose Photo"
         panel.message = "Choose a portrait or reference photo for this Family Tree person"
-        guard panel.runModal() == .OK,
-              let url = panel.url,
-              let image = NSImage(contentsOf: url) else { return }
-        model.setPhotoOverride(image, for: personID)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Decode bounded (≤ 2048 px) via ImageIO, off the main actor. An
+        // 8000×6000 scan never becomes a 190 MB bitmap in this process;
+        // `Task.detached` ≈ std::async on a background queue.
+        Task {
+            let image = await Task.detached(priority: .userInitiated) {
+                CropRenderer.boundedImage(at: url)
+            }.value
+            guard let image else {
+                adjustError = "Couldn't read \(url.lastPathComponent) as an image."
+                return
+            }
+            model.setPhotoOverride(image, for: personID)
+        }
     }
 
     /// Build the Adjust sheet's source: this session's override if the user
     /// just picked one, else the first non-card photo in People/<person>/.
-    /// Decoding is bounded to 2048 px (≈ 16 MB) before the sheet sees it.
+    /// Decoding is bounded to 2048 px (≈ 16 MB) by ImageIO before any
+    /// bitmap exists, and happens off the main actor. No NSImage, no TIFF.
     private func presentAdjustPhoto(for person: FamilyTreePersonSummary) {
         guard let assetPerson = model.assetPerson(for: person.id) else {
             adjustError = "Adjust Photo works on people from your GEDCOM."
@@ -847,37 +858,44 @@ struct FamilyTreeDemoView: View {
         }
         let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
         let originalURL = store.originalPhotoURL(for: assetPerson)
-        let image: CGImage?
-        if let override = model.photo(for: person.id),
-           let tiff = override.tiffRepresentation {
-            image = CropRenderer.boundedImage(data: tiff)
-        } else if let originalURL {
-            image = CropRenderer.boundedImage(at: originalURL)
-        } else {
-            image = nil
+        let override = model.photoOverrideSource(for: person.id)
+        Task {
+            let image: CGImage?
+            if let override {
+                image = override
+            } else if let originalURL {
+                image = await Task.detached(priority: .userInitiated) {
+                    CropRenderer.boundedImage(at: originalURL)
+                }.value
+            } else {
+                image = nil
+            }
+            guard let image else {
+                adjustError = "No photo yet — use Pick Photo or Apple Photos first."
+                return
+            }
+            adjustError = nil
+            adjustSource = FamilyPhotoAdjustSource(
+                personID: person.id, personName: person.name,
+                assetPerson: assetPerson, image: image, originalURL: originalURL,
+                store: store)
         }
-        guard let image else {
-            adjustError = "No photo yet — use Pick Photo or Apple Photos first."
-            return
-        }
-        adjustError = nil
-        adjustSource = FamilyPhotoAdjustSource(
-            personID: person.id, personName: person.name,
-            assetPerson: assetPerson, image: image, originalURL: originalURL)
     }
 
     private func importApplePhoto(_ item: PhotosPickerItem?) {
         guard let item, let targetID = model.selectedID else { return }
         Task {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = NSImage(data: data) else {
-                await MainActor.run { selectedPhotoItem = nil }
+            let data = try? await item.loadTransferable(type: Data.self)
+            let image = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+                guard let data else { return nil }
+                return CropRenderer.boundedImage(data: data)
+            }.value
+            guard let image else {
+                selectedPhotoItem = nil
                 return
             }
-            await MainActor.run {
-                model.setPhotoOverride(image, for: targetID)
-                selectedPhotoItem = nil
-            }
+            model.setPhotoOverride(image, for: targetID)
+            selectedPhotoItem = nil
         }
     }
 

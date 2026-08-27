@@ -227,6 +227,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Sorted by surname, then given name, then id (stable).
     private var sortedPeople: [GedcomFamilyGraph.Person] = []
     private var photoOverrides: [String: NSImage] = [:]
+    /// The bounded (≤ 2048 px) bitmap behind each override, kept so
+    /// "Adjust Photo…" can start from it directly instead of round-tripping
+    /// the NSImage through an unbounded TIFF (codex #707 item 6).
+    private var photoOverrideSources: [String: CGImage] = [:]
     /// id → row index in `filteredPeople`. Rebuilt only when the filter
     /// changes (O(rows) once), so each ↑/↓ keypress is one dictionary
     /// lookup, not a linear scan.
@@ -325,6 +329,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         let sourceKey = newGraph.map(Self.sourceKey)
         if sourceKey != installedSourceKey {
             photoOverrides.removeAll()
+            photoOverrideSources.removeAll()
             installedSourceKey = sourceKey
         }
         graph = newGraph
@@ -747,7 +752,24 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func setPhotoOverride(_ image: NSImage, for personID: String) {
         photoOverrides[personID] = image
+        photoOverrideSources[personID] = nil
         rebuildScene()
+    }
+
+    /// Preferred entry: a bitmap already decoded at a bounded size (see
+    /// `CropRenderer.boundedImage`). `NSImage(cgImage:size:)` wraps it
+    /// without copying pixels, so the card and the Adjust sheet share one
+    /// decode.
+    func setPhotoOverride(_ image: CGImage, for personID: String) {
+        photoOverrides[personID] = NSImage(cgImage: image, size: .zero)
+        photoOverrideSources[personID] = image
+        rebuildScene()
+    }
+
+    /// The bounded bitmap behind this session's override, if it came in
+    /// through the CGImage path.
+    func photoOverrideSource(for personID: String) -> CGImage? {
+        photoOverrideSources[personID]
     }
 
     func photo(for personID: String) -> NSImage? {
