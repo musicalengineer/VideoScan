@@ -155,4 +155,95 @@ struct HallieLineageYearBoundTests {
         #expect(none.outcome == .declined)
         #expect(none.prose.contains("born in or after 1950"))
     }
+
+    // MARK: codex #707 major 7 — a date gap is not a reached bound
+
+    /// Rick 1959 → Richard Sr 1929 → Bram (undated) → Carl (undated) → Dermot 1700.
+    /// Bound 1800: Bram is kept under a dated child; Carl is skipped only
+    /// because neither he nor Bram has a date — nobody can say whether the
+    /// line reached 1800.
+    private static let gappy = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Rick /Breen/
+    1 SEX M
+    1 BIRT
+    2 DATE 1959
+    1 FAMC @F1@
+    0 @I2@ INDI
+    1 NAME Richard /Breen/ Sr
+    1 SEX M
+    1 BIRT
+    2 DATE 1929
+    1 FAMC @F2@
+    1 FAMS @F1@
+    0 @I3@ INDI
+    1 NAME Bram /Breen/
+    1 SEX M
+    1 FAMC @F3@
+    1 FAMS @F2@
+    0 @I4@ INDI
+    1 NAME Carl /Breen/
+    1 SEX M
+    1 FAMC @F4@
+    1 FAMS @F3@
+    0 @I5@ INDI
+    1 NAME Dermot /Breen/
+    1 SEX M
+    1 BIRT
+    2 DATE 1700
+    1 FAMS @F4@
+    0 @F1@ FAM
+    1 HUSB @I2@
+    1 CHIL @I1@
+    0 @F2@ FAM
+    1 HUSB @I3@
+    1 CHIL @I2@
+    0 @F3@ FAM
+    1 HUSB @I4@
+    1 CHIL @I3@
+    0 @F4@ FAM
+    1 HUSB @I5@
+    1 CHIL @I4@
+    0 TRLR
+    """
+
+    @Test func undatedLinksAreReportedAsADateGapNotAReachedBound() throws {
+        let g = GedcomFamilyGraph(gedcomText: Self.gappy)
+        let rick = try #require(g.people["@I1@"])
+        let walked = g.ancestorLine(of: rick, line: .paternal, generations: Q.yearBoundGenerations, untilYear: 1800)
+        #expect(walked.map { $0.people.map(\.name) } == [["Richard Breen Sr"], ["Bram Breen"]])
+        let gap = g.yearBoundGap(of: rick, generations: walked, untilYear: 1800)
+        #expect(gap.provenBeyond.isEmpty, "Carl has no date — nothing is proven past 1800")
+        #expect(gap.undatedUnwalked.map(\.name) == ["Carl Breen"])
+        #expect(gap.undatedFrontier.map(\.name) == ["Bram Breen"])
+        #expect(gap.undatedWalked.map(\.name) == ["Bram Breen"])
+        #expect(gap.hasDateGap)
+
+        let ctx = HallieTurnExecutor.Context(
+            profiles: [], graph: g,
+            speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = try #require(HallieLineageAnswer.answer(
+            .ancestorLine(person: "Rick", line: .paternal, generations: Q.yearBoundGenerations, untilYear: 1800),
+            context: ctx))
+        #expect(r.outcome == .answered)
+        #expect(r.prose.contains("Bram Breen"))
+        #expect(!r.prose.contains("Carl Breen"))
+        #expect(r.prose.contains("That is as far as the dates take that line back to 1800 — 1 ancestor above Bram Breen has no recorded dates, so the line may reach further."), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("I stopped at 1800"), "not asserted as proven")
+        #expect(!r.prose.contains("as far as the tree reaches"), "the tree does not end there")
+
+        // The dated chain (Owen undated under Patrick 1860, Seamus 1790
+        // dated before 1850) is still PROVEN to go further back.
+        let proven = graph.yearBoundGap(
+            of: rick, generations: graph.ancestorLine(of: self.rick, line: .paternal, generations: 40, untilYear: 1850),
+            untilYear: 1850)
+        #expect(proven.provenBeyond.map(\.name) == ["Seamus Breen"])
+        #expect(!proven.hasDateGap)
+        // And a bound the dated tree never reaches has no gap at all.
+        let ends = graph.yearBoundGap(
+            of: self.rick, generations: graph.ancestorLine(of: self.rick, line: .paternal, generations: 40, untilYear: 1600),
+            untilYear: 1600)
+        #expect(ends.provenBeyond.isEmpty && !ends.hasDateGap)
+    }
 }

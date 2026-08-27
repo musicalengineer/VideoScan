@@ -844,17 +844,21 @@ enum HallieLineageAnswer {
                 sentences.append("\(gen.label.capitalized): \(names).")
             }
             if let untilYear {
-                // Stopped by the year, by the tree, or both — say which.
-                let last = card.generations.last?.people ?? []
-                let beyond = last.contains { card in
-                    guard let p = graph.people[card.gedcomID] else { return false }
-                    return graph.relatives(.parents, of: p).contains {
-                        !GedcomFamilyGraph.withinBound($0, child: p, year: untilYear)
-                    }
+                // Stopped by the year (PROVEN by a dated parent past it),
+                // by a date gap (undated parents nobody can place), or by
+                // the tree itself — say which (codex #707 major 7).
+                let walked = graph.ancestorLine(of: person, line: line,
+                                                generations: generations, untilYear: untilYear)
+                let gap = graph.yearBoundGap(of: person, generations: walked, untilYear: untilYear)
+                if !gap.provenBeyond.isEmpty {
+                    sentences.append("I stopped at \(untilYear) as you asked; the tree goes further back.")
+                } else if gap.hasDateGap {
+                    let n = gap.undatedUnwalked.count
+                    let above = gap.undatedFrontier.map(\.name).joined(separator: " and ")
+                    sentences.append("That is as far as the dates take that line back to \(untilYear) — \(n) ancestor\(n == 1 ? "" : "s") above \(above) \(n == 1 ? "has" : "have") no recorded dates, so the line may reach further.")
+                } else {
+                    sentences.append("That is as far as the tree reaches on that line before \(untilYear).")
                 }
-                sentences.append(beyond
-                    ? "I stopped at \(untilYear) as you asked; the tree goes further back."
-                    : "That is as far as the tree reaches on that line before \(untilYear).")
             } else if !card.reachedAll, let last = card.generations.last?.people.first {
                 let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
                 sentences.append("The tree stops there — no \(who) recorded for \(last.name).")
