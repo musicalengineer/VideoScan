@@ -4,13 +4,25 @@
 // cautions, one card per representation (role · signature · locations ·
 // recommended instance · reason), and the action buttons that hand off
 // to the EXISTING verbs — Promote (unchanged safe executor), Verify
-// Audio, Transcode (companion / access copy).
+// Audio, Balance Audio, Transcode (companion / access copy).
+//
+// 2026-08-26 (Rick: "the helper should have a button Verify/Fix Audio
+// and, if the audio is not balanced, it balances it"): the Verify
+// verdict now shows INLINE under the actions with the probe's numbers;
+// a fixable verdict swaps the Verify button for Balance Audio (progress
+// while it runs), and "Verify and Fix Audio" chains the two. The
+// state lives in the job's VerifyThenBalanceCoordinator
+// (HelperAudioRepair.swift), so it survives collapsing the row.
 
 import SwiftUI
 
 struct AssessCopiesDetailView: View {
     @ObservedObject var job: AssessCopiesJob
     @EnvironmentObject var model: VideoScanModel
+    /// Forwarded only (to the Transcode sheet and the job's audio
+    /// coordinator) — the panel reads job/coordinator state, not the
+    /// Center's own published fields.
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var center: MediaFileOperationsCenter
 
     @State private var transcodeRequest: TranscodeRequest?
@@ -207,39 +219,55 @@ struct AssessCopiesDetailView: View {
         var recRecord: VideoRecord?
         var companion: CopyRepresentation?
         var repaired: CopyRepresentation?
-        var needsAudio: Bool
         var readOnly: Bool
         var recReachable: Bool { recRecord.map { VolumeReachability.isReachable(path: $0.fullPath) } ?? false }
     }
 
     private func actions(_ a: CopyFamilyAssessment) -> some View {
         let recID = a.recommendedInstanceID
+        // LIVE record first (verify persists its verdict on the model's
+        // instance; the job's map is a start-time snapshot).
+        let recRecord = recID.flatMap { model.record(forID: $0) ?? job.record(for: $0) }
         let ctx = ActionContext(rec: a.recommendedRepresentation,
                                 recID: recID,
-                                recRecord: recID.flatMap { job.record(for: $0) },
+                                recRecord: recRecord,
                                 companion: a.representations.first { $0.role == .preservationCompanion },
                                 repaired: a.representations.first { $0.role == .repairedCopy },
-                                needsAudio: a.actions.contains(.verifyAudioFirst),
                                 readOnly: model.isReadOnly)
-        return HStack(spacing: 8) {
-            ForEach(a.actions, id: \.rawValue) { action in
-                actionButton(action, ctx)
+        // One coordinator per recommended record, owned by the job.
+        // Idempotent lookup-or-create; it publishes nothing on creation,
+        // so calling it from the body cannot loop the render.
+        let coordinator = recRecord.map { job.audioCoordinator(for: $0, center: center, model: model) }
+        let repairedExists = ctx.repaired != nil || coordinator?.phase == .balanced
+        let composed = HelperAudioActions.compose(base: a.actions,
+                                                  outcome: coordinator?.outcome,
+                                                  repairedCopyExists: repairedExists)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(composed, id: \.rawValue) { action in
+                    actionButton(action, ctx, coordinator: coordinator)
+                }
+                Spacer()
             }
-            Spacer()
+            if let coordinator {
+                HelperAudioVerdictLine(coordinator: coordinator,
+                                       repairedCopyName: ctx.repaired?.instances.first?.filename)
+            }
         }
     }
 
     @ViewBuilder
-    private func actionButton(_ action: CopyFamilyAction, _ c: ActionContext) -> some View {
+    private func actionButton(_ action: CopyFamilyAction, _ c: ActionContext,
+                              coordinator: VerifyThenBalanceCoordinator?) -> some View {
         switch action {
         case .verifyAudioFirst:
-            Button {
-                if let r = c.recRecord { _ = center.startVerifyAudio(record: r, model: model) }
-            } label: { Label("Verify Audio First", systemImage: "waveform.badge.magnifyingglass") }
-            .buttonStyle(.borderedProminent)
-            .tint(.orange)
-            .disabled(c.recRecord == nil)
-            .help("Run Verify Audio on the recommended copy before promoting it.")
+            if let coordinator {
+                HelperVerifyButtons(coordinator: coordinator)
+            }
+        case .balanceAudio:
+            if let coordinator {
+                HelperBalanceButton(coordinator: coordinator, readOnly: c.readOnly)
+            }
         case .promoteRecommendedOriginal:
             Button {
                 if let id = c.recID { promote([id]) }
@@ -413,7 +441,7 @@ struct AssessCopiesDetailView: View {
                              okText: readiness.audio == .noAudioTrack ? "No audio track" : "Audio verified",
                              fixText: {
                                  if case .verifiedProblem(let note) = readiness.audio { return "Audio problem — \(note)" }
-                                 return "Audio not verified — Verify Audio First below"
+                                 return "Audio not verified — Verify Audio below"
                              }())
                 }
             }
@@ -566,5 +594,171 @@ struct AssessCopiesDetailView: View {
     private func namePreview(_ rec: VideoRecord, title: String?) -> String {
         let facts = ArchivePathResolver.facts(for: rec)
         return "→ " + ArchivePathResolver.baseRelativePath(facts: facts, title: title)
+    }
+}
+
+// MARK: - Verify / Fix Audio controls (2026-08-26)
+
+// These are separate structs (not private funcs on the panel) because
+// each needs `@ObservedObject` on the coordinator / balance job to
+// repaint on progress — SwiftUI only re-evaluates a view whose OWN
+// observed objects change. (≈ a Qt widget subscribing to a signal:
+// the subscription must belong to the widget that repaints.)
+
+/// "Verify Audio" (two-step — Rick wants to see the verdict) plus the
+/// one-click "Verify and Fix Audio" that chains a balance when fixable.
+private struct HelperVerifyButtons: View {
+    @ObservedObject var coordinator: VerifyThenBalanceCoordinator
+
+    var body: some View {
+        Button {
+            coordinator.verify(thenBalance: false)
+        } label: {
+            if coordinator.phase == .verifying {
+                Label { Text("Verifying…") } icon: { ProgressView().controlSize(.mini) }
+            } else {
+                Label("Verify Audio", systemImage: "waveform.badge.magnifyingglass")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+        .disabled(coordinator.isBusy)
+        .help("Diagnoses the audio track; if it's one-sided or mono, you can balance it here.")
+        .accessibilityIdentifier("archiveHelper.verifyAudio")
+
+        Button {
+            coordinator.verify(thenBalance: true)
+        } label: { Label("Verify and Fix Audio", systemImage: "waveform.path.badge.plus") }
+        .disabled(coordinator.isBusy)
+        .help("Diagnoses the track and, if it's one-sided or mono, balances it straight away — no second click. The verdict still shows here.")
+        .accessibilityIdentifier("archiveHelper.verifyAndFixAudio")
+    }
+}
+
+/// "Balance Audio" — shown only for a fixable verdict; turns into a
+/// live progress label while the balance job runs.
+private struct HelperBalanceButton: View {
+    @ObservedObject var coordinator: VerifyThenBalanceCoordinator
+    let readOnly: Bool
+
+    var body: some View {
+        if coordinator.phase == .balancing, let job = coordinator.balanceJob {
+            HelperBalanceProgress(job: job)
+        } else {
+            Button {
+                coordinator.balance()
+            } label: { Label("Balance Audio", systemImage: "waveform.path") }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .disabled(coordinator.isBusy || readOnly)
+            .help({
+                let name = coordinator.plannedBalanceOutput?.lastPathComponent ?? "<name>_balanced"
+                return "Copies the live channel to both speakers into \(name) beside the original (video untouched, no re-encode). The original file is never changed."
+            }())
+            .accessibilityIdentifier("archiveHelper.balanceAudio")
+        }
+    }
+}
+
+private struct HelperBalanceProgress: View {
+    @ObservedObject var job: BalanceAudioJob
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if job.isIndeterminate {
+                ProgressView().controlSize(.small)
+            } else {
+                ProgressView(value: job.fraction).frame(width: 90)
+                Text("\(Int((job.fraction * 100).rounded()))%")
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            Text("Balancing…").font(.system(size: 12))
+            Button("Cancel") { job.cancel() }.controlSize(.small)
+        }
+        .help(job.subtitle)
+    }
+}
+
+/// The verdict line under the actions: what Verify found, with the
+/// probe's numbers; the balance outcome once one ran.
+private struct HelperAudioVerdictLine: View {
+    @ObservedObject var coordinator: VerifyThenBalanceCoordinator
+    /// Filename of an already-catalogued repaired copy, if the family
+    /// holds one (the 8/19 rule — never re-offer Balance).
+    let repairedCopyName: String?
+
+    var body: some View {
+        if let line = content {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: line.icon)
+                    .foregroundStyle(line.color)
+                    .font(.system(size: 12))
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.text)
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = line.detail {
+                        Text(detail)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("archiveHelper.audioVerdict")
+        }
+    }
+
+    private struct Line {
+        var icon: String
+        var color: Color
+        var text: String
+        var detail: String?
+    }
+
+    private var content: Line? {
+        switch coordinator.phase {
+        case .verifying:
+            return Line(icon: "waveform.badge.magnifyingglass", color: .secondary,
+                        text: "Diagnosing the audio track… (reads the whole track; a long tape takes a minute)")
+        case .balancing:
+            return Line(icon: "waveform.path", color: .secondary,
+                        text: coordinator.balanceJob?.subtitle ?? "Balancing…")
+        case .balanced:
+            let name = coordinator.balancedOutputName ?? "the balanced copy"
+            return Line(icon: "checkmark.circle.fill", color: .green,
+                        text: "Audio balanced into \(name) — promote the original and the repaired copy together.")
+        case .failed(let message):
+            return Line(icon: "xmark.octagon.fill", color: .orange, text: message)
+        case .idle, .verified:
+            guard let outcome = coordinator.outcome else { return nil }
+            switch outcome {
+            case .balanced(let s):
+                return Line(icon: "checkmark.circle.fill", color: .green, text: "Audio is balanced — \(s)",
+                            detail: levels)
+            case .fixable(_, let verdict):
+                if let repairedCopyName {
+                    return Line(icon: "checkmark.circle.fill", color: .green,
+                                text: "\(verdict) on the original — already balanced into \(repairedCopyName).",
+                                detail: levels)
+                }
+                return Line(icon: "exclamationmark.circle.fill", color: .orange,
+                            text: "\(verdict). Balance Audio will copy the live channel to both speakers.",
+                            detail: levels)
+            case .refused(let reason):
+                return Line(icon: "info.circle.fill", color: .secondary,
+                            text: "Balance Audio won't apply — \(reason)", detail: levels)
+            case .damaged(let note):
+                return Line(icon: "exclamationmark.triangle.fill", color: .orange,
+                            text: "Audio problem — \(note). Balance Audio can't repair this; see Verification Results in the Catalog for the repair options.")
+            case .noAudio:
+                return Line(icon: "speaker.slash.fill", color: .secondary,
+                            text: "No audio track in this file.")
+            }
+        }
+    }
+
+    private var levels: String? {
+        coordinator.diagnosis?.balanceAnalysis.map(HelperAudioOutcome.levelsLine)
     }
 }
