@@ -65,6 +65,12 @@ public struct GedcomFamilyGraph: Sendable {
         public var birthYear: Int? { GedcomFamilyGraph.year(in: birthDate) }
         /// Same for the raw death date.
         public var deathYear: Int? { GedcomFamilyGraph.year(in: deathDate) }
+        /// What the raw birth date PROVES, qualifier included ("AFT 1837"
+        /// → [1838, ∞)). Date RULES (feasibility, year bounds) must use
+        /// these, not `birthYear`/`deathYear`, which drop the qualifier
+        /// (codex #721/#723). Nil when the date has no year.
+        public var birthYearInterval: GedcomYearInterval? { GedcomYearInterval.parse(birthDate) }
+        public var deathYearInterval: GedcomYearInterval? { GedcomYearInterval.parse(deathDate) }
     }
 
     struct Family: Sendable {

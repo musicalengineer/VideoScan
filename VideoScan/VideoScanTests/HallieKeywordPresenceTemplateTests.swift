@@ -46,8 +46,43 @@ struct HallieKeywordPresenceTemplateTests {
         let file = result("shape=presence keyword=cape", [
             citation("Cape_1993.mov", [.keywordTokens(field: "filename", queryTerm: "down the cape", matchedTokens: ["cape"], alias: nil, matchedValue: "Cape_1993.mov", timestamp: nil)]),
         ], total: 5)
+        // One cited of five (codex #715): the four unseen are not proven to
+        // be filename hits, so the sentence says what was shown.
         #expect(ArchivistPresenceAnswerComposer.compose(file).prose
-                == "5 videos with “down the cape” in the filename — Cape_1993.mov (1993), and 4 more.")
+                == "5 videos matched: 1 shown with “down the cape” in the filename — Cape_1993.mov (1993); 4 more.")
+        // Every match cited → the single-kind template stands.
+        let all = result("shape=presence keyword=cape", [
+            citation("Cape_1993.mov", [.keywordTokens(field: "filename", queryTerm: "down the cape", matchedTokens: ["cape"], alias: nil, matchedValue: "Cape_1993.mov", timestamp: nil)]),
+            citation("Cape_1994.mov", [.keywordTokens(field: "filename", queryTerm: "down the cape", matchedTokens: ["cape"], alias: nil, matchedValue: "Cape_1994.mov", timestamp: nil)]),
+        ])
+        #expect(ArchivistPresenceAnswerComposer.compose(all).prose
+                == "2 videos with “down the cape” in the filename — Cape_1993.mov (1993), Cape_1994.mov (1994).")
+    }
+
+    // codex #715 sensor: a truncated page whose VISIBLE citations are all
+    // one kind must not attribute that kind to the unseen remainder.
+    @Test func truncatedSingleVisibleKindSaysShownNotAll() {
+        let truncated = result("shape=presence keyword=oldest photo", [
+            citation("a.mov", [.transcriptMention(queryTerm: "oldest photo", model: nil),
+                               .pathYear(year: 1993, fullPath: "/vol/1993/a.mov")]),
+            citation("b.mov", [.transcriptMention(queryTerm: "oldest photo", model: nil)]),
+        ], total: 7)
+        let prose = ArchivistPresenceAnswerComposer.compose(truncated).prose
+        #expect(prose == "7 videos matched: 2 shown where someone says “oldest photo” — a.mov (1993), b.mov; 5 more.")
+        #expect(!prose.hasPrefix("7 videos where someone says"), "the unseen five are not transcript hits by proof")
+        // More than three cited: the first three are named, the rest of the
+        // page counted as shown, the unseen remainder apart.
+        let wide = result("shape=presence keyword=cape", (1...5).map { i in
+            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", model: nil)])
+        }, total: 30)
+        #expect(ArchivistPresenceAnswerComposer.compose(wide).prose
+                == "30 videos matched: 5 shown where someone says “cape” — c1.mov, c2.mov, c3.mov, and 2 more shown; 25 more.")
+        // cited == total with more than three: unchanged template.
+        let full = result("shape=presence keyword=cape", (1...5).map { i in
+            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", model: nil)])
+        })
+        #expect(ArchivistPresenceAnswerComposer.compose(full).prose
+                == "5 videos where someone says “cape” — c1.mov, c2.mov, c3.mov, and 2 more.")
     }
 
     // codex #707 item 8 sensor: the FIRST citation's kind used to be

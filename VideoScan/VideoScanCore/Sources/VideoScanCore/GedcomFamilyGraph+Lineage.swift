@@ -22,9 +22,29 @@ extension GedcomFamilyGraph {
     }
 
     /// One generation of an ancestor walk. `generation` 1 = parents.
+    /// `line` records which parent(s) the walk followed so a later
+    /// gap analysis over these generations looks at the SAME side
+    /// (codex #721: a maternal walk must not report a paternal gap).
     public struct AncestorGeneration: Sendable, Equatable {
         public let generation: Int
         public let people: [Person]
+        public let line: Line
+
+        public init(generation: Int, people: [Person], line: Line = .both) {
+            self.generation = generation
+            self.people = people
+            self.line = line
+        }
+    }
+
+    /// The parent relation a line follows — one place, shared by the walk
+    /// and the gap analysis so they can never disagree.
+    static func parentRelation(for line: Line) -> Relation {
+        switch line {
+        case .maternal: return .mother
+        case .paternal: return .father
+        case .both:     return .parents
+        }
     }
 
     /// Walk UP from `person` for at most `generations` steps. The result
@@ -47,12 +67,7 @@ extension GedcomFamilyGraph {
         for g in 1...generations {
             var next: [Person] = []
             for p in frontier {
-                let parents: [Person]
-                switch line {
-                case .maternal: parents = relatives(.mother, of: p)
-                case .paternal: parents = relatives(.father, of: p)
-                case .both:     parents = relatives(.parents, of: p)
-                }
+                let parents = relatives(Self.parentRelation(for: line), of: p)
                 for parent in parents where !seen.contains(parent.id) {
                     if let untilYear, !Self.withinBound(parent, child: p, year: untilYear) { continue }
                     seen.insert(parent.id)
@@ -60,17 +75,26 @@ extension GedcomFamilyGraph {
                 }
             }
             if next.isEmpty { break }
-            out.append(AncestorGeneration(generation: g, people: next))
+            out.append(AncestorGeneration(generation: g, people: next, line: line))
             frontier = next
         }
         return out
     }
 
-    /// The `untilYear` rule, in one place so the prose can quote it.
+    /// The `untilYear` rule, in one place so the prose can quote it. A
+    /// person is PAST the bound only when their birth is proven before
+    /// it — the whole interval below `year` (codex #721/#723: "AFT 1590"
+    /// with a 1600 bound is not past it; "BEF 1610" is not proven past it
+    /// either). An undated parent rides on the child's date the same way.
     public static func withinBound(_ parent: Person, child: Person, year: Int) -> Bool {
-        if let born = parent.birthYear { return born >= year }
-        if let childBorn = child.birthYear { return childBorn >= year }
+        if let born = parent.birthYearInterval { return !born.isEntirelyBefore(year) }
+        if let childBorn = child.birthYearInterval { return !childBorn.isEntirelyBefore(year) }
         return false
+    }
+
+    /// PROVEN born before `year`: the birth interval ends below it.
+    static func provenBornBefore(_ person: Person, year: Int) -> Bool {
+        person.birthYearInterval?.isEntirelyBefore(year) ?? false
     }
 
     /// What a year-bounded walk could and could not PROVE (codex #707
@@ -93,9 +117,17 @@ extension GedcomFamilyGraph {
         public var hasDateGap: Bool { !undatedUnwalked.isEmpty }
     }
 
+    /// `line` is the side the walk followed; pass it explicitly. When nil
+    /// it is read from the generations (stamped by `ancestorLine`), and
+    /// only an EMPTY walk with no line given falls back to `.both`
+    /// (codex #721: the gap used to scan `.parents` for every node, so a
+    /// maternal query could claim an undated FATHER as its gap).
     public func yearBoundGap(of person: Person,
                              generations: [AncestorGeneration],
-                             untilYear: Int) -> YearBoundGap {
+                             untilYear: Int,
+                             line: Line? = nil) -> YearBoundGap {
+        let side = line ?? generations.first?.line ?? .both
+        let relation = Self.parentRelation(for: side)
         let walked = generations.flatMap(\.people)
         let walkedIDs = Set(walked.map(\.id))
         var proven: [Person] = []
@@ -104,10 +136,10 @@ extension GedcomFamilyGraph {
         var seen: Set<String> = []
         for p in (generations.isEmpty ? [person] : walked) {
             var gapHere = false
-            for parent in relatives(.parents, of: p) where !walkedIDs.contains(parent.id) {
+            for parent in relatives(relation, of: p) where !walkedIDs.contains(parent.id) {
                 guard seen.insert(parent.id).inserted else { continue }
-                if let born = parent.birthYear {
-                    if born < untilYear { proven.append(parent) }
+                if parent.birthYearInterval != nil {
+                    if Self.provenBornBefore(parent, year: untilYear) { proven.append(parent) }
                 } else {
                     undated.append(parent)
                     gapHere = true

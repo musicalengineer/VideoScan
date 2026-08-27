@@ -12,15 +12,24 @@
 //
 // The rule is MEDIUM-SPECIFIC and TRI-STATE (codex gate 2026-08-26):
 //   - photograph, film and sound each check their OWN fact;
-//   - `.impossible` only when the death year is KNOWN and precedes the
-//     fact's EARLIEST year (1838 / 1888 / 1877) — "before it existed at
-//     all" means before the lower bound, never the upper;
+//   - `.impossible` only when the death is PROVEN to precede the fact's
+//     EARLIEST year (1838 / 1888 / 1877) — "before it existed at all"
+//     means before the lower bound, never the upper;
 //   - no death year: a birth AT OR AFTER the earliest year proves the
 //     medium existed in the person's lifetime → `.possible`; a birth
 //     before it is `.unknown` — an early birth makes a photograph
 //     unlikely, not impossible, and Hallie does not say "can't" on a
 //     guess. Only `.impossible` is operational (vetoes); the other two
 //     arms behave identically today (ordinary offer).
+//
+// Dates are GEDCOM dates, qualifiers included (codex #721/#723): the
+// rule reasons on `GedcomYearInterval`s, never on a bare year. "AFT
+// 1837" is [1838, ∞) — NOT a death in 1837 and NOT impossible for a
+// photograph; "BEF 1838" is (−∞, 1837] — proven before photography.
+// "Proven before" = the death interval's UPPER bound < earliest;
+// "proven within" = a LOWER bound ≥ earliest. A record whose death
+// ends before its birth begins is contradictory → `.unknown`, never a
+// veto on garbage.
 //
 // C++ readers: `WorldFact` is a plain immutable record; `WorldKnowledge` is
 // a namespace (an enum with no cases cannot be instantiated). The table is
@@ -150,7 +159,8 @@ public enum WorldKnowledge {
     /// Could this person appear in this medium? `.impossible` carries the
     /// fact that rules it out, for the honest line and the basis line.
     public enum MediumFeasibility: Sendable, Equatable {
-        /// Death year is known and precedes the medium's earliest year.
+        /// Death is PROVEN (interval upper bound) to precede the medium's
+        /// earliest year.
         case impossible(WorldFact)
         /// The medium existed at some point in the person's known
         /// lifetime: death year at or after the earliest year, or birth
@@ -167,23 +177,35 @@ public enum WorldKnowledge {
             return false
         }
 
-        /// Ordering (codex #708): a death before the earliest year is
-        /// `.impossible`; otherwise a birth at or after it proves the
-        /// medium existed in the person's lifetime (`.possible`); otherwise
-        /// a death at or after it is `.possible`; otherwise (no death year
-        /// and an early or unknown birth) `.unknown`. A birth year never
-        /// vetoes: without a death year the lifespan is unknown, and
-        /// "unknown" is the honest answer.
+        /// Exact-year convenience: each year is the closed interval [y, y].
         public static func assess(birthYear: Int?, deathYear: Int?, medium: Medium) -> MediumFeasibility {
+            assess(birth: birthYear.map(GedcomYearInterval.exact),
+                   death: deathYear.map(GedcomYearInterval.exact),
+                   medium: medium)
+        }
+
+        /// The rule, on intervals (codex #708 ordering, #721/#723 bounds):
+        ///   1. birth and death contradict (death ends before birth
+        ///      begins) → `.unknown` — the record is broken, not the person
+        ///      pre-photographic;
+        ///   2. death entirely before the earliest year → `.impossible`;
+        ///   3. birth entirely at/after the earliest year → `.possible`;
+        ///   4. death entirely at/after the earliest year → `.possible`;
+        ///   5. otherwise `.unknown` ("AFT 1837" death with no lower-bound
+        ///      proof, "ABT 1838" straddling the line, no dates at all).
+        /// A birth never vetoes.
+        public static func assess(birth: GedcomYearInterval?, death: GedcomYearInterval?,
+                                  medium: Medium) -> MediumFeasibility {
             let earliest = medium.earliestYear
-            if let deathYear, deathYear < earliest { return .impossible(medium.fact) }
-            if let birthYear, birthYear >= earliest { return .possible }
-            if let deathYear, deathYear >= earliest { return .possible }
+            if let birth, let death, death.endsBefore(birth) { return .unknown }
+            if let death, death.isEntirelyBefore(earliest) { return .impossible(medium.fact) }
+            if let birth, birth.isEntirelyAtOrAfter(earliest) { return .possible }
+            if let death, death.isEntirelyAtOrAfter(earliest) { return .possible }
             return .unknown
         }
 
         public static func assess(person: GedcomFamilyGraph.Person, medium: Medium) -> MediumFeasibility {
-            assess(birthYear: person.birthYear, deathYear: person.deathYear, medium: medium)
+            assess(birth: person.birthYearInterval, death: person.deathYearInterval, medium: medium)
         }
     }
 
@@ -201,16 +223,17 @@ public enum WorldKnowledge {
         }
 
         public static func canHavePhotograph(person: GedcomFamilyGraph.Person) -> Bool {
-            canHavePhotograph(birthYear: person.birthYear, deathYear: person.deathYear)
+            !MediumFeasibility.assess(person: person, medium: .photograph).isImpossible
         }
 
         /// Why the medium is impossible, for the log: "d. 1737 < photograph
-        /// 1838". Nil unless `.impossible`.
+        /// 1838" / "d. before 1800 < photograph 1838". Nil unless
+        /// `.impossible`.
         public static func impossibilityNote(person: GedcomFamilyGraph.Person,
                                              medium: Medium = .photograph) -> String? {
             guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium),
-                  let d = person.deathYear else { return nil }
-            return "d. \(d) < \(medium.rawValue) \(fact.earliestYear)"
+                  let d = person.deathYearInterval else { return nil }
+            return "d. \(d.spoken) < \(medium.rawValue) \(fact.earliestYear)"
         }
 
         /// The honest line for a direct "photo of X" / "videos of X" /
@@ -221,9 +244,12 @@ public enum WorldKnowledge {
         public static func impossibilityLine(person: GedcomFamilyGraph.Person,
                                              medium: Medium) -> String? {
             guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium),
-                  let d = person.deathYear else { return nil }
-            let lived = "\(person.name) died in \(d)"
-            let gap = fact.earliestYear - d
+                  let d = person.deathYearInterval, let latest = d.upper else { return nil }
+            // "died in 1737" / "died before 1800" / "died about 1700".
+            let lived = "\(person.name) died \(d.qualifier == .exact ? "in " : "")\(d.spoken)"
+            // Distance from the LATEST possible death — the smallest gap the
+            // record allows, so the phrase can only understate.
+            let gap = fact.earliestYear - latest
             let distance: String
             switch gap {
             case 180...: distance = "nearly two centuries"

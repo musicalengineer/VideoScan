@@ -767,13 +767,27 @@ enum ArchivistPresenceAnswerComposer {
         }
         guard !kinds.isEmpty else { return nil }
         let count = result.evidence.totalMatchCount
+        let cited = result.evidence.citations.count
         let noun = count == 1 ? "1 video" : "\(count) videos"
-        // Single kind: the template the ~30 existing sensors pin, unchanged.
-        if kinds.count == 1, unclassified == 0 {
+        // Single kind, EVERY match cited: the template the ~30 existing
+        // sensors pin, unchanged. The kind is proven for all of them.
+        if kinds.count == 1, unclassified == 0, cited >= count {
             let how = noun + " " + kinds[0].phrase
             let shown = result.evidence.citations.prefix(3).map(shownName)
             let more = count > shown.count ? ", and \(count - shown.count) more" : ""
             return how + " — " + shown.joined(separator: ", ") + more + "."
+        }
+        // Single kind on a TRUNCATED page (codex #715): the cited page is
+        // all one kind, but the unseen remainder proves nothing — "7 videos
+        // where someone says X" with 2 transcript hits and 5 unseen was a
+        // claim about matches nobody looked at. Say what was seen and how
+        // many were not.
+        if kinds.count == 1, unclassified == 0 {
+            let shown = result.evidence.citations.prefix(3).map(shownName)
+            let unseen = count - cited
+            let seen = "\(cited) shown \(kinds[0].phrase) — " + shown.joined(separator: ", ")
+                + (cited > shown.count ? ", and \(cited - shown.count) more shown" : "")
+            return noun + " matched: " + seen + "; \(unseen) more."
         }
         // Mixed kinds: qualified per-kind counts, first file named per kind.
         // The per-kind counts cover the CITED page; the headline count is
@@ -785,7 +799,6 @@ enum ArchivistPresenceAnswerComposer {
         if unclassified > 0 {
             parts.append("\(unclassified) matched another way")
         }
-        let cited = result.evidence.citations.count
         let more = count > cited ? ", and \(count - cited) more" : ""
         return noun + ": " + parts.joined(separator: "; ") + more + "."
     }

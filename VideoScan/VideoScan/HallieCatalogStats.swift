@@ -23,8 +23,21 @@ struct HallieCatalogStats: Equatable, Sendable {
     let duplicateFiles: Int
     let duplicateBytes: Int64
     let volumeCount: Int
-    /// Assets with a byte-verified copy in the Master Archive.
+    /// Assets with a byte-verified copy in the Master Archive
+    /// (ArchivePromotionIndex.Totals.verified).
     let archivedVerified: Int
+    /// Promoted copies present WITHOUT a fixity record — copied, not yet
+    /// verified (ArchivePromotionIndex.Totals.unverified; codex #717/#718:
+    /// "still to be promoted" must subtract these too).
+    let archivedUnverified: Int
+
+    /// The Archive tab's own arithmetic (total = max(unique, verified +
+    /// unverified); remaining subtracts both), so Hallie's figures can
+    /// never disagree with the progress bar — or exceed 100%.
+    var archiveProgress: ArchiveProgress {
+        ArchiveProgress(verified: archivedVerified, unverified: archivedUnverified,
+                        uniqueTotal: uniqueFileCount, verifiedBytes: 0, uniqueBytes: uniqueBytes)
+    }
     /// Seconds of media across active records (duplicates included — it's
     /// what is on disk; the unique figure is given alongside).
     let totalDurationSeconds: Double
@@ -32,18 +45,25 @@ struct HallieCatalogStats: Equatable, Sendable {
     let latestYear: Int?
 
     /// O(records), once per question that needs it (clients decide when).
-    static func compute(records: [VideoRecord]) -> HallieCatalogStats {
-        let totals = CatalogStorageTotalsCalculator.compute(records: records)
-        let active = pfActiveRecords(records)
+    /// `storage` lets a caller pass the footer's already-memoised totals
+    /// for this catalog version instead of recomputing them; either way
+    /// EVERY figure here describes `CatalogStorageTotalsCalculator
+    /// .partition`'s counted population (codex #725) — a hidden
+    /// manually-deleted row cannot move the footage total or the year
+    /// span while the file count ignores it.
+    static func compute(records: [VideoRecord],
+                        storage: CatalogStorageTotals? = nil) -> HallieCatalogStats {
+        let totals = storage ?? CatalogStorageTotalsCalculator.compute(records: records)
+        let active = CatalogStorageTotalsCalculator.partition(records).counted
         var duration = 0.0
         var verified = 0
+        var unverified = 0
         var earliest: Int?
         var latest: Int?
         // Same population as ArchivePromotionIndex.totals (the Archive tab's
         // progress bar / footer): promoted copies, not purged, with fixity.
-        for rec in records where rec.derivationKind == ArchivePromotion.derivationKind
-            && !rec.isPurged && rec.archiveFixity != nil {
-            verified += 1
+        for rec in records where rec.derivationKind == ArchivePromotion.derivationKind && !rec.isPurged {
+            if rec.archiveFixity != nil { verified += 1 } else { unverified += 1 }
         }
         for rec in active {
             duration += max(0, rec.durationSeconds)
@@ -71,6 +91,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             duplicateBytes: totals.duplicateBytes,
             volumeCount: totals.volumeCount,
             archivedVerified: verified,
+            archivedUnverified: unverified,
             totalDurationSeconds: duration,
             earliestYear: earliest,
             latestYear: latest)
@@ -217,6 +238,35 @@ struct HallieCatalogStats: Equatable, Sendable {
 
     // MARK: - The answers
 
+    /// "How many are archived / promoted / verified" — both figures, with
+    /// the Archive tab's arithmetic (codex #717/#718). Promoted = verified
+    /// + not-yet-verified copies; remaining subtracts both; the percentage
+    /// is verified over ArchiveProgress.total, so it cannot pass 100%.
+    static func archivedProse(_ s: HallieCatalogStats) -> String {
+        let p = s.archiveProgress
+        let promoted = p.verified + p.unverified
+        let unique = "\(p.total.formatted()) unique media files"
+        func isAre(_ n: Int) -> String { n == 1 ? "is" : "are" }
+        func hasHave(_ n: Int) -> String { n == 1 ? "has" : "have" }
+        func files(_ n: Int) -> String { "\(n.formatted()) file\(n == 1 ? "" : "s")" }
+        let pct: String
+        switch p.percentText {
+        case "<1%": pct = "under 1%"
+        case ">99%": pct = "over 99%"
+        default: pct = p.percentText
+        }
+        let remaining = p.remaining == 0
+            ? "Nothing is left to promote."
+            : "\(p.remaining.formatted()) \(isAre(p.remaining)) still to be promoted."
+        if promoted == 0 {
+            return "Nothing has a verified copy in the Master Archive yet — of \(unique)."
+        }
+        if p.unverified == 0 {
+            return "\(files(p.verified)) \(hasHave(p.verified)) a verified copy in the Master Archive — \(pct) of the \(unique). \(remaining)"
+        }
+        return "\(files(promoted)) \(hasHave(promoted)) been promoted to the Master Archive, of which \(p.verified.formatted()) \(isAre(p.verified)) verified — \(pct) of the \(unique) verified; \(p.unverified.formatted()) \(isAre(p.unverified)) copied but not yet verified. \(remaining)"
+    }
+
     static func answer(_ question: Question, stats s: HallieCatalogStats) -> HallieTurnExecutor.Result {
         let prose: String
         switch question {
@@ -229,11 +279,7 @@ struct HallieCatalogStats: Equatable, Sendable {
                 ? "I don't have running times for the catalog yet."
                 : "About \(Self.hours(s.totalDurationSeconds)) of footage altogether, in \(s.fileCount.formatted()) files (\(s.uniqueFileCount.formatted()) unique)."
         case .archived:
-            let pct = s.uniqueFileCount > 0 ? Double(s.archivedVerified) / Double(s.uniqueFileCount) * 100 : 0
-            let pctText = s.archivedVerified > 0 && pct < 1 ? "under 1%" : "\(Int(pct.rounded()))%"
-            prose = s.archivedVerified == 0
-                ? "Nothing has a verified copy in the Master Archive yet — of \(s.uniqueFileCount.formatted()) unique media files."
-                : "\(s.archivedVerified.formatted()) file\(s.archivedVerified == 1 ? " has" : "s have") a verified copy in the Master Archive — \(pctText) of the \(s.uniqueFileCount.formatted()) unique media files. \(max(0, s.uniqueFileCount - s.archivedVerified).formatted()) are still to be promoted."
+            prose = Self.archivedProse(s)
         case .duplicates:
             prose = s.duplicateFiles == 0
                 ? "The catalog hasn't found any duplicate copies."
@@ -256,7 +302,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             route: .aggregate,
             outcome: .answered,
             prose: prose,
-            basisLine: "Basis: catalog totals over \(s.fileCount.formatted()) active records (duplicates from catalog analysis; archive count = records with a verified Master Archive copy; years from each record's resolved date); no model call.",
+            basisLine: "Basis: catalog totals over \(s.fileCount.formatted()) active records (duplicates from catalog analysis; archive counts = promoted Master Archive copies, verified and not yet verified, as the Archive tab counts them; years from each record's resolved date); no model call.",
             queryDescription: "catalog-stats \(question)",
             citations: [],
             catalogPersonName: nil,
