@@ -212,3 +212,34 @@ extension HalliePronunciationLexiconTests {
         #expect(newest.apply(to: "McGill").spoken == "mick-GILL")
     }
 }
+
+// MARK: - Malformed file is set aside, never clobbered (codex #700)
+
+extension HalliePronunciationLexiconTests {
+    @Test func aMalformedFileIsSetAsideAndTheWriteIsRefused() throws {
+        let url = scratchURL()
+        let dir = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: url)
+        let log = InMemoryLogSink(name: "test")
+
+        #expect(throws: HalliePronunciationLexicon.FileError.self) {
+            try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "beh-THY-uh", url: url, log: log)
+        }
+        // The user's bytes survive under .bad-<timestamp>; the original path is gone.
+        let kept = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("\(HalliePronunciationLexicon.fileName).bad-") }
+        #expect(kept.count == 1)
+        #expect(try String(contentsOf: dir.appendingPathComponent(kept[0]), encoding: .utf8) == "{ not json")
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(log.lines.contains { $0.contains("malformed") && $0.contains("write refused") })
+
+        // Reads fall back to shipped (and re-create the default file), so
+        // the NEXT telling sticks.
+        #expect(HalliePronunciationLexicon.load(from: url, log: nil) == .shipped)
+        let next = try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "beh-THY-uh", url: url, log: nil)
+        #expect(next.apply(to: "Bethiah").spoken == "beh-THY-uh")
+        #expect(next.apply(to: "Edith").spoken == "EE-dith")
+    }
+}

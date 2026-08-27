@@ -262,10 +262,28 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         }
     }
 
+    /// Why a file-level write was refused.
+    enum FileError: LocalizedError, Equatable {
+        /// The user's pronunciations.json did not parse. It was moved to
+        /// `keptAt` (same directory, ".bad-<timestamp>" suffix) so nothing
+        /// they typed is lost; the next read falls back to shipped.
+        case malformed(keptAt: URL)
+
+        var errorDescription: String? {
+            switch self {
+            case .malformed(let keptAt):
+                return "pronunciations.json is not valid JSON, so I did not write over it; the file is kept as \(keptAt.lastPathComponent)"
+            }
+        }
+    }
+
     /// Set (or, with an empty `spoken`, remove) one word in the JSON file —
     /// the fallback when a name told to Hallie is nobody's in particular.
     /// Read-modify-write of the whole (tiny) table, atomic replace; an
     /// existing key with different case is replaced, not duplicated.
+    /// A malformed file is never overwritten (codex #700): it is set aside
+    /// as `.bad-<timestamp>`, logged, and the write is refused so the
+    /// caller can say so; reads then fall back to shipped.
     @discardableResult
     static func setFileEntry(
         written: String, spoken: String?, url: URL = defaultFileURL, log: LogSink? = appLog
@@ -275,6 +293,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             throw CocoaError(.fileWriteInvalidFileName)
         }
         let said = spoken?.trimmingCharacters(in: .whitespaces) ?? ""
+        try setAsideIfMalformed(url, log: log)
         let current = load(from: url, log: log)
         var kept = current.entries.filter { key($0.written) != key(word) }
         if !said.isEmpty { kept.append(Entry(written: word, spoken: said)) }
@@ -284,6 +303,26 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         try updated.jsonData.write(to: url, options: .atomic)
         log?.write("[hallie-voice] pronunciations.json: \(word) → \(said.isEmpty ? "(removed)" : said)")
         return updated
+    }
+
+    /// Refuse to clobber a file the user broke: move it to
+    /// `pronunciations.json.bad-<yyyyMMdd-HHmmss>` and throw. A missing
+    /// file is fine (load writes the default); a readable one is untouched.
+    private static func setAsideIfMalformed(_ url: URL, log: LogSink?) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let data = try Data(contentsOf: url)
+        do {
+            _ = try HalliePronunciationLexicon(jsonData: data)
+        } catch {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyyMMdd-HHmmss"
+            let keptAt = url.deletingLastPathComponent()
+                .appendingPathComponent("\(url.lastPathComponent).bad-\(formatter.string(from: Date()))")
+            try FileManager.default.moveItem(at: url, to: keptAt)
+            log?.write("[hallie-voice] pronunciations.json is malformed (\(error.localizedDescription)); kept as \(keptAt.lastPathComponent), write refused, shipped defaults in force")
+            throw FileError.malformed(keptAt: keptAt)
+        }
     }
 
     // MARK: - Applying
