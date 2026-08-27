@@ -705,6 +705,12 @@ final class TrimJob: @MainActor MediaFileOperationJob {
     }
 
     private func finish(failed: String) {
+        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
+        // .failed — the SIGTERM'd child's non-zero exit, or any typed error
+        // thrown while the Task unwinds, is the user's Stop, not a failure.
+        // (Stalls are unaffected: the watchdog cancels the Task but never
+        // sets .cancelling — see MediaFileOperationState.cancelWasRequested.)
+        if state.cancelWasRequested { finishCancelled(); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false

@@ -411,7 +411,9 @@ struct MediaFileOperationRow: View {
                 // One verb, one meaning (Rick 2026-08-07: hunted for
                 // "Stop" and found only Pause — the button said "Cancel"
                 // then flipped to "Stopping…", two dialects for one act).
-                Button(job.state == .cancelling ? "Stopping…" : "Stop") {
+                // In flight the button reads the state's own badge label
+                // ("Cancelling…") so button, row and log agree on one word.
+                Button(job.state == .cancelling ? job.state.badge.label : "Stop") {
                     job.cancel()
                 }
                 .font(.system(size: 11))
@@ -479,17 +481,11 @@ struct MediaFileOperationRow: View {
                         .foregroundColor(.green)
                 }
             case .failed:
-                HStack(spacing: 4) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.red)
-                    Text("Failed")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.red)
-                }
+                stateBadge(job.state.badge)
             case .cancelled:
-                Text("Stopped")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
+                // Rick 2026-08-26: a cancelled job is not a failed one —
+                // blue stop symbol + "Cancelled", never the red X.
+                stateBadge(job.state.badge)
                 // A cancelled extract keeps its already-saved frames —
                 // offer Reveal on the partial output too. Both frame
                 // verbs behave the same way here.
@@ -540,6 +536,22 @@ struct MediaFileOperationRow: View {
     }
 
     /// "Reveal in Finder" for extract rows — selects the output folder.
+    /// Terminal badge drawn from the state's pure presentation mapping
+    /// (MediaFileOperationState.badge) — the single place label, symbol
+    /// and tint are decided, so Failed vs Cancelled can't drift apart
+    /// between the row, the tests and any future surface.
+    private func stateBadge(_ badge: MediaFileOperationState.Badge) -> some View {
+        HStack(spacing: 4) {
+            if let symbol = badge.symbol {
+                Image(systemName: symbol)
+                    .foregroundColor(badge.tint.color)
+            }
+            Text(badge.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(badge.tint.color)
+        }
+    }
+
     private func revealButton(_ url: URL) -> some View {
         Button {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -897,5 +909,19 @@ struct PairCompareDetailView: View {
                           design: .monospaced))
             .foregroundStyle(differs ? Color.orange : Color.primary)
             .lineLimit(1)
+    }
+}
+
+// MARK: - Badge tint → SwiftUI colour
+
+extension MediaFileOperationState.BadgeTint {
+    var color: Color {
+        switch self {
+        case .green: return .green
+        case .red: return .red
+        case .blue: return .blue
+        case .orange: return .orange
+        case .secondary: return .secondary
+        }
     }
 }

@@ -194,6 +194,58 @@ enum MediaFileOperationState: Equatable {
         case .finished, .failed, .cancelled: return false
         }
     }
+
+    /// True once the user has asked for this job to stop (unwinding or
+    /// already settled). Rick 2026-08-26: a job whose cancel was
+    /// requested NEVER ends `.failed` — every conformer's `finish(failed:)`
+    /// consults this and diverts to its cancelled terminal instead, so a
+    /// SIGTERM'd ffmpeg's non-zero exit (or any typed error thrown while
+    /// the Task unwinds) can't repaint a user's Stop as a red Failed.
+    /// Deliberately NOT `Task.isCancelled`: the stall watchdogs cancel the
+    /// Task too, and a stall must still render Failed with its reason.
+    var cancelWasRequested: Bool {
+        switch self {
+        case .cancelling, .cancelled: return true
+        case .running, .finished, .failed: return false
+        }
+    }
+
+    // MARK: Presentation (pure)
+
+    /// Colour token for a state badge — resolved to a SwiftUI `Color` in
+    /// the window, kept symbolic here so the mapping is testable without
+    /// SwiftUI. (≈ C++: an enum class the view layer switches on.)
+    enum BadgeTint: Equatable {
+        case green, red, blue, orange, secondary
+    }
+
+    /// What the operations window draws for a state: label text, SF
+    /// Symbol (nil for the running states, which show a progress bar
+    /// instead), and tint. Cancelled is deliberately NOT red and NOT an
+    /// X-in-octagon — Rick 2026-08-26: "if I cancel any MFO verb/job it
+    /// shouldn't say 'Failed' with a red x but 'Cancelled' maybe with a
+    /// blue x or a square." Failed keeps the red X so a genuine failure
+    /// still reads as one.
+    struct Badge: Equatable {
+        let label: String
+        let symbol: String?
+        let tint: BadgeTint
+    }
+
+    var badge: Badge {
+        switch self {
+        case .running:
+            return Badge(label: "Running", symbol: nil, tint: .secondary)
+        case .cancelling:
+            return Badge(label: "Cancelling…", symbol: nil, tint: .orange)
+        case .finished:
+            return Badge(label: "Done", symbol: "checkmark.circle.fill", tint: .green)
+        case .failed:
+            return Badge(label: "Failed", symbol: "xmark.circle.fill", tint: .red)
+        case .cancelled:
+            return Badge(label: "Cancelled", symbol: "stop.circle.fill", tint: .blue)
+        }
+    }
 }
 
 // MARK: - Duration clock (pure)

@@ -193,9 +193,9 @@ final class PairCompareJob: @MainActor MediaFileOperationJob {
             // verdict leads with its statistics ("31/32 frames agree …").
             return comparator.finishedSubtitle ?? "Done"
         case .cancelled:
-            return "Stopped"
+            return "Cancelled"
         case .cancelling:
-            return "Stopping…"
+            return "Cancelling…"
         case .running:
             return comparator.statusText.isEmpty ? "Starting…" : comparator.statusText
         }
@@ -211,8 +211,15 @@ final class PairCompareJob: @MainActor MediaFileOperationJob {
     }
 
     /// Derived from comparator state + the explicit cancel flag.
-    /// Precedence: a verdict or error that landed before cancel wins —
-    /// the work IS done, no point pretending otherwise.
+    /// Precedence: a verdict or error that landed BEFORE cancel wins —
+    /// the work IS done, no point pretending otherwise (cancel() is a
+    /// no-op on a terminal state, so `wasCancelled` can only be true if
+    /// the job was still active when the user hit Stop).
+    ///
+    /// Rick 2026-08-26: cancel outranks an error that lands AFTER it.
+    /// The SIGTERM'd ffmpeg child exits non-zero and the comparator
+    /// records that as `lastError` while the Task unwinds — that is the
+    /// user's Stop, not a failure, and must never paint a red Failed.
     var state: MediaFileOperationState {
         if let verdict = comparator.verdict {
             return .finished(summary: verdict.title)
@@ -222,11 +229,11 @@ final class PairCompareJob: @MainActor MediaFileOperationJob {
         if let stallReason {
             return .failed(message: stallReason)
         }
-        if let error = comparator.lastError {
-            return .failed(message: error)
-        }
         if wasCancelled {
             return comparator.isRunning ? .cancelling : .cancelled
+        }
+        if let error = comparator.lastError {
+            return .failed(message: error)
         }
         return .running
     }

@@ -246,7 +246,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     func cancel() {
         guard state.isActive else { return }
         state = .cancelling
-        subtitleText = "Stopping — files already verified keep their fixity…"
+        subtitleText = "Cancelling — files already verified keep their fixity…"
         task?.cancel()
     }
 
@@ -576,6 +576,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     private func finish(failed: String) {
+        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
+        // .failed — the SIGTERM'd child's non-zero exit, or any typed error
+        // thrown while the Task unwinds, is the user's Stop, not a failure.
+        // (Stalls are unaffected: the watchdog cancels the Task but never
+        // sets .cancelling — see MediaFileOperationState.cancelWasRequested.)
+        if state.cancelWasRequested { finishCancelled(); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false
@@ -584,7 +590,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
 
     private func finishCancelled() {
         state = .cancelled
-        subtitleText = "Stopped — \(Self.summaryLine(tally))"
+        subtitleText = "Cancelled — \(Self.summaryLine(tally))"
         isIndeterminateValue = false
     }
 

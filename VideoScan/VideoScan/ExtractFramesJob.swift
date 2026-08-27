@@ -195,11 +195,11 @@ final class ExtractFramesJob: @MainActor MediaFileOperationJob {
             // Cancel never deletes output — anything already saved is
             // kept, and the row says so explicitly.
             if ripper.framesSaved > 0, let dest = ripper.completedDestination {
-                return "Stopped — \(ripper.framesSaved) already-saved frame(s) kept in \(dest.lastPathComponent)"
+                return "Cancelled — \(ripper.framesSaved) already-saved frame(s) kept in \(dest.lastPathComponent)"
             }
-            return "Stopped — no frames saved"
+            return "Cancelled — no frames saved"
         case .cancelling:
-            return "Stopping…"
+            return "Cancelling…"
         case .running:
             return ripper.statusText.isEmpty ? "Starting…" : ripper.statusText
         }
@@ -225,16 +225,20 @@ final class ExtractFramesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Derived from ripper state + the explicit cancel flag.
-    /// Precedence mirrors PairCompareJob: an error that landed before
-    /// cancel wins; a successful destination only counts as finished
-    /// when the user didn't cancel (a cancelled-mid-save rip also sets
+    /// Precedence mirrors PairCompareJob: an error that landed BEFORE
+    /// cancel wins (cancel() is a no-op once the state is terminal, so
+    /// `wasCancelled` implies the job was still active); an error that
+    /// lands AFTER cancel — the killed decode throwing while the Task
+    /// unwinds — is the user's Stop, not a failure (Rick 2026-08-26). A
+    /// successful destination only counts as finished when the user
+    /// didn't cancel (a cancelled-mid-save rip also sets
     /// `completedDestination` so Reveal works on the partial output).
     var state: MediaFileOperationState {
-        if let error = ripper.lastError {
-            return .failed(message: error)
-        }
         if wasCancelled {
             return ripper.isRunning ? .cancelling : .cancelled
+        }
+        if let error = ripper.lastError {
+            return .failed(message: error)
         }
         if ripper.completedDestination != nil {
             return .finished(summary: "\(ripper.framesSaved) frame\(ripper.framesSaved == 1 ? "" : "s") saved")
