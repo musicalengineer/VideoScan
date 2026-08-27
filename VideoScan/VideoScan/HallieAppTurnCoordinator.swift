@@ -809,31 +809,23 @@ enum HallieAppTurnCoordinator {
                             canonicalName,
                             options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
                     } ?? []
-                    let person = graphMatches.count == 1
-                        ? FamilyAssetPerson(graphMatches[0])
-                        : FamilyAssetPerson(name: canonicalName)
-                    if let url = assets.photoURLs(for: person).first {
-                        result = result.adding(attachments: [
-                            .photo(HalliePhotoAttachment(
-                                personName: canonicalName,
-                                fileURL: url,
-                                personGedcomID: person.gedcomID))
-                        ])
-                    } else {
-                        do {
-                            let folder = try assets.folderForPhotoRequest(person: person)
-                            // The folder is created here only after the current
-                            // archive/viewer authority permits it. Renderers never
-                            // create directories from attachment path strings.
-                            result = result.adding(attachments: [
-                                .photoRequest(personName: canonicalName, folderURL: folder)
-                            ])
-                        } catch {
-                            // Photo presentation is optional.  Preserve the
-                            // grounded biography and record why no request card
-                            // was offered; never reinterpret the failed write.
-                            appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error.localizedDescription)")
-                        }
+                    // One decision for the picture beside a biography
+                    // (HallieBiographyPhotoOffer): the family's file, the
+                    // folder card, or nothing for someone who predates
+                    // photography (Rick 2026-08-26).
+                    let decision = HallieBiographyPhotoOffer.decide(
+                        canonicalName: canonicalName, graphMatches: graphMatches, assets: assets)
+                    if !decision.attachments.isEmpty {
+                        result = result.adding(attachments: decision.attachments)
+                    }
+                    if let note = decision.suppressedNote {
+                        appLog.write("[hallie] photo offer suppressed: \(canonicalName) (\(note))")
+                    }
+                    if let error = decision.folderError {
+                        // Photo presentation is optional.  Preserve the
+                        // grounded biography and record why no request card
+                        // was offered; never reinterpret the failed write.
+                        appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error)")
                     }
                 }
             } else {

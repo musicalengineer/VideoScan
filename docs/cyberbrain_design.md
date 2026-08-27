@@ -112,6 +112,18 @@ Suggested source types:
    curated into CyberBrain.
 8. `inference` — a conclusion derived from other evidence, labeled as such.
 
+**Family knowledge vs. world knowledge (2026-08-26).** CyberBrain holds what
+is true of *this family*. Dated facts about the *world* that a deterministic
+answer may lean on — when photography, film, sound recording, or home video
+began — live in `VideoScanCore/WorldKnowledge.swift` as a small data table
+(`WorldFact { id, statement, years, source, spokenClause }`), never as an
+inline heuristic in a chip builder. The first consumer is the photography
+floor: `WorldKnowledge.photography.canHavePhotograph(person:)` withholds
+every "find a photo of X" offer for a person who died before 1839 (or, with
+no death recorded, was born before 1760), and the honest decline cites the
+fact's `spokenClause`. New world facts go in the table with a source; new
+family facts go in CyberBrain.
+
 Source type alone does not decide truth. A first-person memory can be valuable
 and uncertain; an imported GEDCOM can contain transcription errors. Hallie
 must preserve those distinctions.

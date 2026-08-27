@@ -198,6 +198,11 @@ extension HallieTurnExecutor {
             guard let photo = lineageAnswer(.personPhoto(person: name)) else { return .answer(found) }
             return .answer(HallieLineageAnswer.prefixing(found.prose, to: photo))
         }
+        // A pre-photography person (WorldKnowledge) gets the honest line
+        // instead of a presence search; everyone else searches by name.
+        if let floor = lineageAnswer(.personVideos(person: name)) {
+            return .answer(HallieLineageAnswer.prefixing(found.prose, to: floor))
+        }
         return .translate(question: "videos of \(name)", playAfterAnswer: playAfterAnswer)
     }
 

@@ -1357,7 +1357,7 @@ struct ArchivistChatWindow: View {
         let answer = ArchivistBiographyPolicy.lifeDate(
             for: personText, birth: wantsBirth,
             candidates: candidates, in: graph)
-        appendFamilyAnswer(answer, kind: wantsBirth ? .birth : .death)
+        appendFamilyAnswer(answer, kind: wantsBirth ? .birth : .death, graph: graph)
         return true
     }
 
@@ -1378,7 +1378,7 @@ struct ArchivistChatWindow: View {
         }
         let answer = ArchivistBiographyPolicy.biography(
             for: personText, candidates: candidates, in: graph)
-        appendFamilyAnswer(answer, kind: .biography)
+        appendFamilyAnswer(answer, kind: .biography, graph: graph)
         return true
     }
 
@@ -1426,11 +1426,12 @@ struct ArchivistChatWindow: View {
             answer = ArchivistBiographyPolicy.lifeDate(
                 personID: personID, birth: false, in: graph)
         }
-        appendFamilyAnswer(answer, kind: kind)
+        appendFamilyAnswer(answer, kind: kind, graph: graph)
     }
 
     private func appendFamilyAnswer(_ answer: ArchivistBiographyAnswer,
-                                    kind: ArchivistFamilyFactKind) {
+                                    kind: ArchivistFamilyFactKind,
+                                    graph: GedcomFamilyGraph) {
         var chips = answer.candidates.prefix(4).map { candidate in
             ArchivistMessage.Chip(
                 label: candidate.label,
@@ -1438,7 +1439,8 @@ struct ArchivistChatWindow: View {
         }
         if case .biography = kind,
            let canonical = answer.catalogPersonName,
-           let given = canonical.split(separator: " ").first {
+           let given = canonical.split(separator: " ").first,
+           Self.mayOfferMedia(for: canonical, in: graph) {
             let personQuery = NLQueryComposer.infixString(
                 for: NLQueryNormalizer.normalize(
                     NLQuerySpec(people: [canonical])))
@@ -1586,7 +1588,7 @@ struct ArchivistChatWindow: View {
                 appendFamilyAnswer(
                     ArchivistBiographyPolicy.biography(
                         personID: relative.id, in: graph),
-                    kind: .biography)
+                    kind: .biography, graph: graph)
             }
         case .birthDate, .deathDate:
             messages.append(ArchivistMessage(
@@ -1597,7 +1599,7 @@ struct ArchivistChatWindow: View {
                 appendFamilyAnswer(
                     ArchivistBiographyPolicy.lifeDate(
                         personID: relative.id, birth: wantsBirth, in: graph),
-                    kind: wantsBirth ? .birth : .death)
+                    kind: wantsBirth ? .birth : .death, graph: graph)
             }
         case .catalogSearch:
             messages.append(ArchivistMessage(
@@ -1664,6 +1666,21 @@ struct ArchivistChatWindow: View {
     }
 
     /// Load from the same authorized source as cards and the Family Tree tab.
+    /// The WorldKnowledge photography floor for the legacy "Videos of X"
+    /// chip: a uniquely named tree person who predates photography gets no
+    /// media offer. Unknown or ambiguous names keep the chip (never guess).
+    static func mayOfferMedia(for canonicalName: String, in graph: GedcomFamilyGraph) -> Bool {
+        let matches = graph.people.values.filter {
+            $0.name.compare(canonicalName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        guard matches.count == 1 else { return true }
+        if let note = WorldKnowledge.photography.impossibilityNote(person: matches[0]) {
+            appLog.write("[hallie] photo offer suppressed: \(canonicalName) (\(note))")
+            return false
+        }
+        return true
+    }
+
     private func loadFamilyGraph() -> GedcomFamilyGraph? {
         // Re-check authority on every legacy-path use. A cached graph must not
         // survive an archive disconnect or UUID refusal.
