@@ -87,7 +87,7 @@ final class FamilySearchPullCenter: ObservableObject {
     private static func isSettled(_ phase: FamilySearchPullCoordinator.Phase) -> Bool {
         switch phase {
         case .idle, .installed: return true
-        case .waiting, .ready, .failed: return false
+        case .waiting, .parsing, .ready, .failed: return false
         }
     }
 
@@ -117,7 +117,9 @@ final class FamilySearchPullCenter: ObservableObject {
         switch phase {
         case .idle, .installed:
             status = .none
-        case .waiting:
+        case .waiting, .parsing:
+            // Parsing is the tail of the download from the user's point of
+            // view: still "working", still not something to interrupt.
             status = .downloading(since: coordinator.startedAt ?? Date())
         case .ready(_, let new, _, _):
             status = .readyToInstall

@@ -22,6 +22,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         case idle
         /// Terminal has the script; we're watching for the .ged to land.
         case waiting(output: URL)
+        /// The file is complete (or was handed to us) and is being parsed
+        /// off the main actor. Not settled: a sheet dismiss here must not
+        /// drop the coordinator (codex #707 item 2).
+        case parsing(output: URL)
         /// The file arrived and parsed. Ready to install — shown as a
         /// REPLACE decision against the tree currently loaded (Rick
         /// 2026-08-25: "Would you like to replace the existing gedcom data?").
@@ -46,6 +50,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Echoed under the sheet's button so the user reads the exact command
     /// before it runs — the verification step Rick asked for.
     @Published private(set) var previewLine: String = ""
+    /// Set when the output file has stopped growing (no trailer yet) for
+    /// `pollsBeforeQuiet` polls; nil once it grows again or completes. A
+    /// pause is NOT failure — the tool waits on a password prompt, an API
+    /// rate limit, or just a slow page — so the sheet shows a soft "may be
+    /// waiting for you" note and the watcher keeps watching (codex #707
+    /// item 3). Failure needs evidence: the file disappearing.
+    @Published private(set) var quietSince: Date?
     @Published var request: FamilySearchPullRequest
 
     /// Where the archive wants the finished file. Injected so tests never
@@ -61,6 +72,16 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// the instant the sheet opened.
     private var launchDate: Date = .distantPast
     private var watchTask: Task<Void, Never>?
+    /// The parse/compare work is owned here, not fire-and-forget: cancel()
+    /// drops it, and a result from a superseded parse is discarded by
+    /// generation (same idea as `FamilyTreeLiveModel.loadGeneration` — a
+    /// monotonically increasing token; a stale worker compares its copy
+    /// against the current one and bails).
+    private var parseTask: Task<Void, Never>?
+    private var parseGeneration = 0
+    /// Test pacing only: an artificial wait before the parse so a sensor
+    /// can forget/dismiss/re-parse *during* it. Zero in production.
+    let parseDelay: Duration
 
     /// Poll interval and give-up horizon. A real 20-generation pull took
     /// ~2 h (2026-08-25) and the coordinator now outlives the sheet, so
@@ -84,8 +105,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         fileManager: FileManager = .default,
         launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
         pollInterval: Duration = .seconds(2),
-        timeout: Duration = FamilySearchPullCoordinator.defaultTimeout
+        timeout: Duration = FamilySearchPullCoordinator.defaultTimeout,
+        parseDelay: Duration = .zero
     ) {
+        self.parseDelay = parseDelay
         self.gedcomDirectory = gedcomDirectory
         self.locator = locator
         self.fileManager = fileManager
@@ -168,6 +191,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
 
             launchDate = Date()
             startedAt = launchDate
+            quietSince = nil
             workspace.open(scriptURL)
             phase = .waiting(output: request.outputURL)
             startWatching(output: request.outputURL)
@@ -181,6 +205,12 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     func cancel() {
         watchTask?.cancel()
         watchTask = nil
+        parseTask?.cancel()
+        parseTask = nil
+        // Bump so a detached parse that cannot observe cancellation mid-
+        // GEDCOM still finds itself stale when it comes back.
+        parseGeneration &+= 1
+        quietSince = nil
         phase = .idle
     }
 
@@ -194,13 +224,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: FamilySearchPullError.outputNotGedcom(url).localizedDescription)
             return
         }
-        Task { await finish(output: url) }
+        beginParse(output: url)
     }
 
     // MARK: Watching
 
     private func startWatching(output: URL) {
         watchTask?.cancel()
+        quietSince = nil
         let deadline = ContinuousClock.now.advanced(by: timeout)
         watchTask = Task { [weak self] in
             guard let self else { return }
@@ -214,8 +245,16 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 guard let size = await Self.fileSize(at: output, newerThan: since) else {
                     // The tool creates the file eagerly (argparse opens `-o`
                     // before it even prompts for the password), so "missing"
-                    // here really means "not ours yet".
-                    lastSize = -1
+                    // here usually means "not ours yet" — unless we had
+                    // already seen it. A file that was there and is now
+                    // gone is the one hard piece of evidence we have that
+                    // the run is over (user deleted it, tool cleaned up).
+                    if lastSize >= 0 {
+                        self.quietSince = nil
+                        self.phase = .failed(message:
+                            "\(output.lastPathComponent) was removed before it finished. Nothing was installed — run Get Family Tree again, or use Install from file if you have the export somewhere else.")
+                        return
+                    }
                     stableCount = 0
                     continue
                 }
@@ -224,34 +263,45 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 // never have to guess from timing whether a long pause in
                 // the middle of a big write means "finished".
                 if size > 0, await Self.hasGedcomTrailer(at: output) {
-                    await self.finish(output: output)
+                    self.quietSince = nil
+                    self.beginParse(output: output)
                     return
                 }
                 if size > 0, size == lastSize {
                     stableCount += 1
-                    // ~30s of no growth and still no trailer: the run died
-                    // partway (killed, network dropped, app key revoked).
-                    // Say so rather than installing half a tree.
-                    if stableCount >= Self.stallsBeforeGivingUp {
-                        self.phase = .failed(message:
-                            "\(output.lastPathComponent) stopped growing but has no GEDCOM end marker, so the download did not finish. Check the Terminal window — nothing was installed.")
-                        return
+                    // No growth for a while and still no trailer. That is
+                    // NOT proof the run died — the tool pauses on password
+                    // entry, API throttling, and simply between pages — so
+                    // keep watching and let the sheet say "may be waiting
+                    // for you". The user can Forget it; the deadline is
+                    // the backstop.
+                    if stableCount >= Self.pollsBeforeQuiet, self.quietSince == nil {
+                        self.quietSince = Date()
                     }
                 } else {
                     stableCount = 0
+                    self.quietSince = nil
                 }
                 lastSize = size
             }
             if !Task.isCancelled {
+                self.quietSince = nil
                 self.phase = .failed(message:
                     "Timed out waiting for \(output.lastPathComponent). If the Terminal window is still working, leave it running and use Install from file when it finishes.")
             }
         }
     }
 
-    /// Polls with no growth and no trailer before we call a run dead.
-    /// 15 × 2s ≈ 30 seconds.
-    static let stallsBeforeGivingUp = 15
+    /// Polls with no growth and no trailer before `quietSince` is set.
+    /// 15 × 2s ≈ 30 seconds. Informational only — never a failure.
+    static let pollsBeforeQuiet = 15
+
+    /// Wording for the sheet's soft stall note. Pure so a test can pin it.
+    nonisolated static func quietMessage(fileName: String, since: Date, now: Date = Date()) -> String {
+        let minutes = max(0, Int(now.timeIntervalSince(since) / 60))
+        let span = minutes < 1 ? "under a minute" : (minutes == 1 ? "1 min" : "\(minutes) min")
+        return "No change to \(fileName) for \(span) — Terminal may be waiting for you (password prompt, or a pause between pages). Still watching."
+    }
 
     /// True when the file ends with GEDCOM's `0 TRLR` trailer — the last
     /// line getmyancestors writes. Reads only the tail, so this costs the
@@ -279,27 +329,48 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// a stale export from an earlier run must never be adopted silently.
     /// `nonisolated static` with everything passed in: no actor hop per
     /// poll, and nothing here can accidentally read main-actor state.
+    ///
+    /// Deliberately `FileManager.attributesOfItem` (a fresh stat(2) each
+    /// call) and NOT `URL.resourceValues`: the latter caches per URL value,
+    /// so polling the same URL reported the FIRST size forever — growth and
+    /// deletion were both invisible (found by the #707 item-3 sensor).
     nonisolated static func fileSize(at url: URL, newerThan since: Date) async -> Int64? {
         await Task.detached(priority: .utility) { () -> Int64? in
-            let keys: Set<URLResourceKey> = [
-                .fileSizeKey, .contentModificationDateKey, .isRegularFileKey,
-            ]
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true,
-                  let modified = values.contentModificationDate,
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  (attributes[.type] as? FileAttributeType) == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date,
                   // A couple of seconds of slack: the tool may create the
                   // file a moment before our launch stamp settles.
                   modified >= since.addingTimeInterval(-2),
-                  let size = values.fileSize
+                  let size = (attributes[.size] as? NSNumber)?.int64Value
             else { return nil }
-            return Int64(size)
+            return size
         }.value
+    }
+
+    /// Start (or restart) the parse. Only the newest generation may
+    /// publish; anything older that is still running is cancelled and, if
+    /// it cannot observe that, its result is dropped on return.
+    private func beginParse(output: URL) {
+        parseTask?.cancel()
+        parseGeneration &+= 1
+        let generation = parseGeneration
+        phase = .parsing(output: output)
+        parseTask = Task { [weak self] in
+            guard let self else { return }
+            await self.finish(output: output, generation: generation)
+        }
     }
 
     /// Parse before offering to install. A truncated download — the tool
     /// killed halfway, the borrowed app key revoked mid-run — must not be
     /// installed over a good tree.
-    private func finish(output: URL) async {
+    private func finish(output: URL, generation: Int) async {
+        if parseDelay > .zero {
+            // `try?` here is deliberate: a cancelled sleep throws, and a
+            // cancelled parse has nothing left to do.
+            guard (try? await Task.sleep(for: parseDelay)) != nil else { return }
+        }
         let gedcomDirectory = self.gedcomDirectory
         let fileManager = self.fileManager
         let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
@@ -322,6 +393,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             let unmatched = folderIDs.filter { !newIDs.contains($0) }.count
             return (new, current, unmatched)
         }.value
+
+        // Back on the main actor. Superseded (a newer parse started) or
+        // cancelled (forget / Keep current) → this result is nobody's.
+        guard generation == parseGeneration, !Task.isCancelled else { return }
+        parseTask = nil
 
         guard let parsed else {
             phase = .failed(message:

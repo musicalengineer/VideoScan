@@ -19,6 +19,11 @@ struct FamilyPhotoAdjustSource: Identifiable {
     /// The on-disk original, when there is one. Nil for a photo that only
     /// exists as this session's in-memory override.
     let originalURL: URL?
+    /// Where Save writes. Resolved by the presenter (a snapshot of the
+    /// configuration at present time) rather than by the sheet reaching for
+    /// the shared configuration center at Save — so the sheet is
+    /// testable and cannot save into a store that changed underneath it.
+    let store: FamilyAssetStore
 }
 
 struct FamilyPhotoAdjustSheet: View {
@@ -161,9 +166,8 @@ struct FamilyPhotoAdjustSheet: View {
             errorText = "Could not render the crop."
             return
         }
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
         do {
-            let url = try store.saveCardPhoto(data, for: source.assetPerson,
+            let url = try source.store.saveCardPhoto(data, for: source.assetPerson,
                                               nextTo: source.originalURL)
             onSaved(cropped, url)
         } catch {

@@ -35,6 +35,8 @@ struct FamilySearchPullSheet: View {
                         optionsForm
                     case .waiting(let output):
                         waitingSection(output: output)
+                    case .parsing(let output):
+                        parsingSection(output: output)
                     case .ready(let output, let new, let current, let unmatched):
                         readySection(output: output, new: new, current: current,
                                      unmatchedFolderIDs: unmatched)
@@ -268,7 +270,39 @@ struct FamilySearchPullSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("Watching for", value: output.lastPathComponent)
                 .font(.system(size: 12))
+            if let quietSince = coordinator.quietSince {
+                // `TimelineView` ≈ a timer-driven re-render: the closure is
+                // re-evaluated once a minute so the "for N min" stays honest
+                // without any state of our own.
+                TimelineView(.periodic(from: quietSince, by: 60)) { context in
+                    Label {
+                        Text(FamilySearchPullCoordinator.quietMessage(
+                            fileName: output.lastPathComponent,
+                            since: quietSince, now: context.date))
+                            .font(.system(size: 12))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "clock.badge.questionmark")
+                    }
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("familyTree.pullQuiet")
+                }
+            }
             commandPreview
+        }
+    }
+
+    private func parsingSection(output: URL) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking \(output.lastPathComponent)…")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            Text("Reading the file and comparing it with the tree Hallie uses now. A large export takes a few seconds.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -403,6 +437,12 @@ struct FamilySearchPullSheet: View {
                     onForget()
                 }
                 .help("Stops watching for the file. The Terminal download keeps running; use Install from file when it finishes.")
+            case .parsing:
+                Button("Forget this download") {
+                    coordinator.cancel()
+                    onForget()
+                }
+                .help("Stops checking the file. Nothing has been installed.")
             case .ready(_, _, let current, _):
                 Button("Keep current") { coordinator.cancel() }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {
