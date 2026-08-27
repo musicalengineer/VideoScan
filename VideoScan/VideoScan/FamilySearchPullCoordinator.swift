@@ -22,6 +22,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         case idle
         /// Terminal has the script; we're watching for the .ged to land.
         case waiting(output: URL)
+        /// The file is complete (or was handed to us) and is being parsed
+        /// off the main actor. Not settled: a sheet dismiss here must not
+        /// drop the coordinator (codex #707 item 2).
+        case parsing(output: URL)
         /// The file arrived and parsed. Ready to install — shown as a
         /// REPLACE decision against the tree currently loaded (Rick
         /// 2026-08-25: "Would you like to replace the existing gedcom data?").
@@ -61,6 +65,16 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// the instant the sheet opened.
     private var launchDate: Date = .distantPast
     private var watchTask: Task<Void, Never>?
+    /// The parse/compare work is owned here, not fire-and-forget: cancel()
+    /// drops it, and a result from a superseded parse is discarded by
+    /// generation (same idea as `FamilyTreeLiveModel.loadGeneration` — a
+    /// monotonically increasing token; a stale worker compares its copy
+    /// against the current one and bails).
+    private var parseTask: Task<Void, Never>?
+    private var parseGeneration = 0
+    /// Test pacing only: an artificial wait before the parse so a sensor
+    /// can forget/dismiss/re-parse *during* it. Zero in production.
+    let parseDelay: Duration
 
     /// Poll interval and give-up horizon. A real 20-generation pull took
     /// ~2 h (2026-08-25) and the coordinator now outlives the sheet, so
@@ -84,8 +98,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         fileManager: FileManager = .default,
         launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
         pollInterval: Duration = .seconds(2),
-        timeout: Duration = FamilySearchPullCoordinator.defaultTimeout
+        timeout: Duration = FamilySearchPullCoordinator.defaultTimeout,
+        parseDelay: Duration = .zero
     ) {
+        self.parseDelay = parseDelay
         self.gedcomDirectory = gedcomDirectory
         self.locator = locator
         self.fileManager = fileManager
@@ -181,6 +197,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     func cancel() {
         watchTask?.cancel()
         watchTask = nil
+        parseTask?.cancel()
+        parseTask = nil
+        // Bump so a detached parse that cannot observe cancellation mid-
+        // GEDCOM still finds itself stale when it comes back.
+        parseGeneration &+= 1
         phase = .idle
     }
 
@@ -194,7 +215,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: FamilySearchPullError.outputNotGedcom(url).localizedDescription)
             return
         }
-        Task { await finish(output: url) }
+        beginParse(output: url)
     }
 
     // MARK: Watching
@@ -224,7 +245,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 // never have to guess from timing whether a long pause in
                 // the middle of a big write means "finished".
                 if size > 0, await Self.hasGedcomTrailer(at: output) {
-                    await self.finish(output: output)
+                    self.beginParse(output: output)
                     return
                 }
                 if size > 0, size == lastSize {
@@ -296,10 +317,29 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         }.value
     }
 
+    /// Start (or restart) the parse. Only the newest generation may
+    /// publish; anything older that is still running is cancelled and, if
+    /// it cannot observe that, its result is dropped on return.
+    private func beginParse(output: URL) {
+        parseTask?.cancel()
+        parseGeneration &+= 1
+        let generation = parseGeneration
+        phase = .parsing(output: output)
+        parseTask = Task { [weak self] in
+            guard let self else { return }
+            await self.finish(output: output, generation: generation)
+        }
+    }
+
     /// Parse before offering to install. A truncated download — the tool
     /// killed halfway, the borrowed app key revoked mid-run — must not be
     /// installed over a good tree.
-    private func finish(output: URL) async {
+    private func finish(output: URL, generation: Int) async {
+        if parseDelay > .zero {
+            // `try?` here is deliberate: a cancelled sleep throws, and a
+            // cancelled parse has nothing left to do.
+            guard (try? await Task.sleep(for: parseDelay)) != nil else { return }
+        }
         let gedcomDirectory = self.gedcomDirectory
         let fileManager = self.fileManager
         let folderIDs = FamilyAssetConfigurationCenter.shared.snapshot().makeStore().personFolderGEDCOMIDs()
@@ -322,6 +362,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             let unmatched = folderIDs.filter { !newIDs.contains($0) }.count
             return (new, current, unmatched)
         }.value
+
+        // Back on the main actor. Superseded (a newer parse started) or
+        // cancelled (forget / Keep current) → this result is nobody's.
+        guard generation == parseGeneration, !Task.isCancelled else { return }
+        parseTask = nil
 
         guard let parsed else {
             phase = .failed(message:

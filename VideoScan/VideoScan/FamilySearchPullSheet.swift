@@ -35,6 +35,8 @@ struct FamilySearchPullSheet: View {
                         optionsForm
                     case .waiting(let output):
                         waitingSection(output: output)
+                    case .parsing(let output):
+                        parsingSection(output: output)
                     case .ready(let output, let new, let current, let unmatched):
                         readySection(output: output, new: new, current: current,
                                      unmatchedFolderIDs: unmatched)
@@ -272,6 +274,20 @@ struct FamilySearchPullSheet: View {
         }
     }
 
+    private func parsingSection(output: URL) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking \(output.lastPathComponent)…")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            Text("Reading the file and comparing it with the tree Hallie uses now. A large export takes a few seconds.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func readySection(
         output: URL,
         new: FamilySearchPullCoordinator.TreeSummary,
@@ -403,6 +419,12 @@ struct FamilySearchPullSheet: View {
                     onForget()
                 }
                 .help("Stops watching for the file. The Terminal download keeps running; use Install from file when it finishes.")
+            case .parsing:
+                Button("Forget this download") {
+                    coordinator.cancel()
+                    onForget()
+                }
+                .help("Stops checking the file. Nothing has been installed.")
             case .ready(_, _, let current, _):
                 Button("Keep current") { coordinator.cancel() }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {
