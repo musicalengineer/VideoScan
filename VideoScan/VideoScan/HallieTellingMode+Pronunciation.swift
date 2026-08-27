@@ -42,10 +42,39 @@ extension HallieTellingMode {
         #"^(?:hallie[,]?\s+)?you(?:'re| are| keep| were|'ve been| have been)? (?:mispronouncing|mis-pronouncing|saying|pronouncing) ["']?([\p{L}'’-]+)["']?(?: wrong| wrongly| incorrectly| badly)?[,.;:!]?\s*(?:—|–|-)?\s*(?:it's|it is|its|it should be|it's said|it's pronounced|it goes|say it as|say it like|say|try|should be)[,:]? ["']?(.+?)["']?[.!]?$"#,
     ]
 
+    /// Compiled once (≈ a function-local `static const std::regex`): the
+    /// patterns are literals, so a compile failure is a programmer error.
+    private static let compiledPatterns: [NSRegularExpression] = pronunciationPatterns.map {
+        try! NSRegularExpression(pattern: $0, options: [.caseInsensitive])
+    }
+
     /// Words that can never be a name being respelled.
     private static let notNames: Set<String> = [
         "it", "that", "this", "he", "she", "they", "his", "her", "their", "the", "my", "name", "word",
     ]
+
+    /// A respelling never opens with a function word: "to cook", "a story",
+    /// "of fondly", "in Boston" are predicates the loose `(.+?)` tail of
+    /// pattern 1 can capture from ordinary sentences (QA 2026-08-26).
+    private static let notRespellingOpeners: Set<String> = [
+        "to", "a", "an", "the", "as", "of", "in", "that",
+    ]
+
+    /// Does `saidAs` look like a respelling rather than a predicate? One
+    /// spoken token ("EE-dith"), a hyphenated one ("nuh-THAN-yul"), or a
+    /// token carrying an all-caps stressed syllable ("LAT uh"). "to cook"
+    /// is none of those.
+    static func looksLikeRespelling(_ saidAs: String) -> Bool {
+        let tokens = saidAs.split(separator: " ")
+        guard let first = tokens.first, tokens.count <= 2,
+              !notRespellingOpeners.contains(first.lowercased()) else { return false }
+        if tokens.count == 1 { return true }
+        if saidAs.contains("-") { return true }
+        // An all-caps syllable of two or more letters ("LAT", "GILL").
+        return tokens.contains { token in
+            token.count >= 2 && token.allSatisfy { $0.isLetter && $0.isUppercase }
+        }
+    }
 
     static func detectPronunciation(_ text: String) -> PronunciationTelling? {
         let cleaned = text
@@ -55,9 +84,8 @@ extension HallieTellingMode {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         guard !cleaned.isEmpty, !cleaned.hasSuffix("?") else { return nil }
-        for pattern in pronunciationPatterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-                  let match = regex.firstMatch(
+        for regex in compiledPatterns {
+            guard let match = regex.firstMatch(
                     in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
                   match.numberOfRanges == 3,
                   let wordRange = Range(match.range(at: 1), in: cleaned),
@@ -67,9 +95,9 @@ extension HallieTellingMode {
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \"'.,;:!"))
             guard !word.isEmpty, !notNames.contains(word.lowercased()),
                   !saidAs.isEmpty, saidAs.count <= 40,
-                  // A respelling is one spoken token: "nuh-THAN-yul", "EE-dith".
-                  // "as a boy" or "wrong all the time" are not respellings.
-                  saidAs.split(separator: " ").count <= 2 else { continue }
+                  // "nuh-THAN-yul" and "EE-dith" are respellings; "to cook",
+                  // "as a boy" and "wrong all the time" are not.
+                  looksLikeRespelling(saidAs) else { continue }
             return PronunciationTelling(word: word, saidAs: saidAs)
         }
         return nil

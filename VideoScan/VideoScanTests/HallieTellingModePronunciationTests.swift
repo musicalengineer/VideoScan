@@ -64,3 +64,32 @@ extension HallieTellingModeTests {
                     .hasPrefix("Got it — I'll say nuh-THAN-yul as nuh-THAN-yul from now on."))
     }
 }
+
+extension HallieTellingModeTests {
+
+    /// QA 2026-08-26: "Donna is said to cook" used to detect word=Donna,
+    /// saidAs="to cook" and PERSIST it. A respelling has to look like one:
+    /// one token, or hyphenated, or carrying an all-caps stressed syllable
+    /// — and never opening with a function word ("to", "a", "of", ...).
+    @Test func twoTokenPredicatesAreNotRespellings() throws {
+        for text in [
+            "Donna is said to cook",
+            "Rick is read a story",
+            "Tim is said to sing",
+            "Edith is spoken of fondly",
+            "Nathaniel is pronounced in Boston",
+            "McGill is said as the Scots do",
+        ] {
+            #expect(HallieTellingMode.detectPronunciation(text) == nil, Comment(rawValue: text))
+        }
+        let a = try #require(HallieTellingMode.detectPronunciation("Nathaniel is pronounced nuh-THAN-yul"))
+        #expect(a == .init(word: "Nathaniel", saidAs: "nuh-THAN-yul"))
+        let b = try #require(HallieTellingMode.detectPronunciation("say Edith as EE-dith"))
+        #expect(b == .init(word: "Edith", saidAs: "EE-dith"))
+        let c = try #require(HallieTellingMode.detectPronunciation("McGill is pronounced muh-GILL"))
+        #expect(c == .init(word: "McGill", saidAs: "muh-GILL"))
+        // Two tokens are still fine when one carries the stress marking.
+        let d = try #require(HallieTellingMode.detectPronunciation("Latta is pronounced LAT uh"))
+        #expect(d == .init(word: "Latta", saidAs: "LAT uh"))
+    }
+}
