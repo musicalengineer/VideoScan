@@ -96,6 +96,11 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
                       speakers: HallieTurnExecutor.Speakers,
                       cyberBrain: CyberBrainIndex?) -> GedcomFamilyGraph.Person? {
         if let pinned = graph.person(familySearchID: speakers.ownerFamilySearchID) { return pinned }
+        // A configured ID the tree lacks fails closed (codex #707): no
+        // CyberBrain / name / root fall-through can bind the wrong owner.
+        if HallieOwnerResolver.stalePinLine(familySearchID: speakers.ownerFamilySearchID, graph: graph) != nil {
+            return nil
+        }
         guard let ownerName = speakers.ownerName else { return nil }
         if let cyberBrain, case .resolved(let person) = cyberBrain.resolve(ownerName),
            let pointer = person.gedcomPersonID, let tree = graph.people[pointer] {

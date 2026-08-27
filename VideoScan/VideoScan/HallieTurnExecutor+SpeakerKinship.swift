@@ -82,6 +82,11 @@ extension HallieTurnExecutor {
             if let pinned = graph.person(familySearchID: speakers.ownerFamilySearchID) {
                 owners = [pinned]
                 result.notes.append("“you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? ""))")
+            } else if let stale = HallieOwnerResolver.stalePinLine(
+                        familySearchID: speakers.ownerFamilySearchID, graph: graph) {
+                // Explicit pin, not in the tree: fail closed (codex #707).
+                result.failure = stale + " So I can't work out who “\(phrase)” is."
+                return result
             } else if let cyberBrain, case .resolved(let person) = cyberBrain.resolve(owner),
                let gedcomID = person.gedcomPersonID, let treePerson = graph.people[gedcomID] {
                 owners = [treePerson]
@@ -98,8 +103,9 @@ extension HallieTurnExecutor {
                         result.notes.append(note.replacingOccurrences(of: "Basis: ", with: ""))
                     case .many(let people):
                         owners = people
-                    case .none:
+                    case .none(let reason):
                         owners = []
+                        if let reason { result.notes.append(reason) }
                     }
                 }
             }
