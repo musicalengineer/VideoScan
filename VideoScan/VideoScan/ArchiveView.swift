@@ -10,6 +10,8 @@ import SwiftUI
 //   ArchiveView+Table.swift       — file table, status cell, context menu
 //   ArchiveView+Categories.swift  — pure derivations (categories, status, people)
 //   ArchiveView+DetailSheet.swift — the per-record detail sheet
+//   ArchiveHomeState.swift        — entry/hand-off state machine (HOME =
+//                                   Archived + Timeline; see that file)
 
 struct ArchiveView: View {
     @EnvironmentObject var model: VideoScanModel
@@ -42,12 +44,17 @@ struct ArchiveView: View {
     /// "It looks like N files are ready" (ArchiveNudge.swift), memoized
     /// per records version.
     @State var nudgeMemo = RenderMemo<RecordsVersion, ArchiveNudge>()
-    /// "timeline" | "files" — the Archived category's view switch.
-    /// Timeline is the default: the archive is the story, Files the bench.
-    @AppStorage("archive.viewMode") var archiveViewMode: String = "timeline"
-    /// First-appearance default: Not Yet Archived when the archive is
-    /// empty, else Archived. Applied once so a user's click sticks.
-    @State private var didPickDefaultCategory = false
+    /// "timeline" | "files" — the Archived category's in-session view
+    /// switch (ArchiveViewMode.rawValue). Timeline is the default and
+    /// every tab ENTRY resets to it (ArchiveHomeState rule 1/2): the
+    /// archive is the story, Files the bench.
+    @AppStorage("archive.viewMode") var archiveViewMode: String = ArchiveViewMode.timeline.rawValue
+    /// Non-nil while a hand-off has detoured the tab to a non-archived
+    /// list ("Showing Not Yet Archived — Back to archive"). Set only by
+    /// ArchiveHomeState; cleared by any sidebar click or Back.
+    @State var detourCategory: ArchiveCategory?
+    /// Timeline item to scroll to after an archived hand-off.
+    @State var timelineScrollTarget: UUID?
     /// Main-window tab index (1 = Catalog) — "Show in Catalog" writes it.
     @AppStorage("selectedTab") var selectedTab: Int = 0
 
@@ -62,12 +69,13 @@ struct ArchiveView: View {
             fileList
                 .frame(minWidth: 500)
         }
-        .onAppear {
-            pickDefaultCategoryIfNeeded()
-            handlePendingArchiveNavigation()
-            restoreFocusedMedia()
-        }
-        .onChange(of: model.pendingArchiveSelection) { handlePendingArchiveNavigation() }
+        // ContentView renders tabs via `switch selectedTab`, so this view
+        // is rebuilt on every tab entry and onAppear IS the entry point.
+        // One resolver decides what to show (ArchiveHomeState) — it used
+        // to be three independent writers, and the focus-restore one
+        // landed the tab in a file list nearly every time (Rick 2026-08-26).
+        .onAppear { applyEntry() }
+        .onChange(of: model.pendingArchiveSelection) { applyEntry() }
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
@@ -93,40 +101,62 @@ struct ArchiveView: View {
                                        volumeSearchPaths: visibleVolumeTargets.map(\.searchPath))
     }
 
-    private func pickDefaultCategoryIfNeeded() {
-        guard !didPickDefaultCategory else { return }
-        didPickDefaultCategory = true
-        selectedCategory = snapshot.archived.isEmpty ? .notYetArchived : .archived
+    /// True when the record has a Master Archive copy (any status but
+    /// notArchived) — the timeline can show it.
+    private func isArchived(_ id: UUID) -> Bool {
+        guard let rec = model.record(forID: id) else { return false }
+        if case .notArchived = ArchiveCategorySnapshot.status(of: rec, model: model) { return false }
+        return true
     }
 
     /// Which sidebar row a record lives under (for navigation from
     /// elsewhere — Catalog "Show in Archive", focus restore).
     private func category(containing id: UUID) -> ArchiveCategory {
-        guard let rec = model.record(forID: id) else { return .notYetArchived }
-        switch ArchiveCategorySnapshot.status(of: rec, model: model) {
-        case .notArchived: return .notYetArchived
-        default:           return .archived
-        }
+        isArchived(id) ? .archived : .notYetArchived
     }
 
-    private func handlePendingArchiveNavigation() {
-        guard let id = model.pendingArchiveSelection else { return }
-        model.pendingArchiveSelection = nil
-        selectedCategory = category(containing: id)
-        searchText = model.pendingArchiveSearch ?? ""
-        model.pendingArchiveSearch = nil
-        model.focusedMediaIDs = model.focusSet(for: id)
-        selectedIDs = model.focusedMediaIDs
+    /// Tab entry + "Show in Archive" hand-off. Gathers the model's
+    /// one-shot requests, consumes them, and applies the resolved state.
+    private func applyEntry() {
+        let entry = ArchiveTabEntry(pendingSelection: model.pendingArchiveSelection,
+                                    pendingSearch: model.pendingArchiveSearch,
+                                    focusedIDs: model.focusedMediaIDs,
+                                    persistedViewMode: archiveViewMode)
+        let state = ArchiveHomeState.resolveEntry(entry,
+                                                  isArchived: isArchived,
+                                                  category: category(containing:),
+                                                  focusSet: model.focusSet(for:))
+        if let id = model.pendingArchiveSelection {
+            // Consume the one-shot request; the focus set persists so a
+            // round-trip to the Catalog and back lands on the same item.
+            model.pendingArchiveSelection = nil
+            model.pendingArchiveSearch = nil
+            model.focusedMediaIDs = model.focusSet(for: id)
+        }
+        apply(state)
     }
 
-    private func restoreFocusedMedia() {
-        guard model.pendingArchiveSelection == nil,
-              !model.focusedMediaIDs.isEmpty else { return }
-        if let first = model.focusedMediaIDs.first {
-            selectedCategory = category(containing: first)
+    /// Copy a resolved state into the view's storage. The only place
+    /// selectedCategory / archiveViewMode / detour are written together.
+    func apply(_ state: ArchiveTabState) {
+        selectedCategory = state.category
+        // The persisted Timeline/Files switch belongs to the Archived
+        // category only; a list pick must not leave "files" behind and
+        // turn the next Archived click into a table.
+        if state.category == .archived {
+            archiveViewMode = state.viewMode.rawValue
         }
-        searchText = ""
-        selectedIDs = model.focusedMediaIDs
+        selectedIDs = state.selectedIDs
+        searchText = state.searchText
+        detourCategory = state.detour
+        timelineScrollTarget = state.scrollTarget
+    }
+
+    /// "Back to archive" (detour banner) — HOME, and drop the app-wide
+    /// focus so the next entry is HOME as well.
+    func backToArchive() {
+        model.focusedMediaIDs = []
+        apply(ArchiveHomeState.backToArchive())
     }
 
     // MARK: - Sidebar
@@ -303,18 +333,23 @@ struct ArchiveView: View {
 
     private func sidebarRow(_ category: ArchiveCategory) -> some View {
         let count = snapshot.count(for: category)
+        // Archived is the home row (Rick 2026-08-26: "a user has to figure
+        // out what button to click on the left") — bold, archive glyph,
+        // first. The lists below it read as secondary.
+        let isHome = category == .archived
         return Button {
-            selectedCategory = category
-            selectedIDs = []
             model.focusedMediaIDs = []
+            apply(ArchiveHomeState.sidebarPick(
+                category,
+                viewMode: ArchiveViewMode(rawValue: archiveViewMode) ?? .timeline))
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: category.icon)
                     .foregroundColor(category.color)
-                    .font(.system(size: 15))
+                    .font(.system(size: isHome ? 17 : 15, weight: isHome ? .semibold : .regular))
                     .frame(width: 20)
                 Text(category.label)
-                    .font(.system(size: 15))
+                    .font(.system(size: isHome ? 16 : 15, weight: isHome ? .bold : .regular))
                     .lineLimit(1)
                 Spacer()
                 Text("\(count)")
@@ -338,7 +373,7 @@ struct ArchiveView: View {
     private func categoryHelp(_ category: ArchiveCategory) -> String {
         switch category {
         case .archived:
-            return "Assets with a byte-verified copy in the Master Archive (one row per asset)."
+            return "The archive — the family's story by decade and year. Every asset with a byte-verified copy in the Master Archive."
         case .notYetArchived:
             return "Active catalog assets with no Master Archive copy yet. Right-click → Promote to Archive."
         case .needsDate:

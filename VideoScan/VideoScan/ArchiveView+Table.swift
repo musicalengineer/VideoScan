@@ -64,7 +64,29 @@ extension ArchiveView {
                 Divider()
             }
 
-            if selectedCategory == .archived && archiveViewMode == "timeline" {
+            // Hand-off detour (ArchiveHomeState rule 3): one line so the
+            // user is never stranded in a list wondering where the
+            // archive went.
+            if let detour = detourCategory {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .foregroundStyle(.secondary)
+                    Text("Showing \(detour.label)")
+                        .font(.system(size: 14))
+                    Text("—").foregroundStyle(.secondary)
+                    Button("Back to archive") { backToArchive() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 14, weight: .medium))
+                        .accessibilityIdentifier("archive.detour.back")
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.08))
+                Divider()
+            }
+
+            if selectedCategory == .archived && archiveViewMode == ArchiveViewMode.timeline.rawValue {
                 timelinePane
             } else {
                 // File table

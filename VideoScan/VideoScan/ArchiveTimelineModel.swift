@@ -164,6 +164,13 @@ struct ArchiveTimeline: Equatable {
     var isEmpty: Bool { decades.isEmpty && undated.isEmpty }
     var datedCount: Int { decades.reduce(0) { $0 + $1.count } }
 
+    /// Is this item on the timeline (after any search narrowing)? Used to
+    /// decide whether a hand-off target can be scrolled to. O(archived).
+    func contains(_ id: UUID) -> Bool {
+        undated.contains { $0.id == id } ||
+        decades.contains { $0.years.contains { $0.items.contains { $0.id == id } } }
+    }
+
     /// O(n log n) in the number of ARCHIVED items (never the whole
     /// catalog). Decade span runs from the earliest to the latest year
     /// with media, inclusive, so interior gaps show.

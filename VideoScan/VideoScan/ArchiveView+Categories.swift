@@ -38,7 +38,7 @@ enum ArchiveCategory: String, CaseIterable {
 
     var icon: String {
         switch self {
-        case .archived:       return "checkmark.seal.fill"
+        case .archived:       return "archivebox.fill"
         case .notYetArchived: return "tray.fill"
         case .needsDate:      return "calendar.badge.exclamationmark"
         }

@@ -64,6 +64,8 @@ extension ArchiveView {
         ArchiveTimelinePane(
             timeline: ArchiveTimeline.build(items: cachedTimelineItems(),
                                             matching: searchText),
+            selectedIDs: selectedIDs,
+            scrollTarget: timelineScrollTarget,
             contextMenu: { ids in AnyView(self.recordContextMenu(for: ids)) },
             openItems: { ids in
                 MediaOpener.open(ids.compactMap { self.model.record(forID: $0) })
@@ -79,6 +81,12 @@ struct ArchiveTimelinePane: View {
     let timeline: ArchiveTimeline
     /// Rail selection → scroll anchor. Nil until the user clicks.
     @State private var focusedDecade: Int?
+    /// Items to highlight — a hand-off from the Catalog/Hallie selects
+    /// the target here instead of dropping into the Files table
+    /// (ArchiveHomeState rule 2).
+    var selectedIDs: Set<UUID> = []
+    /// Item to scroll into view once the pane is up. Owned by ArchiveView.
+    var scrollTarget: UUID? = nil
     /// The enclosing ArchiveView's context menu + open handling.
     let contextMenu: (Set<UUID>) -> AnyView
     let openItems: ([UUID]) -> Void
@@ -96,7 +104,19 @@ struct ArchiveTimelinePane: View {
                     Divider()
                     stream
                 }
+                .onAppear { scrollToTarget(proxy) }
+                .onChange(of: scrollTarget) { scrollToTarget(proxy) }
             }
+        }
+    }
+
+    /// Bring the hand-off target into view. The cards carry `.id(item.id)`
+    /// inside the LazyVStack; SwiftUI resolves the scroll from the
+    /// identifier even for cards not yet materialised.
+    private func scrollToTarget(_ proxy: ScrollViewProxy) {
+        guard let target = scrollTarget, timeline.contains(target) else { return }
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(target, anchor: .center) }
         }
     }
 
@@ -290,7 +310,8 @@ struct ArchiveTimelinePane: View {
     /// means "select". The play glyph is the affordance; right-click
     /// keeps the full archive menu (journey, details, reveal).
     private func itemCard(_ item: ArchiveTimelineItem) -> some View {
-        Button {
+        let isSelected = selectedIDs.contains(item.id)
+        return Button {
             openItems([item.id])
         } label: {
             HStack(spacing: 12) {
@@ -331,13 +352,19 @@ struct ArchiveTimelinePane: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(isSelected
+                        ? Color.accentColor.opacity(0.14)
+                        : Color(NSColor.controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.primary.opacity(0.08)))
+                .strokeBorder(isSelected
+                              ? Color.accentColor.opacity(0.6)
+                              : Color.primary.opacity(0.08),
+                              lineWidth: isSelected ? 1.5 : 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .id(item.id)
         .help(item.relPath)
         .contextMenu { contextMenu([item.id]) }
     }
