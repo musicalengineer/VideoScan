@@ -50,6 +50,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Echoed under the sheet's button so the user reads the exact command
     /// before it runs — the verification step Rick asked for.
     @Published private(set) var previewLine: String = ""
+    /// Set when the output file has stopped growing (no trailer yet) for
+    /// `pollsBeforeQuiet` polls; nil once it grows again or completes. A
+    /// pause is NOT failure — the tool waits on a password prompt, an API
+    /// rate limit, or just a slow page — so the sheet shows a soft "may be
+    /// waiting for you" note and the watcher keeps watching (codex #707
+    /// item 3). Failure needs evidence: the file disappearing.
+    @Published private(set) var quietSince: Date?
     @Published var request: FamilySearchPullRequest
 
     /// Where the archive wants the finished file. Injected so tests never
@@ -184,6 +191,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
 
             launchDate = Date()
             startedAt = launchDate
+            quietSince = nil
             workspace.open(scriptURL)
             phase = .waiting(output: request.outputURL)
             startWatching(output: request.outputURL)
@@ -202,6 +210,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // Bump so a detached parse that cannot observe cancellation mid-
         // GEDCOM still finds itself stale when it comes back.
         parseGeneration &+= 1
+        quietSince = nil
         phase = .idle
     }
 
@@ -222,6 +231,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
 
     private func startWatching(output: URL) {
         watchTask?.cancel()
+        quietSince = nil
         let deadline = ContinuousClock.now.advanced(by: timeout)
         watchTask = Task { [weak self] in
             guard let self else { return }
@@ -235,8 +245,16 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 guard let size = await Self.fileSize(at: output, newerThan: since) else {
                     // The tool creates the file eagerly (argparse opens `-o`
                     // before it even prompts for the password), so "missing"
-                    // here really means "not ours yet".
-                    lastSize = -1
+                    // here usually means "not ours yet" — unless we had
+                    // already seen it. A file that was there and is now
+                    // gone is the one hard piece of evidence we have that
+                    // the run is over (user deleted it, tool cleaned up).
+                    if lastSize >= 0 {
+                        self.quietSince = nil
+                        self.phase = .failed(message:
+                            "\(output.lastPathComponent) was removed before it finished. Nothing was installed — run Get Family Tree again, or use Install from file if you have the export somewhere else.")
+                        return
+                    }
                     stableCount = 0
                     continue
                 }
@@ -245,34 +263,45 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 // never have to guess from timing whether a long pause in
                 // the middle of a big write means "finished".
                 if size > 0, await Self.hasGedcomTrailer(at: output) {
+                    self.quietSince = nil
                     self.beginParse(output: output)
                     return
                 }
                 if size > 0, size == lastSize {
                     stableCount += 1
-                    // ~30s of no growth and still no trailer: the run died
-                    // partway (killed, network dropped, app key revoked).
-                    // Say so rather than installing half a tree.
-                    if stableCount >= Self.stallsBeforeGivingUp {
-                        self.phase = .failed(message:
-                            "\(output.lastPathComponent) stopped growing but has no GEDCOM end marker, so the download did not finish. Check the Terminal window — nothing was installed.")
-                        return
+                    // No growth for a while and still no trailer. That is
+                    // NOT proof the run died — the tool pauses on password
+                    // entry, API throttling, and simply between pages — so
+                    // keep watching and let the sheet say "may be waiting
+                    // for you". The user can Forget it; the deadline is
+                    // the backstop.
+                    if stableCount >= Self.pollsBeforeQuiet, self.quietSince == nil {
+                        self.quietSince = Date()
                     }
                 } else {
                     stableCount = 0
+                    self.quietSince = nil
                 }
                 lastSize = size
             }
             if !Task.isCancelled {
+                self.quietSince = nil
                 self.phase = .failed(message:
                     "Timed out waiting for \(output.lastPathComponent). If the Terminal window is still working, leave it running and use Install from file when it finishes.")
             }
         }
     }
 
-    /// Polls with no growth and no trailer before we call a run dead.
-    /// 15 × 2s ≈ 30 seconds.
-    static let stallsBeforeGivingUp = 15
+    /// Polls with no growth and no trailer before `quietSince` is set.
+    /// 15 × 2s ≈ 30 seconds. Informational only — never a failure.
+    static let pollsBeforeQuiet = 15
+
+    /// Wording for the sheet's soft stall note. Pure so a test can pin it.
+    nonisolated static func quietMessage(fileName: String, since: Date, now: Date = Date()) -> String {
+        let minutes = max(0, Int(now.timeIntervalSince(since) / 60))
+        let span = minutes < 1 ? "under a minute" : (minutes == 1 ? "1 min" : "\(minutes) min")
+        return "No change to \(fileName) for \(span) — Terminal may be waiting for you (password prompt, or a pause between pages). Still watching."
+    }
 
     /// True when the file ends with GEDCOM's `0 TRLR` trailer — the last
     /// line getmyancestors writes. Reads only the tail, so this costs the
@@ -300,20 +329,22 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// a stale export from an earlier run must never be adopted silently.
     /// `nonisolated static` with everything passed in: no actor hop per
     /// poll, and nothing here can accidentally read main-actor state.
+    ///
+    /// Deliberately `FileManager.attributesOfItem` (a fresh stat(2) each
+    /// call) and NOT `URL.resourceValues`: the latter caches per URL value,
+    /// so polling the same URL reported the FIRST size forever — growth and
+    /// deletion were both invisible (found by the #707 item-3 sensor).
     nonisolated static func fileSize(at url: URL, newerThan since: Date) async -> Int64? {
         await Task.detached(priority: .utility) { () -> Int64? in
-            let keys: Set<URLResourceKey> = [
-                .fileSizeKey, .contentModificationDateKey, .isRegularFileKey,
-            ]
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true,
-                  let modified = values.contentModificationDate,
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  (attributes[.type] as? FileAttributeType) == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date,
                   // A couple of seconds of slack: the tool may create the
                   // file a moment before our launch stamp settles.
                   modified >= since.addingTimeInterval(-2),
-                  let size = values.fileSize
+                  let size = (attributes[.size] as? NSNumber)?.int64Value
             else { return nil }
-            return Int64(size)
+            return size
         }.value
     }
 

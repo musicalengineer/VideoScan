@@ -1,10 +1,15 @@
 // FamilySearchPullLifecycleTests.swift
-// SENSORS for codex #707 item 2 (2026-08-26).
+// SENSORS for codex #707 items 2 and 3 (2026-08-26).
 //
 // Item 2 — the parse used to be a fire-and-forget `Task { await finish() }`
 // nobody owned: forget() during it still published `.ready` into a dead
 // coordinator, and two rapid parses raced. The coordinator now owns the
 // parse task and gates its result on a generation counter.
+//
+// Item 3 — a run that paused > 30 s with no trailer was declared FAILED.
+// getmyancestors pauses for the password prompt and between pages; a pause
+// is now a soft `quietSince` note and the watcher keeps watching. Only the
+// file disappearing (after we had seen it) is failure.
 //
 // All tests inject a silent launcher, a planted tool and temp directories;
 // `parseDelay` slows the parse so a test can act *during* it.
@@ -50,7 +55,7 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
 
     // MARK: Helpers
 
-    /// 30 ms polls.
+    /// 30 ms polls: `pollsBeforeQuiet` (15) ≈ 450 ms of no growth.
     private static let pollInterval: Duration = .milliseconds(30)
 
     private func makeCenter(parseDelay: Duration = .zero) -> FamilySearchPullCenter {
@@ -200,6 +205,104 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .idle)
         try await Task.sleep(for: .milliseconds(900))
         XCTAssertEqual(coordinator.phase, .idle)
+    }
+
+    // MARK: Item 3 — a pause is not a failure
+
+    func testAPauseLongerThanTheQuietThresholdKeepsWatchingAndFinishes() async throws {
+        let center = makeCenter()
+        let coordinator = center.begin(gedcomDirectory: gedcomDirectory)
+        coordinator.launch()
+        guard case .waiting = coordinator.phase else {
+            return XCTFail("expected .waiting, got \(coordinator.phase)")
+        }
+
+        // The tool creates the file and writes some of it…
+        try write(gedcom(people: 2, trailer: false), to: outputURL)
+        try await Task.sleep(for: Self.pollInterval * 4)
+        try append("0 @I3@ INDI\n1 NAME Third /Breen/\n", to: outputURL)
+
+        // …then pauses well past pollsBeforeQuiet (15 × 30 ms = 450 ms).
+        // The old stall detector would have FAILED the run here.
+        let pause = Self.pollInterval * (FamilySearchPullCoordinator.pollsBeforeQuiet + 25)
+        try await Task.sleep(for: pause)
+        guard case .waiting = coordinator.phase else {
+            return XCTFail("a pause must not fail the run; got \(coordinator.phase)")
+        }
+        XCTAssertNotNil(coordinator.quietSince, "the pause is surfaced as a soft note")
+        XCTAssertEqual(center.status, .downloading(since: center.status.sinceOrNow))
+
+        // Growth resumes → note clears.
+        try append("0 @I4@ INDI\n1 NAME Fourth /Breen/\n", to: outputURL)
+        await wait { coordinator.quietSince == nil }
+        XCTAssertNil(coordinator.quietSince)
+
+        // Trailer lands → ready.
+        try append("0 TRLR\n", to: outputURL)
+        await wait { self.isReady(coordinator.phase) }
+        guard case .ready(_, let new, _, _) = coordinator.phase else {
+            return XCTFail("expected .ready after the trailer, got \(coordinator.phase)")
+        }
+        XCTAssertEqual(new.people, 4)
+        XCTAssertNil(coordinator.quietSince)
+    }
+
+    func testAFileThatWasSeenAndThenRemovedFails() async throws {
+        let center = makeCenter()
+        let coordinator = center.begin(gedcomDirectory: gedcomDirectory)
+        coordinator.launch()
+
+        try write(gedcom(people: 2, trailer: false), to: outputURL)
+        try await Task.sleep(for: Self.pollInterval * 4)
+        try FileManager.default.removeItem(at: outputURL)
+
+        await wait { if case .failed = coordinator.phase { return true } else { return false } }
+        guard case .failed(let message) = coordinator.phase else {
+            return XCTFail("expected .failed after the file vanished, got \(coordinator.phase)")
+        }
+        XCTAssertTrue(message.contains("was removed"), message)
+        XCTAssertEqual(center.status, .failed)
+        XCTAssertNil(coordinator.quietSince)
+    }
+
+    func testAFileThatHasNotAppearedYetIsNotAFailure() async throws {
+        // Missing before it was ever seen = "not ours yet", exactly as before.
+        let center = makeCenter()
+        let coordinator = center.begin(gedcomDirectory: gedcomDirectory)
+        coordinator.launch()
+        try await Task.sleep(for: Self.pollInterval * 30)
+        guard case .waiting = coordinator.phase else {
+            return XCTFail("expected .waiting, got \(coordinator.phase)")
+        }
+        XCTAssertNil(coordinator.quietSince)
+    }
+
+    func testForgetClearsTheQuietNote() async throws {
+        let center = makeCenter()
+        let coordinator = center.begin(gedcomDirectory: gedcomDirectory)
+        coordinator.launch()
+        try write(gedcom(people: 2, trailer: false), to: outputURL)
+        await wait { coordinator.quietSince != nil }
+        XCTAssertNotNil(coordinator.quietSince)
+        center.forget()
+        XCTAssertNil(coordinator.quietSince)
+        XCTAssertEqual(coordinator.phase, .idle)
+    }
+
+    func testQuietMessageWording() {
+        let since = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(
+            FamilySearchPullCoordinator.quietMessage(fileName: "tree.ged", since: since,
+                                                     now: since.addingTimeInterval(30)),
+            "No change to tree.ged for under a minute — Terminal may be waiting for you (password prompt, or a pause between pages). Still watching.")
+        XCTAssertEqual(
+            FamilySearchPullCoordinator.quietMessage(fileName: "tree.ged", since: since,
+                                                     now: since.addingTimeInterval(4 * 60 + 5)),
+            "No change to tree.ged for 4 min — Terminal may be waiting for you (password prompt, or a pause between pages). Still watching.")
+        XCTAssertEqual(
+            FamilySearchPullCoordinator.quietMessage(fileName: "tree.ged", since: since,
+                                                     now: since.addingTimeInterval(61)),
+            "No change to tree.ged for 1 min — Terminal may be waiting for you (password prompt, or a pause between pages). Still watching.")
     }
 }
 

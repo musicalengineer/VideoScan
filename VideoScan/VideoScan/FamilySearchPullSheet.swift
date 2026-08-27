@@ -270,6 +270,24 @@ struct FamilySearchPullSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("Watching for", value: output.lastPathComponent)
                 .font(.system(size: 12))
+            if let quietSince = coordinator.quietSince {
+                // `TimelineView` ≈ a timer-driven re-render: the closure is
+                // re-evaluated once a minute so the "for N min" stays honest
+                // without any state of our own.
+                TimelineView(.periodic(from: quietSince, by: 60)) { context in
+                    Label {
+                        Text(FamilySearchPullCoordinator.quietMessage(
+                            fileName: output.lastPathComponent,
+                            since: quietSince, now: context.date))
+                            .font(.system(size: 12))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "clock.badge.questionmark")
+                    }
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("familyTree.pullQuiet")
+                }
+            }
             commandPreview
         }
     }
