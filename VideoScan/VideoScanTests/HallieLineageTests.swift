@@ -279,7 +279,10 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("trace our heritage back") == .originTrail(person: nil, country: nil, line: .both))
         #expect(Q.detect("can you find my family links back to england") == .originTrail(person: nil, country: "England", line: .both))
         #expect(Q.detect("follow rick's line back to scotland") == .originTrail(person: "Rick", country: "Scotland", line: .both))
-        #expect(Q.detect("find videos of donna") == nil)
+        // Since 0d8cbf5c the detector names the person; the ANSWER returns nil
+        // for anyone who could have been filmed, so the ask still reaches the
+        // translator unchanged (pinned in HalliePhotographyFloorTests).
+        #expect(Q.detect("find videos of donna") == .personVideos(person: "Donna"))
         #expect(Q.detect("find my family") == nil)
         #expect(Q.detect("trace this network route back to Ireland") == nil)
         #expect(Q.detect("family tree of the Ross family") == .surnameTree(surname: "ross"))
