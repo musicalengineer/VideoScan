@@ -492,3 +492,353 @@ struct MFOStoredStateCancelTests {
         #expect(partialDebris(in: dir).isEmpty)
     }
 }
+
+// MARK: - Stall recorded BEFORE Stop stays Failed (codex gate 2026-08-26)
+//
+// The stored-state watchdogs record their reason and cancel the Task
+// while `state` stays `.running`. If Stop was clicked before the run
+// epilogue, `cancel()` used to flip `.cancelling` and the 06b8ce2f
+// diversion in `finish(failed:)` then reported a KNOWN stall as
+// "Cancelled". `MFOTerminalCause` makes the first cause explicit.
+//
+// Per kind, three shapes:
+//   - stall then Stop → .failed with the stall message, never Cancelled;
+//     and Stop after a stall never shows "Cancelling…" (the row stays
+//     "Stalled — stopping…")
+//   - Stop then late error → .cancelled (regression from 06b8ce2f)
+//   - plain stall → .failed
+//
+// Balance / Rebuild / Cleanup fire the stall while the injected child is
+// genuinely blocked (the real mid-run shape). Transcode / Reformat / Trim
+// have no ffmpeg override, so the stall is fired right after start() —
+// on the main actor the run Task cannot begin until this test suspends,
+// so the ordering is deterministic and the epilogue's "stall first"
+// ladder is what is under test, whatever ffmpeg then does.
+
+@Suite("MFOTerminalCause — set-once ledger")
+struct MFOTerminalCauseTests {
+    @Test func firstRecordWinsAndLaterOnesAreRefused() {
+        // (#expect captures its expression by value, so the mutating
+        // `record` is called outside the macro.)
+        var cause = MFOTerminalCause()
+        #expect(cause.first == nil && !cause.isStall && !cause.isCancel)
+        let stallWon = cause.record(.stall(reason: "Stalled — x"))
+        #expect(stallWon)
+        let lateCancelWon = cause.record(.cancel)
+        #expect(!lateCancelWon, "a Stop after a stall is refused")
+        #expect(cause.stallReason == "Stalled — x")
+        #expect(cause.isStall && !cause.isCancel)
+
+        var other = MFOTerminalCause()
+        let cancelWon = other.record(.cancel)
+        #expect(cancelWon)
+        let lateStallWon = other.record(.stall(reason: "late"))
+        #expect(!lateStallWon, "a stall after a Stop is refused")
+        #expect(other.isCancel && other.stallReason == nil)
+    }
+}
+
+@MainActor
+@Suite("Stored-state jobs — a stall recorded before Stop stays Failed", .serialized)
+struct MFOStallBeforeStopTests {
+
+    private func expectStalledFailure(_ state: MediaFileOperationState, _ label: String) {
+        guard case .failed(let msg) = state else {
+            Issue.record("\(label): expected .failed(Stalled…), got \(state)")
+            return
+        }
+        #expect(msg.hasPrefix("Stalled"), "\(label): \(msg)")
+    }
+
+    // MARK: Balance Audio
+
+    @Test("balance: stall then Stop → Failed with the stall reason", .timeLimit(.minutes(2)))
+    func balanceStallThenStop() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("mfo_stall_stop")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try BalanceAudioTestMedia.generate(into: dir, channelCase: .leftOnly, wrapper: .mp4H264Aac)
+        let analysis = try await AudioBalanceProbe.analyze(path: path)
+        let model = VideoScanModel()
+        let record = makeBalanceSourceRecord(path: path,
+                                             durationSeconds: analysis.shape.durationSeconds,
+                                             audioCodec: analysis.shape.audioCodec)
+        model.records = [record]
+        let fake = try writeTrappingFFmpeg(in: dir)
+        let job = BalanceAudioJob(record: record, analysis: analysis, model: model,
+                                  ffmpegPathOverride: fake.path)
+        job.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(job.state == .running)
+        job.handleStall(silentFor: 120)
+        #expect(job.state == .running, "the watchdog leaves state alone until the epilogue")
+        #expect(job.subtitle == "Stalled — stopping…")
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        #expect(job.subtitle == "Stalled — stopping…")
+        await job.task?.value
+        expectStalledFailure(job.state, "balance")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+    }
+
+    @Test("balance: plain stall → Failed", .timeLimit(.minutes(2)))
+    func balancePlainStall() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("mfo_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try BalanceAudioTestMedia.generate(into: dir, channelCase: .leftOnly, wrapper: .mp4H264Aac)
+        let analysis = try await AudioBalanceProbe.analyze(path: path)
+        let model = VideoScanModel()
+        let record = makeBalanceSourceRecord(path: path,
+                                             durationSeconds: analysis.shape.durationSeconds,
+                                             audioCodec: analysis.shape.audioCodec)
+        model.records = [record]
+        let fake = try writeTrappingFFmpeg(in: dir)
+        let job = BalanceAudioJob(record: record, analysis: analysis, model: model,
+                                  ffmpegPathOverride: fake.path)
+        job.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        job.handleStall(silentFor: 120)
+        await job.task?.value
+        expectStalledFailure(job.state, "balance")
+    }
+
+    // MARK: Rebuild Audio
+
+    @Test("rebuild: stall then Stop → Failed with the stall reason", .timeLimit(.minutes(2)))
+    func rebuildStallThenStop() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try makeScratch("rebuild_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try CleanupTestMedia.generate(
+            into: dir, name: "test_rebuild_stall.mp4", duration: 2.0,
+            size: "320x240", rate: "25", videoCodec: "libx264",
+            extraVideoArgs: ["-preset", "ultrafast"], audioCodec: "aac")
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        let model = VideoScanModel()
+        let record = makeBalanceSourceRecord(path: path,
+                                             durationSeconds: d.shape.containerDurationSeconds,
+                                             audioCodec: d.shape.audioCodec)
+        model.records = [record]
+        let fake = try writeTrappingFFmpeg(in: dir)
+        let job = RebuildAudioJob(record: record, reason: "test", shape: d.shape, model: model,
+                                  ffmpegPathOverride: fake.path)
+        job.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(job.state == .running)
+        job.handleStall(silentFor: 120)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        await job.task?.value
+        expectStalledFailure(job.state, "rebuild")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+
+        // Plain stall, same harness.
+        let plain = RebuildAudioJob(record: record, reason: "test", shape: d.shape, model: model,
+                                    ffmpegPathOverride: fake.path)
+        plain.start()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        plain.handleStall(silentFor: 120)
+        await plain.task?.value
+        expectStalledFailure(plain.state, "rebuild plain")
+    }
+
+    // MARK: Clean Up
+
+    private struct BlockingCleanupEngine: CleanupRecipeEngine {
+        let engineID = "blocking-test-engine"
+        func canExecute(_ recipe: CleanupRecipe) -> Bool { true }
+        func render(recipe: CleanupRecipe, source: CleanupSource, scratchDirectory: URL,
+                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+            progress(CleanupProgress(phase: "Blocking render", fraction: 0.1))
+            try await blockUntilCancelledThenThrow(GenericRenderError())
+        }
+    }
+
+    @Test("cleanup: stall then Stop → Failed with the stall reason; plain stall → Failed", .timeLimit(.minutes(2)))
+    func cleanupStallThenStop() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try makeScratch("cleanup_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_cleanup_stall.mp4", duration: 1.0,
+            size: "320x240", rate: "25", videoCodec: "libx264",
+            extraVideoArgs: ["-preset", "ultrafast"], audioCodec: "aac")
+        let model = VideoScanModel()
+        let source = makeCleanupSourceRecord(path: src, durationSeconds: 1.0, fieldOrder: "tt")
+        model.records = [source]
+
+        let job = CleanupJob(record: source, recipe: CleanupRecipeRegistry.vhsQuickClean,
+                             model: model, engine: BlockingCleanupEngine())
+        job.start()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        job.handleStall(silentFor: 120)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        await job.task?.value
+        expectStalledFailure(job.state, "cleanup")
+        #expect(model.records.count == 1)
+
+        let plain = CleanupJob(record: source, recipe: CleanupRecipeRegistry.vhsQuickClean,
+                               model: model, engine: BlockingCleanupEngine())
+        plain.start()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        plain.handleStall(silentFor: 120)
+        await plain.task?.value
+        expectStalledFailure(plain.state, "cleanup plain")
+    }
+
+    // MARK: Transcode / Reformat / Trim — stall fired before the run Task begins
+
+    @Test("transcode: stall then Stop → Failed, no output; plain stall → Failed", .timeLimit(.minutes(2)))
+    func transcodeStallThenStop() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try makeScratch("transcode_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_transcode_stall.mp4", duration: 2.0,
+            size: "320x240", rate: "25", videoCodec: "libx264",
+            extraVideoArgs: ["-preset", "ultrafast"], audioCodec: "aac")
+        let record = makeCleanupSourceRecord(path: src, durationSeconds: 2.0, fieldOrder: "progressive")
+        let model = VideoScanModel()
+        model.records = [record]
+
+        let out = dir.appendingPathComponent("test_transcode_stall_out.mov")
+        let job = TranscodeJob(record: record, preset: .editing, outputURL: out, model: model)
+        job.start()
+        job.handleStall(phase: "transcode encode", silentFor: 120)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        await job.task?.value
+        expectStalledFailure(job.state, "transcode")
+        #expect(!FileManager.default.fileExists(atPath: out.path))
+        #expect(partialDebris(in: dir).isEmpty)
+        #expect(model.records.count == 1)
+
+        let out2 = dir.appendingPathComponent("test_transcode_stall_out2.mov")
+        let plain = TranscodeJob(record: record, preset: .editing, outputURL: out2, model: model)
+        plain.start()
+        plain.handleStall(phase: "transcode encode", silentFor: 120)
+        await plain.task?.value
+        expectStalledFailure(plain.state, "transcode plain")
+        #expect(!FileManager.default.fileExists(atPath: out2.path))
+    }
+
+    @Test("reformat: stall then Stop → Failed, no output; plain stall → Failed", .timeLimit(.minutes(2)))
+    func reformatStallThenStop() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try makeScratch("reformat_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_reformat_stall.mp4", duration: 2.0,
+            size: "320x240", rate: "25", videoCodec: "libx264",
+            extraVideoArgs: ["-preset", "ultrafast"], audioCodec: "aac")
+        let record = makeCleanupSourceRecord(path: src, durationSeconds: 2.0, fieldOrder: "progressive")
+        let model = VideoScanModel()
+        model.records = [record]
+
+        let job = ReformatJob(record: record, model: model, orchestrator: nil)
+        job.start()
+        job.handleStall(inputPath: src, silentFor: 120)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        await job.task?.value
+        expectStalledFailure(job.state, "reformat")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+
+        let plain = ReformatJob(record: record, model: model, orchestrator: nil)
+        plain.start()
+        plain.handleStall(inputPath: src, silentFor: 120)
+        await plain.task?.value
+        expectStalledFailure(plain.state, "reformat plain")
+        #expect(!FileManager.default.fileExists(atPath: plain.outputURL.path))
+    }
+
+    @Test("trim: stall then Stop → Failed, no output; Stop → Cancelled; plain stall → Failed", .timeLimit(.minutes(2)))
+    func trimStallThenStopAndPlainStop() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try makeScratch("trim_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_trim_stall.mp4", duration: 4.0,
+            size: "320x240", rate: "25", videoCodec: "libx264",
+            extraVideoArgs: ["-preset", "ultrafast"], audioCodec: "aac")
+        let record = makeCleanupSourceRecord(path: src, durationSeconds: 4.0, fieldOrder: "progressive")
+        let model = VideoScanModel()
+        model.records = [record]
+
+        let job = TrimJob(record: record, range: TrimRange(inSeconds: 1.0, outSeconds: 3.0), model: model)
+        job.start()
+        job.handleStall(silentFor: 120)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        await job.task?.value
+        expectStalledFailure(job.state, "trim")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+        #expect(model.records.count == 1)
+
+        // Regression (06b8ce2f shape for Trim): a plain Stop is Cancelled.
+        let stopped = TrimJob(record: record, range: TrimRange(inSeconds: 1.0, outSeconds: 3.0), model: model)
+        stopped.start()
+        stopped.cancel()
+        #expect(stopped.state == .cancelling)
+        await stopped.task?.value
+        #expect(stopped.state == .cancelled, "got \(stopped.state) — \(stopped.subtitle)")
+        #expect(!FileManager.default.fileExists(atPath: stopped.outputURL.path))
+
+        let plain = TrimJob(record: record, range: TrimRange(inSeconds: 1.0, outSeconds: 3.0), model: model)
+        plain.start()
+        plain.handleStall(silentFor: 120)
+        await plain.task?.value
+        expectStalledFailure(plain.state, "trim plain")
+    }
+
+    // MARK: Find Person — the finish ladder, no engine
+
+    @Test func findPersonStallThenStopIsFailedAndStopThenErrorIsCancelled() {
+        let model = VideoScanModel()
+        let rec = VideoRecord()
+        rec.filename = "test_find_stall.mov"
+        rec.fullPath = "/Volumes/T/test_find_stall.mov"
+
+        // Stall then Stop → the stall reason, never Cancelled.
+        let job = FindPersonJob(person: "Donna", records: [rec], model: model)
+        #expect(job.state == .running)
+        job.handleStall(silentFor: 315)
+        #expect(job.state == .running)
+        job.cancel()
+        #expect(job.state == .running, "Stop after a stall must not become Cancelling")
+        job.finishRun(failure: nil)
+        guard case .failed(let msg) = job.state else {
+            Issue.record("find person: expected .failed, got \(job.state)"); return
+        }
+        #expect(msg.contains("recipe engine stalled"), "\(msg)")
+        #expect(job.subtitle == msg)
+
+        // Stop then a late engine error → Cancelled (06b8ce2f regression).
+        let stopped = FindPersonJob(person: "Donna", records: [rec], model: model)
+        stopped.cancel()
+        #expect(stopped.state == .cancelling)
+        stopped.finishRun(failure: "engine exited 1 while unwinding")
+        #expect(stopped.state == .cancelled, "got \(stopped.state)")
+        #expect(stopped.subtitle.hasPrefix("Cancelled"))
+
+        // Plain stall → Failed.
+        let plain = FindPersonJob(person: "Donna", records: [rec], model: model)
+        plain.handleStall(silentFor: 315)
+        plain.finishRun(failure: nil)
+        if case .failed(let m) = plain.state { #expect(m.contains("stalled")) }
+        else { Issue.record("find person plain stall: got \(plain.state)") }
+
+        // A stall arriving AFTER the Stop is ignored — cancel owns it.
+        let late = FindPersonJob(person: "Donna", records: [rec], model: model)
+        late.cancel()
+        late.handleStall(silentFor: 315)
+        late.finishRun(failure: nil)
+        #expect(late.state == .cancelled, "got \(late.state)")
+    }
+}

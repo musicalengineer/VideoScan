@@ -142,7 +142,10 @@ final class TrimJob: @MainActor MediaFileOperationJob {
 
     /// Set by the stall watchdog; wins over the generic cancel branch
     /// (the watchdog cancels the Task, which also trips Task.isCancelled).
-    private var stallReason: String?
+    /// Set-once ledger of the first terminal cause (watchdog stall vs the
+    /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
+    private var terminalCause = MFOTerminalCause()
+    private var stallReason: String? { terminalCause.stallReason }
 
     /// True when the Center's dedupe guard refused this job before it
     /// ever ran — flips the file-log OUTCOME line from "trim FAILED:"
@@ -201,8 +204,14 @@ final class TrimJob: @MainActor MediaFileOperationJob {
     /// ProcessRunner, which terminates the child (SIGTERM → SIGKILL).
     func cancel() {
         guard state.isActive else { return }
-        state = .cancelling
-        subtitleText = "Cancelling…"
+        // A stall recorded first owns the terminal (codex gate 2026-08-26):
+        // the watchdog is already killing the Task, the row keeps
+        // "Stalled — stopping…" and ends Failed with the stall reason —
+        // never Cancelled. Otherwise the user's Stop is the first cause.
+        if terminalCause.record(.cancel) {
+            state = .cancelling
+            subtitleText = "Cancelling…"
+        }
         task?.cancel()
     }
 
@@ -630,11 +639,11 @@ final class TrimJob: @MainActor MediaFileOperationJob {
 
     // MARK: Stall handling
 
-    private func handleStall(silentFor: Double) {
-        guard state.isActive, stallReason == nil else { return }
+    func handleStall(silentFor: Double) {
+        guard state.isActive, terminalCause.first == nil else { return }
         let attribution = StallMonitor.attribution(forPaths: [record.fullPath, outputURL.path])
         let reason = "Stalled — no ffmpeg progress for \(Int(silentFor))s during trim. \(attribution)"
-        stallReason = reason
+        terminalCause.record(.stall(reason: reason))
         subtitleText = "Stalled — stopping…"
         trimLog.error("trim WATCHDOG: killing \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
         appLog.write("trim watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing ffmpeg")
@@ -705,12 +714,12 @@ final class TrimJob: @MainActor MediaFileOperationJob {
     }
 
     private func finish(failed: String) {
-        // Rick 2026-08-26: a job whose cancel was requested NEVER ends
-        // .failed — the SIGTERM'd child's non-zero exit, or any typed error
-        // thrown while the Task unwinds, is the user's Stop, not a failure.
-        // (Stalls are unaffected: the watchdog cancels the Task but never
-        // sets .cancelling — see MediaFileOperationState.cancelWasRequested.)
-        if state.cancelWasRequested { finishCancelled(); return }
+        // Rick 2026-08-26: a job whose cancel was the FIRST terminal cause
+        // NEVER ends .failed — the SIGTERM'd child's non-zero exit, or any
+        // typed error thrown while the Task unwinds, is the user's Stop,
+        // not a failure. A stall recorded before the Stop is not diverted
+        // (codex gate 2026-08-26) — see MFOTerminalCause.
+        if terminalCause.isCancel { finishCancelled(); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false
@@ -718,6 +727,9 @@ final class TrimJob: @MainActor MediaFileOperationJob {
     }
 
     private func finishCancelled() {
+        // An earlier stall is the cause of THIS cancellation (the watchdog
+        // cancelled the Task) — report it, not "Cancelled".
+        if let reason = terminalCause.stallReason { finish(failed: reason); return }
         state = .cancelled
         subtitleText = "Cancelled — nothing was written"
         isIndeterminateValue = false

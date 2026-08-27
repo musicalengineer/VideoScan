@@ -73,6 +73,53 @@ extension GedcomFamilyGraph {
         return false
     }
 
+    /// What a year-bounded walk could and could not PROVE (codex #707
+    /// major 7): "I stopped at 1600" is only true when a parent DATED
+    /// before the bound was left unwalked. Parents skipped because neither
+    /// they nor their child carries a birth year are a date gap — the line
+    /// may reach further, and the prose must say so instead of asserting
+    /// the bound was reached.
+    public struct YearBoundGap: Sendable, Equatable {
+        /// Unwalked parents born BEFORE the bound — proof the tree goes on.
+        public let provenBeyond: [Person]
+        /// Unwalked parents with no birth year (their child is undated too).
+        public let undatedUnwalked: [Person]
+        /// Walked ancestors with an undated parent left unwalked — where
+        /// the dates run out.
+        public let undatedFrontier: [Person]
+        /// Walked ancestors with no birth year (kept under a dated child).
+        public let undatedWalked: [Person]
+
+        public var hasDateGap: Bool { !undatedUnwalked.isEmpty }
+    }
+
+    public func yearBoundGap(of person: Person,
+                             generations: [AncestorGeneration],
+                             untilYear: Int) -> YearBoundGap {
+        let walked = generations.flatMap(\.people)
+        let walkedIDs = Set(walked.map(\.id))
+        var proven: [Person] = []
+        var undated: [Person] = []
+        var frontier: [Person] = []
+        var seen: Set<String> = []
+        for p in (generations.isEmpty ? [person] : walked) {
+            var gapHere = false
+            for parent in relatives(.parents, of: p) where !walkedIDs.contains(parent.id) {
+                guard seen.insert(parent.id).inserted else { continue }
+                if let born = parent.birthYear {
+                    if born < untilYear { proven.append(parent) }
+                } else {
+                    undated.append(parent)
+                    gapHere = true
+                }
+            }
+            if gapHere { frontier.append(p) }
+        }
+        return YearBoundGap(provenBeyond: proven, undatedUnwalked: undated,
+                            undatedFrontier: frontier,
+                            undatedWalked: walked.filter { $0.birthYear == nil })
+    }
+
     /// The pedigree generations PRUNED to the people who lie on a path
     /// from `person` up to any of `targets` — the chain you would trace
     /// with a finger, not the whole fan. Generations with nobody on a
