@@ -33,6 +33,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// — points at the Family Tree tab's Get Family Tree sheet (Rick
     /// 2026-08-25: "maybe via Hallie if we can make it simple english").
     case getFamilyTree
+    /// "did we only get the gedcom for Rick?" / "have we pulled the tree
+    /// for Donna's side?" (live 2026-08-27, asked twice): a question about
+    /// what the loaded tree COVERS — its source file, whom it was pulled
+    /// for, whether a person / surname is in it — not a fetch. `person`
+    /// and `surname` are whatever the sentence named (lowercase surname,
+    /// as `.surnameTree`).
+    case gedcomProvenance(person: String?, surname: String?)
     /// "describe X" / "what was X like" / "X's appearance/personality" —
     /// answered DETERMINISTICALLY from the family's told accounts, voiced
     /// as attributed testimony (Rick 2026-08-25: a prompt nudge left it
@@ -140,6 +147,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     private static func detectShape(_ lower: String) -> HallieLineageQuestion? {
         if isGetFamilyTree(lower) { return .getFamilyTree }
+        if let provenance = gedcomProvenanceQuestion(in: lower) { return provenance }
         if isGedcomAwareness(lower) { return .gedcomAwareness }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person
@@ -327,14 +335,73 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// A request to FETCH tree data, as opposed to questions about it.
     /// Requires a fetch verb and a tree/GEDCOM/FamilySearch object; "show
     /// me the family tree" and "what is GEDCOM" are not fetches.
+    /// "did we (only) get …", "have you pulled …", "do we have …": the
+    /// fetch verb inside an interrogative / past clause. A question about
+    /// what we HAVE, never a fetch (live 2026-08-27: "did we only get the
+    /// gedcom for Rick" drew the download pitch). "can you fetch" /
+    /// "could you get" are requests and are NOT in this list.
+    static let interrogativeFetchClause =
+        /\b(?:did|do|does|have|has|had)\s+(?:we|you|i|they)\s+(?:only\s+|already\s+|ever\s+|just\s+)?(?:get|got|gotten|fetch(?:ed)?|download(?:ed)?|pull(?:ed)?|import(?:ed)?|grab(?:bed)?|load(?:ed)?|have)\b/
+
+    /// Clause seams for the per-clause veto (codex #754): "do we have the
+    /// gedcom, and can you fetch more ancestors?" is a question AND a
+    /// request; the request clause wins.
+    static let clauseSeam = /\s*(?:,\s*(?:and|but|or)\s+|\s+(?:and|but)\s+|[?;])\s*/
+
     static func isGetFamilyTree(_ lower: String) -> Bool {
+        lower.split(separator: clauseSeam).contains { clause in
+            isFetchClause(String(clause))
+        }
+    }
+
+    /// One clause: a fetch verb + a tree object, phrased as a request or
+    /// an imperative. A clause whose fetch verb sits inside "did we /
+    /// have you / do we …" is a question about what we have, not a fetch.
+    private static func isFetchClause(_ lower: String) -> Bool {
         let verbs = /\b(?:get|fetch|download|pull|import|grab|update|refresh|expand|extend|deepen)\b/
         let object = /\b(?:family ?search|gedcom|(?:family )?tree|ancestors|ancestry|generations)\b/
         guard lower.firstMatch(of: verbs) != nil, lower.firstMatch(of: object) != nil else { return false }
+        if lower.firstMatch(of: interrogativeFetchClause) != nil { return false }
         if lower.contains("familysearch") || lower.contains("family search") { return true }
         return lower.firstMatch(of: /\b(?:get|fetch|download|pull|import|grab) (?:more (?:of )?)?(?:the |my |our |a )?(?:whole |entire |full |bigger |deeper |updated |new |latest )?(?:family )?(?:tree|gedcom|ancestors|ancestry)\b/) != nil
             || lower.firstMatch(of: /\b(?:more|deeper|further|older) (?:generations|ancestors)\b/) != nil
             || lower.firstMatch(of: /\b(?:update|refresh|expand|extend|deepen) (?:the |my |our )?(?:family )?tree\b/) != nil
+    }
+
+    /// The interrogative fetch clause with a tree object AND a named
+    /// person or surname → a coverage question. With neither ("where did
+    /// we get the gedcom") this steps aside for `.gedcomAwareness`, which
+    /// reports the file's folder and date (codex #754). Person = up to
+    /// three name tokens after "from"/"for" (trace start first: "from
+    /// donna … for rick" is about Donna); surname = "the hudson line/
+    /// side/family" or "for the hudsons".
+    static func gedcomProvenanceQuestion(in lower: String) -> HallieLineageQuestion? {
+        guard lower.firstMatch(of: interrogativeFetchClause) != nil,
+              lower.firstMatch(of: /\b(?:gedcom|family ?search|(?:family )?tree|ancestors|ancestry)\b/) != nil
+        else { return nil }
+        var surname: String?
+        if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+) (?:line|side|family|branch|lineage)\b/) {
+            surname = String(m.1)
+        } else if let m = lower.firstMatch(of: /\b(?:for|of|from) the ([a-z][a-z'-]+s)\b/) {
+            surname = String(m.1)
+        }
+        let stop: Set<String> = ["the", "my", "our", "your", "a", "an", "this", "that", "it", "or", "and",
+                                 "but", "did", "do", "does", "have", "has", "we", "you", "i", "they",
+                                 "only", "yet", "already", "just", "from", "for", "of", "familysearch",
+                                 "family", "search", "gedcom", "tree", "ancestors", "ancestry", "side",
+                                 "line", "branch", "lineage", "here", "there", "back", "then"]
+        var person: String?
+        for m in lower.matches(of: /\b(?:from|for)\s+((?:[a-z][a-z'-]*\s*){1,3})/) where person == nil {
+            var tokens: [String] = []
+            for raw in String(m.1).split(separator: " ") {
+                let word = raw.replacingOccurrences(of: "'s", with: "").replacingOccurrences(of: "'", with: "")
+                if stop.contains(word) || word == surname { break }
+                tokens.append(word)
+            }
+            if !tokens.isEmpty { person = capitalizedName(tokens.joined(separator: " ")) }
+        }
+        guard person != nil || surname != nil else { return nil }
+        return .gedcomProvenance(person: person, surname: surname)
     }
 
     static func isGedcomAwareness(_ lower: String) -> Bool {
@@ -700,6 +767,8 @@ enum HallieLineageAnswer {
             return gedcomAwareness(context.graph)
         case .getFamilyTree:
             return getFamilyTreeAnswer(context.graph)
+        case .gedcomProvenance(let person, let surname):
+            return gedcomProvenance(person: person, surname: surname, context: context)
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
@@ -1734,6 +1803,124 @@ enum HallieLineageAnswer {
             basisLine: "Basis: Get Family Tree (getmyancestors via Terminal); nothing was downloaded or changed; no model call.",
             queryDescription: "lineage: get family tree", citations: [], catalogPersonName: nil,
             offeredActions: [.getFamilyTree])
+    }
+
+    /// "did we only get the gedcom for Rick?" — what the loaded tree
+    /// covers: its file, its first record (stated as the assumption it
+    /// is), whether the named person is in it, and — the part that
+    /// matters — how far the graph can actually WALK back from that
+    /// person. Surname presence is never a traceability claim (codex on
+    /// 0508bdab: the real Donna Hudson has no parents attached, and a
+    /// 16k-person GEDCOM can hold unrelated Hudsons). Only the ancestor
+    /// walk earns "I can trace". Deterministic; no model call.
+    static func gedcomProvenance(person: String?, surname: String?,
+                                 context: HallieTurnExecutor.Context) -> Result {
+        guard let graph = context.graph else { return noTree() }
+        var parts: [String] = []
+        var source = "The tree I have comes from "
+        source += graph.sourceFileName.map { "the GEDCOM file “\($0)”" } ?? "a GEDCOM file"
+        let fromFamilySearch = graph.people.values.contains { $0.familySearchID != nil }
+        source += " — \(graph.people.count) people and \(graph.familyCount) families."
+        if fromFamilySearch {
+            source += " Its records carry FamilySearch IDs, so I take it to be a FamilySearch export."
+        }
+        if let root = graph.rootPerson {
+            let born = root.birthYear.map { " (b. \($0))" } ?? ""
+            source += " Its first record is \(root.name)\(born); exports usually put the home person first, so I assume it was pulled for \(root.name) — the file doesn’t say."
+        }
+        parts.append(source)
+
+        var offer = false
+        let carriers = surname.map { graph.people(withSurname: $0) } ?? []
+        let surnameDisplay = surname.map { carriers.first?.surname ?? HallieLineageQuestion.capitalizedName($0) }
+        var ancestorIDs: Set<String> = []     // everyone the walk reached
+        var selfIDs: Set<String> = []         // the named person's own record(s)
+        var personFound = false
+
+        if let person {
+            // The same resolver the ancestor walks use: owner pinning,
+            // CyberBrain aliases ("Rick" → "Richard Harding Breen Jr"),
+            // indexed lookup. Several namesakes → all of them are walked
+            // and the deepest speaks for the name.
+            let found: [GedcomFamilyGraph.Person]
+            switch resolveDetailed(person, context: context, graph: graph) {
+            case .success(let p, _): found = [p]
+            case .ambiguous(let people): found = people
+            case .failure: found = []
+            }
+            if found.isEmpty {
+                parts.append("I don’t find “\(person)” in it.")
+                offer = true
+            } else {
+                personFound = true
+                let shown = found.prefix(3).map { p in
+                    p.name + (p.birthYear.map { " (b. \($0))" } ?? "")
+                }.joined(separator: ", ")
+                let more = found.count > 3 ? " and \(found.count - 3) more" : ""
+                parts.append("\(person) is in it: \(shown)\(more).")
+                // The walk is the evidence. Several namesakes → the
+                // deepest one speaks for the name.
+                var deepest = 0
+                for p in found {
+                    let walked = graph.ancestorLine(of: p, line: .both, generations: 60)
+                    deepest = max(deepest, walked.count)
+                    selfIDs.insert(p.id)
+                    for gen in walked { for a in gen.people { ancestorIDs.insert(a.id) } }
+                }
+                let pronoun: String
+                switch found.first?.sex {
+                case "F": pronoun = "her"
+                case "M": pronoun = "his"
+                default: pronoun = "their"
+                }
+                if deepest > 0 {
+                    parts.append("I can trace \(deepest) generation\(deepest == 1 ? "" : "s") back from \(person).")
+                    if let surnameDisplay {
+                        let connected = carriers.filter { ancestorIDs.contains($0.id) }.count
+                        let stray = carriers.filter { !ancestorIDs.contains($0.id) && !selfIDs.contains($0.id) }.count
+                        if connected > 0 {
+                            parts.append("\(connected) of \(pronoun) recorded ancestors carr\(connected == 1 ? "ies" : "y") the surname \(surnameDisplay).")
+                        } else if carriers.isEmpty {
+                            parts.append("No one in it carries the surname \(surnameDisplay).")
+                        }
+                        if stray > 0 {
+                            parts.append("The \(stray) other \(surnameDisplay)\(stray == 1 ? "" : "s") in the tree \(stray == 1 ? "isn’t" : "aren’t") among \(pronoun) recorded ancestors, so I can’t say they connect to \(person).")
+                        }
+                    }
+                } else {
+                    let lineName = surnameDisplay.map { "\($0) line" } ?? "line"
+                    parts.append("But \(pronoun) record has no parents attached, so \(pronoun) \(lineName) stops there in this tree.")
+                    let stray = carriers.filter { !selfIDs.contains($0.id) }.count
+                    if let surnameDisplay, stray > 0 {
+                        parts.append("The \(stray) other \(surnameDisplay)\(stray == 1 ? "" : "s") in the tree \(stray == 1 ? "isn’t" : "aren’t") connected to \(person).")
+                    }
+                    offer = true
+                }
+            }
+        }
+        if let surnameDisplay, !personFound {
+            if carriers.isEmpty {
+                parts.append("No one in it carries the surname \(surnameDisplay), so I can’t trace that line from this tree.")
+                offer = true
+            } else {
+                parts.append("\(carriers.count) \(carriers.count == 1 ? "person carries" : "people carry") the surname \(surnameDisplay); whether they connect to anyone you mean, I can only tell from a named person’s record.")
+            }
+        }
+        if offer {
+            // Honest about what the sheet does (codex #754): it pulls for
+            // the signed-in FamilySearch user and REPLACES the active tree;
+            // it cannot add a side to this one.
+            let side = person.map { HallieLineageQuestion.possessive($0) + " side" } ?? "that side"
+            let record = person.map { "\($0)’s record" } ?? "a record on that side"
+            parts.append("Get Family Tree pulls from the signed-in FamilySearch account and replaces the current tree, so covering \(side) means starting a pull from \(record) there.")
+        }
+        return Result(
+            route: .graph, outcome: .answered,
+            prose: parts.joined(separator: " "),
+            basisLine: "Basis: the loaded GEDCOM’s file name and counts; its first record is ASSUMED to be the home person and FamilySearch IDs are taken as a sign of a FamilySearch export (neither is stated in the file); name/surname counts and an ancestor walk from the named person; nothing was downloaded or changed; no model call.",
+            queryDescription: "lineage: gedcom provenance" + (person.map { " person=\($0)" } ?? "") + (surname.map { " surname=\($0)" } ?? ""),
+            citations: [], catalogPersonName: nil,
+            offeredActions: offer ? [.getFamilyTree] : [])
     }
 
     static func noTree() -> Result {

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "corpusID": "hallie-live-misses-v1",
+  "description": "Live Hallie misses pinned as a second, growing lane. Same schema as hallie_interaction_corpus.json so scripts/hallie_eval.py run --corpus tests/hallie_live_misses_corpus.json works unchanged; the fixed 200-turn corpus and its sensors are left alone.",
+  "categories": [
+    {
+      "id": "family_tree_live",
+      "expectedRoutes": ["graph", "follow-up"],
+      "expectedOutcomes": ["answered", "declined", "needsClarification"],
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "mustNotContain": ["tap Get Family Tree, choose how many ancestor steps"],
+      "prompts": [
+        {
+          "text": "Can we trace the Hudson line from Donna or did we only get the GEDCOM for Rick?",
+          "note": "2026-08-27 22:07Z, asked twice; routed to the Get Family Tree download pitch. Fixed on fix/hallie-gedcom-provenance-question."
+        }
+      ]
+    }
+  ]
+}

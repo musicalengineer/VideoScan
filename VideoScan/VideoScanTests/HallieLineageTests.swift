@@ -508,6 +508,208 @@ struct HallieLineageAnswerTests {
         #expect(HallieLineageQuestion.detect("get me a photo of donna") != .getFamilyTree)
     }
 
+    // MARK: GEDCOM provenance (live 2026-08-27, asked twice)
+
+    /// "did we only get the gedcom for Rick" is a question about what we
+    /// HAVE, not an imperative to download; the fetch verb sits inside an
+    /// interrogative/past clause and must not reach the Get Family Tree
+    /// pitch.
+    @Test func interrogativeFetchClausesAreNotFetches() {
+        let live = "can we trace the hudson line from donna or did we only get the gedcom for Rick?"
+        #expect(HallieLineageQuestion.detect(live) != .getFamilyTree)
+        #expect(HallieLineageQuestion.detect(live) == .gedcomProvenance(person: "Donna", surname: "hudson"))
+        #expect(HallieLineageQuestion.detect("did we only get the gedcom for rick")
+                == .gedcomProvenance(person: "Rick", surname: nil))
+        #expect(HallieLineageQuestion.detect("have we pulled the tree for donna's side")
+                == .gedcomProvenance(person: "Donna", surname: nil))
+        #expect(HallieLineageQuestion.detect("do we have the gedcom for the hudsons")
+                == .gedcomProvenance(person: nil, surname: "hudsons"))
+        for text in ["did you get the family tree from familysearch yet", "have you downloaded the gedcom"] {
+            #expect(HallieLineageQuestion.detect(text) != .getFamilyTree, Comment(rawValue: text))
+        }
+        // codex #754: multi-token names, and a name with a suffix.
+        #expect(HallieLineageQuestion.detect("can we trace the hudson line from Richard Breen or did we only get the gedcom for Rick")
+                == .gedcomProvenance(person: "Richard Breen", surname: "hudson"))
+        #expect(HallieLineageQuestion.detect("did we only get the gedcom for richard harding breen jr")
+                == .gedcomProvenance(person: "Richard Harding Breen", surname: nil),
+                "three name tokens at most; the suffix is the resolver's business")
+    }
+
+    /// codex #754: with no person or surname named, the coverage shape
+    /// steps aside — awareness reports the file's folder and date.
+    @Test func bareWhereDidWeGetTheGedcomStaysOnAwareness() {
+        #expect(HallieLineageQuestion.detect("where did we get the gedcom") == .gedcomAwareness)
+        #expect(HallieLineageQuestion.detect("Where did we get the GEDCOM?") == .gedcomAwareness)
+    }
+
+    /// codex #754: the veto is per clause. A question joined to a request
+    /// is still a request.
+    @Test func mixedQuestionAndRequestStillFetches() {
+        #expect(HallieLineageQuestion.detect("Do we have the GEDCOM, and can you fetch more ancestors?") == .getFamilyTree)
+        #expect(HallieLineageQuestion.detect("do we have the gedcom and can you pull the tree from familysearch") == .getFamilyTree)
+        #expect(HallieLineageQuestion.detect("Do we have the GEDCOM for Donna?") == .gedcomProvenance(person: "Donna", surname: nil))
+    }
+
+    @Test func imperativeFetchesStillRouteToGetFamilyTree() {
+        for text in ["get the family tree", "pull more generations",
+                     "can you fetch my ancestors from familysearch", "download the gedcom",
+                     "could you get the gedcom for donna"] {
+            #expect(HallieLineageQuestion.detect(text) == .getFamilyTree, Comment(rawValue: text))
+        }
+    }
+
+    private func ctx(_ g: GedcomFamilyGraph?) -> HallieTurnExecutor.Context {
+        HallieTurnExecutor.Context(profiles: [], graph: g, speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+    }
+
+    @Test func gedcomProvenanceAnswerNamesTheSourceAndCounts() {
+        let bare = HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, context: ctx(graph))
+        #expect(bare.route == .graph)
+        #expect(bare.outcome == .answered)
+        #expect(bare.prose.contains("first record is Rick Breen"), "the root is stated as the assumption it is")
+        #expect(bare.prose.contains("I assume it was pulled for Rick Breen"))
+        #expect(bare.prose.contains("the file doesn’t say"))
+        #expect(!bare.prose.contains("FamilySearch"), "no FS IDs in the fixture → no FamilySearch claim")
+        #expect(!bare.prose.contains("rooted"))
+        #expect(bare.basisLine.contains("ASSUMED"))
+        #expect(bare.prose.contains("comes from a GEDCOM file"), "in-memory graph has no file name")
+
+        // codex #754: a graph that knows its file names it.
+        var named = GedcomFamilyGraph(gedcomText: tree)
+        named.sourceFileName = "Breen_ancestry_2026-08-25.ged"
+        let namedAnswer = HallieLineageAnswer.gedcomProvenance(person: nil, surname: "latta", context: ctx(named))
+        #expect(namedAnswer.prose.contains("the GEDCOM file “Breen_ancestry_2026-08-25.ged”"))
+        #expect(bare.offeredActions.isEmpty)
+        #expect(HallieLineageAnswer.gedcomProvenance(person: nil, surname: nil, context: ctx(nil)).outcome == .declined)
+
+        // Zero surname, connected person: Rick has parents, no Zylstras anywhere.
+        let zero = HallieLineageAnswer.gedcomProvenance(person: "Rick", surname: "zylstra", context: ctx(graph))
+        #expect(zero.prose.contains("I can trace"))
+        #expect(zero.prose.contains("No one in it carries the surname Zylstra"))
+        #expect(zero.offeredActions.isEmpty, "the walk succeeded; nothing to fetch")
+
+        // Bare surname, no person: a count, never a traceability claim.
+        let count = HallieLineageAnswer.gedcomProvenance(person: nil, surname: "latta", context: ctx(graph))
+        #expect(count.prose.contains("carry the surname Latta"))
+        #expect(!count.prose.contains("I can trace"))
+    }
+
+    /// codex on 0508bdab: surname presence is not a path. The fixture's
+    /// Donna Hudson has no parents (as the real one does tonight), and a
+    /// second, unrelated Hudson sits elsewhere in the tree. The answer
+    /// must not claim her line is traceable; with parents attached it may.
+    @Test func gedcomProvenanceNeverClaimsTraceabilityFromSurnameAlone() {
+        let strayHudson = tree + """
+
+        0 @I90@ INDI
+        1 NAME Ezekiel /Hudson/
+        1 SEX M
+        1 BIRT
+        2 DATE 1840
+        """
+        let disconnected = GedcomFamilyGraph(gedcomText: strayHudson)
+        #expect(disconnected.people(withSurname: "hudson").count == 2)
+        let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", context: ctx(disconnected))
+        #expect(r.prose.contains("Donna is in it"))
+        #expect(!r.prose.contains("I can trace"), "no parents → no traceability claim")
+        #expect(r.prose.contains("no parents attached"))
+        #expect(r.prose.contains("Hudson line stops there"))
+        #expect(r.prose.contains("stops there in this tree"))
+        #expect(!r.prose.contains("rooted"))
+        #expect(r.prose.contains("replaces the current tree"), "the offer is honest about what the sheet does")
+        #expect(r.prose.contains("starting a pull from Donna’s record there"))
+        #expect(!r.prose.contains("add"), "never promises to add the missing side")
+        #expect(r.prose.contains("other Hudson in the tree isn’t connected to Donna"))
+        #expect(r.offeredActions == [.getFamilyTree])
+
+        // Attach parents to Donna and the walk earns the claim.
+        let withFAMC = strayHudson.replacingOccurrences(of: "1 NAME Donna /Hudson/\n1 SEX F",
+                                                         with: "1 NAME Donna /Hudson/\n1 SEX F\n1 FAMC @F90@")
+        #expect(withFAMC != strayHudson)
+        let connected = GedcomFamilyGraph(gedcomText: withFAMC + """
+
+        0 @I91@ INDI
+        1 NAME Walter /Hudson/
+        1 SEX M
+        1 FAMS @F90@
+        0 @I92@ INDI
+        1 NAME Ruth /Perry/
+        1 SEX F
+        1 FAMS @F90@
+        0 @F90@ FAM
+        1 HUSB @I91@
+        1 WIFE @I92@
+        1 CHIL @I9@
+        """)
+        let c = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", context: ctx(connected))
+        #expect(c.prose.contains("I can trace 1 generation back from Donna"))
+        #expect(c.prose.contains("1 of her recorded ancestors carries the surname Hudson"))
+        #expect(c.prose.contains("other Hudson in the tree isn’t among her recorded ancestors"))
+        #expect(!c.prose.contains("no parents attached"))
+        #expect(c.offeredActions.isEmpty)
+    }
+
+    /// codex #754 end-to-end sensor: the live sentence, detector →
+    /// answer, on the fixture graph. Never the download pitch again.
+    @Test func liveSentenceEndToEndGivesProvenanceNotThePitch() {
+        let live = "can we trace the hudson line from donna or did we only get the gedcom for Rick?"
+        let q = HallieLineageQuestion.detect(live)
+        #expect(q == .gedcomProvenance(person: "Donna", surname: "hudson"))
+        let ctx = HallieTurnExecutor.Context(profiles: [], graph: graph,
+                                             speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let r = HallieLineageAnswer.answer(q!, context: ctx)
+        #expect(r?.route == .graph)
+        #expect(r?.outcome == .answered)
+        #expect(r?.prose.contains("choose how many ancestor steps") == false, "the Get Family Tree pitch")
+        #expect(r?.prose.contains("first record is Rick Breen") == true)
+        #expect(r?.prose.contains("Donna is in it: Donna Hudson") == true)
+        #expect(r?.prose.contains("no parents attached") == true)
+        #expect(r?.prose.contains("I can trace") == false)
+    }
+
+    /// SCALE (codex #754): the composer scans all people twice and walks
+    /// a 60-generation pedigree from every namesake. 100k-person binary
+    /// pedigree, one answer, under a second. Parsing is outside the clock.
+    @Test func gedcomProvenanceAnswersA100kPersonTreeUnderASecond() {
+        var lines = ["0 HEAD"]
+        let n = 100_000
+        for i in 1...n {
+            // i's parents are 2i and 2i+1 (a full binary pedigree), so the
+            // walk from anyone near the top reaches ~n/2 records.
+            let surname: String
+            switch i {
+            case 1: surname = "Breen"
+            case 3: surname = "Hudson"
+            default: surname = i % 200 == 0 ? "Hudson" : "Person\(i % 97)"
+            }
+            let given = i == 3 ? "Donna" : "Given\(i)"
+            lines.append("0 @I\(i)@ INDI")
+            lines.append("1 NAME \(given) /\(surname)/")
+            lines.append("1 SEX \(i % 2 == 0 ? "M" : "F")")
+            lines.append("1 BIRT")
+            lines.append("2 DATE \(2000 - 25 * Int(log2(Double(i))))")
+            if 2 * i + 1 <= n { lines.append("1 FAMC @F\(i)@") }
+            if i > 1 { lines.append("1 FAMS @F\(i / 2)@") }
+        }
+        for i in 1...n where 2 * i + 1 <= n {
+            lines.append("0 @F\(i)@ FAM")
+            lines.append("1 HUSB @I\(2 * i)@")
+            lines.append("1 WIFE @I\(2 * i + 1)@")
+            lines.append("1 CHIL @I\(i)@")
+        }
+        lines.append("0 TRLR")
+        let big = GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
+        #expect(big.people.count == n)
+
+        let t0 = Date()
+        let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", context: ctx(big))
+        let elapsed = Date().timeIntervalSince(t0)
+        #expect(elapsed < 1.0, "one provenance answer on 100k people took \(elapsed)s")
+        #expect(r.prose.contains("I can trace 15 generations back from Donna"), Comment(rawValue: String(r.prose.prefix(400))))
+        #expect(r.prose.contains("of her recorded ancestors carry the surname Hudson"))
+        #expect(r.prose.contains("aren’t among her recorded ancestors"), "stray Hudsons are named, not claimed")
+    }
+
     @Test func getFamilyTreeAnswerOffersTheSheetAndChangesNothing() {
         let result = HallieLineageAnswer.getFamilyTreeAnswer(nil)
         #expect(result.outcome == .answered)
