@@ -170,3 +170,45 @@ extension HalliePronunciationLexiconTests {
         }
     }
 }
+
+// MARK: - Shared words (codex #700, 2026-08-26)
+
+extension HalliePronunciationLexiconTests {
+    /// Two records claim "nathaniel": the subject of the answer wins, else
+    /// the newest record, else the lowest id — and the choice is logged.
+    @Test func aSharedWordPrefersTheSubjectThenTheNewestRecordThenTheLowestId() {
+        var people = brainPeople()
+        let log = InMemoryLogSink(name: "test")
+
+        // No subject, no items on either record → lowest id, logged.
+        #expect(HalliePronunciationLexicon.personLayer(people: people, log: log)
+                    .apply(to: "Nathaniel").spoken == "nah-THAN-yel")
+        #expect(log.lines.contains { $0.contains("'Nathaniel' carried by 2 records") && $0.hasSuffix("(lowest id)") })
+
+        // Subject by id, then by name; a subject who does not carry the
+        // word changes nothing.
+        #expect(HalliePronunciationLexicon.personLayer(people: people, subject: "person.zed")
+                    .apply(to: "Nathaniel").spoken == "NAT-han-yel")
+        let byName = HalliePronunciationLexicon.personLayer(people: people, subject: "nathaniel lamb", log: log)
+        #expect(byName.apply(to: "Nathaniel's").spoken == "NAT-han-yel's")
+        #expect(byName.source(of: byName.entries[0]) == .person(id: "person.zed", name: "Nathaniel Lamb"))
+        #expect(log.lines.last?.hasSuffix("(subject of this answer)") == true)
+        #expect(HalliePronunciationLexicon.personLayer(people: people, subject: "Edith Latta")
+                    .apply(to: "Nathaniel").spoken == "nah-THAN-yel")
+
+        // Without a subject, a record with a newer item outranks the lower id.
+        let told = Date(timeIntervalSince1970: 1_787_300_000)
+        people[2] = CyberBrainPerson(
+            id: "person.zed", canonicalName: "Nathaniel Lamb",
+            notes: [CyberBrainItem(id: "note.zed", kind: .note, text: "Born in Belfast.",
+                                   subjectPersonIDs: ["person.zed"], sourceIDs: [],
+                                   confidence: .probable, privacy: .family,
+                                   createdAt: told, updatedAt: told)],
+            pronunciations: ["nathaniel": "NAT-han-yel"])
+        let newest = HalliePronunciationLexicon.personLayer(people: people, log: log)
+        #expect(newest.apply(to: "Nathaniel").spoken == "NAT-han-yel")
+        #expect(log.lines.last?.hasSuffix("(most recently updated)") == true)
+        // The unshared word is untouched by any of this.
+        #expect(newest.apply(to: "McGill").spoken == "mick-GILL")
+    }
+}
