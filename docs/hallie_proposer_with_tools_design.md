@@ -55,7 +55,7 @@ Invariants (all testable without a model):
 1. **No unverified fact reaches speech.** A `fact` claim with no verifiable citation is dropped, never softened.
 2. **Every citation is re-derivable.** `Citation.ref` is a GEDCOM pointer, CyberBrain item id, WorldFact id, or catalog record id — never free text.
 3. **Tools are read-only.** Writes (told-me, captions, pronunciations) stay on the existing telling routes with explicit confirmation.
-3b. **Conversational truth ≠ operational authority** (rev 2, codex S3). The model may *say* a photograph was unlikely; only a deterministic tri-state policy over reviewed facts (`MediumFeasibility.assess → impossible | possible | unknown`) may veto an offer, a search, or a mutation. `unknown` never vetoes. (The 79-year lifespan heuristic that shipped on 08-26 was exactly this confusion; fixed same night.)
+3b. **Conversational truth ≠ operational authority** (rev 2, codex S3). The model may *say* a photograph was unlikely; only a deterministic tri-state policy over reviewed facts (`MediumFeasibility.assess → impossible | possible | unknown`) may veto an offer, a search, or a mutation. `unknown` never vetoes. (The 79-year lifespan heuristic that shipped on 08-26 was exactly this confusion; identified for correction by codex #700, fix on branch fix/codex-gate-blockers-0826.)
 4. **Deterministic fallback.** If the proposer times out or returns malformed output, the current executor answers (today's behaviour), and the eval logs a `proposer-miss`.
 5. **Same contract at every model size.** Nothing in the app depends on which model is behind Ollama; only the eval numbers do.
 
@@ -121,7 +121,7 @@ Everything the regex routes compute today is reachable through these; the routes
 
 ## 10. Open questions for Rick
 
-0. *(codex, answered 2026-08-26)* Measurement authorized: 30+ questions, M4 or M5, native tools vs constrained JSON, 3 runs — branch `test/qwen-tool-reliability`.
+0. Measurement (30+ questions, M4 or M5, native tools vs constrained JSON, 3 runs, branch `test/qwen-tool-reliability`): Rick authorized via Claude 2026-08-26; per team-channel protocol codex needs Rick's direct ask in the Codex session before running it.
 
 1. Tool-calling transport: Ollama native tools vs. constrained JSON — we should measure qwen3.6's tool reliability first (codex task).
 2. Should `inference` claims be spoken at all in family-facing mode, or only in Rick's dev mode?
