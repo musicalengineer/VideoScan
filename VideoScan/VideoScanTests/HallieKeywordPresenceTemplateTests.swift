@@ -50,6 +50,41 @@ struct HallieKeywordPresenceTemplateTests {
                 == "5 videos with “down the cape” in the filename — Cape_1993.mov (1993), and 4 more.")
     }
 
+    // codex #707 item 8 sensor: the FIRST citation's kind used to be
+    // attributed to every match ("5 videos where someone says …" when only
+    // one was a transcript hit). Mixed evidence is now counted per kind.
+    @Test func mixedEvidenceIsCountedPerKindNotByTheFirstCitation() {
+        let mixed = result("shape=presence keyword=cape", [
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("Cape_1994.mov", [.keywordTokens(field: "filename", queryTerm: "cape", matchedTokens: ["cape"], alias: nil, matchedValue: "Cape_1994.mov", timestamp: nil)]),
+            citation("Cape_1995.mov", [.catalogField(field: "filename", queryTerm: "cape", matchedValue: "Cape_1995.mov")]),
+            citation("cottage.mov", [.caption(queryTerm: "cape", timestamp: 1, text: "cape cod cottage", model: nil)]),
+            citation("Cape_1996.mov", [.catalogField(field: "filename", queryTerm: "cape", matchedValue: "Cape_1996.mov")]),
+        ])
+        #expect(ArchivistPresenceAnswerComposer.compose(mixed).prose
+                == "5 videos: 1 where someone says “cape” — Beach1993.mov (1993); 3 with “cape” in the filename — Cape_1994.mov (1994); 1 captioned with “cape” — cottage.mov.")
+        // A truncated page: per-kind counts cover what was cited, the
+        // remainder is said plainly.
+        let truncated = result("shape=presence keyword=cape", [
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("Cape_1994.mov", [.catalogField(field: "filename", queryTerm: "cape", matchedValue: "Cape_1994.mov")]),
+        ], total: 7)
+        #expect(ArchivistPresenceAnswerComposer.compose(truncated).prose
+                == "7 videos: 1 where someone says “cape” — Beach1993.mov (1993); 1 with “cape” in the filename — Cape_1994.mov (1994), and 5 more.")
+        // A cited item with no keyword basis at all is counted apart, never
+        // folded into the first kind.
+        let odd = result("shape=presence keyword=cape year=1993", [
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("x.mov", [.pathYear(year: 1993, fullPath: "/1993/x.mov")]),
+        ])
+        #expect(ArchivistPresenceAnswerComposer.compose(odd).prose
+                == "2 videos: 1 where someone says “cape” — Beach1993.mov (1993); 1 matched another way.")
+        // An item matching several ways counts once, under its strongest kind.
+        #expect(ArchivistPresenceAnswerComposer.keywordMatchKind(of: citation("a.mov", [
+            .catalogField(field: "filename", queryTerm: "cape", matchedValue: "a"),
+            .transcriptMention(queryTerm: "cape", model: nil)])) == .says("cape"))
+    }
+
     @Test func personAnswersKeepTheirTemplate() {
         let person = result("shape=presence person=Donna keyword=cape", [
             citation("Cape_1993.mov", [.humanPersonTag(queryIdentity: "Donna", taggedName: "Donna", confirmedAt: Date()),
