@@ -39,9 +39,14 @@ struct HallieCatalogStats: Equatable, Sendable {
         var verified = 0
         var earliest: Int?
         var latest: Int?
+        // Same population as ArchivePromotionIndex.totals (the Archive tab's
+        // progress bar / footer): promoted copies, not purged, with fixity.
+        for rec in records where rec.derivationKind == ArchivePromotion.derivationKind
+            && !rec.isPurged && rec.archiveFixity != nil {
+            verified += 1
+        }
         for rec in active {
             duration += max(0, rec.durationSeconds)
-            if rec.archiveFixity != nil { verified += 1 }
             let resolution = RecordDateResolver.resolve(
                 userDate: rec.userDate,
                 userDateConfidence: rec.userDateConfidence,
@@ -89,7 +94,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             switch self {
             case .total: return ["videos", "files", "recordings", "tapes", "clips", "items", "movies"]
             case .footage: return ["footage", "hours", "minutes", "long", "runtime", "duration", "playing", "time"]
-            case .archived: return ["archived", "archive", "promoted", "verified", "safe", "reliably"]
+            case .archived: return ["archived", "archive", "promoted", "promote", "verified", "safe", "reliably", "unarchived", "familyarchive"]
             case .duplicates: return ["duplicates", "duplicate", "dupes", "copies", "duplicated"]
             case .diskSpace: return ["space", "disk", "storage", "big", "bytes", "gb", "tb", "gigabytes", "terabytes", "size"]
             case .years: return ["years", "year", "decades", "span", "earliest", "oldest", "latest", "newest", "cover", "covers", "range", "from"]
@@ -100,7 +105,12 @@ struct HallieCatalogStats: Equatable, Sendable {
             switch self {
             case .total: return ["total", "altogether", "all", "count", "number", "many"]
             case .footage: return ["footage", "video", "videos", "altogether", "total", "all", "much", "many", "there", "is", "of"]
-            case .archived: return ["files", "videos", "of", "them", "already", "so", "far", "master", "percent", "percentage", "fraction", "share", "been", "has", "have", "many", "much", "what", "is"]
+            // "items"/"recordings"/… are .total's keys but a relative says "how many
+            // items have been promoted" (live 2026-08-27 — the word fell outside
+            // this closed set and the question became a presence search).
+            // "not"/"yet"/"still"/"left" cover the complement ("how many are
+            // not yet archived"); "on" covers "on FamilyArchive".
+            case .archived: return ["files", "videos", "items", "recordings", "clips", "tapes", "movies", "of", "them", "already", "so", "far", "master", "percent", "percentage", "fraction", "share", "been", "has", "have", "many", "much", "what", "is", "not", "yet", "still", "left", "remain", "remaining", "on", "copy", "copies", "raid", "gold"]
             case .duplicates: return ["files", "videos", "there", "are", "many", "have", "we", "got", "of", "any", "much"]
             case .diskSpace: return ["whole", "archive", "catalog", "collection", "everything", "take", "takes", "taking", "up", "use", "uses", "used", "does", "much", "how", "is", "it", "total", "altogether", "all", "the", "library", "files", "videos"]
             case .years: return ["footage", "video", "videos", "archive", "catalog", "collection", "do", "does", "we", "have", "many", "much", "what", "which", "is", "the", "to", "does", "it", "go", "back", "far", "how", "recording", "recordings"]
@@ -127,7 +137,8 @@ struct HallieCatalogStats: Equatable, Sendable {
         // means this is a real search, not a catalog-wide question.
         guard !words.contains(where: { $0.contains(where: \.isNumber) }) else { return nil }
         // A question must actually ASK a quantity.
-        guard words.contains("how") || words.contains("what") || words.contains("which") else { return nil }
+        // "what's archived" / "whats archived" ask just as plainly as "what".
+        guard words.contains(where: { ["how", "what", "what's", "whats", "which"].contains($0) }) else { return nil }
         // Every correctly-spelled vocabulary word, across ALL question
         // kinds. A word found here is NOT a typo — if it doesn't fit the
         // question at hand, the question falls through; fuzzing it would
@@ -222,7 +233,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             let pctText = s.archivedVerified > 0 && pct < 1 ? "under 1%" : "\(Int(pct.rounded()))%"
             prose = s.archivedVerified == 0
                 ? "Nothing has a verified copy in the Master Archive yet — of \(s.uniqueFileCount.formatted()) unique media files."
-                : "\(s.archivedVerified.formatted()) file\(s.archivedVerified == 1 ? " has" : "s have") a verified copy in the Master Archive — \(pctText) of the \(s.uniqueFileCount.formatted()) unique media files. The rest are still to be promoted."
+                : "\(s.archivedVerified.formatted()) file\(s.archivedVerified == 1 ? " has" : "s have") a verified copy in the Master Archive — \(pctText) of the \(s.uniqueFileCount.formatted()) unique media files. \(max(0, s.uniqueFileCount - s.archivedVerified).formatted()) are still to be promoted."
         case .duplicates:
             prose = s.duplicateFiles == 0
                 ? "The catalog hasn't found any duplicate copies."

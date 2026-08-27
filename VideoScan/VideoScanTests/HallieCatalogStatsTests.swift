@@ -69,6 +69,8 @@ struct HallieCatalogStatsTests {
         }
         if let md5 { r.partialMD5 = md5 }
         if fixity {
+            // Fixity only ever lands on a promoted archive COPY in production.
+            r.derivationKind = ArchivePromotion.derivationKind
             r.archiveFixity = ArchiveFixity(digest: "abc", verifiedAt: Date(), sizeBytes: bytes)
         }
         return r
@@ -118,6 +120,99 @@ struct HallieCatalogStatsTests {
             question: "how many are archived", playAfterAnswer: false,
             memory: .init(), isKnownPerson: { _ in false })
         guard case .translate = without else { Issue.record("without a snapshot it must fall through"); return }
+    }
+
+    // Live miss 2026-08-27 03:27Z: "how many items have been promoted to
+    // archive master?" — "items" is .total's word, and outside .archived's
+    // closed set the whole question fell through to a presence keyword
+    // search that answered "one video file … DonnaRock&Piano.mov".
+    @Test func archiveMasterPhrasingsAllReachTheArchivedCount() {
+        let phrasings = [
+            "how many items have been promoted to archive master?",
+            "how many items have been promoted",
+            "how many files are promoted",
+            "how many videos are archived",
+            "how many are in the master archive",
+            "how many items are in the master archive?",
+            "how many are on FamilyArchive",
+            "what's archived",
+            "whats archived so far",
+            "how much is archived",
+            "how much has been archived",
+            "how many are not yet archived",
+            "how many videos are still not archived",
+            "how many items are left to promote",
+            "how many are verified",
+            "how many verified copies are there",
+            "what percent of the total has been archived",
+        ]
+        for text in phrasings {
+            #expect(HallieCatalogStats.detect(text) == .archived, Comment(rawValue: text))
+        }
+        // Content words still make it a real search, never a catalog total.
+        for text in ["how many items of donna were promoted", "show me what was promoted in 1994",
+                     "which items were promoted last week", "how many items have been promoted from westford"] {
+            #expect(HallieCatalogStats.detect(text) == nil, Comment(rawValue: text))
+        }
+    }
+
+    // SENSOR: the live question must be answered before translation — the
+    // presence route only exists after `.translate`, so a local `.answer`
+    // here is the proof it can never reach a keyword search again.
+    @Test func liveArchiveMasterQuestionNeverReachesTranslation() {
+        let stats = HallieCatalogStats.compute(records: [
+            record("a.mov", bytes: 10, seconds: 10, year: 1999, fixity: true),
+            record("b.mov", bytes: 10, seconds: 10, year: 2001),
+        ])
+        for text in ["how many items have been promoted to archive master?",
+                     "how many are not yet archived", "how many verified"] {
+            let outcome = HallieTurnExecutor.preTranslation(
+                question: text, playAfterAnswer: false,
+                memory: .init(), isKnownPerson: { _ in false }, catalogStats: stats)
+            guard case .answer(let result) = outcome else {
+                Issue.record("\(text) fell through to translation"); continue
+            }
+            #expect(result.route == .aggregate, Comment(rawValue: text))
+            #expect(result.queryDescription == "catalog-stats archived", Comment(rawValue: text))
+            #expect(result.prose == "1 file has a verified copy in the Master Archive — 50% of the 2 unique media files. 1 are still to be promoted.")
+            #expect(result.basisLine.contains("catalog totals"))
+        }
+    }
+
+    // SCALE: Hallie's number is the Archive tab's number — same predicate
+    // as ArchivePromotionIndex.totals on a 100k synthetic model, including
+    // the edge rows (fixity on a non-copy, purged copies) that would make
+    // two hand-rolled counts drift apart.
+    @Test @MainActor func archivedCountEqualsTheArchiveTabTotalsAtScale() {
+        var records: [VideoRecord] = []
+        records.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            let r = record("f\(i).mov", bytes: 1_000_000, seconds: 60, year: 1980 + (i % 40))
+            switch i % 1000 {
+            case 0:      // verified promoted copy
+                r.derivationKind = ArchivePromotion.derivationKind
+                r.archiveFixity = ArchiveFixity(digest: "d", verifiedAt: Date(), sizeBytes: 1_000_000)
+            case 1:      // promoted but unverified
+                r.derivationKind = ArchivePromotion.derivationKind
+            case 2:      // purged copy — neither side counts it
+                r.derivationKind = ArchivePromotion.derivationKind
+                r.archiveFixity = ArchiveFixity(digest: "d", verifiedAt: Date(), sizeBytes: 1_000_000)
+                r.purgedAt = Date()
+            case 3:      // stray fixity on a source — not an archive copy
+                r.archiveFixity = ArchiveFixity(digest: "d", verifiedAt: Date(), sizeBytes: 1_000_000)
+            default: break
+            }
+            records.append(r)
+        }
+        let index = ArchivePromotionIndex()
+        let totals = index.totals(in: records, version: RecordsVersion(count: records.count, revision: 1))
+        let start = Date()
+        let stats = HallieCatalogStats.compute(records: records)
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(totals.verified == 100)
+        #expect(stats.archivedVerified == totals.verified)
+        #expect(HallieCatalogStats.answer(.archived, stats: stats).prose.hasPrefix("100 files have a verified copy"))
+        #expect(elapsed < 3.0, "took \(elapsed)s")
     }
 
     @Test func hundredThousandRecordsComputeWithinBudget() {
