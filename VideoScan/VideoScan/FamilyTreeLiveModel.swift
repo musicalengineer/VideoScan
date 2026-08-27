@@ -176,6 +176,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedNotes: [FamilyTreeNote] = []
     /// Why the notes pane is empty when it is (no brain yet / unreadable).
     @Published private(set) var notesStatus: String?
+    /// "Said as": one chip per word of the selected person's name, with any
+    /// person-level respelling from their CyberBrain record. Rebuilt with
+    /// the notes — never in `body`.
+    @Published private(set) var selectedPronunciations: [FamilyTreePronunciationChip] = []
     /// "Line to…" targets, built once per install (root + root's spouses).
     @Published private(set) var anchors: [FamilyTreeAnchor] = []
     /// One option per anchor for the selected person; computed on
@@ -207,6 +211,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     let cyberBrainRootURL: URL?
     /// Who is writing notes — the owner name from the archivist settings.
     var noteAuthor: String
+    /// What the voice says for a word with no person-level entry (file +
+    /// shipped layers). Tests inject `.shipped` so no real file is touched.
+    private let pronunciationFallback: HalliePronunciationLexicon
 
     // MARK: Private state
 
@@ -244,6 +251,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     init(originalsDirectory: URL? = nil,
          cyberBrainRootURL: URL? = nil,
          noteAuthor: String? = nil,
+         pronunciationFallback: HalliePronunciationLexicon? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
@@ -255,6 +263,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         self.noteAuthor = noteAuthor
             ?? HallieTurnExecutor.Speakers.fromDefaults().ownerName
             ?? HallieTurnExecutor.Speakers.defaultOwnerName
+        self.pronunciationFallback = pronunciationFallback
+            ?? (originalsDirectory == nil
+                ? HalliePronunciationLexicon.merged([.load(), .shipped])
+                : .shipped)
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
@@ -679,11 +691,45 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     private func refreshSelectedNotes() {
-        guard let resolver = notesResolver, let id = selectedID, isLive else {
+        guard let id = selectedID, isLive, let person = graph?.people[id] else {
+            if !selectedNotes.isEmpty { selectedNotes = [] }
+            if !selectedPronunciations.isEmpty { selectedPronunciations = [] }
+            return
+        }
+        // Chips need only the name; the brain adds the person-level entries.
+        selectedPronunciations = FamilyTreePronunciationChips.make(
+            name: person.name,
+            people: notesResolver?.cyberBrainPeople(forGedcomID: id) ?? [],
+            fallback: pronunciationFallback)
+        guard let resolver = notesResolver else {
             if !selectedNotes.isEmpty { selectedNotes = [] }
             return
         }
         selectedNotes = resolver.notes(forGedcomID: id)
+    }
+
+    /// "Said as" for one word of the selected person's name, kept on their
+    /// CyberBrain record (minted with the GEDCOM pointer if Hallie has no
+    /// record for them yet). Empty/nil `saidAs` removes the entry. Same
+    /// atomic writer as notes; the voice cache is dropped so the next
+    /// utterance uses it.
+    func setPronunciation(word: String, saidAs: String?) throws {
+        guard let root = cyberBrainRootURL else {
+            throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
+        }
+        guard let graph, let id = selectedID, let person = graph.people[id] else {
+            throw CyberBrainWriter.WriteError.emptySubject
+        }
+        let receipt = try CyberBrainWriter.setPronunciation(
+            subjectName: person.name,
+            gedcomPersonID: person.id,
+            aliases: person.alternateNames,
+            token: word,
+            saidAs: saidAs,
+            rootURL: root)
+        PersonPronunciationCache.shared.invalidate()
+        notesGeneration &+= 1
+        applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
     }
 
     /// Store key for the selected person (folder lookup for photos).

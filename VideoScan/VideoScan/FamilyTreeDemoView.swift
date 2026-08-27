@@ -31,6 +31,11 @@ struct FamilyTreeDemoView: View {
     /// Archivist Notes draft + last save error (view-local, not persisted).
     @State private var draftNote = ""
     @State private var noteError: String?
+    /// "Said as" editor: the name word being edited, its draft respelling,
+    /// and the last save error (view-local).
+    @State private var editingPronunciationWord: String?
+    @State private var draftSaidAs = ""
+    @State private var pronunciationError: String?
     /// Adjust Photo… sheet. `.sheet(item:)` shows it while this is non-nil
     /// (the item-binding form, per the chained-sheet note in memory).
     @State private var adjustSource: FamilyPhotoAdjustSource?
@@ -559,6 +564,8 @@ struct FamilyTreeDemoView: View {
                 .help("Re-read the family knowledge file (after telling Hallie something)")
             }
 
+            saidAsRow
+
             if model.selectedNotes.isEmpty {
                 Text(model.notesStatus ?? "Nothing recorded about this person yet.")
                     .font(.system(size: 12))
@@ -602,6 +609,129 @@ struct FamilyTreeDemoView: View {
         }
         .padding(14)
         .background(panelBackground)
+        // `.onChange` ≈ an observer on the model's selection: a new person
+        // closes the editor so a draft never lands on the wrong name.
+        .onChange(of: model.selectedID) { _, _ in
+            editingPronunciationWord = nil
+            pronunciationError = nil
+        }
+    }
+
+    // MARK: Said as (pronunciations)
+
+    /// One chip per word of the name; click to say how it is pronounced.
+    /// Saved on the person's CyberBrain record next to their aliases and
+    /// used by Hallie's voice on the very next answer.
+    private var saidAsRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Said as")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                ForEach(model.selectedPronunciations) { chip in
+                    Button { beginEditingPronunciation(chip) } label: {
+                        HStack(spacing: 4) {
+                            Text(chip.word)
+                            if let said = chip.saidAs {
+                                Text("· \(said)").foregroundStyle(.secondary)
+                                Image(systemName: "pencil").font(.system(size: 8))
+                            }
+                        }
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background((chip.isSet ? Color.cyan : Color.white).opacity(0.12))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(chip.isSet
+                          ? "Hallie says \(chip.word) as \(chip.saidAs ?? "") — click to change"
+                          : chip.inherited.map { "Hallie says \(chip.word) as \($0) (family default) — click to set it for this person" }
+                            ?? "Click to tell Hallie how to say \(chip.word)")
+                }
+                Spacer(minLength: 0)
+            }
+            if let word = editingPronunciationWord {
+                pronunciationEditor(word: word)
+            }
+        }
+    }
+
+    private func pronunciationEditor(word: String) -> some View {
+        let chip = model.selectedPronunciations.first { $0.word == word }
+        let draft = draftSaidAs.trimmingCharacters(in: .whitespaces)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("How do you say \(word)?")
+                    .font(.system(size: 11))
+                // `$draftSaidAs` is a two-way binding to the @State string.
+                TextField("", text: $draftSaidAs, prompt: Text("nuh-THAN-yul"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(maxWidth: 170)
+                    .onSubmit { savePronunciation(word) }
+                Button {
+                    // Preview through the same voice Hallie answers with
+                    // (Bella when installed): the draft respelling itself, or
+                    // the word as she currently says it.
+                    HallieSpeaker.shared.speak(draft.isEmpty ? word : draft)
+                } label: {
+                    Label("Say it", systemImage: "play.fill")
+                }
+                .controlSize(.small)
+                .help("Hear it")
+                Button("Save") { savePronunciation(word) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(draft.isEmpty)
+                if chip?.isSet == true {
+                    Button("Remove") { removePronunciation(word) }
+                        .controlSize(.small)
+                }
+                Button("Cancel") {
+                    editingPronunciationWord = nil
+                    pronunciationError = nil
+                }
+                .controlSize(.small)
+            }
+            if let pronunciationError {
+                Text(pronunciationError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func beginEditingPronunciation(_ chip: FamilyTreePronunciationChip) {
+        editingPronunciationWord = chip.word
+        draftSaidAs = chip.effective ?? ""
+        pronunciationError = nil
+    }
+
+    private func savePronunciation(_ word: String) {
+        let draft = draftSaidAs.trimmingCharacters(in: .whitespaces)
+        guard !draft.isEmpty else { return }
+        do {
+            try model.setPronunciation(word: word, saidAs: draft)
+            editingPronunciationWord = nil
+            pronunciationError = nil
+        } catch {
+            pronunciationError = error.localizedDescription
+        }
+    }
+
+    private func removePronunciation(_ word: String) {
+        do {
+            try model.setPronunciation(word: word, saidAs: nil)
+            editingPronunciationWord = nil
+            pronunciationError = nil
+        } catch {
+            pronunciationError = error.localizedDescription
+        }
     }
 
     private func saveDraftNote() {
