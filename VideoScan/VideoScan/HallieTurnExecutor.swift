@@ -39,6 +39,9 @@ enum HallieTurnExecutor {
         case declined
         case unsupported
         case needsClarification
+        /// Hallie tried to DO something the turn asked for (a save) and it
+        /// did not happen. Never dressed up as an answer (codex #700).
+        case failed
     }
 
     enum IdentitySource: Sendable, Equatable {
@@ -561,6 +564,7 @@ enum HallieTurnExecutor {
         case .declined: return "declined"
         case .unsupported: return "unsupported"
         case .needsClarification: return "needs-clarification"
+        case .failed: return "failed"
         }
     }
 

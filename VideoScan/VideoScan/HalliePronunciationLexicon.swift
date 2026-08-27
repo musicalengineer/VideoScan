@@ -131,19 +131,70 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     // MARK: - Layers
 
     /// The per-person layer: every `pronunciations` entry on every CyberBrain
-    /// person. People are visited in id order so a word two records both
-    /// claim resolves the same way every time (first id wins).
-    static func personLayer(people: [CyberBrainPerson]) -> HalliePronunciationLexicon {
-        var entries: [Entry] = []
-        var sources: [String: Source] = [:]
+    /// person. A word that two records both claim (two Nathaniels with
+    /// different respellings) is resolved deterministically and the choice
+    /// is logged (codex #700, 2026-08-26):
+    ///   1. the record for `subject` — the person the current answer is
+    ///      about, given as a CyberBrain id or a canonical name/alias — when
+    ///      it carries the word;
+    ///   2. else the most recently updated record (newest item timestamp —
+    ///      the schema has no per-entry timestamps, so a record with no
+    ///      items sorts last);
+    ///   3. else the lowest id.
+    static func personLayer(
+        people: [CyberBrainPerson],
+        subject: String? = nil,
+        log: LogSink? = nil
+    ) -> HalliePronunciationLexicon {
+        typealias Claim = (person: CyberBrainPerson, written: String, spoken: String)
+        let subjectKey = subject.map { FamilyIdentityText.normalized($0) } ?? ""
+        func isSubject(_ person: CyberBrainPerson) -> Bool {
+            guard !subjectKey.isEmpty else { return false }
+            if person.id == subject { return true }
+            return ([person.canonicalName] + person.aliases).contains {
+                FamilyIdentityText.normalized($0) == subjectKey
+            }
+        }
+        func updated(_ person: CyberBrainPerson) -> Date {
+            person.items.map(\.updatedAt).max() ?? .distantPast
+        }
+
+        var claims: [String: [Claim]] = [:]
+        var order: [String] = []
         for person in people.sorted(by: { $0.id < $1.id }) {
             for (word, spoken) in (person.pronunciations ?? [:]).sorted(by: { $0.key < $1.key }) {
                 let written = word.trimmingCharacters(in: .whitespaces)
                 let said = spoken.trimmingCharacters(in: .whitespaces)
-                guard !written.isEmpty, !said.isEmpty, sources[key(written)] == nil else { continue }
-                entries.append(Entry(written: written, spoken: said))
-                sources[key(written)] = .person(id: person.id, name: person.canonicalName)
+                guard !written.isEmpty, !said.isEmpty else { continue }
+                let wordKey = key(written)
+                if claims[wordKey] == nil { order.append(wordKey) }
+                claims[wordKey, default: []].append((person, written, said))
             }
+        }
+
+        var entries: [Entry] = []
+        var sources: [String: Source] = [:]
+        for wordKey in order {
+            guard let list = claims[wordKey], let first = list.first else { continue }
+            var chosen = first
+            var reason = ""
+            if list.count > 1 {
+                if let own = list.first(where: { isSubject($0.person) }) {
+                    chosen = own
+                    reason = "subject of this answer"
+                } else {
+                    // Newest first; ties (including "no items at all") by id.
+                    chosen = list.sorted {
+                        let (a, b) = (updated($0.person), updated($1.person))
+                        return a != b ? a > b : $0.person.id < $1.person.id
+                    }[0]
+                    reason = updated(chosen.person) == .distantPast ? "lowest id" : "most recently updated"
+                }
+                let names = list.map { "\($0.person.canonicalName) → \($0.spoken)" }.joined(separator: ", ")
+                log?.write("[hallie-voice] '\(chosen.written)' carried by \(list.count) records (\(names)); using \(chosen.person.canonicalName) → \(chosen.spoken) (\(reason))")
+            }
+            entries.append(Entry(written: chosen.written, spoken: chosen.spoken))
+            sources[wordKey] = .person(id: chosen.person.id, name: chosen.person.canonicalName)
         }
         return HalliePronunciationLexicon(entries: entries, sources: sources)
     }
@@ -170,15 +221,18 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
 
     /// What Bella reads from on the next utterance: people → file → shipped.
     /// Cheap enough to call per utterance: the file is tiny and the
-    /// CyberBrain layer is cached by (path, mtime, size).
+    /// CyberBrain records are cached by (path, mtime, size). `subject` is
+    /// the person the utterance is about (id or name), used only to break
+    /// ties between records that claim the same word.
     static func resolved(
         fileURL: URL = defaultFileURL,
         cyberBrainRootURL: URL? = defaultCyberBrainRootURL,
+        subject: String? = nil,
         log: LogSink? = appLog
     ) -> HalliePronunciationLexicon {
         var layers: [HalliePronunciationLexicon] = []
         if let root = cyberBrainRootURL {
-            layers.append(PersonPronunciationCache.shared.layer(rootURL: root, log: log))
+            layers.append(PersonPronunciationCache.shared.layer(rootURL: root, subject: subject, log: log))
         }
         layers.append(load(from: fileURL, log: log))
         layers.append(shipped)
@@ -208,10 +262,28 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         }
     }
 
+    /// Why a file-level write was refused.
+    enum FileError: LocalizedError, Equatable {
+        /// The user's pronunciations.json did not parse. It was moved to
+        /// `keptAt` (same directory, ".bad-<timestamp>" suffix) so nothing
+        /// they typed is lost; the next read falls back to shipped.
+        case malformed(keptAt: URL)
+
+        var errorDescription: String? {
+            switch self {
+            case .malformed(let keptAt):
+                return "pronunciations.json is not valid JSON, so I did not write over it; the file is kept as \(keptAt.lastPathComponent)"
+            }
+        }
+    }
+
     /// Set (or, with an empty `spoken`, remove) one word in the JSON file —
     /// the fallback when a name told to Hallie is nobody's in particular.
     /// Read-modify-write of the whole (tiny) table, atomic replace; an
     /// existing key with different case is replaced, not duplicated.
+    /// A malformed file is never overwritten (codex #700): it is set aside
+    /// as `.bad-<timestamp>`, logged, and the write is refused so the
+    /// caller can say so; reads then fall back to shipped.
     @discardableResult
     static func setFileEntry(
         written: String, spoken: String?, url: URL = defaultFileURL, log: LogSink? = appLog
@@ -221,6 +293,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             throw CocoaError(.fileWriteInvalidFileName)
         }
         let said = spoken?.trimmingCharacters(in: .whitespaces) ?? ""
+        try setAsideIfMalformed(url, log: log)
         let current = load(from: url, log: log)
         var kept = current.entries.filter { key($0.written) != key(word) }
         if !said.isEmpty { kept.append(Entry(written: word, spoken: said)) }
@@ -230,6 +303,26 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         try updated.jsonData.write(to: url, options: .atomic)
         log?.write("[hallie-voice] pronunciations.json: \(word) → \(said.isEmpty ? "(removed)" : said)")
         return updated
+    }
+
+    /// Refuse to clobber a file the user broke: move it to
+    /// `pronunciations.json.bad-<yyyyMMdd-HHmmss>` and throw. A missing
+    /// file is fine (load writes the default); a readable one is untouched.
+    private static func setAsideIfMalformed(_ url: URL, log: LogSink?) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let data = try Data(contentsOf: url)
+        do {
+            _ = try HalliePronunciationLexicon(jsonData: data)
+        } catch {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyyMMdd-HHmmss"
+            let keptAt = url.deletingLastPathComponent()
+                .appendingPathComponent("\(url.lastPathComponent).bad-\(formatter.string(from: Date()))")
+            try FileManager.default.moveItem(at: url, to: keptAt)
+            log?.write("[hallie-voice] pronunciations.json is malformed (\(error.localizedDescription)); kept as \(keptAt.lastPathComponent), write refused, shipped defaults in force")
+            throw FileError.malformed(keptAt: keptAt)
+        }
     }
 
     // MARK: - Applying
@@ -261,11 +354,13 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     }
 }
 
-/// The CyberBrain per-person layer, re-read only when cyberbrain.json
-/// changes. Memory: one lexicon (a few hundred short strings at most —
-/// the loader caps the file at 16 MB but only the pronunciation tables
-/// are kept). `NSLock` ≈ std::mutex; `@unchecked Sendable` = "I promise
-/// the lock makes this thread-safe" since the compiler cannot prove it.
+/// The CyberBrain records that carry a pronunciation table, re-read only
+/// when cyberbrain.json changes; the layer itself is rebuilt per utterance
+/// (a handful of records) because the subject can change the tie-break.
+/// Memory: only pronunciation-carrying records are kept — the loader caps
+/// the file at 16 MB but this holds a few short strings per name.
+/// `NSLock` ≈ std::mutex; `@unchecked Sendable` = "I promise the lock
+/// makes this thread-safe" since the compiler cannot prove it.
 final class PersonPronunciationCache: @unchecked Sendable {
     static let shared = PersonPronunciationCache()
 
@@ -277,27 +372,28 @@ final class PersonPronunciationCache: @unchecked Sendable {
 
     private let lock = NSLock()
     private var stamp: Stamp?
-    private var cached = HalliePronunciationLexicon(entries: [])
+    private var carriers: [CyberBrainPerson] = []
 
-    func layer(rootURL: URL, log: LogSink?) -> HalliePronunciationLexicon {
+    func layer(rootURL: URL, subject: String? = nil, log: LogSink?) -> HalliePronunciationLexicon {
         let file = rootURL.appendingPathComponent(CyberBrainLoader.defaultFilename, isDirectory: false)
         let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let now = Stamp(path: file.path, modified: values?.contentModificationDate, size: values?.fileSize)
-        return lock.withLock {
-            if now == stamp { return cached }
-            var layer = HalliePronunciationLexicon(entries: [])
+        let people: [CyberBrainPerson] = lock.withLock {
+            if now == stamp { return carriers }
+            var loaded: [CyberBrainPerson] = []
             do {
                 let archive = try CyberBrainLoader(rootURL: rootURL).load()
-                layer = .personLayer(people: archive.people)
+                loaded = archive.people.filter { $0.pronunciations != nil }
             } catch CyberBrainError.missingArchive {
                 // No brain yet: nothing person-level to say.
             } catch {
                 log?.write("[hallie-voice] CyberBrain pronunciations unavailable (\(error.localizedDescription)); using file + shipped")
             }
             stamp = now
-            cached = layer
-            return layer
+            carriers = loaded
+            return loaded
         }
+        return .personLayer(people: people, subject: subject, log: log)
     }
 
     /// Tests and the inspector call this after a write so the next

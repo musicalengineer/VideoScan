@@ -306,6 +306,7 @@ private func goldenOutcomeName(_ outcome: HallieTurnExecutor.Outcome) -> String 
     case .declined: return "declined"
     case .unsupported: return "unsupported"
     case .needsClarification: return "needsClarification"
+    case .failed: return "failed"
     }
 }
 

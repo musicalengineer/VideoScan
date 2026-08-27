@@ -183,12 +183,15 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     // MARK: - Speaking
 
-    func speak(_ text: String) {
+    /// `subject` is who the text is about (a CyberBrain id or name), so a
+    /// name two records respell differently is said the way THAT person's
+    /// record says (HalliePronunciationLexicon.personLayer).
+    func speak(_ text: String, about subject: String? = nil) {
         stop()
-        // Re-read per utterance: the file is tiny, the CyberBrain layer is
+        // Re-read per utterance: the file is tiny, the CyberBrain records are
         // mtime-cached, and an edit should be heard on the very next answer,
         // no restart. Layers: CyberBrain people → pronunciations.json → shipped.
-        let lexicon = HalliePronunciationLexicon.resolved()
+        let lexicon = HalliePronunciationLexicon.resolved(subject: subject)
         let sentences = Self.sentences(text, lexicon: lexicon)
         guard !sentences.isEmpty else { return }
         let fired = lexicon.apply(to: Self.spokenText(text, lexicon: HalliePronunciationLexicon(entries: []))).fired

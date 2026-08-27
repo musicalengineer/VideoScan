@@ -816,7 +816,7 @@ enum HallieShellCLI {
                 if outcome == .mediaFailure { return .declined }
                 switch result.outcome {
                 case .answered: return .answered
-                case .declined, .needsClarification: return .declined
+                case .declined, .needsClarification, .failed: return .declined
                 case .unsupported: return .unsupported
                 }
             case .run(let local):
@@ -969,6 +969,7 @@ enum HallieShellCLI {
             case .declined: return .declined
             case .unsupported: return .unsupported
             case .needsClarification: return .declined
+            case .failed: return .declined   // a save that did not happen is not an answer
             }
         } catch {
             state.citations = []
@@ -1054,7 +1055,7 @@ enum HallieShellCLI {
             await dependencies.recordTranscript([event])
             switch result.outcome {
             case .answered: return .answered
-            case .declined, .needsClarification: return .declined
+            case .declined, .needsClarification, .failed: return .declined
             case .unsupported: return .unsupported
             }
         } catch {

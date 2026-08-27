@@ -50,18 +50,27 @@ extension HallieAppTurnCoordinator {
             scope = .file
         }
         let prose: String
+        let outcome: HallieTurnExecutor.Outcome
+        let basis: String
+        let store = scope == .file ? "pronunciations.json" : "person record"
         do {
             try dependencies.recordPronunciation(
                 PronunciationWrite(word: told.word, saidAs: told.saidAs, target: target))
             prose = HallieTellingMode.pronunciationReply(told, scope: scope)
+            outcome = .answered
+            basis = "pronunciation kept (\(store))"
         } catch {
+            // Honest failure (codex #700): no "Got it", not an answer, and
+            // the basis says it was NOT kept.
             prose = HallieTellingMode.pronunciationFailureReply(told, error: error.localizedDescription)
+            outcome = .failed
+            basis = "pronunciation NOT kept (\(store): \(error.localizedDescription))"
         }
         let result = HallieTurnExecutor.Result(
             route: .telling,
-            outcome: .answered,
+            outcome: outcome,
             prose: prose,
-            basisLine: "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query.",
+            basisLine: "Basis: listening — \(basis); no model call, no catalog query.",
             queryDescription: "pronunciation",
             citations: [],
             catalogPersonName: nil)

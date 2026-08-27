@@ -228,3 +228,40 @@ struct CyberBrainWriterTests {
         #expect(CyberBrainWriter.uniqueID(base: "a", taken: ["a", "a.2"]) == "a.3")
     }
 }
+
+// MARK: - Additive-field sensor (#167 class, QA 2026-08-26)
+
+extension CyberBrainWriterTests {
+
+    /// Every rebuild of a CyberBrainPerson must carry EVERY field, including
+    /// ones added after the writer was first written. #167 lost designation
+    /// and fixity records to exactly this: an older-schema writer rebuilt a
+    /// record without the newer fields. `pronunciations` is the newest
+    /// field; this pins that both appenders keep it.
+    @Test func appendingTestimonyAndCaptionKeepAnExistingPronunciationTable() throws {
+        let base = existingArchive()
+        let table = ["Breen": "BREEN", "Rick": "RICK"]
+        let seeded = CyberBrainArchive(
+            archiveID: base.archiveID, displayName: base.displayName,
+            people: base.people.map { $0.withPronunciations(table) },
+            sources: base.sources)
+
+        let afterTestimony = try CyberBrainWriter.appending(
+            testimony("He still plays the Strat.", subject: "Rick Breen"), to: seeded)
+        #expect(!afterTestimony.createdPerson)
+        #expect(afterTestimony.archive.people.first { $0.id == "person.rick-breen" }?.pronunciations == table)
+
+        let caption = CyberBrainWriter.PhotoCaption(
+            subjects: [.init(name: "Rick Breen")], speakerName: "Rick",
+            text: "me at the bench", photoPath: "/nonexistent/bench.jpg", date: told)
+        let afterCaption = try CyberBrainWriter.appending(caption: caption, to: afterTestimony.archive)
+        let rick = try #require(afterCaption.archive.people.first { $0.id == "person.rick-breen" })
+        #expect(rick.pronunciations == table)
+        #expect(rick.biographyPassages.count == 2)   // the testimony landed too
+        #expect(rick.notes.count == 1)               // and the caption
+        // Round trip through the codec: the field is still there on disk.
+        let data = try JSONEncoder().encode(afterCaption.archive)
+        let decoded = try JSONDecoder().decode(CyberBrainArchive.self, from: data)
+        #expect(decoded.people.first { $0.id == "person.rick-breen" }?.pronunciations == table)
+    }
+}

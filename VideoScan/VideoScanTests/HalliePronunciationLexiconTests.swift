@@ -170,3 +170,76 @@ extension HalliePronunciationLexiconTests {
         }
     }
 }
+
+// MARK: - Shared words (codex #700, 2026-08-26)
+
+extension HalliePronunciationLexiconTests {
+    /// Two records claim "nathaniel": the subject of the answer wins, else
+    /// the newest record, else the lowest id — and the choice is logged.
+    @Test func aSharedWordPrefersTheSubjectThenTheNewestRecordThenTheLowestId() {
+        var people = brainPeople()
+        let log = InMemoryLogSink(name: "test")
+
+        // No subject, no items on either record → lowest id, logged.
+        #expect(HalliePronunciationLexicon.personLayer(people: people, log: log)
+                    .apply(to: "Nathaniel").spoken == "nah-THAN-yel")
+        #expect(log.lines.contains { $0.contains("'Nathaniel' carried by 2 records") && $0.hasSuffix("(lowest id)") })
+
+        // Subject by id, then by name; a subject who does not carry the
+        // word changes nothing.
+        #expect(HalliePronunciationLexicon.personLayer(people: people, subject: "person.zed")
+                    .apply(to: "Nathaniel").spoken == "NAT-han-yel")
+        let byName = HalliePronunciationLexicon.personLayer(people: people, subject: "nathaniel lamb", log: log)
+        #expect(byName.apply(to: "Nathaniel's").spoken == "NAT-han-yel's")
+        #expect(byName.source(of: byName.entries[0]) == .person(id: "person.zed", name: "Nathaniel Lamb"))
+        #expect(log.lines.last?.hasSuffix("(subject of this answer)") == true)
+        #expect(HalliePronunciationLexicon.personLayer(people: people, subject: "Edith Latta")
+                    .apply(to: "Nathaniel").spoken == "nah-THAN-yel")
+
+        // Without a subject, a record with a newer item outranks the lower id.
+        let told = Date(timeIntervalSince1970: 1_787_300_000)
+        people[2] = CyberBrainPerson(
+            id: "person.zed", canonicalName: "Nathaniel Lamb",
+            notes: [CyberBrainItem(id: "note.zed", kind: .note, text: "Born in Belfast.",
+                                   subjectPersonIDs: ["person.zed"], sourceIDs: [],
+                                   confidence: .probable, privacy: .family,
+                                   createdAt: told, updatedAt: told)],
+            pronunciations: ["nathaniel": "NAT-han-yel"])
+        let newest = HalliePronunciationLexicon.personLayer(people: people, log: log)
+        #expect(newest.apply(to: "Nathaniel").spoken == "NAT-han-yel")
+        #expect(log.lines.last?.hasSuffix("(most recently updated)") == true)
+        // The unshared word is untouched by any of this.
+        #expect(newest.apply(to: "McGill").spoken == "mick-GILL")
+    }
+}
+
+// MARK: - Malformed file is set aside, never clobbered (codex #700)
+
+extension HalliePronunciationLexiconTests {
+    @Test func aMalformedFileIsSetAsideAndTheWriteIsRefused() throws {
+        let url = scratchURL()
+        let dir = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: url)
+        let log = InMemoryLogSink(name: "test")
+
+        #expect(throws: HalliePronunciationLexicon.FileError.self) {
+            try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "beh-THY-uh", url: url, log: log)
+        }
+        // The user's bytes survive under .bad-<timestamp>; the original path is gone.
+        let kept = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("\(HalliePronunciationLexicon.fileName).bad-") }
+        #expect(kept.count == 1)
+        #expect(try String(contentsOf: dir.appendingPathComponent(kept[0]), encoding: .utf8) == "{ not json")
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(log.lines.contains { $0.contains("malformed") && $0.contains("write refused") })
+
+        // Reads fall back to shipped (and re-create the default file), so
+        // the NEXT telling sticks.
+        #expect(HalliePronunciationLexicon.load(from: url, log: nil) == .shipped)
+        let next = try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "beh-THY-uh", url: url, log: nil)
+        #expect(next.apply(to: "Bethiah").spoken == "beh-THY-uh")
+        #expect(next.apply(to: "Edith").spoken == "EE-dith")
+    }
+}

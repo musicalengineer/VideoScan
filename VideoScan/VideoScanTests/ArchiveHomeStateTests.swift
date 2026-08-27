@@ -179,3 +179,82 @@ struct ArchiveHomeStateIsolationTests {
         #expect(defaults.string(forKey: "archive.viewMode") == "files")
     }
 }
+
+// MARK: - Entry controller (integration seam, QA + codex #700 2026-08-26)
+
+// Drives the SAME sequence the view does — appear with a pending id and
+// search → consume → the model's id→nil transition fires onChange →
+// entry again — through ArchiveEntryController, without SwiftUI. Before
+// the controller, the second run resolved from the cleared model and
+// overwrote the search with "".
+@Suite("Archive tab — entry controller seam")
+struct ArchiveEntryControllerTests {
+
+    let archivedA = UUID(), archivedB = UUID(), pendingP = UUID()
+
+    private func isArchived(_ id: UUID) -> Bool { id == archivedA || id == archivedB }
+    private func category(_ id: UUID) -> ArchiveCategory { isArchived(id) ? .archived : .notYetArchived }
+    private func focusSet(_ id: UUID) -> Set<UUID> { [id] }
+
+    private func handle(_ trigger: ArchiveEntryController.Trigger,
+                        _ request: inout ArchiveEntryRequest) -> ArchiveEntryController.Outcome? {
+        ArchiveEntryController.handle(trigger, request: &request, persistedViewMode: "files",
+                                      isArchived: isArchived, category: category, focusSet: focusSet)
+    }
+
+    @Test func searchAndScrollTargetSurviveTheConsumptionTransition() throws {
+        var request = ArchiveEntryRequest(pendingSelection: archivedA, pendingSearch: "cape",
+                                          focusedIDs: [pendingP])
+        // 1. Tab appears with a pending hand-off.
+        let first = try #require(handle(.appear, &request))
+        #expect(first.consumed)
+        #expect(first.state.searchText == "cape")
+        #expect(first.state.scrollTarget == archivedA)
+        #expect(first.state.selectedIDs == [archivedA])
+        #expect(first.state.category == .archived && first.state.viewMode == .timeline)
+        // The request was consumed: the caller writes these back to the model.
+        #expect(request.pendingSelection == nil)
+        #expect(request.pendingSearch == nil)
+        #expect(request.focusedIDs == [archivedA])
+
+        // 2. Writing nil back fires onChange(nil) — must be a no-op, NOT a
+        //    second resolution with search "".
+        #expect(handle(.pendingSelectionChanged(nil), &request) == nil)
+        #expect(request.pendingSelection == nil && request.focusedIDs == [archivedA])
+
+        // 3. A later re-entry (Catalog and back) is a focus restore: same
+        //    item, no search — by design, and not what step 2 does.
+        let again = try #require(handle(.appear, &request))
+        #expect(!again.consumed)
+        #expect(again.state.scrollTarget == archivedA)
+        #expect(again.state.searchText.isEmpty)
+    }
+
+    @Test func aNewPendingIdWhileTheTabIsUpIsResolvedFromTheSnapshot() throws {
+        var request = ArchiveEntryRequest(pendingSelection: archivedB, pendingSearch: "1988",
+                                          focusedIDs: [archivedA])
+        let outcome = try #require(handle(.pendingSelectionChanged(archivedB), &request))
+        #expect(outcome.consumed)
+        #expect(outcome.state.scrollTarget == archivedB)
+        #expect(outcome.state.searchText == "1988")
+        #expect(request.focusedIDs == [archivedB])
+    }
+
+    @Test func focusedIDsNeverOverrideTheRequestedId() throws {
+        // A stale focus on B must not steal the hand-off to A.
+        var request = ArchiveEntryRequest(pendingSelection: archivedA, pendingSearch: nil,
+                                          focusedIDs: [archivedB])
+        let outcome = try #require(handle(.appear, &request))
+        #expect(outcome.state.scrollTarget == archivedA)
+        #expect(outcome.state.selectedIDs == [archivedA])
+        #expect(request.focusedIDs == [archivedA])
+    }
+
+    @Test func nothingPendingIsHomeAndTouchesNothing() throws {
+        var request = ArchiveEntryRequest()
+        let outcome = try #require(handle(.appear, &request))
+        #expect(!outcome.consumed)
+        #expect(outcome.state == .home)
+        #expect(request == ArchiveEntryRequest())
+    }
+}

@@ -1095,7 +1095,7 @@ struct ArchivistChatWindow: View {
         // Rick 2026-08-22: "in-app, there's no audio." On by default; the
         // settings sheet has the switch and the voice picker.
         if HallieSpeaker.isEnabled() {
-            HallieSpeaker.shared.speak(response.result.prose)
+            HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
         }
         lastResponder = response.responderHost
         pendingHallieClarification = response.pendingClarification
