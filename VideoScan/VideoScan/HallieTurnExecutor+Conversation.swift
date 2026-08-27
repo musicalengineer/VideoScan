@@ -38,6 +38,14 @@ extension HallieTurnExecutor {
         /// Convenience context for callers: people and years of the last AST.
         private(set) var lastPeople: [String] = []
         private(set) var lastYears: ClosedRange<Int>?
+        /// The ONE person the last archive answer was about, by the name
+        /// the answer settled on — "Nathaniel Parker Sr" after a which-one
+        /// chip, not the "nathaniel parker" that was typed (live 2026-08-27:
+        /// "are there any photos of him" looked up a person named "Him").
+        /// Taken from the answer's `catalogPersonName` when it has one,
+        /// else from a single-person AST. Kept across follow-ups; replaced
+        /// by the next answer about someone; cleared by reset.
+        private(set) var lastSubject: String?
         /// The photo the previous answer showed, so "this photo is …" can
         /// caption or correct it (2026-08-26). Cleared by the next archive
         /// answer that shows no photo; follow-ups and tellings keep it.
@@ -77,6 +85,19 @@ extension HallieTurnExecutor {
             default:
                 break
             }
+            // A resolved subject outranks the typed name: the answer knows
+            // WHICH Nathaniel Parker it just described. Local answers with
+            // no intent (the deterministic photo / description routes) count
+            // too — they name their person the same way.
+            if let name = result.catalogPersonName, result.outcome == .answered
+                || result.route == .graph {
+                lastSubject = name
+                // A local answer (no intent) about ONE person replaces the
+                // older AST's people too, or "photos of him" after "videos
+                // of Rick and Donna" → "photo of Nathaniel Parker Sr" would
+                // still see the stale pair (codex #716).
+                if intent == nil { lastPeople = [name] }
+            }
             guard let intent else { return }
             let ast = intent.ast
             lastAST = ast
@@ -84,6 +105,12 @@ extension HallieTurnExecutor {
                 ?? (intent.citationOffset > 0 ? lastChain : nil)
                 ?? ArchivistFollowUpResolver.Chain.base(for: ast)
             (lastPeople, lastYears) = Self.context(of: ast)
+            if result.catalogPersonName == nil, lastPeople.count == 1,
+               !HalliePronounContinuity.isThirdPersonPronoun(lastPeople[0]) {
+                lastSubject = lastPeople[0]
+            } else if result.catalogPersonName == nil, lastPeople.count > 1 {
+                lastSubject = nil
+            }
             switch result.route {
             case .presence, .cross, .aggregate:
                 if result.outcome == .answered {
@@ -101,6 +128,13 @@ extension HallieTurnExecutor {
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
+        }
+
+        /// Who a bare "he" / "she" / "they" stands for right now: the
+        /// resolved subject when there is one, else the last AST's people.
+        var pronounReferents: [String] {
+            if let lastSubject, lastPeople.count <= 1 { return [lastSubject] }
+            return lastPeople
         }
 
         var followUpSnapshot: ArchivistFollowUpResolver.Snapshot? {
@@ -362,6 +396,96 @@ extension HallieTurnExecutor {
         return out
     }
 
+    enum MediaAskPronoun: Equatable {
+        case subject(String)
+        case ask(Result)
+    }
+
+    /// The person a pronoun in a photo / video ask stands for. Singular
+    /// ("him", "her", "his", …) → the conversation's one current subject;
+    /// plural ("them", "their", …) → a polite no, one person at a time.
+    /// No subject in memory → "who do you mean?" (never a lookup of "Him").
+    static func mediaAskPronounSubject(_ pronoun: String, memory: ConversationMemory) -> MediaAskPronoun {
+        let key = pronoun.lowercased()
+        if HalliePronounContinuity.plural.contains(key) {
+            return .ask(Result(
+                route: .graph, outcome: .declined,
+                prose: "I can look for pictures of one person at a time — who do you mean?",
+                basisLine: "Basis: a plural pronoun names no one person; nothing was looked up.",
+                queryDescription: "media ask: pronoun \(key) (plural)",
+                citations: [], catalogPersonName: nil))
+        }
+        let referents = memory.pronounReferents.filter {
+            !$0.isEmpty && !HalliePronounContinuity.isThirdPersonPronoun($0)
+        }
+        guard referents.count == 1 else {
+            return .ask(Result(
+                route: .graph, outcome: .declined,
+                prose: HalliePronounContinuity.whoDoYouMean(key),
+                basisLine: "Basis: no one person from the last answer to stand for “\(key)”; nothing was looked up.",
+                queryDescription: "media ask: pronoun \(key) (no subject)",
+                citations: [], catalogPersonName: nil))
+        }
+        return .subject(referents[0])
+    }
+
+    /// The local family-tree shapes, as one step of `preTranslationSingle`.
+    /// Nil = the shape was not really ours; the question continues as typed.
+    private static func lineageTurn(
+        _ detected: HallieLineageQuestion,
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)?
+    ) -> PreTranslation? {
+        var lineage = detected
+        // "are there any photos of him" right after a biography (live
+        // 2026-08-27): the photo / video shapes run BEFORE the
+        // translator's pronoun rewrite, so "him" reached the tree as a
+        // name. A pronoun object is resolved here through the same
+        // memory subject the rest of the executor uses; with nothing to
+        // stand for, Hallie asks who — she never looks up "Him".
+        if let object = lineage.mediaAskPerson,
+           HalliePronounContinuity.isThirdPersonPronoun(object) {
+            switch mediaAskPronounSubject(object, memory: memory) {
+            case .subject(let name):
+                lineage = lineage.replacingMediaAskPerson(with: name)
+            case .ask(let result):
+                return .answer(result)
+            }
+        }
+        // A multi-hop kinship phrase ("X's great great grandpa on his
+        // paternal side") is not answered by the lineage code: it is a
+        // ready-made graph intent, run by the ordinary kinship route so
+        // it keeps the chips, People-tab fallback and told knowledge.
+        if case .kinship(let person, let relation, let side) = lineage {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .graph(.init(people: [person ?? "me"], operation: .kinship,
+                                  relation: relation, side: side)),
+                playAfterAnswer: playAfterAnswer))
+        }
+        if case .superlative(_, _, let media?) = lineage, let lineageAnswer {
+            return superlativeMediaTurn(
+                lineage, media: media, question: question,
+                playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
+        }
+        if let lineageAnswer, let answer = lineageAnswer(lineage) {
+            return .answer(answer)
+        }
+        // A photo ask the lineage answer declined to settle (several
+        // namesakes): run it as a photo intent so the executor can offer
+        // the which-one chips and finish the PHOTO ask after the tap
+        // (live 2026-08-27: "are there are photos of Nathaniel Parker").
+        if lineageAnswer != nil, case .personPhoto(let person) = lineage {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .presence(.init(people: [person], mediaKind: .photo)),
+                playAfterAnswer: playAfterAnswer))
+        }
+        return nil
+    }
+
     private static func preTranslationSingle(
         question: String,
         playAfterAnswer: Bool,
@@ -384,26 +508,10 @@ extension HallieTurnExecutor {
         // graph with a card attached (2026-08-22). A nil answer means the
         // shape was not really ours (e.g. "family tree for Donna" is a
         // person, not a surname) and the question continues as typed.
-        if let lineage = HallieLineageQuestion.detect(question) {
-            // A multi-hop kinship phrase ("X's great great grandpa on his
-            // paternal side") is not answered by the lineage code: it is a
-            // ready-made graph intent, run by the ordinary kinship route so
-            // it keeps the chips, People-tab fallback and told knowledge.
-            if case .kinship(let person, let relation, let side) = lineage {
-                return .run(Intent(
-                    originalQuestion: question,
-                    ast: .graph(.init(people: [person ?? "me"], operation: .kinship,
-                                      relation: relation, side: side)),
-                    playAfterAnswer: playAfterAnswer))
-            }
-            if case .superlative(_, _, let media?) = lineage, let lineageAnswer {
-                return superlativeMediaTurn(
-                    lineage, media: media, question: question,
-                    playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
-            }
-            if let lineageAnswer, let answer = lineageAnswer(lineage) {
-                return .answer(answer)
-            }
+        if let lineage = HallieLineageQuestion.detect(question),
+           let turn = lineageTurn(lineage, question: question, playAfterAnswer: playAfterAnswer,
+                                  memory: memory, lineageAnswer: lineageAnswer) {
+            return turn
         }
         // Capability first: "how do i change donna's bio" is a capability
         // question, and only then is "how do i …" a how-to for the help card.
@@ -437,7 +545,7 @@ extension HallieTurnExecutor {
             // "when did they get married" after "who did Rick marry": the
             // pronoun stands for the last answer's people; say so to the
             // translator instead of letting it guess (HalliePronounContinuity).
-            if let rewrite = HalliePronounContinuity.rewrite(question, lastPeople: memory.lastPeople) {
+            if let rewrite = HalliePronounContinuity.rewrite(question, lastPeople: memory.pronounReferents) {
                 return .translate(question: rewrite.question, playAfterAnswer: playAfterAnswer)
             }
             return .translate(question: question, playAfterAnswer: playAfterAnswer)

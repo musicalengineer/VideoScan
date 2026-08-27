@@ -148,10 +148,25 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if let sup = superlativeQuestion(in: lower) { return sup }
         // "show me a photo of Fred Lamb" (typos in the lead words are the
         // translator's problem no longer — this is deterministic).
-        if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image)s?\s+of\s+([a-z][a-z .'-]+?)\s*$/),
-           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any)\b/) != nil {
+        // The name may carry a namesake qualifier — "(b. 1651)", "born
+        // 1651", "who died in 1737" (HallieNameQualifier; TEMPORARY, see
+        // that file); nothing else with digits, so "photos of donna from
+        // 1992" stays a media search.
+        if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image)s?\s+of\s+([a-z][a-z .'-]+?(?:\s*\([^)]*\)|\s+(?:who\s+)?(?:born|b\.|died|d\.)\s+(?:in\s+)?\d{4})?)\s*$/),
+           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any|there)\b/) != nil,
+           // "photos of me and donna" is a catalog search for two people,
+           // never a portrait of a person named "Me And Donna".
+           m.1.firstMatch(of: /\b(?:and|with)\b|&|,/) == nil {
+            // "are there are photos of …" (live 2026-08-27, a typo): "there"
+            // is a lead word too.
             let name = HallieLineageQuestion.capitalizedName(String(m.1).trimmingCharacters(in: .whitespaces))
             return .personPhoto(person: name)
+        }
+        // "show me his photo" / "her picture" — the pronoun is the person;
+        // preTranslation resolves it from conversation memory.
+        if let m = lower.firstMatch(of: /\b(his|her|their)\s+(?:photo|picture|portrait|image)s?\s*$/),
+           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any|find|there)\b/) != nil {
+            return .personPhoto(person: HallieLineageQuestion.capitalizedName(String(m.1)))
         }
         // "describe X", "what was X like", "X's appearance/personality/character".
         if let m = lower.firstMatch(of: /^describe\s+(?:the\s+)?([a-z][a-z .'-]+?)(?:'s?\s+(?:physical\s+)?(?:appearance|personality|character|looks|traits))?(?:\s+(?:and|as)\b.*)?$/) {
@@ -282,7 +297,31 @@ enum HallieLineageQuestion: Equatable, Sendable {
                 return .personVideos(person: HallieLineageQuestion.capitalizedName(name))
             }
         }
+        // "show me his videos" — same pronoun rule as the photo shape.
+        if let m = lower.firstMatch(of: /\b(his|her|their)\s+(?:videos?|films?|footage|movies?|clips?|home movies)\s*$/),
+           lower.firstMatch(of: /\b(?:show|see|play|find|got|have|any|there)\b/) != nil {
+            return .personVideos(person: HallieLineageQuestion.capitalizedName(String(m.1)))
+        }
         return nil
+    }
+
+    /// The person a photo / video ask is about, when this is one of those
+    /// shapes; nil for every other shape.
+    var mediaAskPerson: String? {
+        switch self {
+        case .personPhoto(let person), .personVideos(let person): return person
+        default: return nil
+        }
+    }
+
+    /// The same media ask about a different person (a pronoun resolved from
+    /// conversation memory). Other shapes are returned unchanged.
+    func replacingMediaAskPerson(with name: String) -> HallieLineageQuestion {
+        switch self {
+        case .personPhoto: return .personPhoto(person: name)
+        case .personVideos: return .personVideos(person: name)
+        default: return self
+        }
     }
 
     /// A request to FETCH tree data, as opposed to questions about it.
@@ -750,9 +789,75 @@ enum HallieLineageAnswer {
         }
     }
 
+    /// `resolve` with the which-one case exposed, for callers that can
+    /// offer chips (the photo ask) instead of a declined sentence.
+    enum Detailed: Equatable {
+        case success(GedcomFamilyGraph.Person, note: String? = nil)
+        case ambiguous([GedcomFamilyGraph.Person])
+        case failure(Result?)
+    }
+
     static func resolve(_ typed: String?,
+                        context: HallieTurnExecutor.Context,
+                        graph: GedcomFamilyGraph) -> Resolved {
+        switch resolveDetailed(typed, context: context, graph: graph) {
+        case .success(let p, let note): return .success(p, note: note)
+        case .failure(let r): return .failure(r)
+        case .ambiguous(let people):
+            let name = typed ?? context.speakers.ownerName ?? ""
+            return .failure(whichOne(name, among: people))
+        }
+    }
+
+    /// The declined which-one sentence, with each namesake's years so the
+    /// next reply can say "the one born in 1651".
+    static func whichOne(_ typed: String, among people: [GedcomFamilyGraph.Person]) -> Result {
+        let labels = people.map { ArchivistBiographyPolicy.disambiguationCandidate(for: $0).label }
+        return Result(
+            route: .graph, outcome: .needsClarification,
+            prose: "Which \(HallieLineageQuestion.capitalizedName(typed)) do you mean — " + HallieNameQualifier.joined(labels, conjunction: "or") + "?",
+            basisLine: "Basis: the family tree has \(people.count) people by that name; nothing was looked up.",
+            queryDescription: "lineage: resolve \(typed)", citations: [], catalogPersonName: nil)
+    }
+
+    /// "Nathaniel Parker born 1651" (HallieNameQualifier — TEMPORARY, see
+    /// that file): the namesakes by the bare name, narrowed by the exact
+    /// year. One → that person; several still → which-one with years;
+    /// none → the honest miss naming the years the tree does have. Nil =
+    /// no qualifier, or no namesake at all (the ordinary resolver then
+    /// says "I don't find …").
+    static func resolveQualified(_ typed: String, graph: GedcomFamilyGraph) -> Detailed? {
+        guard let qualified = HallieNameQualifier.parse(typed) else { return nil }
+        let namesakes = graph.people(namedLike: qualified.name)
+        guard !namesakes.isEmpty else { return nil }
+        let picked = qualified.select(namesakes)
+        switch picked.count {
+        case 1:
+            return .success(picked[0])
+        case 0:
+            let shown = HallieLineageQuestion.capitalizedName(qualified.name)
+            let plural = namesakes.count == 1 ? shown : shown + "s"
+            let have = namesakes.count == 1
+                ? "I have one \(shown), \(HallieNameQualifier.yearsPhrase(namesakes, kind: qualified.kind))"
+                : "I have \(HallieNameQualifier.countWord(namesakes.count)) \(plural), \(HallieNameQualifier.yearsPhrase(namesakes, kind: qualified.kind))"
+            let neither = namesakes.count == 2 ? "neither" : (namesakes.count == 1 ? "not" : "none")
+            return .failure(Result(
+                route: .graph, outcome: .declined,
+                prose: "\(have) — \(neither) \(qualified.kind.description).",
+                basisLine: "Basis: family tree dates for the \(namesakes.count) namesake\(namesakes.count == 1 ? "" : "s"); nothing else was looked up.",
+                queryDescription: "lineage: resolve \(typed) (no namesake \(qualified.kind.description))",
+                citations: [], catalogPersonName: nil))
+        default:
+            return .ambiguous(picked)
+        }
+    }
+
+    static func resolveDetailed(_ typed: String?,
                                 context: HallieTurnExecutor.Context,
-                                graph: GedcomFamilyGraph) -> Resolved {
+                                graph: GedcomFamilyGraph) -> Detailed {
+        if let typed, let qualified = resolveQualified(typed, graph: graph) {
+            return qualified
+        }
         guard let name = typed ?? context.speakers.ownerName else {
             return .failure(Result(
                 route: .graph, outcome: .needsClarification,
@@ -780,13 +885,7 @@ enum HallieLineageAnswer {
             case .ambiguous(let people):
                 let linked = people.compactMap { $0.gedcomPersonID.flatMap { graph.people[$0] } }
                 if linked.count == 1 { return .success(linked[0]) }
-                if linked.count > 1 {
-                    return .failure(Result(
-                        route: .graph, outcome: .needsClarification,
-                        prose: "Which \(name) do you mean — " + linked.map(\.name).joined(separator: " or ") + "?",
-                        basisLine: "Basis: Breen Family CyberBrain knows more than one person by that name; nothing was looked up.",
-                        queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
-                }
+                if linked.count > 1 { return .ambiguous(linked) }
             case .notFound:
                 break
             }
@@ -808,7 +907,17 @@ enum HallieLineageAnswer {
             if isOwnerSpelling {
                 let owner = resolveOwner(name, graph: graph,
                                          familySearchID: context.speakers.ownerFamilySearchID)
-                if owner != .failure(nil) { return owner }
+                switch owner {
+                case .success(let p, let note): return .success(p, note: note)
+                case .failure(let r?): return .failure(r)
+                case .failure(nil): break
+                }
+            }
+            // Several namesakes: the caller decides between chips and a
+            // declined sentence (`resolve` picks the sentence).
+            let namesakes = r.candidates.compactMap { graph.people[$0.id] }
+            if r.conclusion == .personAmbiguous, namesakes.count > 1 {
+                return .ambiguous(namesakes)
             }
             // The resolver's own honest answer (not found / which one?).
             return .failure(Result(
@@ -1514,41 +1623,57 @@ enum HallieLineageAnswer {
     static func personPhoto(_ typed: String,
                             context: HallieTurnExecutor.Context) -> Result? {
         guard let graph = context.graph else { return nil }
-        switch resolve(typed, context: context, graph: graph) {
+        // A pronoun that got this far had nothing to stand for
+        // (preTranslation resolves the ones it can): ask, never look up "Him".
+        if HalliePronounContinuity.isThirdPersonPronoun(typed) {
+            return pronounAsk(typed)
+        }
+        switch resolveDetailed(typed, context: context, graph: graph) {
         case .failure(let result): return result
-        case .success(let person, _):
-            let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
-            if let url = store.photoURLs(for: person).first {
-                return Result(
-                    route: .graph, outcome: .answered,
-                    prose: "Here\u{2019}s \(person.name).",
-                    basisLine: "Basis: portrait from the Master Archive\u{2019}s 40_Family_Tree folder for this person.",
-                    queryDescription: "photo: \(person.name)",
-                    citations: [], catalogPersonName: person.name,
-                    offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
-                    attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
-            }
-            // Died before photography (WorldKnowledge, photograph medium):
-            // the honest line, and no folder card — there is nothing to ask
-            // the family for except a painting, which the line already says.
-            if let line = photographyFloorLine(person, medium: .photograph) {
-                return Result(
-                    route: .graph, outcome: .declined,
-                    prose: line,
-                    basisLine: "Basis: family tree dates; \(WorldKnowledge.Medium.photograph.fact.statement) No search was run.",
-                    queryDescription: "photo: \(person.name) (before photography)",
-                    citations: [], catalogPersonName: person.name,
-                    offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
-            }
-            let folder = try? store.folderForPhotoRequest(person: person)
+        case .success(let person, _): return personPhoto(person: person)
+        case .ambiguous:
+            // Several namesakes: not answered here — the executor's photo
+            // ask offers the chips and resumes the ask for the chosen one
+            // (preTranslation hands it over; +PhotoAsk).
+            return nil
+        }
+    }
+
+    /// The photo answer for a RESOLVED tree person: the stored portrait, the
+    /// photography-floor line, or the folder card. Shared by the
+    /// deterministic shape and the executor's photo ask (chips path).
+    static func personPhoto(person: GedcomFamilyGraph.Person) -> Result {
+        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        if let url = store.photoURLs(for: person).first {
             return Result(
-                route: .graph, outcome: .declined,
-                prose: "I don\u{2019}t have a photo of \(person.name) yet.",
-                basisLine: "Basis: no image in the archive\u{2019}s People folder for this person.",
+                route: .graph, outcome: .answered,
+                prose: "Here\u{2019}s \(person.name).",
+                basisLine: "Basis: portrait from the Master Archive\u{2019}s 40_Family_Tree folder for this person.",
                 queryDescription: "photo: \(person.name)",
                 citations: [], catalogPersonName: person.name,
-                attachments: folder.map { [.photoRequest(personName: person.name, folderURL: $0)] } ?? [])
+                offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
+                attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
         }
+        // Died before photography (WorldKnowledge, photograph medium):
+        // the honest line, and no folder card — there is nothing to ask
+        // the family for except a painting, which the line already says.
+        if let line = photographyFloorLine(person, medium: .photograph) {
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: line,
+                basisLine: "Basis: family tree dates; \(WorldKnowledge.Medium.photograph.fact.statement) No search was run.",
+                queryDescription: "photo: \(person.name) (before photography)",
+                citations: [], catalogPersonName: person.name,
+                offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
+        }
+        let folder = try? store.folderForPhotoRequest(person: person)
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: "I don\u{2019}t have a photo of \(person.name) yet.",
+            basisLine: "Basis: no image in the archive\u{2019}s People folder for this person.",
+            queryDescription: "photo: \(person.name)",
+            citations: [], catalogPersonName: person.name,
+            attachments: folder.map { [.photoRequest(personName: person.name, folderURL: $0)] } ?? [])
     }
 
     /// "videos of X" for a tree person who died before motion pictures
@@ -1559,8 +1684,9 @@ enum HallieLineageAnswer {
     /// route already owns those conversations.
     static func personVideos(_ typed: String,
                              context: HallieTurnExecutor.Context) -> Result? {
-        guard let graph = context.graph,
-              case .success(let person, _) = resolve(typed, context: context, graph: graph),
+        guard let graph = context.graph else { return nil }
+        if HalliePronounContinuity.isThirdPersonPronoun(typed) { return pronounAsk(typed) }
+        guard case .success(let person, _) = resolve(typed, context: context, graph: graph),
               let line = photographyFloorLine(person, medium: .film) else { return nil }
         return Result(
             route: .graph, outcome: .declined,
@@ -1569,6 +1695,17 @@ enum HallieLineageAnswer {
             queryDescription: "videos: \(person.name) (before motion pictures)",
             citations: [], catalogPersonName: person.name,
             offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
+    }
+
+    /// "Who do you mean?" for a media ask whose person is a bare pronoun.
+    static func pronounAsk(_ pronoun: String) -> Result {
+        let key = pronoun.lowercased()
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: HalliePronounContinuity.whoDoYouMean(key),
+            basisLine: "Basis: a pronoun names no one without a previous answer; nothing was looked up.",
+            queryDescription: "media ask: pronoun \(key) (no subject)",
+            citations: [], catalogPersonName: nil)
     }
 
     /// The WorldKnowledge floor for ONE medium, logged once per suppressed

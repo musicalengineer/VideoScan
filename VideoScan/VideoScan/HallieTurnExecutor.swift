@@ -627,6 +627,12 @@ enum HallieTurnExecutor {
         let ast = request.intent.ast
         switch ast {
         case .presence(let payload):
+            // "photos of X" about a family-tree person: portrait /
+            // photography floor / which-one chips, never a catalog search
+            // (+PhotoAsk). Nil = not a photo ask about a tree person.
+            if let photo = photoAsk(payload, request: request, context: context) {
+                return photo
+            }
             guard request.selectedIdentity == nil else {
                 return invalidContinuationResult(for: ast)
             }
