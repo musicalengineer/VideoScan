@@ -108,6 +108,10 @@ enum HallieAppTurnCoordinator {
         /// 2026-08-26). Default records nothing; live writes through
         /// CyberBrainWriter.
         let recordPhotoCaption: @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void
+        /// Durably keep how a name is said ("Nathaniel is pronounced …",
+        /// 2026-08-26). Default records nothing; live writes through
+        /// CyberBrainWriter.setPronunciation or pronunciations.json.
+        let recordPronunciation: @Sendable (PronunciationWrite) throws -> Void
         /// Mark a photo as NOT showing a tree person (photo, GEDCOM ID,
         /// noted by, caption). Default does nothing; live writes the
         /// `.notof.json` sidecar through FamilyAssetStore.
@@ -151,6 +155,7 @@ enum HallieAppTurnCoordinator {
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
             recordTestimony: @escaping @Sendable (CyberBrainWriter.Testimony) throws -> Void = { _ in },
             recordPhotoCaption: @escaping @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void = { _ in },
+            recordPronunciation: @escaping @Sendable (PronunciationWrite) throws -> Void = { _ in },
             excludePhoto: @escaping @Sendable (URL, String, String?, String?) throws -> Void = { _, _, _, _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
@@ -193,6 +198,7 @@ enum HallieAppTurnCoordinator {
             self.loadCyberBrain = loadCyberBrain
             self.recordTestimony = recordTestimony
             self.recordPhotoCaption = recordPhotoCaption
+            self.recordPronunciation = recordPronunciation
             self.excludePhoto = excludePhoto
             self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
@@ -309,6 +315,9 @@ enum HallieAppTurnCoordinator {
                 let receipt = try CyberBrainWriter.record(caption: caption, rootURL: root)
                 appLog.write("Hallie: kept photo caption \(receipt.itemID) for \(caption.subjects.count) people (\(caption.photoPath))")
             },
+            recordPronunciation: { write in
+                try recordPronunciationLive(write)
+            },
             excludePhoto: { photo, gedcomID, notedBy, caption in
                 let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
                 let sidecar = try store.excludePhoto(
@@ -385,6 +394,13 @@ enum HallieAppTurnCoordinator {
     ) async throws -> Response {
         try Task.checkCancellation()
 
+        // "Nathaniel is pronounced …" is one word, one respelling; it is
+        // kept and confirmed even mid-interview (the session rides through).
+        if let handled = pronunciationResponse(
+            question: question, telling: telling,
+            referent: referent, dependencies: dependencies) {
+            return handled
+        }
         // Listening comes first: while a family member is telling Hallie
         // about someone, the turn is theirs to classify; a question ends
         // the telling and falls through to ordinary answering.

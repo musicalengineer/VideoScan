@@ -185,15 +185,15 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     func speak(_ text: String) {
         stop()
-        // Re-read per utterance: the file is tiny and an edit should be
-        // heard on the very next answer, no restart.
-        let lexicon = HalliePronunciationLexicon.load()
+        // Re-read per utterance: the file is tiny, the CyberBrain layer is
+        // mtime-cached, and an edit should be heard on the very next answer,
+        // no restart. Layers: CyberBrain people → pronunciations.json → shipped.
+        let lexicon = HalliePronunciationLexicon.resolved()
         let sentences = Self.sentences(text, lexicon: lexicon)
         guard !sentences.isEmpty else { return }
         let fired = lexicon.apply(to: Self.spokenText(text, lexicon: HalliePronunciationLexicon(entries: []))).fired
         if !fired.isEmpty {
-            appLog.write("[hallie-voice] pronunciations: "
-                         + fired.map { "\($0.written)→\($0.spoken)" }.joined(separator: ", "))
+            appLog.write("[hallie-voice] pronunciations: " + lexicon.logLine(for: fired))
         }
 
         if let voice = Self.selectedNeuralVoice(),

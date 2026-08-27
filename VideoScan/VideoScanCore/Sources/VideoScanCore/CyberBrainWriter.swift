@@ -264,7 +264,8 @@ public enum CyberBrainWriter {
                 + (testimony.kind == .biography ? [item] : []),
             anecdotes: person.anecdotes + (testimony.kind == .anecdote ? [item] : []),
             lifeEvents: person.lifeEvents + (testimony.kind == .event ? [item] : []),
-            notes: person.notes + (testimony.kind == .note ? [item] : []))
+            notes: person.notes + (testimony.kind == .note ? [item] : []),
+            pronunciations: person.pronunciations)
 
         let updated = CyberBrainArchive(
             schemaVersion: archive.schemaVersion,
@@ -415,7 +416,8 @@ public enum CyberBrainWriter {
             biographyPassages: person.biographyPassages,
             anecdotes: person.anecdotes,
             lifeEvents: person.lifeEvents,
-            notes: person.notes + [item])
+            notes: person.notes + [item],
+            pronunciations: person.pronunciations)
         archive = CyberBrainArchive(
             schemaVersion: archive.schemaVersion,
             archiveID: archive.archiveID,
@@ -494,7 +496,8 @@ public enum CyberBrainWriter {
                     id: p.id, gedcomPersonID: pointer, profileStableID: p.profileStableID,
                     canonicalName: p.canonicalName, aliases: p.aliases, terminology: p.terminology,
                     biographyPassages: p.biographyPassages, anecdotes: p.anecdotes,
-                    lifeEvents: p.lifeEvents, notes: p.notes)
+                    lifeEvents: p.lifeEvents, notes: p.notes,
+                    pronunciations: p.pronunciations)
             }
             return (person.id, false)
         case .ambiguous(let candidates):
@@ -532,6 +535,130 @@ public enum CyberBrainWriter {
         }
         // Any other loader error propagates: a corrupt or unsafe archive must
         // never be silently replaced by a fresh one.
+    }
+
+    // MARK: - Pronunciations (2026-08-26: "a pronunciation key next to aliases")
+
+    /// What was recorded about how a name is said.
+    public struct PronunciationReceipt: Sendable, Equatable {
+        public let archive: CyberBrainArchive
+        public let personID: String
+        public let canonicalName: String
+        /// The key as stored (trimmed, caller's spelling).
+        public let word: String
+        /// Nil when the entry was removed.
+        public let saidAs: String?
+        public let createdPerson: Bool
+    }
+
+    /// Pure: set (or, with an empty `saidAs`, remove) how one word of a
+    /// person's name is spoken. `word` must be a single token; keys are
+    /// matched case-insensitively so "nathaniel" replaces "Nathaniel"
+    /// rather than sitting beside it. Nothing else on the person changes.
+    public static func settingPronunciation(
+        personID: String,
+        word: String,
+        saidAs: String?,
+        in archive: CyberBrainArchive
+    ) throws -> PronunciationReceipt {
+        let key = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw WriteError.emptySubject }
+        guard key.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+            throw WriteError.ioFailure("pronunciation key \"\(key)\" must be one word")
+        }
+        let spoken = saidAs?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var people = archive.people
+        guard let at = people.firstIndex(where: { $0.id == personID }) else {
+            throw WriteError.emptySubject
+        }
+        let person = people[at]
+        var table = (person.pronunciations ?? [:]).filter {
+            FamilyIdentityText.normalized($0.key) != FamilyIdentityText.normalized(key)
+        }
+        if !spoken.isEmpty { table[key] = spoken }
+        people[at] = person.withPronunciations(table)
+        let updated = CyberBrainArchive(
+            schemaVersion: archive.schemaVersion,
+            archiveID: archive.archiveID,
+            displayName: archive.displayName,
+            people: people,
+            sources: archive.sources)
+        try CyberBrainValidator.validate(updated)
+        return PronunciationReceipt(
+            archive: updated, personID: person.id, canonicalName: person.canonicalName,
+            word: key, saidAs: spoken.isEmpty ? nil : spoken, createdPerson: false)
+    }
+
+    /// Pure: same, addressed by NAME (+ optional GEDCOM pointer) through the
+    /// resolution ladder testimony uses — so the Family Tree inspector can
+    /// set a pronunciation for a tree person Hallie has never been told
+    /// about. That mints a person record with no passages, only the
+    /// pronunciation; an ambiguous name without a pointer throws.
+    public static func settingPronunciation(
+        subjectName: String,
+        gedcomPersonID: String?,
+        aliases: [String] = [],
+        word: String,
+        saidAs: String?,
+        in existing: CyberBrainArchive?
+    ) throws -> PronunciationReceipt {
+        let subject = subjectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !subject.isEmpty else { throw WriteError.emptySubject }
+        let archive = existing ?? CyberBrainArchive(
+            archiveID: defaultArchiveID,
+            displayName: defaultDisplayName,
+            people: [],
+            sources: [])
+        let index = try CyberBrainIndex(archive: archive)
+        var people = archive.people
+        let (id, created) = try resolveSubject(
+            subject, gedcomPersonID: gedcomPersonID, aliases: aliases,
+            index: index, people: &people)
+        let withPerson = CyberBrainArchive(
+            schemaVersion: archive.schemaVersion,
+            archiveID: archive.archiveID,
+            displayName: archive.displayName,
+            people: people,
+            sources: archive.sources)
+        let receipt = try settingPronunciation(
+            personID: id, word: word, saidAs: saidAs, in: withPerson)
+        return PronunciationReceipt(
+            archive: receipt.archive, personID: receipt.personID,
+            canonicalName: receipt.canonicalName, word: receipt.word,
+            saidAs: receipt.saidAs, createdPerson: created)
+    }
+
+    /// Durable: load, set, save atomically (temp → fsync → backup → rename,
+    /// like every other write here). The person must already exist.
+    public static func setPronunciation(
+        personID: String,
+        token word: String,
+        saidAs: String?,
+        rootURL: URL
+    ) throws -> PronunciationReceipt {
+        let (root, existing) = try prepareRoot(rootURL)
+        guard let archive = existing else { throw WriteError.emptySubject }
+        let receipt = try settingPronunciation(
+            personID: personID, word: word, saidAs: saidAs, in: archive)
+        try save(receipt.archive, root: root, hadExisting: true)
+        return receipt
+    }
+
+    /// Durable form of the by-name variant (mints the person if needed).
+    public static func setPronunciation(
+        subjectName: String,
+        gedcomPersonID: String?,
+        aliases: [String] = [],
+        token word: String,
+        saidAs: String?,
+        rootURL: URL
+    ) throws -> PronunciationReceipt {
+        let (root, existing) = try prepareRoot(rootURL)
+        let receipt = try settingPronunciation(
+            subjectName: subjectName, gedcomPersonID: gedcomPersonID, aliases: aliases,
+            word: word, saidAs: saidAs, in: existing)
+        try save(receipt.archive, root: root, hadExisting: existing != nil)
+        return receipt
     }
 
     // MARK: - Durable write

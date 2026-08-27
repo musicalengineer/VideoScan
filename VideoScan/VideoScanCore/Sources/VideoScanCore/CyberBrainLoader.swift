@@ -73,6 +73,16 @@ public enum CyberBrainValidator {
                     == person.aliases.count else {
                 throw CyberBrainError.invalidField("duplicate alias for \(person.id)")
             }
+            // Pronunciations: one name WORD → one non-empty respelling. A
+            // multi-word key would never match the word-based speech lexicon,
+            // so it is rejected here rather than silently never firing.
+            for (word, saidAs) in person.pronunciations ?? [:] {
+                try requireText(word, "person.pronunciations.key")
+                try requireText(saidAs, "person.pronunciations[\(word)]")
+                guard word.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+                    throw CyberBrainError.invalidField("pronunciation key \"\(word)\" for \(person.id) must be one word")
+                }
+            }
 
             let sections: [([CyberBrainItem], CyberBrainItem.Kind, String)] = [
                 (person.biographyPassages, .biography, "biographyPassages"),
@@ -345,7 +355,7 @@ public struct CyberBrainLoader: Sendable {
             try known(person, allowed: ["id", "gedcomPersonID", "profileStableID",
                                         "canonicalName", "aliases", "terminology",
                                         "biographyPassages", "anecdotes", "lifeEvents",
-                                        "notes"], at: "people[\(index)]")
+                                        "notes", "pronunciations"], at: "people[\(index)]")
             for key in ["biographyPassages", "anecdotes", "lifeEvents", "notes"] {
                 for (itemIndex, itemValue) in (person[key] as? [Any] ?? []).enumerated() {
                     guard let item = itemValue as? [String: Any] else {

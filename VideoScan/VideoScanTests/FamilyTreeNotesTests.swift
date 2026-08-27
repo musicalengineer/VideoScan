@@ -338,3 +338,78 @@ struct FamilyTreeNotesScaleTests {
         #expect(resolver.ambiguousPersonIDs.isEmpty)
     }
 }
+
+// MARK: - "Said as" chips (2026-08-26)
+
+@Suite("Family tree notes — said-as chips")
+struct FamilyTreePronunciationChipTests {
+
+    @Test func nameWordsDropSuffixesInitialsAndDuplicates() {
+        #expect(FamilyTreePronunciationChips.nameWords("Richard Hardin Breen Jr") == ["Richard", "Hardin", "Breen"])
+        #expect(FamilyTreePronunciationChips.nameWords("Nathaniel J. McGill III") == ["Nathaniel", "McGill"])
+        #expect(FamilyTreePronunciationChips.nameWords("Edith (Latta) Breen, Breen") == ["Edith", "Latta", "Breen"])
+        #expect(FamilyTreePronunciationChips.nameWords("   ").isEmpty)
+    }
+
+    @Test func chipsShowThePersonsOwnEntryElseTheInheritedOne() {
+        let people = [CyberBrainPerson(id: "p", canonicalName: "Nathaniel McGill",
+                                       pronunciations: ["nathaniel": "nah-THAN-yel"])]
+        let chips = FamilyTreePronunciationChips.make(
+            name: "Nathaniel Edith McGill Jr", people: people, fallback: .shipped)
+        #expect(chips.map(\.word) == ["Nathaniel", "Edith", "McGill"])
+        #expect(chips[0].saidAs == "nah-THAN-yel")
+        #expect(chips[0].inherited == "nuh-THAN-yul")
+        #expect(chips[0].isSet && chips[0].effective == "nah-THAN-yel")
+        #expect(chips[1].saidAs == nil && chips[1].inherited == "EE-dith" && !chips[1].isSet)
+        #expect(chips[2].effective == "muh-GILL")
+        // A word nobody has an entry for: no hint at all (identity entries
+        // like Breen → Breen count as "no hint").
+        let breen = FamilyTreePronunciationChips.make(name: "Rick Breen", people: [], fallback: .shipped)
+        #expect(breen.map(\.effective) == [nil, nil])
+    }
+}
+
+@Suite("Family tree notes — said-as round-trip")
+@MainActor
+struct FamilyTreePronunciationRoundTripTests {
+
+    @Test func settingAPronunciationMintsTheLinkedPersonAndTheVoiceLayerSeesIt() throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"),
+            cyberBrainRootURL: root, noteAuthor: "Rick", pronunciationFallback: .shipped)
+        model.install(graph: treeGraph())
+        model.loadCyberBrainNow()
+
+        // Chips appear before any brain exists.
+        model.select("@I2@")
+        #expect(model.selectedPronunciations.map(\.word) == ["Eileen", "Latta"])
+        #expect(model.selectedPronunciations[1].inherited == "LAT-uh")
+        #expect(!model.selectedPronunciations[1].isSet)
+
+        try model.setPronunciation(word: "Latta", saidAs: "LAH-tuh")
+        #expect(model.selectedPronunciations[1].saidAs == "LAH-tuh")
+        #expect(model.selectedNotes.isEmpty)   // a pronunciation is not a note
+
+        // On disk: linked person, no passages, the table; strict loader OK.
+        let reloaded = try CyberBrainLoader(rootURL: root).load()
+        let person = try #require(reloaded.people.first { $0.gedcomPersonID == "@I2@" })
+        #expect(person.canonicalName == "Eileen Latta")
+        #expect(person.items.isEmpty)
+        #expect(person.pronunciations == ["Latta": "LAH-tuh"])
+
+        // The voice layer built from that directory says it the new way.
+        let layer = HalliePronunciationLexicon.personLayer(people: reloaded.people)
+        #expect(layer.apply(to: "Eileen Latta's").spoken == "Eileen LAH-tuh's")
+
+        // Removing clears the table but keeps the person.
+        try model.setPronunciation(word: "latta", saidAs: nil)
+        #expect(!model.selectedPronunciations[1].isSet)
+        #expect(try CyberBrainLoader(rootURL: root).load().people.first { $0.gedcomPersonID == "@I2@" }?.pronunciations == nil)
+
+        // Another person is untouched.
+        model.select("@I1@")
+        #expect(model.selectedPronunciations.allSatisfy { !$0.isSet })
+    }
+}

@@ -35,6 +35,15 @@ public struct CyberBrainPerson: Codable, Sendable, Equatable, Identifiable {
     public let anecdotes: [CyberBrainItem]
     public let lifeEvents: [CyberBrainItem]
     public let notes: [CyberBrainItem]
+    /// How Hallie's voice should say a word of this person's name
+    /// (2026-08-26, "a pronunciation key next to aliases"): name word →
+    /// respelling, e.g. "Nathaniel" → "nuh-THAN-yul". Keys are single
+    /// words; the speech lexicon is word-based, so an entry applies to that
+    /// word wherever it appears in spoken text, not just next to this
+    /// person. Optional and omitted when empty: files written before this
+    /// field decode unchanged (nil), and a file without pronunciations is
+    /// byte-identical to what the older writer produced.
+    public let pronunciations: [String: String]?
 
     public init(
         id: String,
@@ -46,7 +55,8 @@ public struct CyberBrainPerson: Codable, Sendable, Equatable, Identifiable {
         biographyPassages: [CyberBrainItem] = [],
         anecdotes: [CyberBrainItem] = [],
         lifeEvents: [CyberBrainItem] = [],
-        notes: [CyberBrainItem] = []
+        notes: [CyberBrainItem] = [],
+        pronunciations: [String: String]? = nil
     ) {
         self.id = id
         self.gedcomPersonID = gedcomPersonID
@@ -58,6 +68,18 @@ public struct CyberBrainPerson: Codable, Sendable, Equatable, Identifiable {
         self.anecdotes = anecdotes
         self.lifeEvents = lifeEvents
         self.notes = notes
+        self.pronunciations = (pronunciations?.isEmpty ?? true) ? nil : pronunciations
+    }
+
+    /// Copy with a different pronunciation table (nil/empty clears it).
+    /// Swift structs are values, so "modify" means "make a new one" — the
+    /// C++ analogy is a const struct with a builder method.
+    public func withPronunciations(_ table: [String: String]?) -> CyberBrainPerson {
+        CyberBrainPerson(
+            id: id, gedcomPersonID: gedcomPersonID, profileStableID: profileStableID,
+            canonicalName: canonicalName, aliases: aliases, terminology: terminology,
+            biographyPassages: biographyPassages, anecdotes: anecdotes,
+            lifeEvents: lifeEvents, notes: notes, pronunciations: table)
     }
 
     public var items: [CyberBrainItem] {

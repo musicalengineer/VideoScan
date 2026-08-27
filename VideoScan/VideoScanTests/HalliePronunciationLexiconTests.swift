@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 /// The respelling table Bella reads from: whole words only, possessives
@@ -75,5 +76,97 @@ struct HalliePronunciationLexiconTests {
         #expect(HalliePronunciationLexicon.load(from: url, log: log) == .shipped)
         #expect(try String(contentsOf: url, encoding: .utf8) == "not json")
         #expect(log.lines.contains { $0.contains("unreadable") })
+    }
+}
+
+// MARK: - Layers (2026-08-26: per-person "said as" beside aliases)
+
+extension HalliePronunciationLexiconTests {
+    private func brainPeople() -> [CyberBrainPerson] {
+        [
+            CyberBrainPerson(id: "person.nathaniel", canonicalName: "Nathaniel McGill",
+                             pronunciations: ["Nathaniel": "nah-THAN-yel", "McGill": "mick-GILL"]),
+            CyberBrainPerson(id: "person.edith", canonicalName: "Edith Latta"),
+            // A second record claiming the same word: the lower id wins.
+            CyberBrainPerson(id: "person.zed", canonicalName: "Nathaniel Lamb",
+                             pronunciations: ["nathaniel": "NAT-han-yel"]),
+        ]
+    }
+
+    @Test func shippedTableCarriesNathanielAndBethiah() {
+        let table = Dictionary(uniqueKeysWithValues: HalliePronunciationLexicon.shipped.entries.map { ($0.written, $0.spoken) })
+        #expect(table["Nathaniel"] == "nuh-THAN-yul")
+        #expect(table["Bethiah"] == "beh-THY-uh")
+        #expect(table["Edith"] == "EE-dith")
+        #expect(table["McGill"] == "muh-GILL")
+        #expect(table["Latta"] == "LAT-uh")
+    }
+
+    @Test func mergeOrderIsPeopleThenFileThenShippedFirstMatchWins() {
+        let people = HalliePronunciationLexicon.personLayer(people: brainPeople())
+        #expect(people.entries.map(\.written).sorted() == ["McGill", "Nathaniel"])
+        let file = HalliePronunciationLexicon(entries: [
+            .init(written: "McGill", spoken: "FILE-gill"),
+            .init(written: "Latta", spoken: "FILE-uh"),
+        ])
+        let merged = HalliePronunciationLexicon.merged([people, file, .shipped])
+
+        let (spoken, fired) = merged.apply(to: "Nathaniel McGill's wife Edith Latta")
+        #expect(spoken == "nah-THAN-yel mick-GILL's wife EE-dith FILE-uh")
+        let sources = Dictionary(uniqueKeysWithValues: fired.map { ($0.written, merged.source(of: $0)) })
+        #expect(sources["Nathaniel"] == .person(id: "person.nathaniel", name: "Nathaniel McGill"))
+        #expect(sources["McGill"] == .person(id: "person.nathaniel", name: "Nathaniel McGill"))
+        #expect(sources["Latta"] == .file)
+        #expect(sources["Edith"] == .shipped)
+        #expect(merged.logLine(for: fired).contains("Nathaniel→nah-THAN-yel (person Nathaniel McGill)"))
+        #expect(merged.logLine(for: fired).contains("Edith→EE-dith (shipped)"))
+        #expect(merged.logLine(for: fired).contains("Latta→FILE-uh (pronunciations.json)"))
+        // Possessives and case still survive with a person-level entry.
+        #expect(merged.apply(to: "NATHANIEL's").spoken == "nah-THAN-yel's")
+        #expect(merged.apply(to: "Nathaniels").fired.isEmpty)
+    }
+
+    @Test func resolvedReadsTheBrainDirectoryAndTheCacheDropsOnInvalidate() throws {
+        let fileURL = scratchURL()
+        let brainRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HalliePronunciationLexiconTests-brain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: brainRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent().deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: brainRoot)
+        }
+        // No brain yet → file (written from shipped) + shipped only.
+        let before = HalliePronunciationLexicon.resolved(fileURL: fileURL, cyberBrainRootURL: brainRoot, log: nil)
+        #expect(before.apply(to: "Nathaniel").spoken == "nuh-THAN-yul")
+
+        _ = try CyberBrainWriter.setPronunciation(
+            subjectName: "Nathaniel McGill", gedcomPersonID: "@I7@", token: "Nathaniel",
+            saidAs: "nah-THAN-yel", rootURL: brainRoot)
+        PersonPronunciationCache.shared.invalidate()
+        let after = HalliePronunciationLexicon.resolved(fileURL: fileURL, cyberBrainRootURL: brainRoot, log: nil)
+        let fired = after.apply(to: "Nathaniel").fired
+        #expect(after.apply(to: "Nathaniel").spoken == "nah-THAN-yel")
+        #expect(fired.first.map { after.source(of: $0) } == .person(id: "person.nathaniel-mcgill.i7", name: "Nathaniel McGill"))
+        // The other layers are still there.
+        #expect(after.apply(to: "Edith").spoken == "EE-dith")
+    }
+
+    @Test func fileEntryWriteReplacesCaseInsensitivelyAndEmptyRemoves() throws {
+        let url = scratchURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+        let set = try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "BETH-ee-uh", url: url, log: nil)
+        #expect(set.apply(to: "Bethiah").spoken == "BETH-ee-uh")
+        let reread = try HalliePronunciationLexicon(jsonData: Data(contentsOf: url))
+        #expect(reread.entries.filter { $0.written.lowercased() == "bethiah" }.count == 1)
+        #expect(reread.apply(to: "Bethiah").spoken == "BETH-ee-uh")
+        // Lower-case key replaces rather than duplicates; the rest survives.
+        let again = try HalliePronunciationLexicon.setFileEntry(written: "bethiah", spoken: "beh-THY-uh", url: url, log: nil)
+        #expect(again.entries.filter { $0.written.lowercased() == "bethiah" } == [.init(written: "bethiah", spoken: "beh-THY-uh")])
+        #expect(again.apply(to: "Edith").spoken == "EE-dith")
+        let removed = try HalliePronunciationLexicon.setFileEntry(written: "Bethiah", spoken: "", url: url, log: nil)
+        #expect(!removed.entries.contains { $0.written.lowercased() == "bethiah" })
+        #expect(throws: (any Error).self) {
+            try HalliePronunciationLexicon.setFileEntry(written: "two words", spoken: "x", url: url, log: nil)
+        }
     }
 }
