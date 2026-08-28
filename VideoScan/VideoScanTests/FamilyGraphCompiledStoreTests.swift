@@ -414,4 +414,62 @@ struct FamilyGraphCompiledStoreTests {
         await model.loadFromDisk()
         #expect(box.store().generations().count == 1)
     }
+
+    /// codex #812: a pointer written by a codec-3 build is "schema changed"
+    /// → miss → recompile through the loader; the new pointer is codec 4
+    /// and its manifest carries the loss figures.
+    @Test func codecThreePointerRecompiles() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let source = try box.write(Self.tree)
+        let store = box.store()
+        _ = box.loader(store).loadNewestOutcome()
+        var pointer = try #require(store.readPointer())
+        let gen1 = pointer.current
+        #expect(pointer.codec == 4)
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+        #expect(!FamilyGraphCompiledStore.versionsMatch(pointer))
+        #expect(store.load(sources: [source]) == nil)
+        #expect(store.loadCurrent() == nil)
+        #expect(box.logLines.contains("schema changed"))
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.compiled == true)
+        let after = try #require(store.readPointer())
+        #expect(after.current != gen1)
+        #expect(after.codec == GedcomCompiledTree.codecVersion)
+        let manifest = try #require(store.readManifest(after.current))
+        #expect(manifest.sources.map(\.droppedLineCount) == [outcome.graph?.totalDroppedLineCount])
+        #expect(manifest.localDroppedLineCount == 0)
+        #expect(manifest.totalDroppedLineCount == outcome.graph?.totalDroppedLineCount)
+        #expect(outcome.graph?.sourceProvenance.map(\.sha256) == [try GedcomCompiledTree.fullSHA256(of: source)])
+    }
+
+    /// codex #816/#817 through the app's loader: the graph the loader
+    /// parses carries the file's digest, so a rewrite between parse and
+    /// ingest is refused and the previous generation stays current.
+    @Test func loaderParsedGraphIsRefusedWhenTheFileChangedUnderneath() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let source = try box.write(Self.tree)
+        let store = box.store()
+        _ = box.loader(store).loadNewestOutcome()
+        let before = try #require(store.readPointer())
+        let graph = try #require(GedcomFamilyGraph(fileURL: source))
+        #expect(graph.sourceFingerprint == before.sourceKeys[0])
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 401, generations: 8))
+        #expect(store.ingest(graph: graph, sources: [source]) == nil)
+        #expect(box.logLines.contains("REFUSED"))
+        #expect(store.readPointer() == before)
+        // Reordered / wrong URL for a merged pair: refused as well.
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4)
+            .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D"), as: "b.ged")
+        let merged = try #require(GedcomFamilyGraph(fileURL: source)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: merged, sources: [b, source]) == nil)
+        #expect(store.readPointer() == before)
+        #expect(store.ingest(graph: merged, sources: [source, b]) != nil)
+        let pointer = try #require(store.readPointer())
+        let manifest = try #require(store.readManifest(pointer.current))
+        #expect(manifest.sources.map(\.fileName) == ["family.ged", "b.ged"])
+        #expect(store.loadCurrent()?.graph.sourceProvenance.map(\.sha256) == manifest.sources.map(\.sha256))
+    }
 }

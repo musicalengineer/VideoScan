@@ -913,4 +913,131 @@ struct GedcomMergeTests {
         #expect(tMerge < 2, "merge budget")
         #expect(total < 20, "pipeline budget (Debug)")
     }
+
+    // MARK: Provenance union is identity-aware (codex #810)
+
+    private func named(_ text: String, _ name: String, _ sha: String) -> GedcomFamilyGraph {
+        var g = GedcomFamilyGraph(gedcomText: text); g.sourceFileName = name; g.sourceFingerprint = sha; return g
+    }
+    static let lossyA = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Ann /Shared/
+    1 OCCU Weaver
+    1 NOTE Long story
+    1 _FSFTID SHRD-001
+    0 TRLR
+    """
+    static let lossyB = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Donna /Hudson/
+    1 OCCU Teacher
+    1 _FSFTID G2CL-86B
+    0 @N1@ NOTE A stray note
+    1 CONT with a continuation
+    0 TRLR
+    """
+    static let lossyC = """
+    0 HEAD
+    0 @I9@ INDI
+    1 NAME Walter /Hudson/
+    1 NOTE x
+    1 NOTE y
+    1 _FSFTID DON1-DAD
+    0 @O1@ OBJE
+    1 FILE photo.jpg
+    0 TRLR
+    """
+
+    /// A+B then +B again: B is ONE entry and its loss is counted once —
+    /// exact list, local and total after each step.
+    @Test func mergingTheSameSourceTwiceCountsItsLossOnce() throws {
+        let a = named(Self.lossyA, "a.ged", "aa"), b = named(Self.lossyB, "b.ged", "bb")
+        #expect(a.droppedLineCount == 2 && b.droppedLineCount == 3)
+        let ab = a.merge(with: b)
+        #expect(ab.graph.sourceProvenance == [.init(name: "a.ged", sha256: "aa", droppedLineCount: 2),
+                                              .init(name: "b.ged", sha256: "bb", droppedLineCount: 3)])
+        #expect(ab.graph.droppedLineCount == 0, "every side attributed → local 0")
+        #expect(ab.graph.totalDroppedLineCount == 5)
+        #expect(ab.droppedLineCount == 5)
+
+        let abb = ab.graph.merge(with: b)
+        #expect(abb.graph.sourceProvenance == ab.graph.sourceProvenance, "same (name, sha) → one entry")
+        #expect(abb.graph.droppedLineCount == 0)
+        #expect(abb.graph.totalDroppedLineCount == 5, "not 8: B's loss is not counted again")
+        #expect(abb.droppedLineCount == 5)
+        #expect(abb.graph.people.count == ab.graph.people.count)
+        #expect(!abb.conflicts.contains { $0.ids == ["b.ged"] }, "no disagreement: same count")
+
+        // Same name, DIFFERENT bytes = a re-pull: a second entry, both counted.
+        let b2 = named(Self.lossyB.replacingOccurrences(of: "Teacher", with: "Educator"), "b.ged", "b2")
+        let abb2 = ab.graph.merge(with: b2)
+        #expect(abb2.graph.sourceProvenance.map { "\($0.name):\($0.sha256!)" } == ["a.ged:aa", "b.ged:bb", "b.ged:b2"])
+        #expect(abb2.graph.totalDroppedLineCount == 8)
+    }
+
+    /// Overlapping chained merge: (A+B) written and parsed back, then +
+    /// (B+C). B appears on both sides with the same identity → listed
+    /// once; the artifact's own name is not a source; total = a + b + c.
+    @Test func overlappingChainedMergeListsEverySourceOnceWithExactTotals() throws {
+        let a = named(Self.lossyA, "a.ged", "aa"), b = named(Self.lossyB, "b.ged", "bb"), c = named(Self.lossyC, "c.ged", "cc")
+        #expect(c.droppedLineCount == 4)
+        let ab = a.merge(with: b).graph
+        var abFile = GedcomFamilyGraph(gedcomText: ab.gedcomText(provenance: "A+B"))
+        abFile.sourceFileName = "ab.ged"; abFile.sourceFingerprint = "abab"
+        #expect(abFile.droppedLineCount == 0, "our own HEAD lines are not loss")
+        #expect(abFile.sourceProvenance.map(\.name) == ["a.ged", "b.ged"])
+        let bc = b.merge(with: c).graph
+        #expect(bc.sourceProvenance.map(\.name) == ["b.ged", "c.ged"])
+
+        let all = abFile.merge(with: bc)
+        #expect(all.graph.sourceProvenance == [.init(name: "a.ged", sha256: "aa", droppedLineCount: 2),
+                                               .init(name: "b.ged", sha256: "bb", droppedLineCount: 3),
+                                               .init(name: "c.ged", sha256: "cc", droppedLineCount: 4)])
+        #expect(all.graph.sourceFileNames == ["a.ged", "b.ged", "c.ged"])
+        #expect(all.graph.droppedLineCount == 0)
+        #expect(all.graph.totalDroppedLineCount == 9)
+        #expect(all.droppedLineCount == 9)
+        #expect(all.graph.people.count == 3, "Ann, Donna, Walter — Donna once")
+        #expect(all.graph.sourceFingerprint == nil, "an in-memory merge has no file of its own")
+        // Through text once more: identical list and totals.
+        let back = GedcomFamilyGraph(gedcomText: all.graph.gedcomText())
+        #expect(back.sourceProvenance == all.graph.sourceProvenance)
+        #expect(back.droppedLineCount == 0 && back.totalDroppedLineCount == 9)
+    }
+
+    /// Two entries with the same identity but a different dropped count
+    /// (someone edited a `_VS_DROPPED` line, or two parsers disagreed):
+    /// a `.fieldDisagreement` naming both counts, first kept, counted once.
+    @Test func provenanceCountDisagreementIsReportedAndTheFirstKept() throws {
+        let a = named(Self.lossyA, "a.ged", "aa"), b = named(Self.lossyB, "b.ged", "bb")
+        let ab = a.merge(with: b).graph
+        var altered = GedcomFamilyGraph(gedcomText: ab.gedcomText()
+            .replacingOccurrences(of: "2 _VS_SHA256 bb\n2 _VS_DROPPED 3", with: "2 _VS_SHA256 bb\n2 _VS_DROPPED 7"))
+        altered.sourceFileName = "altered.ged"; altered.sourceFingerprint = "alt"
+        #expect(altered.sourceProvenance.last?.droppedLineCount == 7)
+        let outcome = ab.merge(with: altered)
+        let report = try #require(outcome.conflicts.first { $0.kind == .fieldDisagreement && $0.ids == ["b.ged"] })
+        #expect(report.resolution.contains("kept 3") && report.resolution.contains("says 7"), Comment(rawValue: report.resolution))
+        #expect(outcome.graph.sourceProvenance == ab.sourceProvenance, "first kept, listed once")
+        #expect(outcome.graph.totalDroppedLineCount == 5)
+        // Reversed order: the 7 is first, so it is kept and 3 reported.
+        let reversed = altered.merge(with: ab)
+        #expect(reversed.graph.sourceProvenance.last?.droppedLineCount == 7)
+        #expect(reversed.graph.totalDroppedLineCount == 9)
+        #expect(reversed.conflicts.contains { $0.ids == ["b.ged"] && $0.resolution.contains("kept 7") })
+    }
+
+    /// A nameless text side cannot be listed: its loss stays LOCAL in the
+    /// merged graph, a named side's loss is attributed, the total is exact.
+    @Test func namelessSideKeepsItsLossLocalNamedSideIsAttributed() throws {
+        let nameless = GedcomFamilyGraph(gedcomText: Self.lossyA)
+        let b = named(Self.lossyB, "b.ged", "bb")
+        let outcome = nameless.merge(with: b)
+        #expect(outcome.graph.sourceProvenance == [.init(name: "b.ged", sha256: "bb", droppedLineCount: 3)])
+        #expect(outcome.graph.droppedLineCount == 2, "the nameless side's loss")
+        #expect(outcome.graph.totalDroppedLineCount == 5)
+        #expect(outcome.droppedLineCount == 5)
+    }
 }

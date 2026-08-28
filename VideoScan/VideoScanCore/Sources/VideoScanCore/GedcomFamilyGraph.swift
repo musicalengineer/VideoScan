@@ -18,6 +18,7 @@
 // pointers, cycles); the happy-path contract is pinned here-adjacent
 // in GedcomFamilyGraphTests.
 
+import CryptoKit
 import Foundation
 
 public struct GedcomFamilyGraph: Sendable {
@@ -133,11 +134,19 @@ public struct GedcomFamilyGraph: Sendable {
     /// was merged from, read back from its HEAD (`1 _VS_SOURCE name`).
     /// Empty for a graph parsed from text with no such HEAD lines.
     public private(set) var sourceFileNames: [String] = []
-    /// SHA-256 (hex) of the source file, set by whoever loaded it (the
-    /// coordinator writes it as the `.sha256` sidecar). Nil for text and
-    /// for a merged graph. The merge uses it as the ONLY licence to match
-    /// FSID-less records by pointer: identical fingerprint = the same
-    /// export re-read, so `@I42@` is the same `@I42@` (codex #775).
+    /// SHA-256 (hex) of THIS graph's own source file — the bytes it was
+    /// parsed from. `init?(data:fileURL:)` sets it from the same Data it
+    /// parses (codex #817: parse and hash are never two reads of one
+    /// path). Nil for a text parse and for a graph merged in memory. Two
+    /// jobs: (1) the merge's ONLY licence to match FSID-less records by
+    /// pointer — identical fingerprint = the same export re-read, so
+    /// `@I42@` is the same `@I42@` (codex #775); (2) the hash carried into
+    /// this graph's own provenance entry by `canonicalized()`.
+    ///
+    /// Carried by the codec as its OWN scalar, not derived from
+    /// `sourceProvenance[0]`: a merged artifact parsed from `ab.ged` has a
+    /// fingerprint of ab.ged AND provenance entries for a.ged and b.ged,
+    /// so the two are different facts. Decode restores it verbatim (#809).
     public var sourceFingerprint: String?
     /// True for a file VideoScan wrote as a merge artifact (`1 _VS_MERGED Y`
     /// in HEAD) — the flag that says "derived, lossy, sources elsewhere"
@@ -146,9 +155,57 @@ public struct GedcomFamilyGraph: Sendable {
     /// The HEAD `1 NOTE` (with CONT/CONC joined), as written by the merge.
     /// Nil when the file has none.
     public private(set) var headNote: String?
+
+    // MARK: Provenance — the canonical semantics (codex #809/#810/#812/#814/#816/#817)
+    //
+    // Three fields describe where a graph came from and what was lost:
+    //
+    //   sourceProvenance   THE list of source files: positional, one entry
+    //                      per source, order = merge order (A+B → [A, B];
+    //                      (A+B)+C → [A, B, C]). Each entry carries the
+    //                      file's basename, its SHA-256 and the number of
+    //                      lines that source's parse dropped.
+    //   droppedLineCount   graph-LOCAL loss: lines this graph's own parse
+    //                      dropped that are attributed to NO provenance
+    //                      entry.
+    //   totalDroppedLineCount == droppedLineCount + Σ sourceProvenance[i].droppedLineCount
+    //                      No line is ever counted twice — every dropped
+    //                      line lives in exactly one of the two places.
+    //
+    // Two shapes satisfy that invariant:
+    //   • PLAIN (as parsed): `sourceProvenance` is EMPTY and
+    //     `droppedLineCount = D`, the parse's own loss. A file parse also
+    //     has `sourceFileName` + `sourceFingerprint`; a text parse has
+    //     neither.
+    //   • CANONICAL: a plain graph WITH a file name has its D MOVED into
+    //     the single entry [(name, fingerprint, D)] and local becomes 0.
+    //     A merged graph is already canonical (the merge builds the list
+    //     and leaves local = the un-attributable remainder). A nameless
+    //     text graph cannot be listed, so it stays as it is: its loss is
+    //     local. A merge ARTIFACT parsed from ab.ged is canonical too —
+    //     its list is [A, B] (read back from HEAD) and any loss of the
+    //     artifact's OWN re-parse stays local.
+    // `canonicalized()` is idempotent and never changes the total. The
+    // codec ALWAYS encodes the canonical form (list + local), so decode ==
+    // encode and the total survives a round-trip (#814 was the plain
+    // shape being written as list AND local: 2×D after decode).
+    //
+    // The merge unions the two CANONICAL lists by identity (name, sha256):
+    // one entry per identity, its loss counted ONCE; two entries of the
+    // same identity that disagree on the count are a `.fieldDisagreement`
+    // (first kept). Local = both sides' local (only a nameless side has
+    // any). So A+B+B == A+B and (A+B)+(B+C) == [A, B, C] (#810).
+    //
+    // The store binds sources to entries POSITIONALLY — sources[i] ↔
+    // sourceProvenance[i] — and refuses (not promoted) on any count/name/
+    // hash mismatch (#816, `bindSources`), which is also the TOCTOU guard:
+    // the entry's hash came from the parsed bytes, the store's from a
+    // fresh read; they must agree (#817).
+
     /// Loss accounting (codex #780, tightened codex #794): the number of
-    /// lines of THIS parse that the graph does not retain — what a writer
-    /// round-trip of this graph would lose. "Retained" means one of:
+    /// lines of THIS parse that the graph does not retain and that no
+    /// `sourceProvenance` entry accounts for — see the MARK above. What
+    /// counts as "retained":
     ///   • a record-opening line the graph models (`0 HEAD`, `0 TRLR`,
     ///     `0 @…@ INDI`, `0 @…@ FAM`);
     ///   • an INDI/FAM line the parser stored (NAME, SEX, BIRT/DEAT
@@ -163,10 +220,6 @@ public struct GedcomFamilyGraph: Sendable {
     /// the graph has no model for (SOUR, OBJE, NOTE, REPO, SUBM, …) with
     /// all its sub-lines. Lines without a valid `<level> <tag>` prefix are
     /// not GEDCOM lines and are not counted.
-    ///
-    /// For a merged graph this is the loss of the merge artifact ITSELF
-    /// (0 when built in memory); the sources' losses live in
-    /// `sourceProvenance`, and `totalDroppedLineCount` is the sum.
     public private(set) var droppedLineCount = 0
     /// One source export this tree was built from, with the fingerprint
     /// and loss recorded when it was read (codex #794): written to a
@@ -183,48 +236,82 @@ public struct GedcomFamilyGraph: Sendable {
         public init(name: String, sha256: String?, droppedLineCount: Int) {
             self.name = name; self.sha256 = sha256; self.droppedLineCount = droppedLineCount
         }
+        /// Merge identity: the same file under the same name is one source.
+        var identity: String { name + "\u{0}" + (sha256 ?? "") }
     }
-    /// Structured provenance read from a merged file's HEAD or built by
-    /// the merge; empty for a plain export (see `effectiveProvenance`).
-    /// Kept in step with `sourceFileNames` (one entry per name, same
-    /// order). Module-settable so the compiled-tree codec can restore it.
+    /// The positional source list (see the MARK above). Empty for a plain
+    /// parse. Kept in step with `sourceFileNames` (one name per entry,
+    /// same order). Module-settable so the codec can restore it.
     public internal(set) var sourceProvenance: [SourceProvenance] = []
-    /// Provenance with the plain-export case filled in: a graph with no
-    /// structured entries describes itself from `sourceFileName` /
-    /// `sourceFingerprint` / `droppedLineCount` (one file), or from bare
-    /// `sourceFileNames` (a decoded artifact whose codec carried names
-    /// only — hash unknown, loss left unattributed in `droppedLineCount`).
-    public var effectiveProvenance: [SourceProvenance] {
-        if !sourceProvenance.isEmpty { return sourceProvenance }
-        let names = sourceFileNames.isEmpty ? [sourceFileName].compactMap { $0 } : sourceFileNames
-        if names.count == 1 {
-            return [SourceProvenance(name: names[0], sha256: sourceFingerprint, droppedLineCount: droppedLineCount)]
-        }
-        return names.map { SourceProvenance(name: $0, sha256: nil, droppedLineCount: 0) }
-    }
-    /// Attach the computed full SHA-256 of each source file (keyed by
-    /// file name) so the provenance the codec writes carries real hashes
-    /// (codex #808): a plain export gets `sourceFingerprint`; a merged graph
-    /// gets each nil `sha256` filled; a names-only graph is materialised.
-    /// Names not in the map are left as they are.
-    public mutating func attachSourceHashes(_ sha256ByFileName: [String: String]) {
-        if sourceProvenance.isEmpty {
-            let names = sourceFileNames.isEmpty ? [sourceFileName].compactMap { $0 } : sourceFileNames
-            if names.count == 1 {
-                if sourceFingerprint == nil { sourceFingerprint = sha256ByFileName[names[0]] }
-                return
-            }
-            sourceProvenance = names.map { SourceProvenance(name: $0, sha256: sha256ByFileName[$0], droppedLineCount: 0) }
-            return
-        }
-        for i in sourceProvenance.indices where sourceProvenance[i].sha256 == nil {
-            sourceProvenance[i].sha256 = sha256ByFileName[sourceProvenance[i].name]
-        }
-    }
-    /// Every line lost on the way to this graph: its own parse loss plus
-    /// the recorded loss of each source it was merged from.
+    /// `canonicalized().sourceProvenance` — the list a writer or a
+    /// reviewer should show: a plain file export describes itself as its
+    /// own single source.
+    public var effectiveProvenance: [SourceProvenance] { canonicalized().sourceProvenance }
+    /// Every line lost on the way to this graph: its own unattributed loss
+    /// plus the recorded loss of each listed source. Invariant under
+    /// `canonicalized()`, merge (no double counting) and the codec.
     public var totalDroppedLineCount: Int {
         droppedLineCount + sourceProvenance.reduce(0) { $0 + $1.droppedLineCount }
+    }
+    /// The canonical shape (see the MARK above): a plain file graph's
+    /// own loss moves into its single provenance entry; anything else is
+    /// returned unchanged. Pure; O(1) beyond the struct copy (the record
+    /// dictionaries are copy-on-write, like a shared_ptr behind a value).
+    public func canonicalized() -> GedcomFamilyGraph {
+        guard sourceProvenance.isEmpty, let name = sourceFileName else { return self }
+        var out = self
+        out.sourceProvenance = [SourceProvenance(name: name, sha256: sourceFingerprint, droppedLineCount: droppedLineCount)]
+        out.droppedLineCount = 0
+        if out.sourceFileNames.isEmpty { out.sourceFileNames = [name] }
+        return out
+    }
+
+    /// Why `bindSources` refused. The store logs `description` and does
+    /// not promote.
+    public enum SourceBindingError: Error, Equatable, CustomStringConvertible {
+        case countMismatch(graph: Int, sources: Int)
+        case nameMismatch(index: Int, graph: String, source: String)
+        case hashMismatch(index: Int, name: String, graph: String, source: String)
+        public var description: String {
+            switch self {
+            case let .countMismatch(g, s):
+                return "graph lists \(g) source\(g == 1 ? "" : "s") but \(s) \(s == 1 ? "was" : "were") given"
+            case let .nameMismatch(i, g, s):
+                return "source #\(i + 1) is \(s) but the graph's entry #\(i + 1) is \(g)"
+            case let .hashMismatch(i, n, g, s):
+                return "source #\(i + 1) \(n) hashes to \(s.prefix(12))… on disk but the graph was parsed from \(g.prefix(12))… (file changed since it was read?)"
+            }
+        }
+    }
+
+    /// Bind the store's freshly hashed source files to this graph's
+    /// provenance POSITIONALLY (codex #816): `sources[i]` ↔ entry `i`.
+    /// Canonicalises first, then requires the same count, the same
+    /// basename at every position, and — when the entry already carries a
+    /// hash (it does for every file parse) — the same hash (codex #817:
+    /// the file must still be the bytes it was parsed from). Entries
+    /// without a hash (text parse given a name) take the store's. On
+    /// success the graph is canonical and every entry carries the store's
+    /// hash; on failure `self` is left untouched and the error says why.
+    public mutating func bindSources(_ sources: [(name: String, sha256: String)]) throws {
+        var out = canonicalized()
+        guard out.sourceProvenance.count == sources.count else {
+            throw SourceBindingError.countMismatch(graph: out.sourceProvenance.count, sources: sources.count)
+        }
+        for (i, source) in sources.enumerated() {
+            let entry = out.sourceProvenance[i]
+            guard entry.name == source.name else {
+                throw SourceBindingError.nameMismatch(index: i, graph: entry.name, source: source.name)
+            }
+            if let carried = entry.sha256, carried != source.sha256 {
+                throw SourceBindingError.hashMismatch(index: i, name: entry.name, graph: carried, source: source.sha256)
+            }
+            out.sourceProvenance[i].sha256 = source.sha256
+        }
+        if out.sourceProvenance.count == 1, out.sourceFingerprint == nil, !out.isMergedArtifact {
+            out.sourceFingerprint = sources[0].sha256
+        }
+        self = out
     }
     /// Number of FAM records — the "families" figure in Hallie's answer.
     public var familyCount: Int { families.count }
@@ -398,16 +485,26 @@ public struct GedcomFamilyGraph: Sendable {
         rootPersonIDs = named.isEmpty ? [firstIndi].compactMap { $0 } : named
     }
 
+    /// Parse a file: ONE read of the bytes, then `init?(data:fileURL:)`.
     public init?(fileURL: URL) {
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
-            return nil
-        }
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        self.init(data: data, fileURL: fileURL)
+    }
+
+    /// Parse `data` as the contents of `fileURL` and fingerprint THE SAME
+    /// BYTES (codex #817): `sourceFingerprint` = SHA-256(data), so the
+    /// digest a graph carries is the digest of what it was parsed from,
+    /// never a second read of a path that may have changed meanwhile.
+    /// Nil when the bytes are not UTF-8 or not a `0 HEAD … 0 TRLR` file.
+    public init?(data: Data, fileURL: URL) {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
         let records = text.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let first = records.first, let last = records.last,
               first.trimmingCharacters(in: CharacterSet(charactersIn: "\u{feff}")) == "0 HEAD",
               last.uppercased() == "0 TRLR" else { return nil }
         self.init(gedcomText: text)
+        sourceFingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         sourceFileName = fileURL.lastPathComponent
         if sourceFileNames.isEmpty { sourceFileNames = [fileURL.lastPathComponent] }
         sourceDirectory = fileURL.deletingLastPathComponent().path
