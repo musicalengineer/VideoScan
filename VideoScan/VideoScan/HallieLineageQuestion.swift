@@ -423,11 +423,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
             /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
             /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
             /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
-            /\b(?:nearest|closest|common|shared)\s+(?:common\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s*$/,
+            // "most recent" / "latest" / "recent" common ancestor, and a
+            // trailing "born 1959" qualifier (Rick 2026-08-28 live).
+            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
             /\b(?:do|did|does)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
             /\bwhat\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
             /\b([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
-            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s*$/,
+            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
             /\bwhere\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
         ]
         for pattern in patterns {
@@ -1041,6 +1043,15 @@ enum HallieLineageAnswer {
             // declined sentence (`resolve` picks the sentence).
             let namesakes = r.candidates.compactMap { graph.people[$0.id] }
             if r.conclusion == .personAmbiguous, namesakes.count > 1 {
+                // A bare name that several people share, exactly one of
+                // them a root of the tree (Rick 2026-08-28 live: "Donna"
+                // → Agatha Donna Knauss b. 1520 vs Donna Hudson b. 1959):
+                // the root is who the family means. Stated in the basis.
+                let roots = namesakes.filter { graph.rootPersonIDs.contains($0.id) }
+                if roots.count == 1 {
+                    let others = namesakes.count - 1
+                    return .success(roots[0], note: "“\(name)” taken as \(roots[0].name), a root of this tree (\(others) other namesake\(others == 1 ? "" : "s") in it).")
+                }
                 return .ambiguous(namesakes)
             }
             // The resolver's own honest answer (not found / which one?).

@@ -142,6 +142,8 @@ struct HallieCommonAncestorDetectTests {
         #expect(Q.detect("show me the closest common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("closest common ancestor of rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("can you find the closest common ancestor between richard harding breen Jr and Donna Hudson?") == .commonAncestor(a: "Richard Harding Breen Jr", b: "Donna Hudson"))
+        #expect(Q.detect("Find the most recent common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
+        #expect(Q.detect("Find the most recent common ancestor between rick and donna hudson born 1959") == .commonAncestor(a: "Rick", b: "Donna Hudson"))
         #expect(Q.detect("what is the nearest common ancestor of rick breen and donna hudson") == .commonAncestor(a: "Rick Breen", b: "Donna Hudson"))
         #expect(Q.detect("what do rick and donna have in common ancestrally") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("do rick and donna share an ancestor?") == .commonAncestor(a: "Rick", b: "Donna"))
@@ -204,7 +206,10 @@ struct HallieCommonAncestorAnswerTests {
         // (the one root matching the owner's name in a two-root tree).
         let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: nil, b: "Walter Hudson"), context: context(graph)))
         #expect(r.outcome == .answered)
-        #expect(r.prose.hasPrefix("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
+        // Rick 2026-08-28: in-law is the aside, the blood link is the answer.
+        #expect(r.prose.contains("share 1 recorded ancestor"), "got: \(r.prose)")
+        #expect(r.prose.contains("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
+        #expect(!r.prose.hasPrefix("Walter Hudson is"))
     }
 
     @Test func aSideWithNoParentsIsSaidHonestlyAndOffersGetFamilyTree() throws {
@@ -446,5 +451,21 @@ struct HallieTwoRootOwnerTests {
         #expect(r.prose.contains("cousin"))
         #expect(r.prose.contains("wife"))          // the marriage is an aside…
         #expect(!r.prose.hasPrefix("Donna Hudson is")) // …not the answer
+    }
+
+    // Rick 2026-08-28 live: "most recent common ancestor between rick and
+    // donna" → "Which Donna — Agatha Donna Knauss (b. 1520) … or Donna
+    // Hudson (b. 1959)?" A bare name shared with a namesake resolves to the
+    // ROOT when exactly one candidate is a root.
+    @Test func bareNameSharedWithANamesakeResolvesToTheRoot() throws {
+        var text = mergedGraph().gedcomText()
+        // Add a 16th-century namesake on Donna's side, no FSID, no parents.
+        text = text.replacingOccurrences(of: "0 TRLR", with: "0 @I900@ INDI\n1 NAME Agatha Donna /Knauss/\n1 SEX F\n1 BIRT\n2 DATE ABT 1520\n0 TRLR")
+        let graph = GedcomFamilyGraph(gedcomText: text)
+        #expect(graph.people(namedLike: "Donna").count >= 2)
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Rick", b: "Donna"), context: context(graph)))
+        #expect(r.outcome == .answered, "got: \(r.prose)")
+        #expect(!r.prose.hasPrefix("Which Donna"))
+        #expect(r.basisLine.contains("a root of this tree"))
     }
 }
