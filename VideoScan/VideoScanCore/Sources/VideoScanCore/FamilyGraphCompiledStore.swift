@@ -274,6 +274,12 @@ public struct FamilyGraphCompiledStore {
         let generation = freshGenerationName()
         do {
             try fileManager.createDirectory(at: generationURL(generation), withIntermediateDirectories: true)
+            // Hash the sources FIRST so the promoted artifact's provenance
+            // carries the real digests (codex #808), then compile the
+            // enriched graph and verify against that same graph.
+            let keys = try sourceKeys(for: sources)
+            var graph = graph
+            graph.attachSourceHashes(Dictionary(zip(sources.map(\.lastPathComponent), keys), uniquingKeysWith: { a, _ in a }))
             progress("Compiling family tree (\(graph.people.count.formatted()) people)…")
             let data = GedcomCompiledTree.encode(graph)
             try data.write(to: artifactURL(generation), options: .atomic)
@@ -281,7 +287,6 @@ public struct FamilyGraphCompiledStore {
             progress("Verifying compiled tree…")
             let decoded = try GedcomCompiledTree.decode(try Data(contentsOf: artifactURL(generation)))
             let problems = verify(decoded, graph)
-            let keys = try sourceKeys(for: sources)
             let sourceRecords = try zip(sources, keys).map { url, key -> Source in
                 let stat = try GedcomCompiledTree.sourceStat(url)
                 return Source(fileName: url.lastPathComponent, path: url.path,

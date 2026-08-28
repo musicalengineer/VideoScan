@@ -202,6 +202,25 @@ public struct GedcomFamilyGraph: Sendable {
         }
         return names.map { SourceProvenance(name: $0, sha256: nil, droppedLineCount: 0) }
     }
+    /// Attach the computed full SHA-256 of each source file (keyed by
+    /// file name) so the provenance the codec writes carries real hashes
+    /// (codex #808): a plain export gets `sourceFingerprint`; a merged graph
+    /// gets each nil `sha256` filled; a names-only graph is materialised.
+    /// Names not in the map are left as they are.
+    public mutating func attachSourceHashes(_ sha256ByFileName: [String: String]) {
+        if sourceProvenance.isEmpty {
+            let names = sourceFileNames.isEmpty ? [sourceFileName].compactMap { $0 } : sourceFileNames
+            if names.count == 1 {
+                if sourceFingerprint == nil { sourceFingerprint = sha256ByFileName[names[0]] }
+                return
+            }
+            sourceProvenance = names.map { SourceProvenance(name: $0, sha256: sha256ByFileName[$0], droppedLineCount: 0) }
+            return
+        }
+        for i in sourceProvenance.indices where sourceProvenance[i].sha256 == nil {
+            sourceProvenance[i].sha256 = sha256ByFileName[sourceProvenance[i].name]
+        }
+    }
     /// Every line lost on the way to this graph: its own parse loss plus
     /// the recorded loss of each source it was merged from.
     public var totalDroppedLineCount: Int {

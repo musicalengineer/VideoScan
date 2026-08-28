@@ -75,8 +75,10 @@ public enum GedcomCompiledTree {
         w.u32(UInt32(clamping: graph.droppedLineCount))
         w.ref(graph.headNote)
         // Codec 3: per-source provenance (name, sha256, dropped lines) — codex #794-4.
-        w.u32(UInt32(graph.sourceProvenance.count))
-        for p in graph.sourceProvenance { w.ref(p.name); w.ref(p.sha256); w.u32(UInt32(clamping: p.droppedLineCount)) }
+        let provenance = graph.effectiveProvenance
+        w.u32(UInt32(provenance.count))
+        for p in provenance { w.ref(p.name); w.ref(p.sha256); w.u32(UInt32(clamping: p.droppedLineCount)) }
+        w.ref(graph.sourceFingerprint)
 
         // Index
         w.i32s(index.nameRank)
@@ -196,6 +198,7 @@ public enum GedcomCompiledTree {
             for _ in 0..<provenanceCount {
                 provenance.append(.init(name: try r.string(), sha256: try r.optionalString(), droppedLineCount: Int(try r.u32())))
             }
+            let sourceFingerprint = try r.optionalString()
 
             let nameRank = try r.i32s(expected: personCount)
             let parentStart = try r.i32s(expected: personCount + 1)
@@ -250,6 +253,7 @@ public enum GedcomCompiledTree {
                 sourceFileNames: sourceFileNames, isMergedArtifact: isMerged,
                 droppedLineCount: droppedLines, headNote: headNote)
             graph.sourceProvenance = provenance
+            graph.sourceFingerprint = sourceFingerprint
             graph.indexBox.install(index)
             return graph
         }
@@ -278,7 +282,8 @@ public enum GedcomCompiledTree {
         report.equal("isMergedArtifact", decoded.isMergedArtifact, source.isMergedArtifact)
         report.equal("droppedLineCount", decoded.droppedLineCount, source.droppedLineCount)
         report.equal("headNote", decoded.headNote, source.headNote)
-        report.equal("sourceProvenance", decoded.sourceProvenance, source.sourceProvenance)
+        report.equal("sourceProvenance", decoded.sourceProvenance, source.effectiveProvenance)
+        report.equal("sourceFingerprint", decoded.sourceFingerprint, source.sourceFingerprint)
         report.equal("sourceFileName", decoded.sourceFileName, source.sourceFileName)
         report.equal("sourceDirectory", decoded.sourceDirectory, source.sourceDirectory)
         // Stored as a Double of seconds-since-1970; allow the last-ulp wobble

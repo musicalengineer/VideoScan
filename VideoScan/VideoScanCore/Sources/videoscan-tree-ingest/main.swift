@@ -61,10 +61,12 @@ let t0 = Date()
 var graphs: [GedcomFamilyGraph] = []
 for url in options.sources {
     let t = Date()
-    guard let g = GedcomFamilyGraph(fileURL: url), !g.people.isEmpty else {
+    guard var g = GedcomFamilyGraph(fileURL: url), !g.people.isEmpty else {
         FileHandle.standardError.write(Data("error: \(url.path) did not parse as a non-empty GEDCOM\n".utf8))
         exit(1)
     }
+    // Real digest of the completed file: merge provenance + sameSource rule (codex #808).
+    g.sourceFingerprint = try GedcomCompiledTree.fullSHA256(of: url)
     say("parsed \(url.lastPathComponent): \(g.people.count.formatted()) people, \(g.familyCount.formatted()) families, "
         + "root \(g.rootPerson?.name ?? "?") (\(g.rootPerson?.familySearchID ?? "no FSID")), "
         + "\(g.droppedLineCount.formatted()) lines not kept — \(ms(t))")

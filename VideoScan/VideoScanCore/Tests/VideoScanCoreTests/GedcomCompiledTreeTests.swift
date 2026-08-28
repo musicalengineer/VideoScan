@@ -429,4 +429,35 @@ final class GedcomCompiledTreeTests: XCTestCase {
         XCTAssertFalse(store.rollback(), "missing artifact")
         XCTAssertEqual(store.readPointer(), before)
     }
+
+    // codex #808: promoted artifacts must carry REAL source digests, for one
+    // and two sources, without anyone assigning fingerprints by hand.
+    func testPromotedArtifactCarriesComputedSourceSHAs() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("prov-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.ged"), b = dir.appendingPathComponent("b.ged")
+        try GedcomSyntheticPedigree.gedcom(people: 60, generations: 4).write(to: a, atomically: true, encoding: .utf8)
+        try GedcomSyntheticPedigree.gedcom(people: 40, generations: 3)
+            .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D").write(to: b, atomically: true, encoding: .utf8)
+        let shaA = try GedcomCompiledTree.fullSHA256(of: a), shaB = try GedcomCompiledTree.fullSHA256(of: b)
+        let store = FamilyGraphCompiledStore(root: dir.appendingPathComponent("compiled"))
+
+        // One source, parsed by the file loader path (no fingerprint set).
+        let single = try XCTUnwrap(GedcomFamilyGraph(fileURL: a))
+        XCTAssertNil(single.sourceFingerprint)
+        let promoted1 = try XCTUnwrap(store.ingest(graph: single, sources: [a]))
+        XCTAssertEqual(promoted1.sourceFingerprint, shaA)
+        XCTAssertEqual(promoted1.effectiveProvenance.map(\.sha256), [shaA])
+        let reread1 = try GedcomCompiledTree.decode(try Data(contentsOf: store.artifactURL(try XCTUnwrap(store.readPointer()).current)))
+        XCTAssertEqual(reread1.effectiveProvenance.map(\.sha256), [shaA])
+
+        // Two sources merged with NO fingerprints assigned: the store fills them.
+        let merged = try XCTUnwrap(GedcomFamilyGraph(fileURL: a)).merged(with: try XCTUnwrap(GedcomFamilyGraph(fileURL: b)))
+        XCTAssertEqual(merged.effectiveProvenance.map(\.sha256), [nil, nil])
+        let promoted2 = try XCTUnwrap(store.ingest(graph: merged, sources: [a, b]))
+        XCTAssertEqual(promoted2.effectiveProvenance.map(\.name), ["a.ged", "b.ged"])
+        XCTAssertEqual(promoted2.effectiveProvenance.map(\.sha256), [shaA, shaB])
+        XCTAssertEqual(promoted2.totalDroppedLineCount, merged.totalDroppedLineCount)
+    }
 }
