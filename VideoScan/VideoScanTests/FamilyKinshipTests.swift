@@ -517,7 +517,7 @@ struct FamilyKinshipTests {
         #expect(nephews.prose == "Tim's nieces-and-nephews: Matt (brother Rick → son Matt), Timothy (brother Rick → son Timothy).")
     }
 
-     func unknownRelationFallsThroughToTheTree() {
+    @Test func unknownRelationFallsThroughToTheTree() {
         // Donna bridges to @I3@ via "Donna Breen"; the overlay has no parent
         // rows for her, so "father" must fall through to the GEDCOM decline.
         let result = ArchivistGraphExecutor.execute(kinship("Donna", .father), inputs: inputs())
@@ -531,18 +531,22 @@ struct FamilyKinshipTests {
 
     // MARK: 5. Director acceptance contract (codex #772)
 
-     func correctedShapesPinEverySpellingToTheRightRichard() {
+    @Test func correctedShapesPinEverySpellingToTheRightRichard() {
         let overlay = inputs().kinshipOverlay
         for spelling in ["Rick", "Dicky", "Rich", "Richy", "Richard Harding Breen Jr", "rick breen"] {
-            #expect(overlay.nodes(claiming: spelling, ownerName: "Rick Breen") == [.tree(gedcomID: "@")],
+            #expect(overlay.nodes(claiming: spelling, ownerName: "Rick Breen") == [.tree(gedcomID: "@I1@")],
                     Comment(rawValue: spelling))
         }
         for spelling in ["Dad", "Dad Breen", "Dick", "Grampa Breen", "Richard Harding Breen Sr"] {
-            #expect(overlay.nodes(claiming: spelling) == [.tree(gedcomID: "@")],
+            #expect(overlay.nodes(claiming: spelling) == [.tree(gedcomID: "@I2@")],
                     Comment(rawValue: spelling))
         }
-        #expect(overlay.member(.tree(gedcomID: "@"))?.displayName == "Dad (Richard Harding Breen Sr)")
-        #expect(overlay.warnings.isEmpty)
+        #expect(overlay.member(.tree(gedcomID: "@I2@"))?.displayName == "Dad (Richard Harding Breen Sr)")
+        // No Richard is flagged; the only hygiene nudge is Donna's "Mom"
+        // alias (a relational word, same class as "Dad" on Rick).
+        #expect(overlay.warnings == ["Alias 'Mom' on Donna looks relational — use a Relationship row instead"])
+        #expect(overlay.warnings(forProfileNamed: "Rick").isEmpty)
+        #expect(overlay.warnings(forProfileNamed: "Dad").isEmpty)
 
         // The row on Rick's profile ("Rick is child of Dad") answers both ways.
         let father = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs())
@@ -563,13 +567,16 @@ struct FamilyKinshipTests {
         #expect(mirrored.prose == "Rick's father: Dad (Richard Harding Breen Sr).")
     }
 
-     func uncorrectedLiveShapesReportDadAsAmbiguousNeverRick() {
+    @Test func uncorrectedLiveShapesReportDadAsAmbiguousNeverRick() {
         let overlay = inputs(Self.uncorrected).kinshipOverlay
         // "Dad" is claimed by Rick (alias) and Dad (canonical): a relational
         // word shared by two profiles is reported, never resolved to Rick.
         let claimants = overlay.nodes(claiming: "Dad")
         #expect(claimants.count == 2)
-        #expect(overlay.warnings == ["Alias 'Dad' on Rick looks relational — use a Relationship row instead"])
+        #expect(overlay.warnings == [
+            "Alias 'Dad' on Rick looks relational — use a Relationship row instead",
+            "Alias 'Mom' on Donna looks relational — use a Relationship row instead",
+        ])
         #expect(overlay.warnings(forProfileNamed: "Rick").count == 1)
         #expect(overlay.warnings(forProfileNamed: "Dad").isEmpty)
 
@@ -588,6 +595,146 @@ struct FamilyKinshipTests {
         #expect(overlay.relationshipsLine(forProfileStableID: rick.id, kinships: rick.kinships) == "Dad's son")
         let father = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs(Self.uncorrected))
         #expect(father.prose == "Rick's father: Dad.")
+    }
+
+    /// Codex #791: the live (uncorrected) and corrected profile shapes must
+    /// agree on every verdict they can both reach — the Dad profile is
+    /// Rick's father, Rick is Dad's son, and "Dad" never resolves to Rick.
+    /// Only the spellings that are ambiguous in the live shape may differ,
+    /// and there the live shape must abstain rather than answer.
+    @Test func liveAndCorrectedShapesGiveConsistentVerdicts() {
+        let shapes: [(String, [POIProfile])] = [("corrected", Self.family), ("live", Self.uncorrected)]
+        for (label, profiles) in shapes {
+            let overlay = inputs(profiles).kinshipOverlay
+            let rick = profiles[0]
+            // Rick's card names the Dad profile as the anchor in both shapes.
+            #expect(overlay.relationshipsLine(forProfileStableID: rick.id, kinships: rick.kinships)
+                    == "Dad's son", Comment(rawValue: label))
+            // Father of Rick: answered from the People tab, counterpart is the Dad profile.
+            let father = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs(profiles))
+            #expect(father.conclusion == .answered, Comment(rawValue: label))
+            #expect(father.prose.hasPrefix("Rick's father: Dad"), Comment(rawValue: label))
+            #expect(father.basisLine.contains("People tab relationship"), Comment(rawValue: label))
+            // Son of Dad via a spelling only the Dad profile claims in BOTH shapes.
+            let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs(profiles))
+            #expect(son.conclusion == .answered, Comment(rawValue: label))
+            #expect(son.prose.hasPrefix("Dad's son: Rick"), Comment(rawValue: label))
+            // Asking about "Dad" never produces an answer about Rick's own children.
+            let dadSon = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(profiles))
+            #expect(!dadSon.prose.hasPrefix("Rick's"), Comment(rawValue: label))
+            // Corrected: "Dad" is unambiguous → answered. Live: the overlay
+            // sees "Dad" shared with Rick's alias and abstains, and the
+            // unbridged Dad profile falls through to the tree's not-found —
+            // never an answer, never Rick.
+            if label == "corrected" {
+                #expect(dadSon.conclusion == .answered, Comment(rawValue: label))
+            } else {
+                #expect(dadSon.conclusion == .personNotFound, Comment(rawValue: label))
+            }
+        }
+    }
+
+    // MARK: 6. uuid migration durability (codex #791)
+
+    /// A profile.json written before `POIProfile.uuid` existed, dropped
+    /// straight into the per-process test POI store. Returns the folder.
+    private static func writeLegacyProfileJSON(
+        name: String, kinships: [[String: Any]] = []
+    ) throws -> URL {
+        let folder = POIStorage.folder(for: name)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var obj: [String: Any] = ["name": name, "referencePath": folder.path]
+        if !kinships.isEmpty { obj["kinships"] = kinships }
+        let data = try JSONSerialization.data(withJSONObject: obj)
+        try data.write(to: folder.appendingPathComponent("profile.json"))
+        return folder
+    }
+
+    private static func uuidOnDisk(_ folder: URL) throws -> String? {
+        let data = try Data(contentsOf: folder.appendingPathComponent("profile.json"))
+        return ((try JSONSerialization.jsonObject(with: data)) as? [String: Any])?["uuid"] as? String
+    }
+
+    private static func removeFixtureFolders(_ folders: [URL]) {
+        // Per-process temp POI store (POIStorage.storeDir under a test
+        // host) — never the user's real store.
+        for f in folders {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
+            try? FileManager.default.removeItem(at: f)
+        }
+    }
+
+    @Test func legacyProfileUUIDIsPersistedByListAllAndAnchorsSurviveRestart() throws {
+        // Unique names so parallel suites sharing the process store can't collide.
+        let tag = UUID().uuidString.prefix(8)
+        let anchorName = "LegacyAnchor\(tag)"
+        let rowName = "LegacyRow\(tag)"
+        let anchorFolder = try Self.writeLegacyProfileJSON(name: anchorName)
+        let rowFolder = try Self.writeLegacyProfileJSON(name: rowName, kinships: [
+            ["relation": "sibling", "relativeTo": ["profile": ["name": anchorName]]],
+        ])
+        defer { Self.removeFixtureFolders([anchorFolder, rowFolder]) }
+        #expect(try Self.uuidOnDisk(anchorFolder) == nil)
+
+        // Launch 1: listAll mints AND persists the uuid, and upgrades the row.
+        let first = POIProfile.listAll()
+        let anchor1 = try #require(first.first { $0.name == anchorName })
+        let row1 = try #require(first.first { $0.name == rowName })
+        #expect(try Self.uuidOnDisk(anchorFolder) == anchor1.uuid.uuidString)
+        #expect(row1.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: anchor1.uuid))])
+        // The upgraded row is written the way production does it.
+        try row1.save()
+
+        // Launch 2 (restart = fresh decode from disk): same uuid, anchor resolves.
+        let second = POIProfile.listAll()
+        let anchor2 = try #require(second.first { $0.name == anchorName })
+        let row2 = try #require(second.first { $0.name == rowName })
+        #expect(anchor2.uuid == anchor1.uuid)
+        #expect(row2.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: anchor1.uuid))])
+        let overlay = FamilyKinshipOverlay(profiles: [anchor2, row2], graph: nil)
+        #expect(overlay.relationshipsLine(forProfileStableID: row2.id, kinships: row2.kinships)
+                == "\(anchorName)'s sibling")
+        #expect(overlay.warnings(forProfileNamed: rowName).isEmpty)
+    }
+
+    @Test func unpersistableLegacyUUIDNeverBecomesAnAnchor() throws {
+        // Read-only folder: the atomic write of the minted uuid fails. The
+        // row must keep its name anchor (not a uuid that dangles on restart).
+        let tag = UUID().uuidString.prefix(8)
+        let anchorName = "ReadOnlyAnchor\(tag)"
+        let rowName = "ReadOnlyRow\(tag)"
+        let anchorFolder = try Self.writeLegacyProfileJSON(name: anchorName)
+        let rowFolder = try Self.writeLegacyProfileJSON(name: rowName, kinships: [
+            ["relation": "sibling", "relativeTo": ["profile": ["name": anchorName]]],
+        ])
+        defer { Self.removeFixtureFolders([anchorFolder, rowFolder]) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: anchorFolder.path)
+
+        let listed = POIProfile.listAll()
+        let row = try #require(listed.first { $0.name == rowName })
+        #expect(try Self.uuidOnDisk(anchorFolder) == nil)
+        #expect(row.kinships == [Kinship(relation: .sibling, relativeTo: .profile(name: anchorName))])
+        // The row's own uuid WAS persistable (its folder is writable).
+        #expect(try Self.uuidOnDisk(rowFolder) == row.uuid.uuidString)
+
+        // After the folder becomes writable again, the next launch heals it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: anchorFolder.path)
+        let healed = POIProfile.listAll()
+        let anchor = try #require(healed.first { $0.name == anchorName })
+        let healedRow = try #require(healed.first { $0.name == rowName })
+        #expect(try Self.uuidOnDisk(anchorFolder) == anchor.uuid.uuidString)
+        #expect(healedRow.kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: anchor.uuid))])
+    }
+
+    @Test func upgradeSkipsUUIDsMarkedUnpersisted() {
+        let rick = Self.profile("Rick", sex: .male)
+        let tim = Self.profile("Tim", sex: .male, kinships: [
+            Kinship(relation: .sibling, relativeTo: .profile(name: "Rick")),
+        ])
+        let kept = POIProfile.upgradingKinshipAnchors([rick, tim], unpersistedUUIDs: [rick.uuid])
+        #expect(kept[1].kinships == tim.kinships)
+        let upgraded = POIProfile.upgradingKinshipAnchors([rick, tim], unpersistedUUIDs: [tim.uuid])
+        #expect(upgraded[1].kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: rick.uuid))])
     }
 
     @Test func treePinnedSelectionUnionsWithTheProfile() {

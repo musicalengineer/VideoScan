@@ -657,11 +657,20 @@ struct POIProfile: Codable, Identifiable, Equatable {
     func save() throws {
         let folder = POIStorage.folder(for: name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write(profileJSONAt: POIStorage.profileURL(for: name), folder: folder)
+    }
+
+    /// The ONE writer for profile.json (atomic replace). `save()` and the
+    /// uuid migration in `listAll` both go through here so a profile is
+    /// never written two different ways. `folder` becomes the healed
+    /// referencePath — the folder the JSON actually lives in, which for a
+    /// legacy folder name can differ from `POIStorage.folder(for: name)`.
+    private func write(profileJSONAt url: URL, folder: URL) throws {
         // Keep referencePath in sync with actual location.
         var copy = self
         copy.referencePath = folder.path
         let data = try JSONEncoder().encode(copy)
-        try data.write(to: POIStorage.profileURL(for: name), options: .atomic)
+        try data.write(to: url, options: .atomic)
     }
 
     static func load(name: String) throws -> POIProfile {
@@ -671,7 +680,12 @@ struct POIProfile: Codable, Identifiable, Equatable {
         profile.referencePath = POIStorage.folder(for: profile.name).path
         // First load of a pre-uuid profile.json: persist the freshly minted
         // uuid so kinship anchors written later stay durable across renames.
-        if !Self.hasUUIDKey(data) { try? profile.save() }
+        // Failure is logged, not thrown — the load itself still succeeds.
+        if !Self.hasUUIDKey(data) {
+            do { try profile.save() } catch {
+                identityLog.error("POIProfile load: could not persist the minted uuid for '\(profile.name, privacy: .public)' — \(String(describing: error), privacy: .public)")
+            }
+        }
         return profile
     }
 
@@ -683,14 +697,21 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// anchors where the named profile exists in `profiles` (in memory; the
     /// upgraded form is written the next time that profile is saved). Names
     /// that match no profile are left as-is so the row still displays.
-    static func upgradingKinshipAnchors(_ profiles: [POIProfile]) -> [POIProfile] {
+    ///
+    /// `unpersistedUUIDs` (codex #791): uuids that were minted in memory
+    /// but could NOT be written to disk. Anchors are never upgraded to one
+    /// of those — the id would dangle after restart — so the row keeps its
+    /// name anchor and gets another chance next launch.
+    static func upgradingKinshipAnchors(_ profiles: [POIProfile],
+                                        unpersistedUUIDs: Set<UUID> = []) -> [POIProfile] {
         let byName = Dictionary(profiles.map { (PersonResolver.normalize($0.name), $0.uuid) },
                                 uniquingKeysWith: { first, _ in first })
         return profiles.map { profile in
             var copy = profile
             copy.kinships = profile.kinships.map { row in
                 guard case .profileName(let name) = row.relativeTo,
-                      let id = byName[PersonResolver.normalize(name)] else { return row }
+                      let id = byName[PersonResolver.normalize(name)],
+                      !unpersistedUUIDs.contains(id) else { return row }
                 var upgraded = row
                 upgraded.relativeTo = .profile(id: id)
                 return upgraded
@@ -722,23 +743,51 @@ struct POIProfile: Codable, Identifiable, Equatable {
     static func listAll() -> [POIProfile] {
         // Trigger lazy migration on first read.
         _ = POIStorage.migrateLegacyIfNeeded()
-        return upgradingKinshipAnchors(decodeProfiles(in: POIStorage.allPOIFolders()))
+        let decoded = decodeProfilesTrackingLegacyUUIDs(in: POIStorage.allPOIFolders())
+        // uuid migration (codex #791): a profile.json written before `uuid`
+        // existed gets a fresh uuid on decode. Persist it NOW, through the
+        // same atomic writer as save(), so the id other profiles anchor on
+        // is the one on disk after restart — not a per-launch ephemeral.
+        var unpersisted = Set<UUID>()
+        for (profile, folder) in decoded.legacy {
+            do {
+                try profile.write(profileJSONAt: folder.appendingPathComponent("profile.json"),
+                                  folder: folder)
+                identityLog.notice("POIProfile listAll: persisted a minted uuid for '\(profile.name, privacy: .public)'.")
+            } catch {
+                unpersisted.insert(profile.uuid)
+                identityLog.error("POIProfile listAll: could not persist the minted uuid for '\(profile.name, privacy: .public)' — kinship anchors to it stay name-based this launch. \(String(describing: error), privacy: .public)")
+            }
+        }
+        return upgradingKinshipAnchors(decoded.profiles, unpersistedUUIDs: unpersisted)
     }
 
     /// Decode profile.json in each folder; corrupt/missing entries are
     /// skipped, referencePath is healed to the folder (authoritative).
+    /// Read-only — never writes (cachedSnapshot relies on that).
     private static func decodeProfiles(in folders: [URL]) -> [POIProfile] {
-        folders.compactMap { folder in
+        decodeProfilesTrackingLegacyUUIDs(in: folders).profiles
+    }
+
+    /// `decodeProfiles` plus the subset whose JSON had no `uuid` key (their
+    /// in-memory uuid was minted by the decoder and is not yet on disk),
+    /// each with the folder it was read from.
+    private static func decodeProfilesTrackingLegacyUUIDs(in folders: [URL])
+        -> (profiles: [POIProfile], legacy: [(POIProfile, URL)]) {
+        var legacy: [(POIProfile, URL)] = []
+        let profiles = folders.compactMap { folder -> POIProfile? in
             let profileURL = folder.appendingPathComponent("profile.json")
             guard let data = try? Data(contentsOf: profileURL),
                   var p = try? JSONDecoder().decode(POIProfile.self, from: data)
             else { return nil }
             p.referencePath = folder.path
+            if !hasUUIDKey(data) { legacy.append((p, folder)) }
             return p
         }.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+        return (profiles, legacy)
     }
 
     // MARK: Read-only snapshot (no migration)
