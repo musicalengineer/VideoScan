@@ -11,7 +11,10 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import OSLog
 import VideoScanCore
+
+private let fsLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "familysearch.pull")
 
 @MainActor
 final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
@@ -665,24 +668,58 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         return lines.joined(separator: "\n")
     }
 
-    /// Writes `<file>.sha256` beside `url` if it does not exist ("<hex>  <name>",
-    /// sha256sum format) and returns the hex. Streams in 1 MB chunks; the
-    /// source is only ever READ. Nil when the file cannot be read.
-    nonisolated static func sha256Sidecar(for url: URL, fileManager: FileManager) -> String? {
+    /// SHA-256 of the exact bytes at `url`, streamed in 1 MB chunks. Writes
+    /// (or corrects) `<file>.sha256` beside it in sha256sum format
+    /// ("<hex>  <name>"); the source is only ever READ.
+    ///
+    /// codex #790: the digest is ALWAYS recomputed from the current bytes.
+    /// The sidecar is a record for humans and `shasum -c`, never a cache
+    /// the merge trusts — a download path is reused from pull to pull, so
+    /// a stale sidecar would hand a NEW export the OLD fingerprint and let
+    /// `merge(with:)` pointer-match FSID-less records across two different
+    /// files. A read failure at any point (open or mid-file) yields nil,
+    /// never a prefix hash, and leaves any existing sidecar untouched; the
+    /// merge then falls back to FSID-only matching (`sameSource` false).
+    ///
+    /// `openChunks` is the read seam: it opens the file and returns a
+    /// pull-closure yielding the next chunk, nil at EOF, throwing on I/O
+    /// error (C++: an input iterator whose `++` can throw). Tests inject a
+    /// reader that fails mid-file.
+    nonisolated static func sha256Sidecar(
+        for url: URL, fileManager: FileManager,
+        openChunks: (URL) throws -> (() throws -> Data?) = FamilySearchPullCoordinator.fileHandleChunks
+    ) -> String? {
         let sidecar = url.appendingPathExtension("sha256")
-        if let existing = try? String(contentsOf: sidecar, encoding: .utf8),
-           let hex = existing.split(separator: " ").first, hex.count == 64 {
-            return String(hex)
-        }
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
+        do {
+            let next = try openChunks(url)
+            while let chunk = try next() {
+                if chunk.isEmpty { break }
+                hasher.update(data: chunk)
+            }
+        } catch {
+            fsLog.error("SHA-256 of \(url.lastPathComponent, privacy: .public) failed: \(error.localizedDescription, privacy: .public); no fingerprint recorded.")
+            return nil
         }
         let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        try? "\(hex)  \(url.lastPathComponent)\n".write(to: sidecar, atomically: true, encoding: .utf8)
+        let line = "\(hex)  \(url.lastPathComponent)\n"
+        // Only write when the sidecar is missing or disagrees with the bytes.
+        if (try? String(contentsOf: sidecar, encoding: .utf8)) != line {
+            try? line.write(to: sidecar, atomically: true, encoding: .utf8)
+        }
         return hex
+    }
+
+    /// Default chunk source: a `FileHandle` read 1 MB at a time. Opening
+    /// a directory succeeds on macOS but the first read throws (EISDIR),
+    /// which the caller turns into "no fingerprint" — not the empty hash.
+    nonisolated static func fileHandleChunks(_ url: URL) throws -> (() throws -> Data?) {
+        let handle = try FileHandle(forReadingFrom: url)
+        return {
+            let chunk = try handle.read(upToCount: 1 << 20)
+            if chunk == nil || chunk!.isEmpty { try handle.close() }
+            return chunk
+        }
     }
 
     private static let timestampFormatter: DateFormatter = {

@@ -5,6 +5,7 @@
 // byte-for-byte untouched. ISOLATION: a temp GEDCOM folder; nothing near
 // the archive. Same harness shape as FamilySearchPullLifecycleTests.
 
+import CryptoKit
 import Foundation
 import XCTest
 @testable import VideoScan
@@ -238,4 +239,120 @@ final class FamilySearchPullMergeTests: XCTestCase {
         XCTAssertTrue(message.contains("no current tree"))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: gedcomDirectory.path).count, 0)
     }
+
+    // MARK: - codex #790: the fingerprint is the bytes, never the sidecar
+
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Same path, replaced bytes, stale sidecar → the NEW digest, and the
+    /// sidecar is corrected to match.
+    func testStaleSidecarIsNeverTrustedWhenBytesChange() throws {
+        let fm = FileManager.default
+        let file = staging.appendingPathComponent("familysearch-donna-20generations.ged")
+        try Self.rickPull.write(to: file, atomically: true, encoding: .utf8)
+        let first = try XCTUnwrap(FamilySearchPullCoordinator.sha256Sidecar(for: file, fileManager: fm))
+        XCTAssertEqual(first, sha256Hex(Data(Self.rickPull.utf8)))
+        let sidecar = file.appendingPathExtension("sha256")
+        XCTAssertEqual(try String(contentsOf: sidecar, encoding: .utf8), "\(first)  familysearch-donna-20generations.ged\n")
+
+        // The reused-download path: a new export lands on the same name.
+        try Self.donnaPull.write(to: file, atomically: true, encoding: .utf8)
+        let second = try XCTUnwrap(FamilySearchPullCoordinator.sha256Sidecar(for: file, fileManager: fm))
+        XCTAssertNotEqual(second, first, "old fingerprint handed to new bytes")
+        XCTAssertEqual(second, sha256Hex(Data(Self.donnaPull.utf8)))
+        XCTAssertEqual(try String(contentsOf: sidecar, encoding: .utf8), "\(second)  familysearch-donna-20generations.ged\n", "sidecar corrected")
+
+        // A hand-edited (garbage but well-formed) sidecar is ignored too.
+        let bogus = String(repeating: "ab", count: 32)
+        try "\(bogus)  familysearch-donna-20generations.ged\n".write(to: sidecar, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FamilySearchPullCoordinator.sha256Sidecar(for: file, fileManager: fm), second)
+        XCTAssertEqual(try String(contentsOf: sidecar, encoding: .utf8), "\(second)  familysearch-donna-20generations.ged\n")
+    }
+
+    /// A read failure mid-file → NO fingerprint (nil), never the hash of
+    /// the prefix that did arrive; the sidecar is left as it was.
+    func testReadFailureMidFileYieldsNoFingerprintNotAPrefixHash() throws {
+        struct Injected: Error {}
+        let fm = FileManager.default
+        let file = staging.appendingPathComponent("familysearch-donna-20generations.ged")
+        try Self.donnaPull.write(to: file, atomically: true, encoding: .utf8)
+        let bytes = Data(Self.donnaPull.utf8)
+        let prefix = bytes.prefix(bytes.count / 2)
+        var calls = 0
+        let result = FamilySearchPullCoordinator.sha256Sidecar(for: file, fileManager: fm) { _ in
+            return {
+                calls += 1
+                if calls == 1 { return Data(prefix) }
+                throw Injected()
+            }
+        }
+        XCTAssertNil(result)
+        XCTAssertEqual(calls, 2)
+        XCTAssertNotEqual(result, sha256Hex(Data(prefix)), "a partial read must never yield a digest")
+        XCTAssertFalse(fm.fileExists(atPath: file.appendingPathExtension("sha256").path), "no sidecar for a failed read")
+
+        // Open failure and a directory (open succeeds, first read throws EISDIR): nil, not the empty-data hash.
+        XCTAssertNil(FamilySearchPullCoordinator.sha256Sidecar(for: staging.appendingPathComponent("missing.ged"), fileManager: fm))
+        XCTAssertNil(FamilySearchPullCoordinator.sha256Sidecar(for: staging, fileManager: fm))
+        XCTAssertFalse(fm.fileExists(atPath: staging.appendingPathExtension("sha256").path))
+    }
+
+    /// End to end: a stale sidecar from a previous pull sits beside the
+    /// reused download path. The merged artifact's provenance must carry
+    /// the digest of the bytes actually merged, and the loader's graph must
+    /// carry that same fingerprint — not the stale one that would make
+    /// `sameSource` true against an unrelated file.
+    func testMergeUsesTheDigestOfTheActualDownloadBytesNotAStaleSidecar() async throws {
+        let download = staging.appendingPathComponent("familysearch-donna-20generations.ged")
+        let staleHex = String(repeating: "0", count: 64)
+        try "\(staleHex)  familysearch-donna-20generations.ged\n".write(to: download.appendingPathExtension("sha256"), atomically: true, encoding: .utf8)
+        let (coordinator, _, _) = try await readyCoordinator()
+        await coordinator.installMerged().value
+        guard case .installed(let merged, _) = coordinator.phase else {
+            return XCTFail("expected .installed, got \(coordinator.phase)")
+        }
+        let expected = sha256Hex(Data(Self.donnaPull.utf8))
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: merged))
+        let note = try XCTUnwrap(graph.headNote)
+        XCTAssertTrue(note.contains("familysearch-donna-20generations.ged (sha256 \(expected); 2 people; added)"), note)
+        XCTAssertFalse(note.contains(staleHex), "stale sidecar digest leaked into provenance")
+        XCTAssertEqual(try String(contentsOf: download.appendingPathExtension("sha256"), encoding: .utf8), "\(expected)  familysearch-donna-20generations.ged\n")
+    }
+
+    /// Sensor for the merge fallback: with no fingerprint on one side,
+    /// FSID-less records are NOT pointer-matched (FSID-only matching).
+    func testMissingFingerprintFallsBackToFamilySearchIDOnlyMatching() {
+        let a = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Alice /Nolan/
+        0 @I2@ INDI
+        1 NAME Bob /Nolan/
+        1 _FSFTID BOB1-111
+        0 TRLR
+        """
+        let b = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Zed /Other/
+        0 @I2@ INDI
+        1 NAME Bob /Nolan/
+        1 _FSFTID BOB1-111
+        0 TRLR
+        """
+        var current = GedcomFamilyGraph(gedcomText: a)
+        var added = GedcomFamilyGraph(gedcomText: b)
+        current.sourceFingerprint = "deadbeef"
+        added.sourceFingerprint = nil          // read failed → no digest
+        let outcome = current.merge(with: added)
+        XCTAssertEqual(outcome.sharedPeopleCount, 1, "Bob by FSID only")
+        XCTAssertEqual(outcome.addedPeopleCount, 1, "Zed must NOT be pointer-matched onto Alice")
+        XCTAssertEqual(outcome.graph.people.count, 3)
+        // And the positive control: equal fingerprints DO pointer-match.
+        added.sourceFingerprint = "deadbeef"
+        XCTAssertEqual(current.merge(with: added).graph.people.count, 2)
+    }
+
 }
