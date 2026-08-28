@@ -12,6 +12,12 @@ struct FamilyGraphFileLoader {
         /// True when `graph` came from a promoted compiled artifact
         /// (no GEDCOM parse happened on this load).
         var compiled = false
+        /// codex #826: non-empty when a multi-source generation was
+        /// refused ONLY for version reasons (schema/codec bump) and all
+        /// its source files are still on disk unchanged. `graph` is nil
+        /// then — deliberately: the loader never demotes an N-pull tree
+        /// to the newest single file; the UI shows "Recompile" for these.
+        var needsRecompile: [URL] = []
     }
 
     let originalsDirectory: URL
@@ -38,8 +44,13 @@ struct FamilyGraphFileLoader {
     ///   2. Otherwise the current generation wins while every physical
     ///      source it records is unchanged on disk — CLI multi-pull or
     ///      single-file alike; no parse.
-    ///   3. No usable generation: newest valid, non-empty `.ged` wins
-    ///      (compiled on the way through when a store is present).
+    ///   3. No usable generation, but a multi-source generation exists that
+    ///      failed only the version check (codec/schema bump) with all its
+    ///      sources unchanged on disk: graph nil + `needsRecompile` = those
+    ///      sources (codex #826 — never silently demote N pulls to one).
+    ///      A source that is gone or changed releases this rule (logged).
+    ///   4. Otherwise the newest valid, non-empty `.ged` wins (compiled on
+    ///      the way through when a store is present).
     /// A damaged newer export is retained in `rejectedURLs` so the UI can
     /// say what happened instead of pretending there was no file or
     /// displaying an empty live tree.
@@ -99,7 +110,18 @@ struct FamilyGraphFileLoader {
                            compiled: true)
         }
 
-        // Rule 3: newest valid file wins.
+        // Rule 3: an N-pull generation waiting on a recompile blocks the
+        // single-file path (codex #826).
+        if let store = compiledStore, let pending = store.multiSourceGenerationNeedingRecompile() {
+            let newest = newestFirst.first?.lastPathComponent ?? "(no .ged)"
+            store.log("[family-tree] compiled generation \(pending.generation) needs recompile for \(pending.sources.count) sources "
+                + "(codec/schema) — not demoting to \(newest)")
+            return Outcome(graph: nil, selectedURL: nil, rejectedURLs: [],
+                           candidateCount: newestFirst.count, compiled: false,
+                           needsRecompile: pending.sources)
+        }
+
+        // Rule 4: newest valid file wins.
         for url in newestFirst {
             if let store = compiledStore, let compiled = store.load(sources: [url]) {
                 return Outcome(graph: compiled, selectedURL: url,
@@ -114,6 +136,30 @@ struct FamilyGraphFileLoader {
         return Outcome(graph: nil, selectedURL: nil,
                        rejectedURLs: rejected,
                        candidateCount: newestFirst.count)
+    }
+
+    /// "Recompile" (codex #826): parse `sources` in order, merge left to
+    /// right (first file is the authority, as the CLI does), ingest with
+    /// the same physical sources, and return the promoted graph. Nil,
+    /// logged by the store, when a file does not parse or the ingest is
+    /// refused / fails verification.
+    func recompile(sources: [URL]) -> GedcomFamilyGraph? {
+        guard let store = compiledStore, !sources.isEmpty else { return nil }
+        var graphs: [GedcomFamilyGraph] = []
+        for url in sources {
+            progress("Reading \(url.lastPathComponent)…")
+            guard let graph = GedcomFamilyGraph(fileURL: url), !graph.people.isEmpty else {
+                store.log("[family-tree] recompile: \(url.lastPathComponent) is not a non-empty GEDCOM; nothing promoted")
+                return nil
+            }
+            graphs.append(graph)
+        }
+        var merged = graphs[0]
+        for (i, next) in graphs.dropFirst().enumerated() {
+            progress("Merging \(sources[i + 1].lastPathComponent)…")
+            merged = merged.merged(with: next)
+        }
+        return store.ingest(graph: merged, sources: sources, progress: progress)
     }
 
     /// Parse `url`; nil when it is not a non-empty GEDCOM (the caller

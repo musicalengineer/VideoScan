@@ -174,6 +174,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
     @Published private(set) var scene: FamilyTreeScene = .empty
     @Published private(set) var loadWarning: String?
+    /// codex #826: the N source pulls of a compiled generation that only a
+    /// codec/schema bump refused. Non-empty ⇒ the loader installed NO tree
+    /// rather than demote to one file; the tab shows a "Recompile" banner
+    /// and `recompile()` rebuilds the generation from these.
+    @Published private(set) var needsRecompile: [URL] = []
+    @Published private(set) var isRecompiling = false
     /// "Archivist Notes": what the CyberBrain says about the selected
     /// person. Rebuilt on selection change and after a save — never in
     /// `body`.
@@ -395,6 +401,39 @@ final class FamilyTreeLiveModel: ObservableObject {
         install(outcome: loaded.0, rows: loaded.1, identity: loaded.2)
     }
 
+    /// The "Recompile" button (codex #826): parse + merge + ingest the
+    /// pending sources off the main actor with the phase caption showing,
+    /// then reload from disk so the promoted generation installs through
+    /// the ordinary path. A refused ingest leaves `needsRecompile` set
+    /// and a warning; the store log says why.
+    func recompile() async {
+        let sources = needsRecompile
+        guard !sources.isEmpty, !isRecompiling, let store = compiledStore else { return }
+        isRecompiling = true
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let directory = originalsDirectory
+        let promoted = await Task.detached(priority: .userInitiated) { [weak self] () -> Bool in
+            var loader = FamilyGraphFileLoader(originalsDirectory: directory)
+            loader.compiledStore = store
+            loader.progress = { phase in
+                Task { @MainActor [weak self] in
+                    guard let self, self.loadGeneration == generation else { return }
+                    self.loadPhase = phase
+                }
+            }
+            return loader.recompile(sources: sources) != nil
+        }.value
+        guard generation == loadGeneration else { isRecompiling = false; return }
+        loadPhase = nil
+        isRecompiling = false
+        if promoted {
+            await loadFromDisk()
+        } else {
+            loadWarning = "Recompile did not promote a tree (see the log); the \(sources.count) pulls are unchanged."
+        }
+    }
+
     /// Everyone's sidebar summary in sidebar order — O(people), pure.
     nonisolated static func sidebarRows(of graph: GedcomFamilyGraph) -> [FamilyTreePersonSummary] {
         let index = graph.index
@@ -482,6 +521,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func install(outcome: FamilyGraphFileLoader.Outcome, rows: [FamilyTreePersonSummary]? = nil,
                          identity: FamilyAssetIdentityDirectory? = nil) {
         install(graph: outcome.graph, rows: rows, identity: identity)
+        needsRecompile = outcome.needsRecompile
         if let rejected = outcome.rejectedURLs.first {
             if let selected = outcome.selectedURL {
                 loadWarning = "Could not read \(rejected.lastPathComponent); using \(selected.lastPathComponent)."
@@ -508,6 +548,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         selectedRelatives = FamilyTreeRelatives()
         scene = .empty
         loadWarning = nil
+        needsRecompile = []
         loadState = .unavailable
         notesResolver = nil
         selectedNotes = []

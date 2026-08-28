@@ -612,4 +612,77 @@ struct FamilyGraphCompiledStoreTests {
         #expect(store.readPointer() == pointer)
         #expect(box.logLines.contains("did not parse; keeping compiled generation"))
     }
+
+    // MARK: codex #826 — never silently demote multi-source → single-source
+
+    /// (a) A two-source generation whose pointer carries an old codec:
+    /// the loader returns graph nil + needsRecompile == [a, b]; no
+    /// single-source generation is promoted and the pointer is untouched.
+    /// The model's Recompile then rebuilds the two-pull tree.
+    @Test func versionRefusedMultiSourceGenerationIsNotDemotedToNewestFile() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: old)
+        let store = box.store()
+        let cli = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: cli, sources: [a, b]) != nil)
+        var pointer = try #require(store.readPointer())
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.graph == nil)
+        #expect(outcome.compiled == false)
+        #expect(outcome.needsRecompile == [a, b])
+        #expect(store.readPointer() == pointer, "pointer untouched")
+        #expect(store.generations() == [pointer.current], "no single-source generation")
+        #expect(box.logLines.contains("needs recompile for 2 sources (codec/schema) — not demoting to b.ged"))
+
+        // The model surfaces it, installs no tree, and Recompile fixes it.
+        let model = await MainActor.run { FamilyTreeLiveModel(originalsDirectory: box.originals, compiledStore: store) }
+        await model.loadFromDisk()
+        await MainActor.run {
+            #expect(model.needsRecompile == [a, b])
+            #expect(model.loadState == .loaded(live: false))
+        }
+        await model.recompile()
+        await MainActor.run {
+            #expect(model.needsRecompile.isEmpty)
+            #expect(model.loadState == .loaded(live: true))
+            #expect(model.peopleCount == cli.people.count)
+            #expect(model.isRecompiling == false)
+        }
+        let after = try #require(store.readPointer())
+        #expect(after.codec == GedcomCompiledTree.codecVersion)
+        #expect(after.current != pointer.current)
+        #expect(store.readManifest(after.current)?.sources.map(\.fileName) == ["a.ged", "b.ged"])
+        #expect(box.loader(store).loadNewestOutcome().compiled == true)
+    }
+
+    /// (b) Same, but one of the two sources was deleted: the generation
+    /// cannot be recompiled as it was, so the newest-file path is allowed
+    /// and the log says which source is missing.
+    @Test func versionRefusedGenerationWithAMissingSourceFallsBackToNewestFile() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: old)
+        let store = box.store()
+        let cli = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: cli, sources: [a, b]) != nil)
+        var pointer = try #require(store.readPointer())
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+        try FileManager.default.removeItem(at: b)
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.needsRecompile.isEmpty)
+        #expect(outcome.compiled == true)
+        #expect(outcome.selectedURL == a)
+        #expect(outcome.graph?.people.count == 120)
+        #expect(box.logLines.contains("b.ged missing or changed"))
+        #expect(!box.logLines.contains("not demoting"))
+        #expect(store.readPointer()?.current != pointer.current)
+    }
 }

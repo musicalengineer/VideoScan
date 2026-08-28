@@ -262,6 +262,22 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// codex #826 — a multi-source generation that is refused ONLY for
+    /// version reasons (schema/codec/index bump) while every physical
+    /// source it records still exists unchanged. The loader must not
+    /// quietly recompile the newest single file over it (Donna's tree
+    /// vanished that way); it reports these sources so the UI can offer
+    /// "Recompile". Checks current, then previous. Nil when the pointer
+    /// matches the running versions, or when no such generation exists.
+    public func multiSourceGenerationNeedingRecompile() -> (generation: String, sources: [URL])? {
+        guard let pointer = readPointer(), !Self.versionsMatch(pointer) else { return nil }
+        for generation in [pointer.current, pointer.previous].compactMap({ $0 }) {
+            guard let manifest = usableManifest(generation), manifest.sources.count > 1 else { continue }
+            return (generation, manifest.sources.map { URL(fileURLWithPath: $0.path) })
+        }
+        return nil
+    }
+
     /// The generation's manifest when it verified clean and every source
     /// it records is still on disk with the same key; nil (logged) otherwise.
     private func usableManifest(_ generation: String) -> Manifest? {

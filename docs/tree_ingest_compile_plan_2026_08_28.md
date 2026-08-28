@@ -64,7 +64,11 @@ removed**; also Daniel Cushing I at 11/11 → 10th cousins. 8 ms on the parsed g
   1. a `.ged` in originals that is not one of the current generation's physical sources AND newer
      than `manifest.createdAt` supersedes it → parse, ingest as one physical source, promote;
   2. otherwise the current generation (physical sources unchanged) wins, no parse;
-  3. no usable generation → newest valid non-empty `.ged` (compiled on the way through).
+  3. no usable generation but an N>1-source generation refused ONLY by the version check
+     (codec/schema bump) with all N sources unchanged on disk → `graph == nil`,
+     `needsRecompile == [sources]`; the tab shows "N pulls on disk, none compiled — Recompile"
+     (codex #826: never silently demote N pulls to one file). A missing/changed source releases this;
+  4. otherwise newest valid non-empty `.ged` (compiled on the way through).
 
 ## Next
 1. codex review of #783/#784/#785 + this integration branch; merge order perf → two-root → kinship → ingest.
