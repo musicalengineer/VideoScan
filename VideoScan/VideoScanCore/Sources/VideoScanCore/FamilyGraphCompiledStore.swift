@@ -24,84 +24,88 @@
 // a miss and the caller recompiles.
 
 import Foundation
-import VideoScanCore
 
-struct FamilyGraphCompiledStore {
+// Lives in VideoScanCore (2026-08-28) so the one-time ingest CLI
+// (videoscan-tree-ingest), HallieShellCLI and the app all promote and read
+// the SAME generations. Logging is injected; the app wires appLog.
+public struct FamilyGraphCompiledStore {
+
+    public init(root: URL) { self.root = root }
 
     /// App-level manifest/pointer schema. Bump with the layout here;
     /// the codec and index carry their own versions.
-    static let schemaVersion: UInt32 = 1
+    public static let schemaVersion: UInt32 = 1
     static let pointerName = "current.json"
 
-    let root: URL
-    var fileManager: FileManager = .default
+    public let root: URL
+    public var fileManager: FileManager = .default
     /// Generations kept after a promote: current + this many previous.
-    var keepPrevious = 1
-    var log: (String) -> Void = { appLog.write($0) }
+    public var keepPrevious = 1
+    public var log: (String) -> Void = { _ in }
     /// The ingest gate. Injected so a test can force a failure.
-    var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
+    public var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
         = GedcomCompiledTree.verify(decoded:against:)
 
-    struct Pointer: Codable, Equatable {
-        var schema: UInt32
-        var codec: UInt32
-        var index: UInt32
-        var current: String
-        var previous: String?
-        var sourceKeys: [String]
+    public struct Pointer: Codable, Equatable {
+        public var schema: UInt32
+        public var codec: UInt32
+        public var index: UInt32
+        public var current: String
+        public var previous: String?
+        public var sourceKeys: [String]
     }
 
-    struct Source: Codable, Equatable {
-        var fileName: String
-        var path: String
-        var size: Int
-        var modifiedAt: Date?
-        var key: String
-        var sha256: String
+    public struct Source: Codable, Equatable {
+        public var fileName: String
+        public var path: String
+        public var size: Int
+        public var modifiedAt: Date?
+        public var key: String
+        public var sha256: String
     }
 
-    struct Manifest: Codable, Equatable {
-        var schema: UInt32
-        var codec: UInt32
-        var index: UInt32
-        var generation: String
-        var createdAt: Date
-        var sources: [Source]
-        var peopleCount: Int
-        var familyCount: Int
+    public struct Manifest: Codable, Equatable {
+        public var schema: UInt32
+        public var codec: UInt32
+        public var index: UInt32
+        public var generation: String
+        public var createdAt: Date
+        public var sources: [Source]
+        public var peopleCount: Int
+        public var familyCount: Int
         /// Empty when verification passed. A failed generation keeps its
         /// manifest (for diagnosis) but is never pointed at.
-        var verification: [String]
-        var mergeReport: String?
+        public var verification: [String]
+        public var mergeReport: String?
     }
 
-    static var productionRoot: URL {
+    public static var productionRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("family-tree", isDirectory: true)
             .appendingPathComponent("compiled", isDirectory: true)
     }
 
-    static var production: FamilyGraphCompiledStore { FamilyGraphCompiledStore(root: productionRoot) }
+    public static var production: FamilyGraphCompiledStore { FamilyGraphCompiledStore(root: productionRoot) }
 
     // MARK: Read side
 
-    var pointerURL: URL { root.appendingPathComponent(Self.pointerName) }
-    func generationURL(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true) }
-    func artifactURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("tree.vsft") }
-    func manifestURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("manifest.json") }
+    public var pointerURL: URL { root.appendingPathComponent(Self.pointerName) }
+    public func generationURL(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true) }
+    public func artifactURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("tree.vsft") }
+    public func manifestURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("manifest.json") }
 
-    func readPointer() -> Pointer? {
+    public func readPointer() -> Pointer? {
         guard let data = try? Data(contentsOf: pointerURL) else { return nil }
         return try? JSONDecoder().decode(Pointer.self, from: data)
     }
 
-    func readManifest(_ generation: String) -> Manifest? {
+    public func readManifest(_ generation: String) -> Manifest? {
         guard let data = try? Data(contentsOf: manifestURL(generation)) else { return nil }
         return try? Self.decoder.decode(Manifest.self, from: data)
     }
 
-    static var versionsMatch: (Pointer) -> Bool {
+    public static var versionsMatch: (Pointer) -> Bool {
         { $0.schema == schemaVersion && $0.codec == GedcomCompiledTree.codecVersion
             && $0.index == GedcomFamilyGraph.TreeIndex.formatVersion }
     }
@@ -110,7 +114,7 @@ struct FamilyGraphCompiledStore {
     /// the caller parses and ingests). A current artifact that no longer
     /// decodes falls back to the previous generation when THAT was built
     /// from the same sources; otherwise nil.
-    func load(sources: [URL]) -> GedcomFamilyGraph? {
+    public func load(sources: [URL]) -> GedcomFamilyGraph? {
         guard let pointer = readPointer() else { return nil }
         guard Self.versionsMatch(pointer) else {
             log("[family-tree] compiled artifact schema changed (pointer \(pointer.schema)/\(pointer.codec)/\(pointer.index)); recompiling")
@@ -151,7 +155,7 @@ struct FamilyGraphCompiledStore {
     /// against it, and promote. Returns the DECODED artifact on success so
     /// the runtime consumes only what was promoted; nil when verification
     /// or any write failed (logged) — the caller keeps the parsed graph.
-    func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
+    public func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
                 progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
         let generation = "gen-" + Self.stamp()
         do {
@@ -205,7 +209,7 @@ struct FamilyGraphCompiledStore {
 
     /// Swap current and previous. False when there is no previous.
     @discardableResult
-    func rollback() -> Bool {
+    public func rollback() -> Bool {
         guard var pointer = readPointer(), let previous = pointer.previous,
               let manifest = readManifest(previous), manifest.verification.isEmpty else { return false }
         pointer.previous = pointer.current
@@ -222,7 +226,7 @@ struct FamilyGraphCompiledStore {
     }
 
     /// Every generation directory, newest stamp first.
-    func generations() -> [String] {
+    public func generations() -> [String] {
         ((try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [])
             .filter { $0.hasPrefix("gen-") }
             .sorted(by: >)

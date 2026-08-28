@@ -25,7 +25,7 @@ import Foundation
 public enum GedcomCompiledTree {
 
     /// Bump when the encoding changes so older artifacts are recompiled.
-    public static let codecVersion: UInt32 = 1
+    public static let codecVersion: UInt32 = 2
     static let magic: [UInt8] = Array("VSFT".utf8)
 
     public enum CodecError: Error, Equatable {
@@ -61,7 +61,7 @@ public enum GedcomCompiledTree {
             w.ref(id); w.ref(f.husband); w.ref(f.wife); w.ref(f.marriageDate); w.refs(f.children)
         }
         // Roots (a list, so a merged two-root tree fits the same layout)
-        w.refs([graph.rootPersonID].compactMap { $0 })
+        w.refs(graph.rootPersonIDs)
         // FamilySearch → pointer
         let fs = graph.familySearchIndexTable.keys.sorted()
         w.u32(UInt32(fs.count))
@@ -69,6 +69,11 @@ public enum GedcomCompiledTree {
         // Provenance
         w.ref(graph.sourceFileName); w.ref(graph.sourceDirectory)
         w.f64(graph.sourceModifiedAt?.timeIntervalSince1970 ?? .nan)
+        // Codec 2: merged-tree provenance (two-root merge, 2026-08-28).
+        w.refs(graph.sourceFileNames)
+        w.u32(graph.isMergedArtifact ? 1 : 0)
+        w.u32(UInt32(clamping: graph.droppedLineCount))
+        w.ref(graph.headNote)
 
         // Index
         w.i32s(index.nameRank)
@@ -173,6 +178,10 @@ public enum GedcomCompiledTree {
             let sourceFileName = try r.optionalString()
             let sourceDirectory = try r.optionalString()
             let modified = try r.f64()
+            let sourceFileNames = try r.stringArray()
+            let isMerged = try r.u32() != 0
+            let droppedLines = Int(try r.u32())
+            let headNote = try r.optionalString()
 
             let nameRank = try r.i32s(expected: personCount)
             let parentStart = try r.i32s(expected: personCount + 1)
@@ -220,10 +229,12 @@ public enum GedcomCompiledTree {
                 surnameStart: surnameStart, surnameIDs: surnameIDs,
                 sidebarOrder: sidebarOrder, sidebarHaystack: haystack, sidebarStart: sidebarStart)
             let graph = GedcomFamilyGraph(
-                decodedPeople: people, families: families, rootPersonID: roots.first,
+                decodedPeople: people, families: families, rootPersonIDs: roots,
                 personIDByFamilySearchID: fsIndex,
                 sourceFileName: sourceFileName, sourceDirectory: sourceDirectory,
-                sourceModifiedAt: modified.isNaN ? nil : Date(timeIntervalSince1970: modified))
+                sourceModifiedAt: modified.isNaN ? nil : Date(timeIntervalSince1970: modified),
+                sourceFileNames: sourceFileNames, isMergedArtifact: isMerged,
+                droppedLineCount: droppedLines, headNote: headNote)
             graph.indexBox.install(index)
             return graph
         }
@@ -241,7 +252,9 @@ public enum GedcomCompiledTree {
               "person count \(decoded.people.count) ≠ \(source.people.count)")
         check(decoded.familyCount == source.familyCount,
               "family count \(decoded.familyCount) ≠ \(source.familyCount)")
-        check(decoded.rootPersonID == source.rootPersonID, "root differs")
+        check(decoded.rootPersonIDs == source.rootPersonIDs, "roots differ")
+        check(decoded.sourceFileNames == source.sourceFileNames, "source file names differ")
+        check(decoded.isMergedArtifact == source.isMergedArtifact, "merged flag differs")
         if let root = source.rootPerson {
             check(decoded.rootPerson?.familySearchID == root.familySearchID, "root FSID differs")
             check(decoded.people(matching: root.name).contains { $0.id == root.id }

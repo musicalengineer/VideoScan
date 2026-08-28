@@ -310,7 +310,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // Same isolation rule: an injected originals directory gets NO
         // production compiled store unless the test injects one.
         self.compiledStore = compiledStore
-            ?? (originalsDirectory == nil ? FamilyGraphCompiledStore.production : nil)
+            ?? (originalsDirectory == nil ? FamilyGraphCompiledStore.app : nil)
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations

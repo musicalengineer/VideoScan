@@ -748,15 +748,22 @@ public struct GedcomFamilyGraph: Sendable {
     /// Nothing is parsed or derived here; the caller installs the index.
     init(decodedPeople: [String: Person],
          families: [String: Family],
-         rootPersonID: String?,
+         rootPersonIDs: [String],
          personIDByFamilySearchID: [String: String],
          sourceFileName: String?,
          sourceDirectory: String?,
-         sourceModifiedAt: Date?) {
+         sourceModifiedAt: Date?,
+         sourceFileNames: [String] = [],
+         isMergedArtifact: Bool = false,
+         droppedLineCount: Int = 0,
+         headNote: String? = nil) {
         self.people = decodedPeople
         self.families = families
-        // Codec v-current stores a single root; multi-root artifacts are the next codec bump.
-        self.rootPersonIDs = rootPersonID.flatMap { decodedPeople[$0] != nil ? [$0] : nil } ?? []
+        self.rootPersonIDs = rootPersonIDs.filter { decodedPeople[$0] != nil }
+        self.sourceFileNames = sourceFileNames
+        self.isMergedArtifact = isMergedArtifact
+        self.droppedLineCount = droppedLineCount
+        self.headNote = headNote
         self.personIDByFamilySearchID = personIDByFamilySearchID
         self.sourceFileName = sourceFileName
         self.sourceDirectory = sourceDirectory
