@@ -252,17 +252,9 @@ public struct GedcomFamilyGraph: Sendable {
         if key.hasPrefix("the ") { key.removeFirst(4) }
         key = key.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return [] }
-        func matches(_ person: Person) -> Bool {
-            ([person.surname].compactMap { $0 } + person.alternateSurnames).contains { surname in
-                let normalized = FamilyIdentityText.normalized(surname)
-                return normalized == key
-                    || normalized + "s" == key
-                    || normalized + "es" == key
-            }
-        }
-        return people.values.filter(matches).sorted {
-            $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
-        }
+        // Surname postings narrow; the exact predicate confirms
+        // (GedcomFamilyGraph+Index.swift, 2026-08-28).
+        return indexedPeople(withSurnameKey: key)
     }
 
     // MARK: Lookup
@@ -271,72 +263,14 @@ public struct GedcomFamilyGraph: Sendable {
     /// name (case/diacritic-insensitive). "rick" won't match (nickname),
     /// but "richard" and "richard breen" will; ambiguity returns all.
     public func people(matching typed: String) -> [Person] {
-        let familySearchKey = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        if Self.isFamilySearchID(familySearchKey) {
-            return people.values.filter { $0.familySearchID == familySearchKey }
-                .sorted { $0.id < $1.id }
-        }
-        // Typed spellings meet the parsed ones: "Mc Gill" finds "McGill".
-        let tokens = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed))
-        guard !tokens.isEmpty else { return [] }
-        let matches = people.values.filter { person in
-            // Identity lookup is token-exact, never substring based:
-            // "Ann" must not silently resolve to "Joanne". Nicknames
-            // belong in the explicit alias resolver, not in fuzzy GEDCOM
-            // matching.
-            return Self.allNames(of: person).contains { candidate in
-                let nameTokens = Set(FamilyIdentityText.tokens(candidate))
-                return tokens.allSatisfy { nameTokens.contains($0) }
-            }
-        }
-        .sorted {
-            $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
-        }
-
-        // A complete canonical name is more specific than a token-subset
-        // match ("Zoe River" must not become ambiguous with "Zoe River Jr").
-        let exact = matches.filter { person in
-            Self.allNames(of: person).contains {
-                FamilyIdentityText.tokens($0) == tokens
-            }
-        }
-        if !matches.isEmpty { return exact.isEmpty ? matches : exact }
-
-        // Nothing token-exact (2026-08-24, Rick: "tell me about fred lamb"
-        // declined although Frederick Burton Lamb is right there). Two
-        // deterministic fallbacks, tried in order, still never substring
-        // matching in the middle of a name:
-        //   1. Diminutives: each token may expand through the curated
-        //      table (fred → frederick). Exact-token match on the result.
-        //   2. Unique prefix: every asked token (≥3 letters) must be a
-        //      PREFIX of some name token ("ann" finds Anna and Ann — the
-        //      caller's ambiguity handling asks which one).
-        // Fuzzy fallbacks assert only a UNIQUE person. "rick" → "richard"
-        // matching three Richards must read as not-found (so the People
-        // tab or a "did you mean…?" list can answer), never as GEDCOM
-        // ambiguity (regression caught 2026-08-24: "Which rick do you mean?").
-        let expanded = tokens.map { Self.diminutives[$0] ?? $0 }
-        if expanded != tokens {
-            let byNickname = people.values.filter { person in
-                Self.allNames(of: person).contains { candidate in
-                    let nameTokens = Set(FamilyIdentityText.tokens(candidate))
-                    return expanded.allSatisfy { nameTokens.contains($0) }
-                }
-            }
-            if byNickname.count == 1 { return byNickname }
-            if byNickname.count > 1 { return [] }
-        }
-        guard tokens.allSatisfy({ $0.count >= 3 }) else { return [] }
-        let byPrefix = people.values.filter { person in
-            Self.allNames(of: person).contains { candidate in
-                let nameTokens = FamilyIdentityText.tokens(candidate)
-                return tokens.allSatisfy { asked in
-                    nameTokens.contains { $0.hasPrefix(asked) }
-                }
-            }
-        }
-        return byPrefix.count == 1 ? byPrefix : []
+        // Token postings narrow the candidates (rarest token first); every
+        // survivor is re-checked with the exact per-NAME-record predicates
+        // below, in the same order: token-exact, then the curated
+        // diminutives, then unique ≥3-letter prefix — never a substring
+        // in the middle of a name ("Ann" must not resolve to "Joanne").
+        // See GedcomFamilyGraph+Index.swift (2026-08-28); the frozen
+        // linear scan lives in GedcomIndexEquivalenceTests.
+        indexedPeople(matching: typed)
     }
 
     /// The root person record, when the tree has one (see `rootPersonID`).
@@ -370,8 +304,7 @@ public struct GedcomFamilyGraph: Sendable {
         // Predicate shared with `NameIndex` (see +NameIndex.swift) so the
         // indexed and linear paths can never drift apart.
         guard let tokens = Self.namedLikeTokens(typed) else { return [] }
-        return people.values.filter { matches($0, namedLikeTokens: tokens) }
-        .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+        return indexedPeople(namedLikeTokens: tokens)
     }
 
     /// Surnames a woman may be known by that her NAME records do not
@@ -537,7 +470,7 @@ public struct GedcomFamilyGraph: Sendable {
         return candidates.filter { seen.insert($0.id).inserted }
     }
 
-    private static func allNames(of person: Person) -> [String] {
+    static func allNames(of person: Person) -> [String] {
         [person.name] + person.alternateNames
     }
 
@@ -654,7 +587,7 @@ public struct GedcomFamilyGraph: Sendable {
         return (display, surname)
     }
 
-    private static func isFamilySearchID(_ value: String) -> Bool {
+    static func isFamilySearchID(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 2, parts[0].count == 4, parts[1].count == 3 else {
             return false
@@ -680,5 +613,35 @@ public struct GedcomFamilyGraph: Sendable {
         case "spouse": return .spouse
         default: return nil
         }
+    }
+
+    // MARK: Compiled index hooks (GedcomFamilyGraph+Index.swift /
+    // GedcomCompiledTree.swift, 2026-08-28). Kept at the bottom so the
+    // two-root merge branch's edits above merge cleanly.
+
+    /// Lazily-built derived structures (name postings, CSR topology,
+    /// sidebar order); shared by every copy of this value. Read through
+    /// `index`. Populated ready-made when decoded from a compiled artifact.
+    let indexBox = TreeIndexBox()
+    /// Read access for the compiled-artifact encoder.
+    var familyTable: [String: Family] { families }
+    var familySearchIndexTable: [String: String] { personIDByFamilySearchID }
+
+    /// Assemble a graph from already-decoded records (GedcomCompiledTree).
+    /// Nothing is parsed or derived here; the caller installs the index.
+    init(decodedPeople: [String: Person],
+         families: [String: Family],
+         rootPersonID: String?,
+         personIDByFamilySearchID: [String: String],
+         sourceFileName: String?,
+         sourceDirectory: String?,
+         sourceModifiedAt: Date?) {
+        self.people = decodedPeople
+        self.families = families
+        self.rootPersonID = rootPersonID.flatMap { decodedPeople[$0] != nil ? $0 : nil }
+        self.personIDByFamilySearchID = personIDByFamilySearchID
+        self.sourceFileName = sourceFileName
+        self.sourceDirectory = sourceDirectory
+        self.sourceModifiedAt = sourceModifiedAt
     }
 }

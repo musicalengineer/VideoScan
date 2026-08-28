@@ -41,29 +41,45 @@ extension GedcomFamilyGraph {
             self.people = graph.people
             var cameFrom: [String: String] = [:]
             var depth: [String: Int] = [:]
-            guard let start = graph.people[descendantID] else {
+            guard graph.people[descendantID] != nil else {
                 childToward = [:]
                 depthByID = [:]
                 return
             }
             // `cameFrom[parent] = child` — plain BFS with a predecessor map
-            // (C++: queue + unordered_map<string,string>).
-            var visited: Set<String> = [descendantID]
-            var frontier: [Person] = [start]
+            // (C++: queue + unordered_map<string,string>). The walk runs
+            // over the compiled CSR parent lists (integer ordinals, father
+            // first then mother — see TreeIndex.parents), so the frontier
+            // never copies a Person; the string maps are filled at the end.
+            let index = graph.index
+            guard let startOrdinal = index.ordinal(of: descendantID) else {
+                childToward = [:]
+                depthByID = [:]
+                return
+            }
+            var visited = [Bool](repeating: false, count: index.count)
+            visited[Int(startOrdinal)] = true
+            var cameFromOrdinal: [(parent: Int32, child: Int32, level: Int)] = []
+            var frontier: [Int32] = [startOrdinal]
             var level = 0
             while !frontier.isEmpty {
-                var next: [Person] = []
+                var next: [Int32] = []
                 level += 1
                 for child in frontier {
-                    // Father first, then mother: paternal-first tie-break.
-                    for parent in graph.relatives(.father, of: child) + graph.relatives(.mother, of: child)
-                    where visited.insert(parent.id).inserted {
-                        cameFrom[parent.id] = child.id
-                        depth[parent.id] = level
+                    for parent in index.parents(of: child) where !visited[Int(parent)] {
+                        visited[Int(parent)] = true
+                        cameFromOrdinal.append((parent, child, level))
                         next.append(parent)
                     }
                 }
                 frontier = next
+            }
+            cameFrom.reserveCapacity(cameFromOrdinal.count)
+            depth.reserveCapacity(cameFromOrdinal.count)
+            for entry in cameFromOrdinal {
+                let parentID = index.ids[Int(entry.parent)]
+                cameFrom[parentID] = index.ids[Int(entry.child)]
+                depth[parentID] = entry.level
             }
             childToward = cameFrom
             depthByID = depth

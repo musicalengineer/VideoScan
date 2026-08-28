@@ -9,10 +9,20 @@ struct FamilyGraphFileLoader {
         let selectedURL: URL?
         let rejectedURLs: [URL]
         let candidateCount: Int
+        /// True when `graph` came from a promoted compiled artifact
+        /// (no GEDCOM parse happened on this load).
+        var compiled = false
     }
 
     let originalsDirectory: URL
     var fileManager: FileManager = .default
+    /// Compiled-artifact store (2026-08-28). Nil = parse every time (tests,
+    /// and callers that must not touch Application Support). With a
+    /// store: promoted artifact for the newest .ged → no parse; otherwise
+    /// parse, compile, verify, promote, and return the promoted copy.
+    var compiledStore: FamilyGraphCompiledStore? = nil
+    /// Phase captions for the UI while a compile runs (>1 s on a big pull).
+    var progress: (String) -> Void = { _ in }
 
     func loadNewest() -> GedcomFamilyGraph? {
         loadNewestOutcome().graph
@@ -54,11 +64,27 @@ struct FamilyGraphFileLoader {
         }
         var rejected: [URL] = []
         for url in newestFirst {
+            if let store = compiledStore, let compiled = store.load(sources: [url]) {
+                return Outcome(graph: compiled, selectedURL: url,
+                               rejectedURLs: rejected,
+                               candidateCount: newestFirst.count, compiled: true)
+            }
+            progress("Reading \(url.lastPathComponent)…")
             guard let graph = GedcomFamilyGraph(fileURL: url),
                   !graph.people.isEmpty else {
                 rejected.append(url)
                 continue
             }
+            if let store = compiledStore,
+               let promoted = store.ingest(graph: graph, sources: [url], progress: progress) {
+                return Outcome(graph: promoted, selectedURL: url,
+                               rejectedURLs: rejected,
+                               candidateCount: newestFirst.count, compiled: true)
+            }
+            // No store, or the compile did not verify: the parsed graph is
+            // still the truth. Build its index here, off the caller's
+            // thread, so install does no O(people) name work.
+            _ = graph.index
             return Outcome(graph: graph, selectedURL: url,
                            rejectedURLs: rejected,
                            candidateCount: newestFirst.count)
