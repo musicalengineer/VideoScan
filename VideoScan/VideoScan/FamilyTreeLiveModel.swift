@@ -700,11 +700,23 @@ final class FamilyTreeLiveModel: ObservableObject {
     nonisolated static func anchors(in graph: GedcomFamilyGraph,
                                     ownerFamilySearchID: String? = nil) -> [FamilyTreeAnchor] {
         if staleOwnerPinCaption(in: graph, ownerFamilySearchID: ownerFamilySearchID) != nil { return [] }
-        guard let root = graph.person(familySearchID: ownerFamilySearchID) ?? graph.rootPerson else { return [] }
-        var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
-        var seen: Set<String> = [root.id]
-        for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
-            out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+        // A pinned owner is THE "me" (the first-INDI assumption is not
+        // consulted at all, so a tree whose first record is Sr does not
+        // add him beside a pinned Jr). Without a pin, every root the tree
+        // names is an anchor — a merged two-pull tree has two, Rick and
+        // Donna (2026-08-27) — roots first, then each one's spouses.
+        let leads: [GedcomFamilyGraph.Person] =
+            graph.person(familySearchID: ownerFamilySearchID).map { [$0] } ?? graph.roots
+        guard !leads.isEmpty else { return [] }
+        var out: [FamilyTreeAnchor] = []
+        var seen: Set<String> = []
+        for root in leads where seen.insert(root.id).inserted {
+            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true))
+        }
+        for root in leads {
+            for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
+                out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+            }
         }
         return out
     }

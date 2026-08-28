@@ -85,6 +85,10 @@ extension GedcomFamilyGraph {
             depthByID = depth
         }
 
+        /// Every recorded ancestor with its generation count (1 = parent).
+        /// The common-ancestor search intersects two of these.
+        public var depths: [String: Int] { depthByID }
+
         /// Generations between the ancestor and the descendant (1 = parent),
         /// or nil when `ancestorID` is not on any recorded line above.
         /// O(1): recorded during the walk.
