@@ -15,9 +15,12 @@ final class GedcomScaleSensorTests: XCTestCase {
     static let slack = 3.0
     /// The sub-millisecond lookups run ~9× slower unoptimized (generic
     /// Array/String specialization is off in Debug), measured 2026-08-28:
-    /// token 0.8 ms Release vs 7.7 ms Debug. ×3 would fail on the ratio
-    /// alone, so these carry ×10; a real regression still trips it.
-    static let microSlack = 10.0
+    /// token 0.8 ms Release vs 7.7 ms Debug on the M4 Max. ×3 would fail
+    /// on the ratio alone; ×10 passed on the M4 but the M1 Max measured
+    /// 10.9 ms for the token lookup (2026-08-28, codex nightly), so the
+    /// Debug budget is 25 ms. Release stays at the true budget; a real
+    /// regression (an O(n) scan is ~100+ ms) still trips it.
+    static let microSlack = 25.0
     static let config = "Debug"
     #else
     static let slack = 1.0

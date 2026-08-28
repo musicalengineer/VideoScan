@@ -48,7 +48,11 @@ public struct FamilyGraphCompiledStore {
     /// 2 (2026-08-28): source keys became full-file SHA-256 (were
     /// size+mtime+edge hashes); an older pointer logs "schema changed"
     /// and is recompiled instead of silently missing.
-    public static let schemaVersion: UInt32 = 2
+    /// 3 (2026-08-28, codex #812/#816): manifest sources carry
+    /// `droppedLineCount` and are bound POSITIONALLY to the artifact's
+    /// provenance; the manifest carries the local + total loss. Goes with
+    /// codec 4 — a codec-3 pointer is refused by `versionsMatch` too.
+    public static let schemaVersion: UInt32 = 3
     static let pointerName = "current.json"
     static let lockName = ".lock"
 
@@ -80,6 +84,9 @@ public struct FamilyGraphCompiledStore {
         /// Same value as `key`; kept as its own field for the sidecar /
         /// provenance readers that predate the key change.
         public var sha256: String
+        /// Lines this source's parse dropped (= the artifact's
+        /// `sourceProvenance[i].droppedLineCount`, same position).
+        public var droppedLineCount: Int
     }
 
     public struct Manifest: Codable, Equatable {
@@ -95,6 +102,10 @@ public struct FamilyGraphCompiledStore {
         /// manifest (for diagnosis) but is never pointed at.
         public var verification: [String]
         public var mergeReport: String?
+        /// The artifact's graph-local loss and its total (local + Σ
+        /// sources) — the two numbers the codec carries, for humans.
+        public var localDroppedLineCount: Int
+        public var totalDroppedLineCount: Int
     }
 
     public enum StoreError: Error {
@@ -255,6 +266,12 @@ public struct FamilyGraphCompiledStore {
     /// the runtime consumes only what was promoted; nil when verification
     /// or any write failed (logged) — the caller keeps the parsed graph.
     ///
+    /// `sources` binds POSITIONALLY to the graph's provenance (codex #816):
+    /// `sources[i]` must be the file `graph.sourceProvenance[i]` names,
+    /// and its FRESH full SHA-256 must equal the hash the graph carried
+    /// from its parse (codex #817 — a rewrite between parse and ingest is
+    /// refused). Any mismatch: not promoted, logged, pointer untouched.
+    ///
     /// Holds the store lock for the whole compile → verify → promote →
     /// prune sequence (codex #792): two ingests into one root run one
     /// after the other, so the second sees the first's pointer, keeps it
@@ -274,31 +291,48 @@ public struct FamilyGraphCompiledStore {
         let generation = freshGenerationName()
         do {
             try fileManager.createDirectory(at: generationURL(generation), withIntermediateDirectories: true)
-            // Hash the sources FIRST so the promoted artifact's provenance
-            // carries the real digests (codex #808), then compile the
-            // enriched graph and verify against that same graph.
+            // Hash the sources FIRST (fresh read), then bind them to the
+            // graph's provenance by position: count, basename and the hash
+            // the graph carried from its own parse must all agree (codex
+            // #816/#817). The bound, canonical graph is what gets compiled
+            // and what the artifact is verified against.
             let keys = try sourceKeys(for: sources)
             var graph = graph
-            graph.attachSourceHashes(Dictionary(zip(sources.map(\.lastPathComponent), keys), uniquingKeysWith: { a, _ in a }))
+            do {
+                try graph.bindSources(Array(zip(sources.map(\.lastPathComponent), keys)).map { (name: $0.0, sha256: $0.1) })
+            } catch {
+                log("[family-tree] compiled generation \(generation) REFUSED, not promoted: sources do not bind to the graph's provenance — \(error)")
+                try? fileManager.removeItem(at: generationURL(generation))
+                return nil
+            }
             progress("Compiling family tree (\(graph.people.count.formatted()) people)…")
             let data = GedcomCompiledTree.encode(graph)
             try data.write(to: artifactURL(generation), options: .atomic)
 
             progress("Verifying compiled tree…")
             let decoded = try GedcomCompiledTree.decode(try Data(contentsOf: artifactURL(generation)))
-            let problems = verify(decoded, graph)
-            let sourceRecords = try zip(sources, keys).map { url, key -> Source in
+            var problems = verify(decoded, graph)
+            let sourceRecords = try zip(sources, zip(keys, graph.sourceProvenance)).map { url, bound -> Source in
                 let stat = try GedcomCompiledTree.sourceStat(url)
                 return Source(fileName: url.lastPathComponent, path: url.path,
                               size: stat.size, modifiedAt: Date(timeIntervalSince1970: stat.mtime),
-                              key: key, sha256: key)
+                              key: bound.0, sha256: bound.0, droppedLineCount: bound.1.droppedLineCount)
+            }
+            // The artifact's provenance IS the manifest's source list
+            // (name, sha, order) — asserted, not assumed (codex #816).
+            let artifactProvenance = decoded.sourceProvenance.map { "\($0.name):\($0.sha256 ?? "-"):\($0.droppedLineCount)" }
+            let manifestProvenance = sourceRecords.map { "\($0.fileName):\($0.sha256):\($0.droppedLineCount)" }
+            if artifactProvenance != manifestProvenance {
+                problems.append("artifact provenance ≠ manifest sources (\(artifactProvenance) ≠ \(manifestProvenance))")
             }
             let manifest = Manifest(
                 schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
                 index: GedcomFamilyGraph.TreeIndex.formatVersion, generation: generation,
                 createdAt: Date(), sources: sourceRecords,
                 peopleCount: decoded.people.count, familyCount: decoded.familyCount,
-                verification: problems, mergeReport: mergeReport)
+                verification: problems, mergeReport: mergeReport,
+                localDroppedLineCount: decoded.droppedLineCount,
+                totalDroppedLineCount: decoded.totalDroppedLineCount)
             try Self.encoder.encode(manifest).write(to: manifestURL(generation), options: .atomic)
 
             guard problems.isEmpty else {

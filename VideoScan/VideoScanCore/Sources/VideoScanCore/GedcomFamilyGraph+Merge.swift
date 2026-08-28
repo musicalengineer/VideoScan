@@ -56,9 +56,11 @@ extension GedcomFamilyGraph {
             case familyKeptSeparate
             /// Both sources give a different non-nil value for one field
             /// of the same person — or the MARR DATE of the same family
-            /// (codex #794): the FIRST source's value is kept (codex #780),
-            /// the other is recorded here (and a second NAME survives as
-            /// an alternate name).
+            /// (codex #794) — or two provenance entries for the SAME file
+            /// (name + sha) disagree on its dropped-line count (codex
+            /// #810, `ids` = [file name]): the FIRST source's value is kept
+            /// (codex #780), the other is recorded here (and a second NAME
+            /// survives as an alternate name).
             case fieldDisagreement
         }
         public let kind: Kind
@@ -90,9 +92,9 @@ extension GedcomFamilyGraph {
         public let conflicts: [ConflictReport]
         /// How many `fieldDisagreement` entries `conflicts` holds.
         public var fieldConflictCount: Int { conflicts.filter { $0.kind == .fieldDisagreement }.count }
-        /// Lines lost from EVERY source on the way to `graph` (each side's
-        /// `totalDroppedLineCount`) — what the written artifact cannot
-        /// carry. Per-source detail is in `graph.sourceProvenance`.
+        /// Lines lost from EVERY source on the way to `graph` — equal to
+        /// `graph.totalDroppedLineCount` (each source counted once, codex
+        /// #810). Per-source detail is in `graph.sourceProvenance`.
         public let droppedLineCount: Int
     }
 
@@ -224,26 +226,38 @@ extension GedcomFamilyGraph {
         for id in other.rootPersonIDs.compactMap({ personMap[$0] }) where !roots.contains(id) {
             roots.append(id)
         }
-        // Union of the two sides' provenance, first side first, keyed by
-        // (name, hash) so the same export listed twice stays one entry
-        // and a re-pull under the same name with different content does
-        // not. A source with no name (text parse) cannot be listed; its
-        // loss stays in the merged graph's own `droppedLineCount`, so
-        // `totalDroppedLineCount` never under-counts.
-        var provenance = effectiveProvenance
-        for p in other.effectiveProvenance
-        where !provenance.contains(where: { $0.name == p.name && $0.sha256 == p.sha256 }) {
-            provenance.append(p)
+        // Provenance (codex #810): union of the two CANONICAL lists, first
+        // side first, by identity (name, sha256). One entry per identity;
+        // its loss counted ONCE. Two entries of one identity disagreeing on
+        // the count → reported, first kept. Local loss = both sides' local
+        // (only a nameless text side has any: it cannot be listed, so its
+        // loss stays unattributed and the total never under-counts).
+        let mine = canonicalized(), theirs = other.canonicalized()
+        var provenance = mine.sourceProvenance
+        var seen: [String: Int] = [:]
+        for (i, p) in provenance.enumerated() where seen[p.identity] == nil { seen[p.identity] = i }
+        for p in theirs.sourceProvenance {
+            if let i = seen[p.identity] {
+                if provenance[i].droppedLineCount != p.droppedLineCount {
+                    conflicts.append(ConflictReport(
+                        kind: .fieldDisagreement, ids: [p.name],
+                        resolution: "\(p.name) dropped lines: kept \(provenance[i].droppedLineCount) (first source); "
+                            + "second source says \(p.droppedLineCount) for the same file (sha \(p.sha256.map { String($0.prefix(12)) } ?? "none"))"))
+                }
+            } else {
+                seen[p.identity] = provenance.count
+                provenance.append(p)
+            }
         }
         var names: [String] = []
         for p in provenance where !names.contains(p.name) { names.append(p.name) }
-        let dropped = totalDroppedLineCount + other.totalDroppedLineCount
-        let attributed = provenance.reduce(0) { $0 + $1.droppedLineCount }
         var graph = GedcomFamilyGraph(people: people, families: families,
                                       rootPersonIDs: roots, sourceFileNames: names,
-                                      isMergedArtifact: true, droppedLineCount: max(0, dropped - attributed),
+                                      isMergedArtifact: true,
+                                      droppedLineCount: mine.droppedLineCount + theirs.droppedLineCount,
                                       sourceProvenance: provenance)
         graph.sourceDirectory = sourceDirectory
+        let dropped = graph.totalDroppedLineCount
         return MergeOutcome(graph: graph, sharedPeopleCount: shared, addedPeopleCount: added,
                             unmatched: unmatched, pointerMap: personMap, conflicts: conflicts,
                             droppedLineCount: dropped)

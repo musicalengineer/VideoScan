@@ -137,8 +137,10 @@ final class GedcomCompiledTreeTests: XCTestCase {
                  families: [String: GedcomFamilyGraph.Family]? = nil,
                  droppedLineCount: Int? = nil,
                  headNote: String?? = nil,
-                 familySearchIndex: [String: String]? = nil) -> GedcomFamilyGraph {
-        GedcomFamilyGraph(decodedPeople: people ?? graph.people,
+                 familySearchIndex: [String: String]? = nil,
+                 provenance: [GedcomFamilyGraph.SourceProvenance]? = nil,
+                 fingerprint: String?? = nil) -> GedcomFamilyGraph {
+        var out = GedcomFamilyGraph(decodedPeople: people ?? graph.people,
                           families: families ?? graph.familyTable,
                           rootPersonIDs: graph.rootPersonIDs,
                           personIDByFamilySearchID: familySearchIndex ?? graph.familySearchIndexTable,
@@ -147,6 +149,9 @@ final class GedcomCompiledTreeTests: XCTestCase {
                           isMergedArtifact: graph.isMergedArtifact,
                           droppedLineCount: droppedLineCount ?? graph.droppedLineCount,
                           headNote: headNote ?? graph.headNote)
+        out.sourceProvenance = provenance ?? graph.sourceProvenance
+        out.sourceFingerprint = fingerprint ?? graph.sourceFingerprint
+        return out
     }
 
     /// Verification is exhaustive (codex #789): a corrupt record anywhere,
@@ -189,7 +194,8 @@ final class GedcomCompiledTreeTests: XCTestCase {
 
         // Codec-2 provenance fields.
         let badDropped = GedcomCompiledTree.verify(decoded: mutated(clean, droppedLineCount: source.droppedLineCount + 7), against: source)
-        XCTAssertEqual(badDropped, ["droppedLineCount (first: \(source.droppedLineCount + 7) ≠ \(source.droppedLineCount))"])
+        XCTAssertEqual(badDropped, ["droppedLineCount (first: \(source.droppedLineCount + 7) ≠ \(source.droppedLineCount))",
+                                    "totalDroppedLineCount (first: \(source.totalDroppedLineCount + 7) ≠ \(source.totalDroppedLineCount))"])
         let badNote = GedcomCompiledTree.verify(decoded: mutated(clean, headNote: .some(nil)), against: source)
         XCTAssertEqual(badNote, ["headNote (first: nil ≠ Optional(\"compiled from two pulls\"))"])
 
@@ -431,7 +437,8 @@ final class GedcomCompiledTreeTests: XCTestCase {
     }
 
     // codex #808: promoted artifacts must carry REAL source digests, for one
-    // and two sources, without anyone assigning fingerprints by hand.
+    // and two sources, without anyone assigning fingerprints by hand — and
+    // (codex #817) the parse itself already carries them.
     func testPromotedArtifactCarriesComputedSourceSHAs() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("prov-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -443,21 +450,238 @@ final class GedcomCompiledTreeTests: XCTestCase {
         let shaA = try GedcomCompiledTree.fullSHA256(of: a), shaB = try GedcomCompiledTree.fullSHA256(of: b)
         let store = FamilyGraphCompiledStore(root: dir.appendingPathComponent("compiled"))
 
-        // One source, parsed by the file loader path (no fingerprint set).
+        // One source: the parse carries the digest of the bytes it read.
         let single = try XCTUnwrap(GedcomFamilyGraph(fileURL: a))
-        XCTAssertNil(single.sourceFingerprint)
+        XCTAssertEqual(single.sourceFingerprint, shaA)
+        XCTAssertTrue(single.sourceProvenance.isEmpty, "plain shape as parsed")
         let promoted1 = try XCTUnwrap(store.ingest(graph: single, sources: [a]))
         XCTAssertEqual(promoted1.sourceFingerprint, shaA)
-        XCTAssertEqual(promoted1.effectiveProvenance.map(\.sha256), [shaA])
+        XCTAssertEqual(promoted1.sourceProvenance.map(\.sha256), [shaA], "canonical shape after promote")
         let reread1 = try GedcomCompiledTree.decode(try Data(contentsOf: store.artifactURL(try XCTUnwrap(store.readPointer()).current)))
-        XCTAssertEqual(reread1.effectiveProvenance.map(\.sha256), [shaA])
+        XCTAssertEqual(reread1.sourceProvenance.map(\.sha256), [shaA])
+        XCTAssertEqual(reread1.sourceFingerprint, shaA)
 
-        // Two sources merged with NO fingerprints assigned: the store fills them.
+        // Two sources merged: both hashes came from the parses; the store checks them.
         let merged = try XCTUnwrap(GedcomFamilyGraph(fileURL: a)).merged(with: try XCTUnwrap(GedcomFamilyGraph(fileURL: b)))
-        XCTAssertEqual(merged.effectiveProvenance.map(\.sha256), [nil, nil])
+        XCTAssertEqual(merged.sourceProvenance.map(\.sha256), [shaA, shaB])
+        XCTAssertNil(merged.sourceFingerprint)
         let promoted2 = try XCTUnwrap(store.ingest(graph: merged, sources: [a, b]))
-        XCTAssertEqual(promoted2.effectiveProvenance.map(\.name), ["a.ged", "b.ged"])
-        XCTAssertEqual(promoted2.effectiveProvenance.map(\.sha256), [shaA, shaB])
+        XCTAssertEqual(promoted2.sourceProvenance.map(\.name), ["a.ged", "b.ged"])
+        XCTAssertEqual(promoted2.sourceProvenance.map(\.sha256), [shaA, shaB])
         XCTAssertEqual(promoted2.totalDroppedLineCount, merged.totalDroppedLineCount)
+        XCTAssertNil(promoted2.sourceFingerprint, "decode does not invent a fingerprint (#809)")
+    }
+
+    // MARK: Canonical provenance through the codec and the store (codex #809/#812/#814/#816/#817)
+
+    /// One source with loss in BOTH places the parser counts: a top-level
+    /// record it has no model for, and lines under INDI records.
+    static func lossyOneSource(people: Int = 80) -> String {
+        GedcomSyntheticPedigree.gedcom(people: people, generations: 4)
+            .replacingOccurrences(of: "1 SEX M\n", with: "1 SEX M\n1 OCCU Farmer\n1 NOTE a line\n2 CONT another\n", options: [], range: nil)
+            .replacingOccurrences(of: "0 TRLR", with: "0 @S1@ SOUR\n1 TITL Census\n2 DATE 1900\n0 @N1@ NOTE stray\n0 TRLR")
+    }
+
+    /// Every provenance figure — per-source, local, total, fingerprint —
+    /// is identical before encode, after decode, on the promoted graph
+    /// and in the manifest; the encoded shape is canonical (local 0 for
+    /// a file parse) and the total is NOT doubled (#814).
+    func testOneSourceWithLossRoundTripsProvenanceExactly() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let url = try box.write(Self.lossyOneSource(), as: "lossy.ged")
+        let sha = try GedcomCompiledTree.fullSHA256(of: url)
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: url))
+        let d = graph.droppedLineCount
+        XCTAssertGreaterThan(d, 100, "top-level SOUR/NOTE records + OCCU/NOTE/CONT per man")
+        XCTAssertEqual(graph.totalDroppedLineCount, d)
+        XCTAssertTrue(graph.sourceProvenance.isEmpty)
+        XCTAssertEqual(graph.sourceFingerprint, sha)
+
+        // Codec: canonical out, canonical back, total unchanged.
+        let decoded = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(graph))
+        XCTAssertEqual(decoded.sourceProvenance, [.init(name: "lossy.ged", sha256: sha, droppedLineCount: d)])
+        XCTAssertEqual(decoded.droppedLineCount, 0, "local remainder of a file parse is 0")
+        XCTAssertEqual(decoded.totalDroppedLineCount, d, "#814: not 2×D")
+        XCTAssertEqual(decoded.sourceFingerprint, sha, "#809: decode leaves the fingerprint alone")
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: decoded, against: graph), [])
+        // Idempotent: encoding the decoded (already canonical) graph is byte-identical.
+        XCTAssertEqual(GedcomCompiledTree.encode(decoded), GedcomCompiledTree.encode(graph))
+        let again = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(decoded))
+        XCTAssertEqual(again.totalDroppedLineCount, d)
+
+        // Store: promoted graph and manifest carry the same numbers.
+        let store = box.store()
+        let promoted = try XCTUnwrap(store.ingest(graph: graph, sources: [url]))
+        XCTAssertEqual(promoted.sourceProvenance, decoded.sourceProvenance)
+        XCTAssertEqual(promoted.droppedLineCount, 0)
+        XCTAssertEqual(promoted.totalDroppedLineCount, d)
+        let manifest = try XCTUnwrap(store.readManifest(try XCTUnwrap(store.readPointer()).current))
+        XCTAssertEqual(manifest.sources.map(\.droppedLineCount), [d])
+        XCTAssertEqual(manifest.sources.map(\.sha256), [sha])
+        XCTAssertEqual(manifest.localDroppedLineCount, 0)
+        XCTAssertEqual(manifest.totalDroppedLineCount, d)
+        XCTAssertEqual(manifest.schema, 3)
+        XCTAssertEqual(manifest.codec, 4)
+
+        // Mutation: verify catches every provenance figure.
+        var bad = promoted.sourceProvenance; bad[0].droppedLineCount += 1
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: bad), against: graph).filter { $0.hasPrefix("sourceProvenance") || $0.hasPrefix("totalDropped") }.count, 2)
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: mutated(decoded, droppedLineCount: 1), against: graph),
+                       ["droppedLineCount (first: 1 ≠ 0)", "totalDroppedLineCount (first: \(d + 1) ≠ \(d))"])
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: mutated(decoded, fingerprint: .some("0000")), against: graph),
+                       ["sourceFingerprint (first: Optional(\"0000\") ≠ Optional(\"\(sha.prefix(50)))"])   // report clips each side at 60 chars
+        var wrongSha = promoted.sourceProvenance; wrongSha[0].sha256 = "beef"
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: wrongSha), against: graph).count, 1)
+    }
+
+    /// Two sources with different losses: per-source, local (0) and total
+    /// equal at every stage; a mutation of either entry is caught.
+    func testMultiSourceProvenanceRoundTripsExactly() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let a = try box.write(Self.lossyOneSource(people: 60), as: "a.ged")
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 40, generations: 3)
+            .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D")
+            .replacingOccurrences(of: "0 TRLR", with: "0 @O1@ OBJE\n1 FILE p.jpg\n0 TRLR"), as: "b.ged")
+        let ga = try XCTUnwrap(GedcomFamilyGraph(fileURL: a)), gb = try XCTUnwrap(GedcomFamilyGraph(fileURL: b))
+        XCTAssertEqual(gb.droppedLineCount, 2)
+        let merged = ga.merged(with: gb)
+        let expected: [GedcomFamilyGraph.SourceProvenance] = [
+            .init(name: "a.ged", sha256: try GedcomCompiledTree.fullSHA256(of: a), droppedLineCount: ga.droppedLineCount),
+            .init(name: "b.ged", sha256: try GedcomCompiledTree.fullSHA256(of: b), droppedLineCount: 2),
+        ]
+        XCTAssertEqual(merged.sourceProvenance, expected)
+        XCTAssertEqual(merged.droppedLineCount, 0)
+        let total = ga.droppedLineCount + 2
+        XCTAssertEqual(merged.totalDroppedLineCount, total)
+
+        let decoded = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(merged))
+        XCTAssertEqual(decoded.sourceProvenance, expected)
+        XCTAssertEqual(decoded.droppedLineCount, 0)
+        XCTAssertEqual(decoded.totalDroppedLineCount, total)
+        XCTAssertNil(decoded.sourceFingerprint)
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: decoded, against: merged), [])
+
+        let store = box.store()
+        let promoted = try XCTUnwrap(store.ingest(graph: merged, sources: [a, b]))
+        XCTAssertEqual(promoted.sourceProvenance, expected)
+        XCTAssertEqual(promoted.totalDroppedLineCount, total)
+        let manifest = try XCTUnwrap(store.readManifest(try XCTUnwrap(store.readPointer()).current))
+        XCTAssertEqual(manifest.sources.map { GedcomFamilyGraph.SourceProvenance(name: $0.fileName, sha256: $0.sha256, droppedLineCount: $0.droppedLineCount) }, expected)
+        XCTAssertEqual(manifest.localDroppedLineCount, 0)
+        XCTAssertEqual(manifest.totalDroppedLineCount, total)
+
+        var bad = expected; bad[1].droppedLineCount = 3
+        XCTAssertFalse(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: bad), against: merged).isEmpty)
+        XCTAssertFalse(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: Array(expected.reversed())), against: merged).isEmpty, "order is part of provenance")
+        XCTAssertFalse(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: [expected[0]]), against: merged).isEmpty)
+    }
+
+    /// #812: a codec-3 blob (same bytes, header version 3) is refused with
+    /// `versionMismatch(codec: 3, …)` and the store's `versionsMatch`
+    /// rejects a codec-3 pointer ("schema changed" → recompile).
+    func testCodecThreeArtifactAndPointerAreRejected() throws {
+        XCTAssertEqual(GedcomCompiledTree.codecVersion, 4)
+        let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 30, generations: 3))
+        var v3 = GedcomCompiledTree.encode(graph)
+        // Header: "VSFT" | u32 codec | u32 index — patch the codec to 3.
+        v3.replaceSubrange(4..<8, with: GedcomCompiledTree.le(UInt32(3)))
+        XCTAssertThrowsError(try GedcomCompiledTree.decode(v3)) { error in
+            XCTAssertEqual(error as? GedcomCompiledTree.CodecError,
+                           .versionMismatch(codec: 3, index: GedcomFamilyGraph.TreeIndex.formatVersion))
+        }
+        let ok = FamilyGraphCompiledStore.Pointer(schema: FamilyGraphCompiledStore.schemaVersion, codec: 4,
+                                                  index: GedcomFamilyGraph.TreeIndex.formatVersion,
+                                                  current: "gen-x", previous: nil, sourceKeys: ["k"])
+        XCTAssertTrue(FamilyGraphCompiledStore.versionsMatch(ok))
+        var old = ok; old.codec = 3
+        XCTAssertFalse(FamilyGraphCompiledStore.versionsMatch(old))
+
+        // On disk: a codec-3 pointer makes load/loadCurrent a logged miss.
+        let box = try StoreBox(); defer { box.tearDown() }
+        let url = try box.write(GedcomSyntheticPedigree.gedcom(people: 30, generations: 3), as: "t.ged")
+        let store = box.store()
+        XCTAssertNotNil(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: url)), sources: [url]))
+        var pointer = try XCTUnwrap(store.readPointer())
+        pointer.codec = 3
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+        XCTAssertNil(store.load(sources: [url]))
+        XCTAssertNil(store.loadCurrent())
+        XCTAssertTrue(box.lines.contains("schema changed"), "\(box.lines.all)")
+    }
+
+    /// #816: sources bind to provenance by POSITION. Two pulls with the
+    /// same basename in different directories work (bound by position);
+    /// reordered URLs, a wrong URL, or a hash the graph did not carry are
+    /// refused — nothing promoted, pointer untouched — and the promoted
+    /// artifact's provenance equals the manifest's sources.
+    func testStoreBindsSourcesPositionallyAndFailsClosed() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let dirX = box.root.appendingPathComponent("x"), dirY = box.root.appendingPathComponent("y")
+        try FileManager.default.createDirectory(at: dirX, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dirY, withIntermediateDirectories: true)
+        let x = dirX.appendingPathComponent("pull.ged"), y = dirY.appendingPathComponent("pull.ged")
+        try Self.lossyOneSource(people: 50).write(to: x, atomically: true, encoding: .utf8)
+        try GedcomSyntheticPedigree.gedcom(people: 30, generations: 3)
+            .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID Y").write(to: y, atomically: true, encoding: .utf8)
+        let other = try box.write(GedcomSyntheticPedigree.gedcom(people: 20, generations: 3), as: "other.ged")
+        let gx = try XCTUnwrap(GedcomFamilyGraph(fileURL: x)), gy = try XCTUnwrap(GedcomFamilyGraph(fileURL: y))
+        let merged = gx.merged(with: gy)
+        XCTAssertEqual(merged.sourceProvenance.map(\.name), ["pull.ged", "pull.ged"], "duplicate basenames are legal")
+        let store = box.store()
+
+        // Refusals first (no pointer exists yet → still none afterwards).
+        XCTAssertNil(store.ingest(graph: merged, sources: [y, x]), "reordered: names match but the hashes do not")
+        XCTAssertTrue(box.lines.contains("REFUSED") && box.lines.contains("hashes to"), "\(box.lines.all)")
+        XCTAssertNil(store.ingest(graph: merged, sources: [x, other]), "wrong URL: basename differs")
+        XCTAssertTrue(box.lines.contains("is other.ged"), "\(box.lines.all)")
+        XCTAssertNil(store.ingest(graph: merged, sources: [x]), "count differs")
+        XCTAssertTrue(box.lines.contains("lists 2 sources but 1 was given"), "\(box.lines.all)")
+        XCTAssertNil(store.readPointer(), "nothing promoted")
+        XCTAssertEqual(store.generations(), [], "refused generations are removed")
+
+        // The right binding: works, and artifact provenance == manifest sources.
+        let promoted = try XCTUnwrap(store.ingest(graph: merged, sources: [x, y]))
+        let pointer = try XCTUnwrap(store.readPointer())
+        let manifest = try XCTUnwrap(store.readManifest(pointer.current))
+        XCTAssertEqual(manifest.sources.map(\.path), [x.path, y.path])
+        XCTAssertEqual(promoted.sourceProvenance.map(\.name), manifest.sources.map(\.fileName))
+        XCTAssertEqual(promoted.sourceProvenance.map(\.sha256), manifest.sources.map(\.sha256))
+        XCTAssertEqual(promoted.sourceProvenance.map(\.droppedLineCount), manifest.sources.map(\.droppedLineCount))
+        XCTAssertEqual(pointer.sourceKeys, manifest.sources.map(\.key))
+        XCTAssertEqual(manifest.totalDroppedLineCount, merged.totalDroppedLineCount)
+
+        // A later refusal leaves the promoted pointer untouched.
+        XCTAssertNil(store.ingest(graph: merged, sources: [y, x]))
+        XCTAssertEqual(store.readPointer(), pointer)
+        XCTAssertEqual(store.generations(), [pointer.current])
+    }
+
+    /// #817: parse, then rewrite the file's bytes before ingest. The graph
+    /// carries the digest of what it parsed; the store hashes what is on
+    /// disk now; they differ → refused, nothing promoted, pointer untouched.
+    func testRewriteBetweenParseAndIngestIsRefused() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let url = try box.write(Self.lossyOneSource(people: 40), as: "pull.ged")
+        let store = box.store()
+        // A good generation first, so "pointer untouched" is observable.
+        let first = try XCTUnwrap(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: url)), sources: [url]))
+        let before = try XCTUnwrap(store.readPointer())
+
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: url))
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 41, generations: 4), as: "pull.ged")   // mid-ingest rewrite
+        XCTAssertNil(store.ingest(graph: graph, sources: [url]))
+        XCTAssertTrue(box.lines.contains("file changed since it was read"), "\(box.lines.all)")
+        XCTAssertEqual(store.readPointer(), before, "pointer untouched")
+        XCTAssertEqual(store.generations(), [before.current])
+        XCTAssertEqual(try GedcomCompiledTree.decode(try Data(contentsOf: store.artifactURL(before.current))).people.count, first.people.count)
+
+        // Same for a two-source merge where only the second file moved.
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 20, generations: 3)
+            .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID B"), as: "b.ged")
+        let merged = try XCTUnwrap(GedcomFamilyGraph(fileURL: url)).merged(with: try XCTUnwrap(GedcomFamilyGraph(fileURL: b)))
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 21, generations: 3), as: "b.ged")
+        XCTAssertNil(store.ingest(graph: merged, sources: [url, b]))
+        XCTAssertTrue(box.lines.contains("source #2 b.ged hashes to"), "\(box.lines.all)")
+        XCTAssertEqual(store.readPointer(), before)
     }
 }

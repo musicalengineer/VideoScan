@@ -418,4 +418,114 @@ struct GedcomFamilyGraphTests {
         #expect(elapsed < .milliseconds(50),
                 "100k GEDCOM lookup exceeded 50 ms: \(elapsed)")
     }
+
+    // MARK: Provenance canonical form + same-bytes fingerprint (codex #814/#817)
+
+    static let lossy = """
+    0 HEAD
+    1 SOUR getmyancestors
+    0 @I1@ INDI
+    1 NAME Ann /Shared/
+    1 OCCU Weaver
+    1 NOTE Long story
+    2 CONT more
+    1 _FSFTID SHRD-001
+    0 @S1@ SOUR
+    1 TITL Census
+    0 TRLR
+    """
+
+    /// A file parse carries SHA-256 of the bytes it was parsed from — the
+    /// same digest `shasum -a 256` prints — and `init?(fileURL:)` is one
+    /// read of the file delegating to `init?(data:fileURL:)`.
+    @Test func fileParseFingerprintsTheBytesItParsed() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GedcomFingerprint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("lossy.ged")
+        try Self.lossy.write(to: url, atomically: true, encoding: .utf8)
+        let data = try Data(contentsOf: url)
+        let expected = try GedcomCompiledTree.fullSHA256(of: url)
+
+        let fromFile = try #require(GedcomFamilyGraph(fileURL: url))
+        let fromData = try #require(GedcomFamilyGraph(data: data, fileURL: url))
+        #expect(fromFile.sourceFingerprint == expected)
+        #expect(fromData.sourceFingerprint == expected)
+        #expect(expected.count == 64)
+        #expect(fromFile.sourceFileName == "lossy.ged")
+        #expect(fromFile.people == fromData.people)
+
+        // The Data variant hashes what it was GIVEN, whatever the path holds now.
+        try "0 HEAD\n0 @I1@ INDI\n1 NAME Someone /Else/\n0 TRLR\n".write(to: url, atomically: true, encoding: .utf8)
+        let stale = try #require(GedcomFamilyGraph(data: data, fileURL: url))
+        #expect(stale.sourceFingerprint == expected, "digest of the parsed bytes, not of the path")
+        #expect(stale.sourceFingerprint != (try GedcomCompiledTree.fullSHA256(of: url)))
+        #expect(GedcomFamilyGraph(data: Data([0xFF, 0xFE, 0x00]), fileURL: url) == nil, "not UTF-8 → nil, no trap")
+    }
+
+    /// PLAIN shape: empty list, local = D. CANONICAL: D moved into the one
+    /// entry, local 0. The total is invariant and canonicalized() is
+    /// idempotent; a nameless text graph keeps its loss local.
+    @Test func canonicalizedMovesAPlainGraphsLossIntoItsOneEntryWithoutChangingTheTotal() throws {
+        var plain = GedcomFamilyGraph(gedcomText: Self.lossy)
+        #expect(plain.droppedLineCount == 5)
+        #expect(plain.sourceProvenance.isEmpty)
+        #expect(plain.totalDroppedLineCount == 5)
+        // Nameless: cannot be listed, so canonical == plain.
+        let nameless = plain.canonicalized()
+        #expect(nameless.sourceProvenance.isEmpty)
+        #expect(nameless.droppedLineCount == 5)
+        #expect(nameless.effectiveProvenance.isEmpty)
+
+        plain.sourceFileName = "lossy.ged"; plain.sourceFingerprint = "feed"
+        let canonical = plain.canonicalized()
+        #expect(canonical.sourceProvenance == [.init(name: "lossy.ged", sha256: "feed", droppedLineCount: 5)])
+        #expect(canonical.droppedLineCount == 0)
+        #expect(canonical.totalDroppedLineCount == 5)
+        #expect(canonical.sourceFileNames == ["lossy.ged"])
+        #expect(canonical.sourceFingerprint == "feed", "the graph's own digest is its own scalar")
+        #expect(canonical.canonicalized().sourceProvenance == canonical.sourceProvenance, "idempotent")
+        #expect(canonical.canonicalized().droppedLineCount == 0)
+        #expect(plain.effectiveProvenance == canonical.sourceProvenance)
+        #expect(plain.droppedLineCount == 5, "canonicalized() is pure")
+    }
+
+    /// `bindSources` is positional and fails closed: count, basename and
+    /// carried hash must all agree; on refusal the graph is untouched.
+    @Test func bindSourcesIsPositionalAndFailsClosed() throws {
+        var a = GedcomFamilyGraph(gedcomText: Self.lossy); a.sourceFileName = "a.ged"; a.sourceFingerprint = "aa"
+        var b = GedcomFamilyGraph(gedcomText: "0 HEAD\n0 @I2@ INDI\n1 NAME Bo /Bee/\n1 _FSFTID BBB-1\n0 TRLR"); b.sourceFileName = "b.ged"; b.sourceFingerprint = "bb"
+        var merged = a.merged(with: b)
+        let before = merged
+        #expect(throws: GedcomFamilyGraph.SourceBindingError.countMismatch(graph: 2, sources: 1)) {
+            try merged.bindSources([(name: "a.ged", sha256: "aa")])
+        }
+        #expect(throws: GedcomFamilyGraph.SourceBindingError.nameMismatch(index: 0, graph: "a.ged", source: "b.ged")) {
+            try merged.bindSources([(name: "b.ged", sha256: "bb"), (name: "a.ged", sha256: "aa")])
+        }
+        #expect(throws: GedcomFamilyGraph.SourceBindingError.hashMismatch(index: 1, name: "b.ged", graph: "bb", source: "b2")) {
+            try merged.bindSources([(name: "a.ged", sha256: "aa"), (name: "b.ged", sha256: "b2")])
+        }
+        #expect(merged.sourceProvenance == before.sourceProvenance, "refusal leaves the graph untouched")
+        try merged.bindSources([(name: "a.ged", sha256: "aa"), (name: "b.ged", sha256: "bb")])
+        #expect(merged.sourceProvenance.map(\.sha256) == ["aa", "bb"])
+        #expect(merged.totalDroppedLineCount == 5)
+
+        // A plain file graph binds as ONE source and comes out canonical;
+        // a text graph given a name but no hash takes the store's.
+        var plain = a
+        try plain.bindSources([(name: "a.ged", sha256: "aa")])
+        #expect(plain.sourceProvenance == [.init(name: "a.ged", sha256: "aa", droppedLineCount: 5)])
+        #expect(plain.droppedLineCount == 0)
+        var unhashed = GedcomFamilyGraph(gedcomText: Self.lossy); unhashed.sourceFileName = "a.ged"
+        try unhashed.bindSources([(name: "a.ged", sha256: "fresh")])
+        #expect(unhashed.sourceProvenance.first?.sha256 == "fresh")
+        #expect(unhashed.sourceFingerprint == "fresh")
+        // Nameless text graph: nothing to bind to → refused, never silently accepted.
+        var nameless = GedcomFamilyGraph(gedcomText: Self.lossy)
+        #expect(throws: GedcomFamilyGraph.SourceBindingError.countMismatch(graph: 0, sources: 1)) {
+            try nameless.bindSources([(name: "a.ged", sha256: "aa")])
+        }
+    }
 }

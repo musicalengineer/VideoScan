@@ -25,7 +25,13 @@ import Foundation
 public enum GedcomCompiledTree {
 
     /// Bump when the encoding changes so older artifacts are recompiled.
-    public static let codecVersion: UInt32 = 3
+    /// 4 (2026-08-28, codex #812/#814): provenance is written in the
+    /// CANONICAL shape — the positional source list plus the graph-local
+    /// remainder — so a one-source graph's loss is carried once (codec 3
+    /// wrote it both in the list and as the local count: 2× after decode).
+    /// A codec-3 blob is refused with `versionMismatch` and the store
+    /// recompiles.
+    public static let codecVersion: UInt32 = 4
     static let magic: [UInt8] = Array("VSFT".utf8)
 
     public enum CodecError: Error, Equatable {
@@ -39,6 +45,9 @@ public enum GedcomCompiledTree {
     // MARK: Encode
 
     public static func encode(_ graph: GedcomFamilyGraph) -> Data {
+        // Canonical provenance (codec 4): list + local remainder, total
+        // unchanged; `decode` restores exactly these two.
+        let graph = graph.canonicalized()
         let index = graph.index
         var w = Writer()
         // Everyone in ordinal order so the people table IS index.ids.
@@ -72,12 +81,14 @@ public enum GedcomCompiledTree {
         // Codec 2: merged-tree provenance (two-root merge, 2026-08-28).
         w.refs(graph.sourceFileNames)
         w.u32(graph.isMergedArtifact ? 1 : 0)
+        // Graph-LOCAL loss (codec 4: the canonical remainder, 0 for a file parse).
         w.u32(UInt32(clamping: graph.droppedLineCount))
         w.ref(graph.headNote)
-        // Codec 3: per-source provenance (name, sha256, dropped lines) — codex #794-4.
-        let provenance = graph.effectiveProvenance
+        // Positional source list (name, sha256, that source's dropped lines).
+        let provenance = graph.sourceProvenance
         w.u32(UInt32(provenance.count))
         for p in provenance { w.ref(p.name); w.ref(p.sha256); w.u32(UInt32(clamping: p.droppedLineCount)) }
+        // The graph's OWN file digest, its own scalar (see GedcomFamilyGraph.sourceFingerprint).
         w.ref(graph.sourceFingerprint)
 
         // Index
@@ -263,9 +274,11 @@ public enum GedcomCompiledTree {
 
     /// What a compiled artifact must prove before it is promoted: it
     /// decodes to EXACTLY the tree it was built from — every person (all
-    /// fields), every family, roots, FamilySearch index, provenance and
-    /// the codec-2 merge fields — and answers a fixed set of queries the
-    /// way the source graph does. Exhaustive by design (Rick 2026-08-28:
+    /// fields), every family, roots, FamilySearch index, provenance (the
+    /// canonical list, the local remainder, the total and the fingerprint)
+    /// and the merge fields — and answers a fixed set of queries the
+    /// way the source graph does. `source` is compared in its canonical
+    /// shape, which is what `encode` wrote. Exhaustive by design (Rick 2026-08-28:
     /// ingest is one-time, integrity beats a few hundred ms). Empty = pass.
     ///
     /// Each mismatch CLASS is reported once with a count and its first
@@ -273,6 +286,7 @@ public enum GedcomCompiledTree {
     /// bounded lines rather than 100k of them.
     public static func verify(decoded: GedcomFamilyGraph, against source: GedcomFamilyGraph) -> [String] {
         var report = MismatchReport()
+        let source = source.canonicalized()
 
         // Scalars / provenance
         report.equal("person count", decoded.people.count, source.people.count)
@@ -281,8 +295,9 @@ public enum GedcomCompiledTree {
         report.equal("sourceFileNames", decoded.sourceFileNames, source.sourceFileNames)
         report.equal("isMergedArtifact", decoded.isMergedArtifact, source.isMergedArtifact)
         report.equal("droppedLineCount", decoded.droppedLineCount, source.droppedLineCount)
+        report.equal("totalDroppedLineCount", decoded.totalDroppedLineCount, source.totalDroppedLineCount)
         report.equal("headNote", decoded.headNote, source.headNote)
-        report.equal("sourceProvenance", decoded.sourceProvenance, source.effectiveProvenance)
+        report.equal("sourceProvenance", decoded.sourceProvenance, source.sourceProvenance)
         report.equal("sourceFingerprint", decoded.sourceFingerprint, source.sourceFingerprint)
         report.equal("sourceFileName", decoded.sourceFileName, source.sourceFileName)
         report.equal("sourceDirectory", decoded.sourceDirectory, source.sourceDirectory)

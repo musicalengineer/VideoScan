@@ -61,12 +61,12 @@ let t0 = Date()
 var graphs: [GedcomFamilyGraph] = []
 for url in options.sources {
     let t = Date()
-    guard var g = GedcomFamilyGraph(fileURL: url), !g.people.isEmpty else {
+    // The parse fingerprints the bytes it read (codex #817); the store
+    // re-hashes the file at ingest and refuses if the two disagree.
+    guard let g = GedcomFamilyGraph(fileURL: url), !g.people.isEmpty else {
         FileHandle.standardError.write(Data("error: \(url.path) did not parse as a non-empty GEDCOM\n".utf8))
         exit(1)
     }
-    // Real digest of the completed file: merge provenance + sameSource rule (codex #808).
-    g.sourceFingerprint = try GedcomCompiledTree.fullSHA256(of: url)
     say("parsed \(url.lastPathComponent): \(g.people.count.formatted()) people, \(g.familyCount.formatted()) families, "
         + "root \(g.rootPerson?.name ?? "?") (\(g.rootPerson?.familySearchID ?? "no FSID")), "
         + "\(g.droppedLineCount.formatted()) lines not kept — \(ms(t))")
@@ -140,6 +140,8 @@ if options.dryRun {
         exit(1)
     }
     say("promoted: \(promoted.people.count.formatted()) people from \(promoted.sourceFileNames.joined(separator: " + ")) — \(ms(t))")
+    say("provenance: " + promoted.sourceProvenance.map { "\($0.name) \(($0.sha256 ?? "-").prefix(12))… dropped \($0.droppedLineCount)" }.joined(separator: "; ")
+        + "; local \(promoted.droppedLineCount), total \(promoted.totalDroppedLineCount)")
     // Prove the promoted artifact answers the cross-root question the same way.
     if promoted.roots.count >= 2 {
         let t2 = Date()
