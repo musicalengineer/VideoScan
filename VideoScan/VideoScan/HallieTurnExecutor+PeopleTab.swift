@@ -9,10 +9,13 @@
 // videos carry the tag — and the profile note, QUOTED and attributed,
 // never asserted as a fact (the People-notes rule, #367, still holds).
 //
-// Identity precedence when spellings collide (the real gallery lists
-// "Timmy" as an alias of Tim and "Tim" as an alias of Timmy): the profile
-// whose canonical name IS the typed spelling wins; alias-only claims tie
-// and stay a clarification.
+// Identity when spellings collide (the real gallery lists "Timmy" as an
+// alias of Tim and "Tim" as an alias of Timmy): there is ONE verdict,
+// PersonResolver's (codex #778, Director-approved) — a spelling claimed by
+// more than one profile is AMBIGUOUS and Hallie asks "which one?", never a
+// silent canonical-name pick. The graph, overlay and presence routes give
+// the same answer, so a question cannot change meaning by which route it
+// happens to take.
 
 import Foundation
 import VideoScanCore
@@ -123,18 +126,68 @@ extension HallieTurnExecutor {
 
         // MARK: - One person, from the profile alone
 
-        /// The profile that owns this spelling: the unique claimant, or — when
-        /// several claim it — the one whose canonical name is that spelling.
-        static func profile(claiming typed: String, in profiles: [ProfileSnapshot]) -> ProfileSnapshot? {
-            let key = normalizeName(typed)
-            guard !key.isEmpty else { return nil }
-            let claimants = merged(profiles).filter { profile in
-                normalizeName(profile.canonicalName) == key
-                    || profile.aliases.contains { normalizeName($0) == key }
+        /// Who the People tab says a spelling is. (Think of it as a
+        /// std::variant<Profile, std::vector<Profile>, std::monostate>.)
+        enum Claim: Equatable {
+            /// Exactly one profile owns the spelling — answer from it.
+            case one(ProfileSnapshot)
+            /// Several profiles claim it (canonical on one, alias on
+            /// another, or the same spelling twice) — ask which.
+            case ambiguous([ProfileSnapshot])
+            /// Nobody in the People tab goes by it.
+            case none
+        }
+
+        /// PersonResolver's verdict (#778), mapped back onto profiles. A
+        /// selected People chip (`selected` = the continuation after a
+        /// "which one?") names the profile directly and skips resolution.
+        static func claim(_ typed: String,
+                          selected: CandidateID? = nil,
+                          in profiles: [ProfileSnapshot]) -> Claim {
+            let people = merged(profiles)
+            if case .profileStableID(let stableID) = selected {
+                return people.first { $0.stableID == stableID }.map(Claim.one) ?? .none
             }
-            if claimants.count == 1 { return claimants[0] }
-            let exact = claimants.filter { normalizeName($0.canonicalName) == key }
-            return exact.count == 1 ? exact[0] : nil
+            let resolver = PersonResolver(people: people.map {
+                ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+            })
+            switch resolver.resolve(typed) {
+            case .resolved(let canonicalName):
+                return owners(of: [canonicalName], in: people)
+            case .ambiguous(let candidates):
+                return owners(of: candidates, in: people)
+            case .unknown:
+                return .none
+            }
+        }
+
+        /// The resolver speaks in canonical names; two profiles may share
+        /// one (a duplicate gallery entry), which is itself ambiguous.
+        private static func owners(of canonicalNames: [String],
+                                   in people: [ProfileSnapshot]) -> Claim {
+            let keys = Set(canonicalNames.map(normalizeName))
+            let owners = people.filter { keys.contains(normalizeName($0.canonicalName)) }
+            switch owners.count {
+            case 0: return .none
+            case 1: return .one(owners[0])
+            default: return .ambiguous(owners)
+            }
+        }
+
+        /// The unique owner of a spelling, or nil when nobody — or more than
+        /// one profile — claims it. Never a canonical-wins tie-break.
+        static func profile(claiming typed: String, in profiles: [ProfileSnapshot]) -> ProfileSnapshot? {
+            if case .one(let profile) = claim(typed, in: profiles) { return profile }
+            return nil
+        }
+
+        /// "Which one?" chips for an ambiguous claim — the same shape (and
+        /// duplicate-name labelling) the temporal and graph routes use.
+        static func candidates(_ profiles: [ProfileSnapshot]) -> [Candidate] {
+            profileCandidates(profiles.map {
+                ArchivistTemporalSubjectResolution.Candidate(
+                    stableID: $0.stableID, canonicalName: $0.canonicalName)
+            })
         }
 
         /// The graph route's answer when the tree has nothing but the People

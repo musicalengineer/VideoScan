@@ -10,13 +10,22 @@ struct HalliePeopleTabTests {
     typealias Tab = HallieTurnExecutor.PeopleTab
     typealias Profile = HallieTurnExecutor.ProfileSnapshot
 
-    /// The real gallery's shape: brother and son cross-claim each other's name.
+    /// Brother and son with distinct spellings — the content tests below
+    /// are about what a profile SAYS, not about who owns a spelling.
     private let tim = Profile(stableID: "tim", canonicalName: "Tim",
-                              aliases: ["Mimmy", "Timmy", "Brother"], note: "Brother Tim")
+                              aliases: ["Mimmy", "Brother"], note: "Brother Tim")
     private let timmy = Profile(stableID: "timmy", canonicalName: "Timmy",
-                                aliases: ["Tim", "Timmy"],
+                                aliases: ["Tim Jr", "Timmy"],
                                 birthdate: Self.date(1965, 4, 22),
                                 note: "Number four son, sometimes wears glasses")
+    /// The real gallery's shape (Rick 2026-08-22): the brother lists
+    /// "Timmy" as an alias and the son lists "Tim" — each claims the
+    /// other's name. Used only by the identity tests.
+    private let crossTim = Profile(stableID: "tim", canonicalName: "Tim",
+                                   aliases: ["Timmy", "Mimmy"], note: "Brother Tim")
+    private let crossTimmy = Profile(stableID: "timmy", canonicalName: "Timmy",
+                                     aliases: ["Tim", "Tim Jr"],
+                                     birthdate: Self.date(1965, 4, 22))
     private let dad = Profile(stableID: "dad", canonicalName: "Dad",
                               aliases: ["Grampa Breen", "Dick", "Dad Breen"],
                               birthdate: Self.date(1898, 2, 19), note: "My father")
@@ -59,14 +68,83 @@ struct HalliePeopleTabTests {
 
     // MARK: Spelling → profile
 
-    @Test func theExactNameWinsWhenBrotherAndSonCrossClaimIt() {
-        let profiles = [tim, timmy, dad]
-        #expect(Tab.profile(claiming: "Timmy", in: profiles)?.stableID == "timmy")
-        #expect(Tab.profile(claiming: "tim", in: profiles)?.stableID == "tim")
+    /// Rule #778: a spelling claimed by two profiles is ambiguous even when
+    /// it is one of them's canonical name — no silent canonical-wins pick.
+    @Test func aCrossClaimedSpellingIsAmbiguousNotCanonicalWins() {
+        let profiles = [crossTim, crossTimmy, dad]
+        #expect(Tab.claim("Timmy", in: profiles) == .ambiguous([crossTim, crossTimmy]))
+        #expect(Tab.claim("tim", in: profiles) == .ambiguous([crossTim, crossTimmy]))
+        #expect(Tab.profile(claiming: "Timmy", in: profiles) == nil)
+        #expect(Tab.profile(claiming: "Tim", in: profiles) == nil)
+        // Unique spellings still resolve.
         #expect(Tab.profile(claiming: "Mimmy", in: profiles)?.stableID == "tim")
+        #expect(Tab.profile(claiming: "Tim Jr", in: profiles)?.stableID == "timmy")
         #expect(Tab.profile(claiming: "dad breen", in: profiles)?.stableID == "dad")
         #expect(Tab.profile(claiming: "Grampa Breen", in: profiles)?.stableID == "dad")
         #expect(Tab.profile(claiming: "Matt", in: profiles) == nil)
+        #expect(Tab.claim("Matt", in: profiles) == .none)
+        // A chosen chip names the profile directly, bypassing resolution.
+        #expect(Tab.claim("Timmy", selected: .profileStableID("timmy"), in: profiles) == .one(crossTimmy))
+        #expect(Tab.claim("Timmy", selected: .profileStableID("gone"), in: profiles) == .none)
+    }
+
+    /// Mirror of ArchivistGraphExecutorTests.executorAndPersonResolverGiveOneVerdict
+    /// for the People-tab path: with or without a tree, the executor's
+    /// outcome for every spelling is exactly PersonResolver's verdict.
+    @Test func peopleTabAndPersonResolverGiveOneVerdict() async throws {
+        let other = Profile(stableID: "other", canonicalName: "Timothy", aliases: ["Mimmy"])
+        let profiles = [crossTim, crossTimmy, other]
+        let resolver = PersonResolver(people: profiles.map {
+            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+        })
+        let stableID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.canonicalName, $0.stableID) })
+        for graph in [nil, tree] as [GedcomFamilyGraph?] {
+            let context = HallieTurnExecutor.Context(profiles: profiles, graph: graph)
+            for spelling in ["Tim", "Timmy", "Mimmy", "Timothy", "Tim Jr", "TIMMY", "Nobody"] {
+                let label = Comment(rawValue: "\(spelling) tree=\(graph != nil)")
+                let result = try await HallieTurnExecutor.execute(
+                    .init(intent: intent("who is \(spelling)?", people: [spelling], operation: .biography)),
+                    context: context)
+                switch resolver.resolve(spelling) {
+                case .ambiguous(let candidates):
+                    #expect(result.outcome == .needsClarification, label)
+                    #expect(result.prose == "Which \(spelling) do you mean?", label)
+                    #expect(result.clarification?.stage == .profileIdentity, label)
+                    #expect(result.clarification?.candidates.map(\.id)
+                            == candidates.map { .profileStableID(stableID[$0]!) }, label)
+                    #expect(result.clarification?.candidates.map(\.label) == candidates, label)
+                case .resolved(let canonicalName):
+                    #expect(result.outcome == .answered, label)
+                    #expect(result.clarification == nil, label)
+                    #expect(result.prose.hasPrefix("\(canonicalName) is one of the people in the People tab"), label)
+                case .unknown:
+                    #expect(result.outcome == .declined, label)
+                    #expect(result.clarification == nil, label)
+                }
+            }
+        }
+    }
+
+    /// Picking a chip after "which one?" finishes the turn from that
+    /// profile — with no tree (People-tab path) and with one (graph path).
+    @Test func choosingAChipAfterWhichOneAnswersFromThatProfile() async throws {
+        for graph in [nil, tree] as [GedcomFamilyGraph?] {
+            let context = HallieTurnExecutor.Context(profiles: [crossTim, crossTimmy], graph: graph)
+            let asked = try await HallieTurnExecutor.execute(
+                .init(intent: intent("who is Timmy?", people: ["Timmy"], operation: .biography)),
+                context: context)
+            let pending = try #require(asked.clarification)
+            #expect(pending.candidates.map(\.label) == ["Tim", "Timmy"])
+            let son = try await HallieTurnExecutor.continue(
+                pending: pending, selecting: .profileStableID("timmy"), context: context)
+            #expect(son.outcome == .answered)
+            #expect(son.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim, Tim Jr."))
+            #expect(son.prose.contains("was born 22 Apr 1965, according to the People profile"))
+            let brother = try await HallieTurnExecutor.continue(
+                pending: pending, selecting: .profileStableID("tim"), context: context)
+            #expect(brother.outcome == .answered)
+            #expect(brother.prose.hasPrefix("Tim is one of the people in the People tab — also known as Timmy, Mimmy."))
+        }
     }
 
     @Test func anAliasClaimedByTwoProfilesStaysAmbiguous() {
@@ -79,7 +157,7 @@ struct HalliePeopleTabTests {
 
     @Test func biographyComesFromTheProfileWhenTheTreeHasNoEntry() async throws {
         let context = HallieTurnExecutor.Context(
-            presenceRecords: records(taggedWith: ["Timmy", "Tim", "Timmy", "Donna"]),
+            presenceRecords: records(taggedWith: ["Timmy", "Tim Jr", "Timmy", "Donna"]),
             profiles: [tim, timmy, dad], graph: tree)
         let result = try await HallieTurnExecutor.execute(
             .init(intent: intent("who is Timmy?", people: ["Timmy"], operation: .biography)),
@@ -87,10 +165,9 @@ struct HalliePeopleTabTests {
 
         #expect(result.outcome == .answered)
         #expect(result.clarification == nil)
-        #expect(result.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim."))
+        #expect(result.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim Jr."))
         #expect(result.prose.contains("was born 22 Apr 1965, according to the People profile"))
-        // "Tim" is an alias of Timmy, so the brother's tag counts too — that
-        // is the gallery's own ambiguity, reported as the data says it.
+        // Tags under any of the profile's own names count.
         #expect(result.prose.contains("tagged in 3 catalog videos"))
         #expect(result.prose.contains("The note on the profile says: “Number four son, sometimes wears glasses” — that's a note, not something I've verified."))
         #expect(result.prose.contains("I couldn't match Timmy to a record in the family tree I have."))
@@ -109,7 +186,7 @@ struct HalliePeopleTabTests {
             .init(intent: intent("who is Tim?", people: ["Tim"], operation: .biography)),
             context: context)
         #expect(result.outcome == .answered)
-        #expect(result.prose.hasPrefix("Tim is one of the people in the People tab — also known as Mimmy, Timmy, Brother."))
+        #expect(result.prose.hasPrefix("Tim is one of the people in the People tab — also known as Mimmy, Brother."))
         #expect(!result.prose.contains("was born"))
         #expect(result.prose.contains("isn't tagged in any catalog videos yet"))
         #expect(result.prose.contains("“Brother Tim”"))
@@ -145,7 +222,7 @@ struct HalliePeopleTabTests {
                                  operation: .kinship, relation: .father)),
             context: context)
         #expect(result.outcome == .declined)
-        #expect(result.prose.hasPrefix("Timmy is in the People tab (also known as Tim), so I know the name — but I can't trace father for Timmy yet."))
+        #expect(result.prose.hasPrefix("Timmy is in the People tab (also known as Tim Jr), so I know the name — but I can't trace father for Timmy yet."))
         #expect(result.prose.contains("I couldn't match Timmy to a record in the family tree I have."))
         #expect(!result.prose.contains("1959"), "no max-birth-year reach claim (2026-08-26)")
         #expect(!result.prose.contains("don't find"))
@@ -190,7 +267,7 @@ struct HalliePeopleTabTests {
         #expect(result.route == .capability)
         #expect(result.outcome == .answered)
         #expect(result.prose.hasPrefix(
-            "I know 3 people from the People tab: Dad (also Grampa Breen, Dick, Dad Breen); Tim (also Mimmy, Timmy, Brother); Timmy (also Tim)."))
+            "I know 3 people from the People tab: Dad (also Grampa Breen, Dick, Dad Breen); Tim (also Mimmy, Brother); Timmy (also Tim Jr)."))
         #expect(result.prose.contains("The family tree adds 2 more names, going up to people born in 1959."))
         #expect(result.prose.hasSuffix("Ask me about anyone by name."))
         #expect(result.basisLine == "Basis: People profiles (3); family tree (2 people); no model call.")
