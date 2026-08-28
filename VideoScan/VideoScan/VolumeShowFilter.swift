@@ -146,6 +146,55 @@ struct VolumeShowFilter: Codable, Equatable {
               !f.roles.isEmpty else { return .default }
         return f
     }
+
+    // MARK: Strict Codable
+    //
+    // `VolumeRole.init(from:)` is deliberately LENIENT — an unknown string
+    // decodes to `.unassigned` so a legacy scan-target document never
+    // fails over a role. For a display filter that leniency is wrong: a
+    // saved payload with a role token this build does not know came from
+    // another build, and honouring the rest would hand Rick a nearly
+    // empty volume list with no hint why. So the roles are decoded as
+    // raw strings here and ANY unknown token fails the decode → caller
+    // falls back to `.default`. (Hand-written Codable ≈ writing your own
+    // operator>> instead of taking the compiler-generated one.)
+
+    private enum CodingKeys: String, CodingKey {
+        case connectedOnly, roles, includeRetired
+    }
+
+    init(connectedOnly: Bool = true,
+         roles: Set<VolumeRole> = Set(VolumeRole.allCases),
+         includeRetired: Bool = false) {
+        self.connectedOnly = connectedOnly
+        self.roles = roles
+        self.includeRetired = includeRetired
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        connectedOnly = try c.decode(Bool.self, forKey: .connectedOnly)
+        includeRetired = try c.decode(Bool.self, forKey: .includeRetired)
+        var known = Set<VolumeRole>()
+        for token in try c.decode([String].self, forKey: .roles) {
+            guard let r = VolumeRole(rawValue: token) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .roles, in: c,
+                    debugDescription: "Unknown VolumeRole token '\(token)'")
+            }
+            known.insert(r)
+        }
+        roles = known
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(connectedOnly, forKey: .connectedOnly)
+        try c.encode(includeRetired, forKey: .includeRetired)
+        // Sorted for a stable string (Set order is not).
+        try c.encode(VolumeRole.allCases.filter { roles.contains($0) }.map(\.rawValue),
+                     forKey: .roles)
+    }
 }
 
 // MARK: - The chip

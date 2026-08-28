@@ -60,7 +60,12 @@ struct FamilyTreeDemoView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if case .loaded(live: false) = model.loadState {
+            if !model.needsRecompile.isEmpty {
+                // codex #826: the demo tree is on screen only because the
+                // loader refused to demote N pulls to one file — say that,
+                // not "no GEDCOM found".
+                EmptyView()
+            } else if case .loaded(live: false) = model.loadState {
                 demoBanner
             } else if model.loadState == .unavailable {
                 unavailableBanner
@@ -74,6 +79,20 @@ struct FamilyTreeDemoView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
+            }
+            if !model.needsRecompile.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Button("Recompile") { Task { await model.recompile() } }
+                        .disabled(model.isRecompiling)
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.10))
             }
             if let warning = model.loadWarning {
                 HStack(spacing: 8) {
