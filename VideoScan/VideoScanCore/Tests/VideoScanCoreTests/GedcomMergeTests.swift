@@ -419,11 +419,12 @@ struct GedcomMergeTests {
         1 TITL Census
         0 TRLR
         """)
-        #expect(a.droppedLineCount == 5, "SOUR+PAGE under BIRT, OCCU, NOTE+CONT; the SOUR record's own lines are not under INDI/FAM (not counted)")
+        #expect(a.droppedLineCount == 7, "SOUR+PAGE under BIRT, OCCU, NOTE+CONT (5) + the whole @S1@ SOUR record (2); the HEAD SOUR envelope line is not counted")
         #expect(a.isMergedArtifact == false)
         var b = a; b.sourceFingerprint = nil
         let outcome = a.merge(with: b)
-        #expect(outcome.droppedLineCount == 10)
+        #expect(outcome.droppedLineCount == 14)
+        #expect(outcome.graph.totalDroppedLineCount == 14, "nameless sources: loss stays unattributed but never under-counted")
         #expect(outcome.graph.isMergedArtifact)
         let back = GedcomFamilyGraph(gedcomText: outcome.graph.gedcomText())
         #expect(back.isMergedArtifact)
@@ -431,6 +432,229 @@ struct GedcomMergeTests {
         // Same-root, same-name re-pull merge: ONE root, one file name — still an artifact.
         #expect(back.roots.count == 1)
         #expect(back.sourceFileNames.isEmpty)
+    }
+
+    /// codex #794 (4): a chained merge keeps every source's name, hash and
+    /// loss. A+B → write → parse → +C lists A, B, C with their figures,
+    /// and the total loss is the sum of all three.
+    @Test func chainedMergeCarriesPerSourceProvenanceThroughTheWrittenFile() throws {
+        var a = rick; a.sourceFileName = "a.ged"; a.sourceFingerprint = "AA11"
+        var b = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        1 SOUR getmyancestors
+        0 @I1@ INDI
+        1 NAME Donna /Hudson/
+        1 OCCU Teacher
+        1 _FSFTID G2CL-86B
+        0 @N1@ NOTE A stray note
+        1 CONT with a continuation
+        0 TRLR
+        """)
+        b.sourceFileName = "b.ged"; b.sourceFingerprint = "bb22"
+        #expect(a.droppedLineCount == 0)
+        #expect(b.droppedLineCount == 3)
+        let ab = a.merge(with: b)
+        #expect(ab.droppedLineCount == 3)
+        #expect(ab.graph.sourceProvenance == [
+            .init(name: "a.ged", sha256: "AA11", droppedLineCount: 0),
+            .init(name: "b.ged", sha256: "bb22", droppedLineCount: 3),
+        ])
+
+        let text = ab.graph.gedcomText(provenance: "A+B")
+        #expect(text.contains("1 _VS_SOURCE a.ged\n2 _VS_SHA256 AA11\n2 _VS_DROPPED 0\n1 _VS_SOURCE b.ged\n2 _VS_SHA256 bb22\n2 _VS_DROPPED 3\n"))
+        var artifact = GedcomFamilyGraph(gedcomText: text)
+        artifact.sourceFileName = "ab.ged"; artifact.sourceFingerprint = "abab"
+        #expect(artifact.droppedLineCount == 0, "our own HEAD envelope + provenance lines are not loss")
+        #expect(artifact.totalDroppedLineCount == 3)
+        #expect(artifact.sourceProvenance.map(\.name) == ["a.ged", "b.ged"])
+        #expect(artifact.sourceProvenance.map(\.sha256) == ["AA11", "bb22"], "hashes read back verbatim")
+        #expect(artifact.sourceProvenance.map(\.droppedLineCount) == [0, 3])
+
+        var c = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I9@ INDI
+        1 NAME Walter /Hudson/
+        1 NOTE x
+        1 NOTE y
+        1 _FSFTID DON1-DAD
+        0 @O1@ OBJE
+        1 FILE photo.jpg
+        0 TRLR
+        """)
+        c.sourceFileName = "c.ged"; c.sourceFingerprint = "cc33"
+        #expect(c.droppedLineCount == 4)
+        let abc = artifact.merge(with: c)
+        #expect(abc.graph.sourceFileNames == ["a.ged", "b.ged", "c.ged"], "the artifact's own name is NOT a source; its sources are")
+        #expect(abc.graph.sourceProvenance.map { "\($0.name):\($0.sha256 ?? "-"):\($0.droppedLineCount)" }
+                == ["a.ged:AA11:0", "b.ged:bb22:3", "c.ged:cc33:4"])
+        #expect(abc.droppedLineCount == 7)
+        #expect(abc.graph.droppedLineCount == 0, "everything attributed")
+        // And once more through text: still three sources.
+        let back = GedcomFamilyGraph(gedcomText: abc.graph.gedcomText())
+        #expect(back.sourceProvenance == abc.graph.sourceProvenance)
+        #expect(back.totalDroppedLineCount == 7)
+        // Merging the same export again (same name + hash) does not list it twice.
+        #expect(abc.graph.merge(with: c).graph.sourceProvenance.count == 3)
+        // A plain single export writes itself as its own one-line provenance.
+        #expect(c.gedcomText().contains("1 _VS_SOURCE c.ged\n2 _VS_SHA256 cc33\n2 _VS_DROPPED 4\n"))
+    }
+
+    /// codex #794 (5): a matched family whose MARR DATE differs keeps the
+    /// first source's date and REPORTS the disagreement with both family
+    /// ids and both values.
+    @Test func matchedFamilyMarriageDateDisagreementIsReported() throws {
+        let donnaWithDate = donnaPull.replacingOccurrences(of: "0 @F9@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n",
+                                                           with: "0 @F9@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n1 MARR\n2 DATE 12 SEP 1981\n")
+        #expect(donnaWithDate != donnaPull)
+        let outcome = rick.merge(with: GedcomFamilyGraph(gedcomText: donnaWithDate))
+        let r = try #require(outcome.graph.person(familySearchID: "GVQV-NW3"))
+        #expect(outcome.graph.marriages(of: r).compactMap(\.date) == ["1981"], "first source kept")
+        let marr = outcome.conflicts.filter { $0.kind == .fieldDisagreement }
+        #expect(marr.count == 1)
+        #expect(outcome.fieldConflictCount == 1)
+        #expect(marr.first?.ids == ["@F2@", "@F9@"])
+        #expect(marr.first?.resolution == "Richard Harding Breen Jr & Donna Hudson MARR DATE: kept “1981” (first source, @F2@); second source (@F9@) says “12 SEP 1981”")
+        // Same date on both sides, or a nil on the first side: no report.
+        #expect(rick.merge(with: donna).fieldConflictCount == 0)
+        let sameDate = donnaPull.replacingOccurrences(of: "0 @F9@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n",
+                                                      with: "0 @F9@ FAM\n1 HUSB @I2@\n1 WIFE @I1@\n1 MARR\n2 DATE 1981\n")
+        #expect(rick.merge(with: GedcomFamilyGraph(gedcomText: sameDate)).fieldConflictCount == 0)
+        #expect(GedcomFamilyGraph(gedcomText: donnaWithDate).merge(with: rick).fieldConflictCount == 1, "reversed: the other side is first")
+        let reversed = GedcomFamilyGraph(gedcomText: donnaWithDate).merge(with: rick).graph
+        let rickInReversed = try #require(reversed.person(familySearchID: "GVQV-NW3"))
+        #expect(rickInReversed.id == "@I2@", "Donna's file is first: its pointers are kept")
+        #expect(reversed.marriages(of: rickInReversed).compactMap(\.date) == ["12 SEP 1981"])
+    }
+
+    // MARK: Determinism sensor (codex #794 item 3)
+
+    /// Deterministic seeded generator (C++: a hand-rolled LCG) so the
+    /// perturbation is reproducible in a failure report.
+    struct SeededRNG: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state
+        }
+    }
+
+    /// The same records in a different file order: the first INDI stays
+    /// first (the root convention is file order by design); everything
+    /// after HEAD and before TRLR is shuffled at record granularity.
+    static func perturbed(_ text: String, seed: UInt64) -> String {
+        var records = text.components(separatedBy: "\n0 ").enumerated().map { $0.offset == 0 ? $0.element : "0 " + $0.element }
+        let head = records.removeFirst()
+        let trailer = records.removeLast()
+        let firstIndiIndex = records.firstIndex { $0.hasSuffix(" INDI") || $0.contains(" INDI\n") }!
+        let firstIndi = records.remove(at: firstIndiIndex)
+        var rng = SeededRNG(state: seed)
+        records.shuffle(using: &rng)
+        return ([head, firstIndi] + records + [trailer]).joined(separator: "\n")
+    }
+
+    /// Fixture with the paths that used to depend on Dictionary order: the
+    /// FIRST graph holds two same-parent unknown-partner families (@F5@,
+    /// @F6@) so a near-miss from the second file must name one of them;
+    /// and two identical-key families (@F7@, @F8@: same lone parent, same
+    /// children) so a key-match from the second file must pick one.
+    static let orderSensitiveFirst = rickPull.replacingOccurrences(of: "0 TRLR", with: """
+    0 @I20@ INDI
+    1 NAME Xavier /Lone/
+    1 SEX M
+    1 FAMS @F5@
+    1 FAMS @F6@
+    1 FAMS @F7@
+    1 FAMS @F8@
+    1 _FSFTID XAVI-001
+    0 @I21@ INDI
+    1 NAME Kid /One/
+    1 FAMC @F5@
+    1 _FSFTID KIDD-001
+    0 @I22@ INDI
+    1 NAME Kid /Two/
+    1 FAMC @F6@
+    1 _FSFTID KIDD-002
+    0 @I23@ INDI
+    1 NAME Kid /Four/
+    1 FAMC @F7@
+    1 FAMC @F8@
+    1 _FSFTID KIDD-004
+    0 @F5@ FAM
+    1 HUSB @I20@
+    1 CHIL @I21@
+    0 @F6@ FAM
+    1 HUSB @I20@
+    1 CHIL @I22@
+    0 @F7@ FAM
+    1 HUSB @I20@
+    1 CHIL @I23@
+    1 MARR
+    2 DATE 1900
+    0 @F8@ FAM
+    1 HUSB @I20@
+    1 CHIL @I23@
+    1 MARR
+    2 DATE 1901
+    0 TRLR
+    """)
+    static let orderSensitiveSecond = donnaPull.replacingOccurrences(of: "0 TRLR", with: """
+    0 @I20@ INDI
+    1 NAME Xavier /Lone/
+    1 SEX M
+    1 FAMS @F20@
+    1 FAMS @F21@
+    1 _FSFTID XAVI-001
+    0 @I24@ INDI
+    1 NAME Kid /Three/
+    1 FAMC @F20@
+    1 _FSFTID KIDD-003
+    0 @I23@ INDI
+    1 NAME Kid /Four/
+    1 FAMC @F21@
+    1 _FSFTID KIDD-004
+    0 @F20@ FAM
+    1 HUSB @I20@
+    1 CHIL @I24@
+    0 @F21@ FAM
+    1 HUSB @I20@
+    1 CHIL @I23@
+    1 MARR
+    2 DATE 1902
+    0 TRLR
+    """)
+
+    /// Merge the same two graphs repeatedly, and with BOTH files'
+    /// records order-perturbed under several seeds: byte-identical
+    /// written text and identical conflict lists every time.
+    @Test func mergeIsDeterministicAcrossRunsAndRecordOrder() throws {
+        let stamp = Date(timeIntervalSince1970: 1_756_400_000)
+        func run(_ a: String, _ b: String) -> (String, [GedcomFamilyGraph.ConflictReport]) {
+            var x = GedcomFamilyGraph(gedcomText: a); x.sourceFileName = "a.ged"; x.sourceFingerprint = "aa"
+            var y = GedcomFamilyGraph(gedcomText: b); y.sourceFileName = "b.ged"; y.sourceFingerprint = "bb"
+            let outcome = x.merge(with: y)
+            return (outcome.graph.gedcomText(provenance: "sensor", now: stamp), outcome.conflicts)
+        }
+        let reference = run(Self.orderSensitiveFirst, Self.orderSensitiveSecond)
+        // The order-sensitive paths are actually exercised.
+        let near = reference.1.filter { $0.kind == .familyKeptSeparate && $0.ids.last == "@FB20@" }
+        #expect(near.map(\.ids) == [["@F5@", "@FB20@"]], "the lowest neighbour is named, always")
+        #expect(reference.1.contains { $0.kind == .fieldDisagreement && $0.ids == ["@F7@", "@F21@"] },
+                "@F21@ folds into the lowest identical-key family @F7@ and its MARR disagreement is reported")
+        #expect(reference.0.contains("0 @F7@ FAM\n1 HUSB @I20@\n1 CHIL @I23@\n1 MARR\n2 DATE 1900\n"))
+
+        for _ in 0..<3 {
+            let again = run(Self.orderSensitiveFirst, Self.orderSensitiveSecond)
+            #expect(again.0 == reference.0)
+            #expect(again.1 == reference.1)
+        }
+        for seed: UInt64 in [1, 7, 42, 1234, 99_991] {
+            let pa = Self.perturbed(Self.orderSensitiveFirst, seed: seed)
+            let pb = Self.perturbed(Self.orderSensitiveSecond, seed: seed &+ 1)
+            #expect(pa != Self.orderSensitiveFirst && pb != Self.orderSensitiveSecond, "perturbation changed the files (seed \(seed))")
+            let again = run(pa, pb)
+            #expect(again.0 == reference.0, "written text differs for seed \(seed)")
+            #expect(again.1 == reference.1, "conflicts differ for seed \(seed)")
+        }
     }
 
     // MARK: Writer

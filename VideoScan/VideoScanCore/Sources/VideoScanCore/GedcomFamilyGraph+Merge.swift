@@ -24,7 +24,13 @@
 //   • When both files describe one person, the FIRST graph's non-nil
 //     values are kept, nils are filled from the second, a differing
 //     second value is REPORTED (`fieldDisagreement`, codex #780), and the
-//     links (FAMC/FAMS) are unioned.
+//     links (FAMC/FAMS) are unioned. The same rule applies to a matched
+//     family's MARR DATE (codex #794): first kept, disagreement reported.
+//   • Deterministic (codex #794): every table is walked in pointer order
+//     (`sortedPointers`), never in Dictionary order, so the same two
+//     graphs — or the same records in a different file order — give a
+//     byte-identical `gedcomText()` and the same conflict list. Pinned by
+//     a sensor in GedcomMergeTests.
 //   • Pointers from the first graph are kept verbatim; new people and
 //     families from the second get `@IB…@` / `@FB…@` pointers so nothing
 //     from the first file is renumbered (photo folders are keyed by it).
@@ -49,13 +55,18 @@ extension GedcomFamilyGraph {
             /// same couple/children key: kept as its own record.
             case familyKeptSeparate
             /// Both sources give a different non-nil value for one field
-            /// of the same person: the FIRST source's value is kept
-            /// (codex #780), the other is recorded here (and a second NAME
-            /// survives as an alternate name).
+            /// of the same person — or the MARR DATE of the same family
+            /// (codex #794): the FIRST source's value is kept (codex #780),
+            /// the other is recorded here (and a second NAME survives as
+            /// an alternate name).
             case fieldDisagreement
         }
         public let kind: Kind
-        /// Merged-space pointers involved (person, or [existing FAM, new FAM]).
+        /// Pointers involved: `[person]` (merged space); `[existing FAM,
+        /// new FAM]` for a family kept separate; `[merged FAM, the second
+        /// file's own FAM pointer]` for a matched-family MARR disagreement
+        /// (the second family has no merged pointer — it folded into the
+        /// first).
         public let ids: [String]
         public let resolution: String
     }
@@ -79,9 +90,9 @@ extension GedcomFamilyGraph {
         public let conflicts: [ConflictReport]
         /// How many `fieldDisagreement` entries `conflicts` holds.
         public var fieldConflictCount: Int { conflicts.filter { $0.kind == .fieldDisagreement }.count }
-        /// Lines the parser dropped from BOTH sources (see
-        /// `GedcomFamilyGraph.droppedLineCount`) — what the written
-        /// artifact cannot carry.
+        /// Lines lost from EVERY source on the way to `graph` (each side's
+        /// `totalDroppedLineCount`) — what the written artifact cannot
+        /// carry. Per-source detail is in `graph.sourceProvenance`.
         public let droppedLineCount: Int
     }
 
@@ -143,7 +154,10 @@ extension GedcomFamilyGraph {
             if familyByKey[key.key] == nil { familyByKey[key.key] = fid }
             for parent in key.parents { familiesByParent[parent, default: []].append(fid) }
         }
-        for (fid, fam) in self.families { index(fid, fam, in: people) }
+        // Pointer order, not Dictionary order: which record wins a
+        // duplicate key and which neighbour a near-miss names must be the
+        // same every run (codex #794).
+        for fid in Self.sortedPointers(self.families.keys) { index(fid, self.families[fid]!, in: people) }
         var familyMap: [String: String] = [:]
         familyMap.reserveCapacity(other.families.count)
         for fid in Self.sortedPointers(other.families.keys) {
@@ -160,7 +174,16 @@ extension GedcomFamilyGraph {
                 for child in mapped.children where !merged.children.contains(child) {
                     merged.children.append(child)
                 }
-                if merged.marriageDate == nil { merged.marriageDate = mapped.marriageDate }
+                if let mine = merged.marriageDate, !mine.isEmpty {
+                    if let theirDate = mapped.marriageDate, !theirDate.isEmpty, theirDate != mine {
+                        let who = key.parents.compactMap { people[$0]?.name }.joined(separator: " & ")
+                        conflicts.append(ConflictReport(
+                            kind: .fieldDisagreement, ids: [existing, fid],
+                            resolution: "\(who) MARR DATE: kept “\(mine)” (first source, \(existing)); second source (\(fid)) says “\(theirDate)”"))
+                    }
+                } else {
+                    merged.marriageDate = mapped.marriageDate
+                }
                 families[existing] = merged
             } else {
                 let fresh = Self.freshPointer(fid, prefix: "@FB", taken: families)
@@ -201,15 +224,25 @@ extension GedcomFamilyGraph {
         for id in other.rootPersonIDs.compactMap({ personMap[$0] }) where !roots.contains(id) {
             roots.append(id)
         }
-        let mineNames = sourceFileNames.isEmpty ? [sourceFileName].compactMap { $0 } : sourceFileNames
-        let theirNames = other.sourceFileNames.isEmpty ? [other.sourceFileName].compactMap { $0 } : other.sourceFileNames
-        var names = mineNames
-        for n in theirNames where !names.contains(n) { names.append(n) }
-
-        let dropped = droppedLineCount + other.droppedLineCount
+        // Union of the two sides' provenance, first side first, keyed by
+        // (name, hash) so the same export listed twice stays one entry
+        // and a re-pull under the same name with different content does
+        // not. A source with no name (text parse) cannot be listed; its
+        // loss stays in the merged graph's own `droppedLineCount`, so
+        // `totalDroppedLineCount` never under-counts.
+        var provenance = effectiveProvenance
+        for p in other.effectiveProvenance
+        where !provenance.contains(where: { $0.name == p.name && $0.sha256 == p.sha256 }) {
+            provenance.append(p)
+        }
+        var names: [String] = []
+        for p in provenance where !names.contains(p.name) { names.append(p.name) }
+        let dropped = totalDroppedLineCount + other.totalDroppedLineCount
+        let attributed = provenance.reduce(0) { $0 + $1.droppedLineCount }
         var graph = GedcomFamilyGraph(people: people, families: families,
                                       rootPersonIDs: roots, sourceFileNames: names,
-                                      isMergedArtifact: true, droppedLineCount: dropped)
+                                      isMergedArtifact: true, droppedLineCount: max(0, dropped - attributed),
+                                      sourceProvenance: provenance)
         graph.sourceDirectory = sourceDirectory
         return MergeOutcome(graph: graph, sharedPeopleCount: shared, addedPeopleCount: added,
                             unmatched: unmatched, pointerMap: personMap, conflicts: conflicts,

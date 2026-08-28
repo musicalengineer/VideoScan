@@ -146,12 +146,67 @@ public struct GedcomFamilyGraph: Sendable {
     /// The HEAD `1 NOTE` (with CONT/CONC joined), as written by the merge.
     /// Nil when the file has none.
     public private(set) var headNote: String?
-    /// Lines under INDI/FAM records that this parser does NOT keep (other
-    /// events, sources, notes, media, sub-lines of those) — what a writer
-    /// round-trip would lose. Counted at parse so the loss can be stated
-    /// (codex #780: "loss accounting"). A merged graph carries the sum of
-    /// its sources'.
+    /// Loss accounting (codex #780, tightened codex #794): the number of
+    /// lines of THIS parse that the graph does not retain — what a writer
+    /// round-trip of this graph would lose. "Retained" means one of:
+    ///   • a record-opening line the graph models (`0 HEAD`, `0 TRLR`,
+    ///     `0 @…@ INDI`, `0 @…@ FAM`);
+    ///   • an INDI/FAM line the parser stored (NAME, SEX, BIRT/DEAT
+    ///     DATE+PLAC, FAMC, FAMS, _FSFTID, HUSB, WIFE, CHIL, MARR DATE);
+    ///   • a HEAD line the parser stores (`_VS_*` provenance, NOTE with its
+    ///     CONT/CONC) or the file-envelope boilerplate the writer
+    ///     regenerates (SOUR/DEST/DATE/GEDC/CHAR/LANG/SUBM/SUBN/FILE/COPR/
+    ///     PLAC and their sub-lines) — these describe the file, not the
+    ///     family, so they are neither kept nor counted as lost.
+    /// Everything else counts: other INDI/FAM events, sources, notes, media
+    /// and their sub-lines, unknown HEAD tags, and every top-level record
+    /// the graph has no model for (SOUR, OBJE, NOTE, REPO, SUBM, …) with
+    /// all its sub-lines. Lines without a valid `<level> <tag>` prefix are
+    /// not GEDCOM lines and are not counted.
+    ///
+    /// For a merged graph this is the loss of the merge artifact ITSELF
+    /// (0 when built in memory); the sources' losses live in
+    /// `sourceProvenance`, and `totalDroppedLineCount` is the sum.
     public private(set) var droppedLineCount = 0
+    /// One source export this tree was built from, with the fingerprint
+    /// and loss recorded when it was read (codex #794): written to a
+    /// merged .ged as `1 _VS_SOURCE name` / `2 _VS_SHA256 hex` /
+    /// `2 _VS_DROPPED n` and read back, so a chained merge (A+B → write →
+    /// parse → +C) still lists A, B and C with their hashes and losses.
+    public struct SourceProvenance: Sendable, Equatable {
+        public var name: String
+        /// SHA-256 hex of the source file; nil when the source was not
+        /// fingerprinted (text parse, or an older artifact without the line).
+        public var sha256: String?
+        /// `droppedLineCount` of that source's parse.
+        public var droppedLineCount: Int
+        public init(name: String, sha256: String?, droppedLineCount: Int) {
+            self.name = name; self.sha256 = sha256; self.droppedLineCount = droppedLineCount
+        }
+    }
+    /// Structured provenance read from a merged file's HEAD or built by
+    /// the merge; empty for a plain export (see `effectiveProvenance`).
+    /// Kept in step with `sourceFileNames` (one entry per name, same
+    /// order). Module-settable so the compiled-tree codec can restore it.
+    public internal(set) var sourceProvenance: [SourceProvenance] = []
+    /// Provenance with the plain-export case filled in: a graph with no
+    /// structured entries describes itself from `sourceFileName` /
+    /// `sourceFingerprint` / `droppedLineCount` (one file), or from bare
+    /// `sourceFileNames` (a decoded artifact whose codec carried names
+    /// only — hash unknown, loss left unattributed in `droppedLineCount`).
+    public var effectiveProvenance: [SourceProvenance] {
+        if !sourceProvenance.isEmpty { return sourceProvenance }
+        let names = sourceFileNames.isEmpty ? [sourceFileName].compactMap { $0 } : sourceFileNames
+        if names.count == 1 {
+            return [SourceProvenance(name: names[0], sha256: sourceFingerprint, droppedLineCount: droppedLineCount)]
+        }
+        return names.map { SourceProvenance(name: $0, sha256: nil, droppedLineCount: 0) }
+    }
+    /// Every line lost on the way to this graph: its own parse loss plus
+    /// the recorded loss of each source it was merged from.
+    public var totalDroppedLineCount: Int {
+        droppedLineCount + sourceProvenance.reduce(0) { $0 + $1.droppedLineCount }
+    }
     /// Number of FAM records — the "families" figure in Hallie's answer.
     public var familyCount: Int { families.count }
 
@@ -162,13 +217,15 @@ public struct GedcomFamilyGraph: Sendable {
     /// and `sourceFileNames` are taken as given.
     init(people: [String: Person], families: [String: Family],
          rootPersonIDs: [String], sourceFileNames: [String],
-         isMergedArtifact: Bool = false, droppedLineCount: Int = 0) {
+         isMergedArtifact: Bool = false, droppedLineCount: Int = 0,
+         sourceProvenance: [SourceProvenance] = []) {
         self.people = people
         self.families = families
         self.rootPersonIDs = rootPersonIDs.filter { people[$0] != nil }
         self.sourceFileNames = sourceFileNames
         self.isMergedArtifact = isMergedArtifact
         self.droppedLineCount = droppedLineCount
+        self.sourceProvenance = sourceProvenance
         var index: [String: String] = [:]
         index.reserveCapacity(people.count)
         // Sorted so a duplicated FSID (a malformed file) resolves the same
@@ -184,13 +241,18 @@ public struct GedcomFamilyGraph: Sendable {
         var currentFam: (id: String, family: Family)?
         /// Inside `0 HEAD`: VideoScan's own provenance tags live there.
         var inHead = false
+        /// Inside a top-level record the graph has no model for (SOUR,
+        /// OBJE, NOTE, REPO, SUBM, …): every line is counted as dropped.
+        var inUnmodelledRecord = false
         /// Roots named by the HEAD (`_VS_ROOT`); when present they REPLACE
         /// the first-INDI assumption. Applied after the parse so they can
         /// be checked against the people actually read.
         var headRoots: [String] = []
         var firstIndi: String?
-        /// True while a HEAD NOTE's CONT/CONC lines may follow.
-        var inHeadNote = false
+        /// The level-1 HEAD tag currently open (NOTE → CONT/CONC follow;
+        /// _VS_SOURCE → _VS_SHA256/_VS_DROPPED follow; envelope tags →
+        /// their sub-lines are boilerplate).
+        var headOpenTag = ""
         /// The level-1 tag currently open under a record, for loss
         /// accounting of its sub-lines.
         var openTagKept = true
@@ -198,6 +260,7 @@ public struct GedcomFamilyGraph: Sendable {
         var pendingEvent: String?
         /// Same for a family record: MARR.
         var pendingFamilyEvent: String?
+        let bom = CharacterSet(charactersIn: "\u{feff}")
 
         func flush() {
             if let person = currentIndi {
@@ -221,8 +284,10 @@ public struct GedcomFamilyGraph: Sendable {
 
             if level == 0 {
                 flush()
-                inHead = parts.count == 2 && parts[1].trimmingCharacters(
-                    in: CharacterSet(charactersIn: "\u{feff}")) == "HEAD"
+                let opener = parts[1].trimmingCharacters(in: bom)
+                inHead = parts.count == 2 && opener == "HEAD"
+                inUnmodelledRecord = false
+                headOpenTag = ""
                 // "0 @I…@ INDI" / "0 @F…@ FAM"
                 if parts.count == 3, parts[1].hasPrefix("@") {
                     let id = String(parts[1])
@@ -234,8 +299,13 @@ public struct GedcomFamilyGraph: Sendable {
                     case "FAM":
                         currentFam = (id, Family())
                     default:
-                        break
+                        // "0 @S1@ SOUR", "0 @O1@ OBJE", "0 @N1@ NOTE"…
+                        inUnmodelledRecord = true
+                        droppedLineCount += 1
                     }
+                } else if !inHead, opener != "TRLR" {
+                    inUnmodelledRecord = true
+                    droppedLineCount += 1
                 }
                 continue
             }
@@ -247,22 +317,42 @@ public struct GedcomFamilyGraph: Sendable {
                 // VideoScan provenance (written by the merge, ignored by
                 // every other reader as a custom `_` tag), and the NOTE
                 // with its GEDCOM continuation lines (CONT = newline,
-                // CONC = same line).
+                // CONC = same line). Envelope boilerplate is neither kept
+                // nor counted (see `droppedLineCount`).
+                var kept = true
                 if level == 1 {
-                    inHeadNote = false
+                    headOpenTag = tag
                     switch tag {
                     case "_VS_ROOT" where value.hasPrefix("@"): headRoots.append(value)
-                    case "_VS_SOURCE" where !value.isEmpty: sourceFileNames.append(value)
+                    case "_VS_SOURCE" where !value.isEmpty:
+                        sourceFileNames.append(value)
+                        sourceProvenance.append(SourceProvenance(name: value, sha256: nil, droppedLineCount: 0))
                     case "_VS_MERGED": isMergedArtifact = value.uppercased().hasPrefix("Y")
-                    case "NOTE":
-                        headNote = value
-                        inHeadNote = true
-                    default: break
+                    case "NOTE": headNote = value
+                    default:
+                        kept = Self.headEnvelopeTags.contains(tag)
+                        if !kept { headOpenTag = "" }
                     }
-                } else if level == 2, inHeadNote {
+                } else if level == 2, headOpenTag == "NOTE" {
                     if tag == "CONT" { headNote = (headNote ?? "") + "\n" + value }
                     else if tag == "CONC" { headNote = (headNote ?? "") + value }
+                    else { kept = false }
+                } else if level == 2, headOpenTag == "_VS_SOURCE", !sourceProvenance.isEmpty {
+                    let last = sourceProvenance.count - 1
+                    switch tag {
+                    case "_VS_SHA256" where !value.isEmpty: sourceProvenance[last].sha256 = value
+                    case "_VS_DROPPED":
+                        if let n = Int(value), n >= 0 { sourceProvenance[last].droppedLineCount = n } else { kept = false }
+                    default: kept = false
+                    }
+                } else {
+                    kept = Self.headEnvelopeTags.contains(headOpenTag)
                 }
+                if !kept { droppedLineCount += 1 }
+                continue
+            }
+            if inUnmodelledRecord {
+                droppedLineCount += 1
                 continue
             }
             if var person = currentIndi {
@@ -581,6 +671,11 @@ public struct GedcomFamilyGraph: Sendable {
     /// else under a record is counted in `droppedLineCount`.
     static let keptPersonTags: Set<String> = ["NAME", "SEX", "BIRT", "DEAT", "FAMC", "FAMS", "_FSFTID"]
     static let keptFamilyTags: Set<String> = ["HUSB", "WIFE", "CHIL", "MARR"]
+    /// HEAD level-1 tags that describe the FILE (GEDCOM 5.5.1 header
+    /// structure), regenerated by the writer: not kept, not counted lost.
+    static let headEnvelopeTags: Set<String> = [
+        "SOUR", "DEST", "DATE", "GEDC", "CHAR", "LANG", "SUBM", "SUBN", "FILE", "COPR", "PLAC",
+    ]
 
     /// Returns false when the line was NOT retained (loss accounting).
     @discardableResult

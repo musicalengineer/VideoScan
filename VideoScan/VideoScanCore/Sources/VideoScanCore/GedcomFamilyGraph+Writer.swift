@@ -5,8 +5,9 @@
 // GedcomMergeTests.
 //
 // Written: HEAD (SOUR, GEDC, CHAR, a NOTE with the provenance sentence,
-// and VideoScan's own `_VS_SOURCE` / `_VS_ROOT` lines the parser reads
-// back), then every INDI — roots first, in root order, so a reader that
+// and VideoScan's own `_VS_MERGED` / `_VS_SOURCE` (+ `_VS_SHA256`,
+// `_VS_DROPPED` sub-lines per source, codex #794) / `_VS_ROOT` lines the
+// parser reads back), then every INDI — roots first, in root order, so a reader that
 // only knows the first-INDI convention still lands on Rick — with NAME
 // (primary and alternates), SEX, BIRT/DEAT DATE+PLAC, FAMC, FAMS,
 // _FSFTID; then every FAM with HUSB, WIFE, CHIL, MARR DATE; then TRLR.
@@ -37,7 +38,11 @@ extension GedcomFamilyGraph {
             Self.appendNote(provenance, level: 1, to: &lines)
         }
         if isMergedArtifact { lines.append("1 _VS_MERGED Y") }
-        for name in sourceFileNames { lines.append("1 _VS_SOURCE " + name) }
+        for source in effectiveProvenance {
+            lines.append("1 _VS_SOURCE " + source.name)
+            if let sha = source.sha256, !sha.isEmpty { lines.append("2 _VS_SHA256 " + sha) }
+            lines.append("2 _VS_DROPPED \(source.droppedLineCount)")
+        }
         for id in rootPersonIDs { lines.append("1 _VS_ROOT " + id) }
 
         let rootSet = Set(rootPersonIDs)
