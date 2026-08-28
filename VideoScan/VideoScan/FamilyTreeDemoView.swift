@@ -357,6 +357,18 @@ struct FamilyTreeDemoView: View {
                     }
                     .buttonStyle(.bordered)
                 } else {
+                    if model.isLive {
+                        // Back to the first root (Rick) after wandering up
+                        // the tree (2026-08-28).
+                        Button {
+                            model.focusHome()
+                            zoom = 0.88
+                        } label: {
+                            Label("Home", systemImage: "house")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Focus the tree's root person")
+                    }
                     Button {
                         if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
                         zoom = 0.88
