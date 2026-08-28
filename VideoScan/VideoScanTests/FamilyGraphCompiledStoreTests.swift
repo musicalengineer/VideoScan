@@ -67,7 +67,8 @@ struct FamilyGraphCompiledStoreTests {
         let box = try Sandbox(); defer { box.tearDown() }
         let old = Date(timeIntervalSinceNow: -3600)
         let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
-        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4), as: "b.ged", mtime: old)
+        // Distinct FamilySearch IDs so the two pulls are different families (synthetic FSIDs are index-based).
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4).replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D"), as: "b.ged", mtime: old)
         let store = box.store()
         let ga = try #require(GedcomFamilyGraph(fileURL: a)), gb = try #require(GedcomFamilyGraph(fileURL: b))
         let merged = ga.merged(with: gb)
