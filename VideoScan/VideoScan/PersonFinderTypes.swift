@@ -535,8 +535,36 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// other profiles' kinship rows anchor on it. Assigned on first load of
     /// an older profile.json and persisted by `load(name:)`.
     var uuid: UUID = UUID()
+    /// Whether `uuid` is known to be on disk (codex #799/#800). False only
+    /// when a legacy profile's minted uuid could NOT be written (read-only
+    /// folder, full disk). TRANSIENT — deliberately absent from CodingKeys
+    /// so it is never serialized; a decoded profile starts `true` and the
+    /// loader flips it on write failure. Anchor to such a profile through
+    /// `kinshipAnchor`, never `.profile(id: uuid)` directly, or the id
+    /// dangles after restart ("a removed profile").
+    var uuidPersisted: Bool = true
+
+    /// The anchor other profiles should store for THIS profile: the durable
+    /// uuid when it is on disk, otherwise the name (upgraded automatically
+    /// by `listAll` once the uuid persists). The only sanctioned way to
+    /// mint a `.profile(id:)` anchor from a profile.
+    var kinshipAnchor: KinshipAnchor {
+        uuidPersisted ? .profile(id: uuid) : .profileName(name)
+    }
 
     // MARK: Codable — tolerate missing keys from older JSON files
+
+    /// Explicit so the transient `uuidPersisted` stays out of profile.json.
+    /// (C++: the serializer's field list, spelled out instead of reflected.)
+    /// A new stored property MUST be added here or it silently won't save.
+    enum CodingKeys: String, CodingKey {
+        case name, referencePath, rejectedFiles, engine
+        case visionThreshold, arcfaceThreshold, adafaceThreshold
+        case minFaceConfidence, largestFaceOnly, coverImageFilename, notes, aliases
+        case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
+        case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
+        case kinships, kinshipsQuarantined, uuid
+    }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
          engine: String = RecognitionEngine.vision.rawValue,
@@ -683,7 +711,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         // Failure is logged, not thrown — the load itself still succeeds.
         if !Self.hasUUIDKey(data) {
             do { try profile.save() } catch {
-                identityLog.error("POIProfile load: could not persist the minted uuid for '\(profile.name, privacy: .public)' — \(String(describing: error), privacy: .public)")
+                profile.uuidPersisted = false
+                identityLog.error("POIProfile load: could not persist the minted uuid for '\(profile.name, privacy: .public)' — anchors to it stay name-based. \(String(describing: error), privacy: .public)")
             }
         }
         return profile
@@ -698,12 +727,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// upgraded form is written the next time that profile is saved). Names
     /// that match no profile are left as-is so the row still displays.
     ///
-    /// `unpersistedUUIDs` (codex #791): uuids that were minted in memory
-    /// but could NOT be written to disk. Anchors are never upgraded to one
-    /// of those — the id would dangle after restart — so the row keeps its
-    /// name anchor and gets another chance next launch.
+    /// Codex #791/#799: a uuid that was minted in memory but could NOT be
+    /// written to disk (`uuidPersisted == false`, or listed in
+    /// `unpersistedUUIDs`) is never anchored — the id would dangle after
+    /// restart — so the row keeps its name anchor and gets another chance
+    /// next launch. Both signals are honoured so a caller can't forget one.
     static func upgradingKinshipAnchors(_ profiles: [POIProfile],
                                         unpersistedUUIDs: Set<UUID> = []) -> [POIProfile] {
+        let blocked = unpersistedUUIDs.union(profiles.filter { !$0.uuidPersisted }.map(\.uuid))
         let byName = Dictionary(profiles.map { (PersonResolver.normalize($0.name), $0.uuid) },
                                 uniquingKeysWith: { first, _ in first })
         return profiles.map { profile in
@@ -711,7 +742,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
             copy.kinships = profile.kinships.map { row in
                 guard case .profileName(let name) = row.relativeTo,
                       let id = byName[PersonResolver.normalize(name)],
-                      !unpersistedUUIDs.contains(id) else { return row }
+                      !blocked.contains(id) else { return row }
                 var upgraded = row
                 upgraded.relativeTo = .profile(id: id)
                 return upgraded
@@ -759,7 +790,16 @@ struct POIProfile: Codable, Identifiable, Equatable {
                 identityLog.error("POIProfile listAll: could not persist the minted uuid for '\(profile.name, privacy: .public)' — kinship anchors to it stay name-based this launch. \(String(describing: error), privacy: .public)")
             }
         }
-        return upgradingKinshipAnchors(decoded.profiles, unpersistedUUIDs: unpersisted)
+        // The returned profiles CARRY the failure (codex #799): anyone
+        // minting an anchor from them (the edit sheet's picker) goes through
+        // `kinshipAnchor`, which falls back to the name for these.
+        let profiles = decoded.profiles.map { profile -> POIProfile in
+            guard unpersisted.contains(profile.uuid) else { return profile }
+            var copy = profile
+            copy.uuidPersisted = false
+            return copy
+        }
+        return upgradingKinshipAnchors(profiles, unpersistedUUIDs: unpersisted)
     }
 
     /// Decode profile.json in each folder; corrupt/missing entries are

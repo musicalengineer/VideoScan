@@ -466,7 +466,10 @@ struct PersonEditSheet: View {
 
                     Menu {
                         ForEach(relatableProfiles) { profile in
-                            Button(profile.name) { row.anchor = .profile(id: profile.uuid) }
+                            // `kinshipAnchor`, not `.profile(id: profile.uuid)`: a
+                            // profile whose uuid failed to persist (codex #799)
+                            // is anchored by name so nothing dangling is saved.
+                            Button(profile.name) { row.anchor = profile.kinshipAnchor }
                         }
                         if relatableProfiles.isEmpty {
                             Text("No other people yet")
