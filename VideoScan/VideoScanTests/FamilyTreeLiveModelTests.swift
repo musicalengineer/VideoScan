@@ -395,9 +395,11 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.isLive)
         #expect(model.loadState == .loaded(live: true))
         #expect(model.peopleCount == 18)
-        // Sorted list begins with the Breens; selection follows it.
+        // Sorted list begins with the Breens; the selection does NOT follow
+        // it any more (2026-08-28): with nothing remembered the tree opens
+        // on its first root — no _VS_ROOT here, so the first INDI, John (I1).
         #expect(model.filteredPeople.first?.surname == "Breen")
-        #expect(model.selectedID == model.filteredPeople.first?.id)
+        #expect(model.selectedID == "@I1@")
         #expect(!model.scene.cards.isEmpty)
         #expect(model.scene.cards.contains { $0.isRoot })
     }

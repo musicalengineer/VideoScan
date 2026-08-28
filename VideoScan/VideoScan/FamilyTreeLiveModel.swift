@@ -529,7 +529,19 @@ final class FamilyTreeLiveModel: ObservableObject {
             guard let previousPerson else { return id }
             return Self.sameIdentity(previousPerson, candidate) ? id : nil
         }
-        selectedID = keep ?? (newGraph.map(defaultFocusID) ?? FamilyTreeDemoData.rootID)
+        // Two steps on purpose. `keep ?? (newGraph.map(defaultFocusID) ?? demo)`
+        // type-checks as Optional<String?> and a nil `keep` is promoted to
+        // .some(nil) — non-nil — so `??` returned nil and never evaluated the
+        // fallback (M1 run 8/28: every install ended unselected). C++ analogy:
+        // std::optional<std::optional<T>> — an "empty" inner value is a
+        // present outer one.
+        let fallback: String?
+        if let newGraph {
+            fallback = defaultFocusID(in: newGraph)
+        } else {
+            fallback = FamilyTreeDemoData.rootID
+        }
+        selectedID = keep ?? fallback
         refilter()
         scheduleNotesResolverRebuild()
         rebuildSelection()
