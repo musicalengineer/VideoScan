@@ -276,8 +276,10 @@ enum HallieAppTurnCoordinator {
                 }
             },
             loadGraph: {
-                FamilyAssetConfigurationCenter.shared
-                    .snapshot().loadFamilyGraph()
+                // Promoted artifact only, one decode per process (codex #792).
+                FamilyGraphSharedCache.shared.graph(
+                    for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                    store: .app)
             },
             loadCyberBrain: {
                 guard let root = FileManager.default.urls(

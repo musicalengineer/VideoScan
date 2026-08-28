@@ -1685,9 +1685,13 @@ struct ArchivistChatWindow: View {
 
     private func loadFamilyGraph() -> GedcomFamilyGraph? {
         // Re-check authority on every legacy-path use. A cached graph must not
-        // survive an archive disconnect or UUID refusal.
-        FamilyAssetConfigurationCenter.shared
-            .snapshot().loadFamilyGraph()
+        // survive an archive disconnect or UUID refusal — the shared cache
+        // keys on the snapshot's access + directory + store pointer, so a
+        // revoked authority returns nil and drops the cached tree. The
+        // promoted artifact is decoded once per process (codex #792).
+        FamilyGraphSharedCache.shared.graph(
+            for: FamilyAssetConfigurationCenter.shared.snapshot(),
+            store: .app)
     }
 
     /// The archivist's reply policy — resolution first, then intent.

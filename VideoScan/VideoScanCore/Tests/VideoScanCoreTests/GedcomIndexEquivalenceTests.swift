@@ -289,6 +289,123 @@ final class GedcomIndexEquivalenceTests: XCTestCase {
         ])
     }
 
+    /// Tie-break sensor (codex #792). The CSR keeps children and spouses in
+    /// GEDCOM order; the frozen BFS sorts every neighbour list by pointer.
+    /// This tree lists @I1@'s children as @I8@,@I5@ and spouses as @I9@,@I3@
+    /// (both out of order) and gives each pair a shared 2-hop target:
+    ///   @I6@ married both @I8@ and @I5@   → expected via child @I5@
+    ///   @I2@ is a child of both @I9@ and @I3@ → expected via spouse @I3@
+    /// An unsorted CSR walk picks @I8@ / @I9@ instead — a different but
+    /// equally short path, which is exactly what Hallie must not do
+    /// between two runs of the same question.
+    func testTieBreakMatchesFrozenReferenceWhenCSRListsAreUnsorted() throws {
+        let text = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Start /Person/
+        1 SEX M
+        1 FAMS @F9@
+        1 FAMS @F3@
+        0 @I9@ INDI
+        1 NAME Later /Wife/
+        1 SEX F
+        1 FAMS @F9@
+        1 FAMS @F91@
+        0 @I3@ INDI
+        1 NAME Earlier /Wife/
+        1 SEX F
+        1 FAMS @F3@
+        1 FAMS @F31@
+        0 @I2@ INDI
+        1 NAME Shared /Child/
+        1 SEX F
+        1 FAMC @F91@
+        1 FAMC @F31@
+        0 @I8@ INDI
+        1 NAME Second /Son/
+        1 SEX M
+        1 FAMC @F3@
+        1 FAMS @F81@
+        0 @I5@ INDI
+        1 NAME First /Son/
+        1 SEX M
+        1 FAMC @F3@
+        1 FAMS @F51@
+        0 @I6@ INDI
+        1 NAME Twice /Married/
+        1 SEX F
+        1 FAMS @F81@
+        1 FAMS @F51@
+        0 @F9@ FAM
+        1 HUSB @I1@
+        1 WIFE @I9@
+        0 @F3@ FAM
+        1 HUSB @I1@
+        1 WIFE @I3@
+        1 CHIL @I8@
+        1 CHIL @I5@
+        0 @F91@ FAM
+        1 WIFE @I9@
+        1 CHIL @I2@
+        0 @F31@ FAM
+        1 WIFE @I3@
+        1 CHIL @I2@
+        0 @F81@ FAM
+        1 HUSB @I8@
+        1 WIFE @I6@
+        0 @F51@ FAM
+        1 HUSB @I5@
+        1 WIFE @I6@
+        0 TRLR
+        """
+        let graph = GedcomFamilyGraph(gedcomText: text)
+        let index = graph.index
+        let start = try XCTUnwrap(index.ordinal(of: "@I1@"))
+        // The fixture must actually exercise the tie: CSR lists are NOT sorted.
+        let children = Array(index.children(of: start)), spouses = Array(index.spouses(of: start))
+        XCTAssertEqual(children.map { index.ids[Int($0)] }, ["@I8@", "@I5@"], "fixture children must be in GEDCOM (unsorted) order")
+        XCTAssertEqual(spouses.map { index.ids[Int($0)] }, ["@I9@", "@I3@"], "fixture spouses must be in GEDCOM (unsorted) order")
+        XCTAssertNotEqual(children, children.sorted())
+        XCTAssertNotEqual(spouses, spouses.sorted())
+
+        let i1 = try XCTUnwrap(graph.people["@I1@"])
+        let viaChild = try XCTUnwrap(graph.relationshipPath(from: i1, to: graph.people["@I6@"]!))
+        XCTAssertEqual(viaChild.steps.map { "\($0.edge.rawValue):\($0.person.id)" }, ["child:@I5@", "spouse:@I6@"])
+        let viaSpouse = try XCTUnwrap(graph.relationshipPath(from: i1, to: graph.people["@I2@"]!))
+        XCTAssertEqual(viaSpouse.steps.map { "\($0.edge.rawValue):\($0.person.id)" }, ["spouse:@I3@", "child:@I2@"])
+
+        // Byte-identical to the frozen reference for every ordered pair.
+        let ids = graph.people.keys.sorted()
+        var pairs: [(String, String)] = []
+        for a in ids { for b in ids where a != b { pairs.append((a, b)) } }
+        checkWalks(graph, label: "tiebreak", pairs: pairs)
+    }
+
+    /// N random start pairs on the 100k synthetic pedigree: the CSR path
+    /// must equal the frozen reference path (same edges, same ids).
+    func testSynthetic100kRandomPairsMatchFrozenPath() {
+        let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
+        let ids = graph.people.keys.sorted()
+        // Deterministic LCG so a failure reproduces (≈ srand(seed)).
+        var state: UInt64 = 0x2545F4914F6CDD1D
+        func next() -> Int {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Int((state >> 33) % UInt64(ids.count))
+        }
+        var mismatches: [String] = []
+        var found = 0
+        for _ in 0..<96 {
+            let a = ids[next()], b = ids[next()]
+            guard a != b, let pa = graph.people[a], let pb = graph.people[b] else { continue }
+            let fast = graph.relationshipPath(from: pa, to: pb)?.steps.map { "\($0.edge.rawValue):\($0.person.id)" }
+            let slow = Self.linearRelationshipPath(graph, from: pa, to: pb)?.map { "\($0.0.rawValue):\($0.1)" }
+            if fast != slow { mismatches.append("\(a)→\(b): fast \(fast ?? []) slow \(slow ?? [])") }
+            if fast != nil { found += 1 }
+        }
+        XCTAssertEqual(mismatches, [], "100k random pairs")
+        XCTAssertGreaterThan(found, 0, "sensor must exercise real paths, not only nil results")
+    }
+
     func testRealExport() throws {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path))
         let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))

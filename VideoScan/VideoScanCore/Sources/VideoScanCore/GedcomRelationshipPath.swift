@@ -117,9 +117,15 @@ extension GedcomFamilyGraph {
     ) -> KinPath? {
         guard from.id != to.id, maxDepth > 0 else { return nil }
         // BFS over the compiled CSR adjacency (2026-08-28). Ordinals are
-        // id-sorted, so ascending ordinals reproduce the "ids sorted per
-        // edge type" tie-break of the original Person walk. Predecessor
-        // arrays here ≈ two flat C arrays instead of a hash map.
+        // assigned from `people.keys.sorted()` (Swift String order), so
+        // ascending ordinals reproduce the "ids sorted per edge type"
+        // tie-break of the original Person walk EXACTLY — every list must
+        // be sorted, not just parents (codex #792: CSR children/spouses
+        // keep GEDCOM order, which silently changed which of two equal-
+        // length paths BFS returned). Sorting here, per query, keeps
+        // already-promoted artifacts valid (no index format bump); the
+        // lists are a handful of entries each. Predecessor arrays here ≈
+        // two flat C arrays instead of a hash map.
         let index = self.index
         guard let start = index.ordinal(of: from.id), let goal = index.ordinal(of: to.id) else { return nil }
         var previous = [Int32](repeating: -1, count: index.count)
@@ -139,8 +145,8 @@ extension GedcomFamilyGraph {
             var next: [Int32] = []
             for id in frontier {
                 for n in index.parents(of: id).sorted() where visit(n, .parent, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
-                for n in index.children(of: id) where visit(n, .child, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
-                for n in index.spouses(of: id) where visit(n, .spouse, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
+                for n in index.children(of: id).sorted() where visit(n, .child, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
+                for n in index.spouses(of: id).sorted() where visit(n, .spouse, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
             }
             frontier = next
             depth += 1

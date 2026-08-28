@@ -272,8 +272,11 @@ enum HallieShellCLI {
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
                     }
-                    return FamilyAssetConfigurationCenter.shared
-                        .snapshot().loadFamilyGraph()
+                    // Default path = the promoted artifact only, cached
+                    // for the life of the shell process (codex #792).
+                    return FamilyGraphSharedCache.shared.graph(
+                        for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                        store: .production)
                 },
                 loadCyberBrain: {
                     guard let root = FileManager.default.urls(
