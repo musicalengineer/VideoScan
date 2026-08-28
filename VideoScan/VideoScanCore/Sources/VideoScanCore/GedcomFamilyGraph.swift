@@ -755,7 +755,8 @@ public struct GedcomFamilyGraph: Sendable {
          sourceModifiedAt: Date?) {
         self.people = decodedPeople
         self.families = families
-        self.rootPersonID = rootPersonID.flatMap { decodedPeople[$0] != nil ? $0 : nil }
+        // Codec v-current stores a single root; multi-root artifacts are the next codec bump.
+        self.rootPersonIDs = rootPersonID.flatMap { decodedPeople[$0] != nil ? [$0] : nil } ?? []
         self.personIDByFamilySearchID = personIDByFamilySearchID
         self.sourceFileName = sourceFileName
         self.sourceDirectory = sourceDirectory
