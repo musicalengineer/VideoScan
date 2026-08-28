@@ -81,8 +81,12 @@ extension HallieTurnExecutor {
                 ArchivistGraphProfileSnapshot(
                     stableID: $0.stableID,
                     canonicalName: $0.canonicalName,
-                    aliases: $0.aliases)
-            })
+                    aliases: $0.aliases,
+                    kinships: $0.kinships,
+                    sex: $0.sex,
+                    birthdate: $0.birthdate)
+            },
+            ownerName: context.speakers.ownerName)
         var voices: [Int: ArchivistGraphQuery.Voice] = [:]
         for binding in request.intent.speakerBindings {
             voices[binding.index] = binding.role == .owner ? .owner : .archivist
@@ -90,6 +94,37 @@ extension HallieTurnExecutor {
         let query = ArchivistGraphQuery(payload, voices: voices)
 
         var pinned = request.intent.pinnedGraphSubjects
+
+        // People-tab relationships first (2026-08-27): "how is Timothy
+        // related to Rick?" is answered from the typed overlay when it links
+        // the two — the sons are not in the FamilySearch tree, so the GEDCOM
+        // ladder below would only decline by name.
+        var pinnedSelections: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
+        for index in 0..<2 {
+            switch pinned[index] {
+            case .profileStableID(let id)?: pinnedSelections[index] = .profileStableID(id)
+            case .gedcomPersonID(let id)?:  pinnedSelections[index] = .gedcomPersonID(id)
+            default: break
+            }
+        }
+        if let overlay = ArchivistGraphExecutor.overlayRelationshipResult(
+            query, inputs: inputs, subjects: pinnedSelections) {
+            var offers: [OfferedAction] = []
+            if let other = overlay.evidence?.counterpart {
+                offers.append(.ask(
+                    question: "who is \(other.name)?",
+                    label: "tell me about \(other.name)"))
+            }
+            return Result(
+                route: .graph,
+                outcome: .answered,
+                prose: overlay.prose,
+                basisLine: overlay.basisLine,
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil,
+                offeredActions: offers)
+        }
         var floating = request.selectedIdentity
         var subjects: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
         var notes: [String] = []

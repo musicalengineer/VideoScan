@@ -520,6 +520,12 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// fusion — NOT consumed by any algorithm yet. Separate from `notes`
     /// (relationship / maiden name) on purpose.
     var identityNotes: String?
+    /// Typed, local-only family relationships ("sibling of Rick"), never
+    /// written to GEDCOM/FamilySearch (director decision 2026-08-27 —
+    /// living relatives stay out of the tree). Inverses, gendered words
+    /// and composed relations are derived by FamilyKinshipOverlay, not
+    /// stored. Missing in older profile.json ⇒ [] (additive schema).
+    var kinships: [Kinship] = []
 
     // MARK: Codable — tolerate missing keys from older JSON files
 
@@ -532,7 +538,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
          sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
          sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
-         identityNotes: String? = nil) {
+         identityNotes: String? = nil, kinships: [Kinship] = []) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -555,6 +561,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.hairColor = hairColor
         self.eyeColor = eyeColor
         self.identityNotes = identityNotes
+        self.kinships = kinships
     }
 
     init(from decoder: Decoder) throws {
@@ -586,6 +593,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
         hairColor         = Self.decodeIdentityField(HairColor.self, forKey: .hairColor, from: c)
         eyeColor          = Self.decodeIdentityField(EyeColor.self, forKey: .eyeColor, from: c)
         identityNotes     = try c.decodeIfPresent(String.self, forKey: .identityNotes)
+        // Kinships (2026-08-27): absent in older files ⇒ []. An unknown
+        // relation case (newer app) drops the whole list with a notice
+        // rather than bricking the load — same doctrine as the identity enums.
+        kinships          = Self.decodeIdentityField([Kinship].self, forKey: .kinships, from: c) ?? []
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare

@@ -95,6 +95,9 @@ struct PersonCard: View {
     var cardWidth: CGFloat = 80
     /// Name label point size — scales with image size.
     var nameFontSize: CGFloat = 13
+    /// Derived "Relationships" caption ("Rick's younger brother"), nil when
+    /// the profile has none. Computed by the gallery, never stored.
+    var relationshipsLine: String? = nil
 
     private var ringGradient: AngularGradient {
         AngularGradient(
@@ -156,6 +159,15 @@ struct PersonCard: View {
                     .foregroundColor(justSaved ? .green : isActive ? .blue : .primary)
             }
             .animation(.easeInOut(duration: 0.3), value: justSaved)
+
+            if let relationshipsLine {
+                Text(relationshipsLine)
+                    .font(.system(size: max(9, nameFontSize * 0.78)))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(relationshipsLine)
+            }
         }
         .frame(width: cardWidth)
         .padding(.vertical, 4)

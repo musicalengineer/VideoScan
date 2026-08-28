@@ -221,7 +221,9 @@ extension HallieTurnExecutor {
                         canonicalName: existing.canonicalName,
                         aliases: existing.aliases + profile.aliases,
                         birthdate: existing.birthdate ?? profile.birthdate,
-                        note: existing.note.isEmpty ? profile.note : existing.note)
+                        note: existing.note.isEmpty ? profile.note : existing.note,
+                        kinships: existing.kinships + profile.kinships,
+                        sex: existing.sex ?? profile.sex)
                 } else {
                     byID[profile.stableID] = profile
                     order.append(profile.stableID)

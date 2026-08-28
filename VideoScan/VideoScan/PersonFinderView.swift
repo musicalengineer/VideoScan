@@ -119,6 +119,9 @@ struct PersonFinderView: View {
     /// (`@StateObject` ≈ the view OWNS this heap object across renders,
     /// vs `@ObservedObject` which merely borrows one.)
     @StateObject var holdoutReview = HoldoutReviewCenter()
+    /// Derived "Relationships" lines for the People cards (2026-08-27).
+    /// Observed so cards refresh once the family tree finishes loading.
+    @ObservedObject var kinshipCenter = KinshipDisplayCenter.shared
 
     // MARK: Loaded Faces Strip — compact scan-readiness indicator
     // (UI lives in PersonFinderView+Faces.swift; stored state stays here.)
