@@ -304,6 +304,19 @@ final class FamilyTreeLiveModel: ObservableObject {
         FamilyAssetConfigurationCenter.shared.snapshot().gedcomDirectory()
     }
 
+    /// Where the last focused person is remembered across relaunches
+    /// (2026-08-28: "it should start at Rick and Donna, and remember where
+    /// we left off"). Production = UserDefaults.standard; a test that
+    /// injects an originals directory gets NO defaults unless it injects
+    /// its own suite (isolation rule) — memory is then session-only.
+    static let lastFocusDefaultsKey = "familyTree.lastFocusFSID"
+    private let focusDefaults: UserDefaults?
+    /// Session memory of the last live focus: the person's FamilySearch ID,
+    /// or their @I pointer when the record has none. Survives leaving the
+    /// tab even when the defaults suite is absent. Never set from the demo
+    /// tree.
+    private(set) var rememberedFocusKey: String?
+
     init(originalsDirectory: URL? = nil,
          compiledStore: FamilyGraphCompiledStore? = nil,
          cyberBrainRootURL: URL? = nil,
@@ -311,8 +324,12 @@ final class FamilyTreeLiveModel: ObservableObject {
          pronunciationFallback: (() -> HalliePronunciationLexicon)? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
+         focusDefaults: UserDefaults? = nil,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
+        self.focusDefaults = focusDefaults
+            ?? (originalsDirectory == nil ? UserDefaults.standard : nil)
+        self.rememberedFocusKey = self.focusDefaults?.string(forKey: Self.lastFocusDefaultsKey)
         // A test that injects an originals directory but no brain gets NO
         // brain, never the real one (isolation rule).
         self.cyberBrainRootURL = cyberBrainRootURL
@@ -512,10 +529,55 @@ final class FamilyTreeLiveModel: ObservableObject {
             guard let previousPerson else { return id }
             return Self.sameIdentity(previousPerson, candidate) ? id : nil
         }
-        selectedID = keep ?? (isLive ? sortedPeople.first?.id : FamilyTreeDemoData.rootID)
+        selectedID = keep ?? (newGraph.map(defaultFocusID) ?? FamilyTreeDemoData.rootID)
         refilter()
         scheduleNotesResolverRebuild()
         rebuildSelection()
+    }
+
+    /// Who the tree opens on when nothing is selected. Order (2026-08-28):
+    /// remembered person (session, then UserDefaults) → first root the tree
+    /// names (Rick, then Donna in the merged tree) → the owner pin → the
+    /// first sidebar row, which is alphabetical and therefore said so in
+    /// the log (the "Jane Allen" / "John Allen VII born 1495" class).
+    private func defaultFocusID(in graph: GedcomFamilyGraph) -> String? {
+        let picked: (GedcomFamilyGraph.Person, String)?
+        if let remembered = rememberedFocusKey,
+           let person = graph.person(familySearchID: remembered) ?? graph.people[remembered] {
+            picked = (person, "remembered")
+        } else {
+            picked = homeFocus(in: graph)
+        }
+        // Swift tuple destructuring in `guard let` ≈ std::tie on an optional pair.
+        guard let (person, reason) = picked else { return nil }
+        appLog.write("[family-tree] default focus → \(person.name) (\(reason))")
+        return person.id
+    }
+
+    private func homeFocus(in graph: GedcomFamilyGraph) -> (GedcomFamilyGraph.Person, String)? {
+        if let root = graph.roots.first { return (root, "first root") }
+        let owner = UserDefaults.standard.string(
+            forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
+        if let pinned = graph.person(familySearchID: owner) { return (pinned, "owner pin") }
+        if let first = sortedPeople.first { return (first, "no root or owner pin — first sidebar row") }
+        return nil
+    }
+
+    /// Persist the live selection so the next install (tab switch,
+    /// relaunch) opens on the same person. Explicit save, not `didSet`.
+    private func rememberFocus() {
+        guard isLive, let id = selectedID, let person = graph?.people[id] else { return }
+        let key = person.familySearchID ?? id
+        guard key != rememberedFocusKey else { return }
+        rememberedFocusKey = key
+        focusDefaults?.set(key, forKey: Self.lastFocusDefaultsKey)
+    }
+
+    /// "Home": back to the first root (Rick), or the owner pin / first row
+    /// when the tree names none. No-op on the demo tree.
+    func focusHome() {
+        guard let graph, let (person, _) = homeFocus(in: graph) else { return }
+        select(person.id)
     }
 
     private func install(outcome: FamilyGraphFileLoader.Outcome, rows: [FamilyTreePersonSummary]? = nil,
@@ -1150,6 +1212,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func rebuildSelection() {
         defer { refreshSelectedNotes() }
         defer { refreshLineOptions() }
+        rememberFocus()
         if let graph, let id = selectedID, let person = graph.people[id] {
             selectedPerson = Self.summary(person)
             selectedRelatives = FamilyTreeRelatives(

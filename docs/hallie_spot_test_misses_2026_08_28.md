@@ -1,0 +1,11 @@
+# Hallie spot-test misses — 2026-08-28 evening (Rick, main 20f18bae, 16k single-source tree loaded)
+
+Ordered by demo impact. Fix after dinner; each gets a corpus line in tests/hallie_live_misses_corpus.json (no regexes — see proposer direction).
+
+1. **"closest common ancestor of rick and donna" → "Donna Hudson is Richard Harding Breen Jr's wife."** The direct-relation shortcut (spouse edge) preempts an explicit common-ancestor ask. Rule: when the question names the shape (common ancestor / related by blood / how far back), run `.commonAncestor` even if a direct edge exists; mention the marriage as an aside. Also: the loaded tree was the single-source 16k one (codec-3 generation refused after codec 4) — Donna had no ancestors; ingest rerun fixes the data side.
+2. **"me (Rick)" → "Which rick do you mean?"** with candidates like Catherine Auker (b. 1374). Speaker/owner pin must bind "me"/"I"/"(Rick)" before any name search; and the graph-route name matcher for a bare given name on a 16k–39k tree is far too loose (offers non-Richards). Constrain: exact/diminutive on GIVEN name only, prefer roots/POI-bridged people, cap candidates, else say so. Known lowercase echo ("rick") too.
+3. **"the one born in 1959"** as a which-one reply → translator decline. Clarification replies by birth year/date/place should select the matching candidate.
+4. **"you presented me a list of people born hundreds or years ago"** → catalog search for "hundreds of years ago" → declined. Conversation-repair / meta turns must not become searches; acknowledge and re-offer a better which-one.
+5. Positive: "can you find richard breen jr family tree?" → parents, spouse, 10,136 ancestors / 19 generations from the compiled artifact — good.
+
+Also: Family Tree navigation has no timing logs (load → layout → focus); add >100 ms lines.
