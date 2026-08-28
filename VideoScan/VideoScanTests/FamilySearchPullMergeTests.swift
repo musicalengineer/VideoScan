@@ -67,18 +67,38 @@ final class FamilySearchPullMergeTests: XCTestCase {
     0 TRLR
     """
 
-    private func makeCoordinator() -> FamilySearchPullCoordinator {
+    private var stagingRoot: URL { root.appendingPathComponent("staging", isDirectory: true) }
+
+    private func makeCoordinator(parseDelay: Duration = .zero) -> FamilySearchPullCoordinator {
         FamilySearchPullCoordinator(
             gedcomDirectory: gedcomDirectory,
             defaultUsername: "rick@example.com",
             scriptURL: staging.appendingPathComponent("get-family-tree.command"),
+            stagingDirectory: stagingRoot,
             locator: FamilySearchToolLocator(overridePath: "/nonexistent/getmyancestors"),
             launcher: SilentLauncher(),
-            pollInterval: .milliseconds(30))
+            pollInterval: .milliseconds(30),
+            parseDelay: parseDelay)
+    }
+
+    private func gedFiles() throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: gedcomDirectory.path).filter { $0.hasSuffix(".ged") }.sorted()
+    }
+
+    /// Both sources written, coordinator parsed and .ready.
+    private func readyCoordinator(parseDelay: Duration = .zero) async throws -> (FamilySearchPullCoordinator, URL, URL) {
+        let current = gedcomDirectory.appendingPathComponent("familysearch-tree-20generations.ged")
+        try Self.rickPull.write(to: current, atomically: true, encoding: .utf8)
+        let download = staging.appendingPathComponent("familysearch-donna-20generations.ged")
+        try Self.donnaPull.write(to: download, atomically: true, encoding: .utf8)
+        let coordinator = makeCoordinator(parseDelay: parseDelay)
+        coordinator.installFromFile(download)
+        await waitForReady(coordinator)
+        return (coordinator, current, download)
     }
 
     private func waitForReady(_ coordinator: FamilySearchPullCoordinator) async {
-        for _ in 0..<200 {
+        for _ in 0..<400 {
             if case .ready = coordinator.phase { return }
             if case .failed = coordinator.phase { return }
             try? await Task.sleep(for: .milliseconds(20))
@@ -102,7 +122,7 @@ final class FamilySearchPullMergeTests: XCTestCase {
         }
         XCTAssertEqual(existing?.people, 2)
 
-        await coordinator.installMerged()
+        await coordinator.installMerged().value
         guard case .installed(let merged, let people) = coordinator.phase else {
             return XCTFail("expected .installed, got \(coordinator.phase)")
         }
@@ -112,7 +132,14 @@ final class FamilySearchPullMergeTests: XCTestCase {
         // Sources untouched, byte for byte.
         XCTAssertEqual(try Data(contentsOf: current), currentBytes)
         XCTAssertEqual(try Data(contentsOf: download), downloadBytes)
-        XCTAssertEqual(try fm.contentsOfDirectory(atPath: gedcomDirectory.path).count, 2)
+        XCTAssertEqual(try gedFiles().count, 2)
+        // SHA-256 sidecars beside BOTH raw sources; no staging left behind.
+        let currentSidecar = try String(contentsOf: current.appendingPathExtension("sha256"), encoding: .utf8)
+        let downloadSidecar = try String(contentsOf: download.appendingPathExtension("sha256"), encoding: .utf8)
+        XCTAssertEqual(currentSidecar.split(separator: " ").first?.count, 64)
+        XCTAssertTrue(downloadSidecar.hasSuffix("familysearch-donna-20generations.ged\n"))
+        XCTAssertEqual((try? fm.contentsOfDirectory(atPath: stagingRoot.path))?.count ?? 0, 0, "staging cleaned up")
+        XCTAssertFalse(fm.fileExists(atPath: merged.appendingPathExtension("partial").path))
 
         // The loader now reads the merged tree: Donna has her father, both roots named.
         let loaded = try XCTUnwrap(FamilyGraphFileLoader(originalsDirectory: gedcomDirectory).loadNewestOutcome())
@@ -125,9 +152,77 @@ final class FamilySearchPullMergeTests: XCTestCase {
         XCTAssertEqual(graph.relatives(.father, of: donna).map(\.name), ["Walter Hudson"])
         XCTAssertEqual(graph.relatives(.husband, of: donna).map(\.name), ["Richard Harding Breen Jr"])
         let text = try String(contentsOf: merged, encoding: .utf8)
-        XCTAssertTrue(text.contains("1 NOTE Merged by VideoScan on "))
+        XCTAssertTrue(text.contains("1 NOTE Derived VideoScan merge artifact (lossy: names, vitals, links, FSIDs)"))
+        XCTAssertTrue(text.contains("2 CONT sources: familysearch-tree-20generations.ged (sha256 " + String(currentSidecar.prefix(64))))
+        XCTAssertTrue(text.contains("conflict familyKeptSeparate") == false, "nothing to keep separate in this fixture")
+        XCTAssertTrue(text.contains("2 CONT Loss: 0 source lines"))
+        XCTAssertTrue(text.contains("1 _VS_MERGED Y"))
+        // codex #780: names + SHA-256 only, never an absolute path.
+        XCTAssertFalse(text.contains(staging.path), "absolute path of the download leaked into the artifact")
+        XCTAssertFalse(text.contains(gedcomDirectory.path))
+        // The sources line is longer than one GEDCOM line (CONC-split in
+        // `text`); check the parsed, re-joined HEAD NOTE.
+        let note = try XCTUnwrap(graph.headNote)
+        XCTAssertTrue(note.contains("familysearch-donna-20generations.ged (sha256 " + String(downloadSidecar.prefix(64)) + "; 2 people; added)"), note)
+        XCTAssertTrue(note.hasPrefix("Derived VideoScan merge artifact (lossy: names, vitals, links, FSIDs)"))
+        XCTAssertFalse(note.contains("/"), "no path separators at all in the provenance")
+        XCTAssertTrue(graph.isMergedArtifact)
         XCTAssertTrue(text.contains("1 _VS_ROOT @I1@\n1 _VS_ROOT @I2@"))
         XCTAssertTrue(text.contains("1 _FSFTID DON1-DAD"))
+    }
+
+    /// codex #773: Keep current AFTER the staged write must leave the
+    /// active folder exactly as it was.
+    func testCancelAfterStagedWriteLeavesActiveDirectoryUnchanged() async throws {
+        let (coordinator, _, _) = try await readyCoordinator(parseDelay: .milliseconds(400))
+        guard case .ready = coordinator.phase else { return XCTFail("expected .ready, got \(coordinator.phase)") }
+        let before = try gedFiles()
+        let task = coordinator.installMerged()
+        XCTAssertTrue(coordinator.isInstalling)
+        // The staged write is quick; the 400 ms pacing sits between it and
+        // the activation check. Cancel inside that window.
+        try await Task.sleep(for: .milliseconds(150))
+        coordinator.cancel()
+        await task.value
+        XCTAssertEqual(try gedFiles(), before)
+        XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: stagingRoot.path))?.count ?? 0, 0)
+        XCTAssertFalse(coordinator.isInstalling)
+        if case .installed = coordinator.phase { XCTFail("cancelled merge must not activate") }
+    }
+
+    func testDoubleAddProducesOneFile() async throws {
+        let (coordinator, _, _) = try await readyCoordinator()
+        let first = coordinator.installMerged()
+        let second = coordinator.installMerged()
+        await first.value
+        await second.value
+        XCTAssertEqual(try gedFiles().filter { $0.hasPrefix("familysearch-merged-") }.count, 1)
+        guard case .installed = coordinator.phase else { return XCTFail("expected .installed, got \(coordinator.phase)") }
+        // A third Add after settling is refused: the phase is no longer .ready.
+        await coordinator.installMerged().value
+        XCTAssertEqual(try gedFiles().filter { $0.hasPrefix("familysearch-merged-") }.count, 1)
+    }
+
+    func testAddRacingReplaceIsSerializedAddWins() async throws {
+        let (coordinator, _, _) = try await readyCoordinator(parseDelay: .milliseconds(200))
+        let task = coordinator.installMerged()      // synchronously claims the install
+        coordinator.install()                        // Replace while Add is in flight → refused
+        await task.value
+        let files = try gedFiles()
+        XCTAssertEqual(files.count, 2, "current + merged only; Replace never copied")
+        XCTAssertEqual(files.filter { $0.hasPrefix("familysearch-merged-") }.count, 1)
+        XCTAssertEqual(files.filter { $0.hasPrefix("familysearch-2") }.count, 0)
+        guard case .installed(let url, _) = coordinator.phase else { return XCTFail("expected .installed, got \(coordinator.phase)") }
+        XCTAssertTrue(url.lastPathComponent.hasPrefix("familysearch-merged-"))
+    }
+
+    func testReplaceThenAddIsSerializedReplaceWins() async throws {
+        let (coordinator, _, _) = try await readyCoordinator()
+        coordinator.install()                        // Replace settles synchronously
+        await coordinator.installMerged().value      // phase is .installed → refused
+        let files = try gedFiles()
+        XCTAssertEqual(files.filter { $0.hasPrefix("familysearch-merged-") }.count, 0)
+        XCTAssertEqual(files.filter { $0.hasPrefix("familysearch-2") }.count, 1)
     }
 
     func testAddToCurrentTreeWithNoCurrentTreeFailsHonestly() async throws {
@@ -136,7 +231,7 @@ final class FamilySearchPullMergeTests: XCTestCase {
         let coordinator = makeCoordinator()
         coordinator.installFromFile(download)
         await waitForReady(coordinator)
-        await coordinator.installMerged()
+        await coordinator.installMerged().value
         guard case .failed(let message) = coordinator.phase else {
             return XCTFail("expected .failed, got \(coordinator.phase)")
         }

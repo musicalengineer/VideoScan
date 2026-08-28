@@ -36,6 +36,7 @@ extension GedcomFamilyGraph {
         if let provenance, !provenance.isEmpty {
             Self.appendNote(provenance, level: 1, to: &lines)
         }
+        if isMergedArtifact { lines.append("1 _VS_MERGED Y") }
         for name in sourceFileNames { lines.append("1 _VS_SOURCE " + name) }
         for id in rootPersonIDs { lines.append("1 _VS_ROOT " + id) }
 
@@ -98,9 +99,13 @@ extension GedcomFamilyGraph {
         return display
     }
 
-    /// GEDCOM NOTE with CONT lines for newlines and CONC splits at 200
-    /// characters (the 5.5.1 line-length rule; the parser ignores NOTE
-    /// entirely, this is for the human reading the file).
+    /// GEDCOM NOTE: CONT (level+1) for each newline, CONC (level+1) when a
+    /// line exceeds `noteChunk` characters (the 5.5.1 line-length rule;
+    /// codex #780: continuations are SUBORDINATE to the NOTE, never
+    /// level-1 siblings). Chunks never split at a space and never end in
+    /// one, because readers — this parser included — trim line ends; so
+    /// the note reads back identically. The parser keeps it in `headNote`.
+    static let noteChunk = 200
     static func appendNote(_ text: String, level: Int, to lines: inout [String]) {
         var first = true
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -108,11 +113,22 @@ extension GedcomFamilyGraph {
             var tag = first ? "NOTE" : "CONT"
             let lvl = first ? level : level + 1
             first = false
+            var lineLevel = lvl
             repeat {
-                let chunk = rest.prefix(200)
-                lines.append("\(lvl) \(tag) \(chunk)")
+                var chunk = rest.prefix(noteChunk)
+                if chunk.count == noteChunk, rest.count > noteChunk {
+                    // Back off to a boundary where neither side touches a space.
+                    var cut = chunk.endIndex
+                    while cut > chunk.startIndex,
+                          chunk[chunk.index(before: cut)] == " " || rest[cut] == " " {
+                        cut = chunk.index(before: cut)
+                    }
+                    if cut > chunk.startIndex { chunk = rest[..<cut] }
+                }
+                lines.append(chunk.isEmpty ? "\(lineLevel) \(tag)" : "\(lineLevel) \(tag) \(chunk)")
                 rest = rest.dropFirst(chunk.count)
                 tag = "CONC"
+                lineLevel = level + 1
             } while !rest.isEmpty
         }
     }

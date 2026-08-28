@@ -356,7 +356,7 @@ struct FamilySearchPullSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if current != nil {
-                Text("Add to current tree joins the two by FamilySearch ID: a person in both files becomes one record with both sets of links (a spouse in one pull gains her parents from the other), families with the same couple become one, and both home people are kept as roots. The result is written as a new familysearch-merged-<date>.ged in the same folder; neither source file is changed. Records without a FamilySearch ID are added, never guessed as matches.")
+                Text("Add to current tree writes a derived VideoScan merge artifact — a new familysearch-merged-<date>.ged in the same folder, built from the current file and this download by FamilySearch ID. It is lossy: names, vitals, family links and FamilySearch IDs only (citations, notes, media and other events are not carried over). The two source files remain the record; they are not changed, and a .sha256 sidecar is written beside each so they can be verified. Records without a FamilySearch ID are added, never guessed as matches; families that cannot be matched with certainty are kept separate and listed in the file’s header.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -453,22 +453,26 @@ struct FamilySearchPullSheet: View {
                 Button("Keep current") { coordinator.cancel() }
                 if current != nil {
                     Button("Add to current tree") {
+                        let task = coordinator.installMerged()
                         Task {
-                            await coordinator.installMerged()
+                            await task.value
                             if case .installed(let url, _) = coordinator.phase {
                                 onInstalled(url)
                             }
                         }
                     }
-                    .help("Merge by FamilySearch ID into a new .ged next to the current one; both source files stay untouched.")
+                    .help("Write a derived merge artifact (lossy) next to the current tree; both source files stay untouched.")
+                    .disabled(coordinator.isInstalling)
                 }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {
+                    guard !coordinator.isInstalling else { return }
                     coordinator.install()
                     if case .installed(let url, _) = coordinator.phase {
                         onInstalled(url)
                     }
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(coordinator.isInstalling)
             case .installed:
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)

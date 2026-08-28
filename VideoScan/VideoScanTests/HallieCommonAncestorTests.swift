@@ -183,27 +183,31 @@ struct HallieCommonAncestorAnswerTests {
     }
 
     @Test func nearestCommonAncestorWithBothLinesAndCousinTerm() throws {
-        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "Donna Hudson"), context: context(graph)))
+        // Rick and Donna themselves are spouses (direct kin, see below);
+        // their fathers are the cousin pair: Sr 2 up, Walter 3 up.
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Sr", b: "Walter Hudson"), context: context(graph)))
         #expect(r.outcome == .answered)
-        #expect(r.prose.contains("Richard Harding Breen Jr and Donna Hudson share 1 recorded ancestor; the nearest is Z Common (b. 1840) — Richard Harding Breen Jr’s great-grandfather and Donna Hudson’s great-great-grandfather, making them 2nd cousins once removed."), "got: \(r.prose)")
-        #expect(r.prose.contains("Richard Harding Breen Jr’s line: Z Common → George Breen → Richard Harding Breen Sr → Richard Harding Breen Jr."))
-        #expect(r.prose.contains("Donna Hudson’s line: Z Common → Mabel Common → Harold Hudson → Walter Hudson → Donna Hudson."))
+        #expect(r.prose.contains("Richard Harding Breen Sr and Walter Hudson share 1 recorded ancestor; the nearest is Z Common (b. 1840) — Richard Harding Breen Sr’s grandfather and Walter Hudson’s great-grandfather, making them 1st cousins once removed."), "got: \(r.prose)")
+        #expect(r.prose.contains("Richard Harding Breen Sr’s line: Z Common → George Breen → Richard Harding Breen Sr."))
+        #expect(r.prose.contains("Walter Hudson’s line: Z Common → Mabel Common → Harold Hudson → Walter Hudson."))
         #expect(r.catalogPersonName == "Z Common")
         #expect(r.offeredActions.first == .openFamilyTreePerson(personID: "@I5@", personName: "Z Common"))
         #expect(r.basisLine.hasPrefix(ArchivistBiographyPolicy.gedcomBasis))
     }
 
     @Test func ownerResolvesThroughTheSameChain() throws {
-        // "me and Donna": nil = the owner; "Rick Breen" ~ "Richard Harding Breen Jr".
-        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: nil, b: "Donna"), context: context(graph)))
+        // "me and Walter": nil = the owner; "Rick Breen" ~ "Richard Harding Breen Jr"
+        // (the one root matching the owner's name in a two-root tree).
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: nil, b: "Walter Hudson"), context: context(graph)))
         #expect(r.outcome == .answered)
-        #expect(r.prose.contains("making them 2nd cousins once removed"))
+        #expect(r.prose.hasPrefix("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
     }
 
     @Test func aSideWithNoParentsIsSaidHonestlyAndOffersGetFamilyTree() throws {
-        // Rick's pull alone: Donna has no parents attached.
+        // Rick's pull alone: Donna has no parents attached. (Rick himself is
+        // her husband — direct kin — so ask about his grandfather George.)
         let rickOnly = GedcomFamilyGraph(gedcomText: rickPull)
-        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "Donna"), context: context(rickOnly)))
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "George Breen", b: "Donna"), context: context(rickOnly)))
         #expect(r.outcome == .declined)
         #expect(r.prose.hasPrefix("Donna Hudson’s side isn’t in the tree yet — it records no parents for Donna Hudson"), "got: \(r.prose)")
         #expect(r.prose.contains("add it to the current tree by FamilySearch ID"))
@@ -251,6 +255,29 @@ struct HallieCommonAncestorAnswerTests {
         #expect(r.outcome != .answered)
     }
 
+    /// codex #776: neither side is a person → not ours; the question
+    /// continues as typed (nil), never a graph decline.
+    @Test func twoNonPeopleFallThrough() {
+        #expect(HallieLineageQuestion.detect("how are astronomy and philosophy related") == .commonAncestor(a: "Astronomy", b: "Philosophy"))
+        #expect(HallieLineageAnswer.answer(.commonAncestor(a: "Astronomy", b: "Philosophy"), context: context(graph)) == nil)
+        #expect(HallieLineageAnswer.answer(.commonAncestor(a: "Music", b: "Math"), context: context(graph)) == nil)
+        #expect(HallieLineageQuestion.detect("how are music and math related") == .commonAncestor(a: "Music", b: "Math"))
+    }
+
+    /// codex #776: direct kin are named as such before any cousin math.
+    @Test func directKinBeforeCousinMath() throws {
+        let father = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "Richard Breen Sr"), context: context(graph)))
+        #expect(father.prose == "Richard Harding Breen Sr is Richard Harding Breen Jr’s father.")
+        let grand = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "George Breen"), context: context(graph)))
+        #expect(grand.prose == "George Breen is Richard Harding Breen Jr’s grandfather. Line: Richard Harding Breen Jr → Richard Harding Breen Sr → George Breen.", "got: \(grand.prose)")
+        #expect(!grand.prose.contains("aunt"))
+        let spouse = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "Donna Hudson"), context: context(graph)))
+        #expect(spouse.prose.hasPrefix("Donna Hudson is Richard Harding Breen Jr’s wife."), "spouses outrank the 2nd-cousin link: \(spouse.prose)")
+        let great = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Donna Hudson", b: "Z Common"), context: context(graph)))
+        #expect(great.prose.hasPrefix("Z Common is Donna Hudson’s great-great-grandfather."))
+        #expect(great.basisLine.contains("Direct relation"))
+    }
+
     @Test func noTreeDeclines() throws {
         let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Rick", b: "Donna"),
                                                         context: HallieTurnExecutor.Context(profiles: [], graph: nil, speakers: .none)))
@@ -264,7 +291,7 @@ struct HallieTwoRootProvenanceTests {
 
     @Test func provenanceNamesBothRootsAndBothFiles() throws {
         let r = try #require(HallieLineageAnswer.answer(.gedcomProvenance(person: "Donna", surname: "hudson"), context: context(graph)))
-        #expect(r.prose.contains("It was merged by VideoScan from “familysearch-tree-20generations.ged” and “familysearch-donna-20generations.ged” by FamilySearch ID; its roots are Richard Harding Breen Jr (b. 1959) and Donna Hudson (b. 1959), so I take it to have been pulled for Richard Harding Breen Jr and Donna Hudson."), "got: \(r.prose)")
+        #expect(r.prose.contains("It is a VideoScan merge artifact derived from “familysearch-tree-20generations.ged” and “familysearch-donna-20generations.ged” by FamilySearch ID — lossy: names, vitals, links and FamilySearch IDs only; the source files remain the record. its roots are Richard Harding Breen Jr (b. 1959) and Donna Hudson (b. 1959), so I take it to have been pulled for Richard Harding Breen Jr and Donna Hudson."), "got: \(r.prose)")
         #expect(!r.prose.contains("Its first record is"))
         #expect(r.prose.contains("I can trace 4 generations back from Donna"))
     }
@@ -274,6 +301,23 @@ struct HallieTwoRootProvenanceTests {
         let r = try #require(HallieLineageAnswer.answer(.gedcomProvenance(person: "Donna", surname: nil), context: context(single)))
         #expect(r.prose.contains("Its first record is Richard Harding Breen Jr (b. 1959)"))
         #expect(r.prose.contains("add it to the current tree by FamilySearch ID"))
+    }
+
+    /// codex #780: a same-root re-pull merged into the old tree has ONE
+    /// root and (here) one file name — still called an artifact, by flag.
+    @Test func sameRootMergeIsStillRecognisedAsAnArtifact() throws {
+        var old = GedcomFamilyGraph(gedcomText: rickPull); old.sourceFileName = "familysearch-tree.ged"
+        var again = GedcomFamilyGraph(gedcomText: rickPull); again.sourceFileName = "familysearch-tree.ged"
+        let merged = old.merged(with: again)
+        #expect(merged.roots.count == 1)
+        #expect(merged.sourceFileNames == ["familysearch-tree.ged"])
+        #expect(merged.isMergedArtifact)
+        let line = try #require(HallieLineageAnswer.mergedProvenanceSentence(merged))
+        #expect(line.hasPrefix("It is a VideoScan merge artifact derived from “familysearch-tree.ged” by FamilySearch ID — lossy"))
+        #expect(line.hasSuffix("Its root is Richard Harding Breen Jr (b. 1959), so I take it to have been pulled for Richard Harding Breen Jr."), "got: \(line)")
+        // Round trip through the writer keeps the flag; a plain export has none.
+        #expect(GedcomFamilyGraph(gedcomText: merged.gedcomText()).isMergedArtifact)
+        #expect(HallieLineageAnswer.mergedProvenanceSentence(GedcomFamilyGraph(gedcomText: rickPull)) == nil)
     }
 
     @Test func gedcomAwarenessMentionsTheMerge() {
@@ -289,5 +333,93 @@ struct HallieTwoRootProvenanceTests {
         // A pinned owner still comes first.
         let pinned = FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: "G2CL-86B")
         #expect(pinned.map(\.label) == ["Donna", "Richard"])
+    }
+}
+
+
+@Suite("Two roots — owner resolution is evidence, not file order")
+struct HallieTwoRootOwnerTests {
+    /// Donna FIRST, then Rick Jr, then Rick Sr (not a root).
+    private static let donnaFirst = """
+    0 HEAD
+    1 _VS_ROOT @I1@
+    1 _VS_ROOT @I2@
+    0 @I1@ INDI
+    1 NAME Donna /Hudson/
+    1 SEX F
+    1 _FSFTID G2CL-86B
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 SEX M
+    1 _FSFTID GVQV-NW3
+    0 @I3@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 SEX M
+    1 _FSFTID RICK-DAD
+    0 TRLR
+    """
+    /// Two roots that BOTH match "Rick Breen".
+    private static let twoRichards = """
+    0 HEAD
+    1 _VS_ROOT @I1@
+    1 _VS_ROOT @I2@
+    0 @I1@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 SEX M
+    1 _FSFTID RICK-DAD
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 SEX M
+    1 _FSFTID GVQV-NW3
+    0 TRLR
+    """
+
+    @Test func ownerIsTheSecondRoot() {
+        let g = GedcomFamilyGraph(gedcomText: Self.donnaFirst)
+        #expect(g.roots.map(\.name) == ["Donna Hudson", "Richard Harding Breen Jr"])
+        guard case .one(let p, let note) = HallieOwnerResolver.resolve("Rick Breen", graph: g) else {
+            Issue.record("expected .one"); return
+        }
+        #expect(p.id == "@I2@", "the one ROOT matching the name — never the first root, never Sr")
+        #expect(note.contains("the one tree root matching Rick Breen"))
+    }
+
+    @Test func ambiguousTwoRootCaseFailsClosed() {
+        let g = GedcomFamilyGraph(gedcomText: Self.twoRichards)
+        guard case .none(let reason?) = HallieOwnerResolver.resolve("Rick Breen", graph: g) else {
+            Issue.record("expected .none(reason:)"); return
+        }
+        #expect(reason.contains("2 home people"))
+        #expect(reason.contains("set your FamilySearch ID"))
+        // Reversed root order: same answer (no file-order dependence).
+        let reversed = GedcomFamilyGraph(gedcomText: Self.twoRichards.replacingOccurrences(of: "1 _VS_ROOT @I1@\n1 _VS_ROOT @I2@", with: "1 _VS_ROOT @I2@\n1 _VS_ROOT @I1@"))
+        #expect(reversed.roots.map(\.id) == ["@I2@", "@I1@"])
+        guard case .none = HallieOwnerResolver.resolve("Rick Breen", graph: reversed) else {
+            Issue.record("expected .none for reversed order"); return
+        }
+    }
+
+    @Test func pinnedFamilySearchIDWinsRegardlessOfOrder() {
+        for text in [Self.twoRichards, Self.donnaFirst] {
+            let g = GedcomFamilyGraph(gedcomText: text)
+            guard case .one(let p, _) = HallieOwnerResolver.resolve("Rick Breen", graph: g, familySearchID: "GVQV-NW3") else {
+                Issue.record("expected .one"); return
+            }
+            #expect(p.familySearchID == "GVQV-NW3")
+        }
+        // A pin the tree lacks still fails closed.
+        guard case .none(let reason?) = HallieOwnerResolver.resolve("Rick Breen", graph: GedcomFamilyGraph(gedcomText: Self.donnaFirst), familySearchID: "NOPE-000") else {
+            Issue.record("expected stale-pin .none"); return
+        }
+        #expect(reason.contains("NOPE-000"))
+    }
+
+    @Test func singleRootTreeKeepsTheOldFallback() {
+        let g = GedcomFamilyGraph(gedcomText: Self.donnaFirst.replacingOccurrences(of: "1 _VS_ROOT @I1@\n1 _VS_ROOT @I2@\n", with: ""))
+        #expect(g.roots.count == 1)
+        guard case .many(let like) = HallieOwnerResolver.resolve("Rick Breen", graph: g) else {
+            Issue.record("expected .many (root Donna is not among the Richards)"); return
+        }
+        #expect(like.count == 2)
     }
 }

@@ -67,6 +67,27 @@ enum HallieOwnerResolver {
         if like.count == 1 {
             return .one(like[0], note: "Basis: “you” = \(like[0].name) (matched \(name) by name).")
         }
+        // A merged tree names several home people (Rick AND Donna,
+        // 2026-08-27). "Me" is then decided by evidence, never by file
+        // order: exactly one root matches the owner's name → that one;
+        // several or none → fail closed and ask for the FamilySearch ID
+        // pin (codex #773 item 3). The single-root fallbacks below keep
+        // their 2026-08-26 behaviour.
+        let roots = graph.roots
+        if roots.count > 1 {
+            let likeIDs = Set(like.map(\.id))
+            let matchingRoots = roots.filter { likeIDs.contains($0.id) }
+            if matchingRoots.count == 1 {
+                return .one(matchingRoots[0], note: "Basis: “you” = \(matchingRoots[0].name) (the one tree root matching \(name)).")
+            }
+            // Several namesakes, none of them a root: ask which one (as a
+            // single-root tree would). Two roots both matching, or no
+            // evidence at all: fail closed.
+            if matchingRoots.isEmpty, like.count > 1 { return .many(like) }
+            let names = roots.map(\.name).joined(separator: " and ")
+            ownerLog.warning("Owner \(name, privacy: .public) matches \(matchingRoots.count) of \(roots.count) tree roots; owner left unresolved.")
+            return .none(reason: "This tree has \(roots.count) home people (\(names)) and I can’t tell which is you from the name \(name) — set your FamilySearch ID in Hallie’s settings.")
+        }
         if like.count > 1 {
             if let root = graph.rootPerson, like.contains(where: { $0.id == root.id }) {
                 return .one(root, note: "Basis: “you” = \(root.name) (tree root).")

@@ -166,6 +166,10 @@ struct GedcomMergeTests {
         // with Rick's marriage date kept.
         #expect(g.familyCount == 3 + 3)   // F1,F2,F3 mine + Donna's F1,F2,F3 (F9 merged into F2)
         #expect(g.marriages(of: r).compactMap(\.date) == ["1981"])
+        // Donna's F3 (Ann, partner unknown, child Rose) is NOT George+Ann's
+        // F3: kept separate and reported.
+        #expect(outcome.conflicts.map(\.kind) == [.unmatchedPerson, .familyKeptSeparate])
+        #expect(outcome.conflicts[1].ids.first == "@F3@")
     }
 
     @Test func parentlessDonnaGainsParentsFromHerOwnPull() throws {
@@ -173,7 +177,7 @@ struct GedcomMergeTests {
         let g = rick.merged(with: donna)
         let d = try #require(g.person(familySearchID: "G2CL-86B"))
         #expect(d.id == "@I3@", "Donna keeps the FIRST file's pointer")
-        #expect(d.birthDate == "1959", "the richer record's facts win")
+        #expect(d.birthDate == "1959", "a nil on the first side is filled from the second")
         #expect(g.relatives(.father, of: d).map(\.name) == ["Walter Hudson"])
         #expect(g.relatives(.mother, of: d).map(\.name) == ["Betty Miller"])
         #expect(g.ancestorLine(of: d, line: .maternal, generations: 5).map { $0.people.map(\.name) }
@@ -191,12 +195,147 @@ struct GedcomMergeTests {
         #expect(outcome.graph.people["@IB7@"]?.name == "Another Nofsid")
     }
 
-    @Test func sameFileMergedWithItselfIsUnchangedAndNoFSIDRecordsMatchStrictly() {
-        let outcome = rick.merge(with: rick)
+    @Test func sameFingerprintSelfMergeIsIdempotent() {
+        var fingerprinted = rick
+        fingerprinted.sourceFingerprint = "abc123"
+        let outcome = fingerprinted.merge(with: fingerprinted)
         #expect(outcome.graph.people.count == rick.people.count)
         #expect(outcome.graph.familyCount == rick.familyCount)
-        #expect(outcome.unmatched.isEmpty, "same pointer + same name + same birth = the same record")
+        #expect(outcome.unmatched.isEmpty, "identical file re-read: pointer alone identifies the no-FSID record")
         #expect(outcome.sharedPeopleCount == rick.people.count)
+        #expect(outcome.conflicts.isEmpty)
+    }
+
+    /// codex #775: "@I42@ John Smith" in two independent exports are two
+    /// people. Same pointer, same name, both without a birth date — and
+    /// no shared fingerprint — must NOT collapse.
+    @Test func noFSIDRecordsFromDifferentSourcesAreNeverMerged() {
+        let a = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I42@ INDI
+        1 NAME John /Smith/
+        1 FAMS @F1@
+        0 @I43@ INDI
+        1 NAME Kid /Smith/
+        1 FAMC @F1@
+        0 @F1@ FAM
+        1 HUSB @I42@
+        1 CHIL @I43@
+        0 TRLR
+        """)
+        let b = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I42@ INDI
+        1 NAME John /Smith/
+        1 FAMS @F1@
+        0 @I43@ INDI
+        1 NAME Other /Smith/
+        1 FAMC @F1@
+        0 @F1@ FAM
+        1 HUSB @I42@
+        1 CHIL @I43@
+        0 TRLR
+        """)
+        for pair in [(a, b), ({ var x = a; x.sourceFingerprint = "one"; return x }(), { var y = b; y.sourceFingerprint = "two"; return y }())] {
+            let outcome = pair.0.merge(with: pair.1)
+            #expect(outcome.graph.people.count == 4, "two Johns, two children")
+            #expect(outcome.sharedPeopleCount == 0)
+            #expect(outcome.unmatched.map(\.name) == ["John Smith", "Other Smith"])
+            #expect(outcome.graph.familyCount == 2, "no family splice")
+            #expect(outcome.graph.relatives(.children, of: outcome.graph.people["@I42@"]!).map(\.name) == ["Kid Smith"])
+            #expect(outcome.conflicts.filter { $0.kind == .unmatchedPerson }.count == 2)
+        }
+        // Pointer collision means "not the same" too: nothing from A is renumbered.
+        #expect(a.merge(with: b).graph.people["@I42@"]?.id == "@I42@")
+    }
+
+    /// codex #774: parent P with two unknown-partner families {c1,c2} and
+    /// {c3} stays two families, each with its own MARR data; a same-parent
+    /// near-miss is reported, not merged.
+    @Test func singleParentFamiliesWithDifferentChildrenStaySeparate() throws {
+        let a = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME P /Parent/
+        1 FAMS @F1@
+        1 _FSFTID PPPP-001
+        0 @I2@ INDI
+        1 NAME C1 /Kid/
+        1 FAMC @F1@
+        1 _FSFTID CCCC-001
+        0 @I3@ INDI
+        1 NAME C2 /Kid/
+        1 FAMC @F1@
+        1 _FSFTID CCCC-002
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 CHIL @I2@
+        1 CHIL @I3@
+        1 MARR
+        2 DATE 1900
+        0 TRLR
+        """)
+        let b = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I7@ INDI
+        1 NAME P /Parent/
+        1 FAMS @F9@
+        1 FAMS @F8@
+        1 _FSFTID PPPP-001
+        0 @I8@ INDI
+        1 NAME C3 /Kid/
+        1 FAMC @F9@
+        1 _FSFTID CCCC-003
+        0 @I9@ INDI
+        1 NAME C1 /Kid/
+        1 FAMC @F8@
+        1 _FSFTID CCCC-001
+        0 @I10@ INDI
+        1 NAME C2 /Kid/
+        1 FAMC @F8@
+        1 _FSFTID CCCC-002
+        0 @F9@ FAM
+        1 HUSB @I7@
+        1 CHIL @I8@
+        1 MARR
+        2 DATE 1920
+        0 @F8@ FAM
+        1 HUSB @I7@
+        1 CHIL @I9@
+        1 CHIL @I10@
+        0 TRLR
+        """)
+        let outcome = a.merge(with: b)
+        let g = outcome.graph
+        let p = try #require(g.person(familySearchID: "PPPP-001"))
+        let units = g.familyUnits(of: p)
+        #expect(units.count == 2)
+        #expect(units.map { $0.children.map(\.name).sorted() } == [["C1 Kid", "C2 Kid"], ["C3 Kid"]])
+        #expect(units.map(\.marriageDate) == ["1900", "1920"], "each family keeps its own MARR")
+        #expect(outcome.conflicts.map(\.kind) == [.familyKeptSeparate])
+        #expect(outcome.conflicts[0].ids == ["@F1@", "@FB9@"])
+    }
+
+    @Test func coupleKeyRequiresBothFamilySearchIDs() {
+        // Same husband (FSID) + a wife WITHOUT an FSID on both sides: not a
+        // couple key, and the two wives are distinct people → two families.
+        let a = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME H /Man/
+        1 FAMS @F1@
+        1 _FSFTID HHHH-001
+        0 @I2@ INDI
+        1 NAME Mary /Unknown/
+        1 FAMS @F1@
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 WIFE @I2@
+        0 TRLR
+        """)
+        let outcome = a.merge(with: a)   // no fingerprint → Mary is a different Mary
+        #expect(outcome.graph.familyCount == 2)
+        #expect(outcome.conflicts.map(\.kind) == [.unmatchedPerson, .familyKeptSeparate])
     }
 
     @Test func rootsAndSourcesAreCarried() {
@@ -213,6 +352,85 @@ struct GedcomMergeTests {
         let twice = once.merged(with: donna)
         #expect(twice.people.count == once.people.count + 1, "only the no-FSID record is added again (never guessed)")
         #expect(twice.familyCount == once.familyCount)
+    }
+
+    /// codex #780: two non-nil, different values → first source kept, the
+    /// disagreement reported and counted; a differing NAME survives as an
+    /// alternate name.
+    @Test func scalarDisagreementsKeepFirstSourceAndAreReported() throws {
+        let a = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Ann /Shared/
+        1 SEX F
+        1 BIRT
+        2 DATE 1870
+        2 PLAC Cork, Ireland
+        1 _FSFTID SHRD-001
+        0 TRLR
+        """)
+        let b = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I5@ INDI
+        1 NAME Anne /Shared/
+        1 SEX F
+        1 BIRT
+        2 DATE ABT 1871
+        2 PLAC Cork, Ireland
+        1 DEAT
+        2 DATE 1950
+        1 _FSFTID SHRD-001
+        0 TRLR
+        """)
+        let outcome = a.merge(with: b)
+        let ann = try #require(outcome.graph.person(familySearchID: "SHRD-001"))
+        #expect(ann.name == "Ann Shared")
+        #expect(ann.alternateNames == ["Anne Shared"])
+        #expect(ann.birthDate == "1870", "first source kept")
+        #expect(ann.deathDate == "1950", "nil filled from the second")
+        #expect(ann.birthPlace == "Cork, Ireland")
+        #expect(outcome.fieldConflictCount == 2)
+        let fields = outcome.conflicts.filter { $0.kind == .fieldDisagreement }
+        #expect(fields.map(\.ids) == [["@I1@"], ["@I1@"]])
+        #expect(fields[0].resolution == "SHRD-001 NAME: kept “Ann Shared” (first source); second source says “Anne Shared”")
+        #expect(fields[1].resolution == "SHRD-001 BIRT DATE: kept “1870” (first source); second source says “ABT 1871”")
+        // Reversed order: the other file is "first" and wins.
+        #expect(b.merge(with: a).graph.person(familySearchID: "SHRD-001")?.birthDate == "ABT 1871")
+    }
+
+    /// codex #780 loss accounting: what the parser drops is counted, the
+    /// merge sums it, and the artifact flag survives the round trip.
+    @Test func lossAccountingAndMergedFlag() {
+        let a = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        1 SOUR getmyancestors
+        0 @I1@ INDI
+        1 NAME Ann /Shared/
+        1 SEX F
+        1 BIRT
+        2 DATE 1870
+        2 SOUR @S1@
+        3 PAGE 12
+        1 OCCU Weaver
+        1 NOTE Long story
+        2 CONT more
+        1 _FSFTID SHRD-001
+        0 @S1@ SOUR
+        1 TITL Census
+        0 TRLR
+        """)
+        #expect(a.droppedLineCount == 5, "SOUR+PAGE under BIRT, OCCU, NOTE+CONT; the SOUR record's own lines are not under INDI/FAM (not counted)")
+        #expect(a.isMergedArtifact == false)
+        var b = a; b.sourceFingerprint = nil
+        let outcome = a.merge(with: b)
+        #expect(outcome.droppedLineCount == 10)
+        #expect(outcome.graph.isMergedArtifact)
+        let back = GedcomFamilyGraph(gedcomText: outcome.graph.gedcomText())
+        #expect(back.isMergedArtifact)
+        #expect(back.droppedLineCount == 0, "the artifact carries only what the parser keeps")
+        // Same-root, same-name re-pull merge: ONE root, one file name — still an artifact.
+        #expect(back.roots.count == 1)
+        #expect(back.sourceFileNames.isEmpty)
     }
 
     // MARK: Writer
@@ -246,6 +464,29 @@ struct GedcomMergeTests {
             #expect(back.familyUnits(of: p) == merged.familyUnits(of: p), "family units differ for \(id)")
             #expect(back.relatives(.parents, of: p) == merged.relatives(.parents, of: p))
         }
+    }
+
+    /// codex #780: continuations are level-2 CONC/CONT under a level-1
+    /// NOTE, and a long multi-line note reads back identically.
+    @Test func longMultiLineNoteRoundTripsWithSubordinateContinuations() {
+        let word = "abcdefghij"
+        let long = (0..<40).map { _ in word }.joined(separator: " ")   // 439 chars, spaces every 11
+        let note = "Derived VideoScan merge artifact (lossy: names, vitals, links, FSIDs).\n"
+            + long + "\n"
+            + "\n"   // an empty line
+            + String(repeating: "x", count: 450) + " end"
+        let text = rick.gedcomText(provenance: note)
+        let headLines = text.split(separator: "\n").prefix { !$0.hasPrefix("0 @") }
+        #expect(headLines.contains { $0.hasPrefix("1 NOTE ") })
+        #expect(headLines.filter { $0.hasPrefix("1 CONC") || $0.hasPrefix("1 CONT") }.isEmpty, "no level-1 continuations")
+        #expect(headLines.filter { $0.hasPrefix("2 CONC ") }.count >= 4)
+        #expect(headLines.filter { $0.hasPrefix("2 CONT") }.count == 3)
+        for line in headLines where line.hasPrefix("2 CONC ") || line.hasPrefix("2 CONT ") || line.hasPrefix("1 NOTE ") {
+            #expect(!line.hasSuffix(" "), "chunks never end in a space: \(line)")
+            #expect(line.count <= 2 + 5 + GedcomFamilyGraph.noteChunk + 11)
+        }
+        let back = GedcomFamilyGraph(gedcomText: text)
+        #expect(back.headNote == note)
     }
 
     @Test func writerRebuildsNameSlashesAndAlternateSurnames() {
@@ -371,45 +612,81 @@ struct GedcomMergeTests {
         #expect(G.kinshipTerm(depthA: 12, depthB: 12) == "11th cousins")
     }
 
-    // MARK: Scale
+    // MARK: Scale — full pipeline (codex #780 item 11)
 
     /// Two synthetic 100k-person pedigrees that overlap on 50k FSIDs.
-    /// Budget 2 s for parse-free merge (both graphs pre-built).
-    @Test func twoHundredThousandPersonMergeStaysUnderTwoSeconds() {
-        func synthetic(offset: Int, count: Int) -> GedcomFamilyGraph {
-            var people: [String: GedcomFamilyGraph.Person] = [:]
-            var families: [String: GedcomFamilyGraph.Family] = [:]
-            people.reserveCapacity(count)
-            for i in 0..<count {
-                var p = GedcomFamilyGraph.Person(id: "@I\(i)@", name: "P\(i) /S/", sex: i % 2 == 0 ? "M" : "F",
-                                                 childOfFamily: nil)
-                // Person i's parents are 2i+1, 2i+2 (a binary pedigree).
-                if 2 * i + 2 < count {
-                    p.childOfFamilies = ["@F\(i)@"]; p.childOfFamily = "@F\(i)@"
-                    families["@F\(i)@"] = GedcomFamilyGraph.Family(
-                        husband: "@I\(2 * i + 1)@", wife: "@I\(2 * i + 2)@", children: ["@I\(i)@"])
-                }
-                if i > 0 { p.spouseOfFamilies = ["@F\((i - 1) / 2)@"] }
-                p.familySearchID = String(format: "%04X-%03X", (i + offset) / 4096 % 65536, (i + offset) % 4096)
-                people[p.id] = p
+    static func synthetic(offset: Int, count: Int) -> GedcomFamilyGraph {
+        var people: [String: GedcomFamilyGraph.Person] = [:]
+        var families: [String: GedcomFamilyGraph.Family] = [:]
+        people.reserveCapacity(count)
+        for i in 0..<count {
+            // Identity (name, sex, birth) follows the FSID index so the
+            // same person in both files agrees field for field.
+            let k = i + offset
+            var p = GedcomFamilyGraph.Person(id: "@I\(i)@", name: "P\(k) S", sex: k % 2 == 0 ? "M" : "F",
+                                             childOfFamily: nil)
+            p.surname = "S"
+            // Person i's parents are 2i+1, 2i+2 (a binary pedigree).
+            if 2 * i + 2 < count {
+                p.childOfFamilies = ["@F\(i)@"]; p.childOfFamily = "@F\(i)@"
+                families["@F\(i)@"] = GedcomFamilyGraph.Family(
+                    husband: "@I\(2 * i + 1)@", wife: "@I\(2 * i + 2)@", children: ["@I\(i)@"])
             }
-            return GedcomFamilyGraph(people: people, families: families, rootPersonIDs: ["@I0@"], sourceFileNames: [])
+            if i > 0 { p.spouseOfFamilies = ["@F\((i - 1) / 2)@"] }
+            p.birthDate = "\(1500 + (k % 400))"
+            p.familySearchID = String(format: "%04X-%03X", (i + offset) / 4096 % 65536, (i + offset) % 4096)
+            people[p.id] = p
         }
+        return GedcomFamilyGraph(people: people, families: families, rootPersonIDs: ["@I0@"], sourceFileNames: [])
+    }
+
+    /// parse-free build → merge → write → PARSE the written text → verify
+    /// counts, roots, edges (every 97th person's parents and spouses), and
+    /// sample queries. Budget 20 s Debug for the whole pipeline; each
+    /// stage's time is printed so a regression is visible.
+    @Test func fullPipelineAtTwoHundredThousandStaysWithinBudget() throws {
         let n = 100_000
-        let a = synthetic(offset: 0, count: n)
-        let b = synthetic(offset: n / 2, count: n)
+        var a = Self.synthetic(offset: 0, count: n); a.sourceFileName = "a.ged"
+        var b = Self.synthetic(offset: n / 2, count: n); b.sourceFileName = "b.ged"
         let t0 = Date()
         let outcome = a.merge(with: b)
-        let elapsed = Date().timeIntervalSince(t0)
-        print("SCALE merge 2×\(n): \(String(format: "%.3f", elapsed))s people=\(outcome.graph.people.count)")
+        let tMerge = Date().timeIntervalSince(t0)
         #expect(outcome.graph.people.count == n + n / 2)
         #expect(outcome.sharedPeopleCount == n / 2)
-        #expect(elapsed < 2, "merge budget")
+        #expect(outcome.fieldConflictCount == 0)
+
         let t1 = Date()
-        let hits = outcome.graph.commonAncestors(of: "@I0@", and: outcome.pointerMap["@I0@"]!, limit: 5)
-        let ca = Date().timeIntervalSince(t1)
-        print("SCALE commonAncestors: \(String(format: "%.3f", ca))s hits=\(hits.count)")
+        let text = outcome.graph.gedcomText(provenance: "scale pipeline")
+        let tWrite = Date().timeIntervalSince(t1)
+        let t2 = Date()
+        let back = GedcomFamilyGraph(gedcomText: text)
+        let tParse = Date().timeIntervalSince(t2)
+
+        let t3 = Date()
+        #expect(back.people.count == outcome.graph.people.count)
+        #expect(back.familyCount == outcome.graph.familyCount)
+        #expect(back.rootPersonIDs == outcome.graph.rootPersonIDs)
+        #expect(back.roots.count == 2)
+        #expect(back.isMergedArtifact)
+        #expect(back.headNote == "scale pipeline")
+        var edgeMismatches = 0
+        for (i, id) in GedcomFamilyGraph.sortedPointers(back.people.keys).enumerated() where i % 97 == 0 {
+            let p = try #require(back.people[id]), q = try #require(outcome.graph.people[id])
+            if p != q { edgeMismatches += 1 }
+            if back.relatives(.parents, of: p).map(\.id) != outcome.graph.relatives(.parents, of: q).map(\.id) { edgeMismatches += 1 }
+            if back.relatives(.spouse, of: p).map(\.id) != outcome.graph.relatives(.spouse, of: q).map(\.id) { edgeMismatches += 1 }
+        }
+        #expect(edgeMismatches == 0)
+        // Sample queries on the reloaded graph.
+        let donnaSide = try #require(outcome.pointerMap["@I0@"])
+        let hits = back.commonAncestors(of: "@I0@", and: donnaSide, limit: 5)
         #expect(!hits.isEmpty)
-        #expect(ca < 2)
+        #expect(back.person(familySearchID: b.people["@I0@"]!.familySearchID!)?.id == donnaSide)
+        #expect(back.directRelation(between: "@I0@", and: "@I1@")?.kind == .parentChild)
+        let tVerify = Date().timeIntervalSince(t3)
+        let total = Date().timeIntervalSince(t0)
+        print("SCALE pipeline 2×\(n): merge \(String(format: "%.2f", tMerge))s write \(String(format: "%.2f", tWrite))s (\(text.utf8.count / 1_000_000) MB) parse \(String(format: "%.2f", tParse))s verify \(String(format: "%.2f", tVerify))s total \(String(format: "%.2f", total))s")
+        #expect(tMerge < 2, "merge budget")
+        #expect(total < 20, "pipeline budget (Debug)")
     }
 }

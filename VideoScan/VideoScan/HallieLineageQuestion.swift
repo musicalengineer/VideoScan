@@ -1986,17 +1986,28 @@ enum HallieLineageAnswer {
     /// pulled for both." Nil for an ordinary single-root export.
     static func mergedProvenanceSentence(_ graph: GedcomFamilyGraph) -> String? {
         let roots = graph.roots
-        guard roots.count > 1 else { return nil }
+        // A merge is recognised by its own flag / several source names —
+        // never by root count: re-pulling Rick's tree and adding it to the
+        // old one has ONE root and is still a derived artifact (codex #780).
+        let merged = graph.isMergedArtifact || graph.sourceFileNames.count > 1
+        guard merged || roots.count > 1 else { return nil }
         let names = HallieNameQualifier.joined(roots.map { r in
             r.name + (r.birthYear.map { " (b. \($0))" } ?? "")
         }, conjunction: "and")
         var s = ""
-        if graph.sourceFileNames.count > 1 {
-            s += "It was merged by VideoScan from " + HallieNameQualifier.joined(graph.sourceFileNames.map { "“\($0)”" }, conjunction: "and") + " by FamilySearch ID; "
+        if merged {
+            let from = graph.sourceFileNames.isEmpty ? "two exports" : HallieNameQualifier.joined(graph.sourceFileNames.map { "“\($0)”" }, conjunction: "and")
+            s += "It is a VideoScan merge artifact derived from \(from) by FamilySearch ID — lossy: names, vitals, links and FamilySearch IDs only; the source files remain the record. "
         } else {
             s += "It names \(roots.count) home people; "
         }
-        s += "its roots are \(names), so I take it to have been pulled for " + HallieNameQualifier.joined(roots.map(\.name), conjunction: "and") + "."
+        if roots.count > 1 {
+            s += "its roots are \(names), so I take it to have been pulled for " + HallieNameQualifier.joined(roots.map(\.name), conjunction: "and") + "."
+        } else if let root = roots.first {
+            s += "Its root is \(root.name)" + (root.birthYear.map { " (b. \($0))" } ?? "") + ", so I take it to have been pulled for \(root.name)."
+        } else {
+            s += "It names no home person."
+        }
         return s
     }
 
@@ -2030,9 +2041,17 @@ enum HallieLineageAnswer {
                     citations: [], catalogPersonName: nil))
             }
         }
+        let sideA = person(typedA), sideB = person(typedB)
+        // Neither side is a person the tree knows ("how are astronomy and
+        // philosophy related", codex #776): not ours — the question goes
+        // on as typed instead of a graph decline.
+        if case .stop(let ra) = sideA, case .stop(let rb) = sideB,
+           ra.outcome != .needsClarification, rb.outcome != .needsClarification {
+            return nil
+        }
         let pa: GedcomFamilyGraph.Person, pb: GedcomFamilyGraph.Person
-        switch person(typedA) { case .stop(let r): return r; case .ok(let p): pa = p }
-        switch person(typedB) { case .stop(let r): return r; case .ok(let p): pb = p }
+        switch sideA { case .stop(let r): return r; case .ok(let p): pa = p }
+        switch sideB { case .stop(let r): return r; case .ok(let p): pb = p }
         let basis = ArchivistBiographyPolicy.gedcomBasis
             + " Ancestor sets of both people intersected; nearest by total generations first."
             + (notes.isEmpty ? "" : " " + notes.joined(separator: " "))
@@ -2041,11 +2060,18 @@ enum HallieLineageAnswer {
             .openFamilyTreePerson(personID: pa.id, personName: pa.name),
             .openFamilyTreePerson(personID: pb.id, personName: pb.name),
         ]
-        if pa.id == pb.id {
+        // Direct kin first (codex #776): parent/child, spouses, siblings,
+        // grandparents and the rest are named as such — never as cousins
+        // through a shared grandparent.
+        if let direct = graph.directRelation(between: pa.id, and: pb.id) {
+            let line = direct.path.count > 2 ? " Line: " + direct.path.map(\.name).joined(separator: " → ") + "." : ""
             return Result(route: .graph, outcome: .answered,
-                          prose: "\(pa.name) and \(typedB ?? typedA ?? "you") are the same record in the family tree.",
-                          basisLine: basis, queryDescription: query, citations: [],
-                          catalogPersonName: pa.name, offeredActions: [chips[0]])
+                          prose: direct.term + "." + line,
+                          basisLine: basis.replacingOccurrences(of: "Ancestor sets of both people intersected; nearest by total generations first.",
+                                                                with: "Direct relation from the recorded parent/spouse links (\(direct.kind.rawValue)); no cousin math needed."),
+                          queryDescription: query + " → \(direct.kind.rawValue)", citations: [],
+                          catalogPersonName: pb.name,
+                          offeredActions: pa.id == pb.id ? [chips[0]] : chips)
         }
         let hits = graph.commonAncestors(of: pa.id, and: pb.id)
         let possA = HallieLineageQuestion.possessive(pa.name)
