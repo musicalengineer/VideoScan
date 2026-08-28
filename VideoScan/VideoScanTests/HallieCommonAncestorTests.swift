@@ -206,7 +206,10 @@ struct HallieCommonAncestorAnswerTests {
         // (the one root matching the owner's name in a two-root tree).
         let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: nil, b: "Walter Hudson"), context: context(graph)))
         #expect(r.outcome == .answered)
-        #expect(r.prose.hasPrefix("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
+        // Rick 2026-08-28: in-law is the aside, the blood link is the answer.
+        #expect(r.prose.contains("share 1 recorded ancestor"), "got: \(r.prose)")
+        #expect(r.prose.contains("Walter Hudson is Richard Harding Breen Jr’s father-in-law"), "got: \(r.prose)")
+        #expect(!r.prose.hasPrefix("Walter Hudson is"))
     }
 
     @Test func aSideWithNoParentsIsSaidHonestlyAndOffersGetFamilyTree() throws {
