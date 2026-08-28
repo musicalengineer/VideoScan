@@ -52,6 +52,15 @@ public struct FamilyGraphCompiledStore {
     /// `droppedLineCount` and are bound POSITIONALLY to the artifact's
     /// provenance; the manifest carries the local + total loss. Goes with
     /// codec 4 — a codec-3 pointer is refused by `versionsMatch` too.
+    /// 3, additive (2026-08-28, codex #822): `sources` are the PHYSICAL
+    /// files the store hashed (the pointer's keys); `logicalSources` is
+    /// the artifact's provenance list (what the tree was merged from).
+    /// For a CLI multi-source ingest the two lists are equal; for an app
+    /// merge artifact (one ab.ged listing A and B) they differ. A
+    /// manifest written before the field existed decodes with
+    /// `logicalSources == sources`, which is exactly what those
+    /// generations were (an artifact file could not be promoted then),
+    /// so no schema bump: Rick's compiled two-pull tree stays current.
     public static let schemaVersion: UInt32 = 3
     static let pointerName = "current.json"
     static let lockName = ".lock"
@@ -89,13 +98,35 @@ public struct FamilyGraphCompiledStore {
         public var droppedLineCount: Int
     }
 
+    /// One entry of the artifact's LOGICAL provenance (what the tree was
+    /// merged from), as recorded in the manifest beside the physical
+    /// `sources`. Positional; names may repeat (identity = position + sha).
+    public struct LogicalSource: Codable, Equatable {
+        public var fileName: String
+        /// Nil when that source was never fingerprinted (older artifact).
+        public var sha256: String?
+        public var droppedLineCount: Int
+        public init(fileName: String, sha256: String?, droppedLineCount: Int) {
+            self.fileName = fileName; self.sha256 = sha256; self.droppedLineCount = droppedLineCount
+        }
+        init(_ p: GedcomFamilyGraph.SourceProvenance) {
+            self.init(fileName: p.name, sha256: p.sha256, droppedLineCount: p.droppedLineCount)
+        }
+    }
+
     public struct Manifest: Codable, Equatable {
         public var schema: UInt32
         public var codec: UInt32
         public var index: UInt32
         public var generation: String
         public var createdAt: Date
+        /// PHYSICAL sources: the files hashed and bound at ingest, in
+        /// position order; `map(\.key)` == the pointer's `sourceKeys`.
         public var sources: [Source]
+        /// LOGICAL provenance of the artifact (`graph.sourceProvenance`).
+        /// Equal to `sources` (name/sha/dropped) for a CLI or single-file
+        /// ingest; the merged-from list for an app merge artifact.
+        public var logicalSources: [LogicalSource]
         public var peopleCount: Int
         public var familyCount: Int
         /// Empty when verification passed. A failed generation keeps its
@@ -106,6 +137,36 @@ public struct FamilyGraphCompiledStore {
         /// sources) — the two numbers the codec carries, for humans.
         public var localDroppedLineCount: Int
         public var totalDroppedLineCount: Int
+
+        public init(schema: UInt32, codec: UInt32, index: UInt32, generation: String, createdAt: Date,
+                    sources: [Source], logicalSources: [LogicalSource], peopleCount: Int, familyCount: Int,
+                    verification: [String], mergeReport: String?, localDroppedLineCount: Int, totalDroppedLineCount: Int) {
+            self.schema = schema; self.codec = codec; self.index = index; self.generation = generation
+            self.createdAt = createdAt; self.sources = sources; self.logicalSources = logicalSources
+            self.peopleCount = peopleCount; self.familyCount = familyCount; self.verification = verification
+            self.mergeReport = mergeReport; self.localDroppedLineCount = localDroppedLineCount
+            self.totalDroppedLineCount = totalDroppedLineCount
+        }
+
+        /// Hand-written so a manifest written before `logicalSources`
+        /// existed (same schema 3) reads back as logical == physical.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            schema = try c.decode(UInt32.self, forKey: .schema)
+            codec = try c.decode(UInt32.self, forKey: .codec)
+            index = try c.decode(UInt32.self, forKey: .index)
+            generation = try c.decode(String.self, forKey: .generation)
+            createdAt = try c.decode(Date.self, forKey: .createdAt)
+            sources = try c.decode([Source].self, forKey: .sources)
+            logicalSources = try c.decodeIfPresent([LogicalSource].self, forKey: .logicalSources)
+                ?? sources.map { LogicalSource(fileName: $0.fileName, sha256: $0.sha256, droppedLineCount: $0.droppedLineCount) }
+            peopleCount = try c.decode(Int.self, forKey: .peopleCount)
+            familyCount = try c.decode(Int.self, forKey: .familyCount)
+            verification = try c.decode([String].self, forKey: .verification)
+            mergeReport = try c.decodeIfPresent(String.self, forKey: .mergeReport)
+            localDroppedLineCount = try c.decode(Int.self, forKey: .localDroppedLineCount)
+            totalDroppedLineCount = try c.decode(Int.self, forKey: .totalDroppedLineCount)
+        }
     }
 
     public enum StoreError: Error {
@@ -201,6 +262,22 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// codex #826 — a multi-source generation that is refused ONLY for
+    /// version reasons (schema/codec/index bump) while every physical
+    /// source it records still exists unchanged. The loader must not
+    /// quietly recompile the newest single file over it (Donna's tree
+    /// vanished that way); it reports these sources so the UI can offer
+    /// "Recompile". Checks current, then previous. Nil when the pointer
+    /// matches the running versions, or when no such generation exists.
+    public func multiSourceGenerationNeedingRecompile() -> (generation: String, sources: [URL])? {
+        guard let pointer = readPointer(), !Self.versionsMatch(pointer) else { return nil }
+        for generation in [pointer.current, pointer.previous].compactMap({ $0 }) {
+            guard let manifest = usableManifest(generation), manifest.sources.count > 1 else { continue }
+            return (generation, manifest.sources.map { URL(fileURLWithPath: $0.path) })
+        }
+        return nil
+    }
+
     /// The generation's manifest when it verified clean and every source
     /// it records is still on disk with the same key; nil (logged) otherwise.
     private func usableManifest(_ generation: String) -> Manifest? {
@@ -266,11 +343,16 @@ public struct FamilyGraphCompiledStore {
     /// the runtime consumes only what was promoted; nil when verification
     /// or any write failed (logged) — the caller keeps the parsed graph.
     ///
-    /// `sources` binds POSITIONALLY to the graph's provenance (codex #816):
-    /// `sources[i]` must be the file `graph.sourceProvenance[i]` names,
-    /// and its FRESH full SHA-256 must equal the hash the graph carried
-    /// from its parse (codex #817 — a rewrite between parse and ingest is
-    /// refused). Any mismatch: not promoted, logged, pointer untouched.
+    /// `sources` binds POSITIONALLY to the graph's PHYSICAL sources (codex
+    /// #816/#822): `sources[i]` must be the file `graph.physicalSources[i]`
+    /// names, and its FRESH full SHA-256 must equal the hash the graph
+    /// carried from its parse (codex #817 — a rewrite between parse and
+    /// ingest is refused). For a merge artifact read from disk that is
+    /// ONE file (the artifact); its logical provenance is recorded as the
+    /// manifest's `logicalSources`. Any mismatch: not promoted, logged,
+    /// pointer untouched. The physical sources are hashed AGAIN right
+    /// before the manifest and pointer are written (codex #822 item 2):
+    /// a file replaced during compile/verify is refused the same way.
     ///
     /// Holds the store lock for the whole compile → verify → promote →
     /// prune sequence (codex #792): two ingests into one root run one
@@ -312,23 +394,45 @@ public struct FamilyGraphCompiledStore {
             progress("Verifying compiled tree…")
             let decoded = try GedcomCompiledTree.decode(try Data(contentsOf: artifactURL(generation)))
             var problems = verify(decoded, graph)
-            let sourceRecords = try zip(sources, zip(keys, graph.sourceProvenance)).map { url, bound -> Source in
+            let sourceRecords = try zip(sources, zip(keys, graph.physicalSources)).map { url, bound -> Source in
                 let stat = try GedcomCompiledTree.sourceStat(url)
                 return Source(fileName: url.lastPathComponent, path: url.path,
                               size: stat.size, modifiedAt: Date(timeIntervalSince1970: stat.mtime),
                               key: bound.0, sha256: bound.0, droppedLineCount: bound.1.droppedLineCount)
             }
-            // The artifact's provenance IS the manifest's source list
-            // (name, sha, order) — asserted, not assumed (codex #816).
-            let artifactProvenance = decoded.sourceProvenance.map { "\($0.name):\($0.sha256 ?? "-"):\($0.droppedLineCount)" }
-            let manifestProvenance = sourceRecords.map { "\($0.fileName):\($0.sha256):\($0.droppedLineCount)" }
-            if artifactProvenance != manifestProvenance {
-                problems.append("artifact provenance ≠ manifest sources (\(artifactProvenance) ≠ \(manifestProvenance))")
+            let logicalRecords = graph.sourceProvenance.map(LogicalSource.init)
+            // Two assertions, not assumptions (codex #816/#822): the
+            // artifact's PHYSICAL binding IS the manifest's source list and
+            // its LOGICAL provenance IS the manifest's logicalSources
+            // (name, sha, dropped, order).
+            func line(_ name: String, _ sha: String?, _ dropped: Int) -> String { "\(name):\(sha ?? "-"):\(dropped)" }
+            let artifactPhysical = decoded.physicalSources.map { line($0.name, $0.sha256, $0.droppedLineCount) }
+            let manifestPhysical = sourceRecords.map { line($0.fileName, $0.sha256, $0.droppedLineCount) }
+            if artifactPhysical != manifestPhysical {
+                problems.append("artifact physical binding ≠ manifest sources (\(artifactPhysical) ≠ \(manifestPhysical))")
+            }
+            let artifactLogical = decoded.sourceProvenance.map { line($0.name, $0.sha256, $0.droppedLineCount) }
+            let manifestLogical = logicalRecords.map { line($0.fileName, $0.sha256, $0.droppedLineCount) }
+            if artifactLogical != manifestLogical {
+                problems.append("artifact logical provenance ≠ manifest logicalSources (\(artifactLogical) ≠ \(manifestLogical))")
+            }
+            // Late-rewrite guard (codex #822 item 2): the first hash bound
+            // the graph; compile + verify took time; hash the same files
+            // again NOW, before anything durable is written. A source that
+            // changed meanwhile is refused exactly like one that changed
+            // before the bind — no manifest, no pointer, generation removed.
+            let rehashed = try sourceKeys(for: sources)
+            if rehashed != keys {
+                let changed = zip(sources, zip(keys, rehashed)).filter { $0.1.0 != $0.1.1 }.map(\.0.lastPathComponent)
+                log("[family-tree] compiled generation \(generation) REFUSED, not promoted: "
+                    + "source\(changed.count == 1 ? "" : "s") \(changed.joined(separator: ", ")) changed during compile/verify (hash differs from the bound hash)")
+                try? fileManager.removeItem(at: generationURL(generation))
+                return nil
             }
             let manifest = Manifest(
                 schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
                 index: GedcomFamilyGraph.TreeIndex.formatVersion, generation: generation,
-                createdAt: Date(), sources: sourceRecords,
+                createdAt: Date(), sources: sourceRecords, logicalSources: logicalRecords,
                 peopleCount: decoded.people.count, familyCount: decoded.familyCount,
                 verification: problems, mergeReport: mergeReport,
                 localDroppedLineCount: decoded.droppedLineCount,
