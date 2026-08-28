@@ -65,6 +65,16 @@ struct FamilyTreeDemoView: View {
             } else if model.loadState == .unavailable {
                 unavailableBanner
             }
+            if let phase = model.loadPhase, model.loadState == .loading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(phase).font(.system(size: 12))
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+            }
             if let warning = model.loadWarning {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")

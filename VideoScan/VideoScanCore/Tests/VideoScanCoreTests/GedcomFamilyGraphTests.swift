@@ -330,6 +330,57 @@ struct GedcomFamilyGraphTests {
         #expect(units.first?.children.map(\.id) == ["@I3@"])
     }
 
+    /// codex #794 (4): loss accounting covers EVERY line not retained —
+    /// top-level SOUR/OBJE/NOTE/SUBM records with their sub-lines and
+    /// unknown HEAD tags included — while the HEAD envelope (SOUR, GEDC,
+    /// CHAR, DATE, SUBM…) that the writer regenerates is not counted.
+    @Test func droppedLineCountIncludesTopLevelRecordsAndUnknownHeadLines() {
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        1 SOUR getmyancestors
+        2 VERS 1.0
+        2 NAME getmyancestors
+        1 DATE 1 JAN 2026
+        2 TIME 12:00:00
+        1 GEDC
+        2 VERS 5.5.1
+        2 FORM LINEAGE-LINKED
+        1 CHAR UTF-8
+        1 SUBM @SUBM@
+        1 _CUSTOM header thing
+        2 CONT more of it
+        0 @SUBM@ SUBM
+        1 NAME getmyancestors
+        0 @I1@ INDI
+        1 NAME Ann /Shared/
+        1 _FSFTID SHRD-001
+        1 OBJE @O1@
+        0 @S1@ SOUR
+        1 TITL Census
+        2 DATE 1900
+        0 @O1@ OBJE
+        1 FILE photo.jpg
+        2 FORM jpg
+        0 @N1@ NOTE Hello
+        1 CONT world
+        0 @R1@ REPO
+        1 NAME Archive
+        0 TRLR
+        """)
+        #expect(g.people.count == 1)
+        // _CUSTOM + CONT (2) + SUBM record (2) + OBJE under INDI (1)
+        // + SOUR record (3) + OBJE record (3) + NOTE record (2) + REPO (2)
+        #expect(g.droppedLineCount == 15)
+        // The written form of THIS graph loses nothing further.
+        #expect(GedcomFamilyGraph(gedcomText: g.gedcomText(provenance: "x\ny")).droppedLineCount == 0)
+        // A source-less HEAD NOTE is kept (headNote), so not counted.
+        let noted = GedcomFamilyGraph(gedcomText: "0 HEAD\n1 NOTE a\n2 CONT b\n0 TRLR")
+        #expect(noted.headNote == "a\nb")
+        #expect(noted.droppedLineCount == 0)
+        // Malformed (level-less) lines are not GEDCOM lines: not counted.
+        #expect(GedcomFamilyGraph(gedcomText: "0 HEAD\ngarbage\n\n0 TRLR").droppedLineCount == 0)
+    }
+
     @Test func colloquialRelationWords() {
         #expect(GedcomFamilyGraph.relation(fromWord: "dad") == .father)
         #expect(GedcomFamilyGraph.relation(fromWord: "Mom") == .mother)
@@ -351,12 +402,20 @@ struct GedcomFamilyGraphTests {
         let largeGraph = GedcomFamilyGraph(
             gedcomText: lines.joined(separator: "\n"))
 
+        // The one-time index build (2026-08-28) is a compile-time cost —
+        // the loader does it off the main thread and the compiled artifact
+        // carries it — so it is budgeted separately from the lookup.
+        let buildStarted = ContinuousClock.now
+        _ = largeGraph.index
+        let build = buildStarted.duration(to: .now)
+        #expect(build < .seconds(5), "100k index build exceeded 5 seconds: \(build)")
+
         let started = ContinuousClock.now
         let matches = largeGraph.people(matching: "Needle Archivist")
         let elapsed = started.duration(to: .now)
 
         #expect(matches.map(\.name) == ["Needle Archivist"])
-        #expect(elapsed < .seconds(2),
-                "100k GEDCOM lookup exceeded 2 seconds: \(elapsed)")
+        #expect(elapsed < .milliseconds(50),
+                "100k GEDCOM lookup exceeded 50 ms: \(elapsed)")
     }
 }

@@ -26,10 +26,29 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
         return store
     }
 
-    func loadFamilyGraph() -> GedcomFamilyGraph? {
+    /// Parse-or-decode the family tree for this configuration. Prefer
+    /// `FamilyGraphSharedCache.shared.graph(for:store:)` on any repeated
+    /// path (every Hallie turn): with a `compiledStore` the promoted
+    /// artifact is decoded and NO GEDCOM parse happens (Rick 2026-08-28:
+    /// one-time ingest; launch and queries never parse). `compiledStore ==
+    /// nil` is the parse-every-time seam for tests and isolated callers.
+    func loadFamilyGraph(compiledStore: FamilyGraphCompiledStore? = nil) -> GedcomFamilyGraph? {
+        loadFamilyGraphOutcome(compiledStore: compiledStore)?.graph
+    }
+
+    /// Same as `loadFamilyGraph` with the loader's full outcome (`compiled`
+    /// tells whether the promoted artifact served the load). Nil only when
+    /// the archive authority is `.unavailable` — never fall back to a
+    /// different tree when the designated Master is offline.
+    func loadFamilyGraphOutcome(
+        compiledStore: FamilyGraphCompiledStore? = nil,
+        progress: @escaping (String) -> Void = { _ in }
+    ) -> FamilyGraphFileLoader.Outcome? {
         guard access != .unavailable else { return nil }
-        return FamilyGraphFileLoader(
-            originalsDirectory: gedcomDirectory()).loadNewest()
+        var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory())
+        loader.compiledStore = compiledStore
+        loader.progress = progress
+        return loader.loadNewestOutcome()
     }
 
     /// Prefer the deployed assets/GEDCOM convention.  Older installations
@@ -63,6 +82,121 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
             }
             return values.isRegularFile == true && values.isSymbolicLink != true
         }
+    }
+}
+
+/// One in-process family graph shared by every Hallie entry point
+/// (HallieAppTurnCoordinator, ArchivistChatWindow's legacy path,
+/// HallieShellCLI). Codex #792: those paths each called
+/// `loadFamilyGraph()` with no store, so every Hallie turn re-parsed the
+/// GEDCOM. Now the first caller decodes the promoted artifact (tens of
+/// ms for 16 MB) and later callers get the same value back until the
+/// world changes.
+///
+/// Staleness key — all cheap (no artifact decode, no parse):
+///   • the configuration's GEDCOM directory and access (an archive
+///     disconnect / UUID refusal changes `access` → miss → nil, so a
+///     cached graph never survives a revoked authority);
+///   • the store's pointer (`current.json`, a few hundred bytes): any
+///     ingest, rollback or schema bump repoints → miss → re-decode;
+///   • the (name, mtime) list of .ged files in the directory: a new or
+///     touched pull → miss (the loader then decides compiled vs parse).
+///
+/// C++ analogy: a mutex-guarded memo of `(key, value)`; `graph(for:)` is
+/// `key == memo.key ? memo.value : (memo = load(), memo.value)`. The lock
+/// is held across the load on purpose so two concurrent turns cannot
+/// both decode the artifact.
+final class FamilyGraphSharedCache: @unchecked Sendable {
+    static let shared = FamilyGraphSharedCache(log: { appLog.write($0) })
+
+    struct Loaded {
+        let graph: GedcomFamilyGraph
+        /// True when the promoted compiled artifact served the load
+        /// (no GEDCOM parse). Carried from the loader's outcome.
+        let compiled: Bool
+        /// Identity of the cached load: two `Loaded` values with equal
+        /// tokens came from ONE decode/parse (the graph is a value type,
+        /// so this is how a test proves the instance was reused).
+        let token: UUID
+        /// True when this call did no loading at all.
+        let reused: Bool
+    }
+
+    private struct Key: Equatable {
+        let directory: URL
+        let access: FamilyAssetStore.Access
+        let storeRoot: URL?
+        let pointer: FamilyGraphCompiledStore.Pointer?
+        let gedcomFiles: [String]
+    }
+
+    private let lock = NSLock()
+    private var entry: (key: Key, graph: GedcomFamilyGraph, compiled: Bool, token: UUID)?
+    private var loadCount = 0
+    private let log: (String) -> Void
+
+    init(log: @escaping (String) -> Void = { _ in }) { self.log = log }
+
+    /// How many times the loader actually ran (decode or parse). Tests use
+    /// this to prove consecutive turns did not reload.
+    var loaderRuns: Int { lock.withLock { loadCount } }
+
+    /// The graph for `configuration`, loading through `store` on a miss.
+    func graph(for configuration: FamilyAssetConfiguration,
+               store: FamilyGraphCompiledStore?) -> GedcomFamilyGraph? {
+        load(for: configuration, store: store)?.graph
+    }
+
+    func load(for configuration: FamilyAssetConfiguration,
+              store: FamilyGraphCompiledStore?) -> Loaded? {
+        guard configuration.access != .unavailable else {
+            // Revoked authority: drop what we had so a later republish
+            // cannot hand out a tree from before the disconnect.
+            lock.withLock { entry = nil }
+            return nil
+        }
+        let key = Key(directory: configuration.gedcomDirectory(),
+                      access: configuration.access,
+                      storeRoot: store?.root,
+                      pointer: store?.readPointer(),
+                      gedcomFiles: Self.gedcomStamps(in: configuration.gedcomDirectory()))
+        return lock.withLock {
+            if let entry, entry.key == key {
+                return Loaded(graph: entry.graph, compiled: entry.compiled, token: entry.token, reused: true)
+            }
+            loadCount += 1
+            guard let outcome = configuration.loadFamilyGraphOutcome(
+                compiledStore: store, progress: { [log] in log("[hallie] family graph: \($0)") }),
+                  let graph = outcome.graph else {
+                entry = nil
+                return nil
+            }
+            let token = UUID()
+            entry = (key, graph, outcome.compiled, token)
+            log("[hallie] family graph loaded (compiled: \(outcome.compiled), \(graph.people.count) people, "
+                + "\(outcome.selectedURL?.lastPathComponent ?? "no source"))")
+            return Loaded(graph: graph, compiled: outcome.compiled, token: token, reused: false)
+        }
+    }
+
+    /// Forget the cached graph (tests; or after an in-app ingest when the
+    /// caller wants the next turn to see it without waiting for a key miss —
+    /// the pointer change already forces one).
+    func invalidate() { lock.withLock { entry = nil } }
+
+    /// "name|mtime" for every regular .ged in `directory`, sorted — the
+    /// part of the newest-file rule that can change under us.
+    private static func gedcomStamps(in directory: URL) -> [String] {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) else { return [] }
+        return files.compactMap { url -> String? in
+            guard url.pathExtension.lowercased() == "ged",
+                  let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { return nil }
+            let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            return "\(url.lastPathComponent)|\(mtime)"
+        }.sorted()
     }
 }
 

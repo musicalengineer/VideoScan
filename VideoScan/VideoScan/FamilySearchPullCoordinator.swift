@@ -9,8 +9,12 @@
 
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
+import OSLog
 import VideoScanCore
+
+private let fsLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "familysearch.pull")
 
 @MainActor
 final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
@@ -58,10 +62,21 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// item 3). Failure needs evidence: the file disappearing.
     @Published private(set) var quietSince: Date?
     @Published var request: FamilySearchPullRequest
+    /// True while Add-to-current-tree is writing. Replace and a second Add
+    /// are refused (not queued) until it settles — one install at a time,
+    /// deterministic (codex #773 item 1).
+    @Published private(set) var isInstalling = false
 
     /// Where the archive wants the finished file. Injected so tests never
     /// write near a real archive.
     private let gedcomDirectory: URL
+    /// Where a merge is written BEFORE it is activated. Injected so tests
+    /// stage under their own temp root; production: App Support
+    /// family-tree/staging/. Nothing here is ever read by the loader.
+    private let stagingDirectory: URL
+    /// The staging folder of the merge in flight, so `cancel()` can drop it.
+    private var stagingInFlight: URL?
+    private var installTask: Task<Void, Never>?
     private let scriptURL: URL
     private let locator: FamilySearchToolLocator
     private let fileManager: FileManager
@@ -101,6 +116,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         gedcomDirectory: URL,
         defaultUsername: String = "",
         scriptURL: URL? = nil,
+        stagingDirectory: URL? = nil,
         locator: FamilySearchToolLocator = FamilySearchToolLocator(),
         fileManager: FileManager = .default,
         launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
@@ -116,6 +132,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         self.pollInterval = pollInterval
         self.timeout = timeout
         self.scriptURL = scriptURL ?? Self.defaultScriptURL(fileManager: fileManager)
+        self.stagingDirectory = stagingDirectory
+            ?? Self.defaultScriptURL(fileManager: fileManager).deletingLastPathComponent()
+                .appendingPathComponent("staging", isDirectory: true)
         self.request = FamilySearchPullRequest(
             username: defaultUsername,
             outputURL: Self.defaultOutputURL(fileManager: fileManager))
@@ -212,6 +231,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         parseGeneration &+= 1
         quietSince = nil
         phase = .idle
+        // A merge still writing to staging finds its generation stale
+        // after the write and cleans up itself; a finished-but-unactivated
+        // one is dropped here.
+        if let staging = stagingInFlight {
+            try? fileManager.removeItem(at: staging)
+            stagingInFlight = nil
+        }
     }
 
     /// A .ged the user already has (a Terminal run the sheet was not
@@ -469,7 +495,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// loader takes the newest valid file, so this is additive — the
     /// previous tree stays on disk as its own history.
     func install() {
-        guard case .ready(let output, let new, _, _) = phase else { return }
+        guard case .ready(let output, let new, _, _) = phase, !isInstalling else { return }
         let people = new.people
         do {
             try fileManager.createDirectory(
@@ -489,6 +515,210 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             phase = .failed(message:
                 FamilySearchPullError.installFailed(error.localizedDescription)
                     .localizedDescription)
+        }
+    }
+
+    /// "Add to current tree": build a DERIVED merge artifact from the
+    /// verified export and the tree the loader reads today, keyed by
+    /// FamilySearch ID, and activate it as a NEW file in the archive's
+    /// GEDCOM folder. The raw pulls remain the truth: neither is modified
+    /// or moved; a `.sha256` sidecar is written beside each (if missing)
+    /// so they can be verified later. The artifact is lossy (names,
+    /// vitals, links, FSIDs — see GedcomFamilyGraph+Writer) and says so
+    /// in its HEAD NOTE.
+    ///
+    /// Staged and atomic (codex #773 item 1): the file is written under
+    /// `stagingDirectory/<uuid>/`; only if the generation token is still
+    /// current AFTER the write (no Keep current / Forget / newer parse in
+    /// between) is it moved into the active folder — first under a
+    /// `.partial` name the loader ignores, then a same-directory rename.
+    /// One install at a time: `isInstalling` refuses a second Add and any
+    /// Replace until this settles. Returns the task so a caller can await
+    /// the outcome; the phase carries it.
+    ///
+    /// Memory: three graphs (current, new, merged) plus the merged text —
+    /// for 16k + 16k people well under 200 MB, released on return. SHA-256
+    /// streams the sources in 1 MB chunks.
+    @discardableResult
+    func installMerged() -> Task<Void, Never> {
+        if let running = installTask { return running }
+        guard case .ready(let output, _, _, _) = phase else { return Task {} }
+        isInstalling = true
+        let generation = parseGeneration
+        let staging = stagingDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        stagingInFlight = staging
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performMerge(output: output, generation: generation, staging: staging)
+        }
+        installTask = task
+        return task
+    }
+
+    private func performMerge(output: URL, generation: Int, staging: URL) async {
+        defer {
+            isInstalling = false
+            installTask = nil
+        }
+        let gedcomDirectory = self.gedcomDirectory
+        let fileManager = self.fileManager
+        let stamp = Self.timestampFormatter.string(from: Date())
+        let fileName = "familysearch-merged-\(stamp).ged"
+        // Two-case outcome (C++: a tagged union), because the failure is
+        // a sentence for the sheet, not an `Error`.
+        enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
+        let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
+            guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
+                return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
+            }
+            let outcome = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory, fileManager: fileManager).loadNewestOutcome()
+            guard var current = outcome.graph, let currentURL = outcome.selectedURL else {
+                return .failed("There is no current tree to add to — use Install family tree instead.")
+            }
+            // Sidecars beside the raw sources (never touching the sources);
+            // the hashes are also the merge's source fingerprints.
+            let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
+            let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
+            current.sourceFingerprint = currentSHA
+            new.sourceFingerprint = newSHA
+            let merge = current.merge(with: new)
+            let provenance = Self.provenanceNote(
+                stamp: stamp, merge: merge,
+                current: (currentURL, current.people.count, currentSHA),
+                added: (output, new.people.count, newSHA))
+            let text = merge.graph.gedcomText(provenance: provenance)
+            let stagedFile = staging.appendingPathComponent(fileName)
+            do {
+                try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+                try text.write(to: stagedFile, atomically: true, encoding: .utf8)
+            } catch {
+                try? fileManager.removeItem(at: staging)
+                return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
+            }
+            return .written(stagedFile, merge.graph.people.count, merge)
+        }.value
+
+        if parseDelay > .zero {
+            // Test pacing (see `parseDelay`): lets a sensor cancel BETWEEN
+            // the staged write and the activation check.
+            try? await Task.sleep(for: parseDelay)
+        }
+        // Validate AFTER the write: Keep current / Forget / a newer parse
+        // since we started means this artifact is nobody's — drop it.
+        var stillReady = false
+        if case .ready = phase { stillReady = true }
+        guard generation == parseGeneration, stillReady else {
+            try? fileManager.removeItem(at: staging)
+            if stagingInFlight == staging { stagingInFlight = nil }
+            return
+        }
+        switch staged {
+        case .failed(let message):
+            stagingInFlight = nil
+            phase = .failed(message: message)
+        case .written(let stagedFile, let people, let merge):
+            do {
+                try fileManager.createDirectory(at: gedcomDirectory, withIntermediateDirectories: true)
+                var destination = gedcomDirectory.appendingPathComponent(fileName)
+                var suffix = 2
+                while fileManager.fileExists(atPath: destination.path) {
+                    destination = gedcomDirectory.appendingPathComponent("familysearch-merged-\(stamp)-\(suffix).ged")
+                    suffix += 1
+                }
+                // Cross-volume copy lands under a name the loader ignores
+                // (not ".ged"); the final step is a same-directory rename.
+                let partial = destination.appendingPathExtension("partial")
+                try? fileManager.removeItem(at: partial)
+                try fileManager.moveItem(at: stagedFile, to: partial)
+                try fileManager.moveItem(at: partial, to: destination)
+                try? fileManager.removeItem(at: staging)
+                stagingInFlight = nil
+                appLog.write("Family Tree: merge artifact \(destination.lastPathComponent): \(merge.sharedPeopleCount) shared + \(merge.addedPeopleCount) added people; \(merge.conflicts.count) conflicts kept for review")
+                phase = .installed(installed: destination, people: people)
+            } catch {
+                try? fileManager.removeItem(at: staging)
+                stagingInFlight = nil
+                phase = .failed(message: FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
+            }
+        }
+    }
+
+    /// The HEAD NOTE of a merge artifact: what it is (derived, lossy),
+    /// what it came from (both sources with their SHA-256), roots, counts,
+    /// and every conflict the merge left for a human.
+    nonisolated static func provenanceNote(
+        stamp: String, merge: GedcomFamilyGraph.MergeOutcome,
+        current: (URL, Int, String?), added: (URL, Int, String?)
+    ) -> String {
+        let roots = merge.graph.roots.map { r in r.name + (r.familySearchID.map { " (\($0))" } ?? "") }
+        var lines = [
+            "Derived VideoScan merge artifact (lossy: names, vitals, links, FSIDs) written \(stamp) UTC; the source files remain the record.",
+            // File names + SHA-256 only — never an absolute path (codex #780).
+            "sources: \(current.0.lastPathComponent) (sha256 \(current.2 ?? "unavailable"); \(current.1) people; current tree), "
+                + "\(added.0.lastPathComponent) (sha256 \(added.2 ?? "unavailable"); \(added.1) people; added)",
+            "Roots: " + roots.joined(separator: "; "),
+            "Shared people: \(merge.sharedPeopleCount); added: \(merge.addedPeopleCount); unmatched (no FamilySearch ID): \(merge.unmatched.count); "
+                + "field disagreements (first source kept): \(merge.fieldConflictCount); conflicts kept for review: \(merge.conflicts.count)",
+            "Loss: \(merge.droppedLineCount) source lines (other events, sources, notes, media) are not carried by this artifact.",
+        ]
+        for c in merge.conflicts.prefix(50) {
+            lines.append("conflict \(c.kind.rawValue) [\(c.ids.joined(separator: ", "))]: \(c.resolution)")
+        }
+        if merge.conflicts.count > 50 { lines.append("… and \(merge.conflicts.count - 50) more conflicts") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// SHA-256 of the exact bytes at `url`, streamed in 1 MB chunks. Writes
+    /// (or corrects) `<file>.sha256` beside it in sha256sum format
+    /// ("<hex>  <name>"); the source is only ever READ.
+    ///
+    /// codex #790: the digest is ALWAYS recomputed from the current bytes.
+    /// The sidecar is a record for humans and `shasum -c`, never a cache
+    /// the merge trusts — a download path is reused from pull to pull, so
+    /// a stale sidecar would hand a NEW export the OLD fingerprint and let
+    /// `merge(with:)` pointer-match FSID-less records across two different
+    /// files. A read failure at any point (open or mid-file) yields nil,
+    /// never a prefix hash, and leaves any existing sidecar untouched; the
+    /// merge then falls back to FSID-only matching (`sameSource` false).
+    ///
+    /// `openChunks` is the read seam: it opens the file and returns a
+    /// pull-closure yielding the next chunk, nil at EOF, throwing on I/O
+    /// error (C++: an input iterator whose `++` can throw). Tests inject a
+    /// reader that fails mid-file.
+    nonisolated static func sha256Sidecar(
+        for url: URL, fileManager: FileManager,
+        openChunks: (URL) throws -> (() throws -> Data?) = FamilySearchPullCoordinator.fileHandleChunks
+    ) -> String? {
+        let sidecar = url.appendingPathExtension("sha256")
+        var hasher = SHA256()
+        do {
+            let next = try openChunks(url)
+            while let chunk = try next() {
+                if chunk.isEmpty { break }
+                hasher.update(data: chunk)
+            }
+        } catch {
+            fsLog.error("SHA-256 of \(url.lastPathComponent, privacy: .public) failed: \(error.localizedDescription, privacy: .public); no fingerprint recorded.")
+            return nil
+        }
+        let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        let line = "\(hex)  \(url.lastPathComponent)\n"
+        // Only write when the sidecar is missing or disagrees with the bytes.
+        if (try? String(contentsOf: sidecar, encoding: .utf8)) != line {
+            try? line.write(to: sidecar, atomically: true, encoding: .utf8)
+        }
+        return hex
+    }
+
+    /// Default chunk source: a `FileHandle` read 1 MB at a time. Opening
+    /// a directory succeeds on macOS but the first read throws (EISDIR),
+    /// which the caller turns into "no fingerprint" — not the empty hash.
+    nonisolated static func fileHandleChunks(_ url: URL) throws -> (() throws -> Data?) {
+        let handle = try FileHandle(forReadingFrom: url)
+        return {
+            let chunk = try handle.read(upToCount: 1 << 20)
+            if chunk == nil || chunk!.isEmpty { try handle.close() }
+            return chunk
         }
     }
 

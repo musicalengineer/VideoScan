@@ -163,8 +163,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// that fires after the value lands — here it keeps `filteredIndexByID`
     /// in step so arrow keys never scan the 16k-row list.
     @Published private(set) var filteredPeople: [FamilyTreePersonSummary] = [] {
-        didSet { rebuildFilteredIndex() }
+        didSet { filteredIndexByIDCache = nil }
     }
+    /// What the loader is doing while `loadState == .loading` ("Compiling
+    /// family tree (16,383 people)…"); nil otherwise. A first import of a
+    /// big pull compiles for a few seconds — the caption is the progress.
+    @Published private(set) var loadPhase: String?
     @Published private(set) var selectedID: String?
     @Published private(set) var selectedPerson: FamilyTreePersonSummary?
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
@@ -233,6 +237,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     // MARK: Private state
 
     private var graph: GedcomFamilyGraph?
+    /// The People-tab kinship display follows the tree (codex #795 C):
+    /// every `install(graph:)` is pushed here so "Relationships" lines
+    /// rebuild when the tree is replaced in-session. Production models use
+    /// the shared center; a model built on an injected originals directory
+    /// gets NONE unless the test assigns one (same isolation rule as
+    /// `compiledStore`).
+    var kinshipCenter: KinshipDisplayCenter?
     /// Sorted by surname, then given name, then id (stable).
     private var sortedPeople: [GedcomFamilyGraph.Person] = []
     private var photoOverrides: [String: NSImage] = [:]
@@ -240,11 +251,31 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// "Adjust Photo…" can start from it directly instead of round-tripping
     /// the NSImage through an unbounded TIFF (codex #707 item 6).
     private var photoOverrideSources: [String: CGImage] = [:]
-    /// id → row index in `filteredPeople`. Rebuilt only when the filter
-    /// changes (O(rows) once), so each ↑/↓ keypress is one dictionary
-    /// lookup, not a linear scan.
-    private var filteredIndexByID: [String: Int] = [:]
+    /// id → row index in `filteredPeople`. Built LAZILY on the first ↑/↓
+    /// after a filter change (O(rows) once), never per keystroke, so
+    /// typing in the search field costs the filter alone.
+    private var filteredIndexByIDCache: [String: Int]?
+    private var filteredIndexByID: [String: Int] {
+        if let cached = filteredIndexByIDCache { return cached }
+        var map: [String: Int] = [:]
+        map.reserveCapacity(filteredPeople.count)
+        for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
+        filteredIndexByIDCache = map
+        return map
+    }
+    /// Sidebar rows for everyone, in sidebar order, built once per install
+    /// (off the main thread when loaded from disk) so a filter maps row
+    /// numbers to ready-made summaries.
+    private var summariesInOrder: [FamilyTreePersonSummary] = []
+    /// Where compiled artifacts live; nil = parse every load (tests).
+    private let compiledStore: FamilyGraphCompiledStore?
     private var loadGeneration = 0
+    /// The disk load currently running, and at most one queued after it
+    /// (codex #792): `loadFromDisk` never runs two loads concurrently —
+    /// a second caller waits for the running one, then runs its own
+    /// (cheap: artifact hit); a third joins that queued run.
+    private var loadInFlight: Task<Void, Never>?
+    private var loadQueued: Task<Void, Never>?
     private var installedSourceKey: String?
     private var notesResolver: FamilyTreeNotesResolver?
     private var brainIndex: CyberBrainIndex?
@@ -268,6 +299,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     init(originalsDirectory: URL? = nil,
+         compiledStore: FamilyGraphCompiledStore? = nil,
          cyberBrainRootURL: URL? = nil,
          noteAuthor: String? = nil,
          pronunciationFallback: (() -> HalliePronunciationLexicon)? = nil,
@@ -288,17 +320,45 @@ final class FamilyTreeLiveModel: ObservableObject {
                 : { .shipped })
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()
+        // Same isolation rule: an injected originals directory gets NO
+        // production compiled store unless the test injects one.
+        self.compiledStore = compiledStore
+            ?? (originalsDirectory == nil ? FamilyGraphCompiledStore.app : nil)
         self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations
         self.photoProvider = photoProvider
+        self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
     }
 
     // MARK: Loading
 
     /// Read the newest .ged off the main thread, then install it. Safe to
-    /// call more than once (e.g. after the user drops a file in).
+    /// call more than once (e.g. after the user drops a file in): loads
+    /// are serialized, never concurrent, so two callers cannot race the
+    /// compiled store's ingest/prune (codex #792). A call that arrives
+    /// while one is running still gets a load that STARTS after it (it
+    /// may have been made because the files changed).
     func loadFromDisk() async {
+        if let queued = loadQueued {
+            await queued.value           // a pending reload already covers us
+            return
+        }
+        let running = loadInFlight
+        let isQueued = running != nil
+        let task = Task { @MainActor [weak self] in
+            await running?.value
+            guard let self else { return }
+            if isQueued { self.loadQueued = nil }   // now running; the next caller may queue again
+            await self.performLoadFromDisk()
+        }
+        if isQueued { loadQueued = task }
+        loadInFlight = task
+        await task.value
+        if loadInFlight == task { loadInFlight = nil }
+    }
+
+    private func performLoadFromDisk() async {
         loadGeneration &+= 1
         let generation = loadGeneration
         guard sourceAccess != .unavailable else {
@@ -307,13 +367,38 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         loadState = .loading
         let directory = originalsDirectory
-        // `Task.detached` ≈ spawn on a worker thread; the parse can take a
-        // few hundred ms on a large tree and must not block the UI.
-        let loaded = await Task.detached(priority: .userInitiated) {
-            FamilyGraphFileLoader(originalsDirectory: directory).loadNewestOutcome()
+        let store = compiledStore
+        // `Task.detached` ≈ spawn on a worker thread; a first import parses
+        // and compiles (seconds on a big pull) and must not block the UI.
+        // Afterwards the promoted artifact decodes in ~10 ms.
+        let loaded = await Task.detached(priority: .userInitiated) { [weak self] in
+            var loader = FamilyGraphFileLoader(originalsDirectory: directory)
+            loader.compiledStore = store
+            loader.progress = { phase in
+                Task { @MainActor [weak self] in
+                    guard let self, self.loadGeneration == generation else { return }
+                    self.loadPhase = phase
+                }
+            }
+            let outcome = loader.loadNewestOutcome()
+            // Sidebar rows and the group-photo identity directory are pure
+            // functions of the graph (+ speaker defaults): build them
+            // here, not on the main actor.
+            let rows = outcome.graph.map { Self.sidebarRows(of: $0) } ?? []
+            let identity = outcome.graph.map {
+                FamilyAssetIdentityDirectory(graph: $0, speakers: .fromDefaults())
+            }
+            return (outcome, rows, identity)
         }.value
         guard generation == loadGeneration else { return }
-        install(outcome: loaded)
+        loadPhase = nil
+        install(outcome: loaded.0, rows: loaded.1, identity: loaded.2)
+    }
+
+    /// Everyone's sidebar summary in sidebar order — O(people), pure.
+    nonisolated static func sidebarRows(of graph: GedcomFamilyGraph) -> [FamilyTreePersonSummary] {
+        let index = graph.index
+        return index.sidebarOrder.map { summary(graph.people[index.ids[Int($0)]]!) }
     }
 
     /// Synchronous variant for tests and for callers that already have
@@ -325,14 +410,16 @@ final class FamilyTreeLiveModel: ObservableObject {
             return
         }
         loadState = .loading
-        install(outcome: FamilyGraphFileLoader(
-            originalsDirectory: originalsDirectory).loadNewestOutcome())
+        var loader = FamilyGraphFileLoader(originalsDirectory: originalsDirectory)
+        loader.compiledStore = compiledStore
+        install(outcome: loader.loadNewestOutcome())
     }
 
     /// Install a parsed graph (nil → demo fallback). Keeps the current
     /// selection when the person still exists, else picks the first
     /// sorted person.
-    func install(graph newGraph: GedcomFamilyGraph?) {
+    func install(graph newGraph: GedcomFamilyGraph?, rows: [FamilyTreePersonSummary]? = nil,
+                 identity: FamilyAssetIdentityDirectory? = nil) {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
@@ -342,14 +429,22 @@ final class FamilyTreeLiveModel: ObservableObject {
             installedSourceKey = sourceKey
         }
         graph = newGraph
+        kinshipCenter?.install(graph: newGraph)
         // Group-photo attribution follows the tree (2026-08-26): rebuilt
         // here from tree + speaker settings; a Hallie turn later enriches
         // it with CyberBrain / People-tab aliases.
-        FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map {
-            FamilyAssetIdentityDirectory(graph: $0, speakers: .fromDefaults())
+        // O(people) with a familyUnits walk each — precomputed off the
+        // main actor by loadFromDisk; built here only for synchronous
+        // installs (tests, loadNow).
+        FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map { graph in
+            identity ?? FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
         })
         if let newGraph {
-            sortedPeople = Self.sorted(Array(newGraph.people.values))
+            // Sidebar order comes from the compiled index (surname, name,
+            // id — the `sorted` comparator, computed once per compile).
+            let index = newGraph.index
+            sortedPeople = index.sidebarOrder.map { newGraph.people[index.ids[Int($0)]]! }
+            summariesInOrder = rows ?? sortedPeople.map(Self.summary)
             peopleCount = sortedPeople.count
             let ownerFamilySearchID = UserDefaults.standard.string(
                 forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
@@ -360,6 +455,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             })
         } else {
             sortedPeople = []
+            summariesInOrder = []
             peopleCount = FamilyTreeDemoData.people.count
             anchors = []
             anchorsCaption = nil
@@ -383,8 +479,9 @@ final class FamilyTreeLiveModel: ObservableObject {
         rebuildSelection()
     }
 
-    private func install(outcome: FamilyGraphFileLoader.Outcome) {
-        install(graph: outcome.graph)
+    private func install(outcome: FamilyGraphFileLoader.Outcome, rows: [FamilyTreePersonSummary]? = nil,
+                         identity: FamilyAssetIdentityDirectory? = nil) {
+        install(graph: outcome.graph, rows: rows, identity: identity)
         if let rejected = outcome.rejectedURLs.first {
             if let selected = outcome.selectedURL {
                 loadWarning = "Could not read \(rejected.lastPathComponent); using \(selected.lastPathComponent)."
@@ -403,6 +500,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadGeneration &+= 1
         graph = nil
         sortedPeople = []
+        summariesInOrder = []
         peopleCount = 0
         filteredPeople = []
         selectedID = nil
@@ -628,13 +726,6 @@ final class FamilyTreeLiveModel: ObservableObject {
         select(filteredPeople[target].id)
     }
 
-    private func rebuildFilteredIndex() {
-        var map: [String: Int] = [:]
-        map.reserveCapacity(filteredPeople.count)
-        for (index, person) in filteredPeople.enumerated() { map[person.id] = index }
-        filteredIndexByID = map
-    }
-
     // MARK: Line to… (direct descent chain)
 
     /// "Me" first, then each recorded spouse. "Me" is the person carrying
@@ -647,11 +738,23 @@ final class FamilyTreeLiveModel: ObservableObject {
     nonisolated static func anchors(in graph: GedcomFamilyGraph,
                                     ownerFamilySearchID: String? = nil) -> [FamilyTreeAnchor] {
         if staleOwnerPinCaption(in: graph, ownerFamilySearchID: ownerFamilySearchID) != nil { return [] }
-        guard let root = graph.person(familySearchID: ownerFamilySearchID) ?? graph.rootPerson else { return [] }
-        var out = [FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true)]
-        var seen: Set<String> = [root.id]
-        for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
-            out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+        // A pinned owner is THE "me" (the first-INDI assumption is not
+        // consulted at all, so a tree whose first record is Sr does not
+        // add him beside a pinned Jr). Without a pin, every root the tree
+        // names is an anchor — a merged two-pull tree has two, Rick and
+        // Donna (2026-08-27) — roots first, then each one's spouses.
+        let leads: [GedcomFamilyGraph.Person] =
+            graph.person(familySearchID: ownerFamilySearchID).map { [$0] } ?? graph.roots
+        guard !leads.isEmpty else { return [] }
+        var out: [FamilyTreeAnchor] = []
+        var seen: Set<String> = []
+        for root in leads where seen.insert(root.id).inserted {
+            out.append(FamilyTreeAnchor(id: root.id, label: firstGivenName(root), isRoot: true))
+        }
+        for root in leads {
+            for spouse in graph.relatives(.spouse, of: root) where seen.insert(spouse.id).inserted {
+                out.append(FamilyTreeAnchor(id: spouse.id, label: firstGivenName(spouse), isRoot: false))
+            }
         }
         return out
     }
@@ -982,24 +1085,18 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func refilter() {
         let needle = searchText.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else {
-            filteredPeople = isLive
-                ? sortedPeople.map(Self.summary)
-                : FamilyTreeDemoData.people
+            filteredPeople = isLive ? summariesInOrder : FamilyTreeDemoData.people
             return
         }
-        if isLive {
-            filteredPeople = sortedPeople.filter { person in
-                person.name.localizedCaseInsensitiveContains(needle)
-                    || person.alternateNames.contains {
-                        $0.localizedCaseInsensitiveContains(needle)
-                    }
-                    || (person.surname?.localizedCaseInsensitiveContains(needle) ?? false)
-                    || person.alternateSurnames.contains {
-                        $0.localizedCaseInsensitiveContains(needle)
-                    }
-                    || person.id.localizedCaseInsensitiveContains(needle)
-                    || (person.familySearchID?.localizedCaseInsensitiveContains(needle) ?? false)
-            }.map(Self.summary)
+        if let graph, isLive {
+            // Case-insensitive substring over name, alternate names,
+            // surname(s), pointer and FamilySearch ID — one memmem sweep
+            // over the compiled sidebar haystack (GedcomFamilyGraph+Index),
+            // then rows → ready-made summaries. Same rows as the old
+            // per-person localizedCaseInsensitiveContains scan
+            // (GedcomIndexEquivalenceTests pins it on the real export).
+            let rows = graph.index.sidebarRows(containing: needle.lowercased())
+            filteredPeople = rows.map { summariesInOrder[Int($0)] }
             return
         }
         filteredPeople = FamilyTreeDemoData.people.filter {

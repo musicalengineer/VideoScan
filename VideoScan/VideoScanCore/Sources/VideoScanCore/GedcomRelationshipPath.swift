@@ -116,30 +116,56 @@ extension GedcomFamilyGraph {
         maxDepth: Int = GedcomFamilyGraph.relationshipSearchDepthLimit
     ) -> KinPath? {
         guard from.id != to.id, maxDepth > 0 else { return nil }
-        // Predecessor map: person id → how we got there. The root has no
-        // link. Swift dictionary here ≈ std::unordered_map. (Note: a
-        // dictionary of Optional values would DROP a key on `= nil`, so the
-        // root is stored as a link with nil fields, not as nil.)
-        var previous: [String: Link] = [from.id: Link(previousID: nil, edge: nil)]
-        var frontier = [from.id]
+        // BFS over the compiled CSR adjacency (2026-08-28). Ordinals are
+        // assigned from `people.keys.sorted()` (Swift String order), so
+        // ascending ordinals reproduce the "ids sorted per edge type"
+        // tie-break of the original Person walk EXACTLY — every list must
+        // be sorted, not just parents (codex #792: CSR children/spouses
+        // keep GEDCOM order, which silently changed which of two equal-
+        // length paths BFS returned). Sorting here, per query, keeps
+        // already-promoted artifacts valid (no index format bump); the
+        // lists are a handful of entries each. Predecessor arrays here ≈
+        // two flat C arrays instead of a hash map.
+        let index = self.index
+        guard let start = index.ordinal(of: from.id), let goal = index.ordinal(of: to.id) else { return nil }
+        var previous = [Int32](repeating: -1, count: index.count)
+        var edgeTaken = [UInt8](repeating: 0, count: index.count)
+        previous[Int(start)] = start
+        var frontier: [Int32] = [start]
         var depth = 0
+        func visit(_ neighbour: Int32, _ edge: KinEdge, from id: Int32, _ next: inout [Int32]) -> Bool {
+            guard previous[Int(neighbour)] == -1 else { return false }
+            previous[Int(neighbour)] = id
+            edgeTaken[Int(neighbour)] = edge == .parent ? 1 : edge == .child ? 2 : 3
+            if neighbour == goal { return true }
+            next.append(neighbour)
+            return false
+        }
         while !frontier.isEmpty, depth < maxDepth {
-            var next: [String] = []
+            var next: [Int32] = []
             for id in frontier {
-                guard let person = people[id] else { continue }
-                for (edge, neighbour) in neighbours(of: person) {
-                    guard previous[neighbour.id] == nil else { continue }
-                    previous[neighbour.id] = Link(previousID: id, edge: edge)
-                    if neighbour.id == to.id {
-                        return unwind(previous, from: from, to: to)
-                    }
-                    next.append(neighbour.id)
-                }
+                for n in index.parents(of: id).sorted() where visit(n, .parent, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
+                for n in index.children(of: id).sorted() where visit(n, .child, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
+                for n in index.spouses(of: id).sorted() where visit(n, .spouse, from: id, &next) { return unwindOrdinals(previous, edgeTaken, index, from: from, goal: goal) }
             }
             frontier = next
             depth += 1
         }
         return nil
+    }
+
+    private func unwindOrdinals(_ previous: [Int32], _ edgeTaken: [UInt8], _ index: TreeIndex,
+                                from: Person, goal: Int32) -> KinPath? {
+        var steps: [KinStep] = []
+        var cursor = goal
+        while index.ids[Int(cursor)] != from.id {
+            let prev = previous[Int(cursor)]
+            guard prev != -1, let person = people[index.ids[Int(cursor)]] else { return nil }
+            let edge: KinEdge = edgeTaken[Int(cursor)] == 1 ? .parent : edgeTaken[Int(cursor)] == 2 ? .child : .spouse
+            steps.append(KinStep(edge: edge, person: person))
+            cursor = prev
+        }
+        return KinPath(from: from, steps: steps.reversed())
     }
 
     /// Name the shape of a path. Recognised shapes: direct ancestor /
@@ -198,41 +224,6 @@ extension GedcomFamilyGraph {
     }
 
     // MARK: - Private
-
-    private func neighbours(of person: Person) -> [(KinEdge, Person)] {
-        var out: [(KinEdge, Person)] = []
-        for parent in relatives(.parents, of: person).sorted(by: { $0.id < $1.id }) {
-            out.append((.parent, parent))
-        }
-        for child in relatives(.children, of: person).sorted(by: { $0.id < $1.id }) {
-            out.append((.child, child))
-        }
-        for spouse in relatives(.spouse, of: person).sorted(by: { $0.id < $1.id }) {
-            out.append((.spouse, spouse))
-        }
-        return out
-    }
-
-    private struct Link {
-        let previousID: String?
-        let edge: KinEdge?
-    }
-
-    private func unwind(
-        _ previous: [String: Link],
-        from: Person,
-        to: Person
-    ) -> KinPath? {
-        var steps: [KinStep] = []
-        var cursor = to.id
-        while cursor != from.id {
-            guard let link = previous[cursor], let previousID = link.previousID,
-                  let edge = link.edge, let person = people[cursor] else { return nil }
-            steps.append(KinStep(edge: edge, person: person))
-            cursor = previousID
-        }
-        return KinPath(from: from, steps: steps.reversed())
-    }
 
     /// "great-" × n prefix.
     private static func greats(_ n: Int) -> String {

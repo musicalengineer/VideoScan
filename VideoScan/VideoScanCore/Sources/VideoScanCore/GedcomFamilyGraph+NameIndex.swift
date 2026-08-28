@@ -37,48 +37,22 @@ extension GedcomFamilyGraph {
     ///
     /// Memory: one Set entry per (token, person) pair — a 16k-person tree
     /// with ~4 tokens/name is ~100k small strings, well under 10 MB.
+    /// Inverted token → person index over every NAME record. Since
+    /// 2026-08-28 this is a thin view over the graph's shared `TreeIndex`
+    /// (`likeTokens` postings): constructing one no longer builds a
+    /// second index, and `people(namedLike:)` here and on the graph are
+    /// the same code path.
     public struct NameIndex: Sendable {
-        private let idsByToken: [String: Set<String>]
-        private let people: [String: Person]
         private let graph: GedcomFamilyGraph
 
         public init(graph: GedcomFamilyGraph) {
-            var idsByToken: [String: Set<String>] = [:]
-            for (id, person) in graph.people {
-                for name in [person.name] + person.alternateNames {
-                    for token in FamilyIdentityText.tokens(name) {
-                        idsByToken[GedcomFamilyGraph.diminutives[token] ?? token, default: []].insert(id)
-                    }
-                }
-                // A wife is also reachable under her husband's surname
-                // (see `marriedSurnames(of:)`); the exact predicate below
-                // still decides.
-                for token in graph.marriedSurnames(of: person) {
-                    idsByToken[token, default: []].insert(id)
-                }
-            }
-            self.idsByToken = idsByToken
-            self.people = graph.people
             self.graph = graph
+            _ = graph.index
         }
 
         /// Same result, same order, as `graph.people(namedLike:)`.
         public func people(namedLike typed: String) -> [Person] {
-            guard let tokens = GedcomFamilyGraph.namedLikeTokens(typed) else { return [] }
-            // Narrow: candidates must carry EVERY token somewhere in their
-            // names. Start from the rarest token so the intersection is small.
-            var sets = tokens.compactMap { idsByToken[$0] }
-            guard sets.count == tokens.count else { return [] }
-            sets.sort { $0.count < $1.count }
-            var candidates = sets[0]
-            for set in sets.dropFirst() {
-                candidates.formIntersection(set)
-                if candidates.isEmpty { return [] }
-            }
-            // Confirm with the exact per-NAME-record predicate.
-            return candidates.compactMap { people[$0] }
-                .filter { graph.matches($0, namedLikeTokens: tokens) }
-                .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+            graph.people(namedLike: typed)
         }
     }
 }

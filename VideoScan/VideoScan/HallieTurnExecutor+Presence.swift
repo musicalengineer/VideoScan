@@ -56,7 +56,8 @@ extension HallieTurnExecutor {
             question: request.intent.originalQuestion,
             speakers: context.speakers,
             graph: context.graph,
-            cyberBrain: context.cyberBrain)
+            cyberBrain: context.cyberBrain,
+            kinshipOverlay: kinshipOverlay(context: context))
         if let failure = kin.failure {
             return Result(
                 route: route,

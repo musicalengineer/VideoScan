@@ -229,19 +229,30 @@ enum HallieTurnExecutor {
         /// The free-text note on the profile. Never a fact: the only reader
         /// (PeopleTab) quotes it with attribution, and nothing matches on it.
         let note: String
+        /// Typed local relationships + sex (2026-08-27) for the kinship
+        /// overlay. Additive; default "none".
+        let kinships: [Kinship]
+        let sex: PersonSex?
+        let uuid: UUID?
 
         init(
             stableID: String,
             canonicalName: String,
             aliases: [String] = [],
             birthdate: Date? = nil,
-            note: String = ""
+            note: String = "",
+            kinships: [Kinship] = [],
+            sex: PersonSex? = nil,
+            uuid: UUID? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
             self.aliases = aliases
             self.birthdate = birthdate
             self.note = note
+            self.kinships = kinships
+            self.sex = sex
+            self.uuid = uuid
         }
     }
 
@@ -829,11 +840,13 @@ enum HallieTurnExecutor {
             return result
         }
         // No tree at all, but the People tab knows the name: answer from
-        // the profile (see +PeopleTab) rather than "I don't have a tree".
+        // the profile (see +PeopleTab) rather than "I don't have a tree" —
+        // or ask which one when several profiles claim the spelling.
         if context.graph == nil, let typed = payload.people.first,
-           let profile = PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
-            return PeopleTab.answer(profile: profile, payload: payload, context: context,
-                                    queryDescription: graphQueryDescription(payload))
+           let result = peopleTabResult(
+               typed: typed, payload: payload, request: request, context: context,
+               queryDescription: graphQueryDescription(payload)) {
+            return result
         }
         guard let graph = context.graph else {
             return Result(
@@ -853,8 +866,13 @@ enum HallieTurnExecutor {
                 ArchivistGraphProfileSnapshot(
                     stableID: $0.stableID,
                     canonicalName: $0.canonicalName,
-                    aliases: $0.aliases)
-            })
+                    aliases: $0.aliases,
+                    kinships: $0.kinships,
+                    sex: $0.sex,
+                    birthdate: $0.birthdate,
+                    uuid: $0.uuid)
+            },
+            ownerName: context.speakers.ownerName)
         let selection: ArchivistGraphSubjectSelection
         // Step 0 of the owner chain (2026-08-26): a configured FamilySearch
         // ID pins the owner's own spelling to one record before any name
@@ -952,10 +970,12 @@ enum HallieTurnExecutor {
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {
             // Not in the tree — but is it someone from the People tab? Then
-            // the profile answers (name, alternate names, birth date, tags).
-            if let profile = PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
-                return PeopleTab.answer(profile: profile, payload: payload, context: context,
-                                        queryDescription: queryDescription)
+            // the profile answers (name, alternate names, birth date, tags);
+            // a chip chosen after "which one?" names the profile directly.
+            if let result = peopleTabResult(
+                typed: typed, payload: payload, request: request, context: context,
+                queryDescription: queryDescription) {
+                return result
             }
             // A near miss ("Jusson Lambe") → "Did you mean Judson Lamb?" as a
             // clarification with the real people as choices — the existing
@@ -1254,6 +1274,41 @@ enum HallieTurnExecutor {
         return FamilyKnowledgeSupplement.apply(
             to: base, payload: payload, graphResult: result,
             graph: graph, context: context)
+    }
+
+    /// The People tab's identity verdict is PersonResolver's (#778): the
+    /// one owner of a spelling answers from its profile; several owners ask
+    /// "which one?" with People chips — never a silent canonical-name pick.
+    /// `nil` = nobody in the People tab goes by it; the caller carries on.
+    private static func peopleTabResult(
+        typed: String,
+        payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        queryDescription: String
+    ) -> Result? {
+        switch PeopleTab.claim(typed, selected: request.selectedIdentity,
+                               in: context.profiles ?? []) {
+        case .one(let profile):
+            return PeopleTab.answer(profile: profile, payload: payload, context: context,
+                                    queryDescription: queryDescription)
+        case .ambiguous(let profiles):
+            return Result(
+                route: .graph,
+                outcome: .needsClarification,
+                prose: "Which \(typed) do you mean?",
+                basisLine: "Checked: People profiles — more than one goes by “\(typed)”; no person was selected.",
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil,
+                clarification: Clarification(
+                    intent: request.intent,
+                    stage: .profileIdentity,
+                    candidates: PeopleTab.candidates(profiles),
+                    continuationToken: context.continuationToken))
+        case .none:
+            return nil
+        }
     }
 
     static func graphQueryDescription(_ payload: ArchivistQueryAST.Graph) -> String {

@@ -47,6 +47,13 @@ extension ArchivistGraphExecutor {
                 basis: queryValidationBasis)
         }
 
+        // People-tab relationships first (2026-08-27): the contemporary
+        // family is not in the FamilySearch tree; the overlay answers when
+        // it links the two, otherwise the GEDCOM path search runs as before.
+        if let overlay = overlayRelationshipResult(query, inputs: inputs, subjects: subjects) {
+            return overlay
+        }
+
         var floating = floatingSelection
         var resolved: [(
             GedcomFamilyGraph.Person,

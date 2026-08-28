@@ -16,6 +16,9 @@
 //   (iii) No hit → the tree root (first INDI; getmyancestors/FamilySearch
 //         put the home person first — an assumption, so the note says
 //         "tree root").
+// Multi-root trees (merged artifacts, 2026-08-27) skip (i)–(iii): after
+// the pin the ONLY acceptance is exactly one root matching the name;
+// anything else fails closed with a reason (codex #790).
 // Step 0 (codex #707, 2026-08-26): an EXPLICIT FamilySearch ID pin fails
 // closed. Configured but not in the installed tree → `.none(reason:)` with
 // an honest line, never a silent fall-through to name/root that could bind
@@ -64,6 +67,31 @@ enum HallieOwnerResolver {
             return .none(reason: stale)
         }
         let like = graph.people(namedLike: name)
+        // A merged tree names several home people (Rick AND Donna,
+        // 2026-08-27). "Me" is then decided by evidence, never by file
+        // order OR by a lone namesake: the precedence is pin > exactly one
+        // matching ROOT > fail closed (codex #773 item 3, #790). This block
+        // sits BEFORE the unique-name shortcut on purpose — a two-root
+        // tree whose only "Rick" is a non-root cousin must not bind him.
+        let roots = graph.roots
+        if roots.count > 1 {
+            let likeIDs = Set(like.map(\.id))
+            let matchingRoots = roots.filter { likeIDs.contains($0.id) }
+            if matchingRoots.count == 1 {
+                return .one(matchingRoots[0], note: "Basis: “you” = \(matchingRoots[0].name) (the one tree root matching \(name)).")
+            }
+            let names = roots.map(\.name).joined(separator: " and ")
+            if matchingRoots.isEmpty, !like.isEmpty {
+                // Namesake(s) exist but none is a home person: fail closed
+                // with the honest reason rather than accept a non-root.
+                ownerLog.warning("Owner \(name, privacy: .public) matches \(like.count) people but none of the \(roots.count) tree roots; owner left unresolved.")
+                let namesakes = like.map(\.name).joined(separator: ", ")
+                return .none(reason: "This tree has \(roots.count) home people (\(names)); \(name) matches \(namesakes) but none of them is a home person, so I can’t tell which is you — set your FamilySearch ID in Hallie’s settings.")
+            }
+            ownerLog.warning("Owner \(name, privacy: .public) matches \(matchingRoots.count) of \(roots.count) tree roots; owner left unresolved.")
+            return .none(reason: "This tree has \(roots.count) home people (\(names)) and I can’t tell which is you from the name \(name) — set your FamilySearch ID in Hallie’s settings.")
+        }
+        // Single-root trees keep their 2026-08-26 chain below.
         if like.count == 1 {
             return .one(like[0], note: "Basis: “you” = \(like[0].name) (matched \(name) by name).")
         }

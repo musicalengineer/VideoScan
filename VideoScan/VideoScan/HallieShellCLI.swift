@@ -272,8 +272,11 @@ enum HallieShellCLI {
                             ? FamilyGraphFileLoader(originalsDirectory: requested).loadNewest()
                             : GedcomFamilyGraph(fileURL: requested)
                     }
-                    return FamilyAssetConfigurationCenter.shared
-                        .snapshot().loadFamilyGraph()
+                    // Default path = the promoted artifact only, cached
+                    // for the life of the shell process (codex #792).
+                    return FamilyGraphSharedCache.shared.graph(
+                        for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                        store: .production)
                 },
                 loadCyberBrain: {
                     guard let root = FileManager.default.urls(
@@ -700,7 +703,8 @@ enum HallieShellCLI {
                 profiles: profiles?.map {
                     HallieTurnExecutor.ProfileSnapshot(
                         stableID: $0.id, canonicalName: $0.name,
-                        aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes)
+                        aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes,
+                        kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
                 },
                 graph: graph,
                 cyberBrain: cyberBrain,
@@ -920,7 +924,8 @@ enum HallieShellCLI {
                     stableID: $0.id,
                     canonicalName: $0.name,
                     aliases: $0.aliases,
-                    birthdate: $0.birthdate, note: $0.notes)
+                    birthdate: $0.birthdate, note: $0.notes,
+                    kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
             }
             let selectedDate = state.selectedRecordID
                 .flatMap(state.record)

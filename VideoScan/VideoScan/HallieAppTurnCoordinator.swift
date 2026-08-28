@@ -268,15 +268,18 @@ enum HallieAppTurnCoordinator {
                             stableID: $0.id,
                             canonicalName: $0.name,
                             aliases: $0.aliases,
-                            birthdate: $0.birthdate, note: $0.notes)
+                            birthdate: $0.birthdate, note: $0.notes,
+                            kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
                     }
                 case .unavailable:
                     return nil
                 }
             },
             loadGraph: {
-                FamilyAssetConfigurationCenter.shared
-                    .snapshot().loadFamilyGraph()
+                // Promoted artifact only, one decode per process (codex #792).
+                FamilyGraphSharedCache.shared.graph(
+                    for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                    store: .app)
             },
             loadCyberBrain: {
                 guard let root = FileManager.default.urls(

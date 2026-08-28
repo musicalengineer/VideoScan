@@ -224,7 +224,11 @@ extension PersonFinderView {
                                        justSaved: justSavedProfileID == profile.id,
                                        imageSize: personImageSize,
                                        cardWidth: personCardWidth,
-                                       nameFontSize: personNameFontSize)
+                                       nameFontSize: personNameFontSize,
+                                       relationshipsLine: kinshipCenter.relationshipsLine(
+                                           for: profile, among: model.savedProfiles),
+                                       aliasWarning: kinshipCenter.aliasWarning(
+                                           for: profile, among: model.savedProfiles))
                                 // Holdout Review badge — top-trailing over
                                 // the portrait. The Button in the overlay
                                 // wins the click over the card's
@@ -386,6 +390,9 @@ extension PersonFinderView {
         // Discover the newest holdout queue off the view body — a tiny
         // directory scan + 36-row CSV parse, but it's still file I/O.
         .task { await holdoutReview.refresh() }
+        // One-time background tree load so tree-anchored relationships show
+        // a name, not a bare FamilySearch ID (KinshipDisplayCenter).
+        .task { kinshipCenter.loadTreeIfNeeded() }
         .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
                isPresented: Binding(
             get: { confirmDeleteProfile != nil },
@@ -416,7 +423,9 @@ extension PersonFinderView {
             Text(scanLockMessage ?? "")
         }
         .sheet(item: $editingProfile) { profile in
-            PersonEditSheet(profile: profile) { updated in
+            PersonEditSheet(profile: profile,
+                            otherProfiles: model.savedProfiles,
+                            kinshipCenter: kinshipCenter) { updated in
                 model.updateProfile(updated, oldName: editingOriginalName)
                 // If this person is now the active POI, reload their faces
                 if model.settings.personName.lowercased() == updated.name.lowercased() {

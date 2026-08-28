@@ -1,6 +1,6 @@
 // PersonEditSheet.swift
 // Edit/create a person-of-interest profile — name, aliases, reference photos,
-// cover crop, notes.
+// cover crop, notes, and (2026-08-27) typed local relationships.
 
 import SwiftUI
 import PhotosUI
@@ -9,7 +9,14 @@ import PhotosUI
 
 struct PersonEditSheet: View {
     let originalProfile: POIProfile
+    /// Every saved profile (including this one) — the relationship picker's
+    /// "of whom" choices, and the derived-line preview's overlay input.
+    let otherProfiles: [POIProfile]
     let onSave: (POIProfile) -> Void
+    /// Family-tree names for tree-anchored relationships; loads once in the
+    /// background. (`@ObservedObject` ≈ subscribe to someone else's object —
+    /// the sheet does NOT own it.)
+    @ObservedObject var kinshipCenter: KinshipDisplayCenter
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -25,6 +32,12 @@ struct PersonEditSheet: View {
     @State private var hairColor: HairColor?
     @State private var eyeColor: EyeColor?
     @State private var identityNotes: String
+    // Relationships — one editable row per stored Kinship. Rows carry a
+    // UUID so SwiftUI can track them across reorders/deletes (the stored
+    // Kinship has no id of its own; it doesn't need one on disk).
+    @State private var kinshipRows: [KinshipRow]
+    @State private var treeSearchRowID: UUID?
+    @State private var treeSearchText = ""
     // Photo import
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var isImporting = false
@@ -38,9 +51,24 @@ struct PersonEditSheet: View {
     // Photo deletion — confirmation alert
     @State private var photoPendingDeletion: String?
 
-    init(profile: POIProfile, onSave: @escaping (POIProfile) -> Void) {
+    struct KinshipRow: Identifiable, Equatable {
+        let id = UUID()
+        var relation: KinshipRelation
+        var anchor: KinshipAnchor?
+
+        var kinship: Kinship? {
+            anchor.map { Kinship(relation: relation, relativeTo: $0) }
+        }
+    }
+
+    init(profile: POIProfile,
+         otherProfiles: [POIProfile] = [],
+         kinshipCenter: KinshipDisplayCenter,
+         onSave: @escaping (POIProfile) -> Void) {
         self.originalProfile = profile
+        self.otherProfiles = otherProfiles
         self.onSave = onSave
+        self.kinshipCenter = kinshipCenter
         _name = State(initialValue: profile.name)
         _notes = State(initialValue: profile.notes)
         _aliasText = State(initialValue: profile.aliases.joined(separator: ", "))
@@ -54,6 +82,9 @@ struct PersonEditSheet: View {
         _hairColor = State(initialValue: profile.hairColor)
         _eyeColor = State(initialValue: profile.eyeColor)
         _identityNotes = State(initialValue: profile.identityNotes ?? "")
+        _kinshipRows = State(initialValue: profile.kinships.map {
+            KinshipRow(relation: $0.relation, anchor: $0.relativeTo)
+        })
     }
 
     private var imageFilenames: [String] {
@@ -82,6 +113,17 @@ struct PersonEditSheet: View {
         p.eyeColor = eyeColor
         let trimmedIdentity = identityNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         p.identityNotes = trimmedIdentity.isEmpty ? nil : trimmedIdentity
+        // Rows without a chosen person are dropped on save, never stored
+        // half-filled. Notes on existing rows survive untouched.
+        p.kinships = kinshipRows.compactMap { row in
+            guard var kinship = row.kinship else { return nil }
+            if let existing = originalProfile.kinships.first(where: {
+                $0.relation == kinship.relation && $0.relativeTo == kinship.relativeTo
+            }) {
+                kinship.note = existing.note
+            }
+            return kinship
+        }
         return p
     }
 
@@ -121,6 +163,8 @@ struct PersonEditSheet: View {
                 }
 
                 aboutSection
+
+                relationshipsSection
 
                 Section("Notes") {
                     TextEditor(text: $notes)
@@ -226,7 +270,8 @@ struct PersonEditSheet: View {
             .padding(16)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(width: 560, height: 780)
+        .frame(width: 560, height: 820)
+        .task { kinshipCenter.loadTreeIfNeeded() }
         .alert(
             "Delete this reference photo?",
             isPresented: Binding(
@@ -349,6 +394,199 @@ struct PersonEditSheet: View {
         } footer: {
             Text("Helps rank search matches — someone born after a video was filmed can't be in it. Just the year is enough.")
         }
+    }
+
+    // MARK: Relationships section
+    //
+    // Each row stores "<this person> is <relation> of <someone>". The
+    // someone is another People profile or a family-tree person (by
+    // FamilySearch ID). Words like "brother"/"sister" and "older"/"younger"
+    // are derived from sex and birthdates at display time — see
+    // FamilyKinshipOverlay — so this stays a plain typed fact. These rows
+    // are local to the app and never written to GEDCOM / FamilySearch.
+
+    /// Profiles this person can be related to (everyone but themself).
+    private var relatableProfiles: [POIProfile] {
+        let me = PersonResolver.normalize(name)
+        let original = PersonResolver.normalize(originalProfile.name)
+        return otherProfiles.filter {
+            let key = PersonResolver.normalize($0.name)
+            return key != me && key != original
+        }
+    }
+
+    /// The derived line exactly as the People card will show it.
+    private var derivedRelationshipsLine: String? {
+        let me = currentProfile
+        guard !me.kinships.isEmpty else { return nil }
+        let everyone = relatableProfiles + [me]
+        let overlay = FamilyKinshipOverlay(profiles: everyone, graph: kinshipCenter.graph)
+        return overlay.relationshipsLine(
+            forProfileStableID: me.id, kinships: me.kinships,
+            defaultAnchor: kinshipCenter.defaultAnchor(in: overlay, profiles: everyone))
+    }
+
+    private func anchorLabel(_ anchor: KinshipAnchor?) -> String {
+        switch anchor {
+        case nil:
+            return "Choose a person\u{2026}"
+        case .profile(let id)?:
+            return otherProfiles.first { $0.uuid == id }?.name ?? "a removed profile"
+        case .profileName(let profileName)?:
+            return profileName
+        case .treePerson(let fsid)?:
+            if let person = kinshipCenter.graph?.person(familySearchID: fsid) {
+                return "\(person.name) (tree)"
+            }
+            return "FamilySearch \(fsid.uppercased())"
+        case .treePointer(let pointer, let fingerprint)?:
+            if fingerprint == kinshipCenter.graphFingerprint,
+               let person = kinshipCenter.graph?.people[pointer] {
+                return "\(person.name) (export-local)"
+            }
+            return "tree person \(pointer) (export changed — pick again)"
+        }
+    }
+
+    @ViewBuilder
+    private var relationshipsSection: some View {
+        Section {
+            ForEach($kinshipRows) { $row in
+                HStack(spacing: 8) {
+                    Picker("", selection: $row.relation) {
+                        ForEach(KinshipRelation.allCases, id: \.self) { relation in
+                            Text(relation.label).tag(relation)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+
+                    Text("of")
+                        .foregroundStyle(.secondary)
+
+                    Menu {
+                        ForEach(relatableProfiles) { profile in
+                            // `kinshipAnchor`, not `.profile(id: profile.uuid)`: a
+                            // profile whose uuid failed to persist (codex #799)
+                            // is anchored by name so nothing dangling is saved.
+                            Button(profile.name) { row.anchor = profile.kinshipAnchor }
+                        }
+                        if relatableProfiles.isEmpty {
+                            Text("No other people yet")
+                        }
+                        Divider()
+                        Button("Family tree person\u{2026}") {
+                            treeSearchText = ""
+                            treeSearchRowID = row.id
+                        }
+                    } label: {
+                        Text(anchorLabel(row.anchor))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .popover(isPresented: Binding(
+                        get: { treeSearchRowID == row.id },
+                        set: { if !$0 { treeSearchRowID = nil } }
+                    )) {
+                        treeSearchPopover { anchor in
+                            row.anchor = anchor
+                            treeSearchRowID = nil
+                        }
+                    }
+
+                    Button {
+                        kinshipRows.removeAll { $0.id == row.id }
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this relationship")
+                }
+            }
+
+            Button {
+                kinshipRows.append(KinshipRow(relation: .sibling, anchor: nil))
+            } label: {
+                Label("Add relationship", systemImage: "plus")
+            }
+            .buttonStyle(.link)
+        } header: {
+            Text("Relationships")
+        } footer: {
+            if let line = derivedRelationshipsLine {
+                Text("Shown as: \(line)")
+            } else {
+                Text("\(name.isEmpty ? "This person" : name) is … of … — kept in the app only, never sent to FamilySearch. Brother/sister and older/younger come from sex and birthdays.")
+            }
+        }
+    }
+
+    /// Search the imported family tree by name; picks a FamilySearch ID.
+    /// When no tree is loaded (or the person has no FamilySearch ID) the
+    /// ID can be typed directly.
+    @ViewBuilder
+    private func treeSearchPopover(onPick: @escaping (KinshipAnchor) -> Void) -> some View {
+        let results = kinshipCenter.searchTreePeople(treeSearchText)
+        let typedID = treeSearchText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Name or FamilySearch ID (e.g. GVQV-NW3)", text: $treeSearchText)
+                .textFieldStyle(.roundedBorder)
+            Text("People without a FamilySearch ID are export-local: the link only holds for this exact tree file.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if kinshipCenter.graph == nil {
+                Text("No family tree is loaded — type a FamilySearch ID.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if Self.looksLikeFamilySearchID(typedID) {
+                Button("Use ID \(typedID)") { onPick(.treePerson(familySearchID: typedID)) }
+                    .buttonStyle(.link)
+            }
+            if !results.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(results) { person in
+                            Button {
+                                if let fsid = person.familySearchID {
+                                    onPick(.treePerson(familySearchID: fsid))
+                                } else {
+                                    onPick(.treePointer(pointer: person.pointer,
+                                                        sourceFingerprint: kinshipCenter.graphFingerprint ?? ""))
+                                }
+                            } label: {
+                                HStack {
+                                    Text(person.label).lineLimit(1)
+                                    Spacer()
+                                    Text(person.code)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            } else if !treeSearchText.isEmpty, kinshipCenter.graph != nil {
+                Text("No one in the tree matches.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(width: 360)
+    }
+
+    private static func looksLikeFamilySearchID(_ value: String) -> Bool {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0].count == 4, parts[1].count == 3 else { return false }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        return parts.joined().unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     // MARK: Cover avatar in header

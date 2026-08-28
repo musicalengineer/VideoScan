@@ -61,21 +61,36 @@ extension GedcomFamilyGraph {
                              generations: Int,
                              untilYear: Int? = nil) -> [AncestorGeneration] {
         guard generations > 0 else { return [] }
+        // Over the compiled CSR parent lists (fathers then mothers per
+        // person, the relatives(.father)/(.mother) order) — no Person is
+        // copied until it is part of the answer (2026-08-28).
+        let index = self.index
+        guard let startOrdinal = index.ordinal(of: person.id) else { return [] }
         var out: [AncestorGeneration] = []
-        var frontier = [person]
-        var seen: Set<String> = [person.id]
+        var frontier: [Int32] = [startOrdinal]
+        var seen = [Bool](repeating: false, count: index.count)
+        seen[Int(startOrdinal)] = true
         for g in 1...generations {
-            var next: [Person] = []
+            var next: [Int32] = []
+            var found: [Person] = []
             for p in frontier {
-                let parents = relatives(Self.parentRelation(for: line), of: p)
-                for parent in parents where !seen.contains(parent.id) {
-                    if let untilYear, !Self.withinBound(parent, child: p, year: untilYear) { continue }
-                    seen.insert(parent.id)
+                let parents: ArraySlice<Int32>
+                switch line {
+                case .maternal: parents = index.mothers(of: p)
+                case .paternal: parents = index.fathers(of: p)
+                case .both:     parents = index.parents(of: p)
+                }
+                for parent in parents where !seen[Int(parent)] {
+                    guard let parentPerson = people[index.ids[Int(parent)]] else { continue }
+                    if let untilYear, let child = people[index.ids[Int(p)]],
+                       !Self.withinBound(parentPerson, child: child, year: untilYear) { continue }
+                    seen[Int(parent)] = true
                     next.append(parent)
+                    found.append(parentPerson)
                 }
             }
             if next.isEmpty { break }
-            out.append(AncestorGeneration(generation: g, people: next, line: line))
+            out.append(AncestorGeneration(generation: g, people: found, line: line))
             frontier = next
         }
         return out
