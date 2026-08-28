@@ -138,6 +138,10 @@ struct HallieCommonAncestorDetectTests {
         #expect(Q.detect("are rick and donna related") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("is rick related to donna hudson?") == .commonAncestor(a: "Rick", b: "Donna Hudson"))
         #expect(Q.detect("common ancestor of rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
+        // Rick's exact live phrasings, 2026-08-28 spot test.
+        #expect(Q.detect("show me the closest common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
+        #expect(Q.detect("closest common ancestor of rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
+        #expect(Q.detect("can you find the closest common ancestor between richard harding breen Jr and Donna Hudson?") == .commonAncestor(a: "Richard Harding Breen Jr", b: "Donna Hudson"))
         #expect(Q.detect("what is the nearest common ancestor of rick breen and donna hudson") == .commonAncestor(a: "Rick Breen", b: "Donna Hudson"))
         #expect(Q.detect("what do rick and donna have in common ancestrally") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("do rick and donna share an ancestor?") == .commonAncestor(a: "Rick", b: "Donna"))
@@ -272,7 +276,11 @@ struct HallieCommonAncestorAnswerTests {
         #expect(grand.prose == "George Breen is Richard Harding Breen Jr’s grandfather. Line: Richard Harding Breen Jr → Richard Harding Breen Sr → George Breen.", "got: \(grand.prose)")
         #expect(!grand.prose.contains("aunt"))
         let spouse = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Jr", b: "Donna Hudson"), context: context(graph)))
-        #expect(spouse.prose.hasPrefix("Donna Hudson is Richard Harding Breen Jr’s wife."), "spouses outrank the 2nd-cousin link: \(spouse.prose)")
+        // Rick 2026-08-28 overrides codex #776 for affinal kinds: a marriage
+        // is an aside, the blood link is the answer to "common ancestor".
+        #expect(spouse.prose.contains("share"), "blood answer first: \(spouse.prose)")
+        #expect(spouse.prose.contains("Donna Hudson is Richard Harding Breen Jr’s wife"), "marriage kept as an aside: \(spouse.prose)")
+        #expect(!spouse.prose.hasPrefix("Donna Hudson is"))
         let great = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Donna Hudson", b: "Z Common"), context: context(graph)))
         #expect(great.prose.hasPrefix("Z Common is Donna Hudson’s great-great-grandfather."))
         #expect(great.basisLine.contains("Direct relation"))
@@ -421,5 +429,22 @@ struct HallieTwoRootOwnerTests {
             Issue.record("expected .many (root Donna is not among the Richards)"); return
         }
         #expect(like.count == 2)
+    }
+
+    // Rick 2026-08-28 live miss: "closest common ancestor of rick and donna"
+    // answered "Donna Hudson is Richard Harding Breen Jr's wife." A marriage
+    // is not a common ancestor; the blood answer must win and mention the
+    // marriage as an aside.
+    @Test func spouseEdgeDoesNotPreemptAnExplicitCommonAncestorAsk() throws {
+        let graph = mergedGraph()
+        let ctx = context(graph)
+        let rick = try #require(graph.roots.first), donna = try #require(graph.roots.dropFirst().first)
+        #expect(graph.directRelation(between: rick.id, and: donna.id)?.kind == .spouses)
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: rick.name, b: donna.name), context: ctx))
+        #expect(r.outcome == .answered)
+        #expect(r.prose.contains("share"))
+        #expect(r.prose.contains("cousin"))
+        #expect(r.prose.contains("wife"))          // the marriage is an aside…
+        #expect(!r.prose.hasPrefix("Donna Hudson is")) // …not the answer
     }
 }

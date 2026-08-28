@@ -2063,7 +2063,15 @@ enum HallieLineageAnswer {
         // Direct kin first (codex #776): parent/child, spouses, siblings,
         // grandparents and the rest are named as such — never as cousins
         // through a shared grandparent.
-        if let direct = graph.directRelation(between: pa.id, and: pb.id) {
+        // …but a marriage or in-law link is NOT an answer to "common
+        // ancestor" (Rick 2026-08-28: "closest common ancestor of rick and
+        // donna" → "Donna Hudson is Rick's wife"). Blood kinds short-circuit;
+        // affinal kinds are mentioned as an aside after the blood answer,
+        // and only stand alone when the ancestor walk finds nothing.
+        let direct = graph.directRelation(between: pa.id, and: pb.id)
+        let affinalKinds: Set<GedcomFamilyGraph.DirectRelation.Kind> = [.spouses, .parentInLaw, .siblingInLaw]
+        let affinalAside = direct.flatMap { affinalKinds.contains($0.kind) ? $0 : nil }
+        if let direct, affinalAside == nil {
             let line = direct.path.count > 2 ? " Line: " + direct.path.map(\.name).joined(separator: " → ") + "." : ""
             return Result(route: .graph, outcome: .answered,
                           prose: direct.term + "." + line,
@@ -2076,6 +2084,7 @@ enum HallieLineageAnswer {
         let hits = graph.commonAncestors(of: pa.id, and: pb.id)
         let possA = HallieLineageQuestion.possessive(pa.name)
         let possB = HallieLineageQuestion.possessive(pb.name)
+        let asideSentence = affinalAside.map { " (" + $0.term + ".)" } ?? ""
         if hits.isEmpty {
             let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
             let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
@@ -2085,13 +2094,13 @@ enum HallieLineageAnswer {
                 let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
                 return Result(
                     route: .graph, outcome: .declined,
-                    prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is nothing to compare. Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
+                    prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is no shared ancestor to find.\(asideSentence) Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
                     basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
                     offeredActions: chips + [.getFamilyTree])
             }
             return Result(
                 route: .graph, outcome: .declined,
-                prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting. A deeper pull on either side could still connect them.",
+                prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting.\(asideSentence) A deeper pull on either side could still connect them.",
                 basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
                 offeredActions: chips)
         }
@@ -2106,6 +2115,7 @@ enum HallieLineageAnswer {
         func line(_ path: [GedcomFamilyGraph.Person]) -> String {
             path.map(\.name).joined(separator: " → ")
         }
+        if let affinalAside { sentences.append(affinalAside.term + " — so this is the blood connection behind the marriage.") }
         sentences.append("\(possA) line: \(line(nearest.pathA)). \(possB) line: \(line(nearest.pathB)).")
         if n > 1 {
             let others = hits.dropFirst().prefix(3).map { h in
