@@ -233,6 +233,7 @@ enum HallieTurnExecutor {
         /// overlay. Additive; default "none".
         let kinships: [Kinship]
         let sex: PersonSex?
+        let uuid: UUID?
 
         init(
             stableID: String,
@@ -241,7 +242,8 @@ enum HallieTurnExecutor {
             birthdate: Date? = nil,
             note: String = "",
             kinships: [Kinship] = [],
-            sex: PersonSex? = nil
+            sex: PersonSex? = nil,
+            uuid: UUID? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
@@ -250,6 +252,7 @@ enum HallieTurnExecutor {
             self.note = note
             self.kinships = kinships
             self.sex = sex
+            self.uuid = uuid
         }
     }
 
@@ -864,7 +867,8 @@ enum HallieTurnExecutor {
                     aliases: $0.aliases,
                     kinships: $0.kinships,
                     sex: $0.sex,
-                    birthdate: $0.birthdate)
+                    birthdate: $0.birthdate,
+                    uuid: $0.uuid)
             },
             ownerName: context.speakers.ownerName)
         let selection: ArchivistGraphSubjectSelection

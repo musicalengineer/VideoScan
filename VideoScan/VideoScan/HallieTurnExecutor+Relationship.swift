@@ -84,7 +84,8 @@ extension HallieTurnExecutor {
                     aliases: $0.aliases,
                     kinships: $0.kinships,
                     sex: $0.sex,
-                    birthdate: $0.birthdate)
+                    birthdate: $0.birthdate,
+                    uuid: $0.uuid)
             },
             ownerName: context.speakers.ownerName)
         var voices: [Int: ArchivistGraphQuery.Voice] = [:]

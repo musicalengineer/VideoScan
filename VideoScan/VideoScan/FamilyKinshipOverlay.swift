@@ -25,6 +25,7 @@
 // dictionaries inside are copy-on-write, so passing the overlay into a
 // detached task is a cheap logical copy, not a deep clone.
 
+import CryptoKit
 import Foundation
 import OSLog
 import VideoScanCore
@@ -92,6 +93,15 @@ struct FamilyKinshipOverlay: Sendable {
     private var members: [Node: Member] = [:]
     private var outgoing: [Node: [Edge]] = [:]
     private var nodeByProfileStableID: [String: Node] = [:]
+    /// POIProfile.uuid (lowercased) → vertex, for durable `.profile(id:)` anchors.
+    private var nodeByUUID: [String: Node] = [:]
+    /// The ONE spelling verdict shared with every other route (codex #778):
+    /// PersonResolver decides resolved / ambiguous / unknown; the overlay
+    /// never applies a precedence rule of its own.
+    private let resolver: PersonResolver
+    /// Content fingerprint of `graph`, computed only when some row uses an
+    /// export-local `.treePointer` anchor (SHA-256 over sorted id+name).
+    private let fingerprint: String?
     /// Normalized spelling → profile nodes claiming it (canonical + aliases).
     private var nodesBySpelling: [String: [Node]] = [:]
     private var canonicalNodesBySpelling: [String: [Node]] = [:]
@@ -117,12 +127,19 @@ struct FamilyKinshipOverlay: Sendable {
         self.init(snapshots: profiles.map {
             ArchivistGraphProfileSnapshot(
                 stableID: $0.id, canonicalName: $0.name, aliases: $0.aliases,
-                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate)
+                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate, uuid: $0.uuid)
         }, graph: graph)
     }
 
     init(snapshots: [ArchivistGraphProfileSnapshot], graph: GedcomFamilyGraph? = nil) {
         self.graph = graph
+        self.resolver = PersonResolver(people: snapshots.map {
+            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+        })
+        let usesPointers = snapshots.contains { snapshot in
+            snapshot.kinships.contains { if case .treePointer = $0.relativeTo { return true } else { return false } }
+        }
+        self.fingerprint = usesPointers ? graph.map(Self.fingerprint(of:)) : nil
         // Pass 1: one vertex per profile (bridged to the tree when the
         // canonical name or an alias is a unique, token-exact tree match —
         // the same rule the graph executor's profile route uses; no
@@ -132,6 +149,7 @@ struct FamilyKinshipOverlay: Sendable {
             let node: Node = bridged.map { .tree(gedcomID: $0.id) }
                 ?? .profile(stableID: snapshot.stableID)
             nodeByProfileStableID[snapshot.stableID] = node
+            if let uuid = snapshot.uuid { nodeByUUID[uuid.uuidString.lowercased()] = node }
             let sex = snapshot.sex ?? bridged.flatMap { Self.sex(of: $0) }
             let birth = snapshot.birthdate ?? bridged.flatMap { Self.birthdate(of: $0) }
             if members[node] == nil {
@@ -166,7 +184,7 @@ struct FamilyKinshipOverlay: Sendable {
         for snapshot in snapshots {
             guard let subject = nodeByProfileStableID[snapshot.stableID] else { continue }
             for kinship in snapshot.kinships {
-                let anchor = resolveAnchor(kinship.relativeTo)
+                let anchor = resolveAnchor(kinship.relativeTo, storedOn: snapshot.canonicalName)
                 guard anchor != subject else { continue }
                 let forward = Edge(from: anchor, to: subject,
                                    relation: kinship.relation, storedOn: snapshot.canonicalName)
@@ -180,10 +198,19 @@ struct FamilyKinshipOverlay: Sendable {
     }
 
     /// The vertex an anchor points at, creating a placeholder member when the
-    /// profile / tree person is unknown so the stored row still displays.
-    private mutating func resolveAnchor(_ anchor: KinshipAnchor) -> Node {
+    /// profile / tree person is unknown so the stored row is not lost.
+    private mutating func resolveAnchor(_ anchor: KinshipAnchor, storedOn: String) -> Node {
         switch anchor {
-        case .profile(let name):
+        case .profile(let id):
+            if let node = nodeByUUID[id.uuidString.lowercased()] { return node }
+            let node = Node.profile(stableID: "uuid:" + id.uuidString.lowercased())
+            if members[node] == nil {
+                members[node] = Member(node: node, name: "a removed profile", sex: nil, birthdate: nil,
+                                       profileStableID: nil, gedcomID: nil)
+                note("Relationship row on \(storedOn) points at a profile that no longer exists — remove or re-pick it")
+            }
+            return node
+        case .profileName(let name):
             let key = PersonResolver.normalize(name)
             if let node = nodeByProfileStableID[key] { return node }
             if let node = canonicalNodesBySpelling[key]?.first { return node }
@@ -196,13 +223,7 @@ struct FamilyKinshipOverlay: Sendable {
         case .treePerson(let familySearchID):
             let fsid = familySearchID.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             if let person = graph?.person(familySearchID: fsid) {
-                let node = Node.tree(gedcomID: person.id)
-                if members[node] == nil {
-                    members[node] = Member(node: node, name: person.name, sex: Self.sex(of: person),
-                                           birthdate: Self.birthdate(of: person),
-                                           profileStableID: nil, gedcomID: person.id)
-                }
-                return node
+                return treeNode(for: person)
             }
             let node = Node.treeUnresolved(familySearchID: fsid)
             if members[node] == nil {
@@ -210,7 +231,47 @@ struct FamilyKinshipOverlay: Sendable {
                                        birthdate: nil, profileStableID: nil, gedcomID: nil)
             }
             return node
+        case .treePointer(let pointer, let sourceFingerprint):
+            if let graph, sourceFingerprint == fingerprint, let person = graph.people[pointer] {
+                return treeNode(for: person)
+            }
+            // The export this pointer came from is not the installed tree:
+            // keep the row, name it honestly, and say so.
+            let node = Node.treeUnresolved(familySearchID: "pointer:" + pointer)
+            if members[node] == nil {
+                members[node] = Member(node: node, name: "tree person \(pointer) (export changed)", sex: nil,
+                                       birthdate: nil, profileStableID: nil, gedcomID: nil)
+                note("Relationship row on \(storedOn) points at \(pointer) in an older tree export — pick them again")
+            }
+            return node
         }
+    }
+
+    private mutating func treeNode(for person: GedcomFamilyGraph.Person) -> Node {
+        let node = Node.tree(gedcomID: person.id)
+        if members[node] == nil {
+            members[node] = Member(node: node, name: person.name, sex: Self.sex(of: person),
+                                   birthdate: Self.birthdate(of: person),
+                                   profileStableID: nil, gedcomID: person.id)
+        }
+        return node
+    }
+
+    private mutating func note(_ line: String) {
+        warnings.append(line)
+        kinshipLog.warning("\(line, privacy: .public)")
+    }
+
+    /// Stable content fingerprint of a tree: SHA-256 over every person's
+    /// pointer + name in pointer order (16 hex chars). Same export content ⇒
+    /// same fingerprint, so `.treePointer` anchors survive a re-copy of the
+    /// identical file but go stale on any different export.
+    static func fingerprint(of graph: GedcomFamilyGraph) -> String {
+        var hasher = SHA256()
+        for id in graph.people.keys.sorted() {
+            hasher.update(data: Data((id + "\t" + (graph.people[id]?.name ?? "") + "\n").utf8))
+        }
+        return hasher.finalize().prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func bridge(
@@ -263,29 +324,26 @@ struct FamilyKinshipOverlay: Sendable {
     /// exists (they are the same vertex by construction).
     func node(gedcomID: String) -> Node { .tree(gedcomID: gedcomID) }
 
-    /// Profile vertices claiming a typed spelling. A profile whose CANONICAL
-    /// name is the spelling wins outright over alias-only claimants (the
-    /// Tim/Timmy cross-alias rule, 2026-08-22). Several canonical claimants
-    /// remain ambiguous and return all — the caller must not guess.
-    /// `ownerName` lets the owner's fuller spellings ("Rick Breen", bound
-    /// from "me") reach the owner's one-word profile ("Rick").
+    /// Vertices a typed spelling may mean, by PersonResolver's verdict —
+    /// the same verdict the presence/aggregate routes get, so "Dad" claimed
+    /// by both Rick (alias) and Dad (canonical) is AMBIGUOUS here too, never
+    /// silently one of them. `ownerName` lets the owner's fuller spellings
+    /// ("Rick Breen", bound from "me") reach the owner's one-word profile.
+    /// A spelling no profile knows falls back to a unique tree match.
     func nodes(claiming typed: String, ownerName: String? = nil) -> [Node] {
-        let key = PersonResolver.normalize(typed)
-        guard !key.isEmpty else { return [] }
-        // A relational WORD claimed by several profiles ("Dad" on both Rick
-        // and Dad, live 2026-08-27) is a data smell, not a nickname: report
-        // every claimant (ambiguous) instead of letting the canonical one
-        // win — the caller must ask, never silently pick Rick.
-        if Self.relationalWords.contains(key), let any = nodesBySpelling[key], any.count > 1 { return any }
-        if let exact = canonicalNodesBySpelling[key], exact.count == 1 { return exact }
-        if let any = nodesBySpelling[key], !any.isEmpty { return any }
-        // Owner spellings: try the owner's first token as a canonical name.
+        switch resolver.resolve(typed) {
+        case .resolved(let canonical):
+            return [nodeByProfileStableID[PersonResolver.normalize(canonical)]].compactMap { $0 }
+        case .ambiguous(let candidates):
+            return candidates.compactMap { nodeByProfileStableID[PersonResolver.normalize($0)] }
+        case .unknown:
+            break
+        }
         if HallieOwnerResolver.isOwnerSpelling(typed, owner: ownerName),
            let first = FamilyIdentityText.tokens(typed).first,
-           let exact = canonicalNodesBySpelling[first], exact.count == 1 {
-            return exact
+           case .resolved(let canonical) = resolver.resolve(first) {
+            return [nodeByProfileStableID[PersonResolver.normalize(canonical)]].compactMap { $0 }
         }
-        // A tree spelling with no profile — unique token-exact match only.
         if let graph {
             let people = graph.people(matching: typed)
             if people.count == 1 { return [.tree(gedcomID: people[0].id)] }
@@ -295,7 +353,10 @@ struct FamilyKinshipOverlay: Sendable {
 
     /// Warnings mentioning this profile (for the card badge).
     func warnings(forProfileNamed name: String) -> [String] {
-        warnings.filter { $0.hasSuffix(" on \(name) looks relational — use a Relationship row instead") }
+        warnings.filter {
+            $0.hasSuffix(" on \(name) looks relational — use a Relationship row instead")
+                || $0.hasPrefix("Relationship row on \(name) points at ")
+        }
     }
 
     /// Does this vertex have any overlay knowledge at all?
@@ -420,7 +481,12 @@ struct FamilyKinshipOverlay: Sendable {
 
     private func peekAnchor(_ anchor: KinshipAnchor) -> Node? {
         switch anchor {
-        case .profile(let name):
+        case .profile(let id):
+            let key = id.uuidString.lowercased()
+            if let node = nodeByUUID[key] { return node }
+            let placeholder = Node.profile(stableID: "uuid:" + key)
+            return members[placeholder] != nil ? placeholder : nil
+        case .profileName(let name):
             let key = PersonResolver.normalize(name)
             if let node = nodeByProfileStableID[key] { return node }
             if let node = canonicalNodesBySpelling[key]?.first { return node }
@@ -431,13 +497,21 @@ struct FamilyKinshipOverlay: Sendable {
             if let person = graph?.person(familySearchID: key) { return .tree(gedcomID: person.id) }
             let placeholder = Node.treeUnresolved(familySearchID: key)
             return members[placeholder] != nil ? placeholder : nil
+        case .treePointer(let pointer, let sourceFingerprint):
+            if let graph, sourceFingerprint == fingerprint, graph.people[pointer] != nil {
+                return .tree(gedcomID: pointer)
+            }
+            let placeholder = Node.treeUnresolved(familySearchID: "pointer:" + pointer)
+            return members[placeholder] != nil ? placeholder : nil
         }
     }
 
     static func fallbackName(_ anchor: KinshipAnchor) -> String {
         switch anchor {
-        case .profile(let name): return name
+        case .profile: return "a removed profile"
+        case .profileName(let name): return name
         case .treePerson(let fsid): return "FamilySearch \(fsid.uppercased())"
+        case .treePointer(let pointer, _): return "tree person \(pointer) (export changed)"
         }
     }
 

@@ -430,13 +430,21 @@ struct PersonEditSheet: View {
         switch anchor {
         case nil:
             return "Choose a person\u{2026}"
-        case .profile(let profileName)?:
+        case .profile(let id)?:
+            return otherProfiles.first { $0.uuid == id }?.name ?? "a removed profile"
+        case .profileName(let profileName)?:
             return profileName
         case .treePerson(let fsid)?:
             if let person = kinshipCenter.graph?.person(familySearchID: fsid) {
                 return "\(person.name) (tree)"
             }
             return "FamilySearch \(fsid.uppercased())"
+        case .treePointer(let pointer, let fingerprint)?:
+            if fingerprint == kinshipCenter.graphFingerprint,
+               let person = kinshipCenter.graph?.people[pointer] {
+                return "\(person.name) (export-local)"
+            }
+            return "tree person \(pointer) (export changed — pick again)"
         }
     }
 
@@ -458,7 +466,7 @@ struct PersonEditSheet: View {
 
                     Menu {
                         ForEach(relatableProfiles) { profile in
-                            Button(profile.name) { row.anchor = .profile(name: profile.name) }
+                            Button(profile.name) { row.anchor = .profile(id: profile.uuid) }
                         }
                         if relatableProfiles.isEmpty {
                             Text("No other people yet")
@@ -478,8 +486,8 @@ struct PersonEditSheet: View {
                         get: { treeSearchRowID == row.id },
                         set: { if !$0 { treeSearchRowID = nil } }
                     )) {
-                        treeSearchPopover { fsid in
-                            row.anchor = .treePerson(familySearchID: fsid)
+                        treeSearchPopover { anchor in
+                            row.anchor = anchor
                             treeSearchRowID = nil
                         }
                     }
@@ -516,19 +524,22 @@ struct PersonEditSheet: View {
     /// When no tree is loaded (or the person has no FamilySearch ID) the
     /// ID can be typed directly.
     @ViewBuilder
-    private func treeSearchPopover(onPick: @escaping (String) -> Void) -> some View {
+    private func treeSearchPopover(onPick: @escaping (KinshipAnchor) -> Void) -> some View {
         let results = kinshipCenter.searchTreePeople(treeSearchText)
         let typedID = treeSearchText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         VStack(alignment: .leading, spacing: 8) {
             TextField("Name or FamilySearch ID (e.g. GVQV-NW3)", text: $treeSearchText)
                 .textFieldStyle(.roundedBorder)
+            Text("People without a FamilySearch ID are export-local: the link only holds for this exact tree file.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if kinshipCenter.graph == nil {
                 Text("No family tree is loaded — type a FamilySearch ID.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if Self.looksLikeFamilySearchID(typedID) {
-                Button("Use ID \(typedID)") { onPick(typedID) }
+                Button("Use ID \(typedID)") { onPick(.treePerson(familySearchID: typedID)) }
                     .buttonStyle(.link)
             }
             if !results.isEmpty {
@@ -536,12 +547,17 @@ struct PersonEditSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(results) { person in
                             Button {
-                                onPick(person.familySearchID)
+                                if let fsid = person.familySearchID {
+                                    onPick(.treePerson(familySearchID: fsid))
+                                } else {
+                                    onPick(.treePointer(pointer: person.pointer,
+                                                        sourceFingerprint: kinshipCenter.graphFingerprint ?? ""))
+                                }
                             } label: {
                                 HStack {
                                     Text(person.label).lineLimit(1)
                                     Spacer()
-                                    Text(person.familySearchID)
+                                    Text(person.code)
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                 }

@@ -701,7 +701,7 @@ enum HallieShellCLI {
                     HallieTurnExecutor.ProfileSnapshot(
                         stableID: $0.id, canonicalName: $0.name,
                         aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes,
-                        kinships: $0.kinships, sex: $0.sex)
+                        kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
                 },
                 graph: graph,
                 cyberBrain: cyberBrain,
@@ -922,7 +922,7 @@ enum HallieShellCLI {
                     canonicalName: $0.name,
                     aliases: $0.aliases,
                     birthdate: $0.birthdate, note: $0.notes,
-                    kinships: $0.kinships, sex: $0.sex)
+                    kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
             }
             let selectedDate = state.selectedRecordID
                 .flatMap(state.record)

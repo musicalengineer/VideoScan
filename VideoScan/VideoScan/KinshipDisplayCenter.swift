@@ -19,56 +19,70 @@ import VideoScanCore
 final class KinshipDisplayCenter: ObservableObject {
     static let shared = KinshipDisplayCenter()
 
-    /// One person the editor's tree picker can choose.
+    /// One person the editor's tree picker can choose. With a FamilySearch
+    /// ID the anchor is durable across re-exports; without one (Ancestry
+    /// exports) the anchor is the file-local pointer, valid only for this
+    /// export's content fingerprint — shown as "(export-local)".
     struct TreePersonChoice: Identifiable, Hashable {
-        let familySearchID: String
+        let pointer: String
+        let familySearchID: String?
         let name: String
         let birthYear: Int?
-        var id: String { familySearchID }
-        var label: String { birthYear.map { "\(name) (b. \($0))" } ?? name }
+        var id: String { pointer }
+        var label: String {
+            (birthYear.map { "\(name) (b. \($0))" } ?? name) + (familySearchID == nil ? " (export-local)" : "")
+        }
+        var code: String { familySearchID ?? pointer }
     }
 
     @Published private(set) var graph: GedcomFamilyGraph?
     @Published private(set) var treePeople: [TreePersonChoice] = []
+    /// Bumps on every `install(graph:)` — the overlay cache key (codex #778:
+    /// a same-count tree replacement must rebuild, so people.count is not
+    /// the key).
+    @Published private(set) var graphGeneration = 0
+    /// Content fingerprint of the installed tree, for `.treePointer` anchors.
+    private(set) var graphFingerprint: String?
     private var loadStarted = false
 
     private var cachedProfiles: [POIProfile] = []
-    private var cachedGraphCount = -1
+    private var cachedGeneration = -1
     private var cachedOverlay: FamilyKinshipOverlay?
 
-    private init() {}
+    /// Internal (not private) so tests can build an isolated center; the
+    /// app uses `.shared`.
+    init() {}
+
+    /// Replace the tree (or clear it) and invalidate the overlay cache.
+    func install(graph newGraph: GedcomFamilyGraph?) {
+        graph = newGraph
+        graphFingerprint = newGraph.map(FamilyKinshipOverlay.fingerprint(of:))
+        treePeople = (newGraph?.people ?? [:]).values
+            .map { TreePersonChoice(pointer: $0.id, familySearchID: $0.familySearchID.flatMap { $0.isEmpty ? nil : $0 },
+                                    name: $0.name, birthYear: $0.birthYear) }
+            .sorted { $0.name == $1.name ? $0.pointer < $1.pointer : $0.name < $1.name }
+        graphGeneration += 1
+    }
 
     /// Kick off the one-time tree load. Cheap to call repeatedly.
     func loadTreeIfNeeded() {
         guard !loadStarted else { return }
         loadStarted = true
         Task.detached(priority: .utility) {
+            // Worst case ~16k people × ~100 B for the picker list.
             let loaded = FamilyAssetConfigurationCenter.shared.snapshot().loadFamilyGraph()
-            // Only people with a FamilySearch ID can be anchors — the ID is
-            // what survives a re-export. Worst case ~16k entries × ~100 B.
-            let choices = (loaded?.people ?? [:]).values
-                .compactMap { person -> TreePersonChoice? in
-                    guard let fsid = person.familySearchID, !fsid.isEmpty else { return nil }
-                    return TreePersonChoice(familySearchID: fsid, name: person.name,
-                                            birthYear: person.birthYear)
-                }
-                .sorted { $0.name == $1.name ? $0.familySearchID < $1.familySearchID : $0.name < $1.name }
-            await MainActor.run {
-                self.graph = loaded
-                self.treePeople = choices
-            }
+            await MainActor.run { self.install(graph: loaded) }
         }
     }
 
     /// Memoized overlay for the gallery's current profiles.
     func overlay(for profiles: [POIProfile]) -> FamilyKinshipOverlay {
-        let graphCount = graph?.people.count ?? -1
-        if let cachedOverlay, cachedProfiles == profiles, cachedGraphCount == graphCount {
+        if let cachedOverlay, cachedProfiles == profiles, cachedGeneration == graphGeneration {
             return cachedOverlay
         }
         let built = FamilyKinshipOverlay(profiles: profiles, graph: graph)
         cachedProfiles = profiles
-        cachedGraphCount = graphCount
+        cachedGeneration = graphGeneration
         cachedOverlay = built
         return built
     }

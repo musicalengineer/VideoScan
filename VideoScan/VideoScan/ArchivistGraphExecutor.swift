@@ -14,15 +14,19 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
     /// and "older" vs "younger"; no notes or photos cross this boundary.
     let sex: PersonSex?
     let birthdate: Date?
+    /// Durable profile identity that `.profile(id:)` kinship anchors use.
+    let uuid: UUID?
 
     init(stableID: String, canonicalName: String, aliases: [String] = [],
-         kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil) {
+         kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil,
+         uuid: UUID? = nil) {
         self.stableID = stableID
         self.canonicalName = canonicalName
         self.aliases = aliases
         self.kinships = kinships
         self.sex = sex
         self.birthdate = birthdate
+        self.uuid = uuid
     }
 
     // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
@@ -35,7 +39,8 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
             aliases: profile.aliases,
             kinships: profile.kinships,
             sex: profile.sex,
-            birthdate: profile.birthdate)
+            birthdate: profile.birthdate,
+            uuid: profile.uuid)
     }
 }
 

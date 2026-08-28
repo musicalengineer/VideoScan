@@ -145,7 +145,10 @@ enum KinshipRelation: String, Codable, CaseIterable, Hashable, Sendable {
     }
 
     /// The fold table. Absent pairs (spouse∘spouse, parent∘grandparent =
-    /// great-grand…) have no single word in this vocabulary → nil.
+    /// great-grand…) have no single word in this vocabulary → nil. Step and
+    /// half relations are deliberately NOT invented (codex #778): spouse∘child,
+    /// parent∘spouse and sibling∘sibling fold to nil so the route text shows
+    /// the chain instead of asserting "child"/"parent"/"sibling".
     private static let folds: [Fold: KinshipRelation] = [
         Fold(.parent, .parent):        .grandparent,
         Fold(.child, .child):          .grandchild,
@@ -158,30 +161,129 @@ enum KinshipRelation: String, Codable, CaseIterable, Hashable, Sendable {
         Fold(.auntUncle, .child):      .cousin,
         Fold(.parent, .child):         .sibling,      // caller drops self
         Fold(.auntUncle, .spouse):     .auntUncle,    // uncle by marriage
-        Fold(.spouse, .child):         .child,        // shared child
-        Fold(.parent, .spouse):        .parent,       // step-parent, close enough
         Fold(.spouse, .nieceNephew):   .nieceNephew,
         Fold(.siblingInLaw, .spouse):  .siblingInLaw, // brother-in-law's wife
         Fold(.parentInLaw, .spouse):   .parentInLaw,
-        Fold(.sibling, .sibling):      .sibling,
     ]
 }
 
-/// Who a stored relationship points at. A profile is identified by its
-/// canonical name (POIProfile.id is `name.lowercased()` — there is no other
-/// stable id today); a tree person by FamilySearch ID, which survives GEDCOM
-/// re-exports when `@I…@` pointers move.
-enum KinshipAnchor: Codable, Hashable, Sendable {
-    case profile(name: String)
+/// Who a stored relationship points at.
+///   • `.profile(id:)`   — durable: POIProfile.uuid survives a rename.
+///   • `.profileName`    — LEGACY input only ({"profile":{"name":"Rick"}},
+///                          the 2026-08-27 format); upgraded to `.profile(id:)`
+///                          by `POIProfile.upgradingKinshipAnchors` on load
+///                          and re-saved as ids the next time the profile
+///                          is written.
+///   • `.treePerson`     — FamilySearch ID, which survives GEDCOM re-exports.
+///   • `.treePointer`    — fallback for exports WITHOUT FamilySearch IDs
+///                          (Ancestry): a file-local @I…@ pointer that is only
+///                          valid while the tree's content fingerprint matches.
+/// Wire shape is one object keyed by case: {"profile":{"id":…}},
+/// {"profile":{"name":…}}, {"treePerson":{"familySearchID":…}},
+/// {"treePointer":{"pointer":…,"sourceFingerprint":…}}.
+enum KinshipAnchor: Hashable, Sendable {
+    case profile(id: UUID)
+    case profileName(String)
     case treePerson(familySearchID: String)
+    case treePointer(pointer: String, sourceFingerprint: String)
 
-    /// Case-insensitive identity key, comparable with POIProfile.id.
+    /// Convenience for callers that still think in names (tests, legacy).
+    static func profile(name: String) -> KinshipAnchor { .profileName(name) }
+
+    /// Case-insensitive identity key.
     var key: String {
         switch self {
-        case .profile(let name):
+        case .profile(let id):
+            return "profile-id:" + id.uuidString.lowercased()
+        case .profileName(let name):
             return "profile:" + PersonResolver.normalize(name)
         case .treePerson(let id):
             return "tree:" + id.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        case .treePointer(let pointer, let fingerprint):
+            return "tree-pointer:" + pointer + "@" + fingerprint
+        }
+    }
+}
+
+extension KinshipAnchor: Codable {
+    private enum Key: String, CodingKey { case profile, treePerson, treePointer }
+    private enum ProfileKey: String, CodingKey { case id, name }
+    private enum TreePersonKey: String, CodingKey { case familySearchID }
+    private enum TreePointerKey: String, CodingKey { case pointer, sourceFingerprint }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        if c.contains(.profile) {
+            let p = try c.nestedContainer(keyedBy: ProfileKey.self, forKey: .profile)
+            if let id = try p.decodeIfPresent(UUID.self, forKey: .id) {
+                self = .profile(id: id)
+            } else {
+                self = .profileName(try p.decode(String.self, forKey: .name))
+            }
+        } else if c.contains(.treePerson) {
+            let t = try c.nestedContainer(keyedBy: TreePersonKey.self, forKey: .treePerson)
+            self = .treePerson(familySearchID: try t.decode(String.self, forKey: .familySearchID))
+        } else if c.contains(.treePointer) {
+            let t = try c.nestedContainer(keyedBy: TreePointerKey.self, forKey: .treePointer)
+            self = .treePointer(pointer: try t.decode(String.self, forKey: .pointer),
+                                sourceFingerprint: try t.decode(String.self, forKey: .sourceFingerprint))
+        } else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath, debugDescription: "KinshipAnchor: no known case key"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Key.self)
+        switch self {
+        case .profile(let id):
+            var p = c.nestedContainer(keyedBy: ProfileKey.self, forKey: .profile)
+            try p.encode(id, forKey: .id)
+        case .profileName(let name):
+            var p = c.nestedContainer(keyedBy: ProfileKey.self, forKey: .profile)
+            try p.encode(name, forKey: .name)
+        case .treePerson(let id):
+            var t = c.nestedContainer(keyedBy: TreePersonKey.self, forKey: .treePerson)
+            try t.encode(id, forKey: .familySearchID)
+        case .treePointer(let pointer, let fingerprint):
+            var t = c.nestedContainer(keyedBy: TreePointerKey.self, forKey: .treePointer)
+            try t.encode(pointer, forKey: .pointer)
+            try t.encode(fingerprint, forKey: .sourceFingerprint)
+        }
+    }
+}
+
+/// A raw JSON fragment, kept verbatim. Used to quarantine kinship rows this
+/// build cannot read (written by a newer build, or damaged) so a later save
+/// never silently drops them (codex #778). ≈ a tagged-union JSON DOM.
+indirect enum JSONValue: Codable, Hashable, Sendable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else if let o = try? c.decode([String: JSONValue].self) { self = .object(o) }
+        else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unreadable JSON")) }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let b): try c.encode(b)
+        case .number(let n): try c.encode(n)
+        case .string(let s): try c.encode(s)
+        case .array(let a): try c.encode(a)
+        case .object(let o): try c.encode(o)
         }
     }
 }

@@ -43,7 +43,7 @@ struct FamilyKinshipTests {
     /// nicknames, Dad carries the Sr name — "Dad" is NOT an alias of Rick.
     ///   Dad + Mary (parents) → Rick ═ Donna; Rick's siblings Tim (younger)
     ///   and Ann; Tim ═ Kate; Rick's sons Matt (═ Sue) and Timothy.
-    /// Tim (brother) and Timothy (son) share the "Tim" spelling on purpose.
+    /// (The Tim/Timothy shared-spelling case lives in its own sensor.)
     private static let family: [POIProfile] = [
         profile("Rick", aliases: ["Dicky", "Rich", "Richy", "Richard Harding Breen Jr"],
                 sex: .male, born: 1962, kinships: [
@@ -72,7 +72,7 @@ struct FamilyKinshipTests {
             Kinship(relation: .child, relativeTo: .profile(name: "Rick")),
             Kinship(relation: .child, relativeTo: .profile(name: "Donna")),
         ]),
-        profile("Timothy", aliases: ["Tim"], sex: .male, born: 1990, kinships: [
+        profile("Timothy", sex: .male, born: 1990, kinships: [
             Kinship(relation: .child, relativeTo: .profile(name: "Rick")),
             Kinship(relation: .child, relativeTo: .profile(name: "Donna")),
         ]),
@@ -171,17 +171,190 @@ struct FamilyKinshipTests {
         #expect((rows[0]["relativeTo"] as? [String: Any])?["profile"] != nil)
     }
 
-    @Test func newerRelationCaseDropsTheListNotTheProfile() throws {
-        // A future build writes a relation this build doesn't know: the
-        // profile still loads (name, sex intact); kinships degrade to [].
+    @Test func unreadableRowsAreQuarantinedPerRowAndSurviveASave() throws {
+        // A future build writes a relation this build doesn't know, next to
+        // two readable rows: the two stay usable, the odd one is kept
+        // verbatim and written back on save (codex #778).
         let json = #"""
         {"name": "Tim", "referencePath": "/p", "sex": "male",
-         "kinships": [{"relation": "godparent", "relativeTo": {"profile": {"name": "Rick"}}}]}
+         "kinships": [{"relation": "sibling", "relativeTo": {"profile": {"name": "Rick"}}},
+                      {"relation": "godparent", "relativeTo": {"profile": {"name": "Rick"}}, "note": "keep me"},
+                      {"relation": "spouse", "relativeTo": {"treePerson": {"familySearchID": "GVQV-NW3"}}}]}
         """#
         let p = try JSONDecoder().decode(POIProfile.self, from: Data(json.utf8))
         #expect(p.name == "Tim")
-        #expect(p.sex == .male)
-        #expect(p.kinships.isEmpty)
+        #expect(p.kinships.map(\.relation) == [.sibling, .spouse])
+        #expect(p.kinshipsQuarantined.count == 1)
+
+        let data = try JSONEncoder().encode(p)
+        let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((obj["kinships"] as? [Any])?.count == 2)
+        let kept = try #require(obj["kinshipsQuarantined"] as? [[String: Any]])
+        #expect(kept.count == 1)
+        #expect(kept[0]["relation"] as? String == "godparent")
+        #expect(kept[0]["note"] as? String == "keep me")
+        // And a second round trip still carries it.
+        let again = try JSONDecoder().decode(POIProfile.self, from: data)
+        #expect(again.kinshipsQuarantined == p.kinshipsQuarantined)
+        #expect(again.kinships == p.kinships)
+    }
+
+    @Test func durableAnchorsSurviveARename() throws {
+        // Legacy name anchors are upgraded to uuid anchors on load; a rename
+        // of the anchored profile then leaves the other profile's row intact.
+        let rick = Self.profile("Rick", sex: .male, born: 1962)
+        let tim = Self.profile("Tim", sex: .male, born: 1965, kinships: [
+            Kinship(relation: .sibling, relativeTo: .profile(name: "Rick")),
+        ])
+        let upgraded = POIProfile.upgradingKinshipAnchors([rick, tim])
+        #expect(upgraded[1].kinships == [Kinship(relation: .sibling, relativeTo: .profile(id: rick.uuid))])
+
+        // The uuid anchor round-trips as {"profile":{"id":…}}.
+        let data = try JSONEncoder().encode(upgraded[1])
+        let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let row = try #require((obj["kinships"] as? [[String: Any]])?.first)
+        #expect(((row["relativeTo"] as? [String: Any])?["profile"] as? [String: Any])?["id"] as? String
+                == rick.uuid.uuidString)
+        #expect(try JSONDecoder().decode(POIProfile.self, from: data).kinships == upgraded[1].kinships)
+
+        var renamed = upgraded[0]
+        renamed.name = "Richard"
+        let overlay = FamilyKinshipOverlay(profiles: [renamed, upgraded[1]], graph: nil)
+        #expect(overlay.relationshipsLine(forProfileStableID: "tim", kinships: upgraded[1].kinships)
+                == "Richard's younger brother")
+        // A uuid nobody has any more is named honestly and flagged.
+        let orphan = Self.profile("Ann", sex: .female, kinships: [
+            Kinship(relation: .sibling, relativeTo: .profile(id: UUID())),
+        ])
+        let orphaned = FamilyKinshipOverlay(profiles: [orphan], graph: nil)
+        #expect(orphaned.relationshipsLine(forProfileStableID: "ann", kinships: orphan.kinships)
+                == "a removed profile's sister")
+        #expect(orphaned.warnings(forProfileNamed: "Ann").count == 1)
+    }
+
+    @Test func stepAndHalfRelationsAreNeverInvented() {
+        #expect(KinshipRelation.compose([.spouse, .child]) == nil)      // spouse's child ≠ my child
+        #expect(KinshipRelation.compose([.parent, .spouse]) == nil)     // parent's spouse ≠ my parent
+        #expect(KinshipRelation.compose([.sibling, .sibling]) == nil)   // sibling's sibling ≠ my sibling
+        // And the overlay shows the route instead of a word for such a chain.
+        let profiles = [
+            Self.profile("Rick", sex: .male),
+            Self.profile("Jane", sex: .female, kinships: [
+                Kinship(relation: .spouse, relativeTo: .profile(name: "Rick")),
+            ]),
+            Self.profile("Kid", sex: .male, kinships: [
+                Kinship(relation: .child, relativeTo: .profile(name: "Jane")),
+            ]),
+        ]
+        let result = ArchivistGraphExecutor.execute(relationship("Rick", "Kid"), inputs: inputs(profiles))
+        #expect(result.prose == "Kid is related to Rick through Rick's wife Jane → son Kid — the People tab links them, but not in a way with a single name.")
+        let sons = ArchivistGraphExecutor.execute(kinship("Rick", .son), inputs: inputs(profiles))
+        #expect(sons.conclusion != .answered)
+    }
+
+    @Test func overlayAndPersonResolverGiveTheSameVerdict() {
+        for profiles in [Self.family, Self.uncorrected] {
+            let overlay = inputs(profiles).kinshipOverlay
+            let resolver = PersonResolver(profiles: profiles)
+            for spelling in ["Rick", "Dad", "Dicky", "Dick", "Dad Breen", "Mom", "Nobody", "Timothy"] {
+                let nodes = overlay.nodes(claiming: spelling)
+                switch resolver.resolve(spelling) {
+                case .resolved(let name):
+                    #expect(nodes.count == 1, Comment(rawValue: spelling))
+                    #expect(nodes.first.flatMap { overlay.member($0)?.name } == name, Comment(rawValue: spelling))
+                case .ambiguous(let candidates):
+                    #expect(Set(nodes.compactMap { overlay.member($0)?.name }) == Set(candidates), Comment(rawValue: spelling))
+                case .unknown:
+                    #expect(nodes.isEmpty, Comment(rawValue: spelling))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    @Test func displayCenterRebuildsWhenASameCountTreeReplacesTheOld() {
+        let cara = Self.profile("Cara", sex: .female, kinships: [
+            Kinship(relation: .nieceNephew, relativeTo: .treePerson(familySearchID: "GVQV-NW3")),
+        ])
+        let center = KinshipDisplayCenter()
+        center.install(graph: graph)
+        #expect(center.relationshipsLine(for: cara, among: [cara]) == "Richard Harding Breen Jr's niece")
+        // Same people count, different content.
+        let replaced = GedcomFamilyGraph(gedcomText: Self.tree.replacingOccurrences(
+            of: "Richard Harding /Breen/ Jr", with: "Richard Harding /Breen/ Junior"))
+        #expect(replaced.people.count == graph.people.count)
+        center.install(graph: replaced)
+        #expect(center.relationshipsLine(for: cara, among: [cara]) == "Richard Harding Breen Junior's niece")
+        #expect(center.graphGeneration == 2)
+    }
+
+    @Test func exportLocalPointerAnchorsHoldOnlyForTheirExport() {
+        // An Ancestry-style export: no FamilySearch IDs at all.
+        let ancestry = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I7@ INDI
+        1 NAME Thankful /Pratt/
+        1 SEX F
+        0 TRLR
+        """)
+        let fingerprint = FamilyKinshipOverlay.fingerprint(of: ancestry)
+        let cara = Self.profile("Cara", sex: .female, kinships: [
+            Kinship(relation: .grandchild, relativeTo: .treePointer(pointer: "@I7@", sourceFingerprint: fingerprint)),
+        ])
+        let live = FamilyKinshipOverlay(profiles: [cara], graph: ancestry)
+        #expect(live.relationshipsLine(forProfileStableID: "cara", kinships: cara.kinships)
+                == "Thankful Pratt's granddaughter")
+        #expect(live.warnings.isEmpty)
+        // A different export (even one that reuses @I7@) makes the row stale.
+        let other = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I7@ INDI
+        1 NAME Somebody /Else/
+        0 TRLR
+        """)
+        let stale = FamilyKinshipOverlay(profiles: [cara], graph: other)
+        #expect(stale.relationshipsLine(forProfileStableID: "cara", kinships: cara.kinships)
+                == "tree person @I7@ (export changed)'s granddaughter")
+        #expect(stale.warnings(forProfileNamed: "Cara") == ["Relationship row on Cara points at @I7@ in an older tree export — pick them again"])
+        // Same content copied to a new file keeps the same fingerprint.
+        #expect(FamilyKinshipOverlay.fingerprint(of: GedcomFamilyGraph(gedcomText: "0 HEAD\n0 @I7@ INDI\n1 NAME Thankful /Pratt/\n1 SEX F\n0 TRLR")) == fingerprint)
+    }
+
+    @Test func myDadResolvesThroughTheRowNotTheStrayAlias() {
+        // Live conflict: Rick still carries the "Dad" alias, Dad has the Sr
+        // formal name. "my dad" must follow Rick's "child of Dad" row → Sr.
+        let conflicting: [POIProfile] = [
+            Self.profile("Rick", aliases: ["Dicky", "Dad"], sex: .male, born: 1962, kinships: [
+                Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
+            ]),
+            Self.profile("Dad", aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"],
+                         sex: .male, born: 1931),
+        ]
+        let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+        // main's juniorSeniorGedcom exactly: no FAM, so the tree alone
+        // cannot name a father.
+        let bareTree = GedcomFamilyGraph(gedcomText: Self.tree
+            .replacingOccurrences(of: "1 FAMC @F1@\n", with: "")
+            .replacingOccurrences(of: "1 FAMS @F1@\n", with: "")
+            .replacingOccurrences(of: "0 @F1@ FAM\n1 HUSB @I2@\n1 CHIL @I1@\n", with: ""))
+        #expect(bareTree.familyCount == 0)
+
+        let overlay = FamilyKinshipOverlay(profiles: conflicting, graph: bareTree)
+        let bound = HallieTurnExecutor.SpeakerKinship.rebind(
+            people: ["me"], question: "show me videos of my dad", speakers: speakers,
+            graph: bareTree, kinshipOverlay: overlay)
+        #expect(bound.failure == nil)
+        #expect(bound.people == ["Dad"])
+        #expect(bound.notes == ["'my dad' = Dad (Richard Harding Breen Sr), father of Rick Breen in the People tab relationships"])
+
+        // Row absent → the tree is asked and declines honestly by name.
+        var rowless = conflicting
+        rowless[0].kinships = []
+        let declined = HallieTurnExecutor.SpeakerKinship.rebind(
+            people: ["me"], question: "show me videos of my dad", speakers: speakers,
+            graph: bareTree, kinshipOverlay: FamilyKinshipOverlay(profiles: rowless, graph: bareTree))
+        #expect(declined.failure?.hasPrefix("The family tree doesn't list a father for Richard Harding Breen Jr") == true)
+        #expect(declined.people == ["me"])
     }
 
     // MARK: 1. Inverse + composition
@@ -303,8 +476,6 @@ struct FamilyKinshipTests {
     }
 
     @Test func howIsTimothyRelatedToRickIsSon() {
-        // "Timothy" is a canonical name; "Tim" is also his alias — the
-        // canonical spelling wins outright, so this is the son, not the brother.
         let result = ArchivistGraphExecutor.execute(relationship("Rick", "Timothy"), inputs: inputs())
         #expect(result.conclusion == .answered)
         #expect(result.prose == "Timothy is Rick's son.")

@@ -755,13 +755,13 @@ struct ArchivistGraphExecutorTests {
 
         #expect(snapshot == .init(
             stableID: profile.id, canonicalName: "Renée Dubois",
-            aliases: ["Renee", "Aunt Renée"]))
+            aliases: ["Renee", "Aunt Renée"], uuid: profile.uuid))
         #expect(inputs.profiles == [snapshot])
         // 2026-08-27: kinships / sex / birthdate joined the bridge for the
         // People-tab relationship overlay — still identity, still no notes,
         // photos, or paths. Any further field must be justified here.
         #expect(Mirror(reflecting: snapshot).children.compactMap(\.label)
-                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate"])
+                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate", "uuid"])
         #expect(!String(reflecting: snapshot).contains(profile.referencePath))
         #expect(!String(reflecting: snapshot).contains(profile.notes))
         #expect(!String(reflecting: snapshot).contains(profile.identityNotes!))
