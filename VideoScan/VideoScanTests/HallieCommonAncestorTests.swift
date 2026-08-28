@@ -447,4 +447,20 @@ struct HallieTwoRootOwnerTests {
         #expect(r.prose.contains("wife"))          // the marriage is an aside…
         #expect(!r.prose.hasPrefix("Donna Hudson is")) // …not the answer
     }
+
+    // Rick 2026-08-28 live: "most recent common ancestor between rick and
+    // donna" → "Which Donna — Agatha Donna Knauss (b. 1520) … or Donna
+    // Hudson (b. 1959)?" A bare name shared with a namesake resolves to the
+    // ROOT when exactly one candidate is a root.
+    @Test func bareNameSharedWithANamesakeResolvesToTheRoot() throws {
+        var text = mergedGraph().gedcomText()
+        // Add a 16th-century namesake on Donna's side, no FSID, no parents.
+        text = text.replacingOccurrences(of: "0 TRLR", with: "0 @I900@ INDI\n1 NAME Agatha Donna /Knauss/\n1 SEX F\n1 BIRT\n2 DATE ABT 1520\n0 TRLR")
+        let graph = GedcomFamilyGraph(gedcomText: text)
+        #expect(graph.people(namedLike: "Donna").count >= 2)
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Rick", b: "Donna"), context: context(graph)))
+        #expect(r.outcome == .answered, "got: \(r.prose)")
+        #expect(!r.prose.hasPrefix("Which Donna"))
+        #expect(r.basisLine.contains("a root of this tree"))
+    }
 }

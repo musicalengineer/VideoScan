@@ -1041,6 +1041,15 @@ enum HallieLineageAnswer {
             // declined sentence (`resolve` picks the sentence).
             let namesakes = r.candidates.compactMap { graph.people[$0.id] }
             if r.conclusion == .personAmbiguous, namesakes.count > 1 {
+                // A bare name that several people share, exactly one of
+                // them a root of the tree (Rick 2026-08-28 live: "Donna"
+                // → Agatha Donna Knauss b. 1520 vs Donna Hudson b. 1959):
+                // the root is who the family means. Stated in the basis.
+                let roots = namesakes.filter { graph.rootPersonIDs.contains($0.id) }
+                if roots.count == 1 {
+                    let others = namesakes.count - 1
+                    return .success(roots[0], note: "“\(name)” taken as \(roots[0].name), a root of this tree (\(others) other namesake\(others == 1 ? "" : "s") in it).")
+                }
                 return .ambiguous(namesakes)
             }
             // The resolver's own honest answer (not found / which one?).
