@@ -237,8 +237,10 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
 
 // MARK: - Volume Filter
 
+/// Extra narrowing on top of `VolumeShowFilter` (which owns connected /
+/// role / retired since 2026-08-28 — the old `.connected` case moved
+/// there). Empty set = no extra narrowing.
 enum VolumeFilter: String, CaseIterable, Hashable {
-    case connected      = "Connected"
     case network        = "Network Drives"
     case allScanned     = "All Ever Scanned"
     case uncataloged    = "Uncataloged"
@@ -251,7 +253,6 @@ enum VolumeFilter: String, CaseIterable, Hashable {
 
     var icon: String {
         switch self {
-        case .connected:   return "externaldrive.fill"
         case .network:     return "network"
         case .allScanned:  return "clock.arrow.circlepath"
         case .uncataloged: return "questionmark.folder"
@@ -407,9 +408,16 @@ struct CatalogView: View {
     /// The searchPath of the volume containing the currently selected file.
     /// Used to highlight the matching volume row in the Scan Targets pane.
     @State private var highlightedTargetPath: String = ""
-    /// Volume Options filter — controls which scan targets are visible.
-    /// Default is Connected so the table shows only volumes MFO can act on.
-    @State var volumeFilters: Set<VolumeFilter> = [.connected]
+    /// Extra volume narrowing (Network / Uncataloged / With Errors…) on
+    /// top of `volumeShowFilter`. Empty = none; session-only.
+    @State var volumeFilters: Set<VolumeFilter> = []
+    /// Which volumes the list shows — connected / roles / retired. See
+    /// VolumeShowFilter.swift. Persisted as JSON in UserDefaults; loaded
+    /// once in onAppear, written back in onChange (explicit save — an
+    /// `@State` struct has no didSet hook the way a C++ setter would).
+    @State var volumeShowFilter: VolumeShowFilter = .default
+    @AppStorage("catalog.volumeShow") private var persistedVolumeShow: String = ""
+    @State private var didLoadVolumeShow = false
     @State var showDeleteAllCatalogConfirm = false
     @State var showDeleteVolumeCatalogConfirm = false
     @State var deleteVolumeCatalogTarget: CatalogScanTarget?
@@ -723,6 +731,7 @@ struct CatalogView: View {
                 guard didLoadPersistedViewFilters else { return }
                 persistedViewFilters = CatalogShowingSummary.encode(catalogViewFilters)
             }
+            .onChange(of: volumeShowFilter) { volumeShowFilterDidChange() }
             // A Master Archive designated AFTER first run flips the default
             // to the to-do view once (never again — the user's choice wins).
             .onChange(of: model.masterArchive != nil) { seedDefaultViewFiltersIfUntouched() }
@@ -1139,10 +1148,17 @@ struct CatalogView: View {
         } else {
             volumeFilters.insert(filter)
         }
-        // If nothing is checked, snap back to Connected — the safe baseline
-        // (volumes MFO can actually act on).
-        if volumeFilters.isEmpty {
-            volumeFilters = [.connected]
+    }
+
+    /// Show menu → one of the VolumeShowFilter knobs changed. Persist and
+    /// drop any selected volume the new filter no longer lists (a
+    /// selection you cannot see is a trap for the row actions).
+    func volumeShowFilterDidChange() {
+        guard didLoadVolumeShow else { return }
+        persistedVolumeShow = VolumeShowFilter.encode(volumeShowFilter)
+        let visible = Set(volumeTableRows.map(\.id))
+        if !selectedVolumeIDs.isSubset(of: visible) {
+            selectedVolumeIDs = selectedVolumeIDs.intersection(visible)
         }
     }
 
@@ -1438,6 +1454,8 @@ extension CatalogView {
         guard !didLoadPersistedViewFilters else { return }
         catalogViewFilters = CatalogShowingSummary.decode(persistedViewFilters)
         didLoadPersistedViewFilters = true
+        volumeShowFilter = VolumeShowFilter.decode(persistedVolumeShow)
+        didLoadVolumeShow = true
         seedDefaultViewFiltersIfUntouched()
     }
 

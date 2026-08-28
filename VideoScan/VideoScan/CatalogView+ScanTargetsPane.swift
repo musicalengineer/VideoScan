@@ -308,18 +308,28 @@ extension CatalogView {
         return false
     }
 
-    /// Targets that pass the current Volume Options filters.
-    /// Always hides the RAM disk (VideoScan_Temp). Also hides "never scanned"
-    /// targets unless `showUnscannedTargets` is on — strict-catalog policy.
-    private var filteredScanTargets: [CatalogScanTarget] {
+    /// Everything the Show menu could possibly list: RAM disk excluded,
+    /// strict-catalog (never-scanned hidden unless `showUnscannedTargets`).
+    /// The "N of M" in the summary chip counts against this. O(volumes).
+    private var showableScanTargets: [CatalogScanTarget] {
         let base = CatalogScanTarget.excludingScratch(model.scanTargets)
-
         // Strict-catalog default: hide targets that have never been scanned.
         // The user can flip the toggle to see the full list (useful right
         // after adding new targets that haven't been scanned yet).
-        let scopedToScanned = showUnscannedTargets
-            ? base
-            : base.filter { hasBeenScanned($0) }
+        return showUnscannedTargets ? base : base.filter { hasBeenScanned($0) }
+    }
+
+    /// `showableScanTargets` narrowed by the Show menu's connected / role /
+    /// retired knobs. One pass, O(volumes).
+    private var shownScanTargets: [CatalogScanTarget] {
+        showableScanTargets.filter {
+            volumeShowFilter.admits(role: $0.role, isReachable: $0.isReachable, isRetired: $0.isRetired)
+        }
+    }
+
+    /// Targets that pass the current Volume Options filters.
+    private var filteredScanTargets: [CatalogScanTarget] {
+        let scopedToScanned = shownScanTargets
 
         // "All Ever Scanned" = show everything within the strict-catalog scope,
         // no further user-filter narrowing.
@@ -343,16 +353,13 @@ extension CatalogView {
             let isNetwork = VolumeReachability.isNetworkVolume(path: path)
 
             // Row filters only — column-visibility toggles must not decide
-            // membership. If the user's ONLY active entry is a column
-            // toggle, fall back to the .connected default rather than
-            // filtering every volume out.
+            // membership. No extra row filter → VolumeShowFilter's verdict
+            // (already applied above) stands.
             let rowFilters = volumeFilters.filter { $0 != .showErrorsColumn }
-            if rowFilters.isEmpty { return target.isReachable }
+            if rowFilters.isEmpty { return true }
             // Target passes if ANY active filter matches
             for filter in rowFilters {
                 switch filter {
-                case .connected:
-                    if target.isReachable { return true }
                 case .network:
                     if isNetwork { return true }
                 case .allScanned:
@@ -458,6 +465,39 @@ extension CatalogView {
                 RescueToolbarChip()
 
                 Menu {
+                    // Connected / roles / retired — the VolumeShowFilter
+                    // knobs. Mirrors the catalog list's Show menu: tick
+                    // marks, plain words, the chip beside it says what
+                    // is in force.
+                    Toggle(isOn: $volumeShowFilter.connectedOnly) {
+                        Label("Connected only", systemImage: "externaldrive.fill")
+                    }
+                    Divider()
+                    ForEach(VolumeShowFilter.RoleGroup.allCases) { group in
+                        Toggle(isOn: Binding(
+                            get: { volumeShowFilter.includes(group) },
+                            set: { _ in volumeShowFilter.toggle(group) })) {
+                            Label(group.rawValue, systemImage: group.icon)
+                        }
+                    }
+                    Toggle(isOn: $volumeShowFilter.includeRetired) {
+                        Label("Retired", systemImage: "archivebox.circle")
+                    }
+                    Divider()
+                    Button {
+                        volumeShowFilter = .all
+                    } label: {
+                        Label("All volumes", systemImage: "circle.grid.2x2")
+                    }
+                    .disabled(volumeShowFilter.isAll)
+                    Button {
+                        volumeShowFilter = .default
+                    } label: {
+                        Label("Online and available (default)", systemImage: "checkmark.circle")
+                    }
+                    .disabled(volumeShowFilter == .default)
+                    Divider()
+                    // Extra narrowing (session-only), unchanged from before.
                     ForEach(VolumeFilter.allCases, id: \.self) { filter in
                         Button(action: { toggleVolumeFilter(filter) }) {
                             HStack {
@@ -474,6 +514,11 @@ extension CatalogView {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Choose which volumes are listed below")
+
+                // What the list is filtered to — counts are O(volumes).
+                VolumeShowingBox(filter: volumeShowFilter,
+                                 shown: shownScanTargets.count,
+                                 total: showableScanTargets.count)
 
                 // Scan All / Pause All / Stop All moved OUT of this row
                 // (Rick 2026-08-12). Starting a scan is now a selection
