@@ -20,7 +20,7 @@ struct FamilyGraphCompiledStoreTests {
         let compiled: URL
         var logLines: LogCapture
         init() throws {
-            root = URL(fileURLWithPath: NSTemporaryDirectory())
+            root = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath()
                 .appendingPathComponent("CompiledStore-\(UUID().uuidString)")
             originals = root.appendingPathComponent("originals")
             compiled = root.appendingPathComponent("compiled")
