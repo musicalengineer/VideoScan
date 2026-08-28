@@ -105,6 +105,12 @@ struct FamilyKinshipOverlay: Sendable {
     /// Normalized spelling → profile nodes claiming it (canonical + aliases).
     private var nodesBySpelling: [String: [Node]] = [:]
     private var canonicalNodesBySpelling: [String: [Node]] = [:]
+    /// VERBATIM canonical name → vertices, for PersonResolver's verdicts
+    /// (which return the canonical spelling as stored). Keyed as-is, not by
+    /// stableID, because a stableID may be an arbitrary slug and
+    /// POIProfile.id keeps diacritics ("renée") that `normalize` folds
+    /// ("renee") — codex #795 B.
+    private var nodesByCanonicalName: [String: [Node]] = [:]
     private let graph: GedcomFamilyGraph?
     /// Non-blocking data-hygiene nudges found while building (2026-08-28,
     /// codex #772): an alias that is a relational WORD ("Dad" on Rick) is
@@ -176,6 +182,9 @@ struct FamilyKinshipOverlay: Sendable {
             let canonicalKey = PersonResolver.normalize(snapshot.canonicalName)
             if !(canonicalNodesBySpelling[canonicalKey]?.contains(node) ?? false) {
                 canonicalNodesBySpelling[canonicalKey, default: []].append(node)
+            }
+            if !(nodesByCanonicalName[snapshot.canonicalName]?.contains(node) ?? false) {
+                nodesByCanonicalName[snapshot.canonicalName, default: []].append(node)
             }
         }
         // Pass 2: edges + inverses. `snapshot is relation of anchor` ⇒
@@ -333,22 +342,31 @@ struct FamilyKinshipOverlay: Sendable {
     func nodes(claiming typed: String, ownerName: String? = nil) -> [Node] {
         switch resolver.resolve(typed) {
         case .resolved(let canonical):
-            return [nodeByProfileStableID[PersonResolver.normalize(canonical)]].compactMap { $0 }
+            return nodes(canonicalName: canonical)
         case .ambiguous(let candidates):
-            return candidates.compactMap { nodeByProfileStableID[PersonResolver.normalize($0)] }
+            return candidates.flatMap(nodes(canonicalName:))
         case .unknown:
             break
         }
         if HallieOwnerResolver.isOwnerSpelling(typed, owner: ownerName),
            let first = FamilyIdentityText.tokens(typed).first,
            case .resolved(let canonical) = resolver.resolve(first) {
-            return [nodeByProfileStableID[PersonResolver.normalize(canonical)]].compactMap { $0 }
+            return nodes(canonicalName: canonical)
         }
         if let graph {
             let people = graph.people(matching: typed)
             if people.count == 1 { return [.tree(gedcomID: people[0].id)] }
         }
         return []
+    }
+
+    /// The vertices behind a resolver verdict: the verbatim canonical
+    /// spelling first (exact), then the normalized canonical (a resolver
+    /// built from the same profiles always hits the first; the second is
+    /// defence against a caller passing a re-cased name).
+    private func nodes(canonicalName canonical: String) -> [Node] {
+        if let exact = nodesByCanonicalName[canonical] { return exact }
+        return canonicalNodesBySpelling[PersonResolver.normalize(canonical)] ?? []
     }
 
     /// Warnings mentioning this profile (for the card badge).

@@ -626,15 +626,13 @@ enum ArchivistGraphExecutor {
                 stableID: stableID, definitions: definitions))
         }
 
-        var identities = matchingProfiles.sorted(by: profileOrder)
-        // Cross-claimed spellings (Rick 2026-08-22: the gallery's "Tim" lists
-        // "Timmy" as an alias and "Timmy" lists "Tim" — brother and son): the
-        // profile whose CANONICAL name is the typed spelling wins outright;
-        // alias-only claims still tie and ask.
-        if identities.count > 1 {
-            let exact = identities.filter { normalize($0.canonicalName) == key }
-            if exact.count == 1 { identities = exact }
-        }
+        let identities = matchingProfiles.sorted(by: profileOrder)
+        // ONE spelling verdict, PersonResolver's (codex #778 / #795, Director-
+        // approved): a spelling claimed by more than one profile — canonical
+        // on one, alias on another ("Dad" on the Dad profile and as Rick's
+        // alias; "Timmy" on the son and as the brother's alias) — is
+        // AMBIGUOUS and asks. The former canonical-wins shortcut made this
+        // route answer where the overlay and presence routes clarified.
         guard identities.count <= 1 else {
             return .profileAmbiguous(identities)
         }

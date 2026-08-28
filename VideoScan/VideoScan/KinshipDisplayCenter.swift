@@ -1,9 +1,18 @@
 // KinshipDisplayCenter.swift
 // UI-side owner of the derived "Relationships" strings for the People
 // gallery and the profile editor (2026-08-27). Holds a memoized
-// FamilyKinshipOverlay for the current profile list and loads the family
-// tree ONCE in the background so tree-anchored rows can show a name
-// instead of a bare FamilySearch ID. Nothing here writes to disk.
+// FamilyKinshipOverlay for the current profile list. The tree arrives two
+// ways (codex #795 C):
+//   • the production FamilyTreeLiveModel PUSHES every graph it installs
+//     (tree replaced, offline → online, re-pull) through `install(graph:)`,
+//     so the memo follows the tree within one session; once pushed, the
+//     center follows the live model only;
+//   • until then (People tab opened before the Family Tree tab ever
+//     loaded) each appearance probes FamilyGraphSharedCache off the main
+//     thread — Hallie's one decoded instance of the promoted artifact, so
+//     launch never parses a GEDCOM here (codex #792) — and installs only
+//     when the cache's load token differs from the one already held.
+// Nothing here writes to disk.
 //
 // `@MainActor` ≈ "this must run on the UI thread"; `ObservableObject` +
 // `@Published` ≈ a subject the views subscribe to, so the gallery
@@ -43,7 +52,15 @@ final class KinshipDisplayCenter: ObservableObject {
     @Published private(set) var graphGeneration = 0
     /// Content fingerprint of the installed tree, for `.treePointer` anchors.
     private(set) var graphFingerprint: String?
-    private var loadStarted = false
+    /// True once a FamilyTreeLiveModel has pushed a graph: from then on the
+    /// live model is the only tree source (it already reloads on repoint /
+    /// offline and pushes each install), so the self-load stands down.
+    private(set) var followsLiveModel = false
+    /// The FamilyGraphSharedCache load token behind the last self-load —
+    /// equal tokens mean the cache handed back the same decode, so there is
+    /// nothing to rebuild.
+    private(set) var sharedCacheToken: UUID?
+    private var probeInFlight = false
 
     private var cachedProfiles: [POIProfile] = []
     private var cachedGeneration = -1
@@ -54,7 +71,14 @@ final class KinshipDisplayCenter: ObservableObject {
     init() {}
 
     /// Replace the tree (or clear it) and invalidate the overlay cache.
+    /// Called by FamilyTreeLiveModel on every install (and by tests); a
+    /// pushed tree retires the self-load below.
     func install(graph newGraph: GedcomFamilyGraph?) {
+        followsLiveModel = true
+        apply(graph: newGraph)
+    }
+
+    private func apply(graph newGraph: GedcomFamilyGraph?) {
         graph = newGraph
         graphFingerprint = newGraph.map(FamilyKinshipOverlay.fingerprint(of:))
         treePeople = (newGraph?.people ?? [:]).values
@@ -64,14 +88,27 @@ final class KinshipDisplayCenter: ObservableObject {
         graphGeneration += 1
     }
 
-    /// Kick off the one-time tree load. Cheap to call repeatedly.
+    /// Bring the tree in from the shared cache when no live model has
+    /// pushed one. Called on every People-tab / editor appearance: the
+    /// probe is a pointer read + one directory stat on a utility task; the
+    /// artifact is decoded only on a cache miss, and the overlay is rebuilt
+    /// only when the load token changed (new pull, repoint, offline →
+    /// online, or archive revoked → tree cleared).
     func loadTreeIfNeeded() {
-        guard !loadStarted else { return }
-        loadStarted = true
+        guard !followsLiveModel, !probeInFlight else { return }
+        probeInFlight = true
+        let known = sharedCacheToken
         Task.detached(priority: .utility) {
             // Worst case ~16k people × ~100 B for the picker list.
-            let loaded = FamilyAssetConfigurationCenter.shared.snapshot().loadFamilyGraph()
-            await MainActor.run { self.install(graph: loaded) }
+            let loaded = FamilyGraphSharedCache.shared.load(
+                for: FamilyAssetConfigurationCenter.shared.snapshot(), store: .app)
+            await MainActor.run {
+                self.probeInFlight = false
+                // A live-model push while we were reading wins outright.
+                guard !self.followsLiveModel, loaded?.token != known else { return }
+                self.sharedCacheToken = loaded?.token
+                self.apply(graph: loaded?.graph)
+            }
         }
     }
 

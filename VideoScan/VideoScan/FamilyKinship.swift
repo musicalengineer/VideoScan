@@ -123,12 +123,24 @@ enum KinshipRelation: String, Codable, CaseIterable, Hashable, Sendable {
     /// nil when no single word fits ("your brother's wife's mother").
     static func compose(_ hops: [KinshipRelation]) -> KinshipRelation? {
         guard var current = hops.first else { return nil }
+        // Whole-chain shapes first: a left fold forgets WHERE an
+        // intermediate word came from, so a chain that is only safe as a
+        // whole is named here and never by pairwise folding (codex #795 D).
+        if let whole = wholeChains[hops] { return whole }
         for next in hops.dropFirst() {
             guard let folded = compose(current, next) else { return nil }
             current = folded
         }
         return current
     }
+
+    /// Chains with a single word ONLY as a whole. `[spouse, sibling, spouse]`
+    /// ("husband Rick → brother Tim → wife Kate") is a sister-in-law, but
+    /// its left fold passes through siblingInLaw∘spouse, which is unsafe in
+    /// general (see `folds`), so it is pinned here explicitly.
+    private static let wholeChains: [[KinshipRelation]: KinshipRelation] = [
+        [.spouse, .sibling, .spouse]: .siblingInLaw,
+    ]
 
     /// One fold: "the anchor's `first`'s `second`" → single relation.
     static func compose(_ first: KinshipRelation, _ second: KinshipRelation) -> KinshipRelation? {
@@ -162,8 +174,13 @@ enum KinshipRelation: String, Codable, CaseIterable, Hashable, Sendable {
         Fold(.parent, .child):         .sibling,      // caller drops self
         Fold(.auntUncle, .spouse):     .auntUncle,    // uncle by marriage
         Fold(.spouse, .nieceNephew):   .nieceNephew,
-        Fold(.siblingInLaw, .spouse):  .siblingInLaw, // brother-in-law's wife
         Fold(.parentInLaw, .spouse):   .parentInLaw,
+        // NOT siblingInLaw∘spouse (codex #795 D): by the time the fold sees
+        // "siblingInLaw" it cannot tell spouse∘sibling (whose spouse IS a
+        // sibling-in-law) from sibling∘spouse (whose spouse is the original
+        // sibling, or a remarried in-law's new partner — no name at all).
+        // `[spouse, sibling, spouse]` is named as a whole chain instead;
+        // `[sibling, spouse, spouse]` fails closed to the route text.
     ]
 }
 

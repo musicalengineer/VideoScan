@@ -279,9 +279,11 @@ struct ArchivistGraphExecutorTests {
     }
 
     /// Rick 2026-08-22: the gallery's "Tim" (brother) lists "Timmy" as an
-    /// alias and "Timmy" (son) lists "Tim". The typed spelling's own profile
-    /// wins; an alias claimed by two profiles still asks.
-    @Test func exactCanonicalNameBeatsCrossClaimedAliases() {
+    /// alias and "Timmy" (son) lists "Tim". Codex #795 A (rule #778): a
+    /// spelling two profiles claim — even when one claims it as its
+    /// canonical name — is AMBIGUOUS, the same verdict PersonResolver, the
+    /// overlay and the presence routes give. No silent canonical pick.
+    @Test func crossClaimedSpellingIsAmbiguousEvenWhenOneClaimIsCanonical() {
         let brother = ArchivistGraphProfileSnapshot(
             stableID: "tim", canonicalName: "Tim", aliases: ["Timmy", "Mimmy"])
         // (The real gallery also gives the son "Tim" as an alias — that alias
@@ -304,9 +306,12 @@ struct ArchivistGraphExecutorTests {
 
         let typedTimmy = execute(people: ["Timmy"], operation: .biography,
                                  graph: tree, profiles: [brother, son])
-        #expect(typedTimmy.conclusion == .personNotFound,
-                "the son's own profile wins, and he is not in the tree")
-        #expect(typedTimmy.ambiguityCandidates.isEmpty)
+        #expect(typedTimmy.conclusion == .profileAmbiguous,
+                "the brother's alias and the son's canonical name tie — ask")
+        #expect(typedTimmy.profileCandidates == ["Tim", "Timmy"])
+        #expect(typedTimmy.ambiguityCandidates.map(\.id)
+                == [.profileStableID("tim"), .profileStableID("timmy")])
+        #expect(typedTimmy.evidence == nil)
 
         let aliasOnly = execute(people: ["Mimmy"], operation: .biography,
                                 graph: tree, profiles: [brother, son])
@@ -317,6 +322,40 @@ struct ArchivistGraphExecutorTests {
         let tied = execute(people: ["Mimmy"], operation: .biography,
                            graph: tree, profiles: [brother, son, shared])
         #expect(tied.conclusion == .profileAmbiguous)
+    }
+
+    /// Sensor for codex #795 A: for every spelling, the executor's verdict
+    /// is PersonResolver's verdict — ambiguous ⇔ `.profileAmbiguous` with
+    /// the same candidate list; resolved / unknown ⇔ never a clarification.
+    @Test func executorAndPersonResolverGiveOneVerdict() {
+        let profiles = [
+            ArchivistGraphProfileSnapshot(
+                stableID: "tim", canonicalName: "Tim", aliases: ["Timmy", "Mimmy"]),
+            ArchivistGraphProfileSnapshot(
+                stableID: "timmy", canonicalName: "Timmy", aliases: ["Timmy Breen"]),
+            ArchivistGraphProfileSnapshot(
+                stableID: "other", canonicalName: "Timothy", aliases: ["Mimmy"]),
+        ]
+        let resolver = PersonResolver(people: profiles.map {
+            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+        })
+        let tree = GedcomFamilyGraph(gedcomText: """
+        0 @T@ INDI
+        1 NAME Tim /Breen/
+        0 TRLR
+        """)
+        for spelling in ["Tim", "Timmy", "Mimmy", "Timothy", "Timmy Breen", "TIMMY", "Nobody"] {
+            let result = execute(people: [spelling], operation: .biography,
+                                 graph: tree, profiles: profiles)
+            switch resolver.resolve(spelling) {
+            case .ambiguous(let candidates):
+                #expect(result.conclusion == .profileAmbiguous, Comment(rawValue: spelling))
+                #expect(result.profileCandidates == candidates, Comment(rawValue: spelling))
+            case .resolved, .unknown:
+                #expect(result.conclusion != .profileAmbiguous, Comment(rawValue: spelling))
+                #expect(result.profileCandidates.isEmpty, Comment(rawValue: spelling))
+            }
+        }
     }
 
     @Test func profileAliasBridgesIdentityWhileFactsRetainGedcomProvenance() {
