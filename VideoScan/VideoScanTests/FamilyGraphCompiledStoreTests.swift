@@ -59,6 +59,35 @@ struct FamilyGraphCompiledStoreTests {
 
     static let tree = GedcomSyntheticPedigree.gedcom(people: 400, generations: 8)
 
+    // One-time ingest (2026-08-28): a generation compiled from TWO pulls by
+    // the CLI is what the loader hands out, even though the folder's
+    // "newest .ged" rule would name only one of them. Touching either
+    // source makes it stale and the loader falls back to the newest file.
+    @Test func multiSourceGenerationWinsUntilASourceChanges() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4), as: "b.ged", mtime: old)
+        let store = box.store()
+        let ga = try #require(GedcomFamilyGraph(fileURL: a)), gb = try #require(GedcomFamilyGraph(fileURL: b))
+        let merged = ga.merged(with: gb)
+        #expect(store.ingest(graph: merged, sources: [a, b]) != nil)
+
+        let loaded = box.loader(store).loadNewestOutcome()
+        #expect(loaded.compiled == true)
+        #expect(loaded.graph?.people.count == merged.people.count)
+        #expect(loaded.graph?.rootPersonIDs.count == 2)
+        #expect(loaded.graph?.sourceFileNames == ["a.ged", "b.ged"])
+        #expect(loaded.candidateCount == 2)
+
+        // Re-pull b: the two-source generation is stale; newest single file wins.
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 90, generations: 4), as: "b.ged")
+        let after = box.loader(store).loadNewestOutcome()
+        #expect(after.graph?.people.count == 90)
+        #expect(after.selectedURL?.lastPathComponent == "b.ged")
+        #expect(box.logLines.contains("b.ged missing or changed"))
+    }
+
     @Test func firstLoadCompilesAndPromotesSecondLoadSkipsTheParse() throws {
         let box = try Sandbox(); defer { box.tearDown() }
         let source = try box.write(Self.tree)

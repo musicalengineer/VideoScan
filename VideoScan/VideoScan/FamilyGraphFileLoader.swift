@@ -32,6 +32,15 @@ struct FamilyGraphFileLoader {
     /// retained in `rejectedURLs` so the UI can say what happened instead
     /// of pretending there was no file or displaying an empty live tree.
     func loadNewestOutcome() -> Outcome {
+        // A promoted multi-source generation (videoscan-tree-ingest) wins
+        // outright while its sources are unchanged: that is the tree Rick
+        // paid to compile. Single-file generations still go through the
+        // newest-file path below so a newer pull replaces them.
+        if let store = compiledStore, let current = store.loadCurrent(), current.manifest.sources.count > 1 {
+            return Outcome(graph: current.graph,
+                           selectedURL: current.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                           rejectedURLs: [], candidateCount: current.manifest.sources.count, compiled: true)
+        }
         let keys: Set<URLResourceKey> = [
             .contentModificationDateKey,
             .isRegularFileKey,

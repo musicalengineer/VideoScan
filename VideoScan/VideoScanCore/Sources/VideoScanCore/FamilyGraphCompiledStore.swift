@@ -138,6 +138,31 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// The promoted artifact when EVERY source its manifest records is
+    /// still on disk, unchanged (same size + mtime + edge hashes) — the
+    /// one-time ingest model (Rick 2026-08-28): the CLI compiles N pulls
+    /// once; the app then loads that generation without needing to know
+    /// which files to name. Nil on any miss (the caller falls back to its
+    /// newest-file path), with the reason logged.
+    public func loadCurrent() -> (graph: GedcomFamilyGraph, manifest: Manifest)? {
+        guard let pointer = readPointer() else { return nil }
+        guard Self.versionsMatch(pointer) else {
+            log("[family-tree] compiled artifact schema changed (pointer \(pointer.schema)/\(pointer.codec)/\(pointer.index)); recompiling")
+            return nil
+        }
+        guard let manifest = readManifest(pointer.current), manifest.verification.isEmpty else { return nil }
+        for source in manifest.sources {
+            let url = URL(fileURLWithPath: source.path)
+            guard let key = try? GedcomCompiledTree.sourceKey(for: url), key == source.key else {
+                log("[family-tree] compiled generation \(pointer.current) source \(source.fileName) missing or changed; not using it")
+                return nil
+            }
+        }
+        guard manifest.sources.map(\.key) == pointer.sourceKeys else { return nil }
+        guard let graph = decode(generation: pointer.current) else { return nil }
+        return (graph, manifest)
+    }
+
     private func decode(generation: String) -> GedcomFamilyGraph? {
         guard let data = try? Data(contentsOf: artifactURL(generation)) else { return nil }
         do {
