@@ -14,14 +14,25 @@
 //   gen-<stamp>/tree.vsft     the artifact (GedcomCompiledTree)
 //   gen-<stamp>/manifest.json provenance + verification report
 //   sources/<key>.sha256      full-file SHA-256 sidecar per raw pull
+//   .lock                     advisory flock(2) for every writer
 //
 // Sidecars are written HERE, not beside the raw pull: the pull directory
 // may be the read-only Master Archive, and "never rewrite the raw" is
 // easiest to honour by never opening its folder for writing.
 //
-// Invalidation: the pointer's source keys (size + mtime + first/last MiB
-// hash) and the three version numbers must all match; anything else is
-// a miss and the caller recompiles.
+// Invalidation (codex #792 / #797): a source key IS the file's full
+// SHA-256. The pointer's keys and the three version numbers must all
+// match; anything else is a miss and the caller recompiles. Size and
+// mtime are recorded in the manifest for humans only — they never decide
+// hit/miss, so a same-size mtime-preserving edit cannot reuse a stale
+// artifact.
+//
+// Writers (ingest / promote / prune / rollback / fallback repoint) hold
+// an exclusive flock on root/.lock. The CLI `videoscan-tree-ingest` and
+// the app share the root, so a process-wide lock would not be enough;
+// flock is per open-file-description, so it also serializes two threads
+// of one process. Readers need no lock: the pointer is replaced by
+// rename, so a reader sees the old or the new pointer, never a torn one.
 
 import Foundation
 
@@ -34,8 +45,12 @@ public struct FamilyGraphCompiledStore {
 
     /// App-level manifest/pointer schema. Bump with the layout here;
     /// the codec and index carry their own versions.
-    public static let schemaVersion: UInt32 = 1
+    /// 2 (2026-08-28): source keys became full-file SHA-256 (were
+    /// size+mtime+edge hashes); an older pointer logs "schema changed"
+    /// and is recompiled instead of silently missing.
+    public static let schemaVersion: UInt32 = 2
     static let pointerName = "current.json"
+    static let lockName = ".lock"
 
     public let root: URL
     public var fileManager: FileManager = .default
@@ -60,7 +75,10 @@ public struct FamilyGraphCompiledStore {
         public var path: String
         public var size: Int
         public var modifiedAt: Date?
+        /// Full-file SHA-256 (hex) — the invalidation key.
         public var key: String
+        /// Same value as `key`; kept as its own field for the sidecar /
+        /// provenance readers that predate the key change.
         public var sha256: String
     }
 
@@ -79,6 +97,10 @@ public struct FamilyGraphCompiledStore {
         public var mergeReport: String?
     }
 
+    public enum StoreError: Error {
+        case lockFailed(errno: Int32)
+    }
+
     public static var productionRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("VideoScan", isDirectory: true)
@@ -91,6 +113,7 @@ public struct FamilyGraphCompiledStore {
     // MARK: Read side
 
     public var pointerURL: URL { root.appendingPathComponent(Self.pointerName) }
+    public var lockURL: URL { root.appendingPathComponent(Self.lockName) }
     public func generationURL(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true) }
     public func artifactURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("tree.vsft") }
     public func manifestURL(_ name: String) -> URL { generationURL(name).appendingPathComponent("manifest.json") }
@@ -120,7 +143,7 @@ public struct FamilyGraphCompiledStore {
             log("[family-tree] compiled artifact schema changed (pointer \(pointer.schema)/\(pointer.codec)/\(pointer.index)); recompiling")
             return nil
         }
-        guard let keys = try? sources.map(GedcomCompiledTree.sourceKey(for:)), keys == pointer.sourceKeys else {
+        guard let keys = try? sourceKeys(for: sources), keys == pointer.sourceKeys else {
             return nil
         }
         if let graph = decode(generation: pointer.current) { return graph }
@@ -128,10 +151,7 @@ public struct FamilyGraphCompiledStore {
            readManifest(previous)?.sources.map(\.key) == keys,
            let graph = decode(generation: previous) {
             log("[family-tree] compiled generation \(pointer.current) unreadable; rolled back to \(previous)")
-            var repointed = pointer
-            repointed.current = previous
-            repointed.previous = nil
-            try? writePointer(repointed)
+            repoint(from: pointer, current: previous, sourceKeys: keys)
             return graph
         }
         log("[family-tree] compiled generation \(pointer.current) unreadable and no usable previous; falling back to parse")
@@ -139,11 +159,11 @@ public struct FamilyGraphCompiledStore {
     }
 
     /// The promoted artifact when EVERY source its manifest records is
-    /// still on disk, unchanged (same size + mtime + edge hashes) — the
-    /// one-time ingest model (Rick 2026-08-28): the CLI compiles N pulls
-    /// once; the app then loads that generation without needing to know
-    /// which files to name. Nil on any miss (the caller falls back to its
-    /// newest-file path), with the reason logged.
+    /// still on disk with the same full SHA-256 — the one-time ingest
+    /// model (Rick 2026-08-28): the CLI compiles N pulls once; the app
+    /// then loads that generation without needing to know which files to
+    /// name. Nil on any miss (the caller falls back to its newest-file
+    /// path), with the reason logged.
     ///
     /// Same rollback rule as `load(sources:)` (codex #789): when current
     /// is corrupt or unreadable and the previous generation verified
@@ -163,11 +183,7 @@ public struct FamilyGraphCompiledStore {
         if let previous = pointer.previous, let previousManifest = usableManifest(previous),
            let graph = decode(generation: previous) {
             log("[family-tree] compiled generation \(pointer.current) unreadable; rolled back to \(previous)")
-            var repointed = pointer
-            repointed.current = previous
-            repointed.previous = nil
-            repointed.sourceKeys = previousManifest.sources.map(\.key)
-            try? writePointer(repointed)
+            repoint(from: pointer, current: previous, sourceKeys: previousManifest.sources.map(\.key))
             return (graph, previousManifest)
         }
         log("[family-tree] compiled generation \(pointer.current) unreadable and no usable previous; falling back to parse")
@@ -180,7 +196,7 @@ public struct FamilyGraphCompiledStore {
         guard let manifest = readManifest(generation), manifest.verification.isEmpty else { return nil }
         for source in manifest.sources {
             let url = URL(fileURLWithPath: source.path)
-            guard let key = try? GedcomCompiledTree.sourceKey(for: url), key == source.key else {
+            guard let key = try? sourceKeys(for: [url]).first, key == source.key else {
                 log("[family-tree] compiled generation \(generation) source \(source.fileName) missing or changed; not using it")
                 return nil
             }
@@ -198,6 +214,39 @@ public struct FamilyGraphCompiledStore {
         }
     }
 
+    /// Full-hash keys for `sources`, with the measured cost logged (the
+    /// reviewer asked for it to be visible: ~0.4 s for both real pulls).
+    func sourceKeys(for sources: [URL]) throws -> [String] {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        var bytes = 0
+        let keys = try sources.map { url -> String in
+            bytes += (try? GedcomCompiledTree.sourceStat(url).size) ?? 0
+            return try GedcomCompiledTree.sourceKey(for: url)
+        }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+        log("[family-tree] hashed \(sources.count) source\(sources.count == 1 ? "" : "s") "
+            + "(\(bytes / 1_048_576) MB) in \(Int(ms)) ms")
+        return keys
+    }
+
+    /// Fallback repoint from a read path: under the lock, and only when
+    /// the pointer on disk is still the one we based the decision on (an
+    /// ingest may have promoted a fresh generation meanwhile).
+    private func repoint(from seen: Pointer, current: String, sourceKeys: [String]) {
+        do {
+            try withLock {
+                guard readPointer() == seen else { return }
+                var repointed = seen
+                repointed.current = current
+                repointed.previous = nil
+                repointed.sourceKeys = sourceKeys
+                try writePointer(repointed)
+            }
+        } catch {
+            log("[family-tree] repoint to \(current) failed: \(error)")
+        }
+    }
+
     // MARK: Ingest
 
     /// Compile `graph` (already parsed, validated and — when there were
@@ -205,9 +254,24 @@ public struct FamilyGraphCompiledStore {
     /// against it, and promote. Returns the DECODED artifact on success so
     /// the runtime consumes only what was promoted; nil when verification
     /// or any write failed (logged) — the caller keeps the parsed graph.
+    ///
+    /// Holds the store lock for the whole compile → verify → promote →
+    /// prune sequence (codex #792): two ingests into one root run one
+    /// after the other, so the second sees the first's pointer, keeps it
+    /// as `previous`, and prune never deletes a freshly promoted sibling.
     public func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
-                progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
-        let generation = "gen-" + Self.stamp()
+                       progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
+        do {
+            return try withLock { ingestLocked(graph: graph, sources: sources, mergeReport: mergeReport, progress: progress) }
+        } catch {
+            log("[family-tree] compile failed before a generation was started: \(error)")
+            return nil
+        }
+    }
+
+    private func ingestLocked(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String?,
+                              progress: (String) -> Void) -> GedcomFamilyGraph? {
+        let generation = freshGenerationName()
         do {
             try fileManager.createDirectory(at: generationURL(generation), withIntermediateDirectories: true)
             progress("Compiling family tree (\(graph.people.count.formatted()) people)…")
@@ -217,12 +281,12 @@ public struct FamilyGraphCompiledStore {
             progress("Verifying compiled tree…")
             let decoded = try GedcomCompiledTree.decode(try Data(contentsOf: artifactURL(generation)))
             let problems = verify(decoded, graph)
-            let sourceRecords = try sources.map { url -> Source in
+            let keys = try sourceKeys(for: sources)
+            let sourceRecords = try zip(sources, keys).map { url, key -> Source in
                 let stat = try GedcomCompiledTree.sourceStat(url)
                 return Source(fileName: url.lastPathComponent, path: url.path,
                               size: stat.size, modifiedAt: Date(timeIntervalSince1970: stat.mtime),
-                              key: try GedcomCompiledTree.sourceKey(for: url),
-                              sha256: try GedcomCompiledTree.fullSHA256(of: url))
+                              key: key, sha256: key)
             }
             let manifest = Manifest(
                 schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
@@ -244,7 +308,7 @@ public struct FamilyGraphCompiledStore {
                                   index: GedcomFamilyGraph.TreeIndex.formatVersion,
                                   current: generation,
                                   previous: old.map { $0.current == generation ? nil : $0.current } ?? nil,
-                                  sourceKeys: sourceRecords.map(\.key))
+                                  sourceKeys: keys)
             try writePointer(pointer)
             prune(keeping: pointer)
             log("[family-tree] compiled generation \(generation) promoted (\(decoded.people.count) people, "
@@ -257,18 +321,27 @@ public struct FamilyGraphCompiledStore {
         }
     }
 
-    /// Swap current and previous. False when there is no previous.
+    /// Swap current and previous. False when there is no previous, when
+    /// the previous manifest did not verify clean, or when the previous
+    /// artifact no longer decodes (codex #797-6) — the pointer is left
+    /// untouched in every false case.
     @discardableResult
     public func rollback() -> Bool {
-        guard var pointer = readPointer(), let previous = pointer.previous,
-              let manifest = readManifest(previous), manifest.verification.isEmpty else { return false }
-        pointer.previous = pointer.current
-        pointer.current = previous
-        pointer.sourceKeys = manifest.sources.map(\.key)
         do {
-            try writePointer(pointer)
-            log("[family-tree] rolled back to compiled generation \(previous)")
-            return true
+            return try withLock {
+                guard var pointer = readPointer(), let previous = pointer.previous,
+                      let manifest = readManifest(previous), manifest.verification.isEmpty else { return false }
+                guard decode(generation: previous) != nil else {
+                    log("[family-tree] rollback refused: previous generation \(previous) does not decode; pointer untouched")
+                    return false
+                }
+                pointer.previous = pointer.current
+                pointer.current = previous
+                pointer.sourceKeys = manifest.sources.map(\.key)
+                try writePointer(pointer)
+                log("[family-tree] rolled back to compiled generation \(previous)")
+                return true
+            }
         } catch {
             log("[family-tree] rollback failed: \(error)")
             return false
@@ -280,6 +353,22 @@ public struct FamilyGraphCompiledStore {
         ((try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [])
             .filter { $0.hasPrefix("gen-") }
             .sorted(by: >)
+    }
+
+    // MARK: Locking
+
+    /// Run `body` holding an exclusive advisory lock on root/.lock.
+    /// open(2) + flock(2), like a scoped std::lock_guard over a file:
+    /// closing the descriptor releases the lock even if `body` throws.
+    /// Blocks until the lock is free (an ingest is seconds at most).
+    func withLock<T>(_ body: () throws -> T) throws -> T {
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let fd = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw StoreError.lockFailed(errno: errno) }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { throw StoreError.lockFailed(errno: errno) }
+        defer { flock(fd, LOCK_UN) }
+        return try body()
     }
 
     // MARK: Private
@@ -304,6 +393,7 @@ public struct FamilyGraphCompiledStore {
     /// Delete every generation except the pointer's current + previous
     /// (bounded on disk: at most 1 + keepPrevious artifacts). A failed
     /// generation is removed as soon as it is not the pointer's.
+    /// Callers hold the lock.
     private func prune(keeping pointer: Pointer?) {
         var keep: Set<String> = []
         if let pointer {
@@ -313,6 +403,15 @@ public struct FamilyGraphCompiledStore {
         for name in generations() where !keep.contains(name) {
             try? fileManager.removeItem(at: generationURL(name))
         }
+    }
+
+    /// A stamp no existing generation directory uses (two ingests in the
+    /// same second draw different random suffixes; on the 1-in-65536
+    /// collision, draw again). Callers hold the lock.
+    private func freshGenerationName() -> String {
+        var name = "gen-" + Self.stamp()
+        while fileManager.fileExists(atPath: generationURL(name).path) { name = "gen-" + Self.stamp() }
+        return name
     }
 
     static func stamp() -> String {

@@ -237,6 +237,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     // MARK: Private state
 
     private var graph: GedcomFamilyGraph?
+    /// The People-tab kinship display follows the tree (codex #795 C):
+    /// every `install(graph:)` is pushed here so "Relationships" lines
+    /// rebuild when the tree is replaced in-session. Production models use
+    /// the shared center; a model built on an injected originals directory
+    /// gets NONE unless the test assigns one (same isolation rule as
+    /// `compiledStore`).
+    var kinshipCenter: KinshipDisplayCenter?
     /// Sorted by surname, then given name, then id (stable).
     private var sortedPeople: [GedcomFamilyGraph.Person] = []
     private var photoOverrides: [String: NSImage] = [:]
@@ -263,6 +270,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Where compiled artifacts live; nil = parse every load (tests).
     private let compiledStore: FamilyGraphCompiledStore?
     private var loadGeneration = 0
+    /// The disk load currently running, and at most one queued after it
+    /// (codex #792): `loadFromDisk` never runs two loads concurrently —
+    /// a second caller waits for the running one, then runs its own
+    /// (cheap: artifact hit); a third joins that queued run.
+    private var loadInFlight: Task<Void, Never>?
+    private var loadQueued: Task<Void, Never>?
     private var installedSourceKey: String?
     private var notesResolver: FamilyTreeNotesResolver?
     private var brainIndex: CyberBrainIndex?
@@ -315,13 +328,37 @@ final class FamilyTreeLiveModel: ObservableObject {
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations
         self.photoProvider = photoProvider
+        self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
     }
 
     // MARK: Loading
 
     /// Read the newest .ged off the main thread, then install it. Safe to
-    /// call more than once (e.g. after the user drops a file in).
+    /// call more than once (e.g. after the user drops a file in): loads
+    /// are serialized, never concurrent, so two callers cannot race the
+    /// compiled store's ingest/prune (codex #792). A call that arrives
+    /// while one is running still gets a load that STARTS after it (it
+    /// may have been made because the files changed).
     func loadFromDisk() async {
+        if let queued = loadQueued {
+            await queued.value           // a pending reload already covers us
+            return
+        }
+        let running = loadInFlight
+        let isQueued = running != nil
+        let task = Task { @MainActor [weak self] in
+            await running?.value
+            guard let self else { return }
+            if isQueued { self.loadQueued = nil }   // now running; the next caller may queue again
+            await self.performLoadFromDisk()
+        }
+        if isQueued { loadQueued = task }
+        loadInFlight = task
+        await task.value
+        if loadInFlight == task { loadInFlight = nil }
+    }
+
+    private func performLoadFromDisk() async {
         loadGeneration &+= 1
         let generation = loadGeneration
         guard sourceAccess != .unavailable else {
@@ -392,6 +429,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             installedSourceKey = sourceKey
         }
         graph = newGraph
+        kinshipCenter?.install(graph: newGraph)
         // Group-photo attribution follows the tree (2026-08-26): rebuilt
         // here from tree + speaker settings; a Hallie turn later enriches
         // it with CyberBrain / People-tab aliases.

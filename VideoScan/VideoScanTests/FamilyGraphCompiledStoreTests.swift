@@ -179,28 +179,63 @@ struct FamilyGraphCompiledStoreTests {
         #expect(store.generations().count == 1, "a hit must not compile again")
     }
 
-    @Test func touchingTheSourceInvalidatesAndRecompiles() throws {
+    /// codex #792: the key is the full content hash. A `touch` (same
+    /// bytes, new mtime) stays a hit; edited bytes are a miss.
+    @Test func sameBytesNewMtimeStaysAHitEditedBytesRecompile() throws {
         let box = try Sandbox(); defer { box.tearDown() }
         let source = try box.write(Self.tree, mtime: Date(timeIntervalSince1970: 1_000))
         let store = box.store()
         _ = box.loader(store).loadNewestOutcome()
         let gen1 = try #require(store.readPointer()).current
 
-        // Same bytes, new mtime → miss → new generation; previous retained.
+        // Same bytes, new mtime → still a hit; no new generation.
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2_000)], ofItemAtPath: source.path)
-        #expect(store.load(sources: [source]) == nil)
+        #expect(store.load(sources: [source]) != nil)
         _ = box.loader(store).loadNewestOutcome()
+        #expect(store.readPointer()?.current == gen1)
+        #expect(store.generations().count == 1)
+
+        // Edited content → miss → new generation; previous retained.
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 401, generations: 8), mtime: Date(timeIntervalSince1970: 3_000))
+        #expect(store.load(sources: [source]) == nil)
+        let second = box.loader(store).loadNewestOutcome()
+        #expect(second.graph?.people.count == 401)
         let pointer = try #require(store.readPointer())
         #expect(pointer.current != gen1)
         #expect(pointer.previous == gen1)
         #expect(store.generations().count == 2)
 
-        // Edited content → miss again; oldest generation pruned (N = 2).
-        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 401, generations: 8), mtime: Date(timeIntervalSince1970: 3_000))
+        // Edited again → oldest generation pruned (N = 2).
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 402, generations: 8), mtime: Date(timeIntervalSince1970: 3_000))
         let third = box.loader(store).loadNewestOutcome()
-        #expect(third.graph?.people.count == 401)
+        #expect(third.graph?.people.count == 402)
         #expect(store.generations().count == 2)
         #expect(!store.generations().contains(gen1))
+    }
+
+    /// codex #792: a same-size edit in the middle of the file with the
+    /// mtime put back is a miss (app-side twin of the Core sensor).
+    @Test func middleEditWithPreservedSizeAndMtimeIsAMiss() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let mtime = Date(timeIntervalSince1970: 1_000)
+        let source = try box.write(Self.tree, mtime: mtime)
+        let store = box.store()
+        _ = box.loader(store).loadNewestOutcome()
+        let gen1 = try #require(store.readPointer()).current
+        let bytes = Array(Self.tree.utf8)
+        var at = bytes.count / 2
+        while !(bytes[at] >= 0x30 && bytes[at] <= 0x39) { at += 1 }
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.seek(toOffset: UInt64(at))
+        try handle.write(contentsOf: Data([bytes[at] == 0x39 ? 0x38 : bytes[at] + 1]))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: source.path)
+        #expect(try GedcomCompiledTree.sourceStat(source).size == bytes.count)
+
+        #expect(store.load(sources: [source]) == nil)
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.compiled == true)
+        #expect(store.readPointer()?.current != gen1, "recompiled from the edited bytes")
     }
 
     @Test func corruptCurrentFallsBackToParseWithALogLine() throws {
@@ -280,11 +315,12 @@ struct FamilyGraphCompiledStoreTests {
 
     @Test func rollbackSwapsGenerations() throws {
         let box = try Sandbox(); defer { box.tearDown() }
-        let source = try box.write(Self.tree, mtime: Date(timeIntervalSince1970: 1_000))
+        let treeB = GedcomSyntheticPedigree.gedcom(people: 401, generations: 8)
+        let source = try box.write(Self.tree)
         let store = box.store()
         _ = box.loader(store).loadNewestOutcome()
         let gen1 = try #require(store.readPointer()).current
-        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2_000)], ofItemAtPath: source.path)
+        _ = try box.write(treeB)
         _ = box.loader(store).loadNewestOutcome()
         let gen2 = try #require(store.readPointer()).current
         #expect(gen1 != gen2)
@@ -293,14 +329,47 @@ struct FamilyGraphCompiledStoreTests {
         let pointer = try #require(store.readPointer())
         #expect(pointer.current == gen1)
         #expect(pointer.previous == gen2)
-        // The rolled-back pointer answers for the source it was built from
-        // (mtime 1000), not the current file (mtime 2000).
+        // The rolled-back pointer answers for the bytes it was built from
+        // (tree A), not the current file (tree B).
         #expect(store.load(sources: [source]) == nil)
-        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: source.path)
+        _ = try box.write(Self.tree)
         #expect(store.load(sources: [source])?.people.count == 400)
         // Nothing to roll back to twice in a row? There is (gen2), then no more.
         #expect(store.rollback())
         #expect(store.readPointer()?.current == gen2)
+    }
+
+    /// codex #797-6: rollback refuses a previous whose artifact is corrupt.
+    @Test func rollbackRefusesCorruptPrevious() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write(Self.tree)
+        let store = box.store()
+        _ = box.loader(store).loadNewestOutcome()
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 401, generations: 8))
+        _ = box.loader(store).loadNewestOutcome()
+        let before = try #require(store.readPointer())
+        let previous = try #require(before.previous)
+        try Data("garbage".utf8).write(to: store.artifactURL(previous))
+        #expect(!store.rollback())
+        #expect(store.readPointer() == before, "pointer untouched")
+        #expect(box.logLines.contains("rollback refused"))
+    }
+
+    /// codex #792: two overlapping `loadFromDisk` calls never run two loads
+    /// at once — one generation on disk, and the second caller's load
+    /// starts after the first finishes (a hit).
+    @Test @MainActor func overlappingLoadFromDiskCallsAreSerialized() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write(Self.tree)
+        let model = FamilyTreeLiveModel(originalsDirectory: box.originals, compiledStore: box.store())
+        async let first: Void = model.loadFromDisk()
+        async let second: Void = model.loadFromDisk()
+        async let third: Void = model.loadFromDisk()
+        _ = await (first, second, third)
+        #expect(model.loadState == .loaded(live: true))
+        #expect(model.peopleCount == 400)
+        #expect(box.store().generations().count == 1, "one compile, never two concurrent ingests")
+        #expect(box.logLines.all.filter { $0.contains("promoted") }.count == 1)
     }
 
     @Test func noStoreMeansParseEveryTimeAndNothingWritten() throws {

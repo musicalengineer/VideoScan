@@ -123,7 +123,12 @@ public enum GedcomCompiledTree {
         }
         let length: UInt64 = data.readLE(at: 12)
         let payloadStart = 20
-        guard length <= UInt64(data.count - payloadStart - 32) else { throw CodecError.truncated }
+        // The file is exactly header | payload | checksum (codex #797-5):
+        // shorter = truncated, longer = something appended after the
+        // checksum that the hash would never have covered. Both refuse.
+        let available = UInt64(data.count - payloadStart - 32)
+        guard length <= available else { throw CodecError.truncated }
+        guard length == available else { throw CodecError.corrupt("trailing bytes after checksum") }
         let payloadEnd = payloadStart + Int(length)
         let payload = data.subdata(in: payloadStart..<payloadEnd)
         let stored = Array(data[payloadEnd..<payloadEnd + 32])
@@ -394,26 +399,14 @@ public enum GedcomCompiledTree {
 
     // MARK: Source identity
 
-    /// Cheap, order-of-microseconds identity for a source file: SHA-256
-    /// over (size, mtime, first MiB, last MiB). A re-export changes size
-    /// and mtime; an in-place edit changes bytes. Hex string.
+    /// Identity of a source file for invalidation = its FULL SHA-256, hex
+    /// (codex #792/#797, requirement #771). Size and mtime are deliberately
+    /// NOT part of the key: a same-size, mtime-preserving edit in the
+    /// middle of the file must be a miss, and a `touch` with identical
+    /// bytes may stay a hit. Costs one streaming read of the file
+    /// (~0.2 s per 100 MB on the M4); the store logs the measured time.
     public static func sourceKey(for url: URL) throws -> String {
-        // FileManager, not URL.resourceValues: the latter caches per URL
-        // value within a run-loop turn, so a just-touched file could be
-        // keyed with its OLD mtime (caught by the rollback test 2026-08-28).
-        let (size, mtime) = try sourceStat(url)
-        var hasher = SHA256()
-        hasher.update(data: le(UInt64(size)))
-        hasher.update(data: le(mtime.bitPattern))
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let window = 1 << 20
-        hasher.update(data: try handle.read(upToCount: window) ?? Data())
-        if size > window {
-            try handle.seek(toOffset: UInt64(max(0, size - window)))
-            hasher.update(data: try handle.read(upToCount: window) ?? Data())
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        try fullSHA256(of: url)
     }
 
     /// (size, mtime) straight from the filesystem.
