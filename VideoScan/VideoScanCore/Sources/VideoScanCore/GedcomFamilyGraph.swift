@@ -100,19 +100,27 @@ public struct GedcomFamilyGraph: Sendable {
     }
 
     public private(set) var people: [String: Person] = [:]
-    private var families: [String: Family] = [:]
-    /// The FIRST `0 @…@ INDI` record in file order (2026-08-26, "trace …
-    /// from …" resolved the owner as "Rick Breen" and declined). GEDCOM
-    /// has no home-person tag; getmyancestors, FamilySearch, Ancestry and
-    /// Gramps all write the home/root person first, so this is the best
+    /// Internal (not private) so the merge and writer extensions in this
+    /// module can read the family table; the setter stays here.
+    private(set) var families: [String: Family] = [:]
+    /// The home/root people, in order. One entry per source file: the
+    /// FIRST `0 @…@ INDI` record in file order (2026-08-26, "trace … from
+    /// …" resolved the owner as "Rick Breen" and declined). GEDCOM has no
+    /// home-person tag; getmyancestors, FamilySearch, Ancestry and Gramps
+    /// all write the home/root person first, so this is the best
     /// available "who is 'me'" hint when the owner's name has no exact
     /// tree record. It is an ASSUMPTION — callers say so in their basis
-    /// line. Nil for a tree with no people.
-    public private(set) var rootPersonID: String?
+    /// line. A merged tree (2026-08-27, Rick's pull + Donna's pull) has
+    /// one root per source, recorded explicitly in its HEAD
+    /// (`1 _VS_ROOT @I…@`, see GedcomFamilyGraph+Writer) so the second
+    /// root does not depend on file order. Empty for a tree with no people.
+    public private(set) var rootPersonIDs: [String] = []
+    /// The first root — the single-root view every earlier caller used.
+    public var rootPersonID: String? { rootPersonIDs.first }
     /// `_FSFTID` → file-local pointer, built once at parse. FamilySearch's
     /// identifier survives re-exports when @I…@ pointers move, so it is the
     /// one stable way to say "this record is me" (2026-08-26, owner pin).
-    private var personIDByFamilySearchID: [String: String] = [:]
+    private(set) var personIDByFamilySearchID: [String: String] = [:]
 
     /// Where this tree came from, when loaded from a file (2026-08-22,
     /// "what is GEDCOM / where does your tree come from"). Nil for a
@@ -120,14 +128,45 @@ public struct GedcomFamilyGraph: Sendable {
     public var sourceFileName: String?
     public var sourceDirectory: String?
     public var sourceModifiedAt: Date?
+    /// Every export this tree was built from, in root order. A plain
+    /// export names one file (its own); a merged file names the pulls it
+    /// was merged from, read back from its HEAD (`1 _VS_SOURCE name`).
+    /// Empty for a graph parsed from text with no such HEAD lines.
+    public private(set) var sourceFileNames: [String] = []
     /// Number of FAM records — the "families" figure in Hallie's answer.
     public var familyCount: Int { families.count }
 
     // MARK: Parse
 
+    /// Assemble a graph from already-parsed records (the merge builds one
+    /// this way). The FamilySearch index is rebuilt here; `rootPersonIDs`
+    /// and `sourceFileNames` are taken as given.
+    init(people: [String: Person], families: [String: Family],
+         rootPersonIDs: [String], sourceFileNames: [String]) {
+        self.people = people
+        self.families = families
+        self.rootPersonIDs = rootPersonIDs.filter { people[$0] != nil }
+        self.sourceFileNames = sourceFileNames
+        var index: [String: String] = [:]
+        index.reserveCapacity(people.count)
+        // Sorted so a duplicated FSID (a malformed file) resolves the same
+        // way parse order would: the lowest pointer wins, deterministically.
+        for id in people.keys.sorted() {
+            if let fsid = people[id]?.familySearchID, index[fsid] == nil { index[fsid] = id }
+        }
+        personIDByFamilySearchID = index
+    }
+
     public init(gedcomText: String) {
         var currentIndi: Person?
         var currentFam: (id: String, family: Family)?
+        /// Inside `0 HEAD`: VideoScan's own provenance tags live there.
+        var inHead = false
+        /// Roots named by the HEAD (`_VS_ROOT`); when present they REPLACE
+        /// the first-INDI assumption. Applied after the parse so they can
+        /// be checked against the people actually read.
+        var headRoots: [String] = []
+        var firstIndi: String?
         /// Which level-1 event (BIRT/DEAT) a level-2 DATE belongs to.
         var pendingEvent: String?
         /// Same for a family record: MARR.
@@ -155,6 +194,8 @@ public struct GedcomFamilyGraph: Sendable {
 
             if level == 0 {
                 flush()
+                inHead = parts.count == 2 && parts[1].trimmingCharacters(
+                    in: CharacterSet(charactersIn: "\u{feff}")) == "HEAD"
                 // "0 @I…@ INDI" / "0 @F…@ FAM"
                 if parts.count == 3, parts[1].hasPrefix("@") {
                     let id = String(parts[1])
@@ -162,7 +203,7 @@ public struct GedcomFamilyGraph: Sendable {
                     case "INDI":
                         currentIndi = Person(id: id, name: "", sex: "",
                                              childOfFamily: nil)
-                        if rootPersonID == nil { rootPersonID = id }
+                        if firstIndi == nil { firstIndi = id }
                     case "FAM":
                         currentFam = (id, Family())
                     default:
@@ -175,6 +216,13 @@ public struct GedcomFamilyGraph: Sendable {
             let tag = String(parts[1])
             let value = parts.count == 3 ? String(parts[2]) : ""
 
+            if inHead {
+                // VideoScan provenance (written by the merge, ignored by
+                // every other reader as a custom `_` tag).
+                if level == 1, tag == "_VS_ROOT", value.hasPrefix("@") { headRoots.append(value) }
+                if level == 1, tag == "_VS_SOURCE", !value.isEmpty { sourceFileNames.append(value) }
+                continue
+            }
             if var person = currentIndi {
                 Self.applyPersonLine(level: level, tag: tag, value: value,
                                      person: &person, pendingEvent: &pendingEvent)
@@ -187,6 +235,8 @@ public struct GedcomFamilyGraph: Sendable {
             }
         }
         flush()
+        let named = headRoots.filter { people[$0] != nil }
+        rootPersonIDs = named.isEmpty ? [firstIndi].compactMap { $0 } : named
     }
 
     public init?(fileURL: URL) {
@@ -200,6 +250,7 @@ public struct GedcomFamilyGraph: Sendable {
               last.uppercased() == "0 TRLR" else { return nil }
         self.init(gedcomText: text)
         sourceFileName = fileURL.lastPathComponent
+        if sourceFileNames.isEmpty { sourceFileNames = [fileURL.lastPathComponent] }
         sourceDirectory = fileURL.deletingLastPathComponent().path
         sourceModifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate
@@ -341,6 +392,8 @@ public struct GedcomFamilyGraph: Sendable {
 
     /// The root person record, when the tree has one (see `rootPersonID`).
     public var rootPerson: Person? { rootPersonID.flatMap { people[$0] } }
+    /// Every root, in source order (Rick, then Donna for the merged tree).
+    public var roots: [Person] { rootPersonIDs.compactMap { people[$0] } }
 
     /// The person carrying this FamilySearch ID ("GVQV-NW3"), case- and
     /// whitespace-tolerant. O(1) — indexed at parse. Nil for an empty or
@@ -654,7 +707,7 @@ public struct GedcomFamilyGraph: Sendable {
         return (display, surname)
     }
 
-    private static func isFamilySearchID(_ value: String) -> Bool {
+    static func isFamilySearchID(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 2, parts[0].count == 4, parts[1].count == 3 else {
             return false

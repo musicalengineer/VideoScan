@@ -355,6 +355,12 @@ struct FamilySearchPullSheet: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if current != nil {
+                Text("Add to current tree joins the two by FamilySearch ID: a person in both files becomes one record with both sets of links (a spouse in one pull gains her parents from the other), families with the same couple become one, and both home people are kept as roots. The result is written as a new familysearch-merged-<date>.ged in the same folder; neither source file is changed. Records without a FamilySearch ID are added, never guessed as matches.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button("Reveal file") {
                 NSWorkspace.shared.activateFileViewerSelecting([output])
             }
@@ -445,6 +451,17 @@ struct FamilySearchPullSheet: View {
                 .help("Stops checking the file. Nothing has been installed.")
             case .ready(_, _, let current, _):
                 Button("Keep current") { coordinator.cancel() }
+                if current != nil {
+                    Button("Add to current tree") {
+                        Task {
+                            await coordinator.installMerged()
+                            if case .installed(let url, _) = coordinator.phase {
+                                onInstalled(url)
+                            }
+                        }
+                    }
+                    .help("Merge by FamilySearch ID into a new .ged next to the current one; both source files stay untouched.")
+                }
                 Button(current == nil ? "Install family tree" : "Replace family tree") {
                     coordinator.install()
                     if case .installed(let url, _) = coordinator.phase {

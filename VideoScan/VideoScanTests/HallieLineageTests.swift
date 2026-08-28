@@ -616,9 +616,11 @@ struct HallieLineageAnswerTests {
         #expect(r.prose.contains("Hudson line stops there"))
         #expect(r.prose.contains("stops there in this tree"))
         #expect(!r.prose.contains("rooted"))
-        #expect(r.prose.contains("replaces the current tree"), "the offer is honest about what the sheet does")
-        #expect(r.prose.contains("starting a pull from Donna’s record there"))
-        #expect(!r.prose.contains("add"), "never promises to add the missing side")
+        // The offer is honest about what the sheet does: since 2026-08-27
+        // it can Replace OR Add to current tree (merge by FamilySearch ID).
+        #expect(r.prose.contains("replace the current tree with it or add it to the current tree by FamilySearch ID"), "the offer is honest about what the sheet does")
+        #expect(r.prose.contains("starting a pull from Donna’s record there and adding it"))
+        #expect(!r.prose.contains("I can add"), "never promises the tree already has the missing side")
         #expect(r.prose.contains("other Hudson in the tree isn’t connected to Donna"))
         #expect(r.offeredActions == [.getFamilyTree])
 

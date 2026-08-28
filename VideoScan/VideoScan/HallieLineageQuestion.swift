@@ -102,6 +102,12 @@ enum HallieLineageQuestion: Equatable, Sendable {
         case ancestorsOf(String?)
     }
     case superlative(kind: SuperlativeKind, scope: SuperlativeScope, media: String? = nil)
+    /// "how are Rick and Donna related" / "common ancestor of X and Y" /
+    /// "are X and Y related" / "what do X and Y have in common ancestrally"
+    /// (2026-08-27: the merged two-root tree makes this answerable). The
+    /// ancestor sets intersected, nearest first, with both descent paths
+    /// and the cousin term. `nil` = the owner ("me and Donna").
+    case commonAncestor(a: String?, b: String?)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -149,6 +155,9 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if isGetFamilyTree(lower) { return .getFamilyTree }
         if let provenance = gedcomProvenanceQuestion(in: lower) { return provenance }
         if isGedcomAwareness(lower) { return .gedcomAwareness }
+        // "how are rick and donna related" — two people, one relatedness
+        // word; never a media ask ("videos of rick and donna" has none).
+        if let pair = commonAncestorQuestion(in: lower) { return pair }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person
         // in the tree" is a person to find first, not a person named "the
@@ -402,6 +411,50 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
         guard person != nil || surname != nil else { return nil }
         return .gedcomProvenance(person: person, surname: surname)
+    }
+
+    /// Two names joined by "and" plus a relatedness word. Each pattern
+    /// captures exactly the two names; "me" / "i" / "myself" become the
+    /// owner (nil). A media noun anywhere means a catalog ask — not ours.
+    static func commonAncestorQuestion(in lower: String) -> HallieLineageQuestion? {
+        guard lower.firstMatch(of: mediaNoun) == nil else { return nil }
+        let patterns: [Regex<(Substring, Substring, Substring)>] = [
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:related|connected|linked|kin)\b/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
+            /\b(?:nearest|closest|common|shared)\s+(?:common\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s*$/,
+            /\b(?:do|did|does)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
+            /\bwhat\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
+            /\b([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
+            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s*$/,
+            /\bwhere\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
+        ]
+        for pattern in patterns {
+            guard let m = lower.firstMatch(of: pattern) else { continue }
+            guard let a = commonAncestorName(String(m.1)), let b = commonAncestorName(String(m.2)) else { continue }
+            // Both the owner ("me and myself") is nobody's question.
+            if a.name == nil && b.name == nil { return nil }
+            return .commonAncestor(a: a.name, b: b.name)
+        }
+        return nil
+    }
+
+    /// The typed side of a pair: `(name: nil)` for the owner, nil when the
+    /// words are not a person at all ("they", "the family").
+    private static func commonAncestorName(_ raw: String) -> (name: String?, Void)? {
+        var s = raw.trimmingCharacters(in: .whitespaces)
+        for lead in ["the ", "my wife ", "my husband "] where s.hasPrefix(lead) && s.count > lead.count {
+            if lead == "the " { return nil }
+            s = String(s.dropFirst(lead.count))
+        }
+        s = s.replacing(/'s?$/, with: "")
+        let owner: Set<String> = ["me", "i", "myself", "my", "mine"]
+        let nobody: Set<String> = ["they", "them", "we", "us", "you", "he", "she", "it", "family", "everyone", "anyone", "people", "each other"]
+        if owner.contains(s) { return (nil, ()) }
+        if nobody.contains(s) || s.isEmpty { return nil }
+        guard s.split(separator: " ").count <= 5 else { return nil }
+        return (capitalizedName(s), ())
     }
 
     static func isGedcomAwareness(_ lower: String) -> Bool {
@@ -769,6 +822,8 @@ enum HallieLineageAnswer {
             return getFamilyTreeAnswer(context.graph)
         case .gedcomProvenance(let person, let surname):
             return gedcomProvenance(person: person, surname: surname, context: context)
+        case .commonAncestor(let a, let b):
+            return commonAncestor(a, b, context: context)
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
@@ -1602,6 +1657,7 @@ enum HallieLineageAnswer {
                 source += " (last changed \(date.formatted(date: .abbreviated, time: .omitted)))"
             }
             source += ": \(graph.people.count) people and \(graph.familyCount) families."
+            if let merged = mergedProvenanceSentence(graph) { source += " " + merged }
             parts.append(source)
             parts.append("Drop a newer .ged file in that folder and I’ll read it next time.")
         } else {
@@ -1824,7 +1880,9 @@ enum HallieLineageAnswer {
         if fromFamilySearch {
             source += " Its records carry FamilySearch IDs, so I take it to be a FamilySearch export."
         }
-        if let root = graph.rootPerson {
+        if let merged = mergedProvenanceSentence(graph) {
+            source += " " + merged
+        } else if let root = graph.rootPerson {
             let born = root.birthYear.map { " (b. \($0))" } ?? ""
             source += " Its first record is \(root.name)\(born); exports usually put the home person first, so I assume it was pulled for \(root.name) — the file doesn’t say."
         }
@@ -1912,15 +1970,130 @@ enum HallieLineageAnswer {
             // it cannot add a side to this one.
             let side = person.map { HallieLineageQuestion.possessive($0) + " side" } ?? "that side"
             let record = person.map { "\($0)’s record" } ?? "a record on that side"
-            parts.append("Get Family Tree pulls from the signed-in FamilySearch account and replaces the current tree, so covering \(side) means starting a pull from \(record) there.")
+            parts.append("Get Family Tree pulls from the signed-in FamilySearch account; you can replace the current tree with it or add it to the current tree by FamilySearch ID, so covering \(side) means starting a pull from \(record) there and adding it.")
         }
         return Result(
             route: .graph, outcome: .answered,
             prose: parts.joined(separator: " "),
-            basisLine: "Basis: the loaded GEDCOM’s file name and counts; its first record is ASSUMED to be the home person and FamilySearch IDs are taken as a sign of a FamilySearch export (neither is stated in the file); name/surname counts and an ancestor walk from the named person; nothing was downloaded or changed; no model call.",
+            basisLine: "Basis: the loaded GEDCOM’s file name and counts; its first record is ASSUMED to be the home person (a VideoScan merge names its roots explicitly) and FamilySearch IDs are taken as a sign of a FamilySearch export (neither is stated in the file); name/surname counts and an ancestor walk from the named person; nothing was downloaded or changed; no model call.",
             queryDescription: "lineage: gedcom provenance" + (person.map { " person=\($0)" } ?? "") + (surname.map { " surname=\($0)" } ?? ""),
             citations: [], catalogPersonName: nil,
             offeredActions: offer ? [.getFamilyTree] : [])
+    }
+
+    /// "It was merged by VideoScan from A and B by FamilySearch ID; its
+    /// roots are Richard Harding Breen Jr and Donna Hudson, so it was
+    /// pulled for both." Nil for an ordinary single-root export.
+    static func mergedProvenanceSentence(_ graph: GedcomFamilyGraph) -> String? {
+        let roots = graph.roots
+        guard roots.count > 1 else { return nil }
+        let names = HallieNameQualifier.joined(roots.map { r in
+            r.name + (r.birthYear.map { " (b. \($0))" } ?? "")
+        }, conjunction: "and")
+        var s = ""
+        if graph.sourceFileNames.count > 1 {
+            s += "It was merged by VideoScan from " + HallieNameQualifier.joined(graph.sourceFileNames.map { "“\($0)”" }, conjunction: "and") + " by FamilySearch ID; "
+        } else {
+            s += "It names \(roots.count) home people; "
+        }
+        s += "its roots are \(names), so I take it to have been pulled for " + HallieNameQualifier.joined(roots.map(\.name), conjunction: "and") + "."
+        return s
+    }
+
+    // MARK: Common ancestor
+
+    /// "How are Rick and Donna related?" Both names go through the same
+    /// resolver as every lineage shape; the graph does the intersection.
+    /// Honest on both empty sides: no parents attached → "that side isn't
+    /// in the tree yet" with the Get Family Tree chip; nothing shared →
+    /// say how far each side was walked.
+    static func commonAncestor(_ typedA: String?, _ typedB: String?,
+                               context: HallieTurnExecutor.Context) -> Result? {
+        guard let graph = context.graph else { return noTree() }
+        var notes: [String] = []
+        // C++ readers: a two-case enum instead of std::variant — the
+        // resolved person, or the answer that stops the question.
+        enum Side { case ok(GedcomFamilyGraph.Person), stop(Result) }
+        func person(_ typed: String?) -> Side {
+            switch resolveDetailed(typed, context: context, graph: graph) {
+            case .success(let p, let note):
+                if let note { notes.append(note) }
+                return .ok(p)
+            case .ambiguous(let people):
+                return .stop(whichOne(typed ?? context.speakers.ownerName ?? "", among: people))
+            case .failure(let r):
+                return .stop(r ?? Result(
+                    route: .graph, outcome: .declined,
+                    prose: "I don’t find \(typed ?? "you") in the family tree.",
+                    basisLine: ArchivistBiographyPolicy.gedcomBasis,
+                    queryDescription: "common ancestor: resolve \(typed ?? "owner")",
+                    citations: [], catalogPersonName: nil))
+            }
+        }
+        let pa: GedcomFamilyGraph.Person, pb: GedcomFamilyGraph.Person
+        switch person(typedA) { case .stop(let r): return r; case .ok(let p): pa = p }
+        switch person(typedB) { case .stop(let r): return r; case .ok(let p): pb = p }
+        let basis = ArchivistBiographyPolicy.gedcomBasis
+            + " Ancestor sets of both people intersected; nearest by total generations first."
+            + (notes.isEmpty ? "" : " " + notes.joined(separator: " "))
+        let query = "common ancestor: \(pa.name) & \(pb.name)"
+        let chips: [HallieTurnExecutor.OfferedAction] = [
+            .openFamilyTreePerson(personID: pa.id, personName: pa.name),
+            .openFamilyTreePerson(personID: pb.id, personName: pb.name),
+        ]
+        if pa.id == pb.id {
+            return Result(route: .graph, outcome: .answered,
+                          prose: "\(pa.name) and \(typedB ?? typedA ?? "you") are the same record in the family tree.",
+                          basisLine: basis, queryDescription: query, citations: [],
+                          catalogPersonName: pa.name, offeredActions: [chips[0]])
+        }
+        let hits = graph.commonAncestors(of: pa.id, and: pb.id)
+        let possA = HallieLineageQuestion.possessive(pa.name)
+        let possB = HallieLineageQuestion.possessive(pb.name)
+        if hits.isEmpty {
+            let dA = graph.ancestorDepth(of: pa.id), dB = graph.ancestorDepth(of: pb.id)
+            let missing = [(pa, dA), (pb, dB)].filter { $0.1 == 0 }.map(\.0)
+            if !missing.isEmpty {
+                let sides = HallieNameQualifier.joined(missing.map { HallieLineageQuestion.possessive($0.name) + " side" }, conjunction: "and")
+                let verb = missing.count == 1 ? "isn’t" : "aren’t"
+                let records = HallieNameQualifier.joined(missing.map(\.name), conjunction: "or")
+                return Result(
+                    route: .graph, outcome: .declined,
+                    prose: "\(sides) \(verb) in the tree yet — it records no parents for \(records), so there is nothing to compare. Get Family Tree can pull that ancestry from FamilySearch and add it to the current tree by FamilySearch ID.",
+                    basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+                    offeredActions: chips + [.getFamilyTree])
+            }
+            return Result(
+                route: .graph, outcome: .declined,
+                prose: "\(pa.name) and \(pb.name) share no recorded ancestor: I walked \(dA) generation\(dA == 1 ? "" : "s") above \(pa.name) and \(dB) above \(pb.name) without meeting. A deeper pull on either side could still connect them.",
+                basisLine: basis, queryDescription: query, citations: [], catalogPersonName: nil,
+                offeredActions: chips)
+        }
+        let nearest = hits[0]
+        let z = nearest.person
+        let born = z.birthYear.map { " (b. \($0))" } ?? ""
+        let labelA = GedcomFamilyGraph.generationLabel(generations: nearest.depthA, sex: z.sex)
+        let labelB = GedcomFamilyGraph.generationLabel(generations: nearest.depthB, sex: z.sex)
+        var sentences: [String] = []
+        let n = hits.count
+        sentences.append("\(pa.name) and \(pb.name) share \(n) recorded ancestor\(n == 1 ? "" : "s"); the nearest is \(z.name)\(born) — \(possA) \(labelA) and \(possB) \(labelB), making them \(nearest.kinshipTerm).")
+        func line(_ path: [GedcomFamilyGraph.Person]) -> String {
+            path.map(\.name).joined(separator: " → ")
+        }
+        sentences.append("\(possA) line: \(line(nearest.pathA)). \(possB) line: \(line(nearest.pathB)).")
+        if n > 1 {
+            let others = hits.dropFirst().prefix(3).map { h in
+                h.person.name + (h.person.birthYear.map { " (b. \($0))" } ?? "") + " (\(h.depthA)/\(h.depthB) generations up)"
+            }
+            sentences.append("Also shared: " + others.joined(separator: "; ") + (n - 1 > others.count ? "; and \(n - 1 - others.count) more." : "."))
+        }
+        return Result(
+            route: .graph, outcome: .answered,
+            prose: sentences.joined(separator: " "),
+            basisLine: basis + " Cousin term from the two depths (degree = nearer depth − 1, removed = the difference).",
+            queryDescription: query + " → \(z.name)",
+            citations: [], catalogPersonName: z.name,
+            offeredActions: [.openFamilyTreePerson(personID: z.id, personName: z.name)] + chips)
     }
 
     static func noTree() -> Result {

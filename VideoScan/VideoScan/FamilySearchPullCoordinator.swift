@@ -492,6 +492,71 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         }
     }
 
+    /// "Add to current tree": union the verified export with the tree the
+    /// loader reads today, keyed by FamilySearch ID, and write the result
+    /// as a NEW file (`familysearch-merged-<stamp>.ged`) in the archive's
+    /// GEDCOM folder. Neither source is modified or moved: the current
+    /// file stays where it is and the download stays where it landed —
+    /// the merged file's HEAD names both. The loader picks the newest
+    /// valid file, so the merged tree becomes the active one; moving it
+    /// out restores the previous tree exactly as Replace's note says.
+    ///
+    /// Memory: three graphs (current, new, merged) plus the merged text —
+    /// for 16k + 16k people well under 200 MB, released on return.
+    func installMerged() async {
+        guard case .ready(let output, _, _, _) = phase else { return }
+        let gedcomDirectory = self.gedcomDirectory
+        let fileManager = self.fileManager
+        parseGeneration &+= 1
+        let generation = parseGeneration
+        let stamp = Self.timestampFormatter.string(from: Date())
+        // Two-case outcome (C++: a tagged union), because the failure is
+        // a sentence for the sheet, not an `Error`.
+        enum Merged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
+        let merged = await Task.detached(priority: .userInitiated) { () -> Merged in
+            guard let new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
+                return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
+            }
+            let outcome = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory, fileManager: fileManager).loadNewestOutcome()
+            guard let current = outcome.graph, let currentURL = outcome.selectedURL else {
+                return .failed("There is no current tree to add to — use Install family tree instead.")
+            }
+            let merge = current.merge(with: new)
+            let roots = merge.graph.roots.map { r in
+                r.name + (r.familySearchID.map { " (\($0))" } ?? "")
+            }
+            let provenance = "Merged by VideoScan on \(stamp) UTC by FamilySearch ID (_FSFTID) from "
+                + "\(currentURL.lastPathComponent) (current tree, \(current.people.count) people) and "
+                + "\(output.path) (added, \(new.people.count) people). "
+                + "Roots: " + roots.joined(separator: "; ") + ". "
+                + "Shared people: \(merge.sharedPeopleCount); added: \(merge.addedPeopleCount); "
+                + "records without a FamilySearch ID that could not be matched: \(merge.unmatched.count). "
+                + "Both source files were left untouched."
+            let text = merge.graph.gedcomText(provenance: provenance)
+            var destination = gedcomDirectory.appendingPathComponent("familysearch-merged-\(stamp).ged")
+            var suffix = 2
+            while fileManager.fileExists(atPath: destination.path) {
+                destination = gedcomDirectory.appendingPathComponent("familysearch-merged-\(stamp)-\(suffix).ged")
+                suffix += 1
+            }
+            do {
+                try fileManager.createDirectory(at: gedcomDirectory, withIntermediateDirectories: true)
+                try text.write(to: destination, atomically: true, encoding: .utf8)
+            } catch {
+                return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
+            }
+            return .written(destination, merge.graph.people.count, merge)
+        }.value
+        guard generation == parseGeneration else { return }
+        switch merged {
+        case .written(let destination, let people, let merge):
+            appLog.write("Family Tree: merged \(merge.sharedPeopleCount) shared + \(merge.addedPeopleCount) added people into \(destination.lastPathComponent); \(merge.unmatched.count) unmatched no-FSID records")
+            phase = .installed(installed: destination, people: people)
+        case .failed(let message):
+            phase = .failed(message: message)
+        }
+    }
+
     private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

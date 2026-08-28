@@ -5,15 +5,40 @@
   "categories": [
     {
       "id": "family_tree_live",
-      "expectedRoutes": ["graph", "follow-up"],
-      "expectedOutcomes": ["answered", "declined", "needsClarification"],
+      "expectedRoutes": [
+        "graph",
+        "follow-up"
+      ],
+      "expectedOutcomes": [
+        "answered",
+        "declined",
+        "needsClarification"
+      ],
       "noFabricatedPersonalMemory": true,
       "forbidRawInternals": true,
-      "mustNotContain": ["tap Get Family Tree, choose how many ancestor steps"],
+      "mustNotContain": [
+        "tap Get Family Tree, choose how many ancestor steps"
+      ],
       "prompts": [
         {
           "text": "Can we trace the Hudson line from Donna or did we only get the GEDCOM for Rick?",
           "note": "2026-08-27 22:07Z, asked twice; routed to the Get Family Tree download pitch. Fixed on fix/hallie-gedcom-provenance-question."
+        },
+        {
+          "text": "How are Rick and Donna related?",
+          "note": "2026-08-27 two-root merge: deterministic .commonAncestor shape; nearest shared ancestor + cousin term, or the honest 'Donna's side isn't in the tree yet'."
+        },
+        {
+          "text": "What is the common ancestor of Rick and Donna?",
+          "note": "2026-08-27 .commonAncestor shape."
+        },
+        {
+          "text": "Are Rick and Donna related?",
+          "note": "2026-08-27 .commonAncestor shape."
+        },
+        {
+          "text": "What do Rick and Donna have in common ancestrally?",
+          "note": "2026-08-27 .commonAncestor shape."
         }
       ]
     }
