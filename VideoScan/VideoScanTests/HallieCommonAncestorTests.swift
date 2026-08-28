@@ -142,6 +142,8 @@ struct HallieCommonAncestorDetectTests {
         #expect(Q.detect("show me the closest common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("closest common ancestor of rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("can you find the closest common ancestor between richard harding breen Jr and Donna Hudson?") == .commonAncestor(a: "Richard Harding Breen Jr", b: "Donna Hudson"))
+        #expect(Q.detect("Find the most recent common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
+        #expect(Q.detect("Find the most recent common ancestor between rick and donna hudson born 1959") == .commonAncestor(a: "Rick", b: "Donna Hudson"))
         #expect(Q.detect("what is the nearest common ancestor of rick breen and donna hudson") == .commonAncestor(a: "Rick Breen", b: "Donna Hudson"))
         #expect(Q.detect("what do rick and donna have in common ancestrally") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("do rick and donna share an ancestor?") == .commonAncestor(a: "Rick", b: "Donna"))
