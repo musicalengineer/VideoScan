@@ -472,4 +472,144 @@ struct FamilyGraphCompiledStoreTests {
         #expect(manifest.sources.map(\.fileName) == ["family.ged", "b.ged"])
         #expect(store.loadCurrent()?.graph.sourceProvenance.map(\.sha256) == manifest.sources.map(\.sha256))
     }
+
+    // MARK: codex #822 — app merge artifact vs. CLI generation (loader precedence)
+
+    /// The app's "Add to current tree" output, as the coordinator writes it:
+    /// ONE .ged whose HEAD lists the two pulls it was merged from.
+    private static func mergedArtifactText(_ a: URL, _ b: URL) throws -> (text: String, people: Int) {
+        let merged = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        return (merged.gedcomText(provenance: "test artifact"), merged.people.count)
+    }
+    private static let pullB = GedcomSyntheticPedigree.gedcom(people: 80, generations: 4)
+        .replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D")
+
+    /// (a) A valid two-source CLI generation exists; then an app Add
+    /// installs merged.ged (newer than the generation). Next load promotes
+    /// the artifact as ONE physical source: compiled == true, the decoded
+    /// graph still says it was merged from [A, B], and the manifest keeps
+    /// both lists. A further load is a hit with no parse.
+    @Test func appMergeArtifactInstalledAfterCLIGenerationSupersedesIt() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: old)
+        let store = box.store()
+        let cli = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: cli, sources: [a, b]) != nil)
+        let gen1 = try #require(store.readPointer()).current
+        #expect(box.loader(store).loadNewestOutcome().compiled == true)
+        #expect(store.readPointer()?.current == gen1, "unchanged sources, no newer file: generation wins")
+
+        // The app Add lands a merged artifact, newer than the generation.
+        let artifact = try Self.mergedArtifactText(a, b)
+        let merged = try box.write(artifact.text, as: "familysearch-merged-20260828-120000.ged",
+                                   mtime: Date(timeIntervalSinceNow: 60))
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.compiled == true)
+        #expect(outcome.selectedURL == merged)
+        #expect(outcome.rejectedURLs.isEmpty)
+        let graph = try #require(outcome.graph)
+        #expect(graph.people.count == artifact.people)
+        #expect(graph.isMergedArtifact == true)
+        #expect(graph.sourceProvenance.map(\.name) == ["a.ged", "b.ged"])
+        #expect(graph.sourceProvenance.map(\.sha256) == [try GedcomCompiledTree.fullSHA256(of: a), try GedcomCompiledTree.fullSHA256(of: b)])
+        #expect(graph.physicalSources.map(\.name) == [merged.lastPathComponent])
+        #expect(graph.rootPersonIDs.count == 2)
+        let pointer = try #require(store.readPointer())
+        #expect(pointer.current != gen1)
+        #expect(pointer.previous == gen1)
+        #expect(pointer.sourceKeys == [try GedcomCompiledTree.fullSHA256(of: merged)])
+        let manifest = try #require(store.readManifest(pointer.current))
+        #expect(manifest.sources.map(\.fileName) == [merged.lastPathComponent])
+        #expect(manifest.logicalSources.map(\.fileName) == ["a.ged", "b.ged"])
+        #expect(box.logLines.contains("promoted"))
+
+        // Third load: hit, no parse, no new generation.
+        var phases: [String] = []
+        var loader = box.loader(store)
+        loader.progress = { phases.append($0) }
+        let again = loader.loadNewestOutcome()
+        #expect(again.compiled == true)
+        #expect(again.graph?.people.count == artifact.people)
+        #expect(phases.isEmpty, "a hit must not read or compile: \(phases)")
+        #expect(store.readPointer()?.current == pointer.current)
+        #expect(store.generations().count == 2)
+    }
+
+    /// (b) No prior generation, only the merged artifact on disk: the
+    /// first load parses and promotes it (one physical source, logical
+    /// [A, B]); the second load is served from the artifact with no parse.
+    @Test func mergedArtifactWithNoPriorGenerationIsPromotedOnceThenHit() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let scratch = box.root.appendingPathComponent("pulls", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let a = scratch.appendingPathComponent("a.ged"), b = scratch.appendingPathComponent("b.ged")
+        try GedcomSyntheticPedigree.gedcom(people: 120, generations: 5).write(to: a, atomically: true, encoding: .utf8)
+        try Self.pullB.write(to: b, atomically: true, encoding: .utf8)
+        let artifact = try Self.mergedArtifactText(a, b)
+        let merged = try box.write(artifact.text, as: "familysearch-merged-20260828-120000.ged")
+        let store = box.store()
+
+        var phases: [String] = []
+        var loader = box.loader(store)
+        loader.progress = { phases.append($0) }
+        let first = loader.loadNewestOutcome()
+        #expect(first.compiled == true)
+        #expect(first.selectedURL == merged)
+        #expect(first.graph?.people.count == artifact.people)
+        #expect(first.graph?.sourceProvenance.map(\.name) == ["a.ged", "b.ged"])
+        #expect(phases.contains { $0.hasPrefix("Reading") })
+        let pointer = try #require(store.readPointer())
+        #expect(pointer.previous == nil)
+        #expect(pointer.sourceKeys == [try GedcomCompiledTree.fullSHA256(of: merged)])
+        #expect(store.readManifest(pointer.current)?.logicalSources.map(\.fileName) == ["a.ged", "b.ged"])
+
+        phases.removeAll()
+        let second = loader.loadNewestOutcome()
+        #expect(second.compiled == true)
+        #expect(second.graph?.people.count == artifact.people)
+        #expect(second.graph?.isMergedArtifact == true)
+        #expect(phases.isEmpty, "second load must not parse: \(phases)")
+        #expect(store.generations().count == 1)
+        #expect(store.readPointer() == pointer)
+    }
+
+    /// (c) Unchanged raw sources, a valid multi-source generation, and no
+    /// newer .ged (older siblings and same-age files do not count): the
+    /// generation wins, and nothing is parsed or compiled.
+    @Test func validMultiSourceGenerationWinsWhenNoNewerFileExists() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(Self.pullB, as: "b.ged", mtime: old)
+        // An OLDER stray export (a previous app merge, say) sits beside them.
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 10, generations: 2), as: "familysearch-merged-20260801-000000.ged",
+                          mtime: Date(timeIntervalSinceNow: -7200))
+        let store = box.store()
+        let cli = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: cli, sources: [a, b]) != nil)
+        let pointer = try #require(store.readPointer())
+
+        var phases: [String] = []
+        var loader = box.loader(store)
+        loader.progress = { phases.append($0) }
+        let outcome = loader.loadNewestOutcome()
+        #expect(outcome.compiled == true)
+        #expect(outcome.graph?.people.count == cli.people.count)
+        #expect(outcome.graph?.rootPersonIDs.count == 2)
+        #expect(outcome.candidateCount == 3)
+        #expect(phases.isEmpty, "generation hit must not parse: \(phases)")
+        #expect(store.readPointer() == pointer)
+        #expect(store.generations() == [pointer.current])
+
+        // A newer file that does NOT parse is reported, and the generation still wins.
+        let bad = try box.write("not a gedcom", as: "broken.ged", mtime: Date(timeIntervalSinceNow: 60))
+        let withBad = box.loader(store).loadNewestOutcome()
+        #expect(withBad.compiled == true)
+        #expect(withBad.graph?.people.count == cli.people.count)
+        #expect(withBad.rejectedURLs == [bad])
+        #expect(store.readPointer() == pointer)
+        #expect(box.logLines.contains("did not parse; keeping compiled generation"))
+    }
 }

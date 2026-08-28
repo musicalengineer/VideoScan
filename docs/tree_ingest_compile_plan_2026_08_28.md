@@ -46,6 +46,26 @@ removed**; also Daniel Cushing I at 11/11 → 10th cousins. 8 ms on the parsed g
   not merge errors. Future: "possible duplicate" hint surfaced to Rick, resolved on FS.
 - 0 unmatched (every record carries `_FSFTID`).
 
+## Provenance: logical vs physical (codex #822/#823, post-merge)
+- `sourceProvenance` = LOGICAL list: what the tree was merged from, positional (A+B → [A, B]).
+  Basenames may repeat (two `pull.ged` in different folders are two positions); identity is
+  (position, sha256), never the name. `sourceFileNames` is the same names, for display.
+- `physicalSources` = the files the store hashes and binds. For a CLI multi-pull ingest or a plain
+  parse, physical == logical. For a merge ARTIFACT parsed from disk (the app's "Add to current
+  tree" writes ONE `familysearch-merged-*.ged` whose HEAD lists A and B) the physical source is
+  that one file; the logical [A, B] rides along unchanged. `bindSources` binds physical, positionally,
+  fail-closed on count/name/hash — unchanged strictness.
+- Manifest (schema 3, additive): `sources` = physical (== pointer keys); `logicalSources` = the
+  artifact's provenance. Both asserted against the decoded artifact at ingest. Older manifests
+  without the field read as logical == physical (true for every generation they could describe).
+- Late-rewrite guard: the physical sources are hashed again right before the manifest/pointer are
+  written; a mismatch is REFUSED (generation dir removed, pointer untouched).
+- Loader precedence (`FamilyGraphFileLoader.loadNewestOutcome`):
+  1. a `.ged` in originals that is not one of the current generation's physical sources AND newer
+     than `manifest.createdAt` supersedes it → parse, ingest as one physical source, promote;
+  2. otherwise the current generation (physical sources unchanged) wins, no parse;
+  3. no usable generation → newest valid non-empty `.ged` (compiled on the way through).
+
 ## Next
 1. codex review of #783/#784/#785 + this integration branch; merge order perf → two-root → kinship → ingest.
 2. Run the CLI against production `family-tree/compiled/` (after merge; Rick launches app).

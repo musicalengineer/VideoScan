@@ -133,6 +133,15 @@ public struct GedcomFamilyGraph: Sendable {
     /// export names one file (its own); a merged file names the pulls it
     /// was merged from, read back from its HEAD (`1 _VS_SOURCE name`).
     /// Empty for a graph parsed from text with no such HEAD lines.
+    ///
+    /// Basenames only, and they MAY REPEAT (codex #823): two pulls named
+    /// `pull.ged` in different folders are two distinct POSITIONS of
+    /// `sourceProvenance` and two entries here. A name is a label for
+    /// humans; the identity of a source is (position, sha256). Nothing
+    /// looks a source up by name — the store binds by position and hash,
+    /// the merge unions by (name, sha256). The one place names are
+    /// de-duplicated is the in-memory merge's `sourceFileNames` (a display
+    /// list); `sourceProvenance` is never de-duplicated by name.
     public private(set) var sourceFileNames: [String] = []
     /// SHA-256 (hex) of THIS graph's own source file — the bytes it was
     /// parsed from. `init?(data:fileURL:)` sets it from the same Data it
@@ -197,10 +206,22 @@ public struct GedcomFamilyGraph: Sendable {
     // any). So A+B+B == A+B and (A+B)+(B+C) == [A, B, C] (#810).
     //
     // The store binds sources to entries POSITIONALLY — sources[i] ↔
-    // sourceProvenance[i] — and refuses (not promoted) on any count/name/
+    // physicalSources[i] — and refuses (not promoted) on any count/name/
     // hash mismatch (#816, `bindSources`), which is also the TOCTOU guard:
     // the entry's hash came from the parsed bytes, the store's from a
     // fresh read; they must agree (#817).
+    //
+    // LOGICAL vs PHYSICAL (codex #822/#823): `sourceProvenance` is the
+    // LOGICAL list — what the tree was merged from. The PHYSICAL sources
+    // are the files the store must hash to reproduce this graph:
+    //   • an in-memory merge (CLI: A+B) or a plain file parse — the
+    //     physical files ARE the logical ones (same list, positional);
+    //   • a merge ARTIFACT parsed from disk (the app's "Add to current
+    //     tree" writes ONE ab.ged whose HEAD lists A and B) — the physical
+    //     source is ab.ged itself (its own name + same-bytes fingerprint);
+    //     the logical list [A, B] rides along unchanged and is recorded
+    //     by the store as the manifest's `logicalSources`.
+    // `physicalSources` is that rule; `bindSources` binds to it.
 
     /// Loss accounting (codex #780, tightened codex #794): the number of
     /// lines of THIS parse that the graph does not retain and that no
@@ -284,32 +305,64 @@ public struct GedcomFamilyGraph: Sendable {
         }
     }
 
+    /// True when this graph is a merge ARTIFACT that was parsed from a
+    /// file of its own (`1 _VS_MERGED Y` in HEAD, and a fingerprint from
+    /// `init?(data:fileURL:)`): its physical origin is that one file, not
+    /// the pulls its HEAD lists. False for an in-memory merge (no
+    /// fingerprint) and for every plain parse.
+    public var bindsToOwnFile: Bool {
+        isMergedArtifact && sourceFingerprint != nil && sourceFileName != nil
+    }
+
+    /// The files the store hashes and binds (see the MARK above): the
+    /// artifact's own file when `bindsToOwnFile` (its loss = the
+    /// artifact re-parse's local loss), else the canonical provenance
+    /// list. Same shape as `sourceProvenance` so the store records both
+    /// lists the same way.
+    public var physicalSources: [SourceProvenance] {
+        let c = canonicalized()
+        if c.bindsToOwnFile, let name = c.sourceFileName {
+            return [SourceProvenance(name: name, sha256: c.sourceFingerprint, droppedLineCount: c.droppedLineCount)]
+        }
+        return c.sourceProvenance
+    }
+
     /// Bind the store's freshly hashed source files to this graph's
-    /// provenance POSITIONALLY (codex #816): `sources[i]` ↔ entry `i`.
-    /// Canonicalises first, then requires the same count, the same
-    /// basename at every position, and — when the entry already carries a
-    /// hash (it does for every file parse) — the same hash (codex #817:
-    /// the file must still be the bytes it was parsed from). Entries
-    /// without a hash (text parse given a name) take the store's. On
-    /// success the graph is canonical and every entry carries the store's
-    /// hash; on failure `self` is left untouched and the error says why.
+    /// PHYSICAL sources POSITIONALLY (codex #816, #822): `sources[i]` ↔
+    /// `physicalSources[i]`. Canonicalises first, then requires the same
+    /// count, the same basename at every position, and — when the entry
+    /// already carries a hash (it does for every file parse) — the same
+    /// hash (codex #817: the file must still be the bytes it was parsed
+    /// from). Entries without a hash (text parse given a name) take the
+    /// store's. For a merge artifact read from disk the single physical
+    /// source is the artifact file and the LOGICAL `sourceProvenance` is
+    /// left exactly as parsed. On success the graph is canonical and every
+    /// physical entry carries the store's hash; on failure `self` is left
+    /// untouched and the error says why.
     public mutating func bindSources(_ sources: [(name: String, sha256: String)]) throws {
         var out = canonicalized()
-        guard out.sourceProvenance.count == sources.count else {
-            throw SourceBindingError.countMismatch(graph: out.sourceProvenance.count, sources: sources.count)
+        let physical = out.physicalSources
+        guard physical.count == sources.count else {
+            throw SourceBindingError.countMismatch(graph: physical.count, sources: sources.count)
         }
         for (i, source) in sources.enumerated() {
-            let entry = out.sourceProvenance[i]
+            let entry = physical[i]
             guard entry.name == source.name else {
                 throw SourceBindingError.nameMismatch(index: i, graph: entry.name, source: source.name)
             }
             if let carried = entry.sha256, carried != source.sha256 {
                 throw SourceBindingError.hashMismatch(index: i, name: entry.name, graph: carried, source: source.sha256)
             }
-            out.sourceProvenance[i].sha256 = source.sha256
         }
-        if out.sourceProvenance.count == 1, out.sourceFingerprint == nil, !out.isMergedArtifact {
+        if out.bindsToOwnFile {
+            // Physical = the artifact file; its hash was checked above and
+            // the logical list stays untouched.
             out.sourceFingerprint = sources[0].sha256
+        } else {
+            for (i, source) in sources.enumerated() { out.sourceProvenance[i].sha256 = source.sha256 }
+            if out.sourceProvenance.count == 1, out.sourceFingerprint == nil, !out.isMergedArtifact {
+                out.sourceFingerprint = sources[0].sha256
+            }
         }
         self = out
     }
