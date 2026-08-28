@@ -144,23 +144,48 @@ public struct FamilyGraphCompiledStore {
     /// once; the app then loads that generation without needing to know
     /// which files to name. Nil on any miss (the caller falls back to its
     /// newest-file path), with the reason logged.
+    ///
+    /// Same rollback rule as `load(sources:)` (codex #789): when current
+    /// is corrupt or unreadable and the previous generation verified
+    /// clean AND its sources all still match on disk, decode previous,
+    /// repoint (current = previous, previous = nil, sourceKeys = that
+    /// manifest's keys) and return it.
     public func loadCurrent() -> (graph: GedcomFamilyGraph, manifest: Manifest)? {
         guard let pointer = readPointer() else { return nil }
         guard Self.versionsMatch(pointer) else {
             log("[family-tree] compiled artifact schema changed (pointer \(pointer.schema)/\(pointer.codec)/\(pointer.index)); recompiling")
             return nil
         }
-        guard let manifest = readManifest(pointer.current), manifest.verification.isEmpty else { return nil }
+        guard let manifest = usableManifest(pointer.current) else { return nil }
+        guard manifest.sources.map(\.key) == pointer.sourceKeys else { return nil }
+        if let graph = decode(generation: pointer.current) { return (graph, manifest) }
+
+        if let previous = pointer.previous, let previousManifest = usableManifest(previous),
+           let graph = decode(generation: previous) {
+            log("[family-tree] compiled generation \(pointer.current) unreadable; rolled back to \(previous)")
+            var repointed = pointer
+            repointed.current = previous
+            repointed.previous = nil
+            repointed.sourceKeys = previousManifest.sources.map(\.key)
+            try? writePointer(repointed)
+            return (graph, previousManifest)
+        }
+        log("[family-tree] compiled generation \(pointer.current) unreadable and no usable previous; falling back to parse")
+        return nil
+    }
+
+    /// The generation's manifest when it verified clean and every source
+    /// it records is still on disk with the same key; nil (logged) otherwise.
+    private func usableManifest(_ generation: String) -> Manifest? {
+        guard let manifest = readManifest(generation), manifest.verification.isEmpty else { return nil }
         for source in manifest.sources {
             let url = URL(fileURLWithPath: source.path)
             guard let key = try? GedcomCompiledTree.sourceKey(for: url), key == source.key else {
-                log("[family-tree] compiled generation \(pointer.current) source \(source.fileName) missing or changed; not using it")
+                log("[family-tree] compiled generation \(generation) source \(source.fileName) missing or changed; not using it")
                 return nil
             }
         }
-        guard manifest.sources.map(\.key) == pointer.sourceKeys else { return nil }
-        guard let graph = decode(generation: pointer.current) else { return nil }
-        return (graph, manifest)
+        return manifest
     }
 
     private func decode(generation: String) -> GedcomFamilyGraph? {

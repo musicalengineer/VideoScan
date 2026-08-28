@@ -7,6 +7,10 @@ final class GedcomCompiledTreeTests: XCTestCase {
     static let bigTree = URL(fileURLWithPath:
         "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
+    /// Exhaustive-verify budget (Debug `swift test`; Release is several×
+    /// faster). 100k people + ~50k families + index compare.
+    static let verifyBudgetMS = 1_000.0
+
     func ms(_ body: () throws -> Void) rethrows -> Double {
         let t0 = DispatchTime.now().uptimeNanoseconds
         try body()
@@ -36,7 +40,13 @@ final class GedcomCompiledTreeTests: XCTestCase {
         XCTAssertEqual(d.index, graph.index)
         XCTAssertEqual(d.sourceFileName, graph.sourceFileName)
         XCTAssertEqual(d.sourceModifiedAt, graph.sourceModifiedAt)
-        XCTAssertEqual(GedcomCompiledTree.verify(decoded: d, against: graph), [])
+        var problems: [String] = []
+        let verifyMS = ms { problems = GedcomCompiledTree.verify(decoded: d, against: graph) }
+        print("COMPILED[\(label)] exhaustive verify: \(verifyMS) ms")
+        XCTAssertEqual(problems, [])
+        // Scale sanity (codex #789): exhaustive verify stays cheap. Measured
+        // 2026-08-28 Debug on the 100k synthetic pedigree: see budget below.
+        XCTAssertLessThan(verifyMS, Self.verifyBudgetMS, "exhaustive verify over budget for \(label)")
         // Family links survive: same family units for the root.
         if let root = graph.rootPerson {
             XCTAssertEqual(d.familyUnits(of: root), graph.familyUnits(of: root))
@@ -118,6 +128,85 @@ final class GedcomCompiledTreeTests: XCTestCase {
         let b = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 301, generations: 5))
         XCTAssertFalse(GedcomCompiledTree.verify(decoded: a, against: b).isEmpty)
         XCTAssertEqual(GedcomCompiledTree.verify(decoded: a, against: a), [])
+    }
+
+    /// A copy of `graph` with the given records swapped in (index rebuilt
+    /// lazily from the modified records).
+    func mutated(_ graph: GedcomFamilyGraph,
+                 people: [String: GedcomFamilyGraph.Person]? = nil,
+                 families: [String: GedcomFamilyGraph.Family]? = nil,
+                 droppedLineCount: Int? = nil,
+                 headNote: String?? = nil,
+                 familySearchIndex: [String: String]? = nil) -> GedcomFamilyGraph {
+        GedcomFamilyGraph(decodedPeople: people ?? graph.people,
+                          families: families ?? graph.familyTable,
+                          rootPersonIDs: graph.rootPersonIDs,
+                          personIDByFamilySearchID: familySearchIndex ?? graph.familySearchIndexTable,
+                          sourceFileName: graph.sourceFileName, sourceDirectory: graph.sourceDirectory,
+                          sourceModifiedAt: graph.sourceModifiedAt, sourceFileNames: graph.sourceFileNames,
+                          isMergedArtifact: graph.isMergedArtifact,
+                          droppedLineCount: droppedLineCount ?? graph.droppedLineCount,
+                          headNote: headNote ?? graph.headNote)
+    }
+
+    /// Verification is exhaustive (codex #789): a corrupt record anywhere,
+    /// not only in the first 64 people, and every codec-2 field, is reported
+    /// as a mismatch class with a count and a first example.
+    func testVerifyIsExhaustive() throws {
+        let text = GedcomSyntheticPedigree.gedcom(people: 500, generations: 6)
+            .replacingOccurrences(of: "0 HEAD\n", with: "0 HEAD\n1 NOTE compiled from two pulls\n")
+        let source = GedcomFamilyGraph(gedcomText: text)
+        XCTAssertEqual(source.headNote, "compiled from two pulls")
+        let clean = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(source))
+        XCTAssertEqual(GedcomCompiledTree.verify(decoded: clean, against: source), [])
+
+        // Person well past the 64th (ordinal order), one field changed.
+        let ids = source.index.ids
+        XCTAssertGreaterThan(ids.count, 200)
+        var people = clean.people
+        people[ids[200]]!.birthDate = "1 JAN 1800"
+        people[ids[300]]!.alternateNames.append("Nobody /Else/")
+        people[ids[400]]!.name += " X"
+        let badPeople = GedcomCompiledTree.verify(decoded: mutated(clean, people: people), against: source)
+        XCTAssertTrue(badPeople.contains { $0.hasPrefix("person differs ×3 (first: \(ids[200]): birthDate)") }, "\(badPeople)")
+
+        // Family marriageDate, deep in the table.
+        let familyIDs = source.familyTable.keys.sorted()
+        XCTAssertGreaterThan(familyIDs.count, 100)
+        var families = clean.familyTable
+        families[familyIDs[100]]!.marriageDate = "1 JAN 1800"
+        let badFamily = GedcomCompiledTree.verify(decoded: mutated(clean, families: families), against: source)
+        XCTAssertEqual(badFamily, ["family marriageDate differs (first: \(familyIDs[100]))"])
+
+        // Family children + a missing family.
+        families = clean.familyTable
+        families[familyIDs[50]]!.children.removeAll()
+        families[familyIDs[60]] = nil
+        let badFamilies = GedcomCompiledTree.verify(decoded: mutated(clean, families: families), against: source)
+        XCTAssertTrue(badFamilies.contains("family count (first: \(familyIDs.count - 1) ≠ \(familyIDs.count))"), "\(badFamilies)")
+        XCTAssertTrue(badFamilies.contains("family missing in decoded (first: \(familyIDs[60]))"), "\(badFamilies)")
+        XCTAssertTrue(badFamilies.contains("family children differ (first: \(familyIDs[50]))"), "\(badFamilies)")
+
+        // Codec-2 provenance fields.
+        let badDropped = GedcomCompiledTree.verify(decoded: mutated(clean, droppedLineCount: source.droppedLineCount + 7), against: source)
+        XCTAssertEqual(badDropped, ["droppedLineCount (first: \(source.droppedLineCount + 7) ≠ \(source.droppedLineCount))"])
+        let badNote = GedcomCompiledTree.verify(decoded: mutated(clean, headNote: .some(nil)), against: source)
+        XCTAssertEqual(badNote, ["headNote (first: nil ≠ Optional(\"compiled from two pulls\"))"])
+
+        // FamilySearch index table.
+        var fs = clean.familySearchIndexTable
+        let fsKey = try XCTUnwrap(fs.keys.sorted().last)
+        fs[fsKey] = "@I1@"
+        fs["ZZZZ-999"] = "@I2@"
+        let badFS = GedcomCompiledTree.verify(decoded: mutated(clean, familySearchIndex: fs), against: source)
+        XCTAssertTrue(badFS.contains { $0.hasPrefix("familySearch entry differs (first: \(fsKey):") }, "\(badFS)")
+        XCTAssertTrue(badFS.contains("familySearch entry extra in decoded (first: ZZZZ-999)"), "\(badFS)")
+
+        // Report is bounded: many broken people → one line for the class.
+        for id in ids.prefix(400) { people[id]!.sex = "X" }
+        let many = GedcomCompiledTree.verify(decoded: mutated(clean, people: people), against: source)
+        XCTAssertLessThan(many.count, 8, "\(many)")
+        XCTAssertTrue(many.allSatisfy { $0.count < 400 }, "\(many)")
     }
 
     func testSynthetic100k() throws {

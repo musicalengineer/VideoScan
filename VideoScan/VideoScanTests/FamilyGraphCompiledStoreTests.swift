@@ -89,6 +89,63 @@ struct FamilyGraphCompiledStoreTests {
         #expect(box.logLines.contains("b.ged missing or changed"))
     }
 
+    /// codex #789: `loadCurrent()` rolls back like `load(sources:)`. A
+    /// corrupt current whose previous generation was built from the SAME
+    /// (still unchanged) sources is served from previous and repointed.
+    @Test func corruptMultiSourceCurrentRollsBackToPreviousGeneration() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4).replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D"), as: "b.ged", mtime: old)
+        let store = box.store()
+        let merged = try #require(GedcomFamilyGraph(fileURL: a)).merged(with: try #require(GedcomFamilyGraph(fileURL: b)))
+        #expect(store.ingest(graph: merged, sources: [a, b]) != nil)
+        #expect(store.ingest(graph: merged, sources: [a, b]) != nil)   // same sources → previous has same keys
+        let pointer = try #require(store.readPointer())
+        let previous = try #require(pointer.previous)
+        try Data("garbage".utf8).write(to: store.artifactURL(pointer.current))
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.compiled == true)
+        #expect(outcome.graph?.people.count == merged.people.count)
+        #expect(outcome.graph?.rootPersonIDs.count == 2)
+        #expect(outcome.candidateCount == 2)
+        #expect(box.logLines.contains("rolled back to \(previous)"))
+        let repointed = try #require(store.readPointer())
+        #expect(repointed.current == previous)
+        #expect(repointed.previous == nil)
+        #expect(repointed.sourceKeys == store.readManifest(previous)?.sources.map(\.key))
+    }
+
+    /// …but a previous generation whose sources have since changed is not
+    /// a rollback target: nil, then the loader's newest-file path.
+    @Test func corruptCurrentWithStalePreviousFallsBackToNewestFile() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let old = Date(timeIntervalSinceNow: -3600)
+        let a = try box.write(GedcomSyntheticPedigree.gedcom(people: 120, generations: 5), as: "a.ged", mtime: old)
+        let b = try box.write(GedcomSyntheticPedigree.gedcom(people: 80, generations: 4).replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D"), as: "b.ged", mtime: old)
+        let store = box.store()
+        let ga = try #require(GedcomFamilyGraph(fileURL: a))
+        #expect(store.ingest(graph: ga.merged(with: try #require(GedcomFamilyGraph(fileURL: b))), sources: [a, b]) != nil)
+        // Re-pull b, ingest again: previous (gen1) now records a b.ged that no longer matches disk.
+        let b2 = try box.write(GedcomSyntheticPedigree.gedcom(people: 90, generations: 4).replacingOccurrences(of: "_FSFTID ", with: "_FSFTID D"), as: "b.ged")
+        #expect(store.ingest(graph: ga.merged(with: try #require(GedcomFamilyGraph(fileURL: b2))), sources: [a, b2]) != nil)
+        let pointer = try #require(store.readPointer())
+        let gen1 = try #require(pointer.previous)
+        try Data("garbage".utf8).write(to: store.artifactURL(pointer.current))
+
+        #expect(store.loadCurrent() == nil)
+        #expect(box.logLines.contains("generation \(gen1) source b.ged missing or changed"))
+        #expect(box.logLines.contains("no usable previous"))
+        #expect(store.readPointer() == pointer, "no repoint to a stale previous")
+
+        let outcome = box.loader(store).loadNewestOutcome()
+        #expect(outcome.selectedURL?.lastPathComponent == "b.ged")
+        #expect(outcome.graph?.people.count == 90)
+        #expect(outcome.compiled == true, "newest file re-ingested as a single-source generation")
+        #expect(store.readPointer()?.current != pointer.current)
+    }
+
     @Test func firstLoadCompilesAndPromotesSecondLoadSkipsTheParse() throws {
         let box = try Sandbox(); defer { box.tearDown() }
         let source = try box.write(Self.tree)
