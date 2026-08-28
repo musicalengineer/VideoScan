@@ -211,4 +211,72 @@ struct PersonResolverTests {
                 == .profileAmbiguous(
                     candidates: ["Daniel Breen", "Matthew Breen"]))
     }
+
+    // Director ruling 2026-08-27: bare "Dad"/"Dad Breen"/"Grampa Breen"/
+    // "Dick" = Richard Harding Breen Sr; "Rick"/"Dicky"/"Rich"/"Richy" =
+    // Richard Harding Breen Jr. Same fixtures as
+    // FamilyTreeLiveModelTests, exercised at the resolver level.
+    private static let juniorSeniorGraph = GedcomFamilyGraph(gedcomText: """
+    0 @I1@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 _FSFTID GVQV-NW3
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 _FSFTID G2S4-JF4
+    0 TRLR
+    """)
+
+    @Test func correctedRickAndDadProfilesResolveToDistinctIdentities() {
+        let profiles = [
+            POIProfile(name: "Rick", referencePath: "/synthetic",
+                       aliases: ["Dicky", "Rich", "Richy", "Richard Harding Breen Jr"]),
+            POIProfile(name: "Dad", referencePath: "/synthetic",
+                       aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"]),
+        ]
+        let people = PersonResolver(profiles: profiles)
+        #expect(people.resolve("Dad") == .resolved(canonicalName: "Dad"))
+        #expect(people.resolve("Rick") == .resolved(canonicalName: "Rick"))
+        #expect(people.resolve("dad breen") == .resolved(canonicalName: "Dad"))
+        #expect(people.resolve("dicky") == .resolved(canonicalName: "Rick"))
+        #expect(people.resolve("Dick") == .resolved(canonicalName: "Dad"))
+
+        // Through to the GEDCOM: the formal alias picks the suffix-exact man.
+        let tree = FamilyTreeIdentityResolver(
+            graph: Self.juniorSeniorGraph, profiles: profiles)
+        for spelling in ["Rick", "Dicky", "Rich", "Richy"] {
+            guard case .people(let hits) = tree.resolve(spelling) else {
+                Issue.record("\(spelling) should resolve through the Rick profile"); return
+            }
+            #expect(hits.map(\.id) == ["@I1@"], "\(spelling) → \(hits.map(\.name))")
+        }
+        for spelling in ["Dad", "Dad Breen", "Grampa Breen", "Dick"] {
+            guard case .people(let hits) = tree.resolve(spelling) else {
+                Issue.record("\(spelling) should resolve through the Dad profile"); return
+            }
+            #expect(hits.map(\.id) == ["@I2@"], "\(spelling) → \(hits.map(\.name))")
+        }
+    }
+
+    /// Live 2026-08-27 shape: "Dad" is an alias of Rick AND a profile of its
+    /// own → ambiguous, never silently Rick. Without a formal alias, "Rick"
+    /// resolves as a profile but finds nobody in a tree of two Richards.
+    @Test func uncorrectedLiveProfilesSurfaceDadAsAmbiguous() {
+        let profiles = [
+            POIProfile(name: "Rick", referencePath: "/synthetic",
+                       aliases: ["Dicky", "Dad"]),
+            POIProfile(name: "Dad", referencePath: "/synthetic",
+                       aliases: ["Grampa Breen", "Dick", "Dad Breen"]),
+        ]
+        let people = PersonResolver(profiles: profiles)
+        #expect(people.resolve("Dad") == .ambiguous(candidates: ["Dad", "Rick"]))
+        #expect(people.resolve("dad") == .ambiguous(candidates: ["Dad", "Rick"]))
+        #expect(people.resolveAll(["Dad"])
+                == .ambiguous(typedName: "Dad", candidates: ["Dad", "Rick"]))
+
+        let tree = FamilyTreeIdentityResolver(
+            graph: Self.juniorSeniorGraph, profiles: profiles)
+        #expect(tree.resolve("Dad") == .profileAmbiguous(candidates: ["Dad", "Rick"]))
+        // No formal alias → the tree cannot tell Jr from Sr → empty, not a guess.
+        #expect(tree.resolve("Rick") == .people([]))
+    }
 }

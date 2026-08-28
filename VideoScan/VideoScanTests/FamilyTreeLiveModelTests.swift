@@ -558,6 +558,105 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.focusMissNotice?.hasPrefix("More than one") == true)
     }
 
+    // Director ruling 2026-08-27 (deterministic acceptance contract):
+    // bare "Dad" / "Dad Breen" / "Grampa Breen" / "Dick" = Richard Harding
+    // Breen Sr; "Rick" / "Dicky" / "Rich" / "Richy" = Richard Harding Breen Jr.
+    // "Dad" is never a global alias of Rick (speaker-relative kinship is
+    // future scope). The live GEDCOM carries both men under the SAME name
+    // with only a Jr/Sr suffix, which is the shape that escaped the
+    // existing tests.
+    private static let juniorSeniorGedcom = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 _FSFTID GVQV-NW3
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 _FSFTID G2S4-JF4
+    0 @I3@ INDI
+    1 NAME Donna /Breen/
+    0 TRLR
+    """
+
+    /// The People-tab profiles AFTER the data fix: each carries its formal
+    /// GEDCOM name (with suffix) as an alias, and "Dad" lives only on Dad.
+    private static let correctedProfiles = [
+        POIProfile(name: "Rick", referencePath: "/synthetic",
+                   aliases: ["Dicky", "Rich", "Richy", "Richard Harding Breen Jr"]),
+        POIProfile(name: "Dad", referencePath: "/synthetic",
+                   aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"]),
+    ]
+
+    /// The profiles as they were LIVE on 2026-08-27: "Dad" is an alias of
+    /// Rick, and neither profile carries a formal GEDCOM name.
+    private static let uncorrectedProfiles = [
+        POIProfile(name: "Rick", referencePath: "/synthetic",
+                   aliases: ["Dicky", "Dad"]),
+        POIProfile(name: "Dad", referencePath: "/synthetic",
+                   aliases: ["Grampa Breen", "Dick", "Dad Breen"]),
+    ]
+
+    @Test func correctedProfilesBridgeRickToJuniorAndDadToSenior() {
+        let model = liveModel()
+        model.install(graph: GedcomFamilyGraph(gedcomText: Self.juniorSeniorGedcom))
+        let profiles = Self.correctedProfiles
+
+        // Jr side: canonical nickname and every informal alias.
+        for spelling in ["Rick", "Dicky", "Rich", "Richy"] {
+            model.select("@I3@")
+            #expect(model.focus(onName: spelling, profiles: profiles),
+                    "\(spelling) should bridge to Jr")
+            #expect(model.selectedID == "@I1@", "\(spelling) selected \(model.selectedID ?? "nil"), wanted Jr @I1@")
+            #expect(model.focusMissNotice == nil)
+        }
+        // Sr side.
+        for spelling in ["Dad", "Dad Breen", "Grampa Breen", "Dick"] {
+            model.select("@I3@")
+            #expect(model.focus(onName: spelling, profiles: profiles),
+                    "\(spelling) should bridge to Sr")
+            #expect(model.selectedID == "@I2@", "\(spelling) selected \(model.selectedID ?? "nil"), wanted Sr @I2@")
+            #expect(model.focusMissNotice == nil)
+        }
+        // The formal names themselves still resolve directly, suffix-exact.
+        #expect(model.focus(onName: "Richard Harding Breen Jr", profiles: profiles))
+        #expect(model.selectedID == "@I1@")
+        #expect(model.focus(onName: "Richard Harding Breen Sr", profiles: profiles))
+        #expect(model.selectedID == "@I2@")
+    }
+
+    /// Pins that the DATA fix is required and the code stays honest with the
+    /// live (uncorrected) shape: "Dad" is an ambiguity, never silently Jr and
+    /// never the default person; "Rick" with no formal alias and no literal
+    /// "Rick" in the tree is an honest miss (two Richards, no guess).
+    @Test func uncorrectedLiveProfilesAreAnHonestMissNotASilentRick() {
+        let model = liveModel()
+        model.install(graph: GedcomFamilyGraph(gedcomText: Self.juniorSeniorGedcom))
+        let profiles = Self.uncorrectedProfiles
+        let sortedFirst = model.filteredPeople.first?.id
+        #expect(sortedFirst != nil)
+
+        model.select("@I3@")
+        #expect(!model.focus(onName: "Dad", profiles: profiles))
+        #expect(model.selectedID == nil)          // not Jr, not Sr, not previous
+        #expect(model.selectedPerson == nil)
+        #expect(model.searchText == "Dad")
+        #expect(model.focusMissNotice?.hasPrefix("More than one \u{201C}Dad\u{201D}") == true)
+
+        model.select("@I3@")
+        #expect(!model.focus(onName: "Rick", profiles: profiles))
+        #expect(model.selectedID == nil)
+        #expect(model.selectedPerson == nil)
+        #expect(model.focusMissName == "Rick")
+        #expect(model.focusMissNotice == "No one named \u{201C}Rick\u{201D} in the tree")
+
+        // Sanity for the same GEDCOM without any profiles: "Rick" through
+        // the diminutive table hits BOTH Richards and must still be a miss,
+        // never a coin flip between Jr and Sr.
+        model.select("@I3@")
+        #expect(!model.focus(onName: "Rick"))
+        #expect(model.selectedID == nil)
+    }
+
     /// Codex #756: a stale GEDCOM pointer is the same honest miss.
     @Test func staleRecordIDIsAnHonestMiss() {
         let model = liveModel()
