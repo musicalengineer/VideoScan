@@ -229,19 +229,30 @@ enum HallieTurnExecutor {
         /// The free-text note on the profile. Never a fact: the only reader
         /// (PeopleTab) quotes it with attribution, and nothing matches on it.
         let note: String
+        /// Typed local relationships + sex (2026-08-27) for the kinship
+        /// overlay. Additive; default "none".
+        let kinships: [Kinship]
+        let sex: PersonSex?
+        let uuid: UUID?
 
         init(
             stableID: String,
             canonicalName: String,
             aliases: [String] = [],
             birthdate: Date? = nil,
-            note: String = ""
+            note: String = "",
+            kinships: [Kinship] = [],
+            sex: PersonSex? = nil,
+            uuid: UUID? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
             self.aliases = aliases
             self.birthdate = birthdate
             self.note = note
+            self.kinships = kinships
+            self.sex = sex
+            self.uuid = uuid
         }
     }
 
@@ -853,8 +864,13 @@ enum HallieTurnExecutor {
                 ArchivistGraphProfileSnapshot(
                     stableID: $0.stableID,
                     canonicalName: $0.canonicalName,
-                    aliases: $0.aliases)
-            })
+                    aliases: $0.aliases,
+                    kinships: $0.kinships,
+                    sex: $0.sex,
+                    birthdate: $0.birthdate,
+                    uuid: $0.uuid)
+            },
+            ownerName: context.speakers.ownerName)
         let selection: ArchivistGraphSubjectSelection
         // Step 0 of the owner chain (2026-08-26): a configured FamilySearch
         // ID pins the owner's own spelling to one record before any name

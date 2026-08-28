@@ -7,11 +7,26 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
     let stableID: String
     let canonicalName: String
     let aliases: [String]
+    /// Typed local relationships (2026-08-27) — feed FamilyKinshipOverlay.
+    /// Additive: every existing caller's default is "none".
+    let kinships: [Kinship]
+    /// Sex / birthdate only so the overlay can pick "brother" vs "sister"
+    /// and "older" vs "younger"; no notes or photos cross this boundary.
+    let sex: PersonSex?
+    let birthdate: Date?
+    /// Durable profile identity that `.profile(id:)` kinship anchors use.
+    let uuid: UUID?
 
-    init(stableID: String, canonicalName: String, aliases: [String] = []) {
+    init(stableID: String, canonicalName: String, aliases: [String] = [],
+         kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil,
+         uuid: UUID? = nil) {
         self.stableID = stableID
         self.canonicalName = canonicalName
         self.aliases = aliases
+        self.kinships = kinships
+        self.sex = sex
+        self.birthdate = birthdate
+        self.uuid = uuid
     }
 
     // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
@@ -21,7 +36,11 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
         self.init(
             stableID: profile.id,
             canonicalName: profile.name,
-            aliases: profile.aliases)
+            aliases: profile.aliases,
+            kinships: profile.kinships,
+            sex: profile.sex,
+            birthdate: profile.birthdate,
+            uuid: profile.uuid)
     }
 }
 
@@ -30,22 +49,34 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
 struct ArchivistGraphInputs: Sendable {
     let graph: GedcomFamilyGraph
     let profiles: [ArchivistGraphProfileSnapshot]
+    /// The signed-in owner's configured name, so the overlay can bind the
+    /// owner's fuller spellings ("Rick Breen" from "me") to the owner's
+    /// one-word profile. nil ⇒ exact profile spellings only.
+    let ownerName: String?
+    /// Typed People-tab relationships laid over the same identity space
+    /// (2026-08-27). Built once per turn here so detached execution gets a
+    /// ready value; ≤ 50 ms for 500 profiles × 5 rows.
+    let kinshipOverlay: FamilyKinshipOverlay
 
     init(
         graph: GedcomFamilyGraph,
-        profiles: [ArchivistGraphProfileSnapshot] = []
+        profiles: [ArchivistGraphProfileSnapshot] = [],
+        ownerName: String? = nil
     ) {
         self.graph = graph
         self.profiles = profiles
+        self.ownerName = ownerName
+        self.kinshipOverlay = FamilyKinshipOverlay(snapshots: profiles, graph: graph)
     }
 
     @MainActor
-    init(graph: GedcomFamilyGraph, profiles: [POIProfile]) {
+    init(graph: GedcomFamilyGraph, profiles: [POIProfile], ownerName: String? = nil) {
         self.init(
             graph: graph,
             profiles: profiles.map {
                 ArchivistGraphProfileSnapshot(profile: $0)
-            })
+            },
+            ownerName: ownerName)
     }
 }
 
@@ -376,6 +407,15 @@ enum ArchivistGraphExecutor {
         }
         if query.operation != .kinship, query.relation != nil || query.side != nil {
             return declineUnexpectedRelation()
+        }
+
+        // People-tab relationships first (2026-08-27): the contemporary
+        // family is deliberately absent from the FamilySearch tree, so
+        // "who is Rick's brother" is answered from the typed overlay when
+        // it knows; otherwise the GEDCOM walk below proceeds unchanged.
+        if query.operation == .kinship,
+           let overlay = overlayKinshipResult(query, inputs: inputs, selection: selection) {
+            return overlay
         }
 
         switch resolveSubject(typedName, selection: selection,

@@ -520,6 +520,21 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// fusion — NOT consumed by any algorithm yet. Separate from `notes`
     /// (relationship / maiden name) on purpose.
     var identityNotes: String?
+    /// Typed, local-only family relationships ("sibling of Rick"), never
+    /// written to GEDCOM/FamilySearch (director decision 2026-08-27 —
+    /// living relatives stay out of the tree). Inverses, gendered words
+    /// and composed relations are derived by FamilyKinshipOverlay, not
+    /// stored. Missing in older profile.json ⇒ [] (additive schema).
+    var kinships: [Kinship] = []
+    /// Kinship rows this build could not read (newer relation word, damaged
+    /// JSON). Kept verbatim and written back on save so nothing is silently
+    /// lost (codex #778). Never shown as facts.
+    var kinshipsQuarantined: [JSONValue] = []
+    /// Durable identity (2026-08-28). `id` (name.lowercased()) is the UI /
+    /// storage-folder identity and changes on rename; `uuid` never does, so
+    /// other profiles' kinship rows anchor on it. Assigned on first load of
+    /// an older profile.json and persisted by `load(name:)`.
+    var uuid: UUID = UUID()
 
     // MARK: Codable — tolerate missing keys from older JSON files
 
@@ -532,7 +547,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
          sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
          sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
-         identityNotes: String? = nil) {
+         identityNotes: String? = nil, kinships: [Kinship] = [],
+         uuid: UUID = UUID()) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -555,6 +571,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.hairColor = hairColor
         self.eyeColor = eyeColor
         self.identityNotes = identityNotes
+        self.kinships = kinships
+        self.uuid = uuid
     }
 
     init(from decoder: Decoder) throws {
@@ -586,6 +604,25 @@ struct POIProfile: Codable, Identifiable, Equatable {
         hairColor         = Self.decodeIdentityField(HairColor.self, forKey: .hairColor, from: c)
         eyeColor          = Self.decodeIdentityField(EyeColor.self, forKey: .eyeColor, from: c)
         identityNotes     = try c.decodeIfPresent(String.self, forKey: .identityNotes)
+        // Kinships (2026-08-27): absent in older files ⇒ []. Decoded ROW BY
+        // ROW (codex #778): a row this build can't read is quarantined, not
+        // dropped, so the readable rows stay usable and the odd one survives
+        // the next save.
+        let rows = Self.decodeIdentityField([JSONValue].self, forKey: .kinships, from: c) ?? []
+        var readable: [Kinship] = []
+        var quarantined = Self.decodeIdentityField([JSONValue].self, forKey: .kinshipsQuarantined, from: c) ?? []
+        for row in rows {
+            if let data = try? JSONEncoder().encode(row),
+               let kinship = try? JSONDecoder().decode(Kinship.self, from: data) {
+                readable.append(kinship)
+            } else {
+                identityLog.notice("POIProfile load: quarantined an unreadable kinship row (written by a newer app version?) — kept verbatim.")
+                quarantined.append(row)
+            }
+        }
+        kinships          = readable
+        kinshipsQuarantined = quarantined
+        uuid              = try c.decodeIfPresent(UUID.self, forKey: .uuid) ?? UUID()
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare
@@ -632,7 +669,34 @@ struct POIProfile: Codable, Identifiable, Equatable {
         var profile = try JSONDecoder().decode(POIProfile.self, from: data)
         // Heal referencePath — its folder is implicit, always the POI's own folder.
         profile.referencePath = POIStorage.folder(for: profile.name).path
+        // First load of a pre-uuid profile.json: persist the freshly minted
+        // uuid so kinship anchors written later stay durable across renames.
+        if !Self.hasUUIDKey(data) { try? profile.save() }
         return profile
+    }
+
+    private static func hasUUIDKey(_ data: Data) -> Bool {
+        ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["uuid"] != nil
+    }
+
+    /// Upgrade legacy `.profileName` kinship anchors to durable `.profile(id:)`
+    /// anchors where the named profile exists in `profiles` (in memory; the
+    /// upgraded form is written the next time that profile is saved). Names
+    /// that match no profile are left as-is so the row still displays.
+    static func upgradingKinshipAnchors(_ profiles: [POIProfile]) -> [POIProfile] {
+        let byName = Dictionary(profiles.map { (PersonResolver.normalize($0.name), $0.uuid) },
+                                uniquingKeysWith: { first, _ in first })
+        return profiles.map { profile in
+            var copy = profile
+            copy.kinships = profile.kinships.map { row in
+                guard case .profileName(let name) = row.relativeTo,
+                      let id = byName[PersonResolver.normalize(name)] else { return row }
+                var upgraded = row
+                upgraded.relativeTo = .profile(id: id)
+                return upgraded
+            }
+            return copy
+        }
     }
 
     /// Soft-delete the POI by moving its folder into ~/dev/VideoScan/.trash/.
@@ -658,7 +722,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
     static func listAll() -> [POIProfile] {
         // Trigger lazy migration on first read.
         _ = POIStorage.migrateLegacyIfNeeded()
-        return decodeProfiles(in: POIStorage.allPOIFolders())
+        return upgradingKinshipAnchors(decodeProfiles(in: POIStorage.allPOIFolders()))
     }
 
     /// Decode profile.json in each folder; corrupt/missing entries are

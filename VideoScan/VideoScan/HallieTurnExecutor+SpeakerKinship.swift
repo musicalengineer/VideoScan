@@ -17,6 +17,18 @@ import VideoScanCore
 
 extension HallieTurnExecutor {
 
+    /// The People-tab relationship overlay for this turn's context (nil when
+    /// no profile carries a row — cheap to build otherwise).
+    static func kinshipOverlay(context: Context) -> FamilyKinshipOverlay? {
+        let profiles = context.profiles ?? []
+        guard profiles.contains(where: { !$0.kinships.isEmpty }) else { return nil }
+        return FamilyKinshipOverlay(snapshots: profiles.map {
+            ArchivistGraphProfileSnapshot(
+                stableID: $0.stableID, canonicalName: $0.canonicalName, aliases: $0.aliases,
+                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate, uuid: $0.uuid)
+        }, graph: context.graph)
+    }
+
     enum SpeakerKinship {
 
         struct Rebinding: Equatable, Sendable {
@@ -45,6 +57,18 @@ extension HallieTurnExecutor {
             return (phrase, relation)
         }
 
+        /// Which people-list slot holds the relative: a bare pronoun, the
+        /// phrase, the kin word, or the owner's name. nil ⇒ append.
+        private static func slotIndex(in people: [String], phrase: String, speakers: Speakers) -> Int? {
+            let kinWord = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+            return people.firstIndex { entry in
+                let key = entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return HallieTurnExecutor.isSpeakerPronoun(key)
+                    || key == phrase || key == kinWord
+                    || key == speakers.ownerName?.lowercased()
+            }
+        }
+
         /// Rebind the people list when the question names a relative of the
         /// speaker. Untouched (no notes, no failure) when it does not.
         static func rebind(
@@ -52,20 +76,38 @@ extension HallieTurnExecutor {
             question: String,
             speakers: Speakers,
             graph: GedcomFamilyGraph?,
-            cyberBrain: CyberBrainIndex? = nil
+            cyberBrain: CyberBrainIndex? = nil,
+            kinshipOverlay: FamilyKinshipOverlay? = nil
         ) -> Rebinding {
             var result = Rebinding(people: people)
             guard let (phrase, relation) = kinshipPhrase(in: question) else { return result }
+            // People-tab relationships first (codex #778): "my dad" with the
+            // owner's profile carrying "child of Dad" resolves through that
+            // typed row — never through a stray "Dad" alias. One relative →
+            // bound; several → ask; none → the tree below gets its turn.
+            if let overlay = kinshipOverlay, !overlay.isEmpty, let owner = speakers.ownerName,
+               let wanted = KinshipRelation.parse(term: relation.rawValue) {
+                let owners = overlay.nodes(claiming: owner, ownerName: owner)
+                if owners.count == 1 {
+                    let relatives = overlay.relatives(of: owners[0], relation: wanted.relation, sex: wanted.sex)
+                    if relatives.count > 1 {
+                        result.failure = "The People tab lists more than one \(relation.rawValue) for \(owner): "
+                            + relatives.map(\.member.displayName).joined(separator: ", ") + ". Which one do you mean?"
+                        return result
+                    }
+                    if let hit = relatives.first {
+                        let slot = slotIndex(in: people, phrase: phrase, speakers: speakers)
+                        if let slot { result.people[slot] = hit.member.name } else { result.people.append(hit.member.name) }
+                        result.notes.append("'\(phrase)' = \(hit.member.displayName), \(relation.rawValue) of \(owner) in the People tab relationships")
+                        return result
+                    }
+                }
+            }
             // Which slot did the translator give the relative? A bare
             // pronoun ("me"), the phrase itself, the kin word, or — when the
             // model dropped it — nothing, in which case the relative is added.
             let kinWord = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
-            let slot = people.firstIndex { entry in
-                let key = entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                return HallieTurnExecutor.isSpeakerPronoun(key)
-                    || key == phrase || key == kinWord
-                    || key == speakers.ownerName?.lowercased()
-            }
+            let slot = slotIndex(in: people, phrase: phrase, speakers: speakers)
             guard let owner = speakers.ownerName else {
                 result.failure = "I don't know who “\(phrase)” is because no one has told me who is using the archive — set your name in Hallie's settings and I'll look \(kinWord == "dad" || kinWord == "father" ? "him" : "them") up in the family tree."
                 return result
