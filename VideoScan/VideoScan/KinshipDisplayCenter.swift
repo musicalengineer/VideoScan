@@ -93,6 +93,13 @@ final class KinshipDisplayCenter: ObservableObject {
             defaultAnchor: defaultAnchor(in: overlay, profiles: profiles))
     }
 
+    /// Data-hygiene nudge for the card badge: "Alias 'Dad' on Rick looks
+    /// relational — use a Relationship row instead". nil when clean.
+    func aliasWarning(for profile: POIProfile, among profiles: [POIProfile]) -> String? {
+        let lines = overlay(for: profiles).warnings(forProfileNamed: profile.name)
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     /// Tree people whose name contains every typed token; capped so a
     /// one-letter search can't render 16k rows.
     func searchTreePeople(_ typed: String, limit: Int = 25) -> [TreePersonChoice] {

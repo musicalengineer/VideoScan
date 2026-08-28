@@ -56,8 +56,8 @@ extension ArchivistGraphExecutor {
         let names = hits.map { hit -> String in
             // One hop with a plain word: just the name. Derived (composed)
             // relations show the route so the inference is checkable.
-            if hit.hops.count == 1 { return hit.member.name }
-            return "\(hit.member.name) (\(overlay.route(for: hit.hops)))"
+            if hit.hops.count == 1 { return hit.member.displayName }
+            return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
         }
         let storedOn = Array(Set(hits.flatMap { $0.hops.map(\.storedOn) })).sorted()
         let evidence = ArchivistGraphEvidence(
@@ -110,7 +110,7 @@ extension ArchivistGraphExecutor {
               let memberA = overlay.member(a), let memberB = overlay.member(b) else { return nil }
 
         let voiceA = query.voices[0], voiceB = query.voices[1]
-        let subjectB = voiceB == .archivist ? "I" : voiceB == .owner ? "You" : memberB.name
+        let subjectB = voiceB == .archivist ? "I" : voiceB == .owner ? "You" : memberB.displayName
         let verb = voiceB == .archivist ? "am" : voiceB == .owner ? "are" : "is"
         let possessiveA = voiceA == .archivist ? "my" : voiceA == .owner ? "your"
             : KinshipDisplay.possessive(memberA.name)

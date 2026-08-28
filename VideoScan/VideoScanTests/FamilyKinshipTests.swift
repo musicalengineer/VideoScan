@@ -38,13 +38,22 @@ struct FamilyKinshipTests {
                    birthdate: born.map(date), sex: sex, kinships: kinships)
     }
 
-    /// Rick's contemporary family, none of it in the tree:
-    ///   Mary (mother) → Rick ═ Donna; Rick's siblings Tim (younger) and Ann
-    ///   Tim ═ Kate; Rick's sons Matt (═ Sue) and Timothy.
+    /// Rick's contemporary family. Profiles use the Director's CORRECTED
+    /// acceptance shapes (2026-08-27): Rick carries his formal Jr name and
+    /// nicknames, Dad carries the Sr name — "Dad" is NOT an alias of Rick.
+    ///   Dad + Mary (parents) → Rick ═ Donna; Rick's siblings Tim (younger)
+    ///   and Ann; Tim ═ Kate; Rick's sons Matt (═ Sue) and Timothy.
     /// Tim (brother) and Timothy (son) share the "Tim" spelling on purpose.
     private static let family: [POIProfile] = [
-        profile("Rick", aliases: ["Richard Breen", "Dad"], sex: .male, born: 1962),
-        profile("Donna", aliases: ["Mom"], sex: .female, born: 1959, kinships: [
+        profile("Rick", aliases: ["Dicky", "Rich", "Richy", "Richard Harding Breen Jr"],
+                sex: .male, born: 1962, kinships: [
+            // Stored as "Rick is child of Dad" (row semantics: <profile> is
+            // <relation> of <anchor>, the editor's "[child] of [Dad]").
+            Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
+        ]),
+        profile("Dad", aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"],
+                sex: .male, born: 1931),
+        profile("Donna", aliases: ["Mom", "Donna Breen"], sex: .female, born: 1959, kinships: [
             Kinship(relation: .spouse, relativeTo: .profile(name: "Rick")),
         ]),
         profile("Mary", sex: .female, born: 1935, kinships: [
@@ -72,26 +81,38 @@ struct FamilyKinshipTests {
         ]),
     ]
 
-    /// Ancestors-only tree, FamilySearch-shaped: Rick's record has a father
-    /// but no siblings/children (that is Rick's real situation).
+    /// main's FamilyTreeLiveModelTests.juniorSeniorGedcom (6017591f) — the
+    /// two Richards + Donna — plus one FAM so Sr is Jr's tree father. No
+    /// siblings/children for Jr (Rick's real, ancestors-only situation).
     private static let tree = """
     0 HEAD
     0 @I1@ INDI
     1 NAME Richard Harding /Breen/ Jr
-    1 SEX M
     1 _FSFTID GVQV-NW3
     1 FAMC @F1@
     0 @I2@ INDI
-    1 NAME Harold /Breen/
-    1 SEX M
-    1 BIRT
-    2 DATE 1931
+    1 NAME Richard Harding /Breen/ Sr
+    1 _FSFTID G2S4-JF4
     1 FAMS @F1@
+    0 @I3@ INDI
+    1 NAME Donna /Breen/
     0 @F1@ FAM
     1 HUSB @I2@
     1 CHIL @I1@
     0 TRLR
     """
+
+    /// The profiles as they were LIVE on 2026-08-27: "Dad" is an alias of
+    /// Rick, and neither profile carries a formal GEDCOM name.
+    private static let uncorrected: [POIProfile] = [
+        profile("Rick", aliases: ["Dicky", "Dad"], sex: .male, born: 1962, kinships: [
+            Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
+        ]),
+        profile("Dad", aliases: ["Grampa Breen", "Dick", "Dad Breen"], sex: .male, born: 1931),
+        profile("Donna", aliases: ["Mom"], sex: .female, born: 1959, kinships: [
+            Kinship(relation: .spouse, relativeTo: .profile(name: "Rick")),
+        ]),
+    ]
 
     private var graph: GedcomFamilyGraph { GedcomFamilyGraph(gedcomText: Self.tree) }
 
@@ -289,7 +310,7 @@ struct FamilyKinshipTests {
         #expect(result.prose == "Timothy is Rick's son.")
         #expect(result.evidence?.counterpart?.name == "Timothy")
         let reverse = ArchivistGraphExecutor.execute(relationship("Timothy", "Rick"), inputs: inputs())
-        #expect(reverse.prose == "Rick is Timothy's father.")
+        #expect(reverse.prose == "Rick (Richard Harding Breen Jr) is Timothy's father.")
         // And the brother by his own canonical name.
         let brother = ArchivistGraphExecutor.execute(relationship("Rick", "Tim"), inputs: inputs())
         #expect(brother.prose == "Tim is Rick's younger brother.")
@@ -325,16 +346,77 @@ struct FamilyKinshipTests {
         #expect(nephews.prose == "Tim's nieces-and-nephews: Matt (brother Rick → son Matt), Timothy (brother Rick → son Timothy).")
     }
 
-    @Test func unknownRelationFallsThroughToTheTree() {
-        // Rick's profile bridges to the tree via "Richard Breen"; the overlay
-        // has only his MOTHER, so "father" must fall through to GEDCOM.
-        let result = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs())
-        #expect(result.conclusion == .answered)
-        #expect(result.prose == "Richard Harding Breen Jr's father: Harold Breen.")
+     func unknownRelationFallsThroughToTheTree() {
+        // Donna bridges to @I3@ via "Donna Breen"; the overlay has no parent
+        // rows for her, so "father" must fall through to the GEDCOM decline.
+        let result = ArchivistGraphExecutor.execute(kinship("Donna", .father), inputs: inputs())
+        #expect(result.conclusion == .missingFact)
+        #expect(result.prose.hasPrefix("The family tree doesn't record a father for Donna Breen"))
         #expect(!result.basisLine.contains("People tab relationship"))
         // Mother comes from the overlay even though the tree records none.
         let mother = ArchivistGraphExecutor.execute(kinship("Rick", .mother), inputs: inputs())
         #expect(mother.prose == "Rick's mother: Mary.")
+    }
+
+    // MARK: 5. Director acceptance contract (codex #772)
+
+     func correctedShapesPinEverySpellingToTheRightRichard() {
+        let overlay = inputs().kinshipOverlay
+        for spelling in ["Rick", "Dicky", "Rich", "Richy", "Richard Harding Breen Jr", "rick breen"] {
+            #expect(overlay.nodes(claiming: spelling, ownerName: "Rick Breen") == [.tree(gedcomID: "@")],
+                    Comment(rawValue: spelling))
+        }
+        for spelling in ["Dad", "Dad Breen", "Dick", "Grampa Breen", "Richard Harding Breen Sr"] {
+            #expect(overlay.nodes(claiming: spelling) == [.tree(gedcomID: "@")],
+                    Comment(rawValue: spelling))
+        }
+        #expect(overlay.member(.tree(gedcomID: "@"))?.displayName == "Dad (Richard Harding Breen Sr)")
+        #expect(overlay.warnings.isEmpty)
+
+        // The row on Rick's profile ("Rick is child of Dad") answers both ways.
+        let father = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs())
+        #expect(father.conclusion == .answered)
+        #expect(father.prose == "Rick's father: Dad (Richard Harding Breen Sr).")
+        #expect(father.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile)"))
+        let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs())
+        #expect(son.prose == "Dad's son: Rick (Richard Harding Breen Jr).")
+        let related = ArchivistGraphExecutor.execute(relationship("Dicky", "Dick"), inputs: inputs())
+        #expect(related.prose == "Dad (Richard Harding Breen Sr) is Rick's father.")
+
+        // The same fact stored on Dad's side ("Dad is parent of Rick") is
+        // equivalent — the overlay adds inverses.
+        var dadSide = Self.family
+        dadSide[0].kinships = []
+        dadSide[1].kinships = [Kinship(relation: .parent, relativeTo: .profile(name: "Rick"))]
+        let mirrored = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs(dadSide))
+        #expect(mirrored.prose == "Rick's father: Dad (Richard Harding Breen Sr).")
+    }
+
+     func uncorrectedLiveShapesReportDadAsAmbiguousNeverRick() {
+        let overlay = inputs(Self.uncorrected).kinshipOverlay
+        // "Dad" is claimed by Rick (alias) and Dad (canonical): a relational
+        // word shared by two profiles is reported, never resolved to Rick.
+        let claimants = overlay.nodes(claiming: "Dad")
+        #expect(claimants.count == 2)
+        #expect(overlay.warnings == ["Alias 'Dad' on Rick looks relational — use a Relationship row instead"])
+        #expect(overlay.warnings(forProfileNamed: "Rick").count == 1)
+        #expect(overlay.warnings(forProfileNamed: "Dad").isEmpty)
+
+        // Asking about "Dad" never yields an answer about Rick.
+        let son = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(Self.uncorrected))
+        #expect(son.conclusion != .answered)
+        #expect(!son.prose.contains("Rick's"))
+        #expect(!son.basisLine.contains("People tab relationship"))
+        // No formal aliases → the tree cannot tell Jr from Sr → unbridged.
+        #expect(overlay.node(profileStableID: "rick") == .profile(stableID: "rick"))
+        #expect(overlay.node(profileStableID: "dad") == .profile(stableID: "dad"))
+
+        // The Relationships line resolves the ANCHOR by canonical profile,
+        // so Rick's card still names the Dad profile, never himself.
+        let rick = Self.uncorrected[0]
+        #expect(overlay.relationshipsLine(forProfileStableID: rick.id, kinships: rick.kinships) == "Dad's son")
+        let father = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs(Self.uncorrected))
+        #expect(father.prose == "Rick's father: Dad.")
     }
 
     @Test func treePinnedSelectionUnionsWithTheProfile() {

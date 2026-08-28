@@ -26,7 +26,10 @@
 // detached task is a cheap logical copy, not a deep clone.
 
 import Foundation
+import OSLog
 import VideoScanCore
+
+private let kinshipLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "kinship")
 
 struct FamilyKinshipOverlay: Sendable {
 
@@ -59,6 +62,16 @@ struct FamilyKinshipOverlay: Sendable {
         let birthdate: Date?
         let profileStableID: String?
         let gedcomID: String?
+        /// The bridged tree record's name when it differs from `name`
+        /// ("Dad" → "Richard Harding Breen Sr"), so answers can show both.
+        var treeName: String? = nil
+
+        /// "Dad (Richard Harding Breen Sr)" / "Tim".
+        var displayName: String {
+            guard let treeName, PersonResolver.normalize(treeName) != PersonResolver.normalize(name)
+            else { return name }
+            return "\(name) (\(treeName))"
+        }
     }
 
     struct Edge: Hashable, Sendable {
@@ -83,6 +96,17 @@ struct FamilyKinshipOverlay: Sendable {
     private var nodesBySpelling: [String: [Node]] = [:]
     private var canonicalNodesBySpelling: [String: [Node]] = [:]
     private let graph: GedcomFamilyGraph?
+    /// Non-blocking data-hygiene nudges found while building (2026-08-28,
+    /// codex #772): an alias that is a relational WORD ("Dad" on Rick) is
+    /// the old way of saying a relationship and collides with the profile
+    /// that IS Dad. Never migrated silently — Rick edits his data — only
+    /// surfaced here (and in videoscan.log) for the People-tab badge.
+    private(set) var warnings: [String] = []
+    /// Normalized spellings that are relational words (dad, mom, …).
+    static let relationalWords: Set<String> = [
+        "dad", "daddy", "mom", "mommy", "mother", "father", "grampa", "grandpa",
+        "grandma", "gramma", "nana", "papa", "gran", "granny", "pop", "pops",
+    ]
 
     var isEmpty: Bool { outgoing.isEmpty }
     var edgeCount: Int { outgoing.values.reduce(0) { $0 + $1.count } }
@@ -114,7 +138,15 @@ struct FamilyKinshipOverlay: Sendable {
                 members[node] = Member(
                     node: node, name: snapshot.canonicalName, sex: sex,
                     birthdate: birth, profileStableID: snapshot.stableID,
-                    gedcomID: bridged?.id)
+                    gedcomID: bridged?.id, treeName: bridged?.name)
+            }
+            let canonicalWord = PersonResolver.normalize(snapshot.canonicalName)
+            for alias in snapshot.aliases {
+                let word = PersonResolver.normalize(alias)
+                guard Self.relationalWords.contains(word), word != canonicalWord else { continue }
+                let line = "Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead"
+                warnings.append(line)
+                kinshipLog.warning("\(line, privacy: .public)")
             }
             for spelling in [snapshot.canonicalName] + snapshot.aliases {
                 let key = PersonResolver.normalize(spelling)
@@ -240,6 +272,11 @@ struct FamilyKinshipOverlay: Sendable {
     func nodes(claiming typed: String, ownerName: String? = nil) -> [Node] {
         let key = PersonResolver.normalize(typed)
         guard !key.isEmpty else { return [] }
+        // A relational WORD claimed by several profiles ("Dad" on both Rick
+        // and Dad, live 2026-08-27) is a data smell, not a nickname: report
+        // every claimant (ambiguous) instead of letting the canonical one
+        // win — the caller must ask, never silently pick Rick.
+        if Self.relationalWords.contains(key), let any = nodesBySpelling[key], any.count > 1 { return any }
         if let exact = canonicalNodesBySpelling[key], exact.count == 1 { return exact }
         if let any = nodesBySpelling[key], !any.isEmpty { return any }
         // Owner spellings: try the owner's first token as a canonical name.
@@ -254,6 +291,11 @@ struct FamilyKinshipOverlay: Sendable {
             if people.count == 1 { return [.tree(gedcomID: people[0].id)] }
         }
         return []
+    }
+
+    /// Warnings mentioning this profile (for the card badge).
+    func warnings(forProfileNamed name: String) -> [String] {
+        warnings.filter { $0.hasSuffix(" on \(name) looks relational — use a Relationship row instead") }
     }
 
     /// Does this vertex have any overlay knowledge at all?

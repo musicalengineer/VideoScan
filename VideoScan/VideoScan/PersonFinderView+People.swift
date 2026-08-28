@@ -226,6 +226,8 @@ extension PersonFinderView {
                                        cardWidth: personCardWidth,
                                        nameFontSize: personNameFontSize,
                                        relationshipsLine: kinshipCenter.relationshipsLine(
+                                           for: profile, among: model.savedProfiles),
+                                       aliasWarning: kinshipCenter.aliasWarning(
                                            for: profile, among: model.savedProfiles))
                                 // Holdout Review badge — top-trailing over
                                 // the portrait. The Button in the overlay
