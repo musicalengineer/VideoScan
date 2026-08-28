@@ -34,7 +34,7 @@ private let twoRootGedcom = """
 0 @I2@ INDI
 1 NAME John /Allen/ VII
 1 SEX M
-1 _FSFTID KWXX-ALL7
+1 _FSFTID KWXX-AL7
 1 BIRT
 2 DATE 1495
 0 @I3@ INDI
@@ -48,7 +48,7 @@ private let twoRootGedcom = """
 
 /// Same people, but John Allen is gone (a re-pull that dropped him).
 private let withoutAllenGedcom = twoRootGedcom
-    .replacingOccurrences(of: "0 @I2@ INDI\n1 NAME John /Allen/ VII\n1 SEX M\n1 _FSFTID KWXX-ALL7\n1 BIRT\n2 DATE 1495\n",
+    .replacingOccurrences(of: "0 @I2@ INDI\n1 NAME John /Allen/ VII\n1 SEX M\n1 _FSFTID KWXX-AL7\n1 BIRT\n2 DATE 1495\n",
                           with: "")
 
 @Suite("Family Tree — default focus and remembered focus")
@@ -65,10 +65,25 @@ struct FamilyTreeDefaultFocusTests {
             focusDefaults: defaults)
     }
 
+    /// Fixture sanity: a FamilySearch ID is 4-3 alphanumerics; a malformed
+    /// one is silently dropped by the parser and the pointer gets remembered
+    /// instead (that is exactly how the first cut of this file failed).
+    @Test func fixtureCarriesTheIDsTheTestsRelyOn() {
+        let graph = GedcomFamilyGraph(gedcomText: twoRootGedcom)
+        #expect(graph.rootPersonIDs == ["@I1@", "@I9@"])
+        #expect(graph.person(familySearchID: "GVQV-NW3")?.id == "@I1@")
+        #expect(graph.person(familySearchID: "G2CL-86B")?.id == "@I9@")
+        #expect(graph.person(familySearchID: "KWXX-AL7")?.id == "@I2@")
+        #expect(graph.people["@I3@"]?.familySearchID == nil)
+        #expect(GedcomFamilyGraph(gedcomText: withoutAllenGedcom).people["@I2@"] == nil)
+    }
+
     @Test func freshInstallOpensOnTheFirstRootNotTheAlphabeticalFirst() {
         let sink = InMemoryLogSink()
         let model = model(defaults())
         withAppLog(sink) { model.install(graph: GedcomFamilyGraph(gedcomText: twoRootGedcom)) }
+        #expect(model.isLive)
+        #expect(model.peopleCount == 4)
         #expect(model.filteredPeople.first?.name.contains("Allen") == true)   // the old silent default
         #expect(model.selectedID == "@I1@")
         #expect(sink.joined.contains("[family-tree] default focus → Richard Harding Breen Jr (first root)"))
@@ -79,7 +94,7 @@ struct FamilyTreeDefaultFocusTests {
         let model = model(d)
         model.install(graph: GedcomFamilyGraph(gedcomText: twoRootGedcom))
         model.select("@I2@")
-        #expect(d.string(forKey: FamilyTreeLiveModel.lastFocusDefaultsKey) == "KWXX-ALL7")
+        #expect(d.string(forKey: FamilyTreeLiveModel.lastFocusDefaultsKey) == "KWXX-AL7")
 
         // Same instance, selection dropped (as a miss does), then re-install.
         model.install(graph: nil)                                  // leave the tab → demo
@@ -94,7 +109,7 @@ struct FamilyTreeDefaultFocusTests {
 
     @Test func rememberedPersonMissingFallsBackToTheRootWithALogLine() {
         let d = defaults()
-        d.set("KWXX-ALL7", forKey: FamilyTreeLiveModel.lastFocusDefaultsKey)
+        d.set("KWXX-AL7", forKey: FamilyTreeLiveModel.lastFocusDefaultsKey)
         let sink = InMemoryLogSink()
         let model = model(d)
         withAppLog(sink) { model.install(graph: GedcomFamilyGraph(gedcomText: withoutAllenGedcom)) }
