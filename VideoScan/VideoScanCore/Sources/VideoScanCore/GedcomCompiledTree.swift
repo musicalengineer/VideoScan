@@ -25,7 +25,7 @@ import Foundation
 public enum GedcomCompiledTree {
 
     /// Bump when the encoding changes so older artifacts are recompiled.
-    public static let codecVersion: UInt32 = 2
+    public static let codecVersion: UInt32 = 3
     static let magic: [UInt8] = Array("VSFT".utf8)
 
     public enum CodecError: Error, Equatable {
@@ -74,6 +74,9 @@ public enum GedcomCompiledTree {
         w.u32(graph.isMergedArtifact ? 1 : 0)
         w.u32(UInt32(clamping: graph.droppedLineCount))
         w.ref(graph.headNote)
+        // Codec 3: per-source provenance (name, sha256, dropped lines) — codex #794-4.
+        w.u32(UInt32(graph.sourceProvenance.count))
+        for p in graph.sourceProvenance { w.ref(p.name); w.ref(p.sha256); w.u32(UInt32(clamping: p.droppedLineCount)) }
 
         // Index
         w.i32s(index.nameRank)
@@ -187,6 +190,12 @@ public enum GedcomCompiledTree {
             let isMerged = try r.u32() != 0
             let droppedLines = Int(try r.u32())
             let headNote = try r.optionalString()
+            let provenanceCount = Int(try r.u32())
+            var provenance: [GedcomFamilyGraph.SourceProvenance] = []
+            provenance.reserveCapacity(provenanceCount)
+            for _ in 0..<provenanceCount {
+                provenance.append(.init(name: try r.string(), sha256: try r.optionalString(), droppedLineCount: Int(try r.u32())))
+            }
 
             let nameRank = try r.i32s(expected: personCount)
             let parentStart = try r.i32s(expected: personCount + 1)
@@ -233,13 +242,14 @@ public enum GedcomCompiledTree {
                 marriedStart: marriedStart, marriedIDs: marriedIDs,
                 surnameStart: surnameStart, surnameIDs: surnameIDs,
                 sidebarOrder: sidebarOrder, sidebarHaystack: haystack, sidebarStart: sidebarStart)
-            let graph = GedcomFamilyGraph(
+            var graph = GedcomFamilyGraph(
                 decodedPeople: people, families: families, rootPersonIDs: roots,
                 personIDByFamilySearchID: fsIndex,
                 sourceFileName: sourceFileName, sourceDirectory: sourceDirectory,
                 sourceModifiedAt: modified.isNaN ? nil : Date(timeIntervalSince1970: modified),
                 sourceFileNames: sourceFileNames, isMergedArtifact: isMerged,
                 droppedLineCount: droppedLines, headNote: headNote)
+            graph.sourceProvenance = provenance
             graph.indexBox.install(index)
             return graph
         }
@@ -268,6 +278,7 @@ public enum GedcomCompiledTree {
         report.equal("isMergedArtifact", decoded.isMergedArtifact, source.isMergedArtifact)
         report.equal("droppedLineCount", decoded.droppedLineCount, source.droppedLineCount)
         report.equal("headNote", decoded.headNote, source.headNote)
+        report.equal("sourceProvenance", decoded.sourceProvenance, source.sourceProvenance)
         report.equal("sourceFileName", decoded.sourceFileName, source.sourceFileName)
         report.equal("sourceDirectory", decoded.sourceDirectory, source.sourceDirectory)
         // Stored as a Double of seconds-since-1970; allow the last-ulp wobble
