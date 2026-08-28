@@ -300,8 +300,10 @@ struct FamilyGraphCompiledStoreTests {
         _ = box.loader(store).loadNewestOutcome()
         var pointer = try #require(store.readPointer())
         let gen1 = pointer.current
-        // Simulate an artifact written by an older build.
-        pointer.index = pointer.index &+ 1
+        // Simulate a pointer written by an older build: store schema 1
+        // (pre full-SHA source keys), current schema is 2 (codex #805).
+        #expect(FamilyGraphCompiledStore.schemaVersion > 1)
+        pointer.schema = 1
         try JSONEncoder().encode(pointer).write(to: store.pointerURL)
 
         #expect(store.load(sources: [source]) == nil)

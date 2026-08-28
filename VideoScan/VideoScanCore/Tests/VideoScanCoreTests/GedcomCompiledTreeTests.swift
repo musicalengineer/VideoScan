@@ -352,7 +352,13 @@ final class GedcomCompiledTreeTests: XCTestCase {
                 if FileManager.default.fileExists(atPath: store.pointerURL.path) {
                     reads += 1
                     if let p = store.readPointer() {
+                        // The artifact current.json points at must ALWAYS decode
+                        // (checksum included) — a prune or a half-written
+                        // promote would show up here (codex #805).
                         if store.readManifest(p.current) == nil { unreadableCurrent += 1 }
+                        else if let data = try? Data(contentsOf: store.artifactURL(p.current)),
+                                (try? GedcomCompiledTree.decode(data)) != nil {}
+                        else { unreadableCurrent += 1 }
                     } else { torn += 1 }
                 }
             }
