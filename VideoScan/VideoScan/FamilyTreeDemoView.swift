@@ -22,6 +22,11 @@ struct FamilyTreeDemoView: View {
     private let usesInjectedModel: Bool
     @State private var zoom: Double = 0.88
     @State private var selectedPhotoItem: PhotosPickerItem?
+    /// Apple Photos picker, presented from the card's context menu / the
+    /// inspector's camera menu (2026-08-28: the photo buttons left the
+    /// inspector so its width goes to genealogy). `.photosPicker(isPresented:)`
+    /// is the programmatic form of the `PhotosPicker` button.
+    @State private var showApplePhotosPicker = false
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -121,6 +126,8 @@ struct FamilyTreeDemoView: View {
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
+        .photosPicker(isPresented: $showApplePhotosPicker,
+                      selection: $selectedPhotoItem, matching: .images)
         .sheet(item: $adjustSource) { source in
             FamilyPhotoAdjustSheet(
                 source: source,
@@ -438,6 +445,15 @@ struct FamilyTreeDemoView: View {
                                 isSelected: card.person.id == model.selectedID,
                                 onSelect: { model.select(card.person.id) },
                                 onPickPhoto: { pickPhotoFile(for: card.person.id) },
+                                onApplePhoto: {
+                                    model.select(card.person.id)
+                                    showApplePhotosPicker = true
+                                },
+                                onAdjustPhoto: {
+                                    model.select(card.person.id)
+                                    presentAdjustPhoto(for: card.person)
+                                },
+                                canAdjustPhoto: model.isLive,
                                 onAskHallie: { name in
                                     catalogModel.archivistAskRequest = "tell me about \(name)"
                                     openWindow(id: "archivist")
@@ -503,38 +519,55 @@ struct FamilyTreeDemoView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let person = model.selectedPerson {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(model.isLive ? "GEDCOM Person" : "Demo Person")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        readOnlyField("Name", person.name)
-                        readOnlyField("Life dates", person.years ?? "not recorded")
-                        readOnlyField("Surname", person.surname ?? "not recorded")
-                        readOnlyField(model.isLive ? "GEDCOM ID" : "Reference", person.reference)
-
-                        HStack(spacing: 8) {
-                            Button {
-                                pickPhotoFile(for: person.id)
-                            } label: {
-                                Label("Pick Photo", systemImage: "photo")
-                            }
-                            .buttonStyle(.bordered)
-
-                            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                                Label("Apple Photos", systemImage: "photo.on.rectangle.angled")
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button {
-                                presentAdjustPhoto(for: person)
-                            } label: {
-                                Label("Adjust Photo…", systemImage: "crop")
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(!model.isLive)
-                            .help("Center and crop this person's card photo; the original is kept")
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(model.isLive ? "GEDCOM Person" : "Demo Person")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            // The photo actions moved to right-click /
+                            // double-click on the card (Rick 2026-08-28);
+                            // this small menu is the discoverable fallback.
+                            photoMenu(for: person)
                         }
-                        .controlSize(.small)
+
+                        Text(person.name)
+                            .font(.system(size: 15, weight: .semibold))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        // Born 1615 (Plymouth, Massachusetts)
+                        // Died 1690, age 75 (Sudbury, Massachusetts Bay Colony)
+                        if let life = model.selectedLife, !life.lines.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(life.lines, id: \.self) { line in
+                                    Text(line)
+                                        .font(.system(size: 12.5))
+                                        .textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        } else if let years = person.years {
+                            Text(years)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("No dates recorded")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack(spacing: 10) {
+                            if let surname = person.surname {
+                                Text(surname)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            copyableID(model.isLive ? "GEDCOM" : "Ref", person.reference)
+                            if let fsID = model.selectedFamilySearchID {
+                                copyableID("FS", fsID)
+                            }
+                        }
                         if let adjustError {
                             Text(adjustError)
                                 .font(.system(size: 11))
@@ -815,8 +848,16 @@ struct FamilyTreeDemoView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             relativeGroup("Parents", relatives.parents, icon: "arrow.up")
-            relativeGroup("Spouses", relatives.spouses, icon: "heart")
-            relativeGroup("Children", relatives.children, icon: "arrow.down")
+            if !model.selectedMarriages.isEmpty {
+                // Live tree: one row per recorded marriage, with the MARR
+                // year when the family has one ("m. 1952").
+                marriagesGroup(model.selectedMarriages)
+            } else {
+                relativeGroup("Spouses", relatives.spouses, icon: "heart")
+            }
+            relativeGroup(relatives.children.count > 1
+                          ? "Children (\(relatives.children.count))" : "Children",
+                          relatives.children, icon: "arrow.down")
             relativeGroup("Siblings", relatives.siblings, icon: "arrow.left.arrow.right")
         }
         .padding(14)
@@ -853,7 +894,87 @@ struct FamilyTreeDemoView: View {
         }
     }
 
+    /// Spouses with the marriage year beside each ("m. 1952"). A family
+    /// with no named spouse still lists its marriage so the date isn't lost.
+    @ViewBuilder
+    private func marriagesGroup(_ marriages: [FamilyTreeMarriage]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Spouses", systemImage: "heart")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            ForEach(marriages) { marriage in
+                Button {
+                    if let spouse = marriage.spouse { model.select(spouse.id) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(marriage.spouse?.name ?? "(spouse not recorded)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(marriage.spouse == nil ? .secondary : .primary)
+                        if let years = marriage.spouse?.years {
+                            Text(years)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let married = marriage.marriedYear {
+                            Text("m. \(married)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(marriage.spouse == nil)
+            }
+        }
+    }
+
     // MARK: Small pieces
+
+    /// Camera menu in the inspector header: the same three photo actions
+    /// that live on the card's right-click, for anyone who never right-clicks.
+    private func photoMenu(for person: FamilyTreePersonSummary) -> some View {
+        Menu {
+            Button("Pick a photo…") { pickPhotoFile(for: person.id) }
+            Button("Apple Photos…") {
+                model.select(person.id)
+                showApplePhotosPicker = true
+            }
+            Button("Adjust Photo…") { presentAdjustPhoto(for: person) }
+                .disabled(!model.isLive)
+        } label: {
+            Image(systemName: "camera")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Pick, import or adjust this person's card photo (also right-click or double-click the card)")
+    }
+
+    /// "FS  G7XY-ABC" in monospace with a copy button — small on purpose;
+    /// the pane's width belongs to the genealogy text.
+    private func copyableID(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(value, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 9))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Copy \(value)")
+        }
+    }
 
     private func statRow(_ label: String, _ value: String) -> some View {
         HStack {
@@ -934,7 +1055,7 @@ struct FamilyTreeDemoView: View {
                 image = nil
             }
             guard let image else {
-                adjustError = "No photo yet — use Pick Photo or Apple Photos first."
+                adjustError = "No photo yet — use Pick a photo or Apple Photos first (right-click the card)."
                 return
             }
             adjustError = nil
@@ -985,7 +1106,12 @@ private struct FamilyTreePersonCard: View {
     let card: FamilyTreeCard
     let isSelected: Bool
     let onSelect: () -> Void
+    /// Photo actions (Rick 2026-08-28): right-click menu or double-click on
+    /// the card, so the inspector keeps its width for genealogy.
     let onPickPhoto: () -> Void
+    let onApplePhoto: () -> Void
+    let onAdjustPhoto: () -> Void
+    let canAdjustPhoto: Bool
     /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
@@ -1031,12 +1157,7 @@ private struct FamilyTreePersonCard: View {
                     }
                 }
                 .overlay(Circle().stroke(accent.opacity(0.7), lineWidth: 1.5))
-                .contextMenu {
-                    Button("Pick Photo") {
-                        onSelect()
-                        onPickPhoto()
-                    }
-                }
+                .contextMenu { photoMenuItems }
 
                 Text(person.name)
                     .font(.system(size: 14, weight: .semibold))
@@ -1064,6 +1185,13 @@ private struct FamilyTreePersonCard: View {
         )
         .shadow(color: .black.opacity(0.35), radius: 10, y: 6)
         .contentShape(Rectangle())
+        // Order matters: SwiftUI gives the earlier `count: 2` recognizer
+        // first refusal, so a double-click opens the photo picker and a
+        // lone click (after the double-click window lapses) still selects.
+        .onTapGesture(count: 2) {
+            onSelect()
+            onPickPhoto()
+        }
         .onTapGesture {
             onSelect()
         }
@@ -1076,15 +1204,30 @@ private struct FamilyTreePersonCard: View {
                 onSelect()
             }
             Divider()
-            Button("Pick Photo") {
-                onSelect()
-                onPickPhoto()
-            }
+            photoMenuItems
             Divider()
             Button("Show \(person.name) in People tab") {
                 onShowInPeople(person.name)
             }
         }
+    }
+
+    /// The three photo actions, shared by the portrait's and the card's
+    /// context menus. `@ViewBuilder` on a computed property ≈ a function
+    /// that returns a small view tree without needing an explicit container.
+    @ViewBuilder
+    private var photoMenuItems: some View {
+        Button("Pick a photo…") {
+            onSelect()
+            onPickPhoto()
+        }
+        Button("Apple Photos…") {
+            onApplePhoto()
+        }
+        Button("Adjust Photo…") {
+            onAdjustPhoto()
+        }
+        .disabled(!canAdjustPhoto)
     }
 }
 
