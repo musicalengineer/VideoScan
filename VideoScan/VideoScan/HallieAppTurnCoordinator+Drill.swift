@@ -35,7 +35,7 @@ extension HallieAppTurnCoordinator {
         typealias Mode = HalliePronunciationDrillMode
         if var session = drill {
             var store = dependencies.loadDrillStore()
-            switch Mode.classify(question, session: session) {
+            switch Mode.classify(question, session: session, isKnownName: { isKnownName($0, dependencies: dependencies) }) {
             case .leave:
                 logSession(session)
                 return nil

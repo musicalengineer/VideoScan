@@ -205,7 +205,7 @@ struct HallieRepairTurnTests {
         }
         #expect(again.prose.contains("You asked “\(Self.originalAsk)”"))
         // Small talk and help never become the exchange to repair.
-        memory.record(intent: nil, result: Exec.commandResult(.help))
+        memory.record(intent: nil, result: Exec.commandResult(.help()))
         #expect(memory.lastExchange?.question == Self.originalAsk)
         memory.reset()
         #expect(memory.lastExchange == nil)

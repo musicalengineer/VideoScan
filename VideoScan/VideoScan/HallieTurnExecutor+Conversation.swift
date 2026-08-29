@@ -785,16 +785,17 @@ extension HallieTurnExecutor {
     /// Help card / small talk / reset — deterministic, never a decline.
     static func commandResult(_ command: ArchivistConversationCommand) -> Result {
         switch command {
-        case .help:
+        case .help(let topic):
+            let examples = topic.map(ArchivistConversationCommand.helpExamples) ?? ArchivistConversationCommand.helpExamples
             return Result(
                 route: .help,
                 outcome: .answered,
-                prose: ArchivistConversationCommand.helpCard,
+                prose: topic.map(ArchivistConversationCommand.helpSection) ?? ArchivistConversationCommand.helpCard,
                 basisLine: "Basis: help card; no model call, no catalog query.",
                 queryDescription: "help",
                 citations: [],
                 catalogPersonName: nil,
-                offeredActions: ArchivistConversationCommand.helpExamples.map {
+                offeredActions: examples.map {
                     .ask(question: $0.question, label: $0.label)
                 })
         case .smalltalk(let kind):

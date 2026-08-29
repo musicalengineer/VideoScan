@@ -99,6 +99,30 @@ extension HallieAppTurnCoordinator {
                                  drill: nil, telling: telling, referent: referent, dependencies: dependencies,
                                  prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
         }
+        // Free-form (live miss #17): a pronounce-word, typo-tolerant, plus
+        // a name the archive knows — a teach, a question, or a kept hint.
+        // Never translation, never a search.
+        if let free = HalliePronunciationFreeform.detect(question, isKnownName: { isKnownName($0, dependencies: dependencies) }) {
+            switch free.kind {
+            case .teach:
+                return teachResponse(word: free.word, alternatives: free.alternatives, hint: nil, freeform: free,
+                                     telling: telling, referent: referent, dependencies: dependencies)
+            case .query:
+                if let answered = queryResponse(.name(free.word), telling: telling, referent: referent, dependencies: dependencies) {
+                    return answered
+                }
+            case .hintOnly:
+                var store = dependencies.loadDrillStore()
+                store.set(name: free.word, status: store.status(for: FamilyIdentityText.normalized(free.word)), hint: free.rawHint)
+                let manifest = PronunciationDrillManifest.build(
+                    list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
+                _ = try? dependencies.saveDrillStore(store, manifest)
+                return pronunciationReply(
+                    HalliePronunciationFreeform.hintOnlyReply(free), outcome: .answered,
+                    basis: "listening — pronunciation hint kept, needs a respelling",
+                    description: "pronunciation hint", telling: telling, referent: referent)
+            }
+        }
         return nil
     }
 
@@ -106,6 +130,7 @@ extension HallieAppTurnCoordinator {
     /// write, confirm with the read-back, note it on the drill sheet.
     private static func teachResponse(
         word: String, alternatives: [String], hint: HalliePronunciationHintTelling?,
+        freeform: HallieFreeformPronunciation? = nil,
         telling: HallieTellingMode.Session?, referent: CapturedReferent, dependencies: Dependencies
     ) -> Response {
         let told = HallieTellingMode.PronunciationTelling(word: word, alternatives: alternatives)
@@ -118,15 +143,17 @@ extension HallieAppTurnCoordinator {
             case .file:
                 scope = .file
             }
-            let prose = hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
+            let prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
+                ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
                 ?? HallieTellingMode.pronunciationReply(told, scope: scope)
             // The sheet learns of a one-off teach so the drill never asks
             // for a name Rick just corrected. Best effort: the lexicon is
             // the truth; the sheet is bookkeeping.
             var store = dependencies.loadDrillStore()
+            let derived = hint != nil || freeform?.explicit == false
             store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
                       alternatives: alternatives, phonemes: derivePhonemes(alternatives: alternatives, hint: hint?.hint),
-                      origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
+                      origin: derived ? .derived : .taught, hint: hint?.hint.description ?? freeform?.rawHint)
             let manifest = PronunciationDrillManifest.build(
                 list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
             if (try? dependencies.saveDrillStore(store, manifest)) == nil {

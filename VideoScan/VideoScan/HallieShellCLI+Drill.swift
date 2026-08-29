@@ -24,7 +24,7 @@ extension HallieShellCLI {
         typealias Mode = HalliePronunciationDrillMode
         if var session = state.drill {
             var store = dependencies.loadDrillStore()
-            switch Mode.classify(text, session: session) {
+            switch Mode.classify(text, session: session, isKnownName: { knownSpelling($0, state: state, dependencies: dependencies) != nil }) {
             case .leave:
                 HallieAppTurnCoordinator.logSession(session)
                 state.drill = nil

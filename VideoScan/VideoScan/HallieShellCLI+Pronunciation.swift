@@ -45,11 +45,36 @@ extension HallieShellCLI {
                                       state: &state, output: output, dependencies: dependencies,
                                       prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
         }
+        // Free-form (live miss #17): typo-tolerant pronounce-word + known name.
+        let known = { (token: String) in knownSpelling(token, state: state, dependencies: dependencies) != nil }
+        if let free = HalliePronunciationFreeform.detect(text, isKnownName: known) {
+            switch free.kind {
+            case .teach:
+                return await teachOneOff(word: free.word, alternatives: free.alternatives, hint: nil, freeform: free,
+                                         options: options, state: &state, output: output, dependencies: dependencies)
+            case .query:
+                if let answered = await answerQuery(.name(free.word), state: &state, output: output, dependencies: dependencies) {
+                    return answered
+                }
+            case .hintOnly:
+                if options.remember {
+                    var store = dependencies.loadDrillStore()
+                    store.set(name: free.word, status: store.status(for: FamilyIdentityText.normalized(free.word)), hint: free.rawHint)
+                    _ = try? dependencies.saveDrillStore(store, .build(list: PronunciationDrillList(items: []),
+                                                                       lexicon: dependencies.loadLexicon(), store: store))
+                }
+                return await emitPronunciation(
+                    HalliePronunciationFreeform.hintOnlyReply(free), description: "pronunciation hint",
+                    basis: "Basis: listening — pronunciation hint kept, needs a respelling; no model call, no catalog query.",
+                    state: &state, output: output, dependencies: dependencies)
+            }
+        }
         return nil
     }
 
     private static func teachOneOff(
         word: String, alternatives: [String], hint: HalliePronunciationHintTelling?,
+        freeform: HallieFreeformPronunciation? = nil,
         options: Options, state: inout Session, output: (String) -> Void, dependencies: Dependencies
     ) async -> AnswerOutcome {
         let told = HallieTellingMode.PronunciationTelling(word: word, alternatives: alternatives)
@@ -60,7 +85,8 @@ extension HallieShellCLI {
         case .cyberBrainPerson(_, let name), .treePerson(let name, _, _): scope = .person(name: name)
         case .file: scope = .file
         }
-        var prose = hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
+        var prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
+            ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
             ?? HallieTellingMode.pronunciationReply(told, scope: scope)
         var basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
         let phonemes = HallieAppTurnCoordinator.derivePhonemes(alternatives: alternatives, hint: hint?.hint)
@@ -69,8 +95,10 @@ extension HallieShellCLI {
                 try dependencies.recordPronunciation(.init(word: word, saidAs: told.saidAs, phonemes: phonemes, target: target))
                 HallieAppTurnCoordinator.logTaught(word: word, saidAs: told.saidAs + (phonemes.map { " /\($0)/" } ?? ""))
                 var store = dependencies.loadDrillStore()
+                let derived = hint != nil || freeform?.explicit == false
                 store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
-                          alternatives: alternatives, phonemes: phonemes, origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
+                          alternatives: alternatives, phonemes: phonemes, origin: derived ? .derived : .taught,
+                          hint: hint?.hint.description ?? freeform?.rawHint)
                 _ = try? dependencies.saveDrillStore(store, .build(list: PronunciationDrillList(items: []),
                                                                    lexicon: dependencies.loadLexicon(), store: store))
             } catch {

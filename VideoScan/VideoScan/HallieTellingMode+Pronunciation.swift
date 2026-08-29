@@ -112,7 +112,8 @@ extension HallieTellingMode {
     }
 
     static func detectPronunciation(_ text: String) -> PronunciationTelling? {
-        let cleaned = text
+        // "prounounced" / "pronunced" read as "pronounced" (live miss #17).
+        let cleaned = HalliePronounceWords.normalize(text)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "“", with: "\"")
             .replacingOccurrences(of: "”", with: "\"")

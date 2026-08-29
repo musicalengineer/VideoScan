@@ -101,7 +101,14 @@ enum HalliePhonemes {
             guard let phones = phonemes(forSyllable: syllable.lowercased().filter(\.isLetter),
                                         stressed: index == stressedIndex,
                                         pinnedVowel: exemplarVowels[index]) else { return nil }
-            out += phones
+            // "LAT-tah": the same consonant closing one syllable and
+            // opening the next is one sound (lˈætɑ, not lˈættɑ).
+            if let first = phones.first, let last = out.last, first == last,
+               !vowelPhones.contains(first), first != "ˈ" {
+                out += phones.dropFirst()
+            } else {
+                out += phones
+            }
         }
         return out
     }
