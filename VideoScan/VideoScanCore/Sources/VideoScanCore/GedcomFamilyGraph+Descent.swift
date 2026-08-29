@@ -29,86 +29,119 @@ extension GedcomFamilyGraph {
     /// Every recorded ancestor of one descendant, each with the child
     /// through which they were first (= shortest, paternal-first) reached.
     ///
-    /// Memory: one String pair per ancestor — a few hundred KB for the
-    /// deepest tree in the archive.
+    /// Ordinal-dense (2026-08-29): two `Int32` arrays over the compiled
+    /// index — `childToward[o]` and `depth[o]` (−1 = not an ancestor) —
+    /// so building one is a BFS over the CSR parent lists with NO string
+    /// hashing, and intersecting two is a linear pass over integers.
+    /// Memory: 8 bytes × people (~300 KB for the 39k merged tree).
     public struct AncestorIndex: Sendable {
         public let descendantID: String
-        /// ancestor id → the child on the shortest line down to `descendantID`.
-        private let childToward: [String: String]
-        /// ancestor id → generations above the descendant (1 = parent).
-        private let depthByID: [String: Int]
+        private let index: TreeIndex
         private let people: [String: Person]
+        private let descendant: Int32
+        /// ordinal → the child on the shortest line down to `descendantID`; −1 = not an ancestor.
+        private let childToward: [Int32]
+        /// ordinal → generations above the descendant (1 = parent); −1 = not an ancestor.
+        private let depth: [Int32]
+        /// Ancestors in discovery (BFS) order — the walk's own order, so
+        /// callers that iterate get a deterministic sequence.
+        private let ancestors: [Int32]
 
         public init(graph: GedcomFamilyGraph, descendantID: String) {
             self.descendantID = descendantID
             self.people = graph.people
-            var cameFrom: [String: String] = [:]
-            var depth: [String: Int] = [:]
-            guard graph.people[descendantID] != nil else {
-                childToward = [:]
-                depthByID = [:]
-                return
-            }
-            // `cameFrom[parent] = child` — plain BFS with a predecessor map
-            // (C++: queue + unordered_map<string,string>). The walk runs
-            // over the compiled CSR parent lists (integer ordinals, father
-            // first then mother — see TreeIndex.parents), so the frontier
-            // never copies a Person; the string maps are filled at the end.
             let index = graph.index
-            guard let startOrdinal = index.ordinal(of: descendantID) else {
-                childToward = [:]
-                depthByID = [:]
+            self.index = index
+            var childToward = [Int32](repeating: -1, count: index.count)
+            var depth = [Int32](repeating: -1, count: index.count)
+            var ancestors: [Int32] = []
+            guard graph.people[descendantID] != nil, let start = index.ordinal(of: descendantID) else {
+                self.descendant = -1
+                self.childToward = childToward
+                self.depth = depth
+                self.ancestors = ancestors
                 return
             }
+            self.descendant = start
+            // Plain BFS with a predecessor array (C++: queue +
+            // vector<int32_t>). Father first then mother per person — see
+            // TreeIndex.parents — so ties break paternal-first; FIFO order
+            // keeps the shortest path. The descendant is marked visited
+            // by its own depth so a corrupt self-ancestor loop stops.
             var visited = [Bool](repeating: false, count: index.count)
-            visited[Int(startOrdinal)] = true
-            var cameFromOrdinal: [(parent: Int32, child: Int32, level: Int)] = []
-            var frontier: [Int32] = [startOrdinal]
-            var level = 0
-            while !frontier.isEmpty {
-                var next: [Int32] = []
-                level += 1
-                for child in frontier {
-                    for parent in index.parents(of: child) where !visited[Int(parent)] {
-                        visited[Int(parent)] = true
-                        cameFromOrdinal.append((parent, child, level))
-                        next.append(parent)
-                    }
+            visited[Int(start)] = true
+            var queue: [Int32] = [start]
+            var head = 0
+            var levelEnd = 1
+            var level: Int32 = 0
+            while head < queue.count {
+                if head == levelEnd { level += 1; levelEnd = queue.count }
+                if head == 0 { level = 1 }
+                let child = queue[head]
+                head += 1
+                for parent in index.parents(of: child) where !visited[Int(parent)] {
+                    visited[Int(parent)] = true
+                    childToward[Int(parent)] = child
+                    depth[Int(parent)] = level
+                    ancestors.append(parent)
+                    queue.append(parent)
                 }
-                frontier = next
             }
-            cameFrom.reserveCapacity(cameFromOrdinal.count)
-            depth.reserveCapacity(cameFromOrdinal.count)
-            for entry in cameFromOrdinal {
-                let parentID = index.ids[Int(entry.parent)]
-                cameFrom[parentID] = index.ids[Int(entry.child)]
-                depth[parentID] = entry.level
-            }
-            childToward = cameFrom
-            depthByID = depth
+            self.childToward = childToward
+            self.depth = depth
+            self.ancestors = ancestors
         }
 
-        /// Every recorded ancestor with its generation count (1 = parent).
-        /// The common-ancestor search intersects two of these.
-        public var depths: [String: Int] { depthByID }
+        /// Every recorded ancestor with its generation count (1 = parent),
+        /// keyed by GEDCOM pointer. Materialized on demand (the walk itself
+        /// keeps ordinals); the common-ancestor search uses `depth(of:)`.
+        public var depths: [String: Int] {
+            var out: [String: Int] = [:]
+            out.reserveCapacity(ancestors.count)
+            for o in ancestors { out[index.ids[Int(o)]] = Int(depth[Int(o)]) }
+            return out
+        }
+
+        /// Number of recorded ancestors.
+        public var ancestorCount: Int { ancestors.count }
+
+        /// Deepest generation reached (0 = no parents attached).
+        public var maxDepth: Int { ancestors.isEmpty ? 0 : Int(depth[Int(ancestors.last!)]) }
+
+        /// Generations above the descendant for an ORDINAL, or nil.
+        @inlinable public func depth(ofOrdinal o: Int32) -> Int? {
+            let d = depthValue(o)
+            return d < 0 ? nil : Int(d)
+        }
+        @usableFromInline func depthValue(_ o: Int32) -> Int32 { o == descendant ? -1 : depth[Int(o)] }
 
         /// Generations between the ancestor and the descendant (1 = parent),
         /// or nil when `ancestorID` is not on any recorded line above.
-        /// O(1): recorded during the walk.
+        /// O(log people): one binary search on the id table.
         public func generations(from ancestorID: String) -> Int? {
-            ancestorID == descendantID ? nil : depthByID[ancestorID]
+            guard ancestorID != descendantID, let o = index.ordinal(of: ancestorID) else { return nil }
+            return depth(ofOrdinal: o)
         }
 
         /// `[ancestor, …, parent, descendant]`, or nil when not an ancestor.
         public func path(from ancestorID: String) -> [Person]? {
-            guard ancestorID != descendantID, childToward[ancestorID] != nil else { return nil }
+            guard ancestorID != descendantID, let o = index.ordinal(of: ancestorID) else { return nil }
+            return path(fromOrdinal: o)
+        }
+
+        /// Same, by ordinal.
+        public func path(fromOrdinal o: Int32) -> [Person]? {
+            guard o != descendant, depth[Int(o)] >= 0 else { return nil }
             var path: [Person] = []
-            var current: String? = ancestorID
-            while let id = current, let person = people[id] {
+            var current = o
+            while true {
+                guard let person = people[index.ids[Int(current)]] else { return nil }
                 path.append(person)
-                current = id == descendantID ? nil : childToward[id]
+                if current == descendant { return path }
+                let child = childToward[Int(current)]
+                guard child >= 0 else { return nil }
+                current = child
             }
-            return path.last?.id == descendantID ? path : nil
         }
     }
 

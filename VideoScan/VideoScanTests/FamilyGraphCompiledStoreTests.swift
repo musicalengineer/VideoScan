@@ -415,18 +415,22 @@ struct FamilyGraphCompiledStoreTests {
         #expect(box.store().generations().count == 1)
     }
 
-    /// codex #812: a pointer written by a codec-3 build is "schema changed"
-    /// → miss → recompile through the loader; the new pointer is codec 4
-    /// and its manifest carries the loss figures.
-    @Test func codecThreePointerRecompiles() throws {
+    /// codex #812 (codec 3 → 4) and 2026-08-29 (codec 4 → 5, index 1 → 2):
+    /// a pointer written by an older build is "schema changed" → miss →
+    /// recompile through the loader; the new pointer carries the current
+    /// codec and its manifest the loss figures.
+    @Test(arguments: [(codec: UInt32(3), index: UInt32(1)), (codec: 4, index: 1), (codec: 5, index: 1), (codec: 4, index: 2)])
+    func olderCodecPointerRecompiles(older: (codec: UInt32, index: UInt32)) throws {
         let box = try Sandbox(); defer { box.tearDown() }
         let source = try box.write(Self.tree)
         let store = box.store()
         _ = box.loader(store).loadNewestOutcome()
         var pointer = try #require(store.readPointer())
         let gen1 = pointer.current
-        #expect(pointer.codec == 4)
-        pointer.codec = 3
+        #expect(pointer.codec == 5)
+        #expect(pointer.index == 2)
+        pointer.codec = older.codec
+        pointer.index = older.index
         try JSONEncoder().encode(pointer).write(to: store.pointerURL)
         #expect(!FamilyGraphCompiledStore.versionsMatch(pointer))
         #expect(store.load(sources: [source]) == nil)

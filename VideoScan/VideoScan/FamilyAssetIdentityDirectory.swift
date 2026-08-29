@@ -114,51 +114,56 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
     }
 
     /// Pure builder: tree + alias table + owner. Tests use this directly.
+    ///
+    /// The tree pass (given / surname / suffix tokens per person, spouse
+    /// surnames included) comes ready-made from the compiled index's
+    /// launch tables (TreeIndex formatVersion 2, 2026-08-29) — no name is
+    /// tokenized and no family unit is walked here. Members are assembled
+    /// in parallel chunks of ordinals; ordinal order IS `gedcomID` order,
+    /// so the result is the same sorted list the per-person walk produced
+    /// (FamilyAssetIdentityDirectoryTests pins it against the frozen
+    /// builder on the 39k synthetic tree).
     init(graph: GedcomFamilyGraph,
          aliases: AliasTable,
          ownerGedcomID: String?,
          ownerName: String?) {
         let suffixes = GedcomFamilyGraph.nameSuffixes
-        // Pass 1: what the tree says about everyone.
-        struct Draft {
-            let person: GedcomFamilyGraph.Person
-            let given: Set<String>
-            let surnames: Set<String>
-            let suffix: String?
-        }
-        var drafts: [Draft] = []
-        var allGiven: Set<String> = []
-        var allSurnames: Set<String> = []
-        for person in graph.people.values {
-            let surname = Self.tokens(person.surname ?? "")
-            var surnames = Set(surname)
-            for unit in graph.familyUnits(of: person) {
-                if let spouse = unit.spouse { surnames.formUnion(Self.tokens(spouse.surname ?? "")) }
-            }
-            let nameTokens = Self.tokens(person.name)
-            let suffix = nameTokens.last(where: { suffixes.contains($0) })
-            let given = Set(nameTokens.filter { !suffixes.contains($0) && !surnames.contains($0) })
-            drafts.append(Draft(person: person, given: given, surnames: surnames, suffix: suffix))
-            allGiven.formUnion(given)
-            allSurnames.formUnion(surnames)
-        }
+        let index = graph.index
+        let keys = index.identityKeys
         // Pass 2: aliases contribute only what the tree does not already
         // say, so "Richard Harding Breen Sr" as an alias never lets Sr claim
         // "Richard" ahead of Jr — that stays a tree-level (ambiguous) match.
+        // `identityKeys` is exactly every given + surname (+ used suffix)
+        // token of the tree; subtracting it and the suffix table equals
+        // the old `allGiven ∪ allSurnames ∪ suffixes` subtraction.
+        let treeSaid = Set(keys)
         func nicknameTokens(_ spellings: [String]) -> Set<String> {
-            Set(spellings.flatMap(Self.tokens))
-                .subtracting(allGiven).subtracting(allSurnames).subtracting(suffixes)
+            Set(spellings.flatMap(Self.tokens)).subtracting(treeSaid).subtracting(suffixes)
         }
         let ownerNick = nicknameTokens(ownerName.map { [$0] } ?? [])
-        members = drafts.map { draft in
-            var nick = nicknameTokens(aliases[draft.person.id] ?? [])
-            if draft.person.id == ownerGedcomID { nick.formUnion(ownerNick) }
-            return Member(gedcomID: draft.person.id,
-                          givenTokens: draft.given,
-                          surnameTokens: draft.surnames,
-                          suffix: draft.suffix,
-                          aliasTokens: nick)
-        }.sorted { $0.gedcomID < $1.gedcomID }
+        let count = index.count
+        let chunk = 4096
+        let chunks = (count + chunk - 1) / chunk
+        let members = [Member](unsafeUninitializedCapacity: count) { buffer, initialized in
+            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                let lo = c * chunk, hi = min(count, lo + chunk)
+                for i in lo..<hi {
+                    let o = Int32(i)
+                    let id = index.ids[i]
+                    var nick = nicknameTokens(aliases[id] ?? [])
+                    if id == ownerGedcomID { nick.formUnion(ownerNick) }
+                    let suffix = index.suffixIDs[i]
+                    (buffer.baseAddress! + i).initialize(to: Member(
+                        gedcomID: id,
+                        givenTokens: Set(index.givenIDs(of: o).map { keys[Int($0)] }),
+                        surnameTokens: Set(index.surnameTokenIDs(of: o).map { keys[Int($0)] }),
+                        suffix: suffix < 0 ? nil : keys[Int(suffix)],
+                        aliasTokens: nick))
+                }
+            }
+            initialized = count
+        }
+        self.members = members
         self.ownerGedcomID = ownerGedcomID
         self.ownerTokens = ownerGedcomID == nil ? [] : ownerNick
     }

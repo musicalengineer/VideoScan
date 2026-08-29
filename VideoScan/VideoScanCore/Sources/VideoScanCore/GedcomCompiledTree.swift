@@ -29,10 +29,17 @@ public enum GedcomCompiledTree {
     /// CANONICAL shape — the positional source list plus the graph-local
     /// remainder — so a one-source graph's loss is carried once (codec 3
     /// wrote it both in the list and as the local count: 2× after decode).
-    /// A codec-3 blob is refused with `versionMismatch` and the store
-    /// recompiles.
-    public static let codecVersion: UInt32 = 4
+    /// 5 (2026-08-29): the people and family sections carry a chunk
+    /// offset table so they decode in parallel (one chunk per core), and
+    /// TreeIndex formatVersion 2 adds the launch tables. Older blobs are
+    /// refused with `versionMismatch` and the store recompiles.
+    public static let codecVersion: UInt32 = 5
     static let magic: [UInt8] = Array("VSFT".utf8)
+    /// Records per parallel decode chunk (written into the section header;
+    /// the reader honours whatever the file says). 39k people → 39
+    /// chunks; 100k → 98: enough to balance 16 cores, large enough that
+    /// the per-chunk dispatch is noise.
+    static let chunkSize = 1024
 
     public enum CodecError: Error, Equatable {
         case badMagic
@@ -55,9 +62,9 @@ public enum GedcomCompiledTree {
         let familyIDs = graph.familyTable.keys.sorted()
         let families = familyIDs.map { graph.familyTable[$0]! }
 
-        // People
-        w.u32(UInt32(people.count))
-        for p in people {
+        // People (codec 5: chunked section — see `Writer.chunkedSection`).
+        w.chunkedSection(count: people.count) { w, i in
+            let p = people[i]
             w.ref(p.id); w.ref(p.name); w.ref(p.sex); w.ref(p.childOfFamily)
             w.ref(p.birthDate); w.ref(p.deathDate); w.ref(p.birthPlace); w.ref(p.deathPlace)
             w.ref(p.surname); w.ref(p.familySearchID)
@@ -65,9 +72,9 @@ public enum GedcomCompiledTree {
             w.refs(p.childOfFamilies); w.refs(p.spouseOfFamilies)
         }
         // Families
-        w.u32(UInt32(families.count))
-        for (id, f) in zip(familyIDs, families) {
-            w.ref(id); w.ref(f.husband); w.ref(f.wife); w.ref(f.marriageDate); w.refs(f.children)
+        w.chunkedSection(count: families.count) { w, i in
+            let f = families[i]
+            w.ref(familyIDs[i]); w.ref(f.husband); w.ref(f.wife); w.ref(f.marriageDate); w.refs(f.children)
         }
         // Roots (a list, so a merged two-root tree fits the same layout)
         w.refs(graph.rootPersonIDs)
@@ -104,6 +111,12 @@ public enum GedcomCompiledTree {
         w.i32s(index.marriedStart); w.i32s(index.marriedIDs)
         w.i32s(index.surnameStart); w.i32s(index.surnameIDs)
         w.i32s(index.sidebarOrder); w.bytes(index.sidebarHaystack); w.i32s(index.sidebarStart)
+        // Launch tables (TreeIndex formatVersion 2)
+        w.refs(index.identityKeys)
+        w.i32s(index.givenStart); w.i32s(index.givenIDs)
+        w.i32s(index.surnameTokenStart); w.i32s(index.surnameTokenIDs)
+        w.i32s(index.suffixIDs)
+        w.refs(index.lifeYears)
 
         // Assemble: header | string table | body | checksum
         var payload = Data()
@@ -130,6 +143,16 @@ public enum GedcomCompiledTree {
     // MARK: Decode
 
     /// The graph, with its index installed. Throws on any malformed input.
+    ///
+    /// Uses every core (2026-08-29): the payload checksum runs on one
+    /// thread while the sections parse on the others; the string table
+    /// and the chunked people/family sections parse with
+    /// `DispatchQueue.concurrentPerform`. Every reader is bounds-checked,
+    /// so parsing ahead of the checksum can only throw, never trap — and
+    /// a checksum failure is still reported as `checksumMismatch`
+    /// whatever the parse made of the bytes. The result is identical to
+    /// a sequential decode by construction (each chunk reads a disjoint
+    /// byte range into a disjoint slot; assembly is in ordinal order).
     public static func decode(_ data: Data) throws -> GedcomFamilyGraph {
         guard data.count >= 4 + 4 + 4 + 8 + 32 else { throw CodecError.truncated }
         guard Array(data.prefix(4)) == magic else { throw CodecError.badMagic }
@@ -146,127 +169,213 @@ public enum GedcomCompiledTree {
         guard length <= available else { throw CodecError.truncated }
         guard length == available else { throw CodecError.corrupt("trailing bytes after checksum") }
         let payloadEnd = payloadStart + Int(length)
-        let payload = data.subdata(in: payloadStart..<payloadEnd)
-        let stored = Array(data[payloadEnd..<payloadEnd + 32])
-        guard Array(SHA256.hash(data: payload)) == stored else { throw CodecError.checksumMismatch }
-        return try payload.withUnsafeBytes { raw -> GedcomFamilyGraph in
-            var r = Reader(bytes: raw)
-            let stringCount = Int(try r.u32())
-            let blobLength = Int(try r.u32())
-            let blob = try r.slice(blobLength)
-            let offsets = try r.i32s(expected: stringCount + 1)
-            var strings: [String] = []
-            strings.reserveCapacity(stringCount)
-            for i in 0..<stringCount {
-                let a = Int(offsets[i]), b = Int(offsets[i + 1])
-                guard a >= 0, a <= b, b <= blobLength else { throw CodecError.corrupt("string table") }
-                strings.append(String(decoding: UnsafeRawBufferPointer(rebasing: blob[a..<b]), as: UTF8.self))
+        return try data.withUnsafeBytes { whole -> GedcomFamilyGraph in
+            let payload = UnsafeRawBufferPointer(rebasing: whole[payloadStart..<payloadEnd])
+            let stored = Array(whole[payloadEnd..<payloadEnd + 32])
+            // Checksum on a worker while this thread parses.
+            let hashGroup = DispatchGroup()
+            var checksumOK = false
+            DispatchQueue.global(qos: .userInitiated).async(group: hashGroup) {
+                checksumOK = Array(SHA256.hash(data: payload)) == stored
             }
-            r.strings = strings
+            defer { hashGroup.wait() }
+            let parsed: GedcomFamilyGraph
+            do {
+                parsed = try parsePayload(payload)
+            } catch {
+                hashGroup.wait()
+                if !checksumOK { throw CodecError.checksumMismatch }
+                throw error
+            }
+            let waited = PhaseClock()
+            hashGroup.wait()
+            var c = waited; c.lap("checksum wait")
+            guard checksumOK else { throw CodecError.checksumMismatch }
+            return parsed
+        }
+    }
 
-            let personCount = Int(try r.u32())
-            var people: [String: GedcomFamilyGraph.Person] = [:]
-            people.reserveCapacity(personCount)
-            var ids: [String] = []
-            ids.reserveCapacity(personCount)
-            for _ in 0..<personCount {
-                let id = try r.string()
-                var p = GedcomFamilyGraph.Person(id: id, name: try r.string(), sex: try r.string(),
-                                                 childOfFamily: try r.optionalString())
-                p.birthDate = try r.optionalString(); p.deathDate = try r.optionalString()
-                p.birthPlace = try r.optionalString(); p.deathPlace = try r.optionalString()
-                p.surname = try r.optionalString(); p.familySearchID = try r.optionalString()
-                p.alternateNames = try r.stringArray(); p.alternateSurnames = try r.stringArray()
-                p.childOfFamilies = try r.stringArray(); p.spouseOfFamilies = try r.stringArray()
-                people[id] = p
-                ids.append(id)
+    /// Payload = string table | people | families | roots | FS index |
+    /// provenance | index arrays. Trusts nothing: every length and every
+    /// reference is checked before use.
+    private static func parsePayload(_ raw: UnsafeRawBufferPointer) throws -> GedcomFamilyGraph {
+        var clock = PhaseClock()
+        var r = Reader(bytes: raw)
+        let stringCount = Int(try r.u32())
+        let blobLength = Int(try r.u32())
+        let blob = try r.slice(blobLength)
+        let offsets = try r.i32s(expected: stringCount + 1)
+        // String table: offsets must be monotonic within the blob (one
+        // sequential pass of integer compares), then the Strings are made
+        // in parallel chunks — each slot written exactly once.
+        guard offsets.first == 0 || stringCount == 0 else { throw CodecError.corrupt("string table") }
+        for i in 0..<stringCount where !(offsets[i] >= 0 && offsets[i] <= offsets[i + 1] && Int(offsets[i + 1]) <= blobLength) {
+            throw CodecError.corrupt("string table")
+        }
+        let strings = [String](unsafeUninitializedCapacity: stringCount) { buffer, initialized in
+            let chunks = Self.chunkCount(stringCount)
+            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                let lo = c * chunkSize, hi = min(stringCount, lo + chunkSize)
+                for i in lo..<hi {
+                    let a = Int(offsets[i]), b = Int(offsets[i + 1])
+                    (buffer.baseAddress! + i).initialize(
+                        to: String(decoding: UnsafeRawBufferPointer(rebasing: blob[a..<b]), as: UTF8.self))
+                }
             }
-            let familyCount = Int(try r.u32())
-            var families: [String: GedcomFamilyGraph.Family] = [:]
-            families.reserveCapacity(familyCount)
-            for _ in 0..<familyCount {
-                let id = try r.string()
-                var f = GedcomFamilyGraph.Family()
-                f.husband = try r.optionalString(); f.wife = try r.optionalString()
-                f.marriageDate = try r.optionalString(); f.children = try r.stringArray()
-                families[id] = f
-            }
-            let roots = try r.stringArray()
-            let fsCount = Int(try r.u32())
-            var fsIndex: [String: String] = [:]
-            fsIndex.reserveCapacity(fsCount)
-            for _ in 0..<fsCount { fsIndex[try r.string()] = try r.string() }
-            let sourceFileName = try r.optionalString()
-            let sourceDirectory = try r.optionalString()
-            let modified = try r.f64()
-            let sourceFileNames = try r.stringArray()
-            let isMerged = try r.u32() != 0
-            let droppedLines = Int(try r.u32())
-            let headNote = try r.optionalString()
-            let provenanceCount = Int(try r.u32())
-            var provenance: [GedcomFamilyGraph.SourceProvenance] = []
-            provenance.reserveCapacity(provenanceCount)
-            for _ in 0..<provenanceCount {
-                provenance.append(.init(name: try r.string(), sha256: try r.optionalString(), droppedLineCount: Int(try r.u32())))
-            }
-            let sourceFingerprint = try r.optionalString()
+            initialized = stringCount
+        }
+        r.strings = strings
+        clock.lap("strings")
 
-            let nameRank = try r.i32s(expected: personCount)
-            let parentStart = try r.i32s(expected: personCount + 1)
-            let parents = try r.i32s()
-            let motherOffset = try r.i32s(expected: personCount)
-            let childStart = try r.i32s(expected: personCount + 1)
-            let children = try r.i32s()
-            let spouseStart = try r.i32s(expected: personCount + 1)
-            let spouses = try r.i32s()
-            var tables: [GedcomFamilyGraph.PostingTable] = []
-            for _ in 0..<5 {
-                let keys = try r.stringArray()
-                let start = try r.i32s(expected: keys.count + 1)
-                let postings = try r.i32s()
-                guard start.last.map(Int.init) == postings.count else { throw CodecError.corrupt("postings") }
-                tables.append(.init(keys: keys, start: start, postings: postings))
-            }
-            let recordStart = try r.i32s(expected: personCount + 1)
-            let recordTokenStart = try r.i32s()
-            let recordTokenIDs = try r.i32s()
-            let recordLikeIDs = try r.i32s(expected: recordTokenIDs.count)
-            let marriedStart = try r.i32s(expected: personCount + 1)
-            let marriedIDs = try r.i32s()
-            let surnameStart = try r.i32s(expected: personCount + 1)
-            let surnameIDs = try r.i32s()
-            let sidebarOrder = try r.i32s(expected: personCount)
-            let haystack = try r.byteArray()
-            let sidebarStart = try r.i32s(expected: personCount + 1)
-            guard r.atEnd else { throw CodecError.corrupt("trailing bytes") }
-            // Cheap structural sanity: every ordinal in range.
-            for list in [parents, children, spouses, sidebarOrder] {
-                guard list.allSatisfy({ $0 >= 0 && Int($0) < personCount }) else { throw CodecError.corrupt("ordinal") }
-            }
+        // People (chunked section, parallel), then the id → record map.
+        let peopleInOrder: [GedcomFamilyGraph.Person] = try r.chunkedSection { r in
+            let id = try r.string()
+            var p = GedcomFamilyGraph.Person(id: id, name: try r.string(), sex: try r.string(),
+                                             childOfFamily: try r.optionalString())
+            p.birthDate = try r.optionalString(); p.deathDate = try r.optionalString()
+            p.birthPlace = try r.optionalString(); p.deathPlace = try r.optionalString()
+            p.surname = try r.optionalString(); p.familySearchID = try r.optionalString()
+            p.alternateNames = try r.stringArray(); p.alternateSurnames = try r.stringArray()
+            p.childOfFamilies = try r.stringArray(); p.spouseOfFamilies = try r.stringArray()
+            return p
+        }
+        clock.lap("people parse")
+        let personCount = peopleInOrder.count
+        var people: [String: GedcomFamilyGraph.Person] = [:]
+        people.reserveCapacity(personCount)
+        var ids: [String] = []
+        ids.reserveCapacity(personCount)
+        for p in peopleInOrder {
+            people[p.id] = p
+            ids.append(p.id)
+        }
+        clock.lap("people map")
+        // Families
+        let familiesInOrder: [(String, GedcomFamilyGraph.Family)] = try r.chunkedSection { r in
+            let id = try r.string()
+            var f = GedcomFamilyGraph.Family()
+            f.husband = try r.optionalString(); f.wife = try r.optionalString()
+            f.marriageDate = try r.optionalString(); f.children = try r.stringArray()
+            return (id, f)
+        }
+        clock.lap("families parse")
+        var families: [String: GedcomFamilyGraph.Family] = [:]
+        families.reserveCapacity(familiesInOrder.count)
+        for (id, f) in familiesInOrder { families[id] = f }
+        clock.lap("families map")
+        let roots = try r.stringArray()
+        let fsCount = Int(try r.u32())
+        var fsIndex: [String: String] = [:]
+        fsIndex.reserveCapacity(fsCount)
+        for _ in 0..<fsCount { fsIndex[try r.string()] = try r.string() }
+        let sourceFileName = try r.optionalString()
+        let sourceDirectory = try r.optionalString()
+        let modified = try r.f64()
+        let sourceFileNames = try r.stringArray()
+        let isMerged = try r.u32() != 0
+        let droppedLines = Int(try r.u32())
+        let headNote = try r.optionalString()
+        let provenanceCount = Int(try r.u32())
+        var provenance: [GedcomFamilyGraph.SourceProvenance] = []
+        provenance.reserveCapacity(provenanceCount)
+        for _ in 0..<provenanceCount {
+            provenance.append(.init(name: try r.string(), sha256: try r.optionalString(), droppedLineCount: Int(try r.u32())))
+        }
+        let sourceFingerprint = try r.optionalString()
+        clock.lap("fs index + provenance")
 
-            let index = GedcomFamilyGraph.TreeIndex(
-                ids: ids, nameRank: nameRank,
-                parentStart: parentStart, parents: parents, motherOffset: motherOffset,
-                childStart: childStart, children: children,
-                spouseStart: spouseStart, spouses: spouses,
-                tokens: tables[0], likeTokens: tables[1], surnames: tables[2],
-                givenNames: tables[3], familySearchIDs: tables[4],
-                recordStart: recordStart, recordTokenStart: recordTokenStart,
-                recordTokenIDs: recordTokenIDs, recordLikeIDs: recordLikeIDs,
-                marriedStart: marriedStart, marriedIDs: marriedIDs,
-                surnameStart: surnameStart, surnameIDs: surnameIDs,
-                sidebarOrder: sidebarOrder, sidebarHaystack: haystack, sidebarStart: sidebarStart)
-            var graph = GedcomFamilyGraph(
-                decodedPeople: people, families: families, rootPersonIDs: roots,
-                personIDByFamilySearchID: fsIndex,
-                sourceFileName: sourceFileName, sourceDirectory: sourceDirectory,
-                sourceModifiedAt: modified.isNaN ? nil : Date(timeIntervalSince1970: modified),
-                sourceFileNames: sourceFileNames, isMergedArtifact: isMerged,
-                droppedLineCount: droppedLines, headNote: headNote)
-            graph.sourceProvenance = provenance
-            graph.sourceFingerprint = sourceFingerprint
-            graph.indexBox.install(index)
-            return graph
+        let nameRank = try r.i32s(expected: personCount)
+        let parentStart = try r.i32s(expected: personCount + 1)
+        let parents = try r.i32s()
+        let motherOffset = try r.i32s(expected: personCount)
+        let childStart = try r.i32s(expected: personCount + 1)
+        let children = try r.i32s()
+        let spouseStart = try r.i32s(expected: personCount + 1)
+        let spouses = try r.i32s()
+        var tables: [GedcomFamilyGraph.PostingTable] = []
+        for _ in 0..<5 {
+            let keys = try r.stringArray()
+            let start = try r.i32s(expected: keys.count + 1)
+            let postings = try r.i32s()
+            guard start.last.map(Int.init) == postings.count else { throw CodecError.corrupt("postings") }
+            tables.append(.init(keys: keys, start: start, postings: postings))
+        }
+        let recordStart = try r.i32s(expected: personCount + 1)
+        let recordTokenStart = try r.i32s()
+        let recordTokenIDs = try r.i32s()
+        let recordLikeIDs = try r.i32s(expected: recordTokenIDs.count)
+        let marriedStart = try r.i32s(expected: personCount + 1)
+        let marriedIDs = try r.i32s()
+        let surnameStart = try r.i32s(expected: personCount + 1)
+        let surnameIDs = try r.i32s()
+        let sidebarOrder = try r.i32s(expected: personCount)
+        let haystack = try r.byteArray()
+        let sidebarStart = try r.i32s(expected: personCount + 1)
+        // Launch tables (TreeIndex formatVersion 2)
+        let identityKeys = try r.stringArray()
+        let givenStart = try r.i32s(expected: personCount + 1)
+        let givenIDs = try r.i32s()
+        let surnameTokenStart = try r.i32s(expected: personCount + 1)
+        let surnameTokenIDs = try r.i32s()
+        let suffixIDs = try r.i32s(expected: personCount)
+        let lifeYears = try r.stringArray()
+        guard lifeYears.count == personCount else { throw CodecError.corrupt("lifeYears length") }
+        guard r.atEnd else { throw CodecError.corrupt("trailing bytes") }
+        clock.lap("index arrays")
+        // Cheap structural sanity: every ordinal / key position in range.
+        for list in [parents, children, spouses, sidebarOrder] {
+            guard list.allSatisfy({ $0 >= 0 && Int($0) < personCount }) else { throw CodecError.corrupt("ordinal") }
+        }
+        let keyCount = Int32(identityKeys.count)
+        guard givenIDs.allSatisfy({ $0 >= 0 && $0 < keyCount }),
+              surnameTokenIDs.allSatisfy({ $0 >= 0 && $0 < keyCount }),
+              suffixIDs.allSatisfy({ $0 >= -1 && $0 < keyCount }),
+              givenStart.last.map(Int.init) == givenIDs.count,
+              surnameTokenStart.last.map(Int.init) == surnameTokenIDs.count
+        else { throw CodecError.corrupt("identity table") }
+
+        let index = GedcomFamilyGraph.TreeIndex(
+            ids: ids, nameRank: nameRank,
+            parentStart: parentStart, parents: parents, motherOffset: motherOffset,
+            childStart: childStart, children: children,
+            spouseStart: spouseStart, spouses: spouses,
+            tokens: tables[0], likeTokens: tables[1], surnames: tables[2],
+            givenNames: tables[3], familySearchIDs: tables[4],
+            recordStart: recordStart, recordTokenStart: recordTokenStart,
+            recordTokenIDs: recordTokenIDs, recordLikeIDs: recordLikeIDs,
+            marriedStart: marriedStart, marriedIDs: marriedIDs,
+            surnameStart: surnameStart, surnameIDs: surnameIDs,
+            sidebarOrder: sidebarOrder, sidebarHaystack: haystack, sidebarStart: sidebarStart,
+            identityKeys: identityKeys, givenStart: givenStart, givenIDs: givenIDs,
+            surnameTokenStart: surnameTokenStart, surnameTokenIDs: surnameTokenIDs,
+            suffixIDs: suffixIDs, lifeYears: lifeYears)
+        var graph = GedcomFamilyGraph(
+            decodedPeople: people, families: families, rootPersonIDs: roots,
+            personIDByFamilySearchID: fsIndex,
+            sourceFileName: sourceFileName, sourceDirectory: sourceDirectory,
+            sourceModifiedAt: modified.isNaN ? nil : Date(timeIntervalSince1970: modified),
+            sourceFileNames: sourceFileNames, isMergedArtifact: isMerged,
+            droppedLineCount: droppedLines, headNote: headNote)
+        graph.sourceProvenance = provenance
+        graph.sourceFingerprint = sourceFingerprint
+        graph.indexBox.install(index)
+        clock.lap("sanity + assemble")
+        return graph
+    }
+
+    static func chunkCount(_ records: Int) -> Int { (records + chunkSize - 1) / chunkSize }
+
+    /// `VS_DECODE_TIMING=1` prints one line per decode phase (perf work).
+    static let phaseTiming = ProcessInfo.processInfo.environment["VS_DECODE_TIMING"] != nil
+    struct PhaseClock {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        var last: UInt64
+        init() { last = t0 }
+        mutating func lap(_ label: String) {
+            guard GedcomCompiledTree.phaseTiming else { return }
+            let now = DispatchTime.now().uptimeNanoseconds
+            print("DECODE-PHASE \(label): +\(Double(now - last) / 1e6) ms (\(Double(now - t0) / 1e6) ms)")
+            last = now
         }
     }
 
@@ -487,17 +596,93 @@ public enum GedcomCompiledTree {
             list.withUnsafeBufferPointer { body.append(contentsOf: UnsafeRawBufferPointer($0)) }
         }
         mutating func bytes(_ list: [UInt8]) { u32(UInt32(list.count)); body.append(contentsOf: list) }
+
+        /// Codec 5 chunked section:
+        ///   u32 count | u32 chunkSize | u32 recordsByteLength |
+        ///   records… | u32 byteOffset[chunk] (relative to the first record)
+        /// The offsets come AFTER the records (they are known only once the
+        /// records are written); the reader jumps over the records by
+        /// `recordsByteLength` to find them.
+        mutating func chunkedSection(count: Int, _ record: (inout Writer, Int) -> Void) {
+            u32(UInt32(count))
+            u32(UInt32(GedcomCompiledTree.chunkSize))
+            let lengthSlot = body.count
+            u32(0)                                   // patched below
+            let recordsStart = body.count
+            var chunkOffsets: [UInt32] = []
+            for i in 0..<count {
+                if i % GedcomCompiledTree.chunkSize == 0 { chunkOffsets.append(UInt32(body.count - recordsStart)) }
+                record(&self, i)
+            }
+            let recordsLength = UInt32(body.count - recordsStart)
+            withUnsafeBytes(of: recordsLength.littleEndian) { body.replaceSubrange(lengthSlot..<lengthSlot + 4, with: $0) }
+            for offset in chunkOffsets { u32(offset) }
+        }
     }
 
     struct Reader {
         let bytes: UnsafeRawBufferPointer
         var cursor = 0
+        /// One past the last readable byte (a chunk reader is fenced to
+        /// its own chunk so a corrupt offset table cannot read a neighbour).
+        var limit: Int
         var strings: [String] = []
-        init(bytes: UnsafeRawBufferPointer) { self.bytes = bytes }
+        init(bytes: UnsafeRawBufferPointer) { self.bytes = bytes; self.limit = bytes.count }
         var atEnd: Bool { cursor == bytes.count }
 
         mutating func need(_ n: Int) throws {
-            guard n >= 0, cursor + n <= bytes.count else { throw CodecError.truncated }
+            guard n >= 0, cursor + n <= limit else { throw CodecError.truncated }
+        }
+
+        /// Read a codec-5 chunked section (see `Writer.chunkedSection`):
+        /// the chunks parse concurrently, each fenced to its byte range,
+        /// and every chunk must consume EXACTLY its range. Returns the
+        /// records in file order.
+        mutating func chunkedSection<T>(_ record: (inout Reader) throws -> T) throws -> [T] {
+            let count = Int(try u32())
+            let size = Int(try u32())
+            guard size > 0, size <= 1 << 20 else { throw CodecError.corrupt("chunk size \(size)") }
+            let recordsLength = Int(try u32())
+            let recordsStart = cursor
+            _ = try slice(recordsLength)
+            let chunks = (count + size - 1) / size
+            var starts: [Int] = []
+            starts.reserveCapacity(chunks + 1)
+            for _ in 0..<chunks { starts.append(recordsStart + Int(try u32())) }
+            starts.append(recordsStart + recordsLength)
+            for c in 0..<chunks where !(starts[c] <= starts[c + 1] && starts[c] >= recordsStart) {
+                throw CodecError.corrupt("chunk offsets")
+            }
+            if chunks > 0, starts[0] != recordsStart { throw CodecError.corrupt("chunk offsets") }
+            let template = self
+            var slots = [[T]](repeating: [], count: chunks)
+            var failures = [CodecError?](repeating: nil, count: chunks)
+            slots.withUnsafeMutableBufferPointer { slotBuffer in
+                failures.withUnsafeMutableBufferPointer { failureBuffer in
+                    DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                        var r = template
+                        r.cursor = starts[c]
+                        r.limit = starts[c + 1]
+                        let lo = c * size, hi = min(count, lo + size)
+                        var out: [T] = []
+                        out.reserveCapacity(hi - lo)
+                        do {
+                            for _ in lo..<hi { out.append(try record(&r)) }
+                            guard r.cursor == r.limit else { throw CodecError.corrupt("chunk length") }
+                            slotBuffer[c] = out
+                        } catch let error as CodecError {
+                            failureBuffer[c] = error
+                        } catch {
+                            failureBuffer[c] = .corrupt("chunk \(c)")
+                        }
+                    }
+                }
+            }
+            if let failure = failures.compactMap({ $0 }).first { throw failure }
+            var all: [T] = []
+            all.reserveCapacity(count)
+            for slot in slots { all.append(contentsOf: slot) }
+            return all
         }
         mutating func u32() throws -> UInt32 {
             try need(4); defer { cursor += 4 }

@@ -288,6 +288,26 @@ struct FamilyKinshipTests {
         #expect(center.graphGeneration == 2)
     }
 
+    /// 2026-08-29: the tree-picker list is built lazily on first use, not
+    /// at install (39k names sorted on the main actor every install), and
+    /// is reset when the tree is replaced.
+    @MainActor @Test func treePeopleAreBuiltLazilyAndResetPerInstall() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.tree)
+        let center = KinshipDisplayCenter()
+        center.install(graph: graph)
+        let people = center.treePeople
+        #expect(people.count == graph.people.count)
+        #expect(people == people.sorted { $0.name == $1.name ? $0.pointer < $1.pointer : $0.name < $1.name })
+        #expect(center.searchTreePeople("richard").map(\.pointer).contains("@I1@"))
+        let replaced = GedcomFamilyGraph(gedcomText: Self.tree.replacingOccurrences(
+            of: "Richard Harding /Breen/ Jr", with: "Zed /Breen/"))
+        center.install(graph: replaced)
+        #expect(center.treePeople.map(\.name).contains("Zed Breen"))
+        #expect(!center.treePeople.map(\.name).contains("Richard Harding Breen Jr"))
+        center.install(graph: nil)
+        #expect(center.treePeople.isEmpty)
+    }
+
     /// Codex #795 C: the production tree owner (FamilyTreeLiveModel) pushes
     /// every install into the display center, so a same-session tree
     /// replacement or an offline → online swing rebuilds the memo without

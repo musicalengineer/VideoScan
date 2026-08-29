@@ -255,8 +255,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// gets NONE unless the test assigns one (same isolation rule as
     /// `compiledStore`).
     var kinshipCenter: KinshipDisplayCenter?
-    /// Sorted by surname, then given name, then id (stable).
-    private var sortedPeople: [GedcomFamilyGraph.Person] = []
+    /// Production only: load through FamilyGraphSharedCache (one decode
+    /// shared with Hallie and the People tab) and the launch-bundle memo.
+    /// A model built on an injected originals directory reads its own
+    /// loader (isolation rule) and builds its bundle inline.
+    private let usesSharedCache: Bool
     private var photoOverrides: [String: NSImage] = [:]
     /// The bounded (≤ 2048 px) bitmap behind each override, kept so
     /// "Adjust Photo…" can start from it directly instead of round-tripping
@@ -309,11 +312,15 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// to the app log. The install total is always written. Logging is
     /// O(1) per step — never per row, never in a view body.
     nonisolated static let slowStepThreshold: Duration = .milliseconds(100)
+    /// `VS_FAMILY_TREE_TIMING=all` in the environment logs EVERY step
+    /// (perf sensors and launch investigations); default = slow steps only.
+    nonisolated static let logsEveryStep: Bool =
+        ProcessInfo.processInfo.environment["VS_FAMILY_TREE_TIMING"] == "all"
 
     /// One log line per (slow) step. `nonisolated` so the detached disk
     /// loader can report its decode/parse step too.
     nonisolated static func logStep(_ step: String, took elapsed: Duration, people: Int, always: Bool = false) {
-        guard always || elapsed > slowStepThreshold else { return }
+        guard always || logsEveryStep || elapsed > slowStepThreshold else { return }
         // Duration / Duration → Double (Swift 5.7+); ≈ std::chrono duration_cast.
         let ms = Int((elapsed / .milliseconds(1)).rounded())
         appLog.write("[family-tree] \(step) took \(ms) ms (\(people) people)")
@@ -386,6 +393,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         self.descendantGenerations = descendantGenerations
         self.photoProvider = photoProvider
         self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
+        self.usesSharedCache = originalsDirectory == nil && compiledStore == nil
     }
 
     // MARK: Loading
@@ -428,10 +436,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         // `Task.detached` ≈ spawn on a worker thread; a first import parses
         // and compiles (seconds on a big pull) and must not block the UI.
         // Afterwards the promoted artifact decodes in ~10 ms.
-        let loaded = await Task.detached(priority: .userInitiated) { [weak self] in
-            var loader = FamilyGraphFileLoader(originalsDirectory: directory)
-            loader.compiledStore = store
-            loader.progress = { phase in
+        // Production: the shared cache (one decode per process, shared
+        // with Hallie and the People tab) when its configuration names
+        // the same directory; tests and injected models use their own
+        // loader. Either way the bundle is built here, off the main actor.
+        let configuration = usesSharedCache ? FamilyAssetConfigurationCenter.shared.snapshot() : nil
+        let loaded = await Task.detached(priority: .userInitiated) { [weak self] () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
+            let progress: (String) -> Void = { phase in
                 Task { @MainActor [weak self] in
                     guard let self, self.loadGeneration == generation else { return }
                     self.loadPhase = phase
@@ -439,23 +450,36 @@ final class FamilyTreeLiveModel: ObservableObject {
             }
             let clock = ContinuousClock()
             var mark = clock.now
+            if let configuration, configuration.gedcomDirectory() == directory {
+                let shared = FamilyGraphSharedCache.shared.outcome(for: configuration, store: store, progress: progress)
+                let outcome = shared.outcome
+                    ?? FamilyGraphFileLoader.Outcome(graph: nil, selectedURL: nil, rejectedURLs: [], candidateCount: 0)
+                let people = outcome.graph?.people.count ?? 0
+                Self.logStep("load: decode/parse (shared\(shared.loaded?.reused == true ? ", reused" : ""))",
+                             took: clock.now - mark, people: people)
+                mark = clock.now
+                let settings = FamilyTreeLaunchBundle.Settings.fromDefaults()
+                let bundle = shared.loaded.map { FamilyTreeLaunchBundle.Cache.shared.bundle(for: $0, settings: settings) }
+                Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
+                return (outcome, bundle)
+            }
+            var loader = FamilyGraphFileLoader(originalsDirectory: directory)
+            loader.compiledStore = store
+            loader.progress = progress
             let outcome = loader.loadNewestOutcome()
             let people = outcome.graph?.people.count ?? 0
             Self.logStep("load: decode/parse", took: clock.now - mark, people: people)
-            // Sidebar rows and the group-photo identity directory are pure
-            // functions of the graph (+ speaker defaults): build them
-            // here, not on the main actor.
+            // Sidebar rows, the group-photo identity directory and the
+            // anchors are pure functions of the graph (+ speaker defaults):
+            // built here, in parallel, not on the main actor.
             mark = clock.now
-            let rows = outcome.graph.map { Self.sidebarRows(of: $0) } ?? []
-            let identity = outcome.graph.map {
-                FamilyAssetIdentityDirectory(graph: $0, speakers: .fromDefaults())
-            }
-            Self.logStep("load: sidebar rows + identity directory", took: clock.now - mark, people: people)
-            return (outcome, rows, identity)
+            let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: .fromDefaults()) }
+            Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
+            return (outcome, bundle)
         }.value
         guard generation == loadGeneration else { return }
         loadPhase = nil
-        install(outcome: loaded.0, rows: loaded.1, identity: loaded.2)
+        install(outcome: loaded.0, bundle: loaded.1)
     }
 
     /// The "Recompile" button (codex #826): parse + merge + ingest the
@@ -491,10 +515,28 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
     }
 
-    /// Everyone's sidebar summary in sidebar order — O(people), pure.
+    /// Everyone's sidebar summary in sidebar order — O(people), pure,
+    /// built in parallel chunks of rows (each slot written once; the
+    /// life-years line comes from the compiled index, so no date is
+    /// parsed here). Same rows as `sidebarOrder.map { summary($0) }`
+    /// (FamilyTreeLaunchBundleTests pins it).
     nonisolated static func sidebarRows(of graph: GedcomFamilyGraph) -> [FamilyTreePersonSummary] {
         let index = graph.index
-        return index.sidebarOrder.map { summary(graph.people[index.ids[Int($0)]]!) }
+        let count = index.count
+        let chunk = 4096
+        let chunks = (count + chunk - 1) / chunk
+        return [FamilyTreePersonSummary](unsafeUninitializedCapacity: count) { buffer, initialized in
+            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                let lo = c * chunk, hi = min(count, lo + chunk)
+                for row in lo..<hi {
+                    let o = Int(index.sidebarOrder[row])
+                    let years = index.lifeYears[o]
+                    (buffer.baseAddress! + row).initialize(
+                        to: summary(graph.people[index.ids[o]]!, years: years.isEmpty ? nil : years))
+                }
+            }
+            initialized = count
+        }
     }
 
     /// Synchronous variant for tests and for callers that already have
@@ -513,17 +555,17 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     /// Install a parsed graph (nil → demo fallback). Keeps the current
     /// selection when the person still exists, else picks the first
-    /// sorted person.
-    func install(graph newGraph: GedcomFamilyGraph?, rows: [FamilyTreePersonSummary]? = nil,
-                 identity: FamilyAssetIdentityDirectory? = nil) {
+    /// sorted person. Without a `bundle` the rows / identity / anchors
+    /// are built here, synchronously (tests, loadNow); the disk loader
+    /// always hands one in, built off the main actor.
+    func install(graph newGraph: GedcomFamilyGraph?, bundle: FamilyTreeLaunchBundle? = nil) {
         // Total is always logged; the steps inside only when slow.
         timed("install total", always: true) {
-            installSteps(graph: newGraph, rows: rows, identity: identity)
+            installSteps(graph: newGraph, bundle: bundle)
         }
     }
 
-    private func installSteps(graph newGraph: GedcomFamilyGraph?, rows: [FamilyTreePersonSummary]?,
-                              identity: FamilyAssetIdentityDirectory?) {
+    private func installSteps(graph newGraph: GedcomFamilyGraph?, bundle: FamilyTreeLaunchBundle?) {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
@@ -534,43 +576,30 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         graph = newGraph
         kinshipCenter?.install(graph: newGraph)
-        // Group-photo attribution follows the tree (2026-08-26): rebuilt
-        // here from tree + speaker settings; a Hallie turn later enriches
-        // it with CyberBrain / People-tab aliases.
-        // O(people) with a familyUnits walk each — precomputed off the
-        // main actor by loadFromDisk; built here only for synchronous
-        // installs (tests, loadNow).
-        timed("install: identity directory") {
-            FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map { graph in
-                identity ?? FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
-            })
+        // Everything O(people) lives in the bundle (rows, identity
+        // directory, anchors + their ancestor indexes). Built inline only
+        // for a synchronous install without one.
+        let ready: FamilyTreeLaunchBundle? = timed("install: launch bundle (inline)") {
+            newGraph.map { graph in bundle ?? FamilyTreeLaunchBundle.build(graph: graph, settings: .fromDefaults()) }
         }
-        let sidebarClock = ContinuousClock()
-        let sidebarStart = sidebarClock.now
-        if let newGraph {
+        // Group-photo attribution follows the tree (2026-08-26); a Hallie
+        // turn later enriches it with CyberBrain / People-tab aliases.
+        FamilyAssetConfigurationCenter.shared.publishIdentity(ready?.identity)
+        if let ready {
             // Sidebar order comes from the compiled index (surname, name,
             // id — the `sorted` comparator, computed once per compile).
-            let index = newGraph.index
-            sortedPeople = index.sidebarOrder.map { newGraph.people[index.ids[Int($0)]]! }
-            summariesInOrder = rows ?? sortedPeople.map(Self.summary)
-            peopleCount = sortedPeople.count
-            let ownerFamilySearchID = UserDefaults.standard.string(
-                forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
-            anchors = Self.anchors(in: newGraph, ownerFamilySearchID: ownerFamilySearchID)
-            anchorsCaption = Self.staleOwnerPinCaption(in: newGraph, ownerFamilySearchID: ownerFamilySearchID)
-            anchorIndexes = Dictionary(uniqueKeysWithValues: anchors.map {
-                ($0.id, GedcomFamilyGraph.AncestorIndex(graph: newGraph, descendantID: $0.id))
-            })
+            summariesInOrder = ready.rows
+            peopleCount = ready.rows.count
+            anchors = ready.anchors
+            anchorsCaption = ready.anchorsCaption
+            anchorIndexes = ready.anchorIndexes
         } else {
-            sortedPeople = []
             summariesInOrder = []
             peopleCount = FamilyTreeDemoData.people.count
             anchors = []
             anchorsCaption = nil
             anchorIndexes = [:]
         }
-        // peopleCount is set inside the branch above, so this is timed by hand.
-        Self.logStep("install: sidebar rows + anchors", took: sidebarClock.now - sidebarStart, people: peopleCount)
         loadState = .loaded(live: newGraph != nil)
         lineCache.removeAll()
         lineChain = nil
@@ -625,7 +654,9 @@ final class FamilyTreeLiveModel: ObservableObject {
         let owner = UserDefaults.standard.string(
             forKey: HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
         if let pinned = graph.person(familySearchID: owner) { return (pinned, "owner pin") }
-        if let first = sortedPeople.first { return (first, "no root or owner pin — first sidebar row") }
+        if let first = summariesInOrder.first.flatMap({ graph.people[$0.id] }) {
+            return (first, "no root or owner pin — first sidebar row")
+        }
         return nil
     }
 
@@ -646,9 +677,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         select(person.id)
     }
 
-    private func install(outcome: FamilyGraphFileLoader.Outcome, rows: [FamilyTreePersonSummary]? = nil,
-                         identity: FamilyAssetIdentityDirectory? = nil) {
-        install(graph: outcome.graph, rows: rows, identity: identity)
+    private func install(outcome: FamilyGraphFileLoader.Outcome, bundle: FamilyTreeLaunchBundle? = nil) {
+        install(graph: outcome.graph, bundle: bundle)
         needsRecompile = outcome.needsRecompile
         if let rejected = outcome.rejectedURLs.first {
             if let selected = outcome.selectedURL {
@@ -667,7 +697,6 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func installUnavailable() {
         loadGeneration &+= 1
         graph = nil
-        sortedPeople = []
         summariesInOrder = []
         peopleCount = 0
         filteredPeople = []
@@ -792,8 +821,10 @@ final class FamilyTreeLiveModel: ObservableObject {
             }) { return .hit(demo.id) }
             return .miss
         }
-        if let exact = sortedPeople.first(where: {
-            $0.name.localizedCaseInsensitiveCompare(wanted) == .orderedSame
+        // Sidebar order, exact (locale-aware, case-insensitive) name —
+        // the record's own name, not the row's "(unnamed)" placeholder.
+        if let exact = summariesInOrder.first(where: {
+            (graph.people[$0.id]?.name ?? "").localizedCaseInsensitiveCompare(wanted) == .orderedSame
         }) {
             return .hit(exact.id)
         }
@@ -1190,53 +1221,44 @@ final class FamilyTreeLiveModel: ObservableObject {
     // call them without hopping to the main thread)
 
     nonisolated static func summary(_ person: GedcomFamilyGraph.Person) -> FamilyTreePersonSummary {
+        summary(person, years: years(birth: person.birthDate, death: person.deathDate))
+    }
+
+    /// Same, with the life-dates line supplied (the compiled index carries
+    /// it per person, so the sidebar build parses no dates).
+    nonisolated static func summary(_ person: GedcomFamilyGraph.Person, years: String?) -> FamilyTreePersonSummary {
         FamilyTreePersonSummary(
             id: person.id,
             name: person.name.isEmpty ? "(unnamed)" : person.name,
             surname: person.surname,
-            years: years(birth: person.birthDate, death: person.deathDate),
+            years: years,
             sex: FamilyTreeSex(gedcom: person.sex),
-            reference: person.id.trimmingCharacters(in: CharacterSet(charactersIn: "@")))
+            reference: reference(for: person.id))
+    }
+
+    /// "@I123@" → "I123": the pointer with every leading and trailing "@"
+    /// removed (what `trimmingCharacters(in: "@")` did, without building
+    /// a CharacterSet per row).
+    nonisolated static func reference(for id: String) -> String {
+        var scalars = Substring(id).unicodeScalars[...]
+        while scalars.first == "@" { scalars.removeFirst() }
+        while scalars.last == "@" { scalars.removeLast() }
+        return String(scalars)
     }
 
     /// Life-dates line. Years when both dates carry one ("1929–2008");
     /// otherwise the raw GEDCOM text, prefixed so "b."/"d." is explicit.
     /// Never claims "Living" — absence of a death date is not evidence.
+    /// Lives in VideoScanCore (`GedcomFamilyGraph.lifeYearsLabel`) since
+    /// 2026-08-29 so the compiled index can carry it per person.
     nonisolated static func years(birth: String?, death: String?) -> String? {
-        let birthYear = year(in: birth)
-        let deathYear = year(in: death)
-        switch (birthYear, deathYear) {
-        case let (b?, d?):
-            return "\(b)–\(d)"
-        case let (b?, nil):
-            if let death, !death.isEmpty { return "\(b) – d. \(death)" }
-            return "b. \(b)"
-        case let (nil, d?):
-            if let birth, !birth.isEmpty { return "b. \(birth) – \(d)" }
-            return "d. \(d)"
-        case (nil, nil):
-            let parts = [birth.map { "b. \($0)" }, death.map { "d. \($0)" }]
-                .compactMap { $0 }
-                .filter { $0.count > 3 }
-            return parts.isEmpty ? nil : parts.joined(separator: " – ")
-        }
+        GedcomFamilyGraph.lifeYearsLabel(birth: birth, death: death)
     }
 
     /// First four-digit run in a raw GEDCOM date ("ABT 1944", "BET 1930
-    /// AND 1931" → 1930). Mirrors GedcomFamilyGraph's private helper; the
-    /// graph only exposes `birthYear`, and the card needs the death year.
+    /// AND 1931" → 1930).
     nonisolated static func year(in raw: String?) -> Int? {
-        guard let raw else { return nil }
-        var digits = ""
-        for character in raw {
-            if character.isNumber {
-                digits.append(character)
-            } else {
-                if digits.count == 4, let year = Int(digits) { return year }
-                digits.removeAll(keepingCapacity: true)
-            }
-        }
-        return digits.count == 4 ? Int(digits) : nil
+        GedcomFamilyGraph.year(in: raw)
     }
 
     /// Surname, then given name, then id. People with no surname go last.
