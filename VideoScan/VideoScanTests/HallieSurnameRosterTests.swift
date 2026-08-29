@@ -66,6 +66,27 @@ private func ricksSentence(_ text: String) -> HallieTurnExecutor.Request {
         ast: .graph(.init(people: [person], operation: .biography))))
 }
 
+/// The pre-optimization implementation, kept here as an independent oracle.
+/// Do not replace this with `HallieWhichOne.arrange`: that production entry
+/// point delegates to the bounded implementation this test is meant to check.
+private func legacyWhichOneArrangement(
+    _ people: [GedcomFamilyGraph.Person],
+    graph: GedcomFamilyGraph?,
+    ownerFamilySearchID: String? = nil
+) -> HallieWhichOne.Arrangement {
+    var anchorIDs = Set(graph?.rootPersonIDs ?? [])
+    if let pinned = graph?.person(familySearchID: ownerFamilySearchID) {
+        anchorIDs.insert(pinned.id)
+    }
+    let ordered = ArchivistBiographyPolicy.orderedPeople(people)
+    let anchors = ordered.filter { anchorIDs.contains($0.id) }
+    let others = ordered.filter { !anchorIDs.contains($0.id) }
+    return HallieWhichOne.Arrangement(
+        shown: Array((anchors + others).prefix(HallieWhichOne.cap)),
+        total: people.count,
+        anchored: !anchors.isEmpty)
+}
+
 @Suite("Surname roster — surname resolves, given token is a nickname (live miss #11)")
 struct HallieSurnameRosterTests {
     let graph = GedcomFamilyGraph(gedcomText: oconnorTree)
@@ -325,7 +346,7 @@ struct HallieSurnameRosterTests {
         #expect(r.basisLine.contains("6 of 41 O'Connors offered"), "got: \(r.basisLine)")
     }
 
-    @Test func alreadyOrderedArrangementMatchesGeneralPathWithLateAnchor() throws {
+    @Test func alreadyOrderedArrangementMatchesIndependentLegacyMatrix() throws {
         var text = "0 HEAD\n"
         for i in 1...9 {
             text += "0 @I\(i)@ INDI\n1 NAME Person\(i) /O'Connor/\n"
@@ -335,14 +356,44 @@ struct HallieSurnameRosterTests {
         let many = GedcomFamilyGraph(gedcomText: text)
         let ordered = ArchivistBiographyPolicy.orderedPeople(
             many.people(withSurname: "O'Connor"))
-        let expected = HallieWhichOne.arrange(
-            ordered, graph: many, ownerFamilySearchID: "LATE-009")
-        let optimized = HallieWhichOne.arrangeAlreadyOrdered(
-            ordered, graph: many, ownerFamilySearchID: "LATE-009")
 
-        #expect(optimized == expected)
-        #expect(optimized.shown.prefix(2).map(\.id) == ["@I1@", "@I9@"])
-        #expect(optimized.shown.count == HallieWhichOne.cap)
-        #expect(optimized.overflow == 3)
+        // A late owner pin must move ahead of earlier non-anchors.
+        let lateOwner = HallieWhichOne.arrangeAlreadyOrdered(
+            ordered, graph: many, ownerFamilySearchID: "LATE-009")
+        #expect(lateOwner == legacyWhichOneArrangement(
+            ordered, graph: many, ownerFamilySearchID: "LATE-009"))
+        #expect(lateOwner.shown.prefix(2).map(\.id) == ["@I1@", "@I9@"])
+
+        // Repeated anchor and non-anchor records retain legacy multiplicity
+        // and ordering. This also guards the bounded path from deduplicating.
+        let duplicateAnchor = try #require(many.people["@I9@"])
+        let duplicateNonAnchor = try #require(many.people["@I4@"])
+        let duplicates = ArchivistBiographyPolicy.orderedPeople(
+            ordered + [duplicateAnchor, duplicateNonAnchor, duplicateAnchor])
+        let withDuplicates = HallieWhichOne.arrangeAlreadyOrdered(
+            duplicates, graph: many, ownerFamilySearchID: "LATE-009")
+        #expect(withDuplicates == legacyWhichOneArrangement(
+            duplicates, graph: many, ownerFamilySearchID: "LATE-009"))
+        #expect(withDuplicates.shown.filter { $0.id == "@I9@" }.count == 3)
+
+        // More roots than the visible cap must remain anchor-first and
+        // bounded, including when an additional owner anchor sorts late.
+        var rootedText = "0 HEAD\n"
+        for i in 1...7 { rootedText += "1 _VS_ROOT @I\(i)@\n" }
+        for i in 1...9 {
+            rootedText += "0 @I\(i)@ INDI\n1 NAME Person\(i) /O'Connor/\n"
+            if i == 9 { rootedText += "1 _FSFTID LATE-009\n" }
+        }
+        rootedText += "0 TRLR\n"
+        let rooted = GedcomFamilyGraph(gedcomText: rootedText)
+        let rootedOrdered = ArchivistBiographyPolicy.orderedPeople(
+            rooted.people(withSurname: "O'Connor"))
+        let excessAnchors = HallieWhichOne.arrangeAlreadyOrdered(
+            rootedOrdered, graph: rooted, ownerFamilySearchID: "LATE-009")
+        #expect(excessAnchors == legacyWhichOneArrangement(
+            rootedOrdered, graph: rooted, ownerFamilySearchID: "LATE-009"))
+        #expect(excessAnchors.shown.map(\.id) == (1...6).map { "@I\($0)@" })
+        #expect(excessAnchors.shown.count == HallieWhichOne.cap)
+        #expect(excessAnchors.overflow == 3)
     }
 }
