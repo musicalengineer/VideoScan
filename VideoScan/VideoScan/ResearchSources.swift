@@ -370,7 +370,7 @@ struct FindAGraveSource: ResearchSource {
     /// present. Any of those may be missing; the memorial link never is.
     static func parse(_ html: String, retrievedAt: Date) -> [ResearchFinding] {
         guard let regex = try? NSRegularExpression(
-            pattern: #"href="(/memorial/(\d+)/([^"?#]*))""#, options: [.caseInsensitive])
+            pattern: #"href="(/memorial/(\d+)/([^"?#]*))[^"]*""#, options: [.caseInsensitive])
         else { return [] }
         let nsRange = NSRange(html.startIndex..., in: html)
         let matches = regex.matches(in: html, options: [], range: nsRange)

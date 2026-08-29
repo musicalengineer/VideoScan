@@ -119,13 +119,17 @@ struct HallieResearchQuestion: Equatable {
         if let graph = context.graph {
             let matches = graph.people(namedLike: name)
             if matches.count == 1 { treePerson = matches[0] }
-            if people.isEmpty, ambiguous.isEmpty, let index = context.cyberBrain {
-                for match in matches {
-                    for linked in index.people(gedcomPersonID: match.id)
-                    where !people.contains(where: { $0.id == linked.id }) {
-                        people.append(linked)
+            if people.isEmpty, ambiguous.isEmpty {
+                if let index = context.cyberBrain {
+                    for match in matches {
+                        for linked in index.people(gedcomPersonID: match.id)
+                        where !people.contains(where: { $0.id == linked.id }) {
+                            people.append(linked)
+                        }
                     }
                 }
+                // Two tree records fit the name and nothing in the brain
+                // picks one: ask, never guess (Jr/Sr rule).
                 if matches.count > 1, people.isEmpty {
                     ambiguous = matches.map { person in
                         let years = [person.birthYear, person.deathYear].compactMap { $0.map(String.init) }
