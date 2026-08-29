@@ -53,10 +53,23 @@ extension ArchivistGraphExecutor {
         let possessive = query.voices[0] == .owner ? "Your"
             : KinshipDisplay.possessive(anchorName)
         let noun = hits.count == 1 ? relation.rawValue : pluralNoun(relation.rawValue)
+        var treeCited: [String] = []
         let names = hits.map { hit -> String in
             // One hop with a plain word: just the name. Derived (composed)
             // relations show the route so the inference is checkable.
-            if hit.hops.count == 1 { return hit.member.displayName }
+            if hit.hops.count == 1 {
+                // A relative bridged to a tree record (pin / certain
+                // derivation) answers with the tree's name and vitals, and
+                // the People-tab name as the alias (Rick 2026-08-29:
+                // "Rick's father is known as Dad" said nothing).
+                if let gedcomID = hit.member.gedcomID, let record = inputs.graph.people[gedcomID] {
+                    treeCited.append("\(record.name) \(gedcomID)")
+                    let alias = PersonResolver.normalize(record.name) == PersonResolver.normalize(hit.member.name)
+                        ? "" : " (\(hit.member.name) in the People tab)"
+                    return record.name + alias + HallieBiographyCard.vitalsAside(record)
+                }
+                return hit.member.displayName
+            }
             return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
         }
         let storedOn = Array(Set(hits.flatMap { $0.hops.map(\.storedOn) })).sorted()
@@ -78,7 +91,10 @@ extension ArchivistGraphExecutor {
             prose: "\(possessive) \(noun): " + names.joined(separator: ", ") + ".",
             basisLine: "\(overlayBasisPrefix) (stored on "
                 + storedOn.map { "\($0)'s profile" }.joined(separator: ", ")
-                + "); local only, not from the family tree.",
+                + (treeCited.isEmpty
+                    ? "); local only, not from the family tree."
+                    : "); name and dates from the imported family tree (GEDCOM: "
+                        + treeCited.joined(separator: ", ") + ")."),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil)

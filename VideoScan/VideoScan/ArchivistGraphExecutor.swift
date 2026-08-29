@@ -318,6 +318,15 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// claims, each cited to its GEDCOM pointers, instead of re-splitting
     /// the prose. Nil = derive the plan from the prose as before.
     let answerPlan: HallieAnswerPlan?
+    /// A duplicated parent the card flagged (live miss #16): the person
+    /// whose record shows both parents, for the "Show possible duplicate
+    /// in Family Tree" chip. Nil when the card raised no flag.
+    let possibleDuplicate: PossibleDuplicate?
+
+    struct PossibleDuplicate: Sendable, Equatable {
+        let personID: String
+        let personName: String
+    }
 
     init(
         conclusion: ArchivistGraphConclusion,
@@ -330,7 +339,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         catalogPersonName: String?,
         familyTreeFocus: ArchivistFamilyTreeFocus? = nil,
         subjectIndex: Int? = nil,
-        answerPlan: HallieAnswerPlan? = nil
+        answerPlan: HallieAnswerPlan? = nil,
+        possibleDuplicate: PossibleDuplicate? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -343,6 +353,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.familyTreeFocus = familyTreeFocus
         self.subjectIndex = subjectIndex
         self.answerPlan = answerPlan
+        self.possibleDuplicate = possibleDuplicate
     }
 
     /// The same result tagged with the people-list slot it concerns.
@@ -354,7 +365,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
             ambiguityCandidates: ambiguityCandidates,
             catalogPersonName: catalogPersonName,
             familyTreeFocus: familyTreeFocus, subjectIndex: index,
-            answerPlan: answerPlan)
+            answerPlan: answerPlan, possibleDuplicate: possibleDuplicate)
     }
 }
 
@@ -439,10 +450,10 @@ enum ArchivistGraphExecutor {
                               inputs: inputs, query: query) {
         case .result(let result):
             return result
-        case .person(let person, let bridge, let correction):
+        case .person(let person, let bridge, let correction, let profileStableID):
             let result = executeResolved(
-                query, person: person, graph: inputs.graph,
-                identityBridge: bridge)
+                query, person: person, inputs: inputs,
+                identityBridge: bridge, profileStableID: profileStableID)
             return applyingMarriedName(
                 typed: typedName, person: person, graph: inputs.graph,
                 to: applyingSpellingCorrection(
@@ -480,16 +491,24 @@ enum ArchivistGraphExecutor {
             ambiguityCandidates: result.ambiguityCandidates,
             catalogPersonName: result.catalogPersonName,
             familyTreeFocus: result.familyTreeFocus,
-            subjectIndex: result.subjectIndex)
+            subjectIndex: result.subjectIndex,
+            // The plan is deliberately NOT carried: its claims say the
+            // maiden name, and the composer would follow the plan over
+            // the prose. Deriving from the prose keeps "(Breen)" (as before).
+            possibleDuplicate: result.possibleDuplicate)
     }
 
     /// Outcome of resolving ONE typed name: the unique GEDCOM person (with
     /// the profile bridge, if any), or the complete result to return as-is
     /// (ambiguity chips, not-found, profile conflict, surname roll-up).
     enum SubjectResolution {
+        /// `profileStableID`: the People-tab profile the typed name went
+        /// through (pin or name route), so the person card can add that
+        /// profile's relationship rows. Nil for a direct tree lookup.
         case person(GedcomFamilyGraph.Person,
                     identityBridge: ArchivistGraphEvidence.IdentityBridge?,
-                    spellingCorrection: String?)
+                    spellingCorrection: String?,
+                    profileStableID: String?)
         case result(ArchivistGraphResult)
     }
 
@@ -553,7 +572,8 @@ enum ArchivistGraphExecutor {
                 profileRoute, effectivePerson: people[0])
             return .person(
                 people[0], identityBridge: bridge,
-                spellingCorrection: correction)
+                spellingCorrection: correction,
+                profileStableID: profileRoute?.profileStableID)
         }
     }
 
@@ -580,6 +600,8 @@ enum ArchivistGraphExecutor {
         let requestedName: String
         let profileCanonicalName: String
         let pinProblem: String?
+        /// The profile's stable id (nil only for legacy callers).
+        var profileStableID: String? = nil
     }
 
     /// Same specificity rule as FamilyTreeIdentityResolver, expressed over a
@@ -796,7 +818,8 @@ enum ArchivistGraphExecutor {
         let profileRoute = ProfileRoute(
             requestedName: requestedName,
             profileCanonicalName: profile.canonicalName,
-            pinProblem: nil)
+            pinProblem: nil,
+            profileStableID: profile.stableID)
 
         // Identity != spelling. Once a profile carries a durable tree pin,
         // the already-built overlay is the sole authority for crossing into
@@ -817,7 +840,8 @@ enum ArchivistGraphExecutor {
                         requestedName: requestedName,
                         profileCanonicalName: profile.canonicalName,
                         pinProblem: pinProblem
-                            ?? "the saved family-tree pin did not resolve"),
+                            ?? "the saved family-tree pin did not resolve",
+                        profileStableID: profile.stableID),
                     spellingCorrection: nil)
             }
             return .people(
@@ -866,9 +890,11 @@ enum ArchivistGraphExecutor {
     private static func executeResolved(
         _ query: ArchivistGraphQuery,
         person: GedcomFamilyGraph.Person,
-        graph: GedcomFamilyGraph,
-        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+        inputs: ArchivistGraphInputs,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?,
+        profileStableID: String?
     ) -> ArchivistGraphResult {
+        let graph = inputs.graph
         switch query.operation {
         case .biography, .familyTree:
             // ONE person card for both asks (live 2026-08-29: "tell me
@@ -877,7 +903,10 @@ enum ArchivistGraphExecutor {
             if query.operation == .biography, query.relation != nil {
                 return declineUnexpectedRelation()
             }
-            let (answer, plan) = HallieBiographyCard.answer(for: person, in: graph)
+            let peopleTab = peopleTabKin(
+                for: person, profileStableID: profileStableID, inputs: inputs)
+            let (answer, plan, card) = HallieBiographyCard.answer(
+                for: person, in: graph, peopleTab: peopleTab)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(
@@ -895,7 +924,10 @@ enum ArchivistGraphExecutor {
                 catalogPersonName: result.catalogPersonName,
                 familyTreeFocus: query.operation == .familyTree
                     ? .person(name: person.name) : nil,
-                answerPlan: plan)
+                answerPlan: plan,
+                possibleDuplicate: card.dataQualityFlags.first.map {
+                    .init(personID: $0.child.id, personName: $0.child.name)
+                })
 
         case .birth, .death:
             guard query.relation == nil else {
@@ -1135,6 +1167,46 @@ enum ArchivistGraphExecutor {
             effectiveGEDCOMName: effectivePerson.name)
     }
 
+    /// The People-tab relatives of a tree person, when that person IS a
+    /// People-tab profile: through the profile the typed name went
+    /// through (`profileStableID`), or through a profile pinned / assumed
+    /// onto this tree record (the overlay put that profile on the record's
+    /// own vertex). Explicit rows only (one hop) — a derived route is not a
+    /// stored fact. Nil when nobody in the People tab is this person, so
+    /// an unbridged card stays exactly as it was.
+    static func peopleTabKin(
+        for person: GedcomFamilyGraph.Person,
+        profileStableID: String?,
+        inputs: ArchivistGraphInputs
+    ) -> HallieBiographyCard.PeopleTabKin? {
+        let overlay = inputs.kinshipOverlay
+        var node: FamilyKinshipOverlay.Node?
+        if let profileStableID, let known = overlay.node(profileStableID: profileStableID) {
+            node = known
+        } else if overlay.member(.tree(gedcomID: person.id))?.profileStableID != nil {
+            node = .tree(gedcomID: person.id)
+        }
+        guard let node, let member = overlay.member(node) else { return nil }
+        var storedOn = Set<String>()
+        func relatives(_ relation: KinshipRelation) -> [HallieBiographyCard.PeopleTabKin.Relative] {
+            overlay.relatives(of: node, relation: relation)
+                .filter { $0.hops.count == 1 }
+                .map { hit in
+                    hit.hops.forEach { storedOn.insert($0.storedOn) }
+                    return .init(
+                        name: hit.member.name,
+                        term: relation.term(sex: hit.member.sex),
+                        evidenceID: hit.member.identity.isEmpty ? hit.member.node.auditID : hit.member.identity,
+                        gedcomID: hit.member.gedcomID)
+                }
+        }
+        let siblings = relatives(.sibling)
+        let children = relatives(.child)
+        let spouses = relatives(.spouse)
+        return .init(profileName: member.name, siblings: siblings, children: children,
+                     spouses: spouses, storedOn: storedOn.sorted())
+    }
+
     static func decline(
         _ conclusion: ArchivistGraphConclusion,
         prose: String,
@@ -1169,7 +1241,9 @@ enum ArchivistGraphExecutor {
             ambiguityCandidates: result.ambiguityCandidates,
             catalogPersonName: result.catalogPersonName,
             familyTreeFocus: result.familyTreeFocus,
-            subjectIndex: result.subjectIndex)
+            subjectIndex: result.subjectIndex,
+            answerPlan: result.answerPlan,
+            possibleDuplicate: result.possibleDuplicate)
     }
 
     private static func normalize(_ value: String) -> String {

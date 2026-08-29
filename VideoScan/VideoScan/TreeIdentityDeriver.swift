@@ -96,6 +96,10 @@ enum TreeIdentityDerivation: Equatable, Sendable {
         case nameAndBirth = "name + birth year"
         case uniqueFullName = "unique full name"
         case nameAndKinship = "name + relationship"
+        /// No usable name evidence, but the typed rows against pinned
+        /// profiles leave exactly one compatible record ("Dad" — Rick's
+        /// "child of Dad" row, Rick pinned to Jr, Jr's one recorded father).
+        case kinshipToPinned = "relationship to a pinned profile"
 
         /// Only the two identity SOURCES the app already trusts elsewhere
         /// (Hallie's owner pin; a merged tree's recorded home people) are
@@ -316,6 +320,20 @@ struct TreeIdentityDeriver: Sendable {
         matches = matches.filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
 
         if matches.isEmpty {
+            // 3b. Typed rows alone: every row against a pinned profile
+            // agrees on ONE compatible, unclaimed record. Rick's own
+            // rulings (owner pin + "I am the child of Dad") decide "Dad" =
+            // Richard Harding Breen Sr without any name being matched; the
+            // People tab still asks before pinning (not auto-acceptable).
+            let constraints = kinshipConstraints(for: subject)
+            if var allowed = constraints.first {
+                for constraint in constraints.dropFirst() { allowed.formIntersection(constraint) }
+                let candidates = allowed.sorted().compactMap { graph.people[$0] }
+                    .filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
+                if candidates.count == 1 {
+                    return .certain(TreeIdentityCandidate(candidates[0]), reason: .kinshipToPinned)
+                }
+            }
             // 4. Review suggestions only.
             let suggested = FamilyKinshipOverlay.suggestedTreeMatches(
                 canonicalName: subject.name, aliases: subject.aliases, graph: graph)
@@ -545,24 +563,35 @@ extension TreeIdentityDeriver {
         ownerName: String?,
         ownerFamilySearchID: String?
     ) -> (snapshots: [HallieTurnExecutor.ProfileSnapshot], assumed: [String: String]) {
-        let deriver = TreeIdentityDeriver(
-            graph: graph, subjects: snapshots.map(TreeIdentitySubject.init),
-            ownerName: ownerName, ownerFamilySearchID: ownerFamilySearchID)
-        let verdicts = deriver.deriveAll()
+        // To a fixpoint (live miss, Rick 2026-08-29): a pin assumed in one
+        // pass is evidence in the next — Rick (owner setting) is pinned to
+        // Jr, so Rick's "child of Dad" row now reaches a pinned record and
+        // "Dad" derives Sr. Each pass only ADDS certain pins; bounded by
+        // the number of profiles.
+        var current = snapshots
         var assumed: [String: String] = [:]
         var used: Set<String> = []
-        let out = snapshots.map { snapshot -> HallieTurnExecutor.ProfileSnapshot in
-            guard snapshot.treeIdentity == nil,
-                  let candidate = verdicts[snapshot.stableID]?.certainCandidate,
-                  candidate.familySearchID != nil,   // a pointer pin needs the fingerprint; not worth it for one turn
-                  used.insert(candidate.personID).inserted else { return snapshot }
-            assumed[candidate.personID] = "\(snapshot.canonicalName) as \(candidate.name)"
-            return HallieTurnExecutor.ProfileSnapshot(
-                stableID: snapshot.stableID, canonicalName: snapshot.canonicalName,
-                aliases: snapshot.aliases, birthdate: snapshot.birthdate, note: snapshot.note,
-                kinships: snapshot.kinships, sex: snapshot.sex, uuid: snapshot.uuid,
-                treeIdentity: candidate.identity(fingerprint: nil))
+        for _ in 0..<max(1, snapshots.count) {
+            let deriver = TreeIdentityDeriver(
+                graph: graph, subjects: current.map(TreeIdentitySubject.init),
+                ownerName: ownerName, ownerFamilySearchID: ownerFamilySearchID)
+            let verdicts = deriver.deriveAll()
+            var added = 0
+            current = current.map { snapshot -> HallieTurnExecutor.ProfileSnapshot in
+                guard snapshot.treeIdentity == nil,
+                      let candidate = verdicts[snapshot.stableID]?.certainCandidate,
+                      candidate.familySearchID != nil,   // a pointer pin needs the fingerprint; not worth it for one turn
+                      used.insert(candidate.personID).inserted else { return snapshot }
+                assumed[candidate.personID] = "\(snapshot.canonicalName) as \(candidate.name)"
+                added += 1
+                return HallieTurnExecutor.ProfileSnapshot(
+                    stableID: snapshot.stableID, canonicalName: snapshot.canonicalName,
+                    aliases: snapshot.aliases, birthdate: snapshot.birthdate, note: snapshot.note,
+                    kinships: snapshot.kinships, sex: snapshot.sex, uuid: snapshot.uuid,
+                    treeIdentity: candidate.identity(fingerprint: nil))
+            }
+            if added == 0 { break }
         }
-        return (out, assumed)
+        return (current, assumed)
     }
 }

@@ -267,6 +267,8 @@ final class HallieWebBridge {
             case .openPeopleTab:
                 // The People tab is Mac-only; the web client gets the prose.
                 break
+            case .showPossibleDuplicate(_, let name):
+                chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
             }
         }
         let cited = citations.map(citationJSON)

@@ -528,6 +528,16 @@ extension HallieTurnExecutor {
                                   relation: relation, side: side)),
                 playAfterAnswer: playAfterAnswer))
         }
+        // "tell me about rick's family tree, his brothers, sisters, parents,
+        // and grandparents" (live miss #16): the person card, by the
+        // ordinary family-tree route (owner chain, People-tab bridge,
+        // chips), never the translator.
+        if case .personTree(let person) = lineage {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .graph(.init(people: [person ?? "me"], operation: .familyTree)),
+                playAfterAnswer: playAfterAnswer))
+        }
         if case .superlative(_, _, let media?) = lineage, let lineageAnswer {
             return superlativeMediaTurn(
                 lineage, media: media, question: question,
@@ -591,6 +601,18 @@ extension HallieTurnExecutor {
         // search for a person named Breen.
         if let surnameAnswer = HallieSurnameReference.answer(question) {
             return .answer(surnameAnswer)
+        }
+        // "what is Dad's name and his birthdate?" (live miss #19): a
+        // PROPERTY of a known person whose canonical name is itself a
+        // kinship word was read as "father of Dad". A possessive subject the
+        // context knows + a property word is a biography ask about THAT
+        // person; "Rick's dad" (relation word as object) is untouched.
+        if let subject = HalliePropertyAsk.detect(question),
+           subject == "me" || isKnownPerson(subject) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .graph(.init(people: [subject], operation: .biography)),
+                playAfterAnswer: playAfterAnswer))
         }
         // Lineage shapes the translator has no vocabulary for ("maternal
         // line back 5 generations", "the Latta family tree", "trace the
@@ -844,6 +866,7 @@ extension HallieTurnExecutor {
         case .ask(_, let label): return label
         case .recompileFamilyTree: return "Recompile the family tree"
         case .openPeopleTab: return "Open the People tab"
+        case .showPossibleDuplicate: return "Show possible duplicate in Family Tree"
         }
     }
 

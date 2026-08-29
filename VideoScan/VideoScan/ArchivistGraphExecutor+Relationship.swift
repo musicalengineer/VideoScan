@@ -77,7 +77,7 @@ extension ArchivistGraphExecutor {
             switch outcome {
             case .result(let result):
                 return result.taggingSubject(index)
-            case .person(let person, let bridge, let correction):
+            case .person(let person, let bridge, let correction, _):
                 resolved.append((person, bridge, correction))
             }
         }

@@ -412,6 +412,10 @@ enum HallieTurnExecutor {
         case recompileFamilyTree
         /// Open the People tab (relationships overview, live miss #12).
         case openPeopleTab
+        /// Focus the Family Tree on the person whose record shows two
+        /// mothers / fathers (live miss #16), so the duplicate can be seen
+        /// and merged upstream on FamilySearch.
+        case showPossibleDuplicate(personID: String, personName: String)
     }
 
     struct Result: Sendable, Equatable {
@@ -1124,15 +1128,22 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil,
                 clarification: clarification)
         }
+        // An assumed bridge is said out loud: in the prose when the prose
+        // is what gets composed, in the basis when a claim plan is (the
+        // composer phrases the plan; an aside in the prose would be lost).
+        let taken = assumedBridges(result, context: context)
+        let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
         let base = Result(
             route: .graph,
             outcome: result.conclusion == .answered ? .answered : .declined,
-            prose: result.prose,
-            basisLine: result.basisLine,
+            prose: result.prose + (result.answerPlan == nil ? aside : ""),
+            basisLine: result.basisLine
+                + (result.answerPlan != nil && !taken.isEmpty
+                    ? " Taking \(taken.joined(separator: "; "))." : ""),
             queryDescription: queryDescription,
             citations: [],
             catalogPersonName: result.catalogPersonName,
-            offeredActions: familyTreeOffers(result.familyTreeFocus),
+            offeredActions: graphOffers(result),
             answerPlan: result.answerPlan)
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
@@ -1438,7 +1449,7 @@ enum HallieTurnExecutor {
             queryDescription: queryDescription,
             citations: [],
             catalogPersonName: result.catalogPersonName,
-            offeredActions: familyTreeOffers(result.familyTreeFocus),
+            offeredActions: graphOffers(result),
             answerPlan: result.answerPlan)
         // "who are Rick's sons" arrives here (CyberBrain knows "rick"); the
         // tree stops in 1959, but the family has told Hallie about the sons.
@@ -1499,6 +1510,30 @@ enum HallieTurnExecutor {
         case .person(let name): return [.openFamilyTree(personName: name)]
         case .surname(let surname): return [.openFamilyTreeSurname(surname)]
         }
+    }
+
+    /// The tree-focus offer plus the duplicate-parent chip when the card
+    /// raised one (live miss #16).
+    static func graphOffers(_ result: ArchivistGraphResult) -> [OfferedAction] {
+        var offers = familyTreeOffers(result.familyTreeFocus)
+        if let duplicate = result.possibleDuplicate {
+            offers.append(.showPossibleDuplicate(
+                personID: duplicate.personID, personName: duplicate.personName))
+        }
+        return offers
+    }
+
+    /// "(taking Dad as Richard Harding Breen Sr)" — every tree person the
+    /// answer leaned on through a bridge this turn only ASSUMED (a
+    /// derivable-but-unconfirmed identity). Empty when none was.
+    static func assumedBridges(_ result: ArchivistGraphResult, context: Context) -> [String] {
+        guard !context.assumedTreeBridges.isEmpty, let evidence = result.evidence else { return [] }
+        var ids: [String] = [evidence.subjectID]
+        ids += evidence.kinshipPaths.flatMap { $0.hops.map(\.person.id) }
+        ids += evidence.relationships.flatMap { $0.people.map(\.id) }
+        if let counterpart = evidence.counterpart { ids.append(counterpart.id) }
+        var seen = Set<String>()
+        return ids.compactMap { context.assumedTreeBridges[$0] }.filter { seen.insert($0).inserted }
     }
 
     /// The whole set of names anybody in the context can vouch for: People
