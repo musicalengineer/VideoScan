@@ -62,8 +62,10 @@ enum HallieRelationshipsOverview {
 
     private static let relativesWords = "(?:relatives|relations|relationships|kin|family relationships|family)"
     private static let leadIn = "(?:(?:tell me|explain|show me|can you tell me|can you explain|could you tell me|i want to know|id like to know) )?"
-    /// "am i" / "is rick" / "is tim breen" / "are we" (we = the owner's side).
-    private static let subjectPhrase = "(am i|is [a-z]+(?: [a-z]+)?|are we)"
+    /// "am i" / "i am" / "is rick" / "rick is" / "tim breen is" / "are we"
+    /// (we = the owner's side). Rick's own sentence is the inverted form:
+    /// "tell me how rick is related to …".
+    private static let subjectPhrase = "(am i|i am|is [a-z]+(?: [a-z]+)?|[a-z]+(?: [a-z]+)? is|are we|we are)"
 
     private static let shapes: [NSRegularExpression] = {
         let patterns = [
@@ -120,10 +122,13 @@ enum HallieRelationshipsOverview {
         collectiveMarkers.contains { remainder.contains($0) }
     }
 
-    /// "am i" / "are we" → owner; "is rick" → named "rick".
+    /// "am i" / "i am" / "are we" / "we are" → owner; "is rick" / "rick is"
+    /// → named "rick".
     private static func subject(fromPhrase phrase: String) -> Ask.Subject {
-        if phrase == "am i" || phrase == "are we" { return .owner }
-        let name = phrase.hasPrefix("is ") ? String(phrase.dropFirst(3)) : phrase
+        if ["am i", "i am", "are we", "we are"].contains(phrase) { return .owner }
+        var name = phrase
+        if name.hasPrefix("is ") { name = String(name.dropFirst(3)) }
+        if name.hasSuffix(" is") { name = String(name.dropLast(3)) }
         return .named(name)
     }
 
@@ -256,7 +261,7 @@ enum HallieRelationshipsOverview {
         basis += "; no model call."
 
         var offers: [HallieTurnExecutor.OfferedAction] = [.openPeopleTab]
-        let chipNames = entries.map(\.name) + unrecorded
+        let chipNames = lines.flatMap(\.names) + unrecorded   // nearest first, like the prose
         for name in chipNames.prefix(HallieWhichOne.cap) {
             offers.append(.ask(question: "who is \(name)?", label: "tell me about \(name)"))
         }

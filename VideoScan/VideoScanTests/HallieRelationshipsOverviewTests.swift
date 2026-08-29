@@ -84,6 +84,8 @@ struct HallieRelationshipsOverviewTests {
         #expect(Overview.detect(Self.rickSentence) == Overview.Ask(subject: .named("rick")))
         #expect(Overview.detect("how am I related to everyone in the People tab?") == Overview.Ask(subject: .owner))
         #expect(Overview.detect("how is Tim related to everyone") == Overview.Ask(subject: .named("tim")))
+        #expect(Overview.detect("tell me how Tim is related to the family") == Overview.Ask(subject: .named("tim")))
+        #expect(Overview.detect("how I am related to everybody in the people tab") == Overview.Ask(subject: .owner))
         #expect(Overview.detect("list Tim's relatives") == Overview.Ask(subject: .named("tim")))
 
         // Two named people, the roster, and searches stay where they were.
