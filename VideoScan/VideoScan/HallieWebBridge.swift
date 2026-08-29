@@ -28,6 +28,7 @@ final class HallieWebBridge {
         var history: [HallieGroundedComposer.HistoryTurn] = []
         var telling: HallieTellingMode.Session?
         var drill: HalliePronunciationDrillMode.Session?
+        var picker: HalliePronunciationPicker.Offer?
         var pendingClarification: HallieAppTurnCoordinator.PendingClarification?
         var lastCitations: [HallieTurnExecutor.Citation] = []
         var lastSeen = Date()
@@ -182,6 +183,7 @@ final class HallieWebBridge {
                     history: session.history,
                     telling: session.telling,
                     drill: session.drill,
+                    picker: session.picker,
                     dependencies: turnDependencies)
                 session.history.append(.init(user: text, assistant: response.result.prose))
                 if session.history.count > HallieGroundedComposer.historyTurns {
@@ -195,6 +197,7 @@ final class HallieWebBridge {
             }
             session.telling = response.telling
             session.drill = response.drill
+            session.picker = response.picker
             session.memory.record(intent: response.executedIntent, result: response.result,
                                   question: object["text"] as? String)
             let isFollowUpAction = response.result.route == .followUp
@@ -271,6 +274,16 @@ final class HallieWebBridge {
                 chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
             }
         }
+        // The variations picker: the web client has no phoneme playback,
+        // so the list rides in the prose and each chip replies by number.
+        var prose = result.prose
+        if let offer = response.picker {
+            prose += "\n" + HalliePronunciationPicker.numberedList(offer)
+            for (index, candidate) in offer.candidates.enumerated() {
+                chips.append(["label": "\(index + 1) \(candidate.respelling)", "ask": "\(index + 1)"])
+            }
+            chips.append(["label": HalliePronunciationPicker.noneLabel, "ask": HalliePronunciationPicker.noneReplyText])
+        }
         let cited = citations.map(citationJSON)
         var play: [[String: Any]] = []
         if let action = result.mediaAction, action.kind == .play {
@@ -279,7 +292,7 @@ final class HallieWebBridge {
             play = cited.filter { ($0["playable"] as? Bool) == true }.prefix(1).map { $0 }
         }
         return [
-            "prose": result.prose,
+            "prose": prose,
             "basis": result.basisLine,
             "attachments": result.attachments.map { attachmentJSON($0) },
             "route": HallieTurnExecutor.label(result.route),

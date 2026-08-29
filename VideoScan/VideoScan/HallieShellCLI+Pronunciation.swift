@@ -39,10 +39,11 @@ extension HallieShellCLI {
                 _ = try? dependencies.saveDrillStore(store, .build(list: PronunciationDrillList(items: []),
                                                                    lexicon: dependencies.loadLexicon(), store: store))
             }
-            return await emitPronunciation(
-                HallieTellingMode.hintNeedsSpellingReply(hinted), description: "pronunciation hint",
-                basis: "Basis: listening — pronunciation hint understood, needs a respelling; no model call, no catalog query.",
-                state: &state, output: output, dependencies: dependencies)
+            // Not mappable: offer a few ways built from the hint (the picker).
+            let word = knownSpelling(hinted.word, state: state, dependencies: dependencies) ?? hinted.word
+            return await offerInShell(word: word, hint: hinted.hint, respellings: [], round: 0, fromDrill: false,
+                                      state: &state, output: output, dependencies: dependencies,
+                                      prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
         }
         return nil
     }
@@ -110,7 +111,7 @@ extension HallieShellCLI {
     }
 
     /// The archive's spelling of `word` (lexicon, People tab, tree, brain).
-    private static func knownSpelling(_ word: String, state: Session, dependencies: Dependencies) -> String? {
+    static func knownSpelling(_ word: String, state: Session, dependencies: Dependencies) -> String? {
         let key = FamilyIdentityText.normalized(word)
         guard !key.isEmpty else { return nil }
         if let entry = dependencies.loadLexicon().entries.first(where: { FamilyIdentityText.normalized($0.written) == key }) {

@@ -33,6 +33,12 @@ extension HallieShellCLI {
                 return await emit(Mode.openingReply(session, remaining: session.remaining(store: store), resumed: true),
                                   state: &state, output: output, dependencies: dependencies)
             case .unrecognized:
+                // A bare "no" with no respelling: offer a few ways to say
+                // the name (the picker) instead of asking for a spelling.
+                if let item = session.current, HalliePronunciationPicker.isBareNo(text) {
+                    return await offerInShell(word: item.name, hint: nil, respellings: [], round: 0, fromDrill: true,
+                                              state: &state, output: output, dependencies: dependencies)
+                }
                 return await emit(Mode.unrecognizedReply(session), state: &state, output: output, dependencies: dependencies)
             case .stop:
                 HallieAppTurnCoordinator.logSession(session)
@@ -69,7 +75,12 @@ extension HallieShellCLI {
                         store.set(name: hinted.word, status: store.status(for: key), hint: hinted.hint.description)
                     }
                     _ = save(store, session: session, options: options, dependencies: dependencies)
-                    return await emit(Mode.hintNeedsSpellingReply(hinted, session: session), state: &state, output: output, dependencies: dependencies)
+                    // Not mappable: offer a few ways built from the hint.
+                    let word = session.list.items.first(where: { $0.key == key })?.name
+                        ?? knownSpelling(hinted.word, state: state, dependencies: dependencies) ?? hinted.word
+                    return await offerInShell(word: word, hint: hinted.hint, respellings: [], round: 0, fromDrill: true,
+                                              state: &state, output: output, dependencies: dependencies,
+                                              prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
                 }
                 return await teachInDrill(.init(word: hinted.word, alternatives: [respelling]), hint: hinted.hint, session: session,
                                           store: store, options: options, state: &state, output: output, dependencies: dependencies)
