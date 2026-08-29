@@ -23,5 +23,5 @@ Extend the existing web pages: catalog browse (search/filter/sort read-only), pe
 Family-facing read portal outside the LAN: auth (invite links / passkeys), TLS, per-viewer audit log; reuse Phase 2 pages; Publish pipeline (per-asset + in/out segments) feeds it. Contemporary people never leave the LAN unless Rick publishes.
 
 ## Open questions for Rick
-- Which second Mac first (M1 or M5)? Media: stream from the M4 by default, SMB opt-in — OK?
+- ANSWERED 8/29 16:05: the M5 (porch) first. Media: stream from the M4 by default, SMB opt-in.
 - Should the viewer be allowed *notes* (archivist notes, dispositions) queued back to the master, or strictly read-only in Phase 1 (recommended: read-only)?
