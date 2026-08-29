@@ -896,6 +896,51 @@ struct FamilyTreeScaleTests {
         #expect(mid.nodes.map(\.generation).min() == -3)
         #expect(mid.nodes.count <= 15)
     }
+
+    // Rick 2026-08-28: "if navigating the tree hangs we need to know
+    // where/when". The install total is ALWAYS logged with the people
+    // count; individual steps only when they exceed 100 ms.
+    @Test func fiveThousandPersonInstallLogsTheTotalLine() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.chainGedcom(count: 5_000))
+        let sink = InMemoryLogSink()
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        withAppLog(sink) { model.install(graph: graph) }
+        let totals = sink.lines.filter { $0.contains("[family-tree] install total took ") }
+        #expect(totals.count == 1, "got: \(sink.joined)")
+        #expect(totals.first?.hasSuffix(" ms (\(graph.people.count) people)") == true, "got: \(totals)")
+        #expect(model.peopleCount == graph.people.count)
+    }
+
+    @Test func fastStepsLogNothingBesidesTheInstallTotal() {
+        let sink = InMemoryLogSink()
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        withAppLog(sink) {
+            model.install(graph: fixtureGraph())
+            model.select("@I7@")
+            model.searchText = "Breen"
+            model.focusHome()
+        }
+        let timing = sink.lines.filter { $0.contains("[family-tree]") && $0.contains(" took ") }
+        // Exactly the install total; select / search / Home on 18 people
+        // are far under the 100 ms threshold and must stay silent.
+        #expect(timing.count == 1, "got: \(timing)")
+        #expect(timing.first?.hasPrefix("[family-tree] install total took ") == true)
+        #expect(FamilyTreeLiveModel.slowStepThreshold == .milliseconds(100))
+    }
+
+    @Test func slowStepLineIsOnlyWrittenAboveTheThreshold() {
+        let sink = InMemoryLogSink()
+        withAppLog(sink) {
+            FamilyTreeLiveModel.logStep("select: relayout", took: .milliseconds(99), people: 7)
+            FamilyTreeLiveModel.logStep("select: relayout", took: .milliseconds(100), people: 7)
+            FamilyTreeLiveModel.logStep("select: relayout", took: .milliseconds(1_234), people: 7)
+            FamilyTreeLiveModel.logStep("install total", took: .milliseconds(3), people: 7, always: true)
+        }
+        #expect(sink.lines == ["[family-tree] select: relayout took 1234 ms (7 people)",
+                               "[family-tree] install total took 3 ms (7 people)"], "got: \(sink.lines)")
+    }
 }
 
 // MARK: - Isolation
