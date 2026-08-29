@@ -16,3 +16,6 @@ Also: Family Tree navigation has no timing logs (load → layout → focus); add
 
 ## Feature idea (Rick 8/29 11:45) — "Research Person"
 Right-click tree person → Research: FSID-keyed pane under People/<FSID>/research/; sources: FamilySearch record hints, Find a Grave, Chronicling America (LoC newspapers), Wikipedia/Wikidata, web search constrained by dates/places; LLM summary with per-sentence citations; findings marked confirmed/plausible/wrong + lore → CyberBrain attestations Hallie cites. Deceased/tree people only (privacy). Design doc after kinship lands.
+
+## Feature idea (Rick 8/29 11:50) — remote use from another Mac; eventually a web portal
+Today: Hallie web server (port 8765) serves chat + playback to iPad/browser. Direction: catalog/tree/Hallie READ for any authorized family member via the web portal (already the privacy model: read for all, write = Rick); full-app remote (another Mac) = later; design with the identity/attestation foundation first.
