@@ -133,6 +133,10 @@ struct FamilyTreeLineChain: Equatable {
         let spouseNames: [String]
         /// 0 = the ancestor at the top.
         let generation: Int
+        /// "Born 1615 (Plymouth…)" / "Died 1690, age 75 (…)" — the same
+        /// lines the inspector shows; carried so the exported line strip
+        /// can print places (2026-08-29). Empty when the GEDCOM has none.
+        var lifeLines: [String] = []
     }
     let anchor: FamilyTreeAnchor
     let title: String
@@ -1058,7 +1062,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             return FamilyTreeLineChain.Card(
                 person: Self.summary(person),
                 spouseNames: spouses.map { $0.name.isEmpty ? "(unnamed)" : $0.name },
-                generation: index)
+                generation: index,
+                lifeLines: FamilyTreeLifeSummary(person).lines)
         }
         let generations = path.count - 1
         lineChain = FamilyTreeLineChain(
