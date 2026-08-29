@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 /// Family Tree tab.
 ///
@@ -22,7 +23,26 @@ struct FamilyTreeDemoView: View {
     @EnvironmentObject private var catalogModel: VideoScanModel
     @Environment(\.openWindow) private var openWindow
     private let usesInjectedModel: Bool
-    @State private var zoom: Double = 0.88
+    @State private var zoom: Double = FamilyTreeZoomMath.default
+    /// Pinch bookkeeping: the zoom when the gesture began (the gesture
+    /// reports a multiplier relative to its start, not a delta).
+    @State private var zoomStart: Double?
+    /// Canvas viewport, kept for "Fit" (⌥⌘0) — the fit scale is pure math
+    /// on the scene size and this; no layout re-run.
+    @State private var canvasViewport: CGSize = .zero
+    /// The tree is the primary view (Rick 2026-08-29): the sidebar hides
+    /// (⌥⌘S) so a long line fits; the choice is saved explicitly to
+    /// `preferences`. `revealedForSearch` is the ⌘F peek while hidden —
+    /// it lasts until the search field loses focus and is never saved.
+    @State private var isSidebarVisible: Bool
+    @State private var sidebarRevealedForSearch = false
+    /// `@FocusState` ≈ a two-way flag for "does this control have keyboard
+    /// focus"; setting it true moves the focus.
+    @FocusState private var searchFocused: Bool
+    private let preferences: UserDefaults
+    /// Export line… state: photos on/off (view-local) and the last error.
+    @State private var exportIncludesPhotos = true
+    @State private var exportError: String?
     @State private var selectedPhotoItem: PhotosPickerItem?
     /// Apple Photos picker, presented from the card's context menu / the
     /// inspector's camera menu (2026-08-28: the photo buttons left the
@@ -68,9 +88,13 @@ struct FamilyTreeDemoView: View {
     /// same ask twice presents the sheet twice.
     @AppStorage("ftGetFamilyTreeRequest") private var getFamilyTreeRequest: String = ""
 
-    init(model: FamilyTreeLiveModel? = nil) {
+    init(model: FamilyTreeLiveModel? = nil, preferences: UserDefaults = .standard) {
         usesInjectedModel = model != nil
         _model = StateObject(wrappedValue: model ?? FamilyTreeLiveModel())
+        self.preferences = preferences
+        // `State(initialValue:)` ≈ member initializer for @State storage;
+        // it is read once when the view is first created.
+        _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
     }
 
     var body: some View {
@@ -130,8 +154,14 @@ struct FamilyTreeDemoView: View {
                 .background(Color.orange.opacity(0.10))
             }
             HSplitView {
-                sidebar
-                    .frame(minWidth: 220, idealWidth: 250, maxWidth: 310)
+                // Hidden sidebar = the canvas takes its width. HSplitView
+                // is not a NavigationSplitView, so this is a plain
+                // conditional child with a slide transition.
+                if isSidebarVisible || sidebarRevealedForSearch {
+                    sidebar
+                        .frame(minWidth: 220, idealWidth: 250, maxWidth: 310)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
 
                 treeCanvas
                     .frame(minWidth: 620)
@@ -139,6 +169,43 @@ struct FamilyTreeDemoView: View {
                 inspector
                     .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
             }
+            .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+            .animation(.easeInOut(duration: 0.2), value: sidebarRevealedForSearch)
+        }
+        // Shortcut carriers: zero-size, invisible buttons whose only job is
+        // the key equivalent (the visible toolbar buttons live inside the
+        // canvas header, which is rebuilt in chain mode). ⌘0 is taken
+        // app-wide by Window › Main Window, so Fit is ⌥⌘0.
+        .background {
+            Group {
+                Button("") { toggleSidebar() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
+                Button("") { revealSearch() }
+                    .keyboardShortcut("f", modifiers: [.command])
+                Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
+                    .keyboardShortcut("=", modifiers: [.command])
+                Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
+                    .keyboardShortcut("+", modifiers: [.command])
+                Button("") { zoom = FamilyTreeZoomMath.zoomOut(zoom) }
+                    .keyboardShortcut("-", modifiers: [.command])
+                Button("") { fitToViewport() }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+            }
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
+        .onChange(of: searchFocused) { _, focused in
+            // The ⌘F peek ends when focus leaves the field.
+            if !focused, sidebarRevealedForSearch { sidebarRevealedForSearch = false }
+        }
+        .alert("Export failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
         .background(Color(red: 0.06, green: 0.07, blue: 0.08))
         .preferredColorScheme(.dark)
@@ -397,6 +464,7 @@ struct FamilyTreeDemoView: View {
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
                 // Return picks the first match; ↑/↓ walk the list without
                 // leaving the field. `.onKeyPress` returning `.handled` ≈
                 // "consumed, don't pass to the next responder".
@@ -481,11 +549,43 @@ struct FamilyTreeDemoView: View {
     private var treeCanvas: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
+                Button {
+                    toggleSidebar()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .buttonStyle(.bordered)
+                .help(isSidebarVisible ? "Hide the sidebar (⌥⌘S)" : "Show the sidebar (⌥⌘S)")
+                .accessibilityIdentifier("ft.toggleSidebar")
                 Text(model.lineChain?.title ?? canvasTitle)
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
-                if model.lineChain != nil {
+                if let chain = model.lineChain {
+                    Button {
+                        zoom = FamilyTreeZoomMath.fitWidthScale(
+                            content: FamilyTreeLineChainMetrics.contentSize(cardCount: chain.cards.count),
+                            viewport: canvasViewport)
+                    } label: {
+                        Label("Fit line", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Scale the line to the canvas width (⌥⌘0)")
+                    Menu {
+                        Button("Export as PDF…") { exportLine(format: .pdf) }
+                        Button("Export as PNG (2×)…") { exportLine(format: .png) }
+                        Divider()
+                        Button("Print line…") { FamilyTreeLineExporter.printLine(exportSpec(chain)) }
+                        Divider()
+                        Toggle("Include photos", isOn: $exportIncludesPhotos)
+                    } label: {
+                        Label("Export line", systemImage: "square.and.arrow.up")
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.bordered)
+                    .fixedSize()
+                    .help("Save or print this line as a strip: names, years, places, photos")
+                    .accessibilityIdentifier("ft.exportLine")
                     Button {
                         model.showFullTree()
                     } label: {
@@ -498,7 +598,7 @@ struct FamilyTreeDemoView: View {
                         // the tree (2026-08-28).
                         Button {
                             model.focusHome()
-                            zoom = 0.88
+                            zoom = FamilyTreeZoomMath.default
                         } label: {
                             Label("Home", systemImage: "house")
                         }
@@ -507,14 +607,32 @@ struct FamilyTreeDemoView: View {
                     }
                     Button {
                         if !model.isLive { model.select(FamilyTreeDemoData.rootID) }
-                        zoom = 0.88
+                        zoom = FamilyTreeZoomMath.default
                     } label: {
                         Label("Center", systemImage: "scope")
                     }
                     .buttonStyle(.bordered)
-                    Slider(value: $zoom, in: 0.5...1.08)
-                        .frame(width: 130)
+                    Button {
+                        fitToViewport()
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Fit the tree to the canvas (⌥⌘0)")
                 }
+                // Zoom: buttons (⌘− / ⌘+), slider, pinch on the canvas.
+                Button { zoom = FamilyTreeZoomMath.zoomOut(zoom) } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .help("Zoom out (⌘−)")
+                Slider(value: $zoom, in: FamilyTreeZoomMath.range)
+                    .frame(width: 130)
+                Button { zoom = FamilyTreeZoomMath.zoomIn(zoom) } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .help("Zoom in (⌘+)")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -525,7 +643,9 @@ struct FamilyTreeDemoView: View {
                 FamilyTreeLineChainView(
                     chain: chain,
                     selectedID: model.selectedID,
+                    zoom: zoom,
                     onSelect: { model.select($0) })
+                .gesture(magnifyGesture)
                 .background(
                     LinearGradient(
                         colors: [
@@ -538,6 +658,79 @@ struct FamilyTreeDemoView: View {
                 )
             } else {
                 treeScroll
+            }
+        }
+        // Viewport for Fit: the whole canvas column (header included — a
+        // ~46 pt overestimate the fit padding absorbs). One place, both
+        // modes, so the value is never stale after a sidebar toggle.
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    // `initial: true` ≈ fire once on appear as well as on change.
+                    .onChange(of: proxy.size, initial: true) { _, newSize in
+                        canvasViewport = newSize
+                    }
+            }
+        }
+        // A chain starts at 1:1 (cards are readable); leaving it goes back
+        // to the tree's comfortable default.
+        .onChange(of: model.lineChain?.title) { _, title in
+            zoom = title == nil ? FamilyTreeZoomMath.default : 1.0
+        }
+    }
+
+    // MARK: Canvas navigation (sidebar, zoom, fit, export)
+
+    /// Trackpad pinch. `magnification` is a multiplier from the pinch's
+    /// start, so the zoom at gesture start is remembered and re-applied.
+    private var magnifyGesture: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                if zoomStart == nil { zoomStart = zoom }
+                zoom = FamilyTreeZoomMath.clamp((zoomStart ?? zoom) * value.magnification)
+            }
+            .onEnded { _ in zoomStart = nil }
+    }
+
+    private func toggleSidebar() {
+        isSidebarVisible.toggle()
+        sidebarRevealedForSearch = false
+        FamilyTreeSidebarPreference.save(isSidebarVisible, to: preferences)
+        appLog.write("Family Tree: sidebar \(isSidebarVisible ? "shown" : "hidden")")
+    }
+
+    /// ⌘F: focus the search field; when the sidebar is hidden, peek it
+    /// open until the field loses focus (the saved preference is untouched).
+    private func revealSearch() {
+        if !isSidebarVisible { sidebarRevealedForSearch = true }
+        // The field has to exist before it can take focus: defer one turn
+        // of the run loop when it is being inserted right now.
+        DispatchQueue.main.async { searchFocused = true }
+    }
+
+    /// ⌥⌘0: fit the tree scene, or the active line by width.
+    private func fitToViewport() {
+        if let chain = model.lineChain {
+            zoom = FamilyTreeZoomMath.fitWidthScale(
+                content: FamilyTreeLineChainMetrics.contentSize(cardCount: chain.cards.count),
+                viewport: canvasViewport)
+        } else {
+            zoom = FamilyTreeZoomMath.fitScale(content: model.scene.size, viewport: canvasViewport)
+        }
+    }
+
+    private func exportSpec(_ chain: FamilyTreeLineChain) -> FamilyTreeLineExportSpec {
+        FamilyTreeLineExportSpec(
+            chain: chain,
+            includePhotos: exportIncludesPhotos,
+            photo: { model.photo(for: $0) })
+    }
+
+    private func exportLine(format: UTType) {
+        guard let chain = model.lineChain else { return }
+        FamilyTreeLineExporter.exportViaPanel(exportSpec(chain), format: format) { result in
+            if case .failure(let error)? = result {
+                exportError = error.localizedDescription
             }
         }
     }
@@ -588,6 +781,7 @@ struct FamilyTreeDemoView: View {
                     .padding(40)
                     .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
                 }
+                .gesture(magnifyGesture)
                 .background(
                     LinearGradient(
                         colors: [

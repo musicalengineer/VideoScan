@@ -4,6 +4,10 @@
 // tree — ancestor at the top, anchor at the bottom, one card per
 // generation, spouse names as a caption. Rendering is O(path length);
 // all the graph work happened in the model (`lineOptions`, `lineChain`).
+//
+// 2026-08-29: the chain zooms like the tree (`zoom` + pinch) and exposes
+// its metrics (`FamilyTreeLineChainMetrics`) so "Fit line" and the export
+// strip can size themselves without laying the view out first.
 
 import SwiftUI
 
@@ -37,28 +41,56 @@ struct FamilyTreeLineToRow: View {
     }
 }
 
+/// Card geometry shared by the on-screen chain, "Fit line", and the export
+/// strip. Heights are estimates (a card grows with a second name line or a
+/// long spouse caption); they are used only to size scroll content and
+/// pick a zoom, never to position anything.
+enum FamilyTreeLineChainMetrics {
+    static let cardWidth: CGFloat = 260
+    /// Name + years + spouses + generation caption at the card's fonts.
+    static let cardHeight: CGFloat = 112
+    static let connectorHeight: CGFloat = 34
+    static let verticalPadding: CGFloat = 40
+
+    /// Unscaled size of a chain of `cardCount` cards.
+    static func contentSize(cardCount: Int) -> CGSize {
+        guard cardCount > 0 else { return .zero }
+        let height = CGFloat(cardCount) * cardHeight
+            + CGFloat(cardCount - 1) * connectorHeight
+            + verticalPadding * 2
+        return CGSize(width: cardWidth + verticalPadding * 2, height: height)
+    }
+}
+
 /// The chain itself: cards stacked top → bottom joined by a vertical line.
 struct FamilyTreeLineChainView: View {
     let chain: FamilyTreeLineChain
     let selectedID: String?
+    var zoom: Double = 1
     let onSelect: (String) -> Void
 
-    private let cardWidth: CGFloat = 260
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(chain.cards) { card in
-                    if card.generation > 0 {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.28))
-                            .frame(width: 2.5, height: 34)
+        GeometryReader { proxy in
+            let content = FamilyTreeLineChainMetrics.contentSize(cardCount: chain.cards.count)
+            ScrollView([.horizontal, .vertical]) {
+                VStack(spacing: 0) {
+                    ForEach(chain.cards) { card in
+                        if card.generation > 0 {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.28))
+                                .frame(width: 2.5, height: FamilyTreeLineChainMetrics.connectorHeight)
+                        }
+                        chainCard(card)
                     }
-                    chainCard(card)
                 }
+                .padding(.vertical, FamilyTreeLineChainMetrics.verticalPadding)
+                // Same trick as the tree canvas: scale the finished stack,
+                // then give the scroll view the scaled footprint so it
+                // scrolls the right distance.
+                .scaleEffect(zoom, anchor: .top)
+                .frame(width: content.width * zoom, height: content.height * zoom, alignment: .top)
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .top)
             }
-            .padding(.vertical, 40)
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -101,7 +133,7 @@ struct FamilyTreeLineChainView: View {
             }
             .padding(10)
         }
-        .frame(width: cardWidth)
+        .frame(width: FamilyTreeLineChainMetrics.cardWidth)
         .background(Color(red: 0.12, green: 0.13, blue: 0.145))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
