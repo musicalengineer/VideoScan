@@ -1013,8 +1013,36 @@ enum HallieTurnExecutor {
                familySearchID: context.speakers.ownerFamilySearchID, graph: graph) {
             ownerNote = stale
         }
+        // LIVE MISS #11 (2026-08-29): "pa oc'connor" — the SURNAME is in
+        // the tree (by spelling recovery) and the given token is a family
+        // nickname. An alias bridges it to one person, a member's own name
+        // answers or asks which one, and otherwise the surname roster is
+        // offered below — never the bare decline. See +SurnameRoster.
+        var rosterNote: String?
+        var rosterReply: Result?
+        if request.selectedIdentity == nil, ownerNote == nil,
+           result.conclusion == .personNotFound,
+           let typed = payload.people.first,
+           let step = surnameRosterStep(
+               typed: typed, request: request, context: context,
+               graph: graph, queryDescription: queryDescription) {
+            switch step {
+            case .resolved(let selection, let note):
+                result = try await detached {
+                    execute(query, inputs, selection)
+                }
+                rosterNote = note
+            case .replyNow(let reply):
+                return reply
+            case .roster(let reply):
+                rosterReply = reply
+            }
+        }
         func withOwnerNote(_ r: Result) -> Result {
-            ownerNote.map { r.prefixingBasis($0) } ?? r
+            var out = r
+            if let rosterNote { out = out.prefixingBasis(rosterNote) }
+            if let ownerNote { out = out.prefixingBasis(ownerNote) }
+            return out
         }
         if !result.ambiguityCandidates.isEmpty {
             let choices = result.ambiguityCandidates.map { candidate in
@@ -1138,6 +1166,9 @@ enum HallieTurnExecutor {
                         candidates: choices,
                         continuationToken: context.continuationToken))
             }
+            // The surname roster (LIVE MISS #11) — after the People tab and
+            // the near-miss suggestion, before the bare decline.
+            if let rosterReply { return rosterReply }
             return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
         }
         return withOwnerNote(FamilyKnowledgeSupplement.apply(
