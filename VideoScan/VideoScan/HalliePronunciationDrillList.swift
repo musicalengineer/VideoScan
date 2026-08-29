@@ -387,28 +387,31 @@ struct PronunciationDrillStore: Codable, Equatable, Sendable {
     /// given keep their previous value (a "right" after a teach keeps the
     /// respelling; a hint keeps the status).
     mutating func set(_ item: PronunciationDrillList.Item, status: PronunciationDrillStatus,
-                      alternatives: [String]? = nil, origin: Origin? = nil, hint: String? = nil,
-                      at date: Date = Date()) {
-        set(key: item.key, name: item.name, status: status, alternatives: alternatives,
+                      alternatives: [String]? = nil, phonemes: String? = nil, origin: Origin? = nil,
+                      hint: String? = nil, at date: Date = Date()) {
+        set(key: item.key, name: item.name, status: status, alternatives: alternatives, phonemes: phonemes,
             origin: origin, listSource: item.source, hint: hint, at: date)
     }
 
     /// Set by normalized key for a name that is not on the sheet (a one-off
     /// "pronounce X like Y" for a name the list did not carry).
     mutating func set(name: String, status: PronunciationDrillStatus,
-                      alternatives: [String]? = nil, origin: Origin? = nil, hint: String? = nil,
-                      at date: Date = Date()) {
+                      alternatives: [String]? = nil, phonemes: String? = nil, origin: Origin? = nil,
+                      hint: String? = nil, at date: Date = Date()) {
         set(key: FamilyIdentityText.normalized(name), name: name, status: status,
-            alternatives: alternatives, origin: origin, listSource: nil, hint: hint, at: date)
+            alternatives: alternatives, phonemes: phonemes, origin: origin, listSource: nil, hint: hint, at: date)
     }
 
     private mutating func set(key: String, name: String, status: PronunciationDrillStatus,
-                              alternatives: [String]?, origin: Origin?,
+                              alternatives: [String]?, phonemes: String?, origin: Origin?,
                               listSource: PronunciationDrillList.Source?, hint: String?, at date: Date) {
         let previous = names[key]
+        // New alternatives without phonemes drop the old phonemes: they
+        // described the old respelling.
+        let keptPhonemes = phonemes ?? (alternatives == nil ? previous?.phonemes : nil)
         names[key] = Record(
             name: name, status: status,
-            phonemes: previous?.phonemes,
+            phonemes: keptPhonemes,
             alternatives: alternatives ?? previous?.alternatives ?? [],
             source: origin ?? previous?.source,
             listSource: listSource ?? previous?.listSource,

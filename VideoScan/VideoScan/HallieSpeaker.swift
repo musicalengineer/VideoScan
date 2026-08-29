@@ -77,9 +77,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// removed, split at sentence ends so each gets its own breath.
     nonisolated static func sentences(
         _ text: String,
-        lexicon: HalliePronunciationLexicon = .shipped
+        lexicon: HalliePronunciationLexicon = .shipped,
+        phonemeLinks: Bool = false
     ) -> [String] {
-        var cleaned = spokenText(text, lexicon: lexicon)
+        var cleaned = spokenText(text, lexicon: lexicon, phonemeLinks: phonemeLinks)
         cleaned = cleaned.replacingOccurrences(of: #"\[c\d+\]"#, with: "", options: .regularExpression)
         cleaned = cleaned.replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
         cleaned = cleaned.replacingOccurrences(of: " — ", with: ", ")
@@ -109,9 +110,12 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     /// Expand suffixes and audited family names before sentence splitting and
     /// speech synthesis. The caller's display string remains unchanged.
+    /// `phonemeLinks` (the Kokoro path) writes an entry that has phonemes as
+    /// misaki's inline override `[Latta](/lˈætə/)` instead of its respelling.
     nonisolated static func spokenText(
         _ text: String,
-        lexicon: HalliePronunciationLexicon = .shipped
+        lexicon: HalliePronunciationLexicon = .shipped,
+        phonemeLinks: Bool = false
     ) -> String {
         var spoken = text
         let suffixes = [(#"\bJr\.?(?=[\s,;:!?)]|['’]s\b|$)"#, "Junior"),
@@ -122,7 +126,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 with: replacement,
                 options: [.regularExpression, .caseInsensitive])
         }
-        return lexicon.apply(to: spoken).spoken
+        return lexicon.apply(to: spoken, style: phonemeLinks ? .kokoro : .respelling).spoken
     }
 
     /// Rank installed English voices: Premium, then Enhanced, then the
@@ -203,8 +207,11 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
         if let voice = Self.selectedNeuralVoice(),
            HallieNeuralSpeech.isInstalled {
+            // Kokoro gets the phoneme overrides; the lexicon is applied ONCE
+            // here (the link text must not be respelled again).
+            appleFallbackLexicon = lexicon
             speakNeural(
-                sentences.joined(separator: " "),
+                Self.sentences(text, lexicon: lexicon, phonemeLinks: true).joined(separator: " "),
                 voice: voice,
                 speed: Self.speedFactor())
         } else {
@@ -218,9 +225,15 @@ final class HallieSpeaker: NSObject, ObservableObject {
         }
     }
 
+    /// The table the current utterance was built with, so an Apple
+    /// continuation can turn `[Latta](/…/)` back into its respelling.
+    private var appleFallbackLexicon = HalliePronunciationLexicon(entries: [])
+
     private func speakWithApple(_ sentences: [String]) {
         let voice = Self.bestVoice()
-        for sentence in sentences {
+        for raw in sentences {
+            // The Apple voice would read the override brackets aloud.
+            let sentence = appleFallbackLexicon.strippingPhonemeLinks(raw)
             let utterance = AVSpeechUtterance(string: sentence)
             utterance.voice = voice
             utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Self.speedFactor()
@@ -241,7 +254,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
     private func speakNeural(_ text: String, voice: HallieNeuralVoice, speed: Float) {
         isSpeaking = true
         let generation = speechGeneration
-        var chunks = HallieSpeechChunker.chunks(sentences: Self.sentences(text))
+        // `text` already carries the lexicon (and any phoneme links): split
+        // only, never respell again.
+        var chunks = HallieSpeechChunker.chunks(sentences: Self.sentences(text, lexicon: HalliePronunciationLexicon(entries: [])))
         neuralTask = Task { [weak self] in
             let started = Date()
             var engine: AVAudioEngine?
@@ -355,7 +370,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     self.appleContinuation = remaining
                     if self.neuralChunksPlayed >= self.neuralChunksScheduled { self.finishNeuralPlayback() }
                 } else {
-                    self.speakWithApple(remaining.isEmpty ? Self.sentences(text) : remaining)
+                    self.speakWithApple(remaining.isEmpty ? Self.sentences(text, lexicon: HalliePronunciationLexicon(entries: [])) : remaining)
                 }
             }
         }

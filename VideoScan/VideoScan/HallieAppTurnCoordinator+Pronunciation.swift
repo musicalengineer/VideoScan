@@ -30,7 +30,33 @@ extension HallieAppTurnCoordinator {
         let word: String
         /// The stored respelling; alternatives joined with " | ".
         let saidAs: String
+        /// misaki phonemes derived from the spoken respelling (HalliePhonemes),
+        /// nil when the respelling used a spelling the rules do not read.
+        let phonemes: String?
         let target: PronunciationTarget
+
+        init(word: String, saidAs: String, phonemes: String? = nil, target: PronunciationTarget) {
+            self.word = word
+            self.saidAs = saidAs
+            self.phonemes = phonemes
+            self.target = target
+        }
+    }
+
+    /// Phonemes for the spoken (first) alternative. An "as in <word>"
+    /// exemplar pins that syllable's vowel from misaki's gold lexicon when
+    /// the helper bundle is installed; otherwise the respelling rules decide.
+    static func derivePhonemes(alternatives: [String], hint: HalliePronunciationHint?) -> String? {
+        guard let spoken = alternatives.first else { return nil }
+        var pinned: [Int: String] = [:]
+        if case .syllables(let given)? = hint {
+            for (index, syllable) in given.enumerated() {
+                if let exemplar = syllable.exemplar, let vowel = HalliePhonemes.exemplarVowel(exemplar) {
+                    pinned[index] = vowel
+                }
+            }
+        }
+        return HalliePhonemes.derive(respelling: spoken, exemplarVowels: pinned)
     }
 
     /// Handle the turn if it tells Hallie how to say a name, hints at it,
@@ -78,7 +104,7 @@ extension HallieAppTurnCoordinator {
         telling: HallieTellingMode.Session?, referent: CapturedReferent, dependencies: Dependencies
     ) -> Response {
         let told = HallieTellingMode.PronunciationTelling(word: word, alternatives: alternatives)
-        switch teach(word: word, alternatives: alternatives, dependencies: dependencies) {
+        switch teach(word: word, alternatives: alternatives, hint: hint?.hint, dependencies: dependencies) {
         case .success(let target):
             let scope: HallieTellingMode.PronunciationScope
             switch target {
@@ -94,7 +120,8 @@ extension HallieAppTurnCoordinator {
             // the truth; the sheet is bookkeeping.
             var store = dependencies.loadDrillStore()
             store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
-                      alternatives: alternatives, origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
+                      alternatives: alternatives, phonemes: derivePhonemes(alternatives: alternatives, hint: hint?.hint),
+                      origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
             let manifest = PronunciationDrillManifest.build(
                 list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
             if (try? dependencies.saveDrillStore(store, manifest)) == nil {
@@ -258,6 +285,7 @@ extension HallieAppTurnCoordinator {
             let receipt = try CyberBrainWriter.setPronunciation(
                 personID: id, token: write.word, saidAs: write.saidAs, rootURL: root)
             appLog.write("[hallie-voice] kept pronunciation \(receipt.word) → \(write.saidAs) on \(name) (\(id))")
+            try keepPhonemesInFile(write)
         case .treePerson(let name, let gedcomID, let aliases):
             guard let root = FamilyTreeNotesStorage.productionRootURL else {
                 throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
@@ -266,9 +294,21 @@ extension HallieAppTurnCoordinator {
                 subjectName: name, gedcomPersonID: gedcomID, aliases: aliases,
                 token: write.word, saidAs: write.saidAs, rootURL: root)
             appLog.write("[hallie-voice] kept pronunciation \(receipt.word) → \(write.saidAs) on \(name) (\(receipt.personID)\(receipt.createdPerson ? ", new record" : ""))")
+            try keepPhonemesInFile(write)
         case .file:
-            try HalliePronunciationLexicon.setFileEntry(written: write.word, spoken: write.saidAs)
+            try HalliePronunciationLexicon.setFileEntry(
+                written: write.word, spoken: write.saidAs, phonemes: write.phonemes, origin: "told")
         }
         PersonPronunciationCache.shared.invalidate()
+    }
+
+    /// Person records hold respellings only (CyberBrainPerson.pronunciations
+    /// is word → string); the phonemes a teach derived live in
+    /// pronunciations.json beside the same respelling, and the merge lends
+    /// them to the person-level entry. Nothing to do without phonemes.
+    private static func keepPhonemesInFile(_ write: PronunciationWrite) throws {
+        guard let phonemes = write.phonemes else { return }
+        try HalliePronunciationLexicon.setFileEntry(
+            written: write.word, spoken: write.saidAs, phonemes: phonemes, origin: "told")
     }
 }

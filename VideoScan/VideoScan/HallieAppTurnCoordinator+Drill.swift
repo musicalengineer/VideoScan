@@ -133,7 +133,7 @@ extension HallieAppTurnCoordinator {
         guard let word = correction.word ?? session.current?.name else {
             return response(Mode.exhaustedReply(session), drill: nil, telling: telling, referent: referent)
         }
-        switch teach(word: word, alternatives: correction.alternatives, dependencies: dependencies) {
+        switch teach(word: word, alternatives: correction.alternatives, hint: hint, dependencies: dependencies) {
         case .failure(let error):
             return response(
                 Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
@@ -143,10 +143,11 @@ extension HallieAppTurnCoordinator {
             let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
             let key = FamilyIdentityText.normalized(word)
             let origin: PronunciationDrillStore.Origin = hint == nil ? .taught : .derived
+            let phonemes = derivePhonemes(alternatives: correction.alternatives, hint: hint)
             if let item = session.list.items.first(where: { $0.key == key }) {
-                store.set(item, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+                store.set(item, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
             } else {
-                store.set(name: word, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+                store.set(name: word, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
             }
             session.taught += 1
             let movedOn = session.current?.key == key
@@ -200,16 +201,18 @@ extension HallieAppTurnCoordinator {
     /// One taught name, drill or one-off: resolve whose name it is, write
     /// through the injected recorder, log. Shared with the one-off path so
     /// both leave the same trail.
-    static func teach(word: String, alternatives: [String], dependencies: Dependencies) -> Result<PronunciationTarget, Error> {
+    static func teach(word: String, alternatives: [String], hint: HalliePronunciationHint? = nil,
+                      dependencies: Dependencies) -> Result<PronunciationTarget, Error> {
         let saidAs = HalliePronunciationLexicon.joinedAlternatives(alternatives)
         let target = resolvePronunciationTarget(
             word: word, cyberBrain: dependencies.loadCyberBrain(), graph: dependencies.loadGraph())
+        let phonemes = derivePhonemes(alternatives: alternatives, hint: hint)
         do {
-            try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, target: target))
+            try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, phonemes: phonemes, target: target))
         } catch {
             return .failure(error)
         }
-        logTaught(word: word, saidAs: saidAs)
+        logTaught(word: word, saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
         return .success(target)
     }
 

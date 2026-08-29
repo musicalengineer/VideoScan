@@ -738,4 +738,127 @@ struct HalliePronunciationDrillTests {
         #expect(text.contains("I have 1 taught pronunciation: Latta as LAT-uh."))
         #expect(text.contains("interpreted: pronunciation question (local)"))
     }
+
+    // MARK: - 10. Phonemes (lexicon v2, docs/pronunciation_training_research.md)
+
+    @Test func respellingsDeriveMisakiPhonemesDeterministically() {
+        typealias P = HalliePhonemes
+        #expect(P.derive(respelling: "LAT-uh") == "lˈætə")
+        #expect(P.derive(respelling: "Lah-Tah") == "lˈɑtɑ")
+        #expect(P.derive(respelling: "LA-tah") == "lˈætɑ")
+        #expect(P.derive(respelling: "muh-GILL") == "məɡˈɪl")
+        #expect(P.derive(respelling: "EE-dith") == "ˈidɪθ")
+        #expect(P.derive(respelling: "nuh-THAN-yul") == "nəθˈænjəl")
+        #expect(P.derive(respelling: "beh-THY-uh") == "bɛθˈIə")
+        #expect(P.derive(respelling: "muh-GLOCK-lin") == "məɡlˈɑklɪn")
+        #expect(P.derive(respelling: "muh-CAR-thee") == "məkˈɑɹθi")
+        #expect(P.derive(respelling: "muh-DON-uld") == "mədˈɑnəld")
+        #expect(P.derive(respelling: "ROW-nin") == "ɹˈOnɪn")
+        #expect(P.derive(respelling: "HEN-door") == "hˈɛndɔɹ")
+        #expect(P.derive(respelling: "MahGill") == "mˈɑɡɪl")
+        // The "as in Lag" exemplar pins the vowel of that syllable.
+        #expect(P.derive(respelling: "LA-tah", exemplarVowels: [0: "æ"]) == "lˈætɑ")
+        #expect(P.derive(respelling: "LA-tah", exemplarVowels: [0: "ɑ"]) == "lˈɑtɑ")
+        // Unreadable spellings never become phonemes.
+        #expect(P.derive(respelling: "LAT-uh!") == nil)
+        #expect(P.derive(respelling: "Lat7a") == nil)
+        #expect(P.derive(respelling: "") == nil)
+        #expect(P.stressedVowel(in: "lˈæɡ") == "æ")
+        #expect(P.stressedVowel(in: "fˈɑðəɹ") == "ɑ")
+        #expect(P.stressedVowel(in: "dˈAɾə") == "A")
+        #expect(P.stressedVowel(in: "bɜɹd") == "ɜɹ")
+        // No dots, ever (a `.` is a pause to misaki).
+        for entry in HalliePronunciationLexicon.shipped.entries {
+            #expect(entry.phonemes?.contains(".") != true, Comment(rawValue: entry.written))
+        }
+        #expect(HalliePronunciationLexicon.shipped.entries.first { $0.written == "Latta" }?.phonemes == "lˈætə")
+        #expect(HalliePronunciationLexicon.shipped.entries.first { $0.written == "Breen" }?.phonemes == nil)
+        // Gold exemplar lookup works when the helper bundle is installed and
+        // is silent otherwise.
+        let gold = MisakiGoldLexicon(url: nil)
+        #expect(!gold.isAvailable && gold.phonemes(for: "lag") == nil)
+        #expect(HalliePhonemes.exemplarVowel("lag", gold: gold) == nil)
+        if MisakiGoldLexicon.shared.isAvailable {
+            #expect(HalliePhonemes.exemplarVowel("lag") == "æ")
+            #expect(HalliePhonemes.exemplarVowel("father") == "ɑ")
+        }
+    }
+
+    @Test func kokoroGetsPhonemeLinksAndAppleSpeechGetsRespellings() throws {
+        let table = HalliePronunciationLexicon(entries: [
+            .init(written: "Latta", spoken: "LAT-uh", phonemes: "lˈætə"),
+            .init(written: "McGill", spoken: "MahGill | MicGill"),
+        ])
+        let prose = "OK, noted — Latta. Edith Latta married a McGill."
+        #expect(HallieSpeaker.spokenText(prose, lexicon: table) == "OK, noted — LAT-uh. Edith LAT-uh married a MahGill.")
+        #expect(HallieSpeaker.spokenText(prose, lexicon: table, phonemeLinks: true)
+                == "OK, noted — [Latta](/lˈætə/). Edith [Latta](/lˈætə/) married a MahGill.")
+        #expect(HallieSpeaker.sentences(prose, lexicon: table, phonemeLinks: true)
+                == ["OK, noted, [Latta](/lˈætə/).", "Edith [Latta](/lˈætə/) married a MahGill."])
+        // The Apple fallback never reads brackets.
+        #expect(table.strippingPhonemeLinks("OK, noted, [Latta](/lˈætə/).") == "OK, noted, LAT-uh.")
+        #expect(HalliePronunciationLexicon.strippingPhonemeLinks("[Zed](/zˈɛd/) here") == "Zed here")
+        #expect(HalliePronunciationLexicon.strippingPhonemeLinks("no links") == "no links")
+        // An entry with phonemes but an identity respelling still overrides on Kokoro.
+        let identity = HalliePronunciationLexicon(entries: [.init(written: "Breen", spoken: "Breen", phonemes: "bɹˈin")])
+        #expect(identity.apply(to: "Rick Breen").spoken == "Rick Breen")
+        #expect(identity.apply(to: "Rick Breen", style: .kokoro).spoken == "Rick [Breen](/bɹˈin/)")
+
+        // v2 JSON round trip: objects for entries with phonemes, strings for
+        // legacy ones; unknown fields survive a read-modify-write.
+        let dir = Self.scratch("lexicon-v2")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(HalliePronunciationLexicon.fileName)
+        try Data("""
+        {"Latta": {"respelling": "Lah-Tah", "phonemes": "lˈɑtɑ", "source": "picked", "confidence": 1.0,
+                   "alternatives": ["lˈætə"], "attested": {"by": "rick", "at": "2026-08-30T15:02Z"}},
+         "McGill": "muh-GILL"}
+        """.utf8).write(to: url)
+        let sink = InMemoryLogSink()
+        let loaded = HalliePronunciationLexicon.load(from: url, log: sink)
+        #expect(loaded.entries.map(\.written) == ["McGill", "Latta"])
+        #expect(loaded.entries.first { $0.written == "Latta" } == .init(written: "Latta", spoken: "Lah-Tah", phonemes: "lˈɑtɑ"))
+        #expect(loaded.entries.first { $0.written == "Latta" }?.origin == "picked")
+        #expect(loaded.apply(to: "Latta", style: .kokoro).spoken == "[Latta](/lˈɑtɑ/)")
+        try HalliePronunciationLexicon.setFileEntry(written: "Edith", spoken: "EE-dith", phonemes: "ˈidɪθ", origin: "told", url: url, log: sink)
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        #expect(json["McGill"] as? String == "muh-GILL")
+        let latta = try #require(json["Latta"] as? [String: Any])
+        #expect(latta["phonemes"] as? String == "lˈɑtɑ")
+        #expect(latta["confidence"] as? Double == 1.0)
+        #expect((latta["alternatives"] as? [String]) == ["lˈætə"])
+        #expect((latta["attested"] as? [String: Any])?["by"] as? String == "rick")
+        let edith = try #require(json["Edith"] as? [String: Any])
+        #expect(edith["respelling"] as? String == "EE-dith" && edith["phonemes"] as? String == "ˈidɪθ" && edith["source"] as? String == "told")
+        #expect((edith["attested"] as? [String: Any])?["at"] != nil)
+
+        // A person-level respelling (no phonemes) borrows the file's
+        // phonemes for the same respelling.
+        let person = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "Lah-Tah")])
+        let merged = HalliePronunciationLexicon.merged([person, loaded])
+        #expect(merged.entries.first { $0.written == "Latta" }?.phonemes == "lˈɑtɑ")
+        let other = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "LAT-uh")])
+        #expect(HalliePronunciationLexicon.merged([other, loaded]).entries.first { $0.written == "Latta" }?.phonemes == nil)
+    }
+
+    @Test func aTeachStoresPhonemesBesideTheRespellingAndTheReadBackUsesThem() async throws {
+        let recorder = Recorder()
+        let taught = try await turn("Latta should be pronounced La (as in Lag) and Tah, so short a on Latta", drill: nil, recorder: recorder)
+        let write = try #require(recorder.writes.last)
+        #expect(write == .init(word: "Latta", saidAs: "LA-tah", phonemes: "lˈætɑ", target: .file))
+        #expect(write.phonemes == "lˈætɑ")
+        #expect(recorder.store.record(for: "latta")?.phonemes == "lˈætɑ")
+        #expect(recorder.store.record(for: "latta")?.source == .derived)
+        let voice = HalliePronunciationLexicon(entries: [.init(written: write.word, spoken: write.saidAs, phonemes: write.phonemes)])
+        #expect(HallieSpeaker.spokenText(taught.result.prose, lexicon: voice, phonemeLinks: true).hasPrefix("OK, noted — [Latta](/lˈætɑ/)."))
+        #expect(HallieSpeaker.spokenText(taught.result.prose, lexicon: voice).hasPrefix("OK, noted — LA-tah."))
+        // Plain typed respellings derive too; unreadable ones stay nil.
+        _ = try await turn("pronounce McGill like MahGill or MicGill", drill: nil, recorder: recorder)
+        #expect(recorder.writes.last?.phonemes == "mˈɑɡɪl")
+        _ = try await turn("say Edith as EE-d1th", drill: nil, recorder: recorder)
+        #expect(recorder.writes.last?.word == "Edith" && recorder.writes.last?.phonemes == nil)
+        // The manifest carries phonemes for codex's audit.
+        let manifest = try #require(recorder.lastManifest)
+        #expect(manifest.entries.first { $0.name == "McGill" }?.phonemes == "mˈɑɡɪl")
+    }
 }

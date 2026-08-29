@@ -101,13 +101,14 @@ extension HallieShellCLI {
                     return await end(session, state: &state, output: output, dependencies: dependencies)
                 }
                 let saidAs = HalliePronunciationLexicon.joinedAlternatives(correction.alternatives)
+                let phonemes = HallieAppTurnCoordinator.derivePhonemes(alternatives: correction.alternatives, hint: hint)
                 var note = ""
                 if options.remember {
                     let target = HallieAppTurnCoordinator.resolvePronunciationTarget(
                         word: word, cyberBrain: state.cyberBrain, graph: state.graph)
                     do {
-                        try dependencies.recordPronunciation(.init(word: word, saidAs: saidAs, target: target))
-                        HallieAppTurnCoordinator.logTaught(word: word, saidAs: saidAs)
+                        try dependencies.recordPronunciation(.init(word: word, saidAs: saidAs, phonemes: phonemes, target: target))
+                        HallieAppTurnCoordinator.logTaught(word: word, saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
                     } catch {
                         return await emit(
                             Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
@@ -119,9 +120,9 @@ extension HallieShellCLI {
                 let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
                 let key = FamilyIdentityText.normalized(word)
                 if let item = session.list.items.first(where: { $0.key == key }) {
-                    store.set(item, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+                    store.set(item, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
                 } else {
-                    store.set(name: word, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+                    store.set(name: word, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
                 }
                 session.taught += 1
                 let movedOn = session.current?.key == key

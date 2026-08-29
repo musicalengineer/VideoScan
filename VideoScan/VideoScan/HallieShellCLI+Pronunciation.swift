@@ -62,13 +62,14 @@ extension HallieShellCLI {
         var prose = hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
             ?? HallieTellingMode.pronunciationReply(told, scope: scope)
         var basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
+        let phonemes = HallieAppTurnCoordinator.derivePhonemes(alternatives: alternatives, hint: hint?.hint)
         if options.remember {
             do {
-                try dependencies.recordPronunciation(.init(word: word, saidAs: told.saidAs, target: target))
-                HallieAppTurnCoordinator.logTaught(word: word, saidAs: told.saidAs)
+                try dependencies.recordPronunciation(.init(word: word, saidAs: told.saidAs, phonemes: phonemes, target: target))
+                HallieAppTurnCoordinator.logTaught(word: word, saidAs: told.saidAs + (phonemes.map { " /\($0)/" } ?? ""))
                 var store = dependencies.loadDrillStore()
                 store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
-                          alternatives: alternatives, origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
+                          alternatives: alternatives, phonemes: phonemes, origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
                 _ = try? dependencies.saveDrillStore(store, .build(list: PronunciationDrillList(items: []),
                                                                    lexicon: dependencies.loadLexicon(), store: store))
             } catch {

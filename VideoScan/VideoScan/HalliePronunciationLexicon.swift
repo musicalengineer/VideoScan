@@ -19,6 +19,17 @@
 // McGill's record also respells any other Nathaniel. That is the intended
 // scope: a name is said the same way whoever carries it.
 //
+// Two representations per entry (docs/pronunciation_training_research.md,
+// 2026-08-29): a RESPELLING ("LAT-uh") and, when known, PHONEMES in
+// misaki's alphabet ("lˈætə"). A respelling is re-guessed by misaki's
+// BART fallback — that is why Rick's "Lah-Tah" did not stick — so on the
+// Kokoro path an entry with phonemes is emitted as the inline override
+// `[Latta](/lˈætə/)` (rating 5, beats every lexicon layer inside misaki).
+// The AVSpeech fallback strips that syntax back to the respelling. The
+// file format is v2: a value is either the legacy string (respelling
+// only) or an object {"respelling", "phonemes", "source", "alternatives",
+// "attested"…}; unknown object keys are carried through untouched.
+//
 // Matches are whole-word and case-insensitive; possessives survive
 // ("McGill's" → "muh-GILL's"). Every entry that fires is logged with the
 // layer it came from so a bad respelling can be traced to its line.
@@ -29,7 +40,31 @@ import VideoScanCore
 struct HalliePronunciationLexicon: Equatable, Sendable {
     struct Entry: Equatable, Sendable {
         let written: String
+        /// The respelling; alternatives joined with " | " (first spoken).
         let spoken: String
+        /// misaki phonemes for the Kokoro override, when known.
+        let phonemes: String?
+        /// How the entry came to be (v2: told | picked | said | shipped |
+        /// legacy | derived …); informational.
+        let origin: String?
+        /// v2 object fields this code does not interpret, carried through
+        /// a read-modify-write so nothing a later phase wrote is lost.
+        /// Not part of equality.
+        let extra: [String: String]
+
+        init(written: String, spoken: String, phonemes: String? = nil, origin: String? = nil,
+             extra: [String: String] = [:]) {
+            self.written = written
+            self.spoken = spoken
+            self.phonemes = phonemes?.trimmingCharacters(in: .whitespaces).isEmpty == false
+                ? phonemes?.trimmingCharacters(in: .whitespaces) : nil
+            self.origin = origin
+            self.extra = extra
+        }
+
+        static func == (lhs: Entry, rhs: Entry) -> Bool {
+            lhs.written == rhs.written && lhs.spoken == rhs.spoken && lhs.phonemes == rhs.phonemes
+        }
     }
 
     /// Where an entry came from — provenance for the log line, not part of
@@ -48,6 +83,15 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         }
     }
 
+    /// How `apply` writes a substitution.
+    enum Style: Sendable, Equatable {
+        /// The respelling, for AVSpeech and for tests/logs (today's form).
+        case respelling
+        /// `[Written](/phonemes/)` when the entry has phonemes, else the
+        /// respelling — the Kokoro/misaki override form.
+        case kokoro
+    }
+
     let entries: [Entry]
     /// Normalised written word → layer. Parallel to `entries`; provenance
     /// only, so two tables with the same words are equal whichever layer
@@ -60,24 +104,31 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
 
     /// Shipped default — the Scots-Irish/Irish set Rick audited 2026-08-26
     /// plus the 8/25 Edith fix and the 8/26 Nathaniel/Bethiah additions.
-    /// Keys are what the family tree spells.
+    /// Keys are what the family tree spells. Phonemes are derived from the
+    /// audited respellings by HalliePhonemes' rules (deterministic, same
+    /// as a teach would produce), so the Kokoro path uses the override.
     static let shipped = HalliePronunciationLexicon(entries: [
-        Entry(written: "Edith", spoken: "EE-dith"),
-        Entry(written: "McGill", spoken: "muh-GILL"),
-        Entry(written: "McDonald", spoken: "muh-DON-uld"),
-        Entry(written: "McCarthy", spoken: "muh-CAR-thee"),
-        Entry(written: "McLaughlin", spoken: "muh-GLOCK-lin"),
-        Entry(written: "Latta", spoken: "LAT-uh"),
-        Entry(written: "Nathaniel", spoken: "nuh-THAN-yul"),
-        Entry(written: "Bethiah", spoken: "beh-THY-uh"),
+        shippedEntry("Edith", "EE-dith"),
+        shippedEntry("McGill", "muh-GILL"),
+        shippedEntry("McDonald", "muh-DON-uld"),
+        shippedEntry("McCarthy", "muh-CAR-thee"),
+        shippedEntry("McLaughlin", "muh-GLOCK-lin"),
+        shippedEntry("Latta", "LAT-uh"),
+        shippedEntry("Nathaniel", "nuh-THAN-yul"),
+        shippedEntry("Bethiah", "beh-THY-uh"),
         // Audited as already correct (2026-08-26; "BREEN" and "LAM" measured
         // no better on the installed Kokoro). Identity entries are listed so
         // the JSON shows the family set, and never fire.
-        Entry(written: "Breen", spoken: "Breen"),
-        Entry(written: "Ronan", spoken: "ROW-nin"),
-        Entry(written: "Lamb", spoken: "Lamb"),
-        Entry(written: "Hendour", spoken: "HEN-door"),
+        Entry(written: "Breen", spoken: "Breen", origin: "shipped"),
+        shippedEntry("Ronan", "ROW-nin"),
+        Entry(written: "Lamb", spoken: "Lamb", origin: "shipped"),
+        shippedEntry("Hendour", "HEN-door"),
     ], source: .shipped)
+
+    private static func shippedEntry(_ written: String, _ respelling: String) -> Entry {
+        Entry(written: written, spoken: respelling,
+              phonemes: HalliePhonemes.derive(respelling: respelling), origin: "shipped")
+    }
 
     static let fileName = "pronunciations.json"
 
@@ -107,24 +158,64 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         self.sourcesByWord = sources
     }
 
-    /// JSON object {"McGill": "muh-GILL", …}. Empty or non-string values are
-    /// dropped; a malformed file throws so the caller can log it.
+    // MARK: - JSON (v1 strings, v2 objects)
+
+    /// JSON object {"McGill": "muh-GILL", "Latta": {"respelling": "LAT-uh",
+    /// "phonemes": "lˈætə", …}}. Empty or unusable values are dropped; a
+    /// malformed file throws so the caller can log it.
     init(jsonData: Data) throws {
         let object = try JSONSerialization.jsonObject(with: jsonData)
         guard let table = object as? [String: Any] else {
             throw CocoaError(.propertyListReadCorrupt)
         }
-        self.init(entries: table.compactMap { key, value in
-            guard let spoken = value as? String else { return nil }
+        self.init(entries: table.compactMap { key, value -> Entry? in
             let written = key.trimmingCharacters(in: .whitespaces)
-            let said = spoken.trimmingCharacters(in: .whitespaces)
-            guard !written.isEmpty, !said.isEmpty else { return nil }
-            return Entry(written: written, spoken: said)
+            guard !written.isEmpty else { return nil }
+            if let spoken = value as? String {
+                let said = spoken.trimmingCharacters(in: .whitespaces)
+                guard !said.isEmpty else { return nil }
+                return Entry(written: written, spoken: said, origin: "legacy")
+            }
+            guard let object = value as? [String: Any] else { return nil }
+            let respelling = (object["respelling"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            let phonemes = (object["phonemes"] as? String)?.trimmingCharacters(in: .whitespaces)
+            // An object with phonemes but no respelling still needs a
+            // visible spoken form: the written word itself.
+            guard !respelling.isEmpty || !(phonemes ?? "").isEmpty else { return nil }
+            var extra: [String: String] = [:]
+            for (field, raw) in object where !["respelling", "phonemes", "source"].contains(field) {
+                if let text = raw as? String { extra[field] = text }
+                else if let data = try? JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys, .fragmentsAllowed]),
+                        let text = String(data: data, encoding: .utf8) { extra[field] = text }
+            }
+            return Entry(written: written, spoken: respelling.isEmpty ? written : respelling,
+                         phonemes: phonemes, origin: object["source"] as? String, extra: extra)
         }, source: .file)
     }
 
+    /// Legacy string values for respelling-only entries (so a hand-edited
+    /// file stays simple); v2 objects for entries with phonemes or carried
+    /// fields.
     var jsonData: Data {
-        let table = Dictionary(uniqueKeysWithValues: entries.map { ($0.written, $0.spoken) })
+        var table: [String: Any] = [:]
+        for entry in entries {
+            if entry.phonemes == nil, entry.extra.isEmpty, entry.origin == nil || entry.origin == "legacy" || entry.origin == "shipped" {
+                table[entry.written] = entry.spoken
+                continue
+            }
+            var object: [String: Any] = ["respelling": entry.spoken]
+            if let phonemes = entry.phonemes { object["phonemes"] = phonemes }
+            if let origin = entry.origin { object["source"] = origin }
+            for (field, text) in entry.extra {
+                if let data = text.data(using: .utf8),
+                   let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+                    object[field] = value
+                } else {
+                    object[field] = text
+                }
+            }
+            table[entry.written] = object
+        }
         return (try? JSONSerialization.data(withJSONObject: table, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     }
 
@@ -193,21 +284,36 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
                 let names = list.map { "\($0.person.canonicalName) → \($0.spoken)" }.joined(separator: ", ")
                 log?.write("[hallie-voice] '\(chosen.written)' carried by \(list.count) records (\(names)); using \(chosen.person.canonicalName) → \(chosen.spoken) (\(reason))")
             }
-            entries.append(Entry(written: chosen.written, spoken: chosen.spoken))
+            entries.append(Entry(written: chosen.written, spoken: chosen.spoken, origin: "person"))
             sources[wordKey] = .person(id: chosen.person.id, name: chosen.person.canonicalName)
         }
         return HalliePronunciationLexicon(entries: entries, sources: sources)
     }
 
     /// Merge layers, highest priority first; the first layer that carries a
-    /// word (case-insensitively) owns it.
+    /// word (case-insensitively) owns it. A winning entry without phonemes
+    /// borrows them from a lower layer that carries the SAME respelling
+    /// (person records hold respellings only; the file holds the phonemes
+    /// a teach derived beside it).
     static func merged(_ layers: [HalliePronunciationLexicon]) -> HalliePronunciationLexicon {
         var entries: [Entry] = []
         var sources: [String: Source] = [:]
+        var at: [String: Int] = [:]
         for layer in layers {
-            for entry in layer.entries where sources[key(entry.written)] == nil {
+            for entry in layer.entries {
+                let wordKey = key(entry.written)
+                if let index = at[wordKey] {
+                    let winner = entries[index]
+                    if winner.phonemes == nil, let phonemes = entry.phonemes,
+                       alternatives(winner.spoken).first == alternatives(entry.spoken).first {
+                        entries[index] = Entry(written: winner.written, spoken: winner.spoken, phonemes: phonemes,
+                                               origin: winner.origin, extra: winner.extra)
+                    }
+                    continue
+                }
+                at[wordKey] = entries.count
                 entries.append(entry)
-                sources[key(entry.written)] = layer.sourcesByWord[key(entry.written)] ?? .file
+                sources[wordKey] = layer.sourcesByWord[wordKey] ?? .file
             }
         }
         return HalliePronunciationLexicon(entries: entries, sources: sources)
@@ -278,7 +384,8 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     }
 
     /// Set (or, with an empty `spoken`, remove) one word in the JSON file —
-    /// the fallback when a name told to Hallie is nobody's in particular.
+    /// the fallback when a name told to Hallie is nobody's in particular,
+    /// and the home of the phonemes beside any respelling a teach derived.
     /// Read-modify-write of the whole (tiny) table, atomic replace; an
     /// existing key with different case is replaced, not duplicated.
     /// A malformed file is never overwritten (codex #700): it is set aside
@@ -286,7 +393,8 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     /// caller can say so; reads then fall back to shipped.
     @discardableResult
     static func setFileEntry(
-        written: String, spoken: String?, url: URL = defaultFileURL, log: LogSink? = appLog
+        written: String, spoken: String?, phonemes: String? = nil, origin: String? = nil,
+        url: URL = defaultFileURL, log: LogSink? = appLog
     ) throws -> HalliePronunciationLexicon {
         let word = written.trimmingCharacters(in: .whitespaces)
         guard !word.isEmpty, word.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
@@ -296,12 +404,20 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         try setAsideIfMalformed(url, log: log)
         let current = load(from: url, log: log)
         var kept = current.entries.filter { key($0.written) != key(word) }
-        if !said.isEmpty { kept.append(Entry(written: word, spoken: said)) }
+        if !said.isEmpty {
+            var extra: [String: String] = [:]
+            if phonemes != nil {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                extra["attested"] = "{\"at\":\"\(formatter.string(from: Date()))\",\"by\":\"owner\"}"
+            }
+            kept.append(Entry(written: word, spoken: said, phonemes: phonemes, origin: origin, extra: extra))
+        }
         let updated = HalliePronunciationLexicon(entries: kept, source: .file)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try updated.jsonData.write(to: url, options: .atomic)
-        log?.write("[hallie-voice] pronunciations.json: \(word) → \(said.isEmpty ? "(removed)" : said)")
+        log?.write("[hallie-voice] pronunciations.json: \(word) → \(said.isEmpty ? "(removed)" : said)\(phonemes.map { " /\($0)/" } ?? "")")
         return updated
     }
 
@@ -325,7 +441,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
         }
     }
 
-    // MARK: - Applying
+    // MARK: - Alternatives
 
     /// Alternatives separator: "MahGill | MicGill" keeps both of Rick's
     /// respellings (2026-08-29 drill); only the FIRST is ever spoken.
@@ -346,29 +462,62 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             .joined(separator: alternativesSeparator)
     }
 
+    // MARK: - Applying
+
     /// Substitute every entry on whole-word boundaries, case-insensitively.
     /// Returns the spoken text and the entries that fired, in table order.
-    /// An entry with alternatives speaks the first one.
-    func apply(to text: String) -> (spoken: String, fired: [Entry]) {
+    /// An entry with alternatives speaks the first one. In `.kokoro` style
+    /// an entry with phonemes becomes `[Written](/phonemes/)` — misaki's
+    /// manual override, which no lexicon or fallback inside it re-guesses.
+    func apply(to text: String, style: Style = .respelling) -> (spoken: String, fired: [Entry]) {
         var spoken = text
         var fired: [Entry] = []
-        for entry in entries where entry.spoken != entry.written {
+        for entry in entries {
             let said = Self.alternatives(entry.spoken).first ?? entry.spoken
-            guard said != entry.written else { continue }
+            let replacement: String
+            if style == .kokoro, let phonemes = entry.phonemes {
+                replacement = "[\(entry.written)](/\(phonemes)/)"
+            } else {
+                guard said != entry.written else { continue }
+                replacement = said
+            }
             let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: entry.written) + #"\b"#
             guard spoken.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else { continue }
             spoken = spoken.replacingOccurrences(
                 of: pattern,
-                with: NSRegularExpression.escapedTemplate(for: said),
+                with: NSRegularExpression.escapedTemplate(for: replacement),
                 options: [.regularExpression, .caseInsensitive])
             fired.append(entry)
         }
         return (spoken, fired)
     }
 
+    /// `[Latta](/lˈætə/)` → the respelling this table has for the word,
+    /// else the bare word — for the AVSpeech fallback, which would
+    /// otherwise read the brackets aloud.
+    func strippingPhonemeLinks(_ text: String) -> String {
+        Self.strippingPhonemeLinks(text) { written in
+            entries.first { Self.key($0.written) == Self.key(written) }
+                .map { Self.alternatives($0.spoken).first ?? $0.spoken }
+        }
+    }
+
+    /// Link syntax → `respelling(written) ?? written`.
+    static func strippingPhonemeLinks(_ text: String, respelling: (String) -> String? = { _ in nil }) -> String {
+        guard text.contains("](/") else { return text }
+        let regex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(/[^)]*/\)"#)
+        var out = text
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let whole = Range(match.range, in: out), let inner = Range(match.range(at: 1), in: out) else { continue }
+            let written = String(out[inner])
+            out.replaceSubrange(whole, with: respelling(written) ?? written)
+        }
+        return out
+    }
+
     /// One log fragment per fired entry: "Nathaniel→nuh-THAN-yul (person Nathaniel McGill)".
     func logLine(for fired: [Entry]) -> String {
-        fired.map { "\($0.written)→\($0.spoken) (\(source(of: $0)))" }.joined(separator: ", ")
+        fired.map { "\($0.written)→\($0.spoken)\($0.phonemes.map { " /\($0)/" } ?? "") (\(source(of: $0)))" }.joined(separator: ", ")
     }
 
     private static func key(_ written: String) -> String {
