@@ -10,6 +10,13 @@
 //
 // Isolation: everything in memory (GEDCOM text → graph); the only shared
 // state is one KinshipDisplayCenter instance created here.
+//
+// RUN THIS SUITE ALONE for gate numbers:
+//   xcodebuild test … -configuration Release -only-testing:VideoScanTests/KinshipPerformanceGateTests
+// Swift Testing runs other suites concurrently in the same process; their
+// allocations land in the process RSS deltas measured here and their CPU
+// contends with the cold/p95 timings (seen 2026-08-29: cold 13 ms → 80 ms,
+// RSS 3.4 MiB → 105 MiB with KinshipInferenceTests alongside).
 
 import Foundation
 import Testing
