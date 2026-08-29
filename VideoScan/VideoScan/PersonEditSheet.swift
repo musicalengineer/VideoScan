@@ -100,6 +100,10 @@ struct PersonEditSheet: View {
     /// background. (`@ObservedObject` ≈ subscribe to someone else's object —
     /// the sheet does NOT own it.)
     @ObservedObject var kinshipCenter: KinshipDisplayCenter
+    /// The card's tree-link badge (2026-08-29), shown under the name in the
+    /// header as a plain indicator — the fix lives on the card / context
+    /// menu ("Show in Family Tree"), not behind a second sheet.
+    let treeLink: TreeLinkBadge?
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -156,11 +160,13 @@ struct PersonEditSheet: View {
     init(profile: POIProfile,
          otherProfiles: [POIProfile] = [],
          kinshipCenter: KinshipDisplayCenter,
+         treeLink: TreeLinkBadge? = nil,
          onSave: @escaping (POIProfile) -> Void) {
         self.originalProfile = profile
         self.otherProfiles = otherProfiles
         self.onSave = onSave
         self.kinshipCenter = kinshipCenter
+        self.treeLink = treeLink
         _name = State(initialValue: profile.name)
         _notes = State(initialValue: profile.notes)
         _aliasText = State(initialValue: profile.aliases.joined(separator: ", "))
@@ -252,9 +258,15 @@ struct PersonEditSheet: View {
                     Text(isNewPerson ? "Add Person" : "Edit Person")
                         .font(.title2.weight(.semibold))
                     if !isNewPerson {
-                        Text(originalProfile.name)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Text(originalProfile.name)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            if let treeLink {
+                                TreeLinkBadgeView(badge: treeLink, fontSize: 10)
+                                    .accessibilityIdentifier("pf.edit.treelink")
+                            }
+                        }
                     }
                 }
                 Spacer()
