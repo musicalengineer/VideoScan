@@ -64,6 +64,9 @@ extension HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+        if let recompile = HallieLineageAnswer.needsRecompileResult(context, queryDescription: queryDescription) {
+            return recompile
+        }
         guard let graph = context.graph else {
             return Result(
                 route: .graph,

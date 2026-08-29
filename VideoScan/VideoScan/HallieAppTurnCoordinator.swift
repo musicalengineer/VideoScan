@@ -110,6 +110,10 @@ enum HallieAppTurnCoordinator {
         ) async -> SocialReply
         let loadProfiles: @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?
         let loadGraph: @Sendable () -> GedcomFamilyGraph?
+        /// The pulls behind a compiled tree this version refused (live
+        /// miss #8); consulted only when `loadGraph` returned nil. Default
+        /// = none, so tests without a store never see a recompile offer.
+        let loadNeedsRecompile: @Sendable () -> [URL]
         let loadCyberBrain: @Sendable () -> CyberBrainIndex?
         /// Durably record one told passage (HallieTellingMode). The default
         /// records nothing so tests never touch the real CyberBrain; live
@@ -163,6 +167,7 @@ enum HallieAppTurnCoordinator {
             ) async -> SocialReply)? = nil,
             loadProfiles: @escaping @Sendable () -> [HallieTurnExecutor.ProfileSnapshot]?,
             loadGraph: @escaping @Sendable () -> GedcomFamilyGraph?,
+            loadNeedsRecompile: @escaping @Sendable () -> [URL] = { [] },
             loadCyberBrain: @escaping @Sendable () -> CyberBrainIndex? = { nil },
             recordTestimony: @escaping @Sendable (CyberBrainWriter.Testimony) throws -> Void = { _ in },
             recordPhotoCaption: @escaping @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void = { _ in },
@@ -206,6 +211,7 @@ enum HallieAppTurnCoordinator {
             }
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
+            self.loadNeedsRecompile = loadNeedsRecompile
             self.loadCyberBrain = loadCyberBrain
             self.recordTestimony = recordTestimony
             self.recordPhotoCaption = recordPhotoCaption
@@ -289,6 +295,11 @@ enum HallieAppTurnCoordinator {
             loadGraph: {
                 // Promoted artifact only, one decode per process (codex #792).
                 FamilyGraphSharedCache.shared.graph(
+                    for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                    store: .app)
+            },
+            loadNeedsRecompile: {
+                FamilyGraphSharedCache.shared.needsRecompile(
                     for: FamilyAssetConfigurationCenter.shared.snapshot(),
                     store: .app)
             },
@@ -616,9 +627,11 @@ enum HallieAppTurnCoordinator {
             var loaded: HallieTurnExecutor.Context?
             func sources() -> HallieTurnExecutor.Context {
                 if let loaded { return loaded }
+                let graph = dependencies.loadGraph()
                 let context = HallieTurnExecutor.Context(
                     profiles: dependencies.loadProfiles(),
-                    graph: dependencies.loadGraph(),
+                    graph: graph,
+                    needsRecompile: graph == nil ? dependencies.loadNeedsRecompile() : [],
                     cyberBrain: dependencies.loadCyberBrain(),
                     // Owner binding (2026-08-24 live spot-test): without it
                     // "trace MY maternal line" asks "whose line?" in the app
@@ -735,6 +748,7 @@ enum HallieAppTurnCoordinator {
             try Task.checkCancellation()
             let profiles: [HallieTurnExecutor.ProfileSnapshot]?
             let graph: GedcomFamilyGraph?
+            var needsRecompile: [URL] = []
             let cyberBrain: CyberBrainIndex?
             switch route {
             case .temporal, .aggregate:
@@ -744,6 +758,7 @@ enum HallieAppTurnCoordinator {
             case .graph:
                 profiles = dependencies.loadProfiles()
                 graph = dependencies.loadGraph()
+                if graph == nil { needsRecompile = dependencies.loadNeedsRecompile() }
                 cyberBrain = dependencies.loadCyberBrain()
             case .presence, .cross:
                 // People + CyberBrain provide the closed vocabulary for safe
@@ -766,6 +781,7 @@ enum HallieAppTurnCoordinator {
                 aggregateRecords: aggregateRecords,
                 profiles: profiles,
                 graph: graph,
+                needsRecompile: needsRecompile,
                 cyberBrain: cyberBrain,
                 selectedTemporalDate: selectedDate,
                 speakers: dependencies.loadSpeakers())

@@ -525,12 +525,20 @@ extension HallieTurnExecutor {
                 lineage, media: media, question: question,
                 playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
         }
+        // "find our nearest common ancestor" (live miss #9): "our" = the
+        // owner and whoever the conversation is about right now; the
+        // answer falls back to the owner's spouse when nobody is.
+        if case .commonAncestor(nil, nil) = lineage,
+           let focus = memory.pronounReferents.first(where: { !HalliePronounContinuity.isThirdPersonPronoun($0) && !$0.isEmpty }) {
+            lineage = .commonAncestor(a: nil, b: focus)
+        }
         if let lineageAnswer, let answer = lineageAnswer(lineage) {
             // A common-ancestor ask stopped by "Which Donna do you mean?"
             // runs as an intent instead, so the executor's which-one chips
             // resume THIS ask for the chosen namesake (2026-08-29).
+            // "Between you and whom?" carries no chips and stays local.
             if case .commonAncestor(let a, let b) = lineage,
-               answer.outcome == .needsClarification {
+               answer.outcome == .needsClarification, answer.clarification != nil {
                 return .run(Intent(
                     originalQuestion: question,
                     ast: .graph(.init(people: [a ?? "me", b ?? "me"], operation: .commonAncestor)),
@@ -812,6 +820,7 @@ extension HallieTurnExecutor {
         case .openFamilyTreeSurname(let surname): return "Open in Family Tree: the \(surname)s"
         case .getFamilyTree: return "Get Family Tree…"
         case .ask(_, let label): return label
+        case .recompileFamilyTree: return "Recompile the family tree"
         }
     }
 

@@ -394,6 +394,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         self.photoProvider = photoProvider
         self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
         self.usesSharedCache = originalsDirectory == nil && compiledStore == nil
+        // Hallie's "I can do that now" (live miss #8) recompiles through
+        // THIS model when the tab exists, so the banner clears with it.
+        // Injected models (tests) never register.
+        if originalsDirectory == nil && compiledStore == nil {
+            FamilyTreeRecompileCenter.shared.register(self)
+        }
     }
 
     // MARK: Loading
