@@ -75,6 +75,9 @@ struct CatalogInfoWindow: View {
 
 struct CatalogSyncBanner: View {
     @ObservedObject var sync: CatalogSync
+    /// Phase 1 remote use: the chip's "media: streaming / master offline"
+    /// word, refreshed by a ping on appear and every minute.
+    @ObservedObject private var media = ViewerMediaStatus.shared
 
     var body: some View {
         HStack(spacing: 10) {
@@ -105,6 +108,16 @@ struct CatalogSyncBanner: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(backgroundColor)
+        .accessibilityIdentifier("viewer.statusChip")
+        .task {
+            // Ping the master's web server for the media word; 4 s cap,
+            // once a minute — never on the render path.
+            let configuration = MediaStreamResolver.Configuration.fromDefaults(masterHostname: sync.masterHostname)
+            while !Task.isCancelled {
+                _ = await ViewerMediaStatus.shared.refresh(configuration: configuration)
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
     }
 
     // MARK: - Visual state
@@ -140,9 +153,13 @@ struct CatalogSyncBanner: View {
             }
             return "MASTER OFFLINE — no previous snapshot available"
         case .syncing:
-            return "Read-only · syncing from master…"
+            return ViewerStatusChipText.compose(
+                masterDisplayName: ViewerModeCenter.shortName(sync.masterHostname),
+                syncedAt: sync.state.lastSuccessfulSync, syncing: true, media: media.label)
         case .synced(let at):
-            return "Read-only · synced \(relative(at))"
+            return ViewerStatusChipText.compose(
+                masterDisplayName: ViewerModeCenter.shortName(sync.masterHostname),
+                syncedAt: at, syncing: false, media: media.label)
         case .failed:
             if let last = sync.state.lastSuccessfulSync {
                 return "MASTER OFFLINE — showing snapshot from \(relative(last))"

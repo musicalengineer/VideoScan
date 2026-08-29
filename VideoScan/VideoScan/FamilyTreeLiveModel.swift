@@ -1091,6 +1091,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// the pane from the archive the writer handed back — no re-read.
     /// Throws the writer's error so the view can show it verbatim.
     func addNote(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+        // Remote viewer (Phase 1): the CyberBrain is the master's; synced, never written here.
+        try ViewerWriteGuard.check("FamilyTreeLiveModel.addNote")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }

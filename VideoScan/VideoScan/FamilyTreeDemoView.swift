@@ -703,6 +703,7 @@ struct FamilyTreeDemoView: View {
                 }
                 Spacer()
                 Button("Add note") { saveDraftNote() }
+                    .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -786,6 +787,7 @@ struct FamilyTreeDemoView: View {
                 .controlSize(.small)
                 .help("Hear it")
                 Button("Save") { savePronunciation(word) }
+                    .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(draft.isEmpty)

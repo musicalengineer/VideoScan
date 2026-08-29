@@ -707,6 +707,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
     // moving the user's home directory can't break things.
 
     func save() throws {
+        // Remote viewer (Phase 1): POI/ is synced FROM the master; never
+        // written here (the kinship attestations ride in profile.json).
+        try ViewerWriteGuard.check("POIProfile.save")
         let folder = POIStorage.folder(for: name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write(profileJSONAt: POIStorage.profileURL(for: name), folder: folder)
