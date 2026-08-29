@@ -326,6 +326,40 @@ final class FamilyTreeLiveModel: ObservableObject {
         appLog.write("[family-tree] \(step) took \(ms) ms (\(people) people)")
     }
 
+    enum FocusDiagnosticKind: String { case name, recordID = "record-id" }
+    enum FocusDiagnosticResult: String {
+        case applied
+        case rejectedEmpty = "rejected-empty"
+        case rejectedAmbiguous = "rejected-ambiguous"
+        case rejectedNoMatch = "rejected-no-match"
+        case rejectedMissingRecord = "rejected-missing-record"
+    }
+
+    /// Privacy-safe, testable focus audit line. It intentionally accepts no
+    /// name or record ID, so those values cannot accidentally reach the
+    /// general diagnostic log. The tree's visible notice still names the
+    /// person for the user.
+    nonisolated static func focusDiagnosticLine(
+        kind: FocusDiagnosticKind,
+        result: FocusDiagnosticResult,
+        elapsed: Duration,
+        people: Int
+    ) -> String {
+        let ms = max(0, Int((elapsed / .milliseconds(1)).rounded()))
+        return "[family-tree] focus kind=\(kind.rawValue) result=\(result.rawValue) "
+            + "elapsed_ms=\(ms) people=\(people)"
+    }
+
+    private func logFocus(
+        kind: FocusDiagnosticKind,
+        result: FocusDiagnosticResult,
+        since start: ContinuousClock.Instant
+    ) {
+        appLog.write(Self.focusDiagnosticLine(
+            kind: kind, result: result,
+            elapsed: ContinuousClock.now - start, people: peopleCount))
+    }
+
     /// Time `body` and report it through `logStep`. No RAII scope guard
     /// in Swift — the closure IS the scope.
     @discardableResult
@@ -651,7 +685,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         // Swift tuple destructuring in `guard let` ≈ std::tie on an optional pair.
         guard let (person, reason) = picked else { return nil }
-        appLog.write("[family-tree] default focus → \(person.name) (\(reason))")
+        appLog.write("[family-tree] default focus applied reason=\(reason)")
         return person.id
     }
 
@@ -779,29 +813,41 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// line goes to videoscan.log.
     @discardableResult
     func focus(onName raw: String, profiles: [POIProfile] = []) -> Bool {
+        let started = ContinuousClock.now
         let wanted = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !wanted.isEmpty else { return false }
+        guard !wanted.isEmpty else {
+            logFocus(kind: .name, result: .rejectedEmpty, since: started)
+            return false
+        }
 
         switch resolveFocus(wanted, profiles: profiles) {
         case .hit(let id):
             clearMissState()
             select(id)
+            logFocus(kind: .name, result: .applied, since: started)
             return true
         case .ambiguous:
-            recordMiss(name: wanted, reason: "ambiguous",
+            recordMiss(name: wanted,
                        notice: "More than one \u{201C}\(wanted)\u{201D} in the tree \u{2014} search to pick one")
+            logFocus(kind: .name, result: .rejectedAmbiguous, since: started)
             return false
         case .miss:
-            recordMiss(name: wanted, reason: "no match",
+            recordMiss(name: wanted,
                        notice: "No one named \u{201C}\(wanted)\u{201D} in the tree")
+            logFocus(kind: .name, result: .rejectedNoMatch, since: started)
             return false
         }
     }
 
     func focus(onID id: String) -> Bool {
-        guard graph?.people[id] != nil else { return false }
+        let started = ContinuousClock.now
+        guard graph?.people[id] != nil else {
+            logFocus(kind: .recordID, result: .rejectedMissingRecord, since: started)
+            return false
+        }
         clearMissState()
         select(id)
+        logFocus(kind: .recordID, result: .applied, since: started)
         return true
     }
 
@@ -813,8 +859,6 @@ final class FamilyTreeLiveModel: ObservableObject {
         let notice = name.isEmpty
             ? "That record isn\u{2019}t in the current tree"
             : "That record for \u{201C}\(name)\u{201D} isn\u{2019}t in the current tree"
-        appLog.write("[family-tree] focus(onID:) record \(id) not in current tree" +
-                     (name.isEmpty ? "" : " (display name '\(name)')"))
         applyMiss(name: name, notice: notice)
     }
 
@@ -865,8 +909,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         return .miss
     }
 
-    private func recordMiss(name: String, reason: String, notice: String) {
-        appLog.write("[family-tree] focus(onName:) \(reason) for '\(name)'")
+    private func recordMiss(name: String, notice: String) {
         applyMiss(name: name, notice: notice)
     }
 

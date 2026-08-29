@@ -36,10 +36,7 @@
 
 import CryptoKit
 import Foundation
-import OSLog
 import VideoScanCore
-
-private let kinshipLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "kinship")
 
 struct FamilyKinshipOverlay: Sendable {
 
@@ -163,8 +160,15 @@ struct FamilyKinshipOverlay: Sendable {
     /// codex #772): an alias that is a relational WORD ("Dad" on Rick) is
     /// the old way of saying a relationship and collides with the profile
     /// that IS Dad. Never migrated silently — Rick edits his data — only
-    /// surfaced here (and in videoscan.log) for the People-tab badge.
+    /// surfaced here for the People-tab badge. Overlay construction is a
+    /// pure operation: it never writes names or aliases to a process or
+    /// persistent log. Callers may summarize warning RULES at an
+    /// orchestration boundary, but the user-facing prose stays in memory.
     private(set) var warnings: [String] = []
+    /// One warning per distinct condition even when duplicate profile input
+    /// reaches the builder. This also prevents repeated UI badges when an
+    /// overlay is reconstructed for several Hallie turns.
+    private var warningKeys: Set<String> = []
     /// profile stableID → why its `treeIdentity` pin did not bridge
     /// (stale or colliding). Validation turns this into an error.
     private(set) var pinProblems: [String: String] = [:]
@@ -368,8 +372,8 @@ struct FamilyKinshipOverlay: Sendable {
     }
 
     private mutating func note(_ line: String) {
+        guard warningKeys.insert(line).inserted else { return }
         warnings.append(line)
-        kinshipLog.warning("\(line, privacy: .public)")
     }
 
     /// Stable content fingerprint of a tree: SHA-256 over every person's

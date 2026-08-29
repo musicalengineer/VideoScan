@@ -15,6 +15,24 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// General app-log records for Hallie actions. Deliberately accepts metadata
+/// only: raw questions, answers, names and error prose belong in the scoped
+/// Hallie transcript or the UI, never in videoscan.log.
+enum ArchivistDiagnosticLine {
+    enum FailureOperation: String { case interpretation, continuation }
+
+    static func recompileStarted(willReask: Bool) -> String {
+        "[family-tree] Hallie recompile started reask=\(willReask)"
+    }
+
+    static let focusRequested = "[family-tree] Hallie focus requested target=person-id"
+    static let filmOfferSuppressed = "[hallie] film offer suppressed reason=person-predates-medium"
+
+    static func failure(_ operation: FailureOperation, error: Error) -> String {
+        "[hallie] \(operation.rawValue) failed category=\(String(describing: type(of: error)))"
+    }
+}
+
 // MARK: - Messages
 
 enum ArchivistFamilyFactKind: Sendable {
@@ -928,7 +946,9 @@ struct ArchivistChatWindow: View {
         messages.append(ArchivistMessage(
             id: messageID, role: .assistant, text: "Recompiling the family tree…",
             basisLine: "Action: recompile the compiled family tree from the pulls on disk."))
-        appLog.write("[family-tree] Hallie recompile started" + (question.map { " (then re-ask: \($0))" } ?? ""))
+        // The question belongs in Hallie's access-controlled transcript, not
+        // the general application diagnostic log.
+        appLog.write(ArchivistDiagnosticLine.recompileStarted(willReask: question != nil))
         Task { @MainActor in
             let outcome = await FamilyTreeRecompileCenter.shared.recompile { [self] phase in
                 replaceMessageText(id: messageID, with: "Recompiling the family tree… \(phase)")
@@ -1104,7 +1124,7 @@ struct ArchivistChatWindow: View {
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                appLog.write("Hallie interpretation failed — \(error.localizedDescription)")
+                appLog.write(ArchivistDiagnosticLine.failure(.interpretation, error: error))
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,
@@ -1160,7 +1180,7 @@ struct ArchivistChatWindow: View {
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                appLog.write("Hallie continuation failed — \(error.localizedDescription)")
+                appLog.write(ArchivistDiagnosticLine.failure(.continuation, error: error))
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,
@@ -1255,7 +1275,9 @@ struct ArchivistChatWindow: View {
         if response.result.performsFirstOfferedAction,
            case .openFamilyTreePerson(let personID, let personName)? = response.result.offeredActions.first {
             openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
-            appLog.write("[family-tree] Hallie centered on \(personName) (\(personID))")
+            // AppStorage is only a hand-off request. FamilyTreeLiveModel logs
+            // whether the target was actually applied or rejected.
+            appLog.write(ArchivistDiagnosticLine.focusRequested)
         }
         // "I can do that now" (live miss #8): the recompile runs without a
         // tap and the question that hit the refused tree is asked again.
@@ -1798,8 +1820,8 @@ struct ArchivistChatWindow: View {
             $0.name.compare(canonicalName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         guard matches.count == 1 else { return true }
-        if let note = WorldKnowledge.photography.impossibilityNote(person: matches[0], medium: .film) {
-            appLog.write("[hallie] film offer suppressed: \(canonicalName) (\(note))")
+        if WorldKnowledge.photography.impossibilityNote(person: matches[0], medium: .film) != nil {
+            appLog.write(ArchivistDiagnosticLine.filmOfferSuppressed)
             return false
         }
         return true
