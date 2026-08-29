@@ -81,6 +81,18 @@ enum ShowInTreeReducer {
     static func usingLine(profileName: String, candidate: TreeIdentityCandidate) -> String {
         "Using \(candidate.name) (\(candidate.code)) for \(profileName)"
     }
+
+    /// Banner line 1 (2026-08-29 layout fix): the sentence WITHOUT the code,
+    /// which the banner shows on its own monospaced line so it is never
+    /// elided at narrow sidebar widths. "Rick is Richard Harding Breen Jr (b. 1959)"
+    static func pinnedHeadline(profileName: String, candidate: TreeIdentityCandidate) -> String {
+        "\(profileName) is \(candidate.label)"
+    }
+
+    /// "Using Richard Harding Breen Jr (b. 1959) for Rick"
+    static func usingHeadline(profileName: String, candidate: TreeIdentityCandidate) -> String {
+        "Using \(candidate.label) for \(profileName)"
+    }
 }
 
 enum TreeIdentityPinning {

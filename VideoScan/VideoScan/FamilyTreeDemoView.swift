@@ -333,35 +333,78 @@ struct FamilyTreeDemoView: View {
 
     // MARK: Identity banner (People-tab focus)
 
-    /// "Rick is Richard Harding Breen Jr (b. 1959) · GVQV-NW3 — Not right?"
-    /// or, right after an auto-pin, "Using … for Rick — OK / Undo".
+    /// Three lines (2026-08-29 layout fix — the one-row form elided the
+    /// FSID and crowded the controls at a 560 px sidebar):
+    ///   1. "Rick is Richard Harding Breen Jr (b. 1959)" — wraps, never elides
+    ///   2. the FamilySearch ID, monospaced, with a copy button — never elided
+    ///   3. trailing controls: [OK / Undo] · Not right? · ⊗
+    /// Semantic fonts (.callout / .caption) follow the system text size.
     private func identityBanner(_ banner: TreeIdentityCenter.Banner) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: banner.kind == .using ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
-            Text(banner.line)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer(minLength: 4)
-            if banner.kind == .using {
-                Button("OK") { identityCenter.dismissBanner() }
-                    .controlSize(.small)
-                Button("Undo") { undoIdentityPin(banner) }
-                    .controlSize(.small)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: banner.kind == .using ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+                Text(banner.headline)
+                    .font(.callout)
+                    // `.fixedSize(horizontal: false, vertical: true)` ≈ "take
+                    // the width you're given, grow as tall as you need" — the
+                    // SwiftUI way to say "wrap instead of truncate".
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("ft.identityBanner.headline")
             }
-            Button("Not right?") { changeIdentityPin(banner) }
-                .buttonStyle(.link)
-                .controlSize(.small)
-            Button {
-                identityCenter.dismissBanner()
-            } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(banner.candidate.code)
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    // The identifier is the one thing that must never be
+                    // cut short; it is short enough to always fit at 400 px.
+                    .fixedSize()
+                    .accessibilityIdentifier("ft.identityBanner.code")
+                Button {
+                    copyToPasteboard(banner.candidate.code)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Copy \(banner.candidate.code)")
+                .accessibilityLabel("Copy FamilySearch ID")
+                .accessibilityIdentifier("ft.identityBanner.copy")
             }
-            .buttonStyle(.plain)
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                if banner.kind == .using {
+                    Button("OK") { identityCenter.dismissBanner() }
+                        .controlSize(.small)
+                    Button("Undo") { undoIdentityPin(banner) }
+                        .controlSize(.small)
+                }
+                Button("Not right?") { changeIdentityPin(banner) }
+                    .buttonStyle(.link)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("ft.identityBanner.notRight")
+                Button {
+                    identityCenter.dismissBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.12)))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ft.identityBanner")
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func profileNamed(_ name: String) -> POIProfile? {
@@ -542,10 +585,42 @@ struct FamilyTreeDemoView: View {
         }
     }
 
+    /// Id of the 1×1 invisible marker that sits on the focused card's
+    /// on-screen point; `ScrollViewReader.scrollTo` targets it.
+    private static let focusAnchorID = "ft.canvas.focusAnchor"
+
+    /// Where the focused card is drawn, in the (post-zoom) scroll content.
+    private var focusAnchorPoint: CGPoint? {
+        guard let id = model.selectedID,
+              let card = model.scene.cards.first(where: { $0.person.id == id }) else { return nil }
+        return FamilyTreeCanvasFocus.anchorPoint(cardPosition: card.position, zoom: zoom)
+    }
+
+    /// Bring the focused card to the middle of the viewport. Deferred one
+    /// run-loop turn so the freshly rebuilt scene has been laid out first
+    /// (2026-08-29: People → Show in Family Tree landed on a scene whose
+    /// root sat far outside the top-left viewport — an "empty" canvas).
+    private func scrollToFocus(_ reader: ScrollViewProxy, animated: Bool) {
+        guard focusAnchorPoint != nil else { return }
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    reader.scrollTo(Self.focusAnchorID, anchor: .center)
+                }
+            } else {
+                reader.scrollTo(Self.focusAnchorID, anchor: .center)
+            }
+        }
+    }
+
     private var treeScroll: some View {
             GeometryReader { proxy in
                 let size = model.scene.size == .zero
                     ? CGSize(width: 600, height: 400) : model.scene.size
+                // `ScrollViewReader` ≈ a handle to scroll programmatically;
+                // the canvas never did this before, so a big tree opened
+                // on its top-left corner instead of on the selected person.
+                ScrollViewReader { reader in
                 ScrollView([.horizontal, .vertical]) {
                     ZStack {
                         treeLines
@@ -585,6 +660,19 @@ struct FamilyTreeDemoView: View {
                     .frame(width: size.width, height: size.height)
                     .scaleEffect(zoom, anchor: .center)
                     .frame(width: size.width * zoom, height: size.height * zoom)
+                    // Invisible scroll target on the focused card's drawn
+                    // point. Placed OUTSIDE the scaleEffect so scrollTo's
+                    // geometry matches what is on screen (scaleEffect is a
+                    // paint-time transform; layout frames stay unscaled).
+                    .overlay(alignment: .topLeading) {
+                        if let point = focusAnchorPoint {
+                            Color.clear
+                                .frame(width: 1, height: 1)
+                                .position(point)
+                                .id(Self.focusAnchorID)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .padding(40)
                     .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
                 }
@@ -598,6 +686,13 @@ struct FamilyTreeDemoView: View {
                         endPoint: .bottom
                     )
                 )
+                .onAppear { scrollToFocus(reader, animated: false) }
+                .onChange(of: model.selectedID) { _, _ in scrollToFocus(reader, animated: true) }
+                // A relayout with the same selection (install / reload /
+                // generation cap change) moves the card; follow it.
+                .onChange(of: model.scene.size) { _, _ in scrollToFocus(reader, animated: false) }
+                .onChange(of: zoom) { _, _ in scrollToFocus(reader, animated: false) }
+                }
             }
     }
 
