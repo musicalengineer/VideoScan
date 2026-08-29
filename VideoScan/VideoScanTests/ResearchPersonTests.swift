@@ -303,7 +303,7 @@ struct ResearchSourceAdapterTests {
         let modern = ResearchQueryPlan(nameVariants: ["Someone Recent"], yearFrom: 1970, yearTo: 2000,
                                        placeTokens: [], stateHint: nil)
         #expect(try await source.search(plan: modern).isEmpty)
-        #expect(recorder.count == 0)
+        #expect(recorder.urls.isEmpty)
         let straddling = ResearchQueryPlan(nameVariants: ["X Y"], yearFrom: 1700, yearTo: 2000,
                                            placeTokens: [], stateHint: nil)
         _ = try await source.search(plan: straddling)

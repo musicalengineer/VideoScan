@@ -332,7 +332,7 @@ struct FindAGraveSource: ResearchSource {
             try Task.checkCancellation()
             guard let url = Self.searchURL(name: variant, plan: plan) else { continue }
             let result = try await fetcher.fetch(url)
-            let html = String(decoding: result.body, as: UTF8.self)
+            let html = String(data: result.body, encoding: .utf8) ?? ""
             for finding in Self.parse(html, retrievedAt: result.retrievedAt)
             where seen.insert(finding.id).inserted {
                 findings.append(finding)
@@ -515,7 +515,7 @@ struct WebSearchSource: ResearchSource {
         guard let primary = plan.nameVariants.first, let url = Self.queryURL(plan: plan, name: primary) else { return [] }
         try Task.checkCancellation()
         let result = try await fetcher.fetch(url)
-        let html = String(decoding: result.body, as: UTF8.self)
+        let html = String(data: result.body, encoding: .utf8) ?? ""
         return Array(Self.parse(html, retrievedAt: result.retrievedAt).prefix(Self.maxResults))
     }
 
