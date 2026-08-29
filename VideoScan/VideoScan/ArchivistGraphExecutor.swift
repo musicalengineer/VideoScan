@@ -18,10 +18,13 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
     let uuid: UUID?
     /// The profile's durable tree pin (design amendment 1). nil = unpinned.
     let treeIdentity: TreeIdentity?
+    /// True when the stored pin could not be decoded (newer build wrote it):
+    /// the overlay fails closed — unbridged with a pin problem, never a name.
+    let treeIdentityUnreadable: Bool
 
     init(stableID: String, canonicalName: String, aliases: [String] = [],
          kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil,
-         uuid: UUID? = nil, treeIdentity: TreeIdentity? = nil) {
+         uuid: UUID? = nil, treeIdentity: TreeIdentity? = nil, treeIdentityUnreadable: Bool = false) {
         self.stableID = stableID
         self.canonicalName = canonicalName
         self.aliases = aliases
@@ -30,6 +33,7 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
         self.birthdate = birthdate
         self.uuid = uuid
         self.treeIdentity = treeIdentity
+        self.treeIdentityUnreadable = treeIdentityUnreadable
     }
 
     // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
@@ -44,7 +48,8 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
             sex: profile.sex,
             birthdate: profile.birthdate,
             uuid: profile.uuid,
-            treeIdentity: profile.treeIdentity)
+            treeIdentity: profile.treeIdentity,
+            treeIdentityUnreadable: profile.treeIdentityQuarantined != nil)
     }
 }
 

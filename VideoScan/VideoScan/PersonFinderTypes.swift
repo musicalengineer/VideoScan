@@ -548,6 +548,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// not pinned (name matches are review SUGGESTIONS, never identity).
     /// Additive: absent in older profile.json ⇒ nil; saved explicitly.
     var treeIdentity: TreeIdentity?
+    /// A `treeIdentity` this build could not read, kept verbatim and written
+    /// back so a newer build's pin is never lost (fail closed: the overlay
+    /// treats the profile as unbridged with a pin problem, never a name).
+    var treeIdentityQuarantined: JSONValue?
 
     /// The anchor other profiles should store for THIS profile: the durable
     /// uuid when it is on disk, otherwise the name (upgraded automatically
@@ -568,7 +572,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case minFaceConfidence, largestFaceOnly, coverImageFilename, notes, aliases
         case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
-        case kinships, kinshipsQuarantined, uuid, treeIdentity
+        case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -657,7 +661,20 @@ struct POIProfile: Codable, Identifiable, Equatable {
         kinships          = readable
         kinshipsQuarantined = quarantined
         uuid              = try c.decodeIfPresent(UUID.self, forKey: .uuid) ?? UUID()
-        treeIdentity      = Self.decodeIdentityField(TreeIdentity.self, forKey: .treeIdentity, from: c)
+        // Pin (2026-08-29): decoded as raw JSON first so an unreadable pin is
+        // quarantined, not dropped and not silently replaced by a name match.
+        let rawPin = Self.decodeIdentityField(JSONValue.self, forKey: .treeIdentity, from: c)
+        if let rawPin, let data = try? JSONEncoder().encode(rawPin),
+           let pin = try? JSONDecoder().decode(TreeIdentity.self, from: data) {
+            treeIdentity = pin
+            treeIdentityQuarantined = nil
+        } else {
+            treeIdentity = nil
+            treeIdentityQuarantined = rawPin ?? Self.decodeIdentityField(JSONValue.self, forKey: .treeIdentityQuarantined, from: c)
+            if rawPin != nil {
+                identityLog.notice("POIProfile load: quarantined an unreadable treeIdentity pin (written by a newer app version?) — kept verbatim, not used.")
+            }
+        }
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare

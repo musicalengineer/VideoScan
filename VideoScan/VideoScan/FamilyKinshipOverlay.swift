@@ -17,17 +17,12 @@
 //                     unless the order is provable
 //
 // Bridging a profile to a tree person (design amendment 1, 2026-08-29:
-// identity ≠ relationship) has two modes:
-//   • `.pinsOnly`      — ONLY an explicit `treeIdentity` pin bridges; a
-//                        stale pin (not in this tree) or a colliding pin
-//                        (two profiles → one tree person) fails CLOSED:
-//                        unbridged + a pin problem the editor shows. This
-//                        is what FamilyKinshipInference uses.
-//   • `.pinsThenNames` — pins first, then the historical unique-name /
-//                        alias match (Hallie's existing routes; unchanged
-//                        behaviour for profiles without a pin).
-// `suggestedTreeMatches` exposes the name candidates for the review sheet
-// as suggestions — never as graph identity.
+// identity ≠ relationship): ONLY an explicit `treeIdentity` pin bridges. A
+// stale pin (not in this tree), an unreadable pin (written by a newer
+// build) or a colliding pin (two profiles → one tree person) fails CLOSED:
+// unbridged + a pin problem the editor and validation show. Name / alias
+// matching is NOT identity anywhere in production; `suggestedTreeMatches`
+// exposes the name candidates for the review sheet as suggestions only.
 //
 // Pure and injected: built from an array of profile snapshots plus an
 // optional graph, so tests never touch App Support. Worst-case memory: a
@@ -47,12 +42,6 @@ import VideoScanCore
 private let kinshipLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "kinship")
 
 struct FamilyKinshipOverlay: Sendable {
-
-    /// How profiles become tree vertices (see file comment).
-    enum Bridging: Sendable {
-        case pinsOnly
-        case pinsThenNames
-    }
 
     // MARK: Identity space
 
@@ -89,13 +78,18 @@ struct FamilyKinshipOverlay: Sendable {
         var birthYears: GedcomYearInterval? = nil
         let profileStableID: String?
         let gedcomID: String?
+        /// Durable identity for provenance / confirmation keys: "uuid:…" for a
+        /// profile, "fsid:…" for a tree person (never a display name, never an
+        /// @I pointer unless the export has no FSIDs — then pointer@fingerprint).
+        var identity: String = ""
         /// The bridged tree record's name when it differs from `name`
         /// ("Dad" → "Richard Harding Breen Sr"), so answers can show both.
         var treeName: String? = nil
 
         init(node: Node, name: String, sex: PersonSex?, birthdate: Date?,
              birthYears: GedcomYearInterval? = nil,
-             profileStableID: String?, gedcomID: String?, treeName: String? = nil) {
+             profileStableID: String?, gedcomID: String?, treeName: String? = nil,
+             identity: String = "") {
             self.node = node
             self.name = name
             self.sex = sex
@@ -104,6 +98,7 @@ struct FamilyKinshipOverlay: Sendable {
             self.profileStableID = profileStableID
             self.gedcomID = gedcomID
             self.treeName = treeName
+            self.identity = identity
         }
 
         /// Birth knowledge at its native precision: a full date beats a
@@ -129,6 +124,8 @@ struct FamilyKinshipOverlay: Sendable {
         let relation: KinshipRelation
         /// Canonical name of the profile whose row produced this edge.
         let storedOn: String
+        /// That profile's durable identity ("uuid:…"), for provenance.
+        var storedOnIdentity: String = ""
         /// What a sibling row asserts about shared parents (both directions
         /// carry the row's basis).
         var basis: SiblingBasis = .unspecified
@@ -162,7 +159,6 @@ struct FamilyKinshipOverlay: Sendable {
     /// ("renee") — codex #795 B.
     private var nodesByCanonicalName: [String: [Node]] = [:]
     private let graph: GedcomFamilyGraph?
-    let bridging: Bridging
     /// Non-blocking data-hygiene nudges found while building (2026-08-28,
     /// codex #772): an alias that is a relational WORD ("Dad" on Rick) is
     /// the old way of saying a relationship and collides with the profile
@@ -183,19 +179,12 @@ struct FamilyKinshipOverlay: Sendable {
 
     // MARK: Build
 
-    init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil, bridging: Bridging = .pinsThenNames) {
-        self.init(snapshots: profiles.map {
-            ArchivistGraphProfileSnapshot(
-                stableID: $0.id, canonicalName: $0.name, aliases: $0.aliases,
-                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate, uuid: $0.uuid,
-                treeIdentity: $0.treeIdentity)
-        }, graph: graph, bridging: bridging)
+    init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil) {
+        self.init(snapshots: profiles.map(ArchivistGraphProfileSnapshot.init(profile:)), graph: graph)
     }
 
-    init(snapshots: [ArchivistGraphProfileSnapshot], graph: GedcomFamilyGraph? = nil,
-         bridging: Bridging = .pinsThenNames) {
+    init(snapshots: [ArchivistGraphProfileSnapshot], graph: GedcomFamilyGraph? = nil) {
         self.graph = graph
-        self.bridging = bridging
         self.resolver = PersonResolver(people: snapshots.map {
             ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
         })
@@ -206,18 +195,9 @@ struct FamilyKinshipOverlay: Sendable {
         self.fingerprint = usesPointers ? graph.map(Self.fingerprint(of:)) : nil
         let pins = resolvePins(snapshots)
         // Pass 1: one vertex per profile — the pinned tree person when the
-        // pin resolves; otherwise (pinsThenNames only) the unique, token-
-        // exact name match the graph executor's profile route also uses; no
-        // diminutive pass, so "Timmy" never bridges to a tree "Tim".
+        // pin resolves, else the profile itself. Never a name match.
         for snapshot in snapshots {
-            let bridged: GedcomFamilyGraph.Person?
-            if let pinned = pins[snapshot.stableID] {
-                bridged = pinned
-            } else if snapshot.treeIdentity == nil, bridging == .pinsThenNames {
-                bridged = Self.uniqueNameMatch(snapshot, graph: graph)
-            } else {
-                bridged = nil
-            }
+            let bridged: GedcomFamilyGraph.Person? = pins[snapshot.stableID]
             let node: Node = bridged.map { .tree(gedcomID: $0.id) }
                 ?? .profile(stableID: snapshot.stableID)
             nodeByProfileStableID[snapshot.stableID] = node
@@ -229,7 +209,8 @@ struct FamilyKinshipOverlay: Sendable {
                     birthdate: snapshot.birthdate,
                     birthYears: bridged?.birthYearInterval,
                     profileStableID: snapshot.stableID,
-                    gedcomID: bridged?.id, treeName: bridged?.name)
+                    gedcomID: bridged?.id, treeName: bridged?.name,
+                    identity: Self.identity(snapshot: snapshot, bridged: bridged, graph: graph))
             }
             let canonicalWord = PersonResolver.normalize(snapshot.canonicalName)
             for alias in snapshot.aliases {
@@ -263,10 +244,13 @@ struct FamilyKinshipOverlay: Sendable {
                 let anchor = resolveAnchor(kinship.relativeTo, storedOn: snapshot.canonicalName)
                 guard anchor != subject else { continue }
                 let basis = kinship.relation == .sibling ? kinship.basis : .unspecified
+                let identity = members[subject]?.identity ?? Self.profileIdentity(snapshot)
                 let forward = Edge(from: anchor, to: subject,
-                                   relation: kinship.relation, storedOn: snapshot.canonicalName, basis: basis)
+                                   relation: kinship.relation, storedOn: snapshot.canonicalName,
+                                   storedOnIdentity: identity, basis: basis)
                 let backward = Edge(from: subject, to: anchor,
-                                    relation: kinship.relation.inverse, storedOn: snapshot.canonicalName, basis: basis)
+                                    relation: kinship.relation.inverse, storedOn: snapshot.canonicalName,
+                                    storedOnIdentity: identity, basis: basis)
                 for edge in [forward, backward] where seen.insert(edge).inserted {
                     outgoing[edge.from, default: []].append(edge)
                 }
@@ -281,6 +265,12 @@ struct FamilyKinshipOverlay: Sendable {
         var resolved: [String: GedcomFamilyGraph.Person] = [:]
         var claimants: [String: [String]] = [:]
         for snapshot in snapshots {
+            if snapshot.treeIdentityUnreadable {
+                let why = "\(snapshot.canonicalName)'s family-tree pin could not be read (written by a newer app version?) — kept as is, not used"
+                pinProblems[snapshot.stableID] = why
+                note(why)
+                continue
+            }
             guard let pin = snapshot.treeIdentity else { continue }
             let person: GedcomFamilyGraph.Person?
             switch pin {
@@ -368,7 +358,8 @@ struct FamilyKinshipOverlay: Sendable {
         if members[node] == nil {
             members[node] = Member(node: node, name: person.name, sex: Self.sex(of: person),
                                    birthdate: nil, birthYears: person.birthYearInterval,
-                                   profileStableID: nil, gedcomID: person.id)
+                                   profileStableID: nil, gedcomID: person.id,
+                                   identity: Self.treeIdentity(person, graph: graph))
         }
         return node
     }
@@ -388,6 +379,24 @@ struct FamilyKinshipOverlay: Sendable {
             hasher.update(data: Data((id + "\t" + (graph.people[id]?.name ?? "") + "\n").utf8))
         }
         return hasher.finalize().prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// "uuid:<uuid>" — or "profile:<stableID>" for snapshots without one.
+    static func profileIdentity(_ snapshot: ArchivistGraphProfileSnapshot) -> String {
+        snapshot.uuid.map { "uuid:" + $0.uuidString.lowercased() } ?? "profile:" + snapshot.stableID
+    }
+
+    /// "fsid:<FamilySearch ID>", or pointer@fingerprint for exports without.
+    static func treeIdentity(_ person: GedcomFamilyGraph.Person, graph: GedcomFamilyGraph?) -> String {
+        if let fsid = person.familySearchID?.trimmingCharacters(in: .whitespacesAndNewlines), !fsid.isEmpty {
+            return "fsid:" + fsid.uppercased()
+        }
+        return "tree-pointer:" + person.id + "@" + (graph.map(fingerprint(of:)) ?? "")
+    }
+
+    private static func identity(snapshot: ArchivistGraphProfileSnapshot, bridged: GedcomFamilyGraph.Person?,
+                                 graph: GedcomFamilyGraph?) -> String {
+        bridged.map { treeIdentity($0, graph: graph) } ?? profileIdentity(snapshot)
     }
 
     /// Tree people whose name matches the profile's canonical name or an
@@ -418,21 +427,6 @@ struct FamilyKinshipOverlay: Sendable {
                 return lhs.offset < rhs.offset
             }
             .map(\.element)
-    }
-
-    /// The historical name bridge (`.pinsThenNames` only): the first
-    /// spelling with exactly one tree match; an ambiguous spelling stops
-    /// the search (never guess).
-    private static func uniqueNameMatch(
-        _ snapshot: ArchivistGraphProfileSnapshot, graph: GedcomFamilyGraph?
-    ) -> GedcomFamilyGraph.Person? {
-        guard let graph else { return nil }
-        for term in spellingsMostSpecificFirst(canonicalName: snapshot.canonicalName, aliases: snapshot.aliases) {
-            let matches = graph.people(matching: term)
-            if matches.count == 1 { return matches[0] }
-            if matches.count > 1 { return nil }   // ambiguous: never guess
-        }
-        return nil
     }
 
     private static func sex(of person: GedcomFamilyGraph.Person) -> PersonSex? {

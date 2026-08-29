@@ -88,14 +88,14 @@ enum KinshipFixture {
         for g in 1...9 {
             let name = g == 9 ? "Martha /Lamson/" : "Ancestor\(g) /Breen/"
             let sex = g == 9 ? "F" : (g % 2 == 1 ? "M" : "F")
-            lines += ["0 @A\(g)@ INDI", "1 NAME \(name)", "1 SEX \(sex)", "1 _FSFTID ANC-\(g)",
+            lines += ["0 @A\(g)@ INDI", "1 NAME \(name)", "1 SEX \(sex)", "1 _FSFTID ANC\(g)-00\(g)",
                       "1 BIRT", "2 DATE \(g == 1 ? "ABT " : "")\(1931 - 28 * g)", "1 FAMS @F\(g)@"]
             if g < 9 { lines.append("1 FAMC @F\(g + 1)@") }
             let child = g == 1 ? "@I2@" : "@A\(g - 1)@"
             lines += ["0 @F\(g)@ FAM", "1 \(sex == "M" ? "HUSB" : "WIFE") @A\(g)@", "1 CHIL \(child)"]
         }
-        lines += ["0 @X1@ INDI", "1 NAME Xavier /Breen/", "1 SEX M", "1 _FSFTID XAV-1", "1 FAMC @F2@", "1 FAMS @FX@",
-                  "0 @X2@ INDI", "1 NAME Xena /Breen/", "1 SEX F", "1 _FSFTID XEN-2", "1 FAMC @FX@",
+        lines += ["0 @X1@ INDI", "1 NAME Xavier /Breen/", "1 SEX M", "1 _FSFTID XAV1-001", "1 FAMC @F2@", "1 FAMS @FX@",
+                  "0 @X2@ INDI", "1 NAME Xena /Breen/", "1 SEX F", "1 _FSFTID XEN2-002", "1 FAMC @FX@",
                   "0 @FX@ FAM", "1 HUSB @X1@", "1 CHIL @X2@"]
         if let i = lines.firstIndex(of: "0 @F2@ FAM") { lines.insert("1 CHIL @X1@", at: i + 3) }
         lines.append("0 TRLR")
@@ -103,6 +103,24 @@ enum KinshipFixture {
     }()
 
     static var graph: GedcomFamilyGraph { GedcomFamilyGraph(gedcomText: tree) }
+
+    /// Pedigree of @P1@: person i has parents 2i (M) and 2i+1 (F); FSID
+    /// "S<i>". 5,001 people, 2,500 families — the Tier B tie fixture.
+    static let pedigree5001: GedcomFamilyGraph = {
+        var lines = ["0 HEAD"]
+        for i in 1...5001 {
+            let depth = Int(log2(Double(i)))
+            lines += ["0 @P\(i)@ INDI", "1 NAME Person\(i) /Line/", "1 SEX \(i % 2 == 0 ? "M" : "F")",
+                      "1 _FSFTID " + String(format: "S%03d-%03d", i / 1000, i % 1000), "1 BIRT", "2 DATE \(1962 - 28 * depth)"]
+            if i <= 2500 { lines.append("1 FAMC @F\(i)@") }
+            if i >= 2 { lines.append("1 FAMS @F\(i / 2)@") }
+        }
+        for i in 1...2500 {
+            lines += ["0 @F\(i)@ FAM", "1 HUSB @P\(2 * i)@", "1 WIFE @P\(2 * i + 1)@", "1 CHIL @P\(i)@"]
+        }
+        lines.append("0 TRLR")
+        return GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
+    }()
 
     static func inference(_ profiles: [POIProfile] = family, graph: GedcomFamilyGraph? = KinshipFixture.graph)
         -> FamilyKinshipInference {
@@ -119,7 +137,8 @@ enum KinshipFixture {
 struct KinshipInferenceTests {
 
     private let inf = KinshipFixture.inference()
-    private let attested = KinshipFixture.inference(KinshipFixture.family(timBasis: .attestedFull))
+    private static let attestedFamily = KinshipFixture.family(timBasis: .attestedFull)
+    private let attested = KinshipFixture.inference(Self.attestedFamily)
     private func n(_ name: String) -> FamilyKinshipInference.Node { KinshipFixture.node(name, in: inf) }
     private static let martha = FamilyKinshipInference.Node.tree(gedcomID: "@A9@")
 
@@ -139,9 +158,9 @@ struct KinshipInferenceTests {
         let suggested = FamilyKinshipOverlay.suggestedTreeMatches(
             canonicalName: "Xavier", aliases: ["Xavier Breen"], graph: KinshipFixture.graph)
         #expect(suggested.map(\.id) == ["@X1@"])
-        // Hallie's display overlay keeps the historical name bridge.
+        // The display overlay is the same identity space: no name bridge there either.
         let display = FamilyKinshipOverlay(profiles: profiles, graph: KinshipFixture.graph)
-        #expect(display.node(profileStableID: "xavier") == .tree(gedcomID: "@X1@"))
+        #expect(display.node(profileStableID: "xavier") == .profile(stableID: "xavier"))
     }
 
     @Test func stalePinFailsClosed() {
@@ -167,9 +186,17 @@ struct KinshipInferenceTests {
         #expect(inf2.overlay.pinProblem(forProfileStableID: "rick") == why)
         #expect(inf2.overlay.pinProblem(forProfileStableID: "rick2") == why)
         #expect(inf2.overlay.warnings(forProfileNamed: "Rick2") == [why])
-        // Rick's rows still work locally; only the tree is cut off.
-        #expect(inf2.relation(from: KinshipFixture.node("Rick", in: inf2), to: KinshipFixture.node("Tim", in: inf2))?.term == "younger brother")
-        #expect(inf2.relation(from: KinshipFixture.node("Rick", in: inf2), to: Self.martha) == nil)
+        // Rick's rows still work: the DIRECT pin failed, but his explicit
+        // "child of Dad" row reaches the (separately pinned) Dad vertex and
+        // from there the tree — with that row cited as the first hop.
+        let rick = KinshipFixture.node("Rick", in: inf2)
+        #expect(inf2.relation(from: rick, to: KinshipFixture.node("Tim", in: inf2))?.term == "younger brother")
+        let viaDad = inf2.relation(from: rick, to: Self.martha)
+        #expect(viaDad?.term == "8th-great-grandmother")
+        #expect(viaDad?.route.first?.to == .tree(gedcomID: "@I2@"))
+        #expect(viaDad?.route.first?.provenance == .profileRow(profileIdentity: inf2.identity(of: rick)))
+        #expect(inf2.identity(of: rick).hasPrefix("uuid:"))          // not the contested FSID
+        #expect(inf2.relation(from: rick, to: .tree(gedcomID: "@I1@"))?.term == nil)   // the tree Rick is a stranger
     }
 
     @Test func treeIdentityAndSiblingBasisRoundTripAndDefault() throws {
@@ -221,7 +248,7 @@ struct KinshipInferenceTests {
     @Test func rickIsTimsOlderBrotherByBirthYear() {
         #expect(inf.relation(from: n("Tim"), to: n("Rick"))?.term == "older brother")
         #expect(inf.relation(from: n("Rick"), to: n("Tim"))?.term == "younger brother")
-        #expect(inf.relation(from: n("Rick"), to: n("Tim"))?.provenance == [.profileRow(storedOn: "Tim")])
+        #expect(inf.relation(from: n("Rick"), to: n("Tim"))?.provenance == [.profileRow(profileIdentity: inf.identity(of: n("Tim")))])
     }
 
     @Test func bobIsRicksBrotherInLawViaRoute() {
@@ -256,7 +283,7 @@ struct KinshipInferenceTests {
         func a(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: attested) }
         let parents = attested.parents(of: a("Tim"))
         #expect(parents.map(\.node) == [a("Dad"), a("Eileen")])
-        #expect(parents.allSatisfy { $0.provenance == .attestedSibling(via: "Rick") })
+        #expect(parents.allSatisfy { $0.provenance == .attestedSibling(viaIdentity: "fsid:GVQV-NW3") })
         #expect(attested.explicitParents(of: a("Tim")).isEmpty)      // still not a stored row
         #expect(attested.proposals(for: a("Tim")).isEmpty)
         let father = attested.relation(from: a("Tim"), to: a("Dad"))
@@ -286,7 +313,7 @@ struct KinshipInferenceTests {
         let d = attested.relation(from: a("Tim"), to: Self.martha)
         #expect(d?.term == "8th-great-grandmother")
         #expect(d?.route.count == 10)
-        #expect(d?.route.first?.provenance == .attestedSibling(via: "Rick"))
+        #expect(d?.route.first?.provenance == .attestedSibling(viaIdentity: "fsid:GVQV-NW3"))
         #expect(d?.usesTree == true)
         #expect(d?.routeText.hasPrefix("father Dad → father Ancestor1 Breen → mother Ancestor2 Breen") == true)
         #expect(d?.routeText.hasSuffix("→ mother Martha Lamson") == true)
@@ -456,7 +483,7 @@ struct KinshipInferenceTests {
         // Through the engine: Ancestor1 is "ABT 1903" in the tree; a sibling
         // born 1904 gets no age word, one born 1965 does.
         let profiles = [
-            KinshipFixture.profile("A1", sex: .male, pin: "ANC-1"),
+            KinshipFixture.profile("A1", sex: .male, pin: "ANC1-001"),
             KinshipFixture.profile("Near", sex: .male, born: 1904, kinships: [KinshipFixture.row(.sibling, of: "A1")]),
             KinshipFixture.profile("Far", sex: .male, born: 1965, kinships: [KinshipFixture.row(.sibling, of: "A1")]),
         ]
@@ -508,64 +535,316 @@ struct KinshipInferenceTests {
             let d = inf.relation(from: KinshipFixture.node("X", in: inf), to: KinshipFixture.node("Zed", in: inf))
             #expect(d?.term == "brother-in-law", Comment(rawValue: order.joined()))
             #expect(d?.route.map(\.relation) == [.spouse, .sibling], Comment(rawValue: order.joined()))
-            #expect(d?.provenance == [.profileRow(storedOn: "Yve"), .profileRow(storedOn: "Zed")], Comment(rawValue: order.joined()))
+            #expect(d?.provenance == [.profileRow(profileIdentity: inf.identity(of: KinshipFixture.node("Yve", in: inf))),
+                                      .profileRow(profileIdentity: inf.identity(of: KinshipFixture.node("Zed", in: inf)))],
+                    Comment(rawValue: order.joined()))
             #expect(d?.routeText == "wife Yve → brother Zed", Comment(rawValue: order.joined()))
         }
     }
 
-    // MARK: 2. Scale
+    // MARK: Attestation merge, rename stability, pin seam (codex #845 2–4)
 
-    /// 100 contemporaries (20 pinned) over a 5,001-person pedigree; 1,000
-    /// random pair queries must average < 50 ms in Debug.
-    @Test func hundredProfilesOverFiveThousandTreePeopleAnswerUnder50msEach() {
-        var lines = ["0 HEAD"]
-        for i in 1...5001 {
-            let depth = Int(log2(Double(i)))
-            lines += ["0 @P\(i)@ INDI", "1 NAME Person\(i) /Line/", "1 SEX \(i % 2 == 0 ? "M" : "F")",
-                      "1 _FSFTID S\(i)", "1 BIRT", "2 DATE \(1962 - 28 * depth)"]
-            if i <= 2500 { lines.append("1 FAMC @F\(i)@") }
-            if i >= 2 { lines.append("1 FAMS @F\(i / 2)@") }
+    @Test func attestedFullMergesPerParentWithWhatIsRecorded() {
+        // Tim has ONE explicit parent (Eileen); attesting full to Rick adds
+        // Dad, not a duplicate Eileen and not a third parent.
+        var profiles = KinshipFixture.family(timBasis: .attestedFull)
+        if let i = profiles.firstIndex(where: { $0.name == "Tim" }) {
+            profiles[i].kinships.append(KinshipFixture.row(.child, of: "Eileen"))
         }
-        for i in 1...2500 {
-            lines += ["0 @F\(i)@ FAM", "1 HUSB @P\(2 * i)@", "1 WIFE @P\(2 * i + 1)@", "1 CHIL @P\(i)@"]
-        }
-        lines.append("0 TRLR")
-        let graph = GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
-        #expect(graph.people.count == 5001)
+        let inf = KinshipFixture.inference(profiles)
+        let tim = KinshipFixture.node("Tim", in: inf)
+        let parents = inf.parents(of: tim)
+        #expect(parents.map(\.node) == [KinshipFixture.node("Dad", in: inf), KinshipFixture.node("Eileen", in: inf)])
+        #expect(parents.map { $0.provenance.isExplicit } == [false, true])
+        #expect(inf.attestationProblems.isEmpty)
+        #expect(inf.relation(from: tim, to: Self.martha)?.term == "8th-great-grandmother")
+        // attestedHalf with an explicit NON-shared parent inherits the shared one.
+        let half = KinshipFixture.inference([
+            KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female), KinshipFixture.profile("P3", sex: .female),
+            KinshipFixture.profile("Al", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1"), KinshipFixture.row(.child, of: "P2")]),
+            KinshipFixture.profile("Hal", sex: .male, kinships: [
+                KinshipFixture.row(.child, of: "P3"),
+                KinshipFixture.row(.sibling, of: "Al", basis: .attestedHalf(sharedParent: .profile(name: "P1"))),
+            ]),
+        ], graph: nil)
+        let hal = KinshipFixture.node("Hal", in: half)
+        #expect(half.parents(of: hal).map(\.node) == [KinshipFixture.node("P1", in: half), KinshipFixture.node("P3", in: half)])
+        #expect(half.relation(from: KinshipFixture.node("Al", in: half), to: hal)?.term == "half-brother")
+        // A half row whose shared parent does not resolve is NOT half.
+        let stale = KinshipFixture.inference([
+            KinshipFixture.profile("Al", sex: .male),
+            KinshipFixture.profile("Hal", sex: .male, kinships: [
+                KinshipFixture.row(.sibling, of: "Al", basis: .attestedHalf(sharedParent: .profile(id: UUID()))),
+            ]),
+        ], graph: nil)
+        let d = stale.relation(from: KinshipFixture.node("Al", in: stale), to: KinshipFixture.node("Hal", in: stale))
+        #expect(d?.term == "brother")
+        #expect(d?.caveats == ["the shared parent named on the half-sibling row could not be found — treated as unspecified"])
+        #expect(stale.parents(of: KinshipFixture.node("Hal", in: stale)).isEmpty)
+    }
 
-        var rng = SplitMix(seed: 0x5EED_2026)
-        var profiles: [POIProfile] = []
-        let anchors = [1, 2, 3, 6, 7, 12, 13, 25, 51, 101, 203, 407, 815, 1631, 2000, 2500, 3001, 4001, 4500, 5001]
-        for (k, p) in anchors.enumerated() {
-            profiles.append(KinshipFixture.profile("C\(k)", sex: p % 2 == 0 ? .male : .female, born: 1900 + k, pin: "S\(p)"))
+    @Test func duplicateLegacyRowsMergeToTheStrongestBasisRegardlessOfOrder() {
+        func build(_ first: SiblingBasis, _ second: SiblingBasis) -> FamilyKinshipInference {
+            KinshipFixture.inference([
+                KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female),
+                KinshipFixture.profile("Al", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1"), KinshipFixture.row(.child, of: "P2")]),
+                KinshipFixture.profile("Tom", sex: .male, kinships: [
+                    KinshipFixture.row(.sibling, of: "Al", basis: first),
+                    KinshipFixture.row(.sibling, of: "Al", basis: second),
+                ]),
+            ], graph: nil)
         }
-        for k in 20..<100 {
-            let target = "C\(Int(rng.next() % UInt64(k)))"
-            let relation: KinshipRelation = [.child, .spouse, .sibling, .child][Int(rng.next() % 4)]
-            let basis: SiblingBasis = rng.next() % 2 == 0 ? .attestedFull : .unspecified
-            profiles.append(KinshipFixture.profile("C\(k)", sex: k % 2 == 0 ? .male : .female,
-                                                   born: 1920 + k % 60,
-                                                   kinships: [KinshipFixture.row(relation, of: target, basis: basis)]))
+        for engine in [build(.unspecified, .attestedFull), build(.attestedFull, .unspecified)] {
+            let tom = KinshipFixture.node("Tom", in: engine)
+            #expect(engine.parents(of: tom).count == 2)
+            #expect(engine.hops(from: tom).filter { $0.relation == .sibling }.count == 1)
+            #expect(engine.relation(from: tom, to: KinshipFixture.node("P1", in: engine))?.term == "father")
         }
-        let inf = FamilyKinshipInference(profiles: profiles, graph: graph)
-        let nodes = (0..<100).map { KinshipFixture.node("C\($0)", in: inf) }
-        #expect(nodes[0] == .tree(gedcomID: "@P1@"))
-        var pairs: [(FamilyKinshipInference.Node, FamilyKinshipInference.Node)] = []
-        for _ in 0..<1000 {
-            pairs.append((nodes[Int(rng.next() % 100)], nodes[Int(rng.next() % 100)]))
+    }
+
+    @Test func renamingAProfileKeepsProvenanceAndPathHash() {
+        // Rows anchored by uuid survive a rename; the citation is the uuid.
+        var profiles = KinshipFixture.family
+        let rickUUID = profiles[0].uuid
+        if let i = profiles.firstIndex(where: { $0.name == "Tim" }) {
+            profiles[i].kinships = [Kinship(relation: .sibling, relativeTo: .profile(id: rickUUID))]
         }
-        var answered = 0, named = 0
-        let elapsed = ContinuousClock().measure {
-            for (a, b) in pairs {
-                if let d = inf.relation(from: a, to: b) {
-                    answered += 1
-                    if d.term != nil { named += 1 }
-                }
+        let before = KinshipFixture.inference(profiles)
+        let timID = profiles.first { $0.name == "Tim" }!.uuid
+        let first = before.relation(from: KinshipFixture.node("Rick", in: before), to: KinshipFixture.node("Tim", in: before))
+        var renamed = profiles
+        if let i = renamed.firstIndex(where: { $0.name == "Tim" }) { renamed[i].name = "Timothy Breen" }
+        let after = KinshipFixture.inference(renamed)
+        let second = after.relation(from: KinshipFixture.node("Rick", in: after), to: KinshipFixture.node("Timothy Breen", in: after))
+        #expect(first?.provenance == [.profileRow(profileIdentity: "uuid:" + timID.uuidString.lowercased())])
+        #expect(second?.provenance == first?.provenance)
+        #expect(second?.pathHash == first?.pathHash)
+        #expect(second?.term == "younger brother")
+    }
+
+    @Test func malformedPinIsQuarantinedAndFailsClosed() throws {
+        let json = #"{"name":"Rick","referencePath":"/p","treeIdentity":{"galaxy":"far away"}}"#
+        let p = try JSONDecoder().decode(POIProfile.self, from: Data(json.utf8))
+        #expect(p.treeIdentity == nil)
+        #expect(p.treeIdentityQuarantined == .object(["galaxy": .string("far away")]))
+        // Written back verbatim, and still quarantined on the next read.
+        let data = try JSONEncoder().encode(p)
+        let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((obj["treeIdentityQuarantined"] as? [String: Any])?["galaxy"] as? String == "far away")
+        #expect(obj["treeIdentity"] == nil)
+        let again = try JSONDecoder().decode(POIProfile.self, from: data)
+        #expect(again.treeIdentityQuarantined == p.treeIdentityQuarantined)
+        // The overlay fails closed: unbridged, with a pin problem — never a name match.
+        var rick = p
+        rick.aliases = ["Richard Harding Breen Jr"]
+        let inf = KinshipFixture.inference([rick], graph: KinshipFixture.graph)
+        #expect(KinshipFixture.node("Rick", in: inf) == .profile(stableID: "rick"))
+        #expect(inf.overlay.pinProblem(forProfileStableID: "rick")
+                == "Rick's family-tree pin could not be read (written by a newer app version?) — kept as is, not used")
+    }
+
+    @Test func hallieProfileSnapshotsCarryThePin() {
+        // Phase B seam: the executor's own snapshot type carries the pin and
+        // the overlay it builds honours it.
+        let profiles = KinshipFixture.family.map {
+            HallieTurnExecutor.ProfileSnapshot(stableID: $0.id, canonicalName: $0.name, aliases: $0.aliases,
+                                               birthdate: $0.birthdate, kinships: $0.kinships, sex: $0.sex,
+                                               uuid: $0.uuid, treeIdentity: $0.treeIdentity)
+        }
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles, graph: KinshipFixture.graph, cyberBrain: nil,
+            speakers: HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
+        let overlay = HallieTurnExecutor.kinshipOverlay(context: context)
+        #expect(overlay?.node(profileStableID: "rick") == .tree(gedcomID: "@I1@"))
+        #expect(overlay?.node(profileStableID: "eileen") == .profile(stableID: "eileen"))
+    }
+
+
+    // MARK: 2. Scale — see KinshipPerformanceGateTests (Release gate, codex #845)
+
+    /// Invalidation: the display center rebuilds the engine (and so its memo)
+    /// on a tree replacement and on a profile edit, and NOT otherwise.
+    @Test @MainActor func inferenceMemoInvalidatesOnGraphReplacementAndProfileEdit() {
+        let center = KinshipDisplayCenter()
+        center.install(graph: KinshipFixture.graph)
+        let profiles = KinshipFixture.family
+        _ = center.inference(for: profiles)
+        #expect(center.inferenceBuildCount == 1)
+        _ = center.inference(for: profiles)
+        #expect(center.inferenceBuildCount == 1)                     // same inputs: memo hit
+        center.install(graph: KinshipFixture.graph)                  // same content, new install
+        _ = center.inference(for: profiles)
+        #expect(center.inferenceBuildCount == 2)
+        var edited = profiles
+        edited[3].kinships[0].basis = .attestedFull                  // Tim attested
+        let engine = center.inference(for: edited)
+        #expect(center.inferenceBuildCount == 3)
+        #expect(engine.relation(from: KinshipFixture.node("Tim", in: engine), to: Self.martha)?.term == "8th-great-grandmother")
+        center.install(graph: nil)
+        #expect(center.inference(for: edited).relation(from: KinshipFixture.node("Tim", in: center.inference(for: edited)), to: Self.martha) == nil)
+        #expect(center.inferenceBuildCount == 4)
+    }
+
+    // MARK: Acceptance (codex #835 a, c, d, e)
+
+    @Test func proposalsNeverBecomeFactsUntilAttested() {
+        // (i) one-parent evidence: proposed, not inherited.
+        let one = KinshipFixture.inference([
+            KinshipFixture.profile("P1", sex: .male),
+            KinshipFixture.profile("Cal", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1")]),
+            KinshipFixture.profile("Kid", sex: .female, kinships: [KinshipFixture.row(.sibling, of: "Cal")]),
+        ], graph: nil)
+        func o(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: one) }
+        #expect(one.proposals(for: o("Kid")) == [.init(subject: o("Kid"), kind: .sharedParents(via: o("Cal"), parents: [o("P1")]),
+                                                        text: "Kid shares Cal's parents (P1) — assumed full; confirm to inherit Cal's ancestry")])
+        #expect(one.parents(of: o("Kid")).isEmpty)
+        #expect(one.relation(from: o("Kid"), to: o("P1"))?.term == nil)
+        #expect(one.relation(from: o("Kid"), to: o("Cal"))?.term == "brother")
+
+        // (ii) disjoint recorded parent sets under a sibling row: no proposal,
+        // no bridge, the word stands with a caveat.
+        let disjoint = KinshipFixture.inference([
+            KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female),
+            KinshipFixture.profile("P3", sex: .male), KinshipFixture.profile("P4", sex: .female),
+            KinshipFixture.profile("A", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1"), KinshipFixture.row(.child, of: "P2")]),
+            KinshipFixture.profile("B", sex: .male, kinships: [KinshipFixture.row(.child, of: "P3"), KinshipFixture.row(.child, of: "P4"),
+                                                               KinshipFixture.row(.sibling, of: "A")]),
+        ], graph: nil)
+        func d(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: disjoint) }
+        #expect(disjoint.proposals(for: d("B")).isEmpty)
+        #expect(disjoint.parents(of: d("B")).map(\.node) == [d("P3"), d("P4")])
+        let ab = disjoint.relation(from: d("A"), to: d("B"))
+        #expect(ab?.term == "brother")
+        #expect(ab?.caveats == ["recorded parents don't overlap (P1 and P2 vs P3 and P4) — check the rows"])
+        #expect(disjoint.relation(from: d("A"), to: d("P3"))?.term == nil)
+
+        // (iii) two sibling rows proposing four parents: two proposals, no
+        // facts; attesting BOTH is contradictory and inherits nothing.
+        func fourParents(_ basis: SiblingBasis) -> FamilyKinshipInference {
+            KinshipFixture.inference([
+                KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female),
+                KinshipFixture.profile("P3", sex: .male), KinshipFixture.profile("P4", sex: .female),
+                KinshipFixture.profile("A", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1"), KinshipFixture.row(.child, of: "P2")]),
+                KinshipFixture.profile("Z", sex: .male, kinships: [KinshipFixture.row(.child, of: "P3"), KinshipFixture.row(.child, of: "P4")]),
+                KinshipFixture.profile("Kid", sex: .female, kinships: [KinshipFixture.row(.sibling, of: "A", basis: basis),
+                                                                       KinshipFixture.row(.sibling, of: "Z", basis: basis)]),
+            ], graph: nil)
+        }
+        let four = fourParents(.unspecified)
+        #expect(four.proposals(for: KinshipFixture.node("Kid", in: four)).count == 2)
+        #expect(four.parents(of: KinshipFixture.node("Kid", in: four)).isEmpty)
+        let both = fourParents(.attestedFull)
+        let kid = KinshipFixture.node("Kid", in: both)
+        #expect(both.parents(of: kid).isEmpty)
+        #expect(both.attestationProblems[kid] == "Kid's attested sibling rows imply more than two parents (P1, P2, P3, P4) — nothing inherited until one is corrected")
+        #expect(both.relation(from: kid, to: KinshipFixture.node("P1", in: both))?.term == nil)
+        #expect(both.relation(from: kid, to: KinshipFixture.node("A", in: both))?.term == "brother")
+    }
+
+    @Test func provenanceCarriesDurableIdentitiesOnly() {
+        let tim = inf.relation(from: n("Rick"), to: n("Tim"))
+        let timID = KinshipFixture.family.first { $0.name == "Tim" }!.uuid.uuidString.lowercased()
+        #expect(tim?.provenance == [.profileRow(profileIdentity: "uuid:" + timID)])
+        #expect(inf.identity(of: n("Rick")) == "fsid:GVQV-NW3")
+        #expect(inf.identity(of: Self.martha) == "fsid:ANC9-009")
+        func a(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: attested) }
+        let d = attested.relation(from: a("Tim"), to: Self.martha)
+        for p in d?.provenance ?? [] {
+            switch p {
+            case .profileRow(let id):       #expect(id.hasPrefix("uuid:"), Comment(rawValue: id))
+            case .attestedSibling(let id):  #expect(id.hasPrefix("fsid:") || id.hasPrefix("uuid:"), Comment(rawValue: id))
+            case .tree:                     break
             }
         }
-        let perQuery = elapsed / 1000
-        #expect(perQuery < .milliseconds(50), "avg \(perQuery) per query (\(answered) answered, \(named) named)")
-        #expect(answered > 0)
+        #expect(d?.pathHash.count == 16)
+        #expect(d?.pathHash == attested.pathHash(d?.route ?? []))
+        // Two engines over the same data agree on the key; a different path
+        // (Rick → Martha) does not.
+        let again = KinshipFixture.inference(Self.attestedFamily)
+        #expect(again.relation(from: KinshipFixture.node("Tim", in: again), to: Self.martha)?.pathHash == d?.pathHash)
+        #expect(attested.relation(from: a("Rick"), to: Self.martha)?.pathHash != d?.pathHash)
+    }
+
+    @Test func reversedProfileAndRowOrderPinRouteProvenanceSpokenRouteAndHash() {
+        let base = KinshipFixture.family(timBasis: .attestedFull)
+        var rowsReversed = base
+        for i in rowsReversed.indices { rowsReversed[i].kinships.reverse() }
+        let variants = [base, Array(base.reversed()), rowsReversed, Array(rowsReversed.reversed())]
+        let engines = variants.map { KinshipFixture.inference($0) }
+        let names = base.map(\.name)
+        var compared = 0
+        for a in names {
+            for b in names + ["@A9@", "@X2@"] where a != b {
+                let answers = engines.map { e -> FamilyKinshipInference.Derived? in
+                    let to: FamilyKinshipInference.Node = b.hasPrefix("@") ? .tree(gedcomID: b) : KinshipFixture.node(b, in: e)
+                    return e.relation(from: KinshipFixture.node(a, in: e), to: to)
+                }
+                for other in answers.dropFirst() {
+                    #expect(other?.route.map(\.relation) == answers[0]?.route.map(\.relation), "\(a) → \(b) route")
+                    #expect(other?.route.map(\.to) == answers[0]?.route.map(\.to), "\(a) → \(b) nodes")
+                    #expect(other?.provenance == answers[0]?.provenance, "\(a) → \(b) provenance")
+                    #expect(other?.routeText == answers[0]?.routeText, "\(a) → \(b) spoken")
+                    #expect(other?.pathHash == answers[0]?.pathHash, "\(a) → \(b) hash")
+                    #expect(other?.term == answers[0]?.term, "\(a) → \(b) term")
+                }
+                compared += 1
+            }
+        }
+        #expect(compared == names.count * (names.count + 1))
+    }
+
+    /// Tier B tie: Kid's two pinned parents (P16, P17 — spouses) both reach
+    /// Root (P1) at the same cost; the entry with the smaller identity key
+    /// wins every time.
+    @Test func equalCostTierBRoutesPickTheStableEntry() {
+        let graph = KinshipFixture.pedigree5001
+        func build(_ reversed: Bool) -> FamilyKinshipInference {
+            var profiles = [
+                KinshipFixture.profile("Root", sex: .female, pin: "S000-001"),
+                KinshipFixture.profile("Pa", sex: .male, pin: "S000-016"),
+                KinshipFixture.profile("Ma", sex: .female, pin: "S000-017"),
+                KinshipFixture.profile("Kid", sex: .male, kinships: [KinshipFixture.row(.child, of: "Pa"), KinshipFixture.row(.child, of: "Ma")]),
+            ]
+            if reversed { profiles.reverse(); profiles[0].kinships.reverse() }
+            return KinshipFixture.inference(profiles, graph: graph)
+        }
+        var hashes = Set<String>()
+        for reversed in [false, true] {
+            let inf = build(reversed)
+            let d = inf.relation(from: KinshipFixture.node("Kid", in: inf), to: KinshipFixture.node("Root", in: inf))
+            #expect(d?.term == "great-great-niece")
+            #expect(d?.route.map(\.relation) == [.parent, .child, .child, .child, .child])
+            #expect(d?.route.first?.to == .tree(gedcomID: "@P16@"))
+            #expect(d?.routeText == "father Pa → son Person8 Line → son Person4 Line → son Person2 Line → daughter Root")
+            #expect(d?.provenance == [.profileRow(profileIdentity: inf.identity(of: KinshipFixture.node("Kid", in: inf))), .tree])
+            if let h = d?.pathHash { hashes.insert(h) }
+        }
+        #expect(hashes.count == 1)
+    }
+
+    /// Full executor, graph == nil: "how is Tim related to Rick?" is a
+    /// People-tab answer and must not need a GEDCOM (codex #835 e).
+    @Test func hallieAnswersLocalRelationshipsWithoutATree() async throws {
+        let profiles = KinshipFixture.family.map {
+            HallieTurnExecutor.ProfileSnapshot(stableID: $0.id, canonicalName: $0.name, aliases: $0.aliases,
+                                               birthdate: $0.birthdate, kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid)
+        }
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles, graph: nil, cyberBrain: nil,
+            speakers: HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "how is Tim related to Rick?",
+            ast: .graph(.init(people: ["Tim", "Rick"], operation: .relationship)))
+        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        #expect(result.outcome == .answered)
+        #expect(result.prose == "Rick is Tim's older brother.")   // executor convention: second person described from the first
+        // No link and no tree: an honest decline that names the reason.
+        let stranger = HallieTurnExecutor.Intent(
+            originalQuestion: "how is Nana related to Rick?",
+            ast: .graph(.init(people: ["Nana", "Rick"], operation: .relationship)))
+        let declined = try await HallieTurnExecutor.execute(.init(intent: stranger), context: context)
+        #expect(declined.outcome == .declined)
+        #expect(declined.basisLine == "Basis: no readable GEDCOM was available; the People-tab relationships don't link them.")
     }
 
     /// Deterministic PRNG (SplitMix64) so the scale fixture is reproducible.
@@ -621,8 +900,8 @@ struct KinshipValidationTests {
     }
 
     @Test func semanticDuplicatesAcrossInverseRowsAndProfiles() {
-        #expect(rules(validate("Tim", .sibling, of: "Rick")) == [.duplicateRow])
-        #expect(rules(validate("Rick", .sibling, of: "Tim")) == [.duplicateRow])   // inverse, other profile
+        #expect(rules(validate("Tim", .sibling, of: "Rick")) == [.duplicateRow, .siblingWithParentsRecorded])
+        #expect(rules(validate("Rick", .sibling, of: "Tim")) == [.duplicateRow, .siblingWithParentsRecorded])   // inverse, other profile
         #expect(rules(validate("Rick", .spouse, of: "Donna")) == [.duplicateRow])
         #expect(rules(validate("Rick", .parent, of: "Michael")) == [.duplicateRow])   // Michael's "child of Rick"
         #expect(rules(validate("Rick", .child, of: "Eileen")) == [.duplicateRow])     // Eileen's "parent of Rick"
@@ -644,7 +923,7 @@ struct KinshipValidationTests {
         #expect(rules(validate("Dad", .child, of: "Michael")).contains(.parentChildCycle))
         #expect(rules(validate("Michael", .parent, of: "Dad")).contains(.parentChildCycle))
         // Through the tree via pins: Martha Lamson pinned as a profile.
-        let profiles = KinshipFixture.family + [KinshipFixture.profile("Martha", sex: .female, pin: "ANC-9")]
+        let profiles = KinshipFixture.family + [KinshipFixture.profile("Martha", sex: .female, pin: "ANC9-009")]
         let inf2 = KinshipFixture.inference(profiles)
         #expect(KinshipFixture.node("Martha", in: inf2) == .tree(gedcomID: "@A9@"))
         let viaTree = validate("Rick", .parent, of: "Martha", inference: inf2, profiles: profiles)
@@ -721,11 +1000,11 @@ struct KinshipValidationTests {
         let inf2 = KinshipFixture.inference(same)
         #expect(rules(validate("Twin", .parent, of: "Dad", inference: inf2, profiles: same)) == [.parentNotOlder])
         // "ABT 1903" (Ancestor1) vs a profile born 1904: overlap ⇒ nothing provable ⇒ no warning.
-        let about = KinshipFixture.family + [KinshipFixture.profile("A1", pin: "ANC-1"), KinshipFixture.profile("Kid", born: 1904)]
+        let about = KinshipFixture.family + [KinshipFixture.profile("A1", pin: "ANC1-001"), KinshipFixture.profile("Kid", born: 1904)]
         let inf3 = KinshipFixture.inference(about)
         #expect(validate("Kid", .child, of: "A1", inference: inf3, profiles: about).isEmpty)
         // …but born 1890 is provably before ⇒ warning with the tree's own wording.
-        let before = KinshipFixture.family + [KinshipFixture.profile("A1", pin: "ANC-1"), KinshipFixture.profile("Elder", born: 1890)]
+        let before = KinshipFixture.family + [KinshipFixture.profile("A1", pin: "ANC1-001"), KinshipFixture.profile("Elder", born: 1890)]
         let inf4 = KinshipFixture.inference(before)
         let w = validate("Elder", .child, of: "A1", inference: inf4, profiles: before)
         #expect(rules(w) == [.parentNotOlder])
@@ -760,6 +1039,79 @@ struct KinshipValidationTests {
         let offline = KinshipFixture.inference(graph: nil)
         #expect(validate("Bob", .sibling, of: "Nana", inference: offline).isEmpty)
         #expect(rules(validate("Kevin", .child, of: "Donna", inference: offline)) == [.treePinProblem])
+    }
+
+    @Test func attestingASiblingThatWouldGiveThreeParentsIsAnError() {
+        // Tim already has Dad + Eileen through his attested row to Rick; a
+        // second attested-full row to Zoe (parents Q1, Q2) is a conflict.
+        let profiles = KinshipFixture.family(timBasis: .attestedFull) + [
+            KinshipFixture.profile("Q1", sex: .male), KinshipFixture.profile("Q2", sex: .female),
+            KinshipFixture.profile("Zoe", sex: .female, kinships: [KinshipFixture.row(.child, of: "Q1"), KinshipFixture.row(.child, of: "Q2")]),
+        ]
+        let inf = KinshipFixture.inference(profiles)
+        let timRows = profiles.first { $0.name == "Tim" }?.kinships ?? []
+        let f = KinshipValidation.validate(
+            candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedFull),
+            subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
+        #expect(rules(f).contains(.attestationConflict))
+        #expect(f.first { $0.rule == .attestationConflict }?.message
+                == "Attesting this sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — correct the other rows first.")
+        // Unspecified: fine (a proposal, not a fact).
+        #expect(!KinshipValidation.validate(
+            candidate: KinshipFixture.row(.sibling, of: "Zoe"),
+            subjectProfileStableID: "tim", existingRows: timRows, inference: inf).blocksSave)
+        // A half row naming a parent that does not exist: unresolved.
+        let stale = KinshipValidation.validate(
+            candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedHalf(sharedParent: .profile(id: UUID()))),
+            subjectProfileStableID: "tim", existingRows: [], inference: inf)
+        #expect(rules(stale).contains(.unresolvedAnchor))
+    }
+
+    // MARK: Whole-batch validation (codex #835 b)
+
+    @Test func batchCatchesThreeParentsEnteredTogether() {
+        let batch = [KinshipFixture.row(.child, of: "Rick"), KinshipFixture.row(.child, of: "Donna"), KinshipFixture.row(.child, of: "Tim")]
+        let result = KinshipValidation.validate(batch: batch, subjectProfileStableID: "nana",
+                                                profiles: KinshipFixture.family, graph: KinshipFixture.graph)
+        #expect(result.count == 3)
+        #expect(result.allSatisfy { $0.findings.map(\.rule).contains(.tooManyParents) })
+        #expect(result.blocksSave)
+        // Two parents together: legal (Nana 1905 is older than both — only
+        // the birthdate warning about a child born before the parent).
+        let two = KinshipValidation.validate(batch: Array(batch.prefix(2)), subjectProfileStableID: "nana",
+                                             profiles: KinshipFixture.family, graph: KinshipFixture.graph)
+        #expect(!two.blocksSave)
+        #expect(two.flatMap(\.findings).map(\.rule) == [.parentNotOlder, .parentNotOlder])
+    }
+
+    @Test func batchCatchesDuplicatesTypedTwiceAndMultiRowCycles() {
+        let twice = [KinshipFixture.row(.spouse, of: "Bob"), KinshipFixture.row(.spouse, of: "Bob")]
+        let dup = KinshipValidation.validate(batch: twice, subjectProfileStableID: "nana",
+                                             profiles: KinshipFixture.family, graph: KinshipFixture.graph)
+        #expect(dup.map { $0.findings.map(\.rule) } == [[.duplicateRow, .spouseAgeGap], [.duplicateRow, .spouseAgeGap]])
+        // A cycle that only closes through two new rows: C child of B and C
+        // parent of A, where B is A's child.
+        let profiles = [
+            KinshipFixture.profile("A"), KinshipFixture.profile("B", kinships: [KinshipFixture.row(.child, of: "A")]),
+            KinshipFixture.profile("C"),
+        ]
+        let rows = [KinshipFixture.row(.child, of: "B"), KinshipFixture.row(.parent, of: "A")]
+        let cycle = KinshipValidation.validate(batch: rows, subjectProfileStableID: "c", profiles: profiles, graph: nil)
+        #expect(cycle.map { $0.findings.map(\.rule) } == [[.parentChildCycle], [.parentChildCycle]])
+        // Each row alone would have passed the single-candidate check.
+        let alone = KinshipFixture.inference(profiles, graph: nil)
+        for row in rows {
+            #expect(KinshipValidation.validate(candidate: row, subjectProfileStableID: "c", existingRows: [], inference: alone).isEmpty)
+        }
+    }
+
+    @Test func batchSkipsUnchangedRowsAndReportsUnknownProfiles() {
+        let tim = KinshipFixture.family.first { $0.name == "Tim" }!
+        #expect(KinshipValidation.validate(batch: tim.kinships, subjectProfileStableID: "tim",
+                                           profiles: KinshipFixture.family, graph: KinshipFixture.graph).isEmpty)
+        let ghost = KinshipValidation.validate(batch: [KinshipFixture.row(.spouse, of: "Rick")], subjectProfileStableID: "ghost",
+                                               profiles: KinshipFixture.family, graph: KinshipFixture.graph)
+        #expect(ghost.map { $0.findings.map(\.rule) } == [[.unresolvedAnchor]])
     }
 
     /// SENSOR: validation never blocks a legal save — every row in the

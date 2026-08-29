@@ -39,6 +39,7 @@ enum KinshipValidation {
         case parentChildCycle
         case tooManyParents
         case siblingOfLineal
+        case attestationConflict
         case parentNotOlder
         case spouseAgeGap
         case siblingWithParentsRecorded
@@ -114,6 +115,7 @@ enum KinshipValidation {
         findings += checkCycle(ctx)
         findings += checkParentCount(ctx)
         findings += checkSiblingOfLineal(ctx)
+        findings += checkAttestation(ctx)
         findings += checkParentOlder(ctx)
         findings += checkSpouseGap(ctx)
         findings += checkSiblingWithParents(ctx)
@@ -180,6 +182,33 @@ enum KinshipValidation {
                         message: "\(up ? c.anchorName : c.subjectName) is an ancestor of \(up ? c.subjectName : c.anchorName) — they can't be siblings.")]
     }
 
+    /// An attested sibling basis must be consistent: a half row's shared
+    /// parent must resolve, and the parents the row would inherit (merged
+    /// with what the subject already has, including other attested rows)
+    /// must not exceed two.
+    private static func checkAttestation(_ c: Context) -> [Finding] {
+        guard c.candidate.relation == .sibling else { return [] }
+        let inherited: [Node]
+        switch c.candidate.basis {
+        case .unspecified:
+            return []
+        case .attestedFull:
+            inherited = c.inference.explicitParents(of: c.anchor)
+        case .attestedHalf(let shared):
+            guard let parent = c.inference.overlay.node(for: shared), !c.inference.overlay.isPlaceholder(parent) else {
+                return [Finding(severity: .error, rule: .unresolvedAnchor,
+                                message: "The shared parent named on this half-sibling row could not be found — pick them again.")]
+            }
+            inherited = [parent]
+        }
+        var merged = c.inference.parents(of: c.subject).map(\.node)
+        for parent in inherited where !merged.contains(parent) && parent != c.subject { merged.append(parent) }
+        guard merged.count > 2 else { return [] }
+        let names = merged.map(c.inference.name(of:)).joined(separator: ", ")
+        return [Finding(severity: .error, rule: .attestationConflict,
+                        message: "Attesting this sibling link would give \(c.subjectName) more than two parents (\(names)) — correct the other rows first.")]
+    }
+
     // MARK: Warnings
 
     /// Only when the child is PROVABLY not younger at the known precision.
@@ -219,4 +248,64 @@ enum KinshipValidation {
 extension Array where Element == KinshipValidation.Finding {
     /// Any error present ⇒ the save must not proceed.
     var blocksSave: Bool { contains { $0.isError } }
+}
+
+// MARK: - Whole-batch validation (codex #835 b)
+
+extension KinshipValidation {
+
+    /// One row of a proposed edit with its findings.
+    struct BatchFinding: Equatable, Sendable {
+        let row: Kinship
+        let findings: [Finding]
+    }
+
+    /// Validate the COMPLETE proposed row list for one profile, not a single
+    /// candidate against the old graph: each row that is new or changed is
+    /// checked against a graph in which the subject carries every OTHER
+    /// proposed row (plus everyone else's current rows), so three parents
+    /// entered together, a duplicate typed twice, or a cycle that only
+    /// closes through two new rows are all caught before anything is saved.
+    /// Unchanged rows are not re-validated (they were legal when saved).
+    ///
+    /// Cost: one overlay build per new row over the profile list —
+    /// dozens of profiles × a handful of rows, milliseconds.
+    /// `currentRows` = the rows as saved today (defaults to the profile's rows
+    /// in `profiles`); the editor passes the original rows when the profile
+    /// in `profiles` already carries the edited state.
+    static func validate(
+        batch proposed: [Kinship],
+        subjectProfileStableID stableID: String,
+        profiles: [POIProfile],
+        graph: GedcomFamilyGraph?,
+        currentRows: [Kinship]? = nil
+    ) -> [BatchFinding] {
+        guard let subjectIndex = profiles.firstIndex(where: { $0.id == stableID }) else {
+            return proposed.map {
+                BatchFinding(row: $0, findings: [Finding(severity: .error, rule: .unresolvedAnchor,
+                                                         message: "This profile is not in the relationship graph yet — save it first.")])
+            }
+        }
+        let current = currentRows ?? profiles[subjectIndex].kinships
+        var out: [BatchFinding] = []
+        var seenBefore: [Kinship] = []
+        for row in proposed {
+            defer { seenBefore.append(row) }
+            // An unchanged row (present today, not duplicated in the batch) stands.
+            if current.contains(row), !seenBefore.contains(row) { continue }
+            var hypothetical = profiles
+            var others = proposed
+            if let i = others.firstIndex(of: row) { others.remove(at: i) }
+            hypothetical[subjectIndex].kinships = others
+            let inference = FamilyKinshipInference(profiles: hypothetical, graph: graph)
+            let findings = validate(candidate: row, subjectProfileStableID: stableID,
+                                    existingRows: others, inference: inference)
+            out.append(BatchFinding(row: row, findings: findings))
+        }
+        return out
+    }
+}
+
+extension Array where Element == KinshipValidation.BatchFinding {
+    var blocksSave: Bool { contains { $0.findings.blocksSave } }
 }

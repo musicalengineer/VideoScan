@@ -277,7 +277,8 @@ extension HallieTurnExecutor {
                         note: existing.note.isEmpty ? profile.note : existing.note,
                         kinships: existing.kinships + profile.kinships,
                         sex: existing.sex ?? profile.sex,
-                        uuid: existing.uuid ?? profile.uuid)
+                        uuid: existing.uuid ?? profile.uuid,
+                        treeIdentity: existing.treeIdentity ?? profile.treeIdentity)
                 } else {
                     byID[profile.stableID] = profile
                     order.append(profile.stableID)

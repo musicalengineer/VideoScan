@@ -32,10 +32,11 @@ struct FamilyKinshipTests {
 
     private static func profile(
         _ name: String, aliases: [String] = [], sex: PersonSex? = nil,
-        born: Int? = nil, kinships: [Kinship] = []
+        born: Int? = nil, kinships: [Kinship] = [], pin: String? = nil
     ) -> POIProfile {
         POIProfile(name: name, referencePath: "/fixture/\(name)", aliases: aliases,
-                   birthdate: born.map(date), sex: sex, kinships: kinships)
+                   birthdate: born.map(date), sex: sex, kinships: kinships,
+                   treeIdentity: pin.map { .familySearchID($0) })
     }
 
     /// Rick's contemporary family. Profiles use the Director's CORRECTED
@@ -45,17 +46,19 @@ struct FamilyKinshipTests {
     ///   and Ann; Tim ═ Kate; Rick's sons Matt (═ Sue) and Timothy.
     /// (The Tim/Timothy shared-spelling case lives in its own sensor.)
     private static let family: [POIProfile] = [
+        // 2026-08-29 (amendment 1): identity is the PIN, never a name match —
+        // Rick, Dad and Donna carry their FamilySearch IDs.
         profile("Rick", aliases: ["Dicky", "Rich", "Richy", "Richard Harding Breen Jr"],
                 sex: .male, born: 1962, kinships: [
             // Stored as "Rick is child of Dad" (row semantics: <profile> is
             // <relation> of <anchor>, the editor's "[child] of [Dad]").
             Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
-        ]),
+        ], pin: "GVQV-NW3"),
         profile("Dad", aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"],
-                sex: .male, born: 1931),
+                sex: .male, born: 1931, pin: "G2S4-JF4"),
         profile("Donna", aliases: ["Mom", "Donna Breen"], sex: .female, born: 1959, kinships: [
             Kinship(relation: .spouse, relativeTo: .profile(name: "Rick")),
-        ]),
+        ], pin: "DONN-A03"),
         profile("Mary", sex: .female, born: 1935, kinships: [
             Kinship(relation: .parent, relativeTo: .profile(name: "Rick")),
         ]),
@@ -96,6 +99,7 @@ struct FamilyKinshipTests {
     1 FAMS @F1@
     0 @I3@ INDI
     1 NAME Donna /Breen/
+    1 _FSFTID DONN-A03
     0 @F1@ FAM
     1 HUSB @I2@
     1 CHIL @I1@
@@ -123,7 +127,8 @@ struct FamilyKinshipTests {
             profiles: profiles.map {
                 ArchivistGraphProfileSnapshot(
                     stableID: $0.id, canonicalName: $0.name, aliases: $0.aliases,
-                    kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate)
+                    kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate,
+                    treeIdentity: $0.treeIdentity)
             },
             ownerName: ownerName)
     }
@@ -410,9 +415,9 @@ struct FamilyKinshipTests {
         let conflicting: [POIProfile] = [
             Self.profile("Rick", aliases: ["Dicky", "Dad"], sex: .male, born: 1962, kinships: [
                 Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
-            ]),
+            ], pin: "GVQV-NW3"),
             Self.profile("Dad", aliases: ["Grampa Breen", "Dick", "Dad Breen", "Richard Harding Breen Sr"],
-                         sex: .male, born: 1931),
+                         sex: .male, born: 1931, pin: "G2S4-JF4"),
         ]
         let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
         // main's juniorSeniorGedcom exactly: no FAM, so the tree alone
