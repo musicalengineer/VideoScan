@@ -94,6 +94,8 @@ struct ArchivistMessage: Identifiable {
             /// Recompile the family tree from the pulls on disk (live
             /// miss #8). `thenAsk` = the question to re-run once promoted.
             case recompileFamilyTree(thenAsk: String?)
+            /// Open the People tab (relationships overview, live miss #12).
+            case openPeopleTab
         }
         let id = UUID()
         let label: String
@@ -944,6 +946,11 @@ struct ArchivistChatWindow: View {
                 text: "Opening Get Family Tree in the Family Tree tab."))
         case .recompileFamilyTree(let thenAsk):
             recompileFamilyTree(thenAsk: thenAsk)
+        case .openPeopleTab:
+            UserDefaults.standard.set(0, forKey: "selectedTab")
+            MainWindowHelper.shared.openMainWindow()
+            messages.append(ArchivistMessage(
+                role: .assistant, text: "Opening the People tab."))
         }
     }
 
@@ -1259,6 +1266,8 @@ struct ArchivistChatWindow: View {
             case .recompileFamilyTree:
                 return ArchivistMessage.Chip(
                     label: label, action: .recompileFamilyTree(thenAsk: question))
+            case .openPeopleTab:
+                return ArchivistMessage.Chip(label: label, action: .openPeopleTab)
             }
         }
         messages.append(ArchivistMessage(

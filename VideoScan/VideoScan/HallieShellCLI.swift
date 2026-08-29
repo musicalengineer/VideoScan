@@ -840,7 +840,8 @@ enum HallieShellCLI {
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
                 catalogStats: state.catalogStats,
                 rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) },
-                lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) })
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) },
+                relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: identity) })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):

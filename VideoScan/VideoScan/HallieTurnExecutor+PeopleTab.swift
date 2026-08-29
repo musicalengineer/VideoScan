@@ -57,6 +57,9 @@ extension HallieTurnExecutor {
         }
 
         static func isRosterQuestion(_ text: String) -> Bool {
+            // "how is rick related to the people in the people tab" is an
+            // overview of relationships, never the name list (live miss #12).
+            if HallieRelationshipsOverview.detect(text) != nil { return false }
             let question = normalizedQuestion(text)
             if rosterPhrases.contains(question) { return true }
             // "who is in the people tab", "which people are in the people tab",

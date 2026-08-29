@@ -261,6 +261,9 @@ final class HallieWebBridge {
                 // Recompiling is the Mac app's job (live miss #8); the
                 // prose already says what is needed. Never auto-run here.
                 break
+            case .openPeopleTab:
+                // The People tab is Mac-only; the web client gets the prose.
+                break
             }
         }
         let cited = citations.map(citationJSON)
