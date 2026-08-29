@@ -32,6 +32,9 @@ struct FamilyTreeDemoView: View {
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
     /// `@ObservedObject` ≈ observe-but-don't-own; the singleton owns itself.
     @ObservedObject private var pullCenter = FamilySearchPullCenter.shared
+    /// People-tab identity banner + "Not right?" sheet (2026-08-29).
+    @ObservedObject private var identityCenter = TreeIdentityCenter.shared
+    @State private var identityPickTarget: TreeIdentityPickTarget?
     @State private var showPullSheet = false
     /// Archivist Notes draft + last save error (view-local, not persisted).
     @State private var draftNote = ""
@@ -140,6 +143,17 @@ struct FamilyTreeDemoView: View {
                     adjustSource = nil
                 },
                 onCancel: { adjustSource = nil })
+        }
+        .sheet(item: $identityPickTarget) { target in
+            TreeIdentityPickerSheet(target: target, center: identityCenter,
+                                    profiles: POIProfile.cachedSnapshot(),
+                                    onPinned: { candidate in
+                                        identityPickTarget = nil
+                                        identityCenter.showBanner(.pinned, profileName: target.profile.name,
+                                                                  candidate: candidate)
+                                        model.focus(onID: candidate.personID)
+                                    },
+                                    onDismiss: { identityPickTarget = nil })
         }
         .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
             // The coordinator is created in presentGetFamilyTree() before the
@@ -275,6 +289,55 @@ struct FamilyTreeDemoView: View {
         ].joined(separator: "|")
     }
 
+    // MARK: Identity banner (People-tab focus)
+
+    /// "Rick is Richard Harding Breen Jr (b. 1959) · GVQV-NW3 — Not right?"
+    /// or, right after an auto-pin, "Using … for Rick — OK / Undo".
+    private func identityBanner(_ banner: TreeIdentityCenter.Banner) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: banner.kind == .using ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+            Text(banner.line)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            if banner.kind == .using {
+                Button("OK") { identityCenter.dismissBanner() }
+                    .controlSize(.small)
+                Button("Undo") { undoIdentityPin(banner) }
+                    .controlSize(.small)
+            }
+            Button("Not right?") { changeIdentityPin(banner) }
+                .buttonStyle(.link)
+                .controlSize(.small)
+            Button {
+                identityCenter.dismissBanner()
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.12)))
+        .accessibilityIdentifier("ft.identityBanner")
+    }
+
+    private func profileNamed(_ name: String) -> POIProfile? {
+        POIProfile.cachedSnapshot().first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    private func undoIdentityPin(_ banner: TreeIdentityCenter.Banner) {
+        guard let profile = profileNamed(banner.profileName) else { return }
+        identityCenter.unpin(profile)
+        identityCenter.dismissBanner()
+    }
+
+    private func changeIdentityPin(_ banner: TreeIdentityCenter.Banner) {
+        guard let profile = profileNamed(banner.profileName) else { return }
+        identityPickTarget = TreeIdentityPickTarget(
+            profile: profile, candidates: [banner.candidate], mode: .changePin, current: banner.candidate)
+    }
+
     // MARK: Sidebar
 
     private var sidebar: some View {
@@ -306,6 +369,11 @@ struct FamilyTreeDemoView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("ft.focusMissNotice")
+            }
+            // Identity line after a People-tab focus: who this profile IS
+            // on the tree, with the way out if the computer got it wrong.
+            if let banner = identityCenter.banner, banner.candidate.personID == model.selectedID {
+                identityBanner(banner)
             }
 
             Divider()
