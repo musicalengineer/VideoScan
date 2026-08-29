@@ -496,6 +496,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     func recompile() async {
         let sources = needsRecompile
         guard !sources.isEmpty, !isRecompiling, let store = compiledStore else { return }
+        // Remote viewer (Phase 1): the tree is compiled on the master. The
+        // banner never offers this button there, but the Hallie chip path
+        // reaches here too — refuse, log, and say where it happens.
+        if ViewerWriteGuard.refuse("FamilyTreeLiveModel.recompile") {
+            loadWarning = "The family tree is compiled \(ViewerModeCenter.shared.masterOnlyHint); sync again after it updates."
+            return
+        }
         isRecompiling = true
         loadGeneration &+= 1
         let generation = loadGeneration
