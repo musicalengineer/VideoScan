@@ -327,17 +327,39 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
 
     // MARK: - Applying
 
+    /// Alternatives separator: "MahGill | MicGill" keeps both of Rick's
+    /// respellings (2026-08-29 drill); only the FIRST is ever spoken.
+    static let alternativesSeparator = " | "
+
+    /// Split a stored respelling into its alternatives (first = spoken).
+    /// A plain respelling is a one-element list.
+    static func alternatives(_ spoken: String) -> [String] {
+        spoken.split(separator: "|")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Join Rick's alternatives into the stored form.
+    static func joinedAlternatives(_ alternatives: [String]) -> String {
+        alternatives.map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: alternativesSeparator)
+    }
+
     /// Substitute every entry on whole-word boundaries, case-insensitively.
     /// Returns the spoken text and the entries that fired, in table order.
+    /// An entry with alternatives speaks the first one.
     func apply(to text: String) -> (spoken: String, fired: [Entry]) {
         var spoken = text
         var fired: [Entry] = []
         for entry in entries where entry.spoken != entry.written {
+            let said = Self.alternatives(entry.spoken).first ?? entry.spoken
+            guard said != entry.written else { continue }
             let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: entry.written) + #"\b"#
             guard spoken.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else { continue }
             spoken = spoken.replacingOccurrences(
                 of: pattern,
-                with: NSRegularExpression.escapedTemplate(for: entry.spoken),
+                with: NSRegularExpression.escapedTemplate(for: said),
                 options: [.regularExpression, .caseInsensitive])
             fired.append(entry)
         }

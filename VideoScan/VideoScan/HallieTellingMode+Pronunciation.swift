@@ -1,13 +1,15 @@
 // HallieTellingMode+Pronunciation.swift
 // "Nathaniel is pronounced nuh-THAN-yul" / "say Edith as EE-dith" /
-// "you're mispronouncing McGill, it's muh-GILL" (Rick, 2026-08-26).
+// "you're mispronouncing McGill, it's muh-GILL" (Rick, 2026-08-26) /
+// "pronounce McGill like MahGill or MicGill" (Rick, 2026-08-29: two
+// acceptable respellings; the first is spoken, both are kept).
 //
 // A pronunciation is the smallest thing a family member can tell Hallie:
-// one word, one respelling. It is detected here beside the other told-me
-// openers, worded here, and written by the coordinator through the same
-// CyberBrain writer as testimony (person-level when the word is one
-// person's name, else the pronunciations.json file). Pure text work: no
-// I/O, no model.
+// one word, one respelling (or two alternatives). It is detected here
+// beside the other told-me openers, worded here, and written by the
+// coordinator through the same CyberBrain writer as testimony (person-level
+// when the word is one person's name, else the pronunciations.json file).
+// Pure text work: no I/O, no model.
 
 import Foundation
 import VideoScanCore
@@ -18,8 +20,24 @@ extension HallieTellingMode {
     struct PronunciationTelling: Equatable, Sendable {
         /// The written name word, caller's capitalisation ("Nathaniel").
         let word: String
-        /// The respelling exactly as typed ("nuh-THAN-yul").
+        /// The respelling as stored: exactly as typed ("nuh-THAN-yul"), or
+        /// two alternatives joined ("MahGill | MicGill").
         let saidAs: String
+
+        init(word: String, saidAs: String) {
+            self.word = word
+            self.saidAs = saidAs
+        }
+
+        init(word: String, alternatives: [String]) {
+            self.word = word
+            self.saidAs = HalliePronunciationLexicon.joinedAlternatives(alternatives)
+        }
+
+        /// Every respelling given, first = the one spoken.
+        var alternatives: [String] { HalliePronunciationLexicon.alternatives(saidAs) }
+        /// The respelling the voice uses.
+        var spoken: String { alternatives.first ?? saidAs }
     }
 
     /// Where the coordinator kept it, for the confirmation.
@@ -76,6 +94,23 @@ extension HallieTellingMode {
         }
     }
 
+    /// "MahGill or MicGill" / "MahGill | MicGill" / "either MahGill or
+    /// MicGill" → ["MahGill", "MicGill"]; a single respelling → [it]. Nil
+    /// when any part is not a respelling ("to cook or to bake").
+    static func respellingAlternatives(_ saidAs: String) -> [String]? {
+        var text = saidAs.trimmingCharacters(in: CharacterSet(charactersIn: " \"'.,;:!"))
+        if text.lowercased().hasPrefix("either ") { text = String(text.dropFirst(7)) }
+        let parts = text
+            .replacingOccurrences(of: #"\s*\|\s*|\s*,?\s+or\s+|\s*/\s*"#, with: "|", options: [.regularExpression, .caseInsensitive])
+            .split(separator: "|")
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"'.,;:!")) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty, parts.count <= 3, parts.allSatisfy({ !$0.isEmpty && $0.count <= 40 && looksLikeRespelling($0) }) else {
+            return nil
+        }
+        return parts
+    }
+
     static func detectPronunciation(_ text: String) -> PronunciationTelling? {
         let cleaned = text
             .replacingOccurrences(of: "’", with: "'")
@@ -94,23 +129,34 @@ extension HallieTellingMode {
             let saidAs = String(cleaned[saidRange])
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \"'.,;:!"))
             guard !word.isEmpty, !notNames.contains(word.lowercased()),
-                  !saidAs.isEmpty, saidAs.count <= 40,
+                  !saidAs.isEmpty, saidAs.count <= 90,
                   // "nuh-THAN-yul" and "EE-dith" are respellings; "to cook",
-                  // "as a boy" and "wrong all the time" are not.
-                  looksLikeRespelling(saidAs) else { continue }
-            return PronunciationTelling(word: word, saidAs: saidAs)
+                  // "as a boy" and "wrong all the time" are not. "MahGill or
+                  // MicGill" is two respellings.
+                  let alternatives = respellingAlternatives(saidAs) else { continue }
+            return PronunciationTelling(word: word, alternatives: alternatives)
         }
         return nil
     }
 
     // MARK: - Wording
 
-    /// "Got it — I'll say Nathaniel as nuh-THAN-yul from now on." plus where
-    /// it was kept. The spoken form of this reply is itself the proof: the
-    /// voice lexicon is re-read on the next utterance, so Bella says the
-    /// name the new way while confirming it.
+    /// The read-back Rick asked for (2026-08-29): "OK, noted — McGill." The
+    /// name in this sentence is the proof — the voice lexicon is re-read on
+    /// the very next utterance, so Bella says it the new way while noting it.
+    static func pronunciationReadBack(_ word: String) -> String {
+        "OK, noted — \(word)."
+    }
+
+    /// "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now
+    /// on." plus where it was kept. With alternatives: "… as MahGill (or
+    /// MicGill) …".
     static func pronunciationReply(_ telling: PronunciationTelling, scope: PronunciationScope) -> String {
-        let lead = "Got it — I'll say \(telling.word) as \(telling.saidAs) from now on."
+        let alternatives = telling.alternatives
+        let said = alternatives.count > 1
+            ? "\(alternatives[0]) (or \(alternatives.dropFirst().joined(separator: " or ")))"
+            : telling.spoken
+        let lead = pronunciationReadBack(telling.word) + " I'll say \(telling.word) as \(said) from now on."
         switch scope {
         case .person(let name) where FamilyIdentityText.normalized(name) != FamilyIdentityText.normalized(telling.word):
             return lead + " I've kept that with \(name)."
@@ -121,8 +167,8 @@ extension HallieTellingMode {
         }
     }
 
-    /// No "Got it": nothing was kept. The reason is the error's own words.
+    /// No "OK, noted": nothing was kept. The reason is the error's own words.
     static func pronunciationFailureReply(_ telling: PronunciationTelling, error: String) -> String {
-        "I couldn't save that — \(error). Saying \(telling.word) as \(telling.saidAs) won't stick past this answer, sorry."
+        "I couldn't save that — \(error). Saying \(telling.word) as \(telling.spoken) won't stick past this answer, sorry."
     }
 }

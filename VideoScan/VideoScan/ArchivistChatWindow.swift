@@ -198,6 +198,8 @@ struct ArchivistChatWindow: View {
     @State private var hallieMemory = HallieTurnExecutor.ConversationMemory()
     /// Non-nil while a family member is telling Hallie about someone.
     @State private var hallieTelling: HallieTellingMode.Session?
+    /// The name drill in progress ("let's practice names"), carried turn to turn.
+    @State private var hallieDrill: HalliePronunciationDrillMode.Session?
     /// Set by "play <something>": after the filter answer lands, the
     /// first match auto-plays.
     @State private var playAfterAnswer = false
@@ -1069,6 +1071,7 @@ struct ArchivistChatWindow: View {
         playAfterAnswer = false
         let memory = hallieMemory
         let telling = hallieTelling
+        let drill = hallieDrill
         let history = recentHistory()
         let compose = composeWithModel
         let requestID = UUID()
@@ -1097,7 +1100,8 @@ struct ArchivistChatWindow: View {
                     memory: memory,
                     composeWithModel: compose,
                     history: history,
-                    telling: telling)
+                    telling: telling,
+                    drill: drill)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response, question: text)
@@ -1185,6 +1189,7 @@ struct ArchivistChatWindow: View {
             pendingHallieClarification = response.pendingClarification
         }
         hallieTelling = response.telling
+        hallieDrill = response.drill
         hallieMemory.record(intent: response.executedIntent,
                             result: response.result,
                             question: question)

@@ -1,10 +1,11 @@
 // HallieAppTurnCoordinator+Pronunciation.swift
 // The chat window's side of "Nathaniel is pronounced nuh-THAN-yul"
-// (HallieTellingMode.detectPronunciation, 2026-08-26). Decides WHOSE name
+// (HallieTellingMode.detectPronunciation, 2026-08-26) and "pronounce McGill
+// like MahGill or MicGill" (alternatives, 2026-08-29). Decides WHOSE name
 // the word is — one CyberBrain person, one tree person, or nobody in
 // particular — and hands a typed write to the dependency that owns the
-// file. The reply is then spoken with the new entry in force, which is the
-// proof Rick asked for.
+// file. The reply opens with the read-back ("OK, noted — McGill.") and is
+// spoken with the new entry in force, which is the proof Rick asked for.
 
 import Foundation
 import VideoScanCore
@@ -24,6 +25,7 @@ extension HallieAppTurnCoordinator {
 
     struct PronunciationWrite: Sendable, Equatable {
         let word: String
+        /// The stored respelling; alternatives joined with " | ".
         let saidAs: String
         let target: PronunciationTarget
     }
@@ -38,33 +40,39 @@ extension HallieAppTurnCoordinator {
         dependencies: Dependencies
     ) -> Response? {
         guard let told = HallieTellingMode.detectPronunciation(question) else { return nil }
-        let target = resolvePronunciationTarget(
-            word: told.word,
-            cyberBrain: dependencies.loadCyberBrain(),
-            graph: dependencies.loadGraph())
-        let scope: HallieTellingMode.PronunciationScope
-        switch target {
-        case .cyberBrainPerson(_, let name), .treePerson(let name, _, _):
-            scope = .person(name: name)
-        case .file:
-            scope = .file
-        }
         let prose: String
         let outcome: HallieTurnExecutor.Outcome
         let basis: String
-        let store = scope == .file ? "pronunciations.json" : "person record"
-        do {
-            try dependencies.recordPronunciation(
-                PronunciationWrite(word: told.word, saidAs: told.saidAs, target: target))
+        switch teach(word: told.word, alternatives: told.alternatives, dependencies: dependencies) {
+        case .success(let target):
+            let scope: HallieTellingMode.PronunciationScope
+            switch target {
+            case .cyberBrainPerson(_, let name), .treePerson(let name, _, _):
+                scope = .person(name: name)
+            case .file:
+                scope = .file
+            }
             prose = HallieTellingMode.pronunciationReply(told, scope: scope)
             outcome = .answered
-            basis = "pronunciation kept (\(store))"
-        } catch {
-            // Honest failure (codex #700): no "Got it", not an answer, and
+            basis = "pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record"))"
+            // The sheet learns of a one-off teach so the drill never asks
+            // for a name Rick just corrected. Best effort: the lexicon is
+            // the truth; the sheet is bookkeeping.
+            var store = dependencies.loadDrillStore()
+            store.set(name: told.word,
+                      status: told.alternatives.count > 1 ? .alternativesPending : .taught,
+                      respelling: told.saidAs)
+            let manifest = PronunciationDrillManifest.build(
+                list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
+            if (try? dependencies.saveDrillStore(store, manifest)) == nil {
+                appLog.write("[hallie-voice] drill: sheet not updated after a one-off teach")
+            }
+        case .failure(let error):
+            // Honest failure (codex #700): no "OK, noted", not an answer, and
             // the basis says it was NOT kept.
             prose = HallieTellingMode.pronunciationFailureReply(told, error: error.localizedDescription)
             outcome = .failed
-            basis = "pronunciation NOT kept (\(store): \(error.localizedDescription))"
+            basis = "pronunciation NOT kept (\(error.localizedDescription))"
         }
         let result = HallieTurnExecutor.Result(
             route: .telling,
