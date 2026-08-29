@@ -131,6 +131,8 @@ struct PersonFinderView: View {
     /// Exact-record hint for the Family Tree tab (same key FamilyTreeDemoView
     /// reads); set alongside `ftHighlight` when the profile is pinned.
     @AppStorage("ftHighlightedPersonID") var ftHighlightID: String = ""
+    /// One-photo-per-person memo for the gallery cards (2026-08-29).
+    @ObservedObject var photoCenter = PersonPhotoCenter.shared
 
     // MARK: Loaded Faces Strip — compact scan-readiness indicator
     // (UI lives in PersonFinderView+Faces.swift; stored state stays here.)

@@ -228,7 +228,10 @@ extension PersonFinderView {
                                        relationshipsLine: kinshipCenter.relationshipsLine(
                                            for: profile, among: model.savedProfiles),
                                        aliasWarning: kinshipCenter.aliasWarning(
-                                           for: profile, among: model.savedProfiles))
+                                           for: profile, among: model.savedProfiles),
+                                       portrait: photoCenter.peoplePhoto(
+                                           for: profile, among: model.savedProfiles,
+                                           kinshipCenter: kinshipCenter))
                                 // Holdout Review badge — top-trailing over
                                 // the portrait. The Button in the overlay
                                 // wins the click over the card's
@@ -442,7 +445,18 @@ extension PersonFinderView {
         .sheet(item: $editingProfile) { profile in
             PersonEditSheet(profile: profile,
                             otherProfiles: model.savedProfiles,
-                            kinshipCenter: kinshipCenter) { updated in
+                            kinshipCenter: kinshipCenter) { edited in
+                // A cover edit is an explicit photo choice (one photo per
+                // person, 2026-08-29): stamp it and, when this profile is
+                // bridged to a tree person, copy it into the family archive
+                // so the Family Tree card shows the same photo.
+                var updated = edited
+                PersonPhotoSync.applyCoverChoice(
+                    to: &updated, previous: profile, profiles: model.savedProfiles,
+                    graph: kinshipCenter.graph,
+                    store: FamilyAssetConfigurationCenter.shared.snapshot().makeStore(),
+                    fingerprint: { kinshipCenter.graphFingerprint })
+                photoCenter.invalidate()
                 model.updateProfile(updated, oldName: editingOriginalName)
                 // If this person is now the active POI, reload their faces
                 if model.settings.personName.lowercased() == updated.name.lowercased() {

@@ -437,18 +437,25 @@ struct FamilyAssetPerson: Sendable, Equatable {
     let gedcomID: String?
     let name: String
     let birthYear: Int?
+    /// FamilySearch ID ("G2CL-86B") when the record carries one. The key of
+    /// the one-photo-per-person folder (`People/<FSID>/`, 2026-08-29): a
+    /// re-pull renumbers `@I` pointers but never this.
+    let familySearchID: String?
 
-    init(gedcomID: String? = nil, name: String, birthYear: Int? = nil) {
+    init(gedcomID: String? = nil, name: String, birthYear: Int? = nil,
+         familySearchID: String? = nil) {
         self.gedcomID = gedcomID
         self.name = name
         self.birthYear = birthYear
+        self.familySearchID = familySearchID
     }
 
     init(_ person: GedcomFamilyGraph.Person) {
         self.init(
             gedcomID: person.id,
             name: person.name,
-            birthYear: person.birthYear)
+            birthYear: person.birthYear,
+            familySearchID: person.familySearchID)
     }
 }
 
@@ -605,8 +612,17 @@ struct FamilyAssetStore {
     /// matching is case/diacritic-insensitive, but never recursive.
     func photoURLs(for person: FamilyAssetPerson) -> [URL] {
         guard access != .unavailable else { return [] }
-        let own = resolvedPersonFolder(for: person).map(verifiedImages(in:)) ?? []
-        let all = own + groupPhotoURLs(for: person).filter { !own.contains($0) }
+        // The explicit choice leads (2026-08-29), then the FamilySearch-ID
+        // folder, then the name/pointer folder, then group folders.
+        var own: [URL] = []
+        var seen: Set<URL> = []
+        func add(_ urls: [URL]) {
+            for url in urls where seen.insert(url).inserted { own.append(url) }
+        }
+        if let chosen = chosenPhoto(for: person) { add([chosen.url]) }
+        if let folder = familySearchIDFolder(for: person) { add(verifiedImages(in: folder)) }
+        if let folder = resolvedPersonFolder(for: person) { add(verifiedImages(in: folder)) }
+        let all = own + groupPhotoURLs(for: person).filter { !seen.contains($0) }
         return all.filter { !isPhotoExcluded($0, for: person) }
     }
 
@@ -938,8 +954,11 @@ struct FamilyAssetStore {
     /// The original is never removed or renamed, so "Adjust" is reversible
     /// by deleting the card file in Finder.
     func cardPhotoURL(for person: FamilyAssetPerson) -> URL? {
-        guard access != .unavailable,
-              let folder = resolvedPersonFolder(for: person) else { return nil }
+        guard access != .unavailable else { return nil }
+        // The explicit choice (either view, newest wins) beats any crop
+        // found by convention — a provider never overrides a choice.
+        if let chosen = chosenPhoto(for: person) { return chosen.url }
+        guard let folder = resolvedPersonFolder(for: person) else { return nil }
         let cards = verifiedImages(in: folder).filter(Self.isCardPhoto)
         // FileManager, not URL.resourceValues: NSURL caches resource values
         // per instance and a just-touched file can read back stale.
@@ -956,9 +975,165 @@ struct FamilyAssetStore {
     /// The photo "Adjust" starts from: the first non-card image in the
     /// person's own folder (never a previous crop of a crop).
     func originalPhotoURL(for person: FamilyAssetPerson) -> URL? {
-        guard access != .unavailable,
-              let folder = resolvedPersonFolder(for: person) else { return nil }
+        guard access != .unavailable else { return nil }
+        if let chosen = chosenPhoto(for: person), !Self.isCardPhoto(chosen.url) {
+            return chosen.url
+        }
+        guard let folder = resolvedPersonFolder(for: person) else { return nil }
         return verifiedImages(in: folder).first { !Self.isCardPhoto($0) }
+    }
+
+    // MARK: One photo per person (2026-08-29: "it keeps reverting")
+
+    /// The explicit portrait choice for a person — ONE per person, shared by
+    /// the Family Tree card and the People tab. A sidecar
+    /// `People/<FamilySearch ID>/chosen-photo.json` (tree-keyed: survives a
+    /// re-pull that renumbers `@I` pointers; a record without an FSID uses
+    /// its own name/pointer folder) names the image: a file in that folder,
+    /// or in another People/ folder (an Adjust crop saved beside its
+    /// original). Precedence against the People-tab cover is by
+    /// `chosenAt` — the most recent explicit choice wins in both views.
+    struct PersonPhotoChoice: Codable, Sendable, Equatable {
+        /// Image path relative to People/, exactly `<folder>/<file>`.
+        let file: String
+        let chosenAt: Date
+        /// Where it was chosen: `tree.pick`, `tree.applePhotos`,
+        /// `tree.adjust`, `people.cover`.
+        let source: String
+    }
+
+    static let chosenPhotoSidecarName = "chosen-photo.json"
+
+    /// `People/<FSID>/` for a record with a safe FamilySearch ID (it need
+    /// not exist yet), else nil.
+    func familySearchIDFolder(for person: FamilyAssetPerson) -> URL? {
+        guard access != .unavailable,
+              let component = Self.safeFamilySearchIDComponent(person.familySearchID) else { return nil }
+        let folder = peopleDirectory.appendingPathComponent(component, isDirectory: true)
+            .standardizedFileURL
+        guard folder.deletingLastPathComponent() == peopleDirectory else { return nil }
+        return folder
+    }
+
+    /// Where this person's choice sidecar lives (read side).
+    func chosenPhotoFolder(for person: FamilyAssetPerson) -> URL? {
+        guard access != .unavailable else { return nil }
+        return familySearchIDFolder(for: person) ?? resolvedPersonFolder(for: person)
+    }
+
+    /// The explicit choice, re-verified at read time: sidecar is a regular
+    /// file, the named image is a verified regular image directly inside
+    /// one People/ folder. Anything else is "no choice", never a guess.
+    func chosenPhoto(for person: FamilyAssetPerson) -> (url: URL, choice: PersonPhotoChoice)? {
+        guard let folder = chosenPhotoFolder(for: person), isSafeDirectory(folder) else { return nil }
+        let sidecar = URL(fileURLWithPath: folder.appendingPathComponent(Self.chosenPhotoSidecarName).path,
+                          isDirectory: false)
+        guard let values = try? sidecar.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true,
+              let data = try? Data(contentsOf: sidecar), data.count <= 8192,
+              let choice = try? Self.sidecarDecoder.decode(PersonPhotoChoice.self, from: data),
+              let url = photoURL(relativeToPeople: choice.file) else { return nil }
+        return (url, choice)
+    }
+
+    /// Choose NEW image bytes (Pick a photo / Apple Photos / a People-tab
+    /// cover copy): validated in memory, written never-overwrite into the
+    /// person's FSID folder, then recorded as the choice.
+    @discardableResult
+    func choosePhoto(_ data: Data, fileExtension: String, for person: FamilyAssetPerson,
+                     source: String, chosenAt: Date? = nil) throws -> URL {
+        try requireWriteAccess()
+        let folder = try writableChosenPhotoFolder(for: person)
+        guard let target = revalidatedPhotoRequestFolder(folder) else {
+            throw StoreError.unsafeDirectory(folder)
+        }
+        let ext = fileExtension.lowercased()
+        guard Self.allowedImageExtensions.contains(ext) else {
+            throw StoreError.sourceIsNotARegularImage(target.appendingPathComponent("portrait.\(ext)"))
+        }
+        guard data.count <= Self.maxImportBytes else {
+            throw StoreError.imageTooLarge(bytes: data.count)
+        }
+        guard FamilyAssetImageValidator.isVerifiedImageData(data) else {
+            throw StoreError.sourceIsNotARegularImage(target.appendingPathComponent("portrait.\(ext)"))
+        }
+        let when = chosenAt ?? importClock()
+        let stamp: String = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd-HHmmss"
+            return f.string(from: when)
+        }()
+        let url = try writePersonPhotoData(data, stem: "portrait-" + stamp, ext: ext, into: target)
+        try recordPhotoChoice(url, for: person, source: source, chosenAt: when)
+        return url
+    }
+
+    /// Record an image ALREADY in a People/ folder (an Adjust crop) as the
+    /// choice. The sidecar goes in the person's choice folder; the image
+    /// stays where it is.
+    func recordPhotoChoice(_ url: URL, for person: FamilyAssetPerson,
+                           source: String, chosenAt: Date? = nil) throws {
+        try requireWriteAccess()
+        let folder = try writableChosenPhotoFolder(for: person)
+        let file = URL(fileURLWithPath: url.path, isDirectory: false).standardizedFileURL
+        let parent = file.deletingLastPathComponent()
+        guard parent.deletingLastPathComponent() == peopleDirectory,
+              isSafeDirectory(parent),
+              FamilyAssetImageValidator.revalidatedURL(file) != nil else {
+            throw StoreError.sourceIsNotARegularImage(file)
+        }
+        let choice = PersonPhotoChoice(
+            file: parent.lastPathComponent + "/" + file.lastPathComponent,
+            chosenAt: chosenAt ?? importClock(),
+            source: source)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let sidecar = folder.appendingPathComponent(Self.chosenPhotoSidecarName, isDirectory: false)
+        do {
+            try encoder.encode(choice).write(to: sidecar, options: .atomic)
+        } catch {
+            throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+        }
+        PersonPhotoLog.chose(person: person, source: source, chosenAt: choice.chosenAt)
+    }
+
+    /// Choice folder for writing: `People/<FSID>/` created on demand, else
+    /// the ordinary photo-request folder.
+    private func writableChosenPhotoFolder(for person: FamilyAssetPerson) throws -> URL {
+        if let folder = familySearchIDFolder(for: person) {
+            try ensureSafeDirectory(root)
+            try ensureSafeDirectory(peopleDirectory)
+            try ensureSafeDirectory(folder)
+            return folder
+        }
+        return try folderForPhotoRequest(person: person)
+    }
+
+    /// `<folder>/<file>` under People/, both components plain, the file a
+    /// verified image. Nil for anything else (a traversal, a link, a
+    /// vanished file).
+    private func photoURL(relativeToPeople relative: String) -> URL? {
+        let parts = relative.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2,
+              parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") }) else { return nil }
+        let folder = peopleDirectory.appendingPathComponent(parts[0], isDirectory: true).standardizedFileURL
+        guard folder.deletingLastPathComponent() == peopleDirectory, isSafeDirectory(folder) else { return nil }
+        let file = folder.appendingPathComponent(parts[1], isDirectory: false).standardizedFileURL
+        guard file.deletingLastPathComponent() == folder else { return nil }
+        return FamilyAssetImageValidator.revalidatedURL(file)
+    }
+
+    /// "G2CL-86B" → "G2CL-86B"; anything that is not a short
+    /// alphanumeric-with-dashes token is not a folder name.
+    static func safeFamilySearchIDComponent(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !trimmed.isEmpty, trimmed.count <= 32,
+              trimmed.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || $0 == "-" }),
+              trimmed.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        return trimmed
     }
 
     /// Write cropped JPEG bytes as `<stem>-card.jpg` beside `original` (or

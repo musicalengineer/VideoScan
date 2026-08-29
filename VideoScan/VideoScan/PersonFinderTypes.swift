@@ -560,6 +560,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// FamilySearch never carries). "Show in Family Tree" stops asking
     /// which record they are. Additive; absent ⇒ false.
     var notInFamilyTree: Bool = false
+    /// When the cover photo was last chosen here (2026-08-29, one photo per
+    /// person). Compared with the Family Tree's choice: the later explicit
+    /// choice shows in BOTH views. nil in older files ⇒ no claim.
+    var photoChosenAt: Date?
 
     /// The anchor other profiles should store for THIS profile: the durable
     /// uuid when it is on disk, otherwise the name (upgraded automatically
@@ -582,6 +586,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
         case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
         case treeIdentityAttestation, notInFamilyTree
+        case photoChosenAt
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -670,6 +675,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         kinships          = readable
         kinshipsQuarantined = quarantined
         uuid              = try c.decodeIfPresent(UUID.self, forKey: .uuid) ?? UUID()
+        photoChosenAt     = try c.decodeIfPresent(Date.self, forKey: .photoChosenAt)
         // Pin (2026-08-29): decoded as raw JSON first so an unreadable pin is
         // quarantined, not dropped and not silently replaced by a name match.
         let rawPin = Self.decodeIdentityField(JSONValue.self, forKey: .treeIdentity, from: c)

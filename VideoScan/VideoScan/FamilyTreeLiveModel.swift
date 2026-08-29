@@ -224,6 +224,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// per-card Pick Photo / Apple Photos choice is an in-memory override
     /// that wins over the provider.
     var photoProvider: (GedcomFamilyGraph.Person) -> NSImage?
+    /// People-tab profiles for the photo bridge (one photo per person,
+    /// 2026-08-29). Production reads the cached snapshot; an injected model
+    /// gets NONE unless the test injects its own (isolation rule).
+    var profilesProvider: () -> [POIProfile]
+    /// Bumps on every photo choice written from this tab so the cards
+    /// re-read the store at once (and the People tab, via PersonPhotoCenter).
+    @Published private(set) var photoRevision = 0
 
     /// The directory the loader reads. Production = App Support; tests
     /// inject a temp directory and nothing outside it is ever consulted.
@@ -400,7 +407,8 @@ final class FamilyTreeLiveModel: ObservableObject {
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          focusDefaults: UserDefaults? = nil,
-         photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil }) {
+         photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil },
+         profilesProvider: (() -> [POIProfile])? = nil) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
         self.focusDefaults = focusDefaults
             ?? (originalsDirectory == nil ? UserDefaults.standard : nil)
@@ -426,6 +434,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations
         self.photoProvider = photoProvider
+        self.profilesProvider = profilesProvider
+            ?? (originalsDirectory == nil ? { POIProfile.cachedSnapshot() } : { [] })
         self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
         self.usesSharedCache = originalsDirectory == nil && compiledStore == nil
         // Hallie's "I can do that now" (live miss #8) recompiles through
@@ -1253,6 +1263,24 @@ final class FamilyTreeLiveModel: ObservableObject {
         if let override = photoOverrides[personID] { return override }
         guard let person = graph?.people[personID] else { return nil }
         return photoProvider(person)
+    }
+
+    /// The People-tab profile that IS this tree person (pin, else the
+    /// identity bridge; nil when unbridged or ambiguous). Its cover is the
+    /// card's photo when no explicit choice exists.
+    func bridgedProfile(for personID: String) -> POIProfile? {
+        guard let graph, let person = graph.people[personID] else { return nil }
+        let profiles = profilesProvider()
+        guard !profiles.isEmpty else { return nil }
+        return PersonPhotoBridge.profile(
+            for: person, profiles: profiles, graph: graph,
+            fingerprint: { [weak self] in self?.kinshipCenter?.graphFingerprint })
+    }
+
+    /// A photo choice was written (either view): make the cards re-read.
+    func notePhotoChoiceWritten() {
+        photoRevision &+= 1
+        PersonPhotoCenter.shared.invalidate()
     }
 
     // MARK: Folder
