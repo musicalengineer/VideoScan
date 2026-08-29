@@ -301,6 +301,35 @@ final class FamilyTreeLiveModel: ObservableObject {
     private let ancestorGenerations: Int
     private let descendantGenerations: Int
 
+    // MARK: Timing sensors
+
+    /// Rick 2026-08-28: if navigating the tree hangs we need to know where
+    /// and when. Every install/select/search step is timed; a step slower
+    /// than this writes `[family-tree] <step> took N ms (<people> people)`
+    /// to the app log. The install total is always written. Logging is
+    /// O(1) per step — never per row, never in a view body.
+    nonisolated static let slowStepThreshold: Duration = .milliseconds(100)
+
+    /// One log line per (slow) step. `nonisolated` so the detached disk
+    /// loader can report its decode/parse step too.
+    nonisolated static func logStep(_ step: String, took elapsed: Duration, people: Int, always: Bool = false) {
+        guard always || elapsed > slowStepThreshold else { return }
+        // Duration / Duration → Double (Swift 5.7+); ≈ std::chrono duration_cast.
+        let ms = Int((elapsed / .milliseconds(1)).rounded())
+        appLog.write("[family-tree] \(step) took \(ms) ms (\(people) people)")
+    }
+
+    /// Time `body` and report it through `logStep`. No RAII scope guard
+    /// in Swift — the closure IS the scope.
+    @discardableResult
+    private func timed<T>(_ step: String, always: Bool = false, _ body: () -> T) -> T {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = body()
+        Self.logStep(step, took: clock.now - start, people: peopleCount, always: always)
+        return result
+    }
+
     // MARK: Init
 
     // `nonisolated` ≈ "no actor lock needed": pure path math, usable as a
@@ -408,14 +437,20 @@ final class FamilyTreeLiveModel: ObservableObject {
                     self.loadPhase = phase
                 }
             }
+            let clock = ContinuousClock()
+            var mark = clock.now
             let outcome = loader.loadNewestOutcome()
+            let people = outcome.graph?.people.count ?? 0
+            Self.logStep("load: decode/parse", took: clock.now - mark, people: people)
             // Sidebar rows and the group-photo identity directory are pure
             // functions of the graph (+ speaker defaults): build them
             // here, not on the main actor.
+            mark = clock.now
             let rows = outcome.graph.map { Self.sidebarRows(of: $0) } ?? []
             let identity = outcome.graph.map {
                 FamilyAssetIdentityDirectory(graph: $0, speakers: .fromDefaults())
             }
+            Self.logStep("load: sidebar rows + identity directory", took: clock.now - mark, people: people)
             return (outcome, rows, identity)
         }.value
         guard generation == loadGeneration else { return }
@@ -481,6 +516,14 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// sorted person.
     func install(graph newGraph: GedcomFamilyGraph?, rows: [FamilyTreePersonSummary]? = nil,
                  identity: FamilyAssetIdentityDirectory? = nil) {
+        // Total is always logged; the steps inside only when slow.
+        timed("install total", always: true) {
+            installSteps(graph: newGraph, rows: rows, identity: identity)
+        }
+    }
+
+    private func installSteps(graph newGraph: GedcomFamilyGraph?, rows: [FamilyTreePersonSummary]?,
+                              identity: FamilyAssetIdentityDirectory?) {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
@@ -497,9 +540,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         // O(people) with a familyUnits walk each — precomputed off the
         // main actor by loadFromDisk; built here only for synchronous
         // installs (tests, loadNow).
-        FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map { graph in
-            identity ?? FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
-        })
+        timed("install: identity directory") {
+            FamilyAssetConfigurationCenter.shared.publishIdentity(newGraph.map { graph in
+                identity ?? FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
+            })
+        }
+        let sidebarClock = ContinuousClock()
+        let sidebarStart = sidebarClock.now
         if let newGraph {
             // Sidebar order comes from the compiled index (surname, name,
             // id — the `sorted` comparator, computed once per compile).
@@ -522,6 +569,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             anchorsCaption = nil
             anchorIndexes = [:]
         }
+        // peopleCount is set inside the branch above, so this is timed by hand.
+        Self.logStep("install: sidebar rows + anchors", took: sidebarClock.now - sidebarStart, people: peopleCount)
         loadState = .loaded(live: newGraph != nil)
         lineCache.removeAll()
         lineChain = nil
@@ -547,9 +596,9 @@ final class FamilyTreeLiveModel: ObservableObject {
             fallback = FamilyTreeDemoData.rootID
         }
         selectedID = keep ?? fallback
-        refilter()
+        refilter(step: "install: filter")
         scheduleNotesResolverRebuild()
-        rebuildSelection()
+        timed("install: selection + layout") { rebuildSelection() }
     }
 
     /// Who the tree opens on when nothing is selected. Order (2026-08-28):
@@ -664,7 +713,9 @@ final class FamilyTreeLiveModel: ObservableObject {
                             : FamilyTreeDemoData.person(id) != nil
         guard exists else { return }
         selectedID = id
-        rebuildSelection()
+        // Focus (Hallie / People tab / Home) lands here too, so one sensor
+        // covers every relayout the user can trigger.
+        timed("select: relayout") { rebuildSelection() }
     }
 
     /// Name a focus miss dropped into the sidebar filter, and the notice the
@@ -1202,7 +1253,13 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     // MARK: Rebuild
 
-    private func refilter() {
+    /// `step` names the caller in the timing line ("search: filter" for a
+    /// keystroke, "install: filter" from install).
+    private func refilter(step: String = "search: filter") {
+        timed(step) { refilterNow() }
+    }
+
+    private func refilterNow() {
         let needle = searchText.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else {
             filteredPeople = isLive ? summariesInOrder : FamilyTreeDemoData.people

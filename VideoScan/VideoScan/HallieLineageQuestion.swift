@@ -811,6 +811,48 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
 // MARK: - Answers
 
+// MARK: - Person vitals (prose)
+
+/// The vitals a record carries, phrased for prose and never invented:
+/// "(b. 1633 – d. after 1717, Sudbury, Middlesex, Massachusetts Bay
+/// Colony)". Year qualifiers come out as recorded (about / before /
+/// after / between…); a place follows its own year; a missing half is
+/// simply absent; no vitals → "". Never "living" — a missing death date
+/// is not evidence of anything (Rick 2026-08-28).
+enum HalliePersonVitals {
+    /// " (b. … – d. …)" with a leading space, or "" — ready to append to
+    /// a name. `places` false → years only (the "Also shared:" list).
+    static func parenthetical(_ person: GedcomFamilyGraph.Person, places: Bool) -> String {
+        let body = vitals(person, places: places)
+        return body.isEmpty ? "" : " (" + body + ")"
+    }
+
+    /// "b. 1633, Boston – d. after 1717, Sudbury" without the parentheses.
+    static func vitals(_ person: GedcomFamilyGraph.Person, places: Bool) -> String {
+        let birth = event("b.", date: person.birthDate, place: places ? person.birthPlace : nil)
+        let death = event("d.", date: person.deathDate, place: places ? person.deathPlace : nil)
+        return [birth, death].compactMap { $0 }.joined(separator: " – ")
+    }
+
+    /// "b. about 1633, Boston" — nil when the record has no usable year.
+    /// A place without a year is dropped: "b. Boston" reads as a claim
+    /// about a date we do not have.
+    private static func event(_ tag: String, date: String?, place: String?) -> String? {
+        guard let year = spokenYear(date) else { return nil }
+        let trimmedPlace = place?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return tag + " " + year + (trimmedPlace.isEmpty ? "" : ", " + trimmedPlace)
+    }
+
+    /// The year as the GEDCOM qualifies it ("1633", "about 1633",
+    /// "before 1800", "between 1700 and 1710"); nil when the date carries
+    /// no four-digit year at all.
+    static func spokenYear(_ date: String?) -> String? {
+        guard let interval = GedcomYearInterval.parse(date),
+              interval.anchor != nil || interval.lower != nil || interval.upper != nil else { return nil }
+        return interval.spoken
+    }
+}
+
 enum HallieLineageAnswer {
     typealias Result = HallieTurnExecutor.Result
 
@@ -2117,7 +2159,10 @@ enum HallieLineageAnswer {
         }
         let nearest = hits[0]
         let z = nearest.person
-        let born = z.birthYear.map { " (b. \($0))" } ?? ""
+        // Rick 2026-08-28: the record's critical info on the nearest —
+        // "(b. 1633 – d. after 1717, Sudbury, Middlesex, Massachusetts Bay
+        // Colony)": year with qualifier as recorded, places when recorded.
+        let born = HalliePersonVitals.parenthetical(z, places: true)
         let labelA = GedcomFamilyGraph.generationLabel(generations: nearest.depthA, sex: z.sex)
         let labelB = GedcomFamilyGraph.generationLabel(generations: nearest.depthB, sex: z.sex)
         var sentences: [String] = []
@@ -2130,7 +2175,7 @@ enum HallieLineageAnswer {
         sentences.append("\(possA) line: \(line(nearest.pathA)). \(possB) line: \(line(nearest.pathB)).")
         if n > 1 {
             let others = hits.dropFirst().prefix(3).map { h in
-                h.person.name + (h.person.birthYear.map { " (b. \($0))" } ?? "") + " (\(h.depthA)/\(h.depthB) generations up)"
+                h.person.name + HalliePersonVitals.parenthetical(h.person, places: false) + " (\(h.depthA)/\(h.depthB) generations up)"
             }
             sentences.append("Also shared: " + others.joined(separator: "; ") + (n - 1 > others.count ? "; and \(n - 1 - others.count) more." : "."))
         }
