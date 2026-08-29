@@ -543,6 +543,11 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// `kinshipAnchor`, never `.profile(id: uuid)` directly, or the id
     /// dangles after restart ("a removed profile").
     var uuidPersisted: Bool = true
+    /// Durable pin to ONE family-tree person (design amendment 1, 2026-08-29):
+    /// the only profile→tree identity the inference engine accepts. nil =
+    /// not pinned (name matches are review SUGGESTIONS, never identity).
+    /// Additive: absent in older profile.json ⇒ nil; saved explicitly.
+    var treeIdentity: TreeIdentity?
 
     /// The anchor other profiles should store for THIS profile: the durable
     /// uuid when it is on disk, otherwise the name (upgraded automatically
@@ -563,7 +568,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case minFaceConfidence, largestFaceOnly, coverImageFilename, notes, aliases
         case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
-        case kinships, kinshipsQuarantined, uuid
+        case kinships, kinshipsQuarantined, uuid, treeIdentity
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -576,7 +581,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
          sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
          sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
          identityNotes: String? = nil, kinships: [Kinship] = [],
-         uuid: UUID = UUID()) {
+         uuid: UUID = UUID(), treeIdentity: TreeIdentity? = nil) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -601,6 +606,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.identityNotes = identityNotes
         self.kinships = kinships
         self.uuid = uuid
+        self.treeIdentity = treeIdentity
     }
 
     init(from decoder: Decoder) throws {
@@ -651,6 +657,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         kinships          = readable
         kinshipsQuarantined = quarantined
         uuid              = try c.decodeIfPresent(UUID.self, forKey: .uuid) ?? UUID()
+        treeIdentity      = Self.decodeIdentityField(TreeIdentity.self, forKey: .treeIdentity, from: c)
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare

@@ -1,39 +1,46 @@
 // FamilyKinshipInference.swift
 // Derivation engine for People-tab relationships (design:
-// docs/kinship_inference_design.md §2, 2026-08-29). Rick stores only the
-// four PRIMITIVES — parent, child, spouse, sibling — and everything else
-// ("Tim is uncle of Matt", "Bob is Rick's brother-in-law", "Martha Lamson
-// is Tim's 8th-great-grandmother") is derived here at read time from:
+// docs/kinship_inference_design.md §2 + amendments 1, 2, 5, 6, 7 after
+// codex review #830/#831/#833, 2026-08-29). Rick stores only the four
+// PRIMITIVES — parent, child, spouse, sibling — and everything else ("Tim
+// is uncle of Matt", "Bob is Rick's brother-in-law", "Martha Lamson is
+// Tim's 8th-great-grandmother") is derived here at read time from:
 //
-//   • the FamilyKinshipOverlay's primitive edges (profile rows + inverses,
-//     profiles bridged to tree people sharing that vertex),
-//   • the GEDCOM graph's parent / child / spouse links for tree vertices,
-//   • one deliberate assumption (Director 2026-08-29: siblings default to
-//     FULL): a person with a sibling row but NO parent rows inherits the
-//     sibling's parents, flagged `.assumedFullSibling` so the review sheet
-//     and Hallie can say "assumed".
+//   • the FamilyKinshipOverlay's primitive edges (profile rows + inverses),
+//     built in `.pinsOnly` mode: a profile is a tree vertex ONLY through
+//     its explicit `treeIdentity` pin (identity ≠ relationship);
+//   • the GEDCOM graph's parent / child / spouse links for tree vertices;
+//   • ATTESTED sibling rows: `.attestedFull` lets the sibling's recorded
+//     parents flow through the row (`.attestedSibling` provenance);
+//     `.attestedHalf(sharedParent:)` lets only that parent through. An
+//     `.unspecified` sibling row supports sibling / uncle / niece /
+//     in-law composition only — it never copies parents as facts; the
+//     engine PROPOSES them (`proposals(for:)`) for the review sheet, and a
+//     lineal question through such a row answers honestly with a
+//     "not attested" note instead of a word.
 //
-// Two tiers per query:
+// Two tiers per query (the hybrid boundary, amendment 5):
 //   Tier A — breadth-first search over the unified adjacency, ≤ `maxHops`
-//            (4) hops, shortest chain wins; the chain is named by
-//            `KinshipChainNamer` (fold table + lineal/collateral shapes).
+//            (4), shortest chain wins with a stable tie-break (hop kind
+//            parent < child < spouse < sibling, explicit before attested,
+//            then the normalized identity key of the far vertex); the chain
+//            is named by `KinshipChainNamer` (fold table + shapes).
 //   Tier B — when A finds nothing and a tree is installed: climb each
-//            endpoint's parent hops to its nearest tree vertices, then let
-//            `GedcomFamilyGraph.AncestorIndex` find the nearest common
-//            ancestor, so a 10-generation line is one query, not a
-//            10-hop BFS. This is where the design's "N = 4 default" did not
-//            survive contact: lineal depth is unbounded by construction.
+//            endpoint's PARENT hops (blood only) to its pinned tree
+//            vertices, then intersect memoised `AncestorIndex` depth maps
+//            for the nearest common ancestor — one ancestor walk per tree
+//            entry, never a per-pair expansion of the tree.
 //
 // Never invented: spouse∘spouse, sibling∘sibling, parent∘spouse (step),
 // spouse∘child — those fall to route text (codex #778 / #795 D), and no
 // chain is named through two spouse hops except the pinned whole chain
-// [spouse, sibling, spouse].
+// [spouse, sibling, spouse]. "older/younger" only when the order is
+// provable at the available date precision (no manufactured Jan 1).
 //
-// Pure and injected (an overlay, itself built from snapshots + an optional
-// graph). Worst-case memory: the BFS frontier is bounded by 4 hops over a
-// fan-out of a few dozen (contemporaries) — kilobytes; the ancestor-index
-// memo holds at most `AncestorMemo.limit` indexes (≈ 200 KB each on the
-// deepest tree) and is cleared, not grown, when full.
+// Pure and injected. Worst-case memory: the BFS frontier is bounded by 4
+// hops over a fan-out of a few dozen (contemporaries) — kilobytes; the
+// ancestor-index memo holds at most `AncestorMemo.limit` indexes (≈ 200 KB
+// each on the deepest tree) and is cleared, not grown, when full.
 //
 // C++ readers: `struct` = value type; `final class … : @unchecked Sendable`
 // with an `NSLock` is the idiom for a shared mutable cache — "I promise the
@@ -52,9 +59,14 @@ struct FamilyKinshipInference: Sendable {
         case profileRow(storedOn: String)
         /// A FAM link in the installed GEDCOM.
         case tree
-        /// The only assumption this engine makes: parents copied from a
-        /// sibling because the person has a sibling row and no parent rows.
-        case assumedFullSibling(via: String)
+        /// A parent inherited through a sibling row Rick ATTESTED
+        /// (full, or half with that shared parent named).
+        case attestedSibling(via: String)
+
+        var isExplicit: Bool {
+            if case .attestedSibling = self { return false }
+            return true
+        }
     }
 
     struct Hop: Hashable, Sendable {
@@ -62,6 +74,8 @@ struct FamilyKinshipInference: Sendable {
         let from: Node
         let to: Node
         let provenance: Provenance
+        /// The sibling row's basis when `relation == .sibling`.
+        var basis: SiblingBasis = .unspecified
     }
 
     /// One answer to "how is `to` related to `from`". `term` is the word
@@ -76,15 +90,27 @@ struct FamilyKinshipInference: Sendable {
         /// Named hop by hop, with in-law prefixes folded when that leaves at
         /// least two segments: "sister-in-law Ann → husband Bob".
         let routeText: String
-        /// Human caveats: "Tim's parents are assumed from Rick's …".
+        /// Human caveats: "Tim's sibling link to Rick is not attested …".
         let caveats: [String]
         /// Every source the route touched.
         let provenance: Set<Provenance>
 
-        var isAssumed: Bool {
-            provenance.contains { if case .assumedFullSibling = $0 { return true } else { return false } }
-        }
         var usesTree: Bool { provenance.contains(.tree) }
+        var usesAttestation: Bool {
+            provenance.contains { if case .attestedSibling = $0 { return true } else { return false } }
+        }
+    }
+
+    /// Something the review sheet should ask Rick to confirm — never a fact.
+    struct Proposal: Sendable, Equatable {
+        enum Kind: Sendable, Equatable {
+            /// "Tim shares Rick's parents" (assumed full) — accepting sets the
+            /// sibling row's basis to `.attestedFull`.
+            case sharedParents(via: Node, parents: [Node])
+        }
+        let subject: Node
+        let kind: Kind
+        let text: String
     }
 
     let overlay: FamilyKinshipOverlay
@@ -92,12 +118,24 @@ struct FamilyKinshipInference: Sendable {
     let maxHops: Int
 
     private let ancestorMemo = AncestorMemo()
-    /// The assumed-full-sibling parents, computed once per engine for every
-    /// vertex (and inverted, so the parent sees the assumed child too).
-    private let assumedParents: [Node: [Hop]]
-    private let assumedChildren: [Node: [Hop]]
+    /// Parents inherited through ATTESTED sibling rows, computed once per
+    /// engine for every vertex, and inverted so the parent sees the child.
+    private let attestedParents: [Node: [Hop]]
+    private let attestedChildren: [Node: [Hop]]
 
-    init(overlay: FamilyKinshipOverlay, maxHops: Int = 4) {
+    init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil, maxHops: Int = 4) {
+        self.init(overlay: FamilyKinshipOverlay(profiles: profiles, graph: graph, bridging: .pinsOnly),
+                  maxHops: maxHops)
+    }
+
+    init(snapshots: [ArchivistGraphProfileSnapshot], graph: GedcomFamilyGraph? = nil, maxHops: Int = 4) {
+        self.init(overlay: FamilyKinshipOverlay(snapshots: snapshots, graph: graph, bridging: .pinsOnly),
+                  maxHops: maxHops)
+    }
+
+    /// The overlay must be `.pinsOnly` (the two public inits guarantee it);
+    /// private so no caller can hand in a name-bridged identity space.
+    private init(overlay: FamilyKinshipOverlay, maxHops: Int) {
         self.overlay = overlay
         self.maxHops = maxHops
         var parents: [Node: [Hop]] = [:]
@@ -107,13 +145,19 @@ struct FamilyKinshipInference: Sendable {
             guard !stored.contains(where: { $0.relation == .parent }) else { continue }
             var mine: [Hop] = []
             for sibling in stored where sibling.relation == .sibling {
-                let siblingParents = Self.storedHops(from: sibling.to, overlay: overlay)
-                    .filter { $0.relation == .parent }.map(\.to)
-                for parent in siblingParents where parent != node && !mine.contains(where: { $0.to == parent }) {
-                    let via = overlay.member(sibling.to)?.name
-                        ?? Self.treeName(sibling.to, overlay: overlay) ?? sibling.to.auditID
-                    let hop = Hop(relation: .parent, from: node, to: parent,
-                                  provenance: .assumedFullSibling(via: via))
+                let inherited: [Node]
+                switch sibling.basis {
+                case .unspecified:
+                    continue
+                case .attestedFull:
+                    inherited = Self.storedHops(from: sibling.to, overlay: overlay)
+                        .filter { $0.relation == .parent }.map(\.to)
+                case .attestedHalf(let shared):
+                    inherited = overlay.node(for: shared).map { [$0] } ?? []
+                }
+                let via = Self.name(of: sibling.to, overlay: overlay)
+                for parent in inherited where parent != node && !mine.contains(where: { $0.to == parent }) {
+                    let hop = Hop(relation: .parent, from: node, to: parent, provenance: .attestedSibling(via: via))
                     mine.append(hop)
                     children[parent, default: []].append(
                         Hop(relation: .child, from: parent, to: node, provenance: hop.provenance))
@@ -121,26 +165,19 @@ struct FamilyKinshipInference: Sendable {
             }
             if !mine.isEmpty { parents[node] = mine }
         }
-        self.assumedParents = parents
-        self.assumedChildren = children
-    }
-
-    private static func treeName(_ node: Node, overlay: FamilyKinshipOverlay) -> String? {
-        if case .tree(let id) = node { return overlay.treeGraph?.people[id]?.name }
-        return nil
-    }
-
-    init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil, maxHops: Int = 4) {
-        self.init(overlay: FamilyKinshipOverlay(profiles: profiles, graph: graph), maxHops: maxHops)
+        self.attestedParents = parents
+        self.attestedChildren = children
     }
 
     private var graph: GedcomFamilyGraph? { overlay.treeGraph }
 
     // MARK: Node facts
 
-    func name(of node: Node) -> String {
+    func name(of node: Node) -> String { Self.name(of: node, overlay: overlay) }
+
+    private static func name(of node: Node, overlay: FamilyKinshipOverlay) -> String {
         if let member = overlay.member(node) { return member.name }
-        if case .tree(let id) = node, let person = graph?.people[id] { return person.name }
+        if case .tree(let id) = node, let person = overlay.treeGraph?.people[id] { return person.name }
         return node.auditID
     }
 
@@ -156,28 +193,19 @@ struct FamilyKinshipInference: Sendable {
         return nil
     }
 
-    func birthdate(of node: Node) -> Date? {
-        if let member = overlay.member(node), let birth = member.birthdate { return birth }
-        if case .tree(let id) = node, let year = graph?.people[id]?.birthYear {
-            var dc = DateComponents()
-            dc.year = year; dc.month = 1; dc.day = 1
-            dc.timeZone = TimeZone(identifier: "UTC")
-            return Calendar(identifier: .gregorian).date(from: dc)
-        }
+    /// Birth knowledge at native precision (profile date, or tree year
+    /// interval); nil when unknown. Never a manufactured January 1.
+    func birth(of node: Node) -> BirthKnowledge? {
+        if let member = overlay.member(node), let birth = member.birth { return birth }
+        if case .tree(let id) = node, let years = graph?.people[id]?.birthYearInterval { return .years(years) }
         return nil
-    }
-
-    func birthYear(of node: Node) -> Int? {
-        guard let date = birthdate(of: node) else { return nil }
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
-        return cal.component(.year, from: date)
     }
 
     // MARK: Adjacency
 
-    /// Parents the data actually records: profile rows + tree FAM links.
-    /// (No assumption — this is what validation counts.)
+    /// Parents the data actually records: profile rows + tree FAM links,
+    /// deduplicated by vertex (a row to "Dad" and the tree's father are the
+    /// same vertex when Dad is pinned). What validation counts.
     func explicitParents(of node: Node) -> [Node] {
         var out: [Node] = []
         for hop in storedHops(from: node) where hop.relation == .parent && !out.contains(hop.to) {
@@ -186,8 +214,7 @@ struct FamilyKinshipInference: Sendable {
         return out
     }
 
-    /// Parents including the assumed-full-sibling fallback, each with its
-    /// provenance. Order: explicit first, assumed after.
+    /// Explicit parents plus those inherited through attested sibling rows.
     func parents(of node: Node) -> [(node: Node, provenance: Provenance)] {
         hops(from: node).filter { $0.relation == .parent }.map { ($0.to, $0.provenance) }
     }
@@ -195,26 +222,62 @@ struct FamilyKinshipInference: Sendable {
     func children(of node: Node) -> [Node] { hops(from: node).filter { $0.relation == .child }.map(\.to) }
     func spouses(of node: Node) -> [Node] { hops(from: node).filter { $0.relation == .spouse }.map(\.to) }
 
-    /// Is `ancestor` above `node` on any recorded parent line (profile rows
-    /// AND tree)? Depth-first with a visited set, so an already-corrupt
-    /// cycle in the data terminates instead of recursing forever.
-    func isAncestor(_ ancestor: Node, of node: Node, includeAssumed: Bool = false) -> Bool {
+    /// Is `ancestor` above `node` on any recorded parent line (rows,
+    /// attested siblings, AND tree ancestry through pins)? Row-based
+    /// parents are walked hop by hop; a tree vertex's own ancestry comes
+    /// from one memoised ancestor index (O(ancestors of that person), no
+    /// per-hop tree calls, no whole-tree expansion). Visited set, so an
+    /// already-corrupt cycle terminates.
+    func isAncestor(_ ancestor: Node, of node: Node) -> Bool {
         var visited: Set<Node> = [node]
         var stack: [Node] = [node]
         while let current = stack.popLast() {
-            let ups = includeAssumed ? parents(of: current).map(\.node) : explicitParents(of: current)
-            for up in ups {
+            for up in rowParents(of: current) {
                 if up == ancestor { return true }
                 if visited.insert(up).inserted { stack.append(up) }
+            }
+            if case .tree(let id) = current, let graph {
+                let index = ancestorMemo.index(for: id, in: graph)
+                if case .tree(let target) = ancestor, index.generations(from: target) != nil { return true }
+                // Tree ancestors that ALSO carry People-tab rows can climb
+                // further through those rows.
+                for treeAncestor in index.depths.keys.sorted() {
+                    let up = Node.tree(gedcomID: treeAncestor)
+                    guard overlay.knows(up) || attestedParents[up] != nil else { continue }
+                    if visited.insert(up).inserted { stack.append(up) }
+                }
             }
         }
         return false
     }
 
-    /// Every primitive hop out of a vertex: profile rows, then tree links
-    /// (deduplicated against the rows), then assumed parents.
+    /// Parent hops that come from rows / attestations (not tree FAM links).
+    private func rowParents(of node: Node) -> [Node] {
+        hops(from: node).filter { $0.relation == .parent && $0.provenance != .tree }.map(\.to)
+    }
+
+    /// Every primitive hop out of a vertex in DETERMINISTIC order: hop kind
+    /// (parent < child < spouse < sibling), explicit before attested, then
+    /// the far vertex's normalized identity key. The BFS inherits this
+    /// order, so a reversed profile list yields the same route.
     func hops(from node: Node) -> [Hop] {
-        storedHops(from: node) + (assumedParents[node] ?? []) + (assumedChildren[node] ?? [])
+        let all = storedHops(from: node) + (attestedParents[node] ?? []) + (attestedChildren[node] ?? [])
+        return all.sorted { lhs, rhs in
+            let lk = Self.kindRank(lhs.relation), rk = Self.kindRank(rhs.relation)
+            if lk != rk { return lk < rk }
+            if lhs.provenance.isExplicit != rhs.provenance.isExplicit { return lhs.provenance.isExplicit }
+            return lhs.to.identityKey < rhs.to.identityKey
+        }
+    }
+
+    private static func kindRank(_ relation: KinshipRelation) -> Int {
+        switch relation {
+        case .parent:  return 0
+        case .child:   return 1
+        case .spouse:  return 2
+        case .sibling: return 3
+        default:       return 4
+        }
     }
 
     private func storedHops(from node: Node) -> [Hop] { Self.storedHops(from: node, overlay: overlay) }
@@ -223,11 +286,11 @@ struct FamilyKinshipInference: Sendable {
         let graph = overlay.treeGraph
         var out: [Hop] = []
         var seen = Set<HopKey>()
-        for edge in overlay.edges(from: node) where Self.primitives.contains(edge.relation) {
+        for edge in overlay.edges(from: node) where primitives.contains(edge.relation) {
             let key = HopKey(relation: edge.relation, to: edge.to)
             guard seen.insert(key).inserted else { continue }
             out.append(Hop(relation: edge.relation, from: node, to: edge.to,
-                           provenance: .profileRow(storedOn: edge.storedOn)))
+                           provenance: .profileRow(storedOn: edge.storedOn), basis: edge.basis))
         }
         if case .tree(let id) = node, let graph, let person = graph.people[id] {
             func add(_ relation: KinshipRelation, _ people: [GedcomFamilyGraph.Person]) {
@@ -255,12 +318,9 @@ struct FamilyKinshipInference: Sendable {
     /// or nothing links them within reach.
     func relation(from: Node, to: Node) -> Derived? {
         guard from != to else { return nil }
-        if let route = shortestRoute(from: from, to: to) {
-            return describe(route, from: from, to: to)
-        }
-        if let route = treeRoute(from: from, to: to) {
-            return describe(route, from: from, to: to)
-        }
+        if let route = shortestRoute(from: from, to: to) { return describe(route, from: from, to: to) }
+        if let route = treeRoute(from: from, to: to) { return describe(route, from: from, to: to) }
+        if let honest = unattestedSiblingRoute(from: from, to: to) { return honest }
         return nil
     }
 
@@ -285,11 +345,29 @@ struct FamilyKinshipInference: Sendable {
         return best.map { describe($0.value, from: node, to: $0.key) }
             .sorted { lhs, rhs in
                 if lhs.route.count != rhs.route.count { return lhs.route.count < rhs.route.count }
-                return name(of: lhs.to) < name(of: rhs.to)
+                return lhs.to.identityKey < rhs.to.identityKey
             }
     }
 
-    /// Tier A: breadth-first shortest chain, ≤ maxHops.
+    /// What the review sheet should ask about `node`: for every
+    /// `.unspecified` sibling row where `node` has no recorded parents and
+    /// the sibling does — "Tim shares Rick's parents (Dad and Eileen)".
+    func proposals(for node: Node) -> [Proposal] {
+        guard parents(of: node).isEmpty else { return [] }
+        var out: [Proposal] = []
+        for hop in hops(from: node) where hop.relation == .sibling && hop.basis == .unspecified {
+            let theirs = explicitParents(of: hop.to)
+            guard !theirs.isEmpty else { continue }
+            let list = theirs.map(name(of:)).joined(separator: " and ")
+            out.append(Proposal(
+                subject: node,
+                kind: .sharedParents(via: hop.to, parents: theirs),
+                text: "\(name(of: node)) shares \(name(of: hop.to))'s parents (\(list)) — assumed full; confirm to inherit \(name(of: hop.to))'s ancestry"))
+        }
+        return out
+    }
+
+    /// Tier A: breadth-first shortest chain, ≤ maxHops, deterministic.
     private func shortestRoute(from a: Node, to b: Node) -> [Hop]? {
         var queue: [(Node, [Hop])] = [(a, [])]
         var visited: Set<Node> = [a]
@@ -316,9 +394,8 @@ struct FamilyKinshipInference: Sendable {
         let hops: [Hop]          // endpoint → … → tree vertex (all .parent)
     }
 
-    /// Climb parent hops from `node` until tree vertices are reached (the
-    /// tree's own ancestry is the AncestorIndex's job). Bounded by maxHops
-    /// of contemporary hops.
+    /// Climb parent hops (blood only) from `node` until tree vertices are
+    /// reached; the tree's own ancestry is the AncestorIndex's job.
     private func treeEntries(from node: Node) -> [Entry] {
         var out: [Entry] = []
         var queue: [(Node, [Hop])] = [(node, [])]
@@ -340,67 +417,24 @@ struct FamilyKinshipInference: Sendable {
         return out
     }
 
+    private struct CommonAncestor { let id: String; let upA: Int; let upB: Int }
+
     private func treeRoute(from a: Node, to b: Node) -> [Hop]? {
         guard let graph else { return nil }
         let entriesA = treeEntries(from: a)
         guard !entriesA.isEmpty else { return nil }
         let entriesB = treeEntries(from: b)
         guard !entriesB.isEmpty else { return nil }
-
-        // Best = smallest total generations to the common ancestor.
         var best: (route: [Hop], cost: Int)?
         for ea in entriesA {
             let indexA = ancestorMemo.index(for: ea.treeID, in: graph)
             for eb in entriesB {
                 let indexB = ancestorMemo.index(for: eb.treeID, in: graph)
-                // Candidate common ancestors: one entry above the other, or a
-                // shared ancestor found by intersection.
-                var candidates: [(id: String, upA: Int, upB: Int)] = []
-                if ea.treeID == eb.treeID {
-                    candidates.append((ea.treeID, 0, 0))
-                } else {
-                    if let g = indexA.generations(from: eb.treeID) { candidates.append((eb.treeID, g, 0)) }
-                    if let g = indexB.generations(from: ea.treeID) { candidates.append((ea.treeID, 0, g)) }
-                    if candidates.isEmpty {
-                        // Nearest shared ancestor by intersecting the two
-                        // memoized depth maps (same reckoning as
-                        // GedcomFamilyGraph.commonAncestors, without
-                        // rebuilding both indexes per query). Probe the
-                        // smaller map.
-                        let dA = indexA.depths, dB = indexB.depths
-                        let (small, large) = dA.count <= dB.count ? (dA, dB) : (dB, dA)
-                        var nearest: (id: String, upA: Int, upB: Int)?
-                        for (id, _) in small {
-                            guard large[id] != nil, let a = dA[id], let b = dB[id] else { continue }
-                            if let n = nearest, n.upA + n.upB < a + b { continue }
-                            if let n = nearest, n.upA + n.upB == a + b, n.id < id { continue }
-                            nearest = (id, a, b)
-                        }
-                        if let nearest { candidates.append(nearest) }
-                    }
-                }
-                for c in candidates {
-                    let cost = ea.hops.count + c.upA + eb.hops.count + c.upB
+                for common in commonAncestors(ea.treeID, indexA, eb.treeID, indexB) {
+                    let cost = ea.hops.count + common.upA + eb.hops.count + common.upB
                     if let best, best.cost <= cost { continue }
-                    // upA = [ancestor, …, ea] (just [ea] when ea IS the
-                    // ancestor — AncestorIndex.path is nil for self); walk
-                    // it upward as parent hops, then upB downward as child hops.
-                    guard let upA = c.id == ea.treeID ? graph.people[ea.treeID].map { [$0] } : indexA.path(from: c.id),
-                          let upB = c.id == eb.treeID ? graph.people[eb.treeID].map { [$0] } : indexB.path(from: c.id)
-                    else { continue }
-                    var route = ea.hops
-                    for i in stride(from: upA.count - 1, to: 0, by: -1) {
-                        route.append(Hop(relation: .parent, from: .tree(gedcomID: upA[i].id),
-                                         to: .tree(gedcomID: upA[i - 1].id), provenance: .tree))
-                    }
-                    for i in 0..<(max(upB.count - 1, 0)) {
-                        route.append(Hop(relation: .child, from: .tree(gedcomID: upB[i].id),
-                                         to: .tree(gedcomID: upB[i + 1].id), provenance: .tree))
-                    }
-                    for hop in eb.hops.reversed() {
-                        route.append(Hop(relation: .child, from: hop.to, to: hop.from, provenance: hop.provenance))
-                    }
-                    guard route.last?.to == b, !route.isEmpty else { continue }
+                    guard let route = assemble(ea, indexA, eb, indexB, common, graph: graph),
+                          route.last?.to == b else { continue }
                     best = (route, cost)
                 }
             }
@@ -408,39 +442,136 @@ struct FamilyKinshipInference: Sendable {
         return best?.route
     }
 
+    /// Candidate common ancestors of two tree entries: one above the
+    /// other, or the nearest shared ancestor by intersecting the two
+    /// memoised depth maps (same reckoning as
+    /// GedcomFamilyGraph.commonAncestors, without rebuilding indexes).
+    private func commonAncestors(_ idA: String, _ indexA: GedcomFamilyGraph.AncestorIndex,
+                                 _ idB: String, _ indexB: GedcomFamilyGraph.AncestorIndex) -> [CommonAncestor] {
+        if idA == idB { return [CommonAncestor(id: idA, upA: 0, upB: 0)] }
+        var out: [CommonAncestor] = []
+        if let g = indexA.generations(from: idB) { out.append(CommonAncestor(id: idB, upA: g, upB: 0)) }
+        if let g = indexB.generations(from: idA) { out.append(CommonAncestor(id: idA, upA: 0, upB: g)) }
+        guard out.isEmpty else { return out }
+        let dA = indexA.depths, dB = indexB.depths
+        let small = dA.count <= dB.count ? dA : dB
+        var nearest: CommonAncestor?
+        for (id, _) in small {
+            guard let a = dA[id], let b = dB[id] else { continue }
+            if let n = nearest, n.upA + n.upB < a + b { continue }
+            if let n = nearest, n.upA + n.upB == a + b, n.id < id { continue }
+            nearest = CommonAncestor(id: id, upA: a, upB: b)
+        }
+        return nearest.map { [$0] } ?? []
+    }
+
+    /// endpoint-A hops, up the tree to the common ancestor, down to entry
+    /// B, then endpoint-B hops reversed as child hops.
+    private func assemble(_ ea: Entry, _ indexA: GedcomFamilyGraph.AncestorIndex,
+                          _ eb: Entry, _ indexB: GedcomFamilyGraph.AncestorIndex,
+                          _ common: CommonAncestor, graph: GedcomFamilyGraph) -> [Hop]? {
+        // AncestorIndex.path is nil for the descendant itself: [self] then.
+        guard let upA = common.id == ea.treeID ? graph.people[ea.treeID].map({ [$0] }) : indexA.path(from: common.id),
+              let upB = common.id == eb.treeID ? graph.people[eb.treeID].map({ [$0] }) : indexB.path(from: common.id)
+        else { return nil }
+        var route = ea.hops
+        for i in stride(from: upA.count - 1, to: 0, by: -1) {
+            route.append(Hop(relation: .parent, from: .tree(gedcomID: upA[i].id),
+                             to: .tree(gedcomID: upA[i - 1].id), provenance: .tree))
+        }
+        for i in 0..<max(upB.count - 1, 0) {
+            route.append(Hop(relation: .child, from: .tree(gedcomID: upB[i].id),
+                             to: .tree(gedcomID: upB[i + 1].id), provenance: .tree))
+        }
+        for hop in eb.hops.reversed() {
+            route.append(Hop(relation: .child, from: hop.to, to: hop.from, provenance: hop.provenance))
+        }
+        return route.isEmpty ? nil : route
+    }
+
+    // MARK: Honest answer through an unattested sibling row
+
+    /// Tim (sibling of Rick, basis unspecified, no parents of his own) →
+    /// Martha Lamson: no fact links them, so the route stops at Rick and
+    /// says why — never a word, never a silent nil.
+    private func unattestedSiblingRoute(from a: Node, to b: Node) -> Derived? {
+        if parents(of: a).isEmpty {
+            for hop in hops(from: a) where hop.relation == .sibling && hop.basis == .unspecified {
+                guard let inner = shortestRoute(from: hop.to, to: b) ?? treeRoute(from: hop.to, to: b),
+                      inner.first?.relation == .parent else { continue }
+                return honest(route: [hop] + inner, lineal: inner, linealFrom: hop.to, linealTo: b,
+                              unattested: a, sibling: hop.to, from: a, to: b)
+            }
+        }
+        if parents(of: b).isEmpty {
+            for hop in hops(from: b) where hop.relation == .sibling && hop.basis == .unspecified {
+                guard let inner = shortestRoute(from: a, to: hop.to) ?? treeRoute(from: a, to: hop.to),
+                      inner.last?.relation == .child else { continue }
+                let back = Hop(relation: .sibling, from: hop.to, to: b,
+                               provenance: hop.provenance, basis: hop.basis)
+                return honest(route: inner + [back], lineal: inner, linealFrom: a, linealTo: hop.to,
+                              unattested: b, sibling: hop.to, from: a, to: b)
+            }
+        }
+        return nil
+    }
+
+    /// `lineal` is the factual part of the route (sibling → target, or
+    /// source → sibling); its own word goes into the note so Rick sees
+    /// what WOULD follow from attesting.
+    private func honest(route: [Hop], lineal: [Hop], linealFrom: Node, linealTo: Node,
+                        unattested: Node, sibling: Node, from: Node, to: Node) -> Derived {
+        let viaWord = describe(lineal, from: linealFrom, to: linealTo).term
+        var caveat = "\(name(of: unattested))'s sibling link to \(name(of: sibling)) is not attested as full, so \(name(of: sibling))'s parents are not treated as \(name(of: unattested))'s"
+        if let viaWord {
+            caveat += " — \(name(of: linealTo)) is \(KinshipDisplay.possessive(name(of: linealFrom))) \(viaWord)"
+        }
+        caveat += " (confirm the shared parents to inherit this)"
+        return Derived(from: from, to: to, term: nil, route: route, routeText: routeText(route),
+                       caveats: [caveat], provenance: Set(route.map(\.provenance)))
+    }
+
     // MARK: Description
 
     private func describe(_ route: [Hop], from: Node, to: Node) -> Derived {
-        let relations = route.map(\.relation)
         var term: String?
-        if let named = KinshipChainNamer.name(relations) {
+        var caveats: [String] = []
+        if let named = KinshipChainNamer.name(route.map(\.relation)) {
             var half = false
             var age: String?
             if named.isSibling {
-                half = isHalfSibling(from, to)
-                age = KinshipDisplay.ageWord(.sibling, subjectBirth: birthdate(of: to), anchorBirth: birthdate(of: from))
+                let verdict = siblingVerdict(from, to, route: route)
+                half = verdict.half
+                if let caveat = verdict.caveat { caveats.append(caveat) }
+                age = BirthKnowledge.ageWord(subject: birth(of: to), anchor: birth(of: from))
             }
             term = named.term(sex: sex(of: to), half: half, age: age)
         }
-        var caveats: [String] = []
-        var assumedNoted = Set<String>()
-        for hop in route {
-            if case .assumedFullSibling(let via) = hop.provenance {
-                let line = "\(name(of: hop.from))'s parents are assumed from \(via)'s (sibling entered without shared parents — assumed full)"
-                if assumedNoted.insert(line).inserted { caveats.append(line) }
-            }
+        // A lineal step taken right after an unattested sibling hop is a
+        // route, not a fact — say so (Tier A can reach "brother Rick →
+        // father Dad" within 4 hops).
+        for (i, hop) in route.enumerated().dropLast()
+            where hop.relation == .sibling && hop.basis == .unspecified && route[i + 1].relation == .parent {
+            caveats.append("\(name(of: hop.from))'s sibling link to \(name(of: hop.to)) is not attested as full, so \(name(of: hop.to))'s parents are not treated as \(name(of: hop.from))'s")
         }
         return Derived(from: from, to: to, term: term, route: route,
                        routeText: routeText(route), caveats: caveats,
                        provenance: Set(route.map(\.provenance)))
     }
 
-    /// Exactly one shared parent while BOTH have two recorded → half.
-    /// Anything less certain stays "full" (Director: siblings default full).
-    private func isHalfSibling(_ a: Node, _ b: Node) -> Bool {
+    /// Half only with complete evidence: an `.attestedHalf` row, or both
+    /// people having two recorded parents of which exactly one is shared.
+    /// One shared parent + one unknown is NOT half — it is "full assumed",
+    /// with a caveat when the word came from parent∘child rather than a row.
+    private func siblingVerdict(_ a: Node, _ b: Node, route: [Hop]) -> (half: Bool, caveat: String?) {
+        if route.count == 1, case .attestedHalf = route[0].basis { return (true, nil) }
         let pa = Set(parents(of: a).map(\.node)), pb = Set(parents(of: b).map(\.node))
-        guard pa.count >= 2, pb.count >= 2 else { return false }
-        return pa.intersection(pb).count == 1
+        if pa.count >= 2, pb.count >= 2 {
+            return (pa.intersection(pb).count == 1, nil)
+        }
+        guard route.count > 1 else { return (false, nil) }   // Rick's own row: his word stands
+        let short = pa.count < 2 ? a : b
+        return (false, "full or half not established — \(name(of: short))'s second parent is not recorded (full assumed)")
     }
 
     /// "wife Donna → sister Ann → husband Bob", with a named in-law prefix
@@ -451,42 +582,36 @@ struct FamilyKinshipInference: Sendable {
         var segments: [String] = []
         var i = 0
         while i < route.count {
-            var end = i + 1
-            let lineal = route[i].relation == .parent || route[i].relation == .child
-            if !lineal {
-                // Longest prefix from i that the fold table names, leaving ≥ 2 segments overall.
-                var j = min(route.count, i + 3)
-                while j > i + 1 {
-                    let chain = route[i..<j].map(\.relation)
-                    if KinshipRelation.compose(chain) != nil, !(i == 0 && j == route.count) {
-                        end = j
-                        break
-                    }
-                    j -= 1
-                }
-            }
+            let end = foldEnd(route, from: i)
             let last = route[end - 1]
-            let word: String
-            if end - i == 1 {
-                word = last.relation.term(sex: sex(of: last.to))
-            } else if let folded = KinshipRelation.compose(route[i..<end].map(\.relation)) {
-                word = folded.term(sex: sex(of: last.to))
-            } else {
-                word = last.relation.term(sex: sex(of: last.to))
-            }
+            let word = (end - i > 1 ? KinshipRelation.compose(route[i..<end].map(\.relation)) : nil)
+                .map { $0.term(sex: sex(of: last.to)) } ?? last.relation.term(sex: sex(of: last.to))
             segments.append("\(word) \(name(of: last.to))")
             i = end
         }
         return segments.joined(separator: " → ")
     }
 
+    /// Longest prefix from `i` the fold table names, never a lineal hop and
+    /// never the whole chain; else `i + 1`.
+    private func foldEnd(_ route: [Hop], from i: Int) -> Int {
+        guard route[i].relation != .parent, route[i].relation != .child else { return i + 1 }
+        var j = min(route.count, i + 3)
+        while j > i + 1 {
+            if KinshipRelation.compose(route[i..<j].map(\.relation)) != nil, !(i == 0 && j == route.count) {
+                return j
+            }
+            j -= 1
+        }
+        return i + 1
+    }
+
     // MARK: Ancestor-index memo
 
-    /// Small LRU-less memo: an AncestorIndex per tree entry. Cleared when
-    /// it reaches `limit` so memory is bounded (≈ limit × ancestors × 2
-    /// strings). Keyed by GEDCOM pointer; the graph is immutable per
-    /// overlay, so no generation key is needed here — a new overlay gets a
-    /// new engine and a new memo.
+    /// Small memo: an AncestorIndex per tree entry. Cleared when it reaches
+    /// `limit` so memory is bounded (≈ limit × ancestors × 2 strings).
+    /// Keyed by GEDCOM pointer; the graph is immutable per overlay, so no
+    /// generation key is needed — a new overlay gets a new engine and memo.
     private final class AncestorMemo: @unchecked Sendable {
         private let lock = NSLock()
         private var indexes: [String: GedcomFamilyGraph.AncestorIndex] = [:]
@@ -578,14 +703,13 @@ enum KinshipChainNamer {
         guard !hops.isEmpty else { return nil }
         if let folded = KinshipRelation.compose(hops) { return .relation(folded) }
         // Shape rule: parents^k · [sibling] · children^m, nothing else. A
-        // sibling hop in the middle counts as one more generation on each
-        // side (my sibling = my parent's child). No spouse hop anywhere.
+        // sibling hop is allowed first ("my sibling's grandchild") or after
+        // parents ("my grandparent's sibling"), counting as one more
+        // generation on each side; never after a child hop — "my child's
+        // sibling" is my child only if full, and that is a stored fact
+        // (attested basis), not a naming rule. No spouse hop anywhere.
         var k = 0, m = 0, i = 0
         while i < hops.count, hops[i] == .parent { k += 1; i += 1 }
-        // A sibling hop is allowed first ("my sibling's grandchild") or after
-        // parents ("my grandparent's sibling"); never after a child hop —
-        // "my child's sibling" is my child only if full, and that assumption
-        // is made once, in the engine's assumed-parent edges, not here.
         if i < hops.count, hops[i] == .sibling, i == k { k += 1; m += 1; i += 1 }
         while i < hops.count, hops[i] == .child { m += 1; i += 1 }
         guard i == hops.count else { return nil }

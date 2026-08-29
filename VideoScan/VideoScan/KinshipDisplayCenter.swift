@@ -66,6 +66,8 @@ final class KinshipDisplayCenter: ObservableObject {
     private var cachedGeneration = -1
     private var cachedOverlay: FamilyKinshipOverlay?
     private var cachedInference: FamilyKinshipInference?
+    private var inferenceProfiles: [POIProfile] = []
+    private var inferenceGeneration = -1
 
     /// Internal (not private) so tests can build an isolated center; the
     /// app uses `.shared`.
@@ -122,19 +124,22 @@ final class KinshipDisplayCenter: ObservableObject {
         cachedProfiles = profiles
         cachedGeneration = graphGeneration
         cachedOverlay = built
-        cachedInference = nil
         return built
     }
 
-    /// Memoized derivation engine over the same overlay (design §2: "memoised
-    /// per graph generation"). Same key as `overlay(for:)`, so a tree
-    /// install or a profile edit rebuilds both; the engine's ancestor-index
-    /// memo lives inside it and is dropped with it.
+    /// Memoized derivation engine (design §2: "memoised per graph
+    /// generation"). Same key shape as `overlay(for:)`, so a tree install
+    /// or a profile edit rebuilds it; the engine's ancestor-index memo
+    /// lives inside it and is dropped with it.
     func inference(for profiles: [POIProfile]) -> FamilyKinshipInference {
-        if let cachedInference, cachedProfiles == profiles, cachedGeneration == graphGeneration {
+        if let cachedInference, inferenceProfiles == profiles, inferenceGeneration == graphGeneration {
             return cachedInference
         }
-        let built = FamilyKinshipInference(overlay: overlay(for: profiles))
+        // Its own overlay, in `.pinsOnly` bridging: the engine never
+        // inherits the display overlay's name-matched identities.
+        let built = FamilyKinshipInference(profiles: profiles, graph: graph)
+        inferenceProfiles = profiles
+        inferenceGeneration = graphGeneration
         cachedInference = built
         return built
     }
