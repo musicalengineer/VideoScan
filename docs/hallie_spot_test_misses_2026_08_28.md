@@ -19,3 +19,5 @@ Right-click tree person → Research: FSID-keyed pane under People/<FSID>/resear
 
 ## Feature idea (Rick 8/29 11:50) — remote use from another Mac; eventually a web portal
 Today: Hallie web server (port 8765) serves chat + playback to iPad/browser. Direction: catalog/tree/Hallie READ for any authorized family member via the web portal (already the privacy model: read for all, write = Rick); full-app remote (another Mac) = later; design with the identity/attestation foundation first.
+8. **(8/29 13:05)** With the compiled generation refused after the codec bump (needsRecompile), "find our nearest common ancestor" → "I don't have an imported family tree, so I can't answer that reliably." — false: the tree is on disk, it needs a recompile. Hallie must distinguish no-tree from needs-recompile, say so, and offer/perform Recompile (auto-performed action like centerTree).
+9. **"find our nearest common ancestor"** — "our" = owner + the person in conversation focus (Donna, just discussed) or owner + spouse. Verify after recompile; add to the detector if it misses.
