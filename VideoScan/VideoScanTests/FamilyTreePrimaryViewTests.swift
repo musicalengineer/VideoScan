@@ -238,5 +238,8 @@ struct FamilyTreeLineExportTests {
         #expect(Int(pixels.width * pixels.height) * 4 <= FamilyTreeLineExporter.pngBitmapBudget + 4 * Int(pixels.width),
                 "bitmap \(pixels) over budget")
         #expect(pixels.width < FamilyTreeLineStripView.width * 2)
+        #expect(max(pixels.width, pixels.height) <= FamilyTreeLineExporter.pngMaxPixelDimension + 1)
+        let image = try #require(NSImage(contentsOf: url))
+        #expect(image.size.height > 0, "PNG decodes with scanlines")
     }
 }

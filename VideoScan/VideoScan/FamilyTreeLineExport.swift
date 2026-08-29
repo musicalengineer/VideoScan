@@ -213,6 +213,10 @@ enum FamilyTreeLineExporter {
     /// Worst case for `writePNG`: 64 MB of RGBA (≈ 16 M pixels — a 120-
     /// generation strip at 2×). Above this the scale is lowered.
     static let pngBitmapBudget: Int = 64 * 1024 * 1024
+    /// Per-axis cap. Above ~16 k px the renderer/PNG encoder hands back an
+    /// image with no scanlines ("No IDATs written", seen on a 200-
+    /// generation strip); the scale drops so neither axis exceeds this.
+    static let pngMaxPixelDimension: CGFloat = 16_000
 
     private static func renderer(for spec: FamilyTreeLineExportSpec) -> ImageRenderer<FamilyTreeLineStripView> {
         let renderer = ImageRenderer(content: FamilyTreeLineStripView(spec: spec))
@@ -275,8 +279,14 @@ enum FamilyTreeLineExporter {
         var effectiveScale = scale
         let bytes = natural.width * natural.height * 4
         if bytes > 0, bytes * scale * scale > CGFloat(pngBitmapBudget) {
-            effectiveScale = max(1, (CGFloat(pngBitmapBudget) / bytes).squareRoot())
-            appLog.write("Family Tree: export PNG scale lowered to \(String(format: "%.2f", effectiveScale))× to stay under the bitmap budget")
+            effectiveScale = (CGFloat(pngBitmapBudget) / bytes).squareRoot()
+        }
+        let longest = max(natural.width, natural.height)
+        if longest > 0, longest * effectiveScale > pngMaxPixelDimension {
+            effectiveScale = pngMaxPixelDimension / longest
+        }
+        if effectiveScale != scale {
+            appLog.write("Family Tree: export PNG scale lowered to \(String(format: "%.2f", effectiveScale))× (bitmap budget / \(Int(pngMaxPixelDimension)) px cap)")
         }
         renderer.scale = effectiveScale
         guard let cgImage = renderer.cgImage else { throw ExportError.bitmap }
