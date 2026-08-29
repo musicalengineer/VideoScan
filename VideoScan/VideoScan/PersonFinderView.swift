@@ -122,6 +122,15 @@ struct PersonFinderView: View {
     /// Derived "Relationships" lines for the People cards (2026-08-27).
     /// Observed so cards refresh once the family tree finishes loading.
     @ObservedObject var kinshipCenter = KinshipDisplayCenter.shared
+    /// Auto-derived profile → family-tree identity (2026-08-29): proposals,
+    /// pins, and the tree tab's identity banner. Observed so a pin written
+    /// here refreshes the gallery (pinsRevision).
+    @ObservedObject var identityCenter = TreeIdentityCenter.shared
+    /// The which-one sheet behind "Show in Family Tree" (item-binding form).
+    @State var identityPickTarget: TreeIdentityPickTarget?
+    /// Exact-record hint for the Family Tree tab (same key FamilyTreeDemoView
+    /// reads); set alongside `ftHighlight` when the profile is pinned.
+    @AppStorage("ftHighlightedPersonID") var ftHighlightID: String = ""
 
     // MARK: Loaded Faces Strip — compact scan-readiness indicator
     // (UI lives in PersonFinderView+Faces.swift; stored state stays here.)

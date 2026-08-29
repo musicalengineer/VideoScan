@@ -326,6 +326,11 @@ enum HallieTurnExecutor {
         /// Who "I" and "you" are (2026-08-18). `.none` = pronouns cannot be
         /// bound and the executor says so.
         let speakers: Speakers
+        /// Profile → tree bridges this turn ASSUMED from a derivable-but-
+        /// unconfirmed identity (TreeIdentityDeriver, 2026-08-29), keyed by
+        /// tree person id, valued "Rick as Richard Harding Breen Jr". An
+        /// answer that leans on one says so in a "(taking …)" aside.
+        let assumedTreeBridges: [String: String]
         /// An opaque capture identity. Copying Context preserves it; invoking
         /// the initializer creates a new capture that cannot continue an old
         /// clarification even if visible stable IDs and names are unchanged.
@@ -339,7 +344,8 @@ enum HallieTurnExecutor {
             needsRecompile: [URL] = [],
             cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
-            speakers: Speakers = .none
+            speakers: Speakers = .none,
+            assumedTreeBridges: [String: String] = [:]
         ) {
             self.presenceRecords = presenceRecords
             self.aggregateRecords = aggregateRecords
@@ -350,6 +356,7 @@ enum HallieTurnExecutor {
             self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
             self.speakers = speakers
+            self.assumedTreeBridges = assumedTreeBridges
             self.continuationToken = UUID()
         }
     }
