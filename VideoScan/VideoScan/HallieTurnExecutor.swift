@@ -314,6 +314,13 @@ enum HallieTurnExecutor {
         /// a successful read proving that no profiles currently exist.
         let profiles: [ProfileSnapshot]?
         let graph: GedcomFamilyGraph?
+        /// Live miss #8 (2026-08-29): when `graph` is nil because the loader
+        /// REFUSED a multi-pull compiled generation after a codec/schema
+        /// bump (FamilyGraphFileLoader.Outcome.needsRecompile), these are
+        /// its source files, still on disk. Non-empty ⇒ there IS a family
+        /// tree; every "no tree" decline must say "needs recompiling" and
+        /// offer `.recompileFamilyTree` instead. Empty = genuinely no tree.
+        let needsRecompile: [URL]
         let cyberBrain: CyberBrainIndex?
         let selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot?
         /// Who "I" and "you" are (2026-08-18). `.none` = pronouns cannot be
@@ -329,6 +336,7 @@ enum HallieTurnExecutor {
             aggregateRecords: [ArchivistAggregateRecordSnapshot] = [],
             profiles: [ProfileSnapshot]? = [],
             graph: GedcomFamilyGraph? = nil,
+            needsRecompile: [URL] = [],
             cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
             speakers: Speakers = .none
@@ -337,6 +345,8 @@ enum HallieTurnExecutor {
             self.aggregateRecords = aggregateRecords
             self.profiles = profiles
             self.graph = graph
+            // A loaded graph is never "waiting on a recompile".
+            self.needsRecompile = graph == nil ? needsRecompile : []
             self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
             self.speakers = speakers
@@ -388,6 +398,11 @@ enum HallieTurnExecutor {
         case getFamilyTree
         /// Ask this question next (label is what the chip shows).
         case ask(question: String, label: String)
+        /// Rebuild the compiled family tree from the pulls on disk (live
+        /// miss #8, 2026-08-29). Offered with `performsFirstOfferedAction`
+        /// so the app runs FamilyTreeLiveModel.recompile() itself and then
+        /// re-asks the question; the shell and web list it as prose.
+        case recompileFamilyTree
     }
 
     struct Result: Sendable, Equatable {
@@ -913,6 +928,13 @@ enum HallieTurnExecutor {
                index: cyberBrain,
                dependencies: dependencies) {
             return result
+        }
+        // The tree is on disk but the compiled generation was refused by
+        // this version (live miss #8): say so and offer the recompile —
+        // never "I don't have a tree", and not the People-tab fallback
+        // either, since the re-ask after the recompile answers properly.
+        if let recompile = HallieLineageAnswer.needsRecompileResult(context, queryDescription: "shape=graph") {
+            return recompile
         }
         // No tree at all, but the People tab knows the name: answer from
         // the profile (see +PeopleTab) rather than "I don't have a tree" —

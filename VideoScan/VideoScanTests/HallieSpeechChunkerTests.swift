@@ -96,12 +96,18 @@ struct HallieSpeechChunkerTests {
         #expect(chunks.joined(separator: " ") == words)
     }
 
-    @Test func liveSixHundredCharacterAnswerFitsInTwoOrThreeChunks() {
+    @Test func liveSixHundredCharacterAnswerFitsInTwoToFourChunks() {
         let text = Self.lineageAnswer(characters: 600)
         let chunks = Self.chunks(text)
-        #expect((2...3).contains(chunks.count), "\(chunks.count) chunks")
+        // Each fixture sentence is ~200 estimated tokens against a 320
+        // budget, so whole sentences need one chunk apiece (4). The earlier
+        // 2–3 rested on the speaker splitting "Richard H. Breen" at the
+        // initial (fixed 2026-08-29, live miss #10); a name is never cut.
+        #expect((2...4).contains(chunks.count), "\(chunks.count) chunks")
         for chunk in chunks {
             #expect(HallieSpeechChunker.estimatedTokens(chunk) <= HallieSpeechChunker.defaultBudget)
+            #expect(!chunk.hasPrefix("Breen"), "a name was cut: \(chunk)")
+            #expect(!chunk.hasSuffix("Richard H."), "a name was cut: \(chunk)")
         }
     }
 

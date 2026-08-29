@@ -257,6 +257,10 @@ final class HallieWebBridge {
             case .getFamilyTree:
                 // The sheet is Mac-only; the web client gets the prose alone.
                 break
+            case .recompileFamilyTree:
+                // Recompiling is the Mac app's job (live miss #8); the
+                // prose already says what is needed. Never auto-run here.
+                break
             }
         }
         let cited = citations.map(citationJSON)
@@ -488,6 +492,7 @@ extension HallieAppTurnCoordinator.Dependencies {
             translateAST: translateAST,
             loadProfiles: loadProfiles,
             loadGraph: loadGraph,
+            loadNeedsRecompile: loadNeedsRecompile,
             loadCyberBrain: loadCyberBrain,
             recordTestimony: recordTestimony,
             loadSpeakers: { speakers },

@@ -202,6 +202,8 @@ extension HallieShellCLI {
                     output("offer: open Get Family Tree in the Family Tree tab (app only)")
                 case .ask(let question, _):
                     output("offer: ask “\(question)”")
+                case .recompileFamilyTree:
+                    output("offer: recompile the family tree (app: Family Tree tab → Recompile, or ask Hallie there)")
                 }
             }
         }

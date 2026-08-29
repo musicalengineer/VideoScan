@@ -121,9 +121,15 @@ struct KinshipPerformanceGateTests {
                 #expect(linked, "\(a)→\(b): \(hop.relation) \(f) → \(t) is not a FAM link")
             }
             let treeHops = d.route.filter { $0.provenance == .tree }.count
-            if let nearest = Self.graph.commonAncestors(of: ida, and: idb, limit: 1).first {
+            // Lineal pins first (commonAncestors excludes the pair themselves):
+            // exact generation count. Otherwise never longer than the graph's
+            // nearest common ancestor.
+            if let line = Self.graph.descentPath(from: ida, to: idb) ?? Self.graph.descentPath(from: idb, to: ida) {
+                #expect(treeHops == line.count - 1, "\(a)→\(b): lineal route \(treeHops) vs \(line.count - 1) generations")
+                #expect(d.route.allSatisfy { $0.relation == .parent } || d.route.allSatisfy { $0.relation == .child }, "\(a)→\(b): lineal route must be one direction")
+            } else if let nearest = Self.graph.commonAncestors(of: ida, and: idb, limit: 1).first {
                 #expect(treeHops <= nearest.depthA + nearest.depthB, "\(a)→\(b): route \(treeHops) vs tree \(nearest.depthA)+\(nearest.depthB)")
-            } else if Self.graph.descentPath(from: ida, to: idb) == nil, Self.graph.descentPath(from: idb, to: ida) == nil {
+            } else {
                 Issue.record("\(a)→\(b): engine found a route the graph does not")
             }
             checked += 1

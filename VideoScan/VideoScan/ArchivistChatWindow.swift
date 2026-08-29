@@ -60,16 +60,21 @@ struct ArchivistMessage: Identifiable {
             case openFamilyTreeSurname(String)
             /// Open the Family Tree tab and present Get Family Tree.
             case getFamilyTree
+            /// Recompile the family tree from the pulls on disk (live
+            /// miss #8). `thenAsk` = the question to re-run once promoted.
+            case recompileFamilyTree(thenAsk: String?)
         }
         let id = UUID()
         let label: String
         let action: Action
     }
 
-    let id = UUID()
+    /// `var` so a progress bubble ("Recompiling the family tree… Reading
+    /// a.ged…") can be updated in place by id (live miss #8).
+    var id = UUID()
     let createdAt = Date()
     let role: Role
-    let text: String
+    var text: String
     /// Monospaced sub-line showing the exact query (assistant only).
     var queryLine: String?
     /// Human-readable provenance for family facts and honest declines.
@@ -906,7 +911,50 @@ struct ArchivistChatWindow: View {
             messages.append(ArchivistMessage(
                 role: .assistant,
                 text: "Opening Get Family Tree in the Family Tree tab."))
+        case .recompileFamilyTree(let thenAsk):
+            recompileFamilyTree(thenAsk: thenAsk)
         }
+    }
+
+    /// Hallie's "The family tree is on disk but needs recompiling … I can
+    /// do that now" (live miss #8, 2026-08-29): run the same recompile the
+    /// Family Tree tab's banner button runs, with its phase captions in
+    /// the transcript, then re-ask `thenAsk` so the original question is
+    /// answered without another tap. A refused promote is said, not hidden.
+    private func recompileFamilyTree(thenAsk question: String?) {
+        guard !isThinking, !FamilyTreeRecompileCenter.shared.isRunning else { return }
+        isThinking = true
+        let messageID = UUID()
+        messages.append(ArchivistMessage(
+            id: messageID, role: .assistant, text: "Recompiling the family tree…",
+            basisLine: "Action: recompile the compiled family tree from the pulls on disk."))
+        appLog.write("[family-tree] Hallie recompile started" + (question.map { " (then re-ask: \($0))" } ?? ""))
+        Task { @MainActor in
+            let outcome = await FamilyTreeRecompileCenter.shared.recompile { [self] phase in
+                replaceMessageText(id: messageID, with: "Recompiling the family tree… \(phase)")
+            }
+            isThinking = false
+            inputFocused = true
+            switch outcome {
+            case .promoted:
+                replaceMessageText(id: messageID, with: "The family tree is compiled again.")
+                appLog.write("[family-tree] Hallie recompile promoted")
+                if let question { ask(question) }
+            case .nothingPending:
+                replaceMessageText(id: messageID, with: "The family tree is already compiled — nothing to do.")
+                if let question { ask(question) }
+            case .failed:
+                replaceMessageText(id: messageID, with: "The recompile did not promote a tree — the log says why. The pull files are unchanged.")
+                appLog.write("[family-tree] Hallie recompile did not promote")
+            }
+        }
+    }
+
+    private func replaceMessageText(id: UUID, with text: String) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        var message = messages[index]
+        message.text = text
+        messages[index] = message
     }
 
     /// Same cross-tab hook the People tab uses ("Show <name> in Family
@@ -1175,6 +1223,9 @@ struct ArchivistChatWindow: View {
             case .ask(let question, _):
                 return ArchivistMessage.Chip(
                     label: label, action: .askText(question, playAfterAnswer: false))
+            case .recompileFamilyTree:
+                return ArchivistMessage.Chip(
+                    label: label, action: .recompileFamilyTree(thenAsk: question))
             }
         }
         messages.append(ArchivistMessage(
@@ -1205,6 +1256,12 @@ struct ArchivistChatWindow: View {
            case .openFamilyTreePerson(let personID, let personName)? = response.result.offeredActions.first {
             openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
             appLog.write("[family-tree] Hallie centered on \(personName) (\(personID))")
+        }
+        // "I can do that now" (live miss #8): the recompile runs without a
+        // tap and the question that hit the refused tree is asked again.
+        if response.result.performsFirstOfferedAction,
+           case .recompileFamilyTree? = response.result.offeredActions.first {
+            recompileFamilyTree(thenAsk: question)
         }
     }
 
@@ -1384,9 +1441,27 @@ struct ArchivistChatWindow: View {
         }
     }
 
+    /// Legacy family-fact paths: the tree on disk needs a recompile (live
+    /// miss #8) → the same offer as Hallie's, performed, then the original
+    /// sentence re-asked. False = not that case; say "no tree" as before.
+    private func declineForRecompile(original: String) -> Bool {
+        let sources = FamilyGraphSharedCache.shared.needsRecompile(
+            for: FamilyAssetConfigurationCenter.shared.snapshot(), store: .app)
+        guard !sources.isEmpty else { return false }
+        let result = HallieLineageAnswer.needsRecompile(sources)
+        messages.append(ArchivistMessage(
+            role: .assistant, text: result.prose, basisLine: result.basisLine,
+            chips: [ArchivistMessage.Chip(
+                label: HallieTurnExecutor.offerLabel(.recompileFamilyTree),
+                action: .recompileFamilyTree(thenAsk: original))]))
+        recompileFamilyTree(thenAsk: original)
+        return true
+    }
+
     private func answerDate(personText: String, wantsBirth: Bool,
                             original: String) -> Bool {
         guard let graph = loadFamilyGraph() else {
+            if declineForRecompile(original: original) { return true }
             messages.append(ArchivistMessage(
                 role: .assistant,
                 text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
@@ -1409,6 +1484,7 @@ struct ArchivistChatWindow: View {
 
     private func answerWhoIs(personText: String, original: String) -> Bool {
         guard let graph = loadFamilyGraph() else {
+            if declineForRecompile(original: original) { return true }
             messages.append(ArchivistMessage(
                 role: .assistant,
                 text: "I don't have the family tree loaded yet, so I can't answer that reliably.",

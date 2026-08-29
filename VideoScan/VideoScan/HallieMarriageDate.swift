@@ -37,6 +37,9 @@ enum HallieMarriageDate {
         guard isWeddingDateQuestion(question),
               let typed = payload.people.first,
               !HalliePronounContinuity.isThirdPersonPronoun(typed) else { return nil }
+        if let recompile = HallieLineageAnswer.needsRecompileResult(context, queryDescription: "wedding date: tree needs recompile") {
+            return recompile
+        }
         guard let graph = context.graph else {
             return decline("I don't have an imported family tree, so I can't look up a wedding date.",
                            basis: "Basis: no readable GEDCOM was available.", payload: payload)

@@ -64,10 +64,13 @@ extension HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+        if let recompile = HallieLineageAnswer.needsRecompileResult(context, queryDescription: queryDescription) {
+            return recompile
+        }
         // Local-only (2026-08-29, codex #835): the People-tab overlay answers
         // without a GEDCOM — "how is Tim related to Rick?" needs no tree.
         // An empty placeholder graph carries the overlay stage; the GEDCOM
-        // ladder below still requires a real tree.
+        // ladder below still requires a real tree (see the guard after it).
         let graphIsInstalled = context.graph != nil
         let graph = context.graph ?? GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR")
 

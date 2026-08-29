@@ -134,6 +134,10 @@ enum HallieShellCLI {
         var configureFamilyAssets: (Options) -> Void
         var loadProfiles: () -> ProfileLoadResult
         var loadGraph: (URL?) -> GedcomFamilyGraph?
+        /// The pulls behind a compiled tree this version refused (live
+        /// miss #8); consulted only when `loadGraph` returned nil for the
+        /// default (promoted-artifact) path. Default = none.
+        var loadNeedsRecompile: (URL?) -> [URL]
         var loadCyberBrain: () -> CyberBrainIndex?
         var translateAST: (String, Options) async throws -> Translation
         var interpretTurn: (String, Options) async throws -> TurnInterpretation
@@ -179,6 +183,7 @@ enum HallieShellCLI {
             configureFamilyAssets: @escaping (Options) -> Void = { _ in },
             loadProfiles: @escaping () -> ProfileLoadResult,
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
+            loadNeedsRecompile: @escaping (URL?) -> [URL] = { _ in [] },
             loadCyberBrain: @escaping () -> CyberBrainIndex? = { nil },
             translateAST: @escaping (String, Options) async throws -> Translation,
             interpretTurn: ((String, Options) async throws -> TurnInterpretation)? = nil,
@@ -221,6 +226,7 @@ enum HallieShellCLI {
             self.configureFamilyAssets = configureFamilyAssets
             self.loadProfiles = loadProfiles
             self.loadGraph = loadGraph
+            self.loadNeedsRecompile = loadNeedsRecompile
             self.loadCyberBrain = loadCyberBrain
             self.translateAST = translateAST
             self.interpretTurn = interpretTurn ?? { question, options in
@@ -275,6 +281,14 @@ enum HallieShellCLI {
                     // Default path = the promoted artifact only, cached
                     // for the life of the shell process (codex #792).
                     return FamilyGraphSharedCache.shared.graph(
+                        for: FamilyAssetConfigurationCenter.shared.snapshot(),
+                        store: .production)
+                },
+                loadNeedsRecompile: { requested in
+                    // An explicit --gedcom file or folder is parsed, never
+                    // compiled: nothing to recompile there.
+                    guard requested == nil else { return [] }
+                    return FamilyGraphSharedCache.shared.needsRecompile(
                         for: FamilyAssetConfigurationCenter.shared.snapshot(),
                         store: .production)
                 },
@@ -585,11 +599,13 @@ enum HallieShellCLI {
         case .unavailable: profiles = nil
         }
         let graph = dependencies.loadGraph(options.gedcomURL)
+        let needsRecompile = graph == nil ? dependencies.loadNeedsRecompile(options.gedcomURL) : []
         let cyberBrain = dependencies.loadCyberBrain()
         var state = Session(
             records: records,
             profiles: profiles,
             graph: graph,
+            needsRecompile: needsRecompile,
             cyberBrain: cyberBrain,
             model: options.model,
             runID: options.logRunID)
@@ -651,6 +667,9 @@ enum HallieShellCLI {
         let records: [VideoRecord]
         let profiles: [POIProfile]?
         let graph: GedcomFamilyGraph?
+        /// Live miss #8: the refused generation's pulls when `graph` is nil
+        /// only because this version refused it; empty otherwise.
+        var needsRecompile: [URL] = []
         /// Rebuilt after every testimony write so "tell me about Dad Breen"
         /// answers from what was just said.
         var cyberBrain: CyberBrainIndex?
@@ -708,6 +727,7 @@ enum HallieShellCLI {
                         treeIdentity: $0.treeIdentity)
                 },
                 graph: graph,
+                needsRecompile: needsRecompile,
                 cyberBrain: cyberBrain,
                 // Same owner binding the full path uses (2026-08-22): "trace
                 // the family back to Ireland" needs to know whose family.
@@ -963,6 +983,7 @@ enum HallieShellCLI {
                 aggregateRecords: state.aggregateSnapshots ?? [],
                 profiles: profiles,
                 graph: state.graph,
+                needsRecompile: state.needsRecompile,
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate,
                 speakers: HallieTurnExecutor.Speakers.fromDefaults())
