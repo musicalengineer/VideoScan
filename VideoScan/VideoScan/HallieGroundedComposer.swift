@@ -65,8 +65,23 @@ struct HallieGroundedComposer: Sendable {
         let transcriptText: String
         let composedBy: HallieComposedBy
         let dropped: [HallieCompositionVerifier.Dropped]
+        /// Plan claims the model left out that were put back verbatim by
+        /// the coverage rule (`restoringMissingClaims`). Empty for template
+        /// answers and for plans the rule does not govern.
+        let restored: [Restored]
         /// One-line diagnostic: "model" or why the template was used.
         let note: String
+
+        init(displayText: String, transcriptText: String, composedBy: HallieComposedBy,
+             dropped: [HallieCompositionVerifier.Dropped], restored: [Restored] = [],
+             note: String) {
+            self.displayText = displayText
+            self.transcriptText = transcriptText
+            self.composedBy = composedBy
+            self.dropped = dropped
+            self.restored = restored
+            self.note = note
+        }
 
         static func template(_ plan: HallieAnswerPlan, note: String) -> Outcome {
             Outcome(displayText: plan.fallbackText,
@@ -75,6 +90,17 @@ struct HallieGroundedComposer: Sendable {
                     dropped: [],
                     note: note)
         }
+    }
+
+    /// One claim the coverage rule re-inserted, and why it was absent.
+    struct Restored: Sendable, Equatable {
+        enum Reason: String, Sendable, Equatable {
+            /// No kept sentence cited the claim and no leak-dropped
+            /// sentence cited it either: the model simply left it out.
+            case missing
+        }
+        let claimID: String
+        let reason: Reason
     }
 
     var personaName: String
@@ -137,13 +163,107 @@ struct HallieGroundedComposer: Sendable {
         var notes: [String] = []
         let counted = Self.restoringCountSentence(verification, plan: plan)
         if counted.kept.count != verification.kept.count { notes.append("count sentence restored") }
-        let restored = Self.restoringSubjectAndLifeDates(counted, plan: plan, notes: &notes)
+        let named = Self.restoringSubjectAndLifeDates(counted, plan: plan, notes: &notes)
+        let covered = Self.restoringMissingClaims(named, plan: plan, notes: &notes)
         return Outcome(
-            displayText: restored.displayText,
-            transcriptText: restored.transcriptText,
+            displayText: covered.verification.displayText,
+            transcriptText: covered.verification.transcriptText,
             composedBy: .model,
-            dropped: restored.dropped,
+            dropped: covered.verification.dropped,
+            restored: covered.restored,
             note: notes.isEmpty ? "model" : "model (\(notes.joined(separator: "; ")))")
+    }
+
+    // MARK: - Claim coverage (live 2026-08-29)
+
+    /// Dropped-sentence reasons that mean the verifier REJECTED the model's
+    /// rendering of the cited claims as unsafe. A claim cited only by such a
+    /// sentence is deliberately not put back: the leak wins, so a rejected
+    /// sentence can never be laundered back in through the template.
+    /// Every other reason (budget, fragment, scaffolding, orphaned opening,
+    /// bare surname, …) is a wording failure, and the claim is still owed.
+    static let leakReasons: Set<HallieCompositionVerifier.Dropped.Reason> = [
+        .leakedYear, .leakedNumber, .leakedName, .alteredFilename,
+    ]
+
+    /// Every claim of a biography plan must reach the reader, cited. The
+    /// verifier only removes; `restoringSubjectAndLifeDates` only knows about
+    /// dates; so "tell me about Matthew Rice" (live 2026-08-29) shipped with
+    /// [c1][c2][c4][c5][c6] and no siblings — the model dropped c3 and
+    /// nothing noticed. This pass computes coverage from the kept
+    /// sentences' citations and re-inserts each missing claim verbatim,
+    /// tagged, exactly as the plan states it.
+    ///
+    /// Placement rule (documented, deterministic): PLAN ORDER. A restored
+    /// claim cN goes directly after the last kept sentence that cites any
+    /// claim earlier in the plan than cN; if no kept sentence does, it goes
+    /// first. Restored claims are processed in plan order, so two missing
+    /// claims land in plan order relative to each other. A model that merely
+    /// REORDERED the claims cites all of them and nothing is restored.
+    ///
+    /// Only `.biography` is governed: it is the one fixed plan whose claims
+    /// are all owed. List plans deliberately do not enumerate their item
+    /// claims (the count sentence has its own restore); `.fact` plans are
+    /// derived from templated prose under a 3-sentence budget and are left
+    /// as they are.
+    static func restoringMissingClaims(
+        _ verification: HallieCompositionVerifier.Verification,
+        plan: HallieAnswerPlan,
+        notes: inout [String]
+    ) -> (verification: HallieCompositionVerifier.Verification, restored: [Restored]) {
+        guard plan.shape == .biography, !verification.kept.isEmpty else {
+            return (verification, [])
+        }
+        typealias Sentence = HallieCompositionVerifier.Sentence
+        let order = Dictionary(uniqueKeysWithValues:
+            plan.claims.enumerated().map { ($1.id, $0) })
+        var kept = verification.kept
+        let cited = Set(kept.flatMap(\.claimIDs))
+        let leaked = Set(verification.dropped
+            .filter { leakReasons.contains($0.reason) }
+            .flatMap { HallieCompositionVerifier.claimTags(in: $0.text) })
+        var restored: [Restored] = []
+        for (index, claim) in plan.claims.enumerated()
+        where !cited.contains(claim.id) && !leaked.contains(claim.id) {
+            let sentence = Sentence(
+                display: claim.text,
+                tagged: claim.text + " [\(claim.id)]",
+                claimIDs: [claim.id])
+            let after = kept.lastIndex { sentence in
+                sentence.claimIDs.contains { (order[$0] ?? Int.max) < index }
+            }
+            kept.insert(sentence, at: after.map { $0 + 1 } ?? 0)
+            restored.append(Restored(claimID: claim.id, reason: .missing))
+        }
+        guard !restored.isEmpty else { return (verification, []) }
+        notes.append("claims restored: \(restored.map(\.claimID).joined(separator: ","))")
+        return (HallieCompositionVerifier.Verification(kept: kept, dropped: verification.dropped),
+                restored)
+    }
+
+    /// App-log lines for the coverage pass, one per restored claim plus one
+    /// metric line the nightly eval can count. Same shape for app and shell.
+    /// Format:
+    ///   `[hallie-verify] restored: cN — reason: missing — "<claim text>"`
+    ///   `[hallie-verify] coverage: shape=biography plan=6 cited=5 restored=1 leaked=0 dropped=0`
+    static func verifyLogLines(_ outcome: Outcome, plan: HallieAnswerPlan) -> [String] {
+        guard outcome.composedBy == .model, plan.shape == .biography else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: plan.claims.map { ($0.id, $0.text) })
+        var lines = outcome.restored.map { item -> String in
+            let line = "[hallie-verify] restored: \(item.claimID) — reason: \(item.reason.rawValue)"
+                + " — \"\(byID[item.claimID] ?? "")\""
+            guard line.count > droppedLogLineLimit else { return line }
+            return String(line.prefix(droppedLogLineLimit - 1)) + "…"
+        }
+        let leaked = Set(outcome.dropped
+            .filter { leakReasons.contains($0.reason) }
+            .flatMap { HallieCompositionVerifier.claimTags(in: $0.text) })
+        let cited = plan.claims.count - outcome.restored.count - leaked.count
+        lines.append("[hallie-verify] coverage: shape=\(plan.shape.rawValue)"
+            + " plan=\(plan.claims.count) cited=\(max(0, cited))"
+            + " restored=\(outcome.restored.count) leaked=\(leaked.count)"
+            + " dropped=\(outcome.dropped.count)")
+        return lines
     }
 
     /// A biography or kinship answer must open with the subject's full name

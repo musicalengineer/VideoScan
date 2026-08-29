@@ -1013,6 +1013,12 @@ enum HallieShellCLI {
         // history is intentionally excluded so uncited social prose cannot
         // bleed into a catalog/tree answer.
         let outcome = await dependencies.composeAnswer(plan, [], options)
+        // Parity with the app: the same verifier/coverage lines go to
+        // stderr so a shell run can be diffed against the app log.
+        for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan)
+            + HallieGroundedComposer.verifyLogLines(outcome, plan: plan) {
+            FileHandle.standardError.write(Data((line + "\n").utf8))
+        }
         return result.applying(outcome)
     }
 

@@ -91,7 +91,11 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// The sentence budget the verifier enforces after phrasing.
     var maxSentences: Int {
         switch shape {
-        case .biography: return 6
+        // A biography is a FIXED plan: every claim must reach the reader
+        // (coverage rule, live 2026-08-29 — c3 siblings silently dropped).
+        // The budget therefore never falls below the claim count, so the
+        // verifier cannot be the reason a fact goes missing.
+        case .biography: return max(6, claims.count)
         case .list, .fact: return 3
         case .fixed: return 0
         }

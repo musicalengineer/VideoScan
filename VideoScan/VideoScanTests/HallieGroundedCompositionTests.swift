@@ -312,9 +312,14 @@ struct HallieGroundedCompositionTests {
             "Ellen Breen was born on 12 MAR 1920 [c1]. She married John Breen [c2]."
         }.compose(plan: plan, history: [])
         #expect(outcome.composedBy == .model)
-        #expect(outcome.displayText == "Ellen Breen was born on 12 MAR 1920. She married John Breen.")
-        #expect(outcome.transcriptText == "Ellen Breen was born on 12 MAR 1920 [c1]. She married John Breen [c2].")
+        // Coverage rule (live 2026-08-29): the model left c3 out of a
+        // biography plan, so the plan's own c3 sentence is appended, tagged.
+        #expect(outcome.displayText == "Ellen Breen was born on 12 MAR 1920. She married John Breen. "
+                + "The imported family tree records Ellen Breen's children as Rick Breen, Mary Breen.")
+        #expect(outcome.transcriptText == "Ellen Breen was born on 12 MAR 1920 [c1]. She married John Breen [c2]. "
+                + "The imported family tree records Ellen Breen's children as Rick Breen, Mary Breen. [c3]")
         #expect(outcome.dropped.isEmpty)
+        #expect(outcome.restored.map(\.claimID) == ["c3"])
         // Golden contract: every displayed sentence maps to plan claims.
         let verification = HallieCompositionVerifier.verify(
             outcome.transcriptText, plan: plan, personaName: "Hallie Mae")
@@ -328,9 +333,14 @@ struct HallieGroundedCompositionTests {
             "Ellen Breen was born on 12 MAR 1920 [c1]. She loved gardening and lived in Lowell until 1988. Her children were Rick Breen and Mary Breen [c3]."
         }.compose(plan: plan, history: [])
         #expect(outcome.composedBy == .model)
-        #expect(outcome.displayText == "Ellen Breen was born on 12 MAR 1920. Her children were Rick Breen and Mary Breen.")
+        // The untagged sentence is gone; c2 (cited by nothing, leaked by
+        // nothing) comes back in plan order, between c1 and c3.
+        #expect(outcome.displayText == "Ellen Breen was born on 12 MAR 1920. "
+                + "The imported family tree records Ellen Breen's spouse as John Breen. "
+                + "Her children were Rick Breen and Mary Breen.")
         #expect(outcome.dropped.count == 1)
         #expect(outcome.dropped.first?.reason == .untagged)
+        #expect(outcome.restored.map(\.claimID) == ["c2"])
     }
 
     @Test func emptyGarbageOrAllDroppedFallsBackToTemplate() async {
