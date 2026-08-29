@@ -801,6 +801,9 @@ enum HallieAppTurnCoordinator {
                     for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan) {
                         appLog.write(line)
                     }
+                    for line in HallieGroundedComposer.verifyLogLines(outcome, plan: plan) {
+                        appLog.write(line)
+                    }
                 }
             }
             try Task.checkCancellation()
