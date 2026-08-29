@@ -29,7 +29,9 @@ enum HalliePropertyAsk {
 
     private static let pattern: Regex<AnyRegexOutput> = {
         let props = propertyPhrases.joined(separator: "|")
-        let lead = #"^(?:(?:hallie|please|ok|okay|so|and),?\s+)*(?:(?:what|whats|what's|what is|what was|what are|what were|tell me|tell us|give me|do you know|do you have|remind me(?: of)?|say)\s+)?"#
+        // Longest lead first: "what is" must win over "what", or the
+        // subject swallows "is" ("what is dad's name" → "is dad").
+        let lead = #"^(?:(?:hallie|please|ok|okay|so|and),?\s+)*(?:(?:what is|what was|what are|what were|what's|whats|what|tell me|tell us|give me|do you know|do you have|remind me of|remind me|say)\s+)?"#
         let subject = #"(?:(my|our)|([a-z][a-z .-]*?(?:'[a-z]+)?)'s)\s+"#
         let qualifier = #"(?:(?:full|real|given|first|last|maiden)\s+)?"#
         let property = #"(?:"# + props + #")"#
@@ -57,6 +59,12 @@ enum HalliePropertyAsk {
         // follow-up the pronoun route owns; "what is the dog's name" is not
         // a family ask).
         if raw.firstMatch(of: /^(?:the|a|an|this|that|his|her|their|your|its|my|our|whose|which|what|everyone|somebody|someone)(?:\s|$)/) != nil {
+            return nil
+        }
+        // A verb or a media word inside the subject means the possessive
+        // is an object of something else ("videos of dad's birthday",
+        // "is dad's name"), not a person being asked about.
+        if raw.firstMatch(of: /\b(?:is|was|are|were|of|for|about|video|videos|photo|photos|picture|pictures|clip|clips|show|find|play|me|us)\b/) != nil {
             return nil
         }
         return HallieLineageQuestion.capitalizedName(raw)

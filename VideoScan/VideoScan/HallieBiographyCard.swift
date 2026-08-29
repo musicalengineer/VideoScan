@@ -258,18 +258,21 @@ enum HallieBiographyCard {
                 basis: ArchivistBiographyPolicy.gedcomBasis,
                 catalogPersonName: person.name), nil, card)
         }
-        var basis = ArchivistBiographyPolicy.gedcomBasis
-        if !card.peopleTabStoredOn.isEmpty {
-            basis = String(basis.dropLast())   // drop the period
-                + "; People tab relationships (stored on "
-                + card.peopleTabStoredOn.map { "\($0)'s profile" }.joined(separator: ", ")
-                + "); local only, not from the family tree."
-        }
         return (ArchivistBiographyAnswer(
             state: .answered,
             text: card.prose,
-            basis: basis,
+            basis: ArchivistBiographyPolicy.gedcomBasis,
             catalogPersonName: person.name), card.plan, card)
+    }
+
+    /// The basis clause for the People-tab rows a card used — appended by
+    /// the executor after whatever basis the bridge produced. Empty when
+    /// the card used none.
+    static func peopleTabBasis(_ card: Card) -> String {
+        guard !card.peopleTabStoredOn.isEmpty else { return "" }
+        return " People tab relationships (stored on "
+            + card.peopleTabStoredOn.map { "\($0)'s profile" }.joined(separator: ", ")
+            + "); local only, not from the family tree."
     }
 
     // MARK: - Data quality

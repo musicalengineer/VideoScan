@@ -271,7 +271,7 @@ struct HallieCrossWorldFamilyCardDetectorTests {
         #expect(Q.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
         #expect(Q.detect("the hudson family tree") == .surnameTree(surname: "hudson"))
         #expect(Q.detect("the family tree from rick breen all the way back to 1600")
-                == .ancestorLine(person: "Rick Breen", line: .both, generations: Q.maxGenerations, untilYear: 1600))
+                == .ancestorLine(person: "Rick Breen", line: .both, generations: Q.yearBoundGenerations, untilYear: 1600))
         // Depth words are not the card's categories.
         #expect(Q.personTreeQuestion(in: "rick's family tree back 3 generations") == nil)
         #expect(Q.personTreeQuestion(in: "his family tree") == nil)

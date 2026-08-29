@@ -916,7 +916,7 @@ enum ArchivistGraphExecutor {
             return ArchivistGraphResult(
                 conclusion: result.conclusion,
                 prose: result.prose,
-                basisLine: result.basisLine,
+                basisLine: result.basisLine + HallieBiographyCard.peopleTabBasis(card),
                 evidence: result.evidence,
                 candidates: result.candidates,
                 profileCandidates: result.profileCandidates,
@@ -1242,7 +1242,9 @@ enum ArchivistGraphExecutor {
             catalogPersonName: result.catalogPersonName,
             familyTreeFocus: result.familyTreeFocus,
             subjectIndex: result.subjectIndex,
-            answerPlan: result.answerPlan,
+            // The plan is deliberately NOT carried (as before): the
+            // "I took that spelling to mean …" sentence lives in the prose
+            // only, and the composer follows a plan over the prose.
             possibleDuplicate: result.possibleDuplicate)
     }
 
