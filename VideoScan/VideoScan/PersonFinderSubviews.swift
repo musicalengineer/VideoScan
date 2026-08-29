@@ -101,6 +101,10 @@ struct PersonCard: View {
     /// Non-blocking data nudge (a relational alias like "Dad" on a profile
     /// that isn't Dad). Shown as a small badge whose tooltip says what to do.
     var aliasWarning: String? = nil
+    /// The resolved portrait (one photo per person, 2026-08-29): the Family
+    /// Tree's explicit choice when it is the latest, else the cover. Nil
+    /// (no resolver consulted) falls back to the profile cover as before.
+    var portrait: PersonPhotoResolution? = nil
 
     private var ringGradient: AngularGradient {
         AngularGradient(
@@ -119,7 +123,14 @@ struct PersonCard: View {
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
-                if let img = profile.coverImage {
+                if let portrait, let img = NSImage(contentsOf: portrait.url) {
+                    CroppedCircleImage(
+                        image: img,
+                        scale: portrait.cropScale,
+                        offset: portrait.cropOffset
+                    )
+                    .frame(width: imageSize, height: imageSize)
+                } else if let img = profile.coverImage {
                     CroppedCircleImage(
                         image: img,
                         scale: profile.coverCropScale,

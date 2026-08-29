@@ -8,9 +8,11 @@ import PhotosUI
 /// person centred, 3 generations up, 2 down). With no
 /// .ged the original demo tree stays, behind a banner that says so.
 ///
-/// Photos chosen here (NSOpenPanel / Apple Photos) are in-memory overrides
-/// and reset on relaunch; the persistent source is the model's
-/// `photoProvider` (codex's FamilyAssetStore, to be wired in later).
+/// Photos chosen here (NSOpenPanel / Apple Photos / Adjust) are written as
+/// THE choice for the person (`People/<FSID>/chosen-photo.json`, one photo
+/// per person shared with the People tab — 2026-08-29) and shown at once
+/// through a session override; `FamilyAssetPortrait` reads the store
+/// through `PersonPhotoResolver` (choice › bridged profile cover › derived).
 /// Nothing here writes to the catalog, POI profiles, Apple Photos, or
 /// FamilySearch.
 struct FamilyTreeDemoView: View {
@@ -145,10 +147,17 @@ struct FamilyTreeDemoView: View {
                 source: source,
                 onSaved: { cropped, url in
                     // The crop wins on the card immediately (session
-                    // override) and on relaunch (cardPhotoURL precedence).
+                    // override) and on relaunch (recorded as THE choice).
                     model.setPhotoOverride(cropped, for: source.personID)
                     appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
-                    adjustError = nil
+                    do {
+                        try source.store.recordPhotoChoice(
+                            url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
+                        model.notePhotoChoiceWritten()
+                        adjustError = nil
+                    } catch {
+                        adjustError = "Crop saved, but not recorded as the chosen photo: \(error.localizedDescription)"
+                    }
                     adjustSource = nil
                 },
                 onCancel: { adjustSource = nil })
@@ -531,6 +540,8 @@ struct FamilyTreeDemoView: View {
                                     presentAdjustPhoto(for: card.person)
                                 },
                                 canAdjustPhoto: model.isLive,
+                                portraitProfile: model.bridgedProfile(for: card.person.id),
+                                photoRevision: model.photoRevision,
                                 onAskHallie: { name in
                                     catalogModel.archivistAskRequest = "tell me about \(name)"
                                     openWindow(id: "archivist")
@@ -1106,7 +1117,41 @@ struct FamilyTreeDemoView: View {
                 adjustError = "Couldn't read \(url.lastPathComponent) as an image."
                 return
             }
-            model.setPhotoOverride(image, for: personID)
+            persistPhotoChoice(image, for: personID, source: PersonPhotoChoiceSource.treePick)
+        }
+    }
+
+    /// A picked/imported photo IS the choice for this person (2026-08-29:
+    /// it used to be a session override the next tab switch threw away).
+    /// The card updates now (override); the bounded decode is written as
+    /// JPEG into People/<FSID>/ off the main actor and recorded as the
+    /// choice, which the People tab then shows too. A refused write
+    /// (read-only / offline archive, demo tree) keeps the override for the
+    /// session and says so.
+    private func persistPhotoChoice(_ image: CGImage, for personID: String, source: String) {
+        model.setPhotoOverride(image, for: personID)
+        guard let assetPerson = model.assetPerson(for: personID) else { return }
+        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
+                let store = configuration.makeStore()
+                guard let data = CropRenderer.jpegData(image, quality: 0.92) else {
+                    return .failure(FamilyAssetStore.StoreError.sourceIsNotARegularImage(store.peopleDirectory))
+                }
+                do {
+                    return .success(try store.choosePhoto(
+                        data, fileExtension: "jpg", for: assetPerson, source: source))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            switch outcome {
+            case .success:
+                adjustError = nil
+                model.notePhotoChoiceWritten()
+            case .failure(let error):
+                adjustError = "Photo shown for this session only — not saved: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1157,7 +1202,7 @@ struct FamilyTreeDemoView: View {
                 selectedPhotoItem = nil
                 return
             }
-            model.setPhotoOverride(image, for: targetID)
+            persistPhotoChoice(image, for: targetID, source: PersonPhotoChoiceSource.treeApplePhotos)
             selectedPhotoItem = nil
         }
     }
@@ -1191,6 +1236,11 @@ private struct FamilyTreePersonCard: View {
     let onApplePhoto: () -> Void
     let onAdjustPhoto: () -> Void
     let canAdjustPhoto: Bool
+    /// The People-tab profile bridged to this person (its cover is the
+    /// photo when no explicit choice exists) and the model's choice
+    /// revision, so a fresh choice re-reads the store at once.
+    let portraitProfile: POIProfile?
+    let photoRevision: Int
     /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
@@ -1225,7 +1275,8 @@ private struct FamilyTreePersonCard: View {
                             .frame(width: 58, height: 58)
                             .clipShape(Circle())
                     } else if let assetPerson = card.assetPerson {
-                        FamilyAssetPortrait(person: assetPerson, accent: accent)
+                        FamilyAssetPortrait(person: assetPerson, profile: portraitProfile,
+                                            revision: photoRevision, accent: accent)
                     } else {
                         Circle()
                             .fill(accent.opacity(0.22))
@@ -1312,8 +1363,24 @@ private struct FamilyTreePersonCard: View {
 
 private struct FamilyAssetPortrait: View {
     let person: FamilyAssetPerson
+    let profile: POIProfile?
+    let revision: Int
     let accent: Color
     @State private var image: NSImage?
+
+    /// What the `.task` keys on: the person, what the bridged profile
+    /// says about its cover, and the choice revision.
+    private struct Key: Equatable {
+        let person: FamilyAssetPerson
+        let profileID: String?
+        let cover: String?
+        let coverChosenAt: Date?
+        let revision: Int
+    }
+    private var key: Key {
+        Key(person: person, profileID: profile?.id, cover: profile?.coverImageFilename,
+            coverChosenAt: profile?.photoChosenAt, revision: revision)
+    }
 
     var body: some View {
         Group {
@@ -1325,13 +1392,15 @@ private struct FamilyAssetPortrait: View {
         }
         .frame(width: 58, height: 58)
         .clipShape(Circle())
-        .task(id: person) {
+        .task(id: key) {
             let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+            let bridged = profile
             let decoded = await Task.detached(priority: .utility) {
                 let store = configuration.makeStore()
-                // A saved "-card" crop wins over the original (Adjust Photo…).
-                guard let url = store.cardPhotoURL(for: person)
-                        ?? store.photoURLs(for: person).first,
+                // Explicit choice › bridged People-tab cover › a "-card"
+                // crop › the person's own folder › a group folder.
+                guard let url = PersonPhotoResolver(store: store)
+                        .treePhoto(for: person, bridgedProfile: bridged)?.url,
                       let cg = store.makeThumbnail(for: url, maxPixelSize: 160)
                 else { return nil as NSImage? }
                 return NSImage(cgImage: cg, size: .zero)
