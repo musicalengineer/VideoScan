@@ -703,10 +703,23 @@ struct HallieLineageAnswerTests {
         let big = GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
         #expect(big.people.count == n)
 
+        // Build the TreeIndex (CSR) BEFORE starting the answer clock. This mirrors
+        // production: the graph Hallie answers against always arrives with its index
+        // already built — FamilyGraphFileLoader.parseAndPromote does `_ = graph.index`
+        // off-thread, and compiled artifacts carry the index. A text-parsed graph here
+        // is lazy, so without this line the ~2.5 s Debug index build would land inside
+        // the answer window and the sensor would measure a cost production never pays.
+        // The build cost is still watched — separately, with its own Debug budget
+        // (measured 2.8 s Debug on M4 Max, 2026-08-28; 5 s leaves room for the M1).
+        let tIndex = Date()
+        _ = big.index
+        let indexElapsed = Date().timeIntervalSince(tIndex)
+        #expect(indexElapsed < 5.0, "lazy TreeIndex build for 100k people took \(indexElapsed)s (Debug budget 5 s; measured ~2.8 s on M4 Max)")
+
         let t0 = Date()
         let r = HallieLineageAnswer.gedcomProvenance(person: "Donna", surname: "hudson", context: ctx(big))
         let elapsed = Date().timeIntervalSince(t0)
-        #expect(elapsed < 1.0, "one provenance answer on 100k people took \(elapsed)s")
+        #expect(elapsed < 1.0, "one provenance answer on 100k people (index pre-built) took \(elapsed)s")
         #expect(r.prose.contains("I can trace 15 generations back from Donna"), Comment(rawValue: String(r.prose.prefix(400))))
         #expect(r.prose.contains("of her recorded ancestors carry the surname Hudson"))
         #expect(r.prose.contains("aren’t among her recorded ancestors"), "stray Hudsons are named, not claimed")
