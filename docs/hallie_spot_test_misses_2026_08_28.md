@@ -9,3 +9,7 @@ Ordered by demo impact. Fix after dinner; each gets a corpus line in tests/halli
 5. Positive: "can you find richard breen jr family tree?" → parents, spouse, 10,136 ancestors / 19 generations from the compiled artifact — good.
 
 Also: Family Tree navigation has no timing logs (load → layout → focus); add >100 ms lines.
+
+## 8/29 morning (main 9e27c40b)
+6. **"can you center on marhta lamson"** → catalog search (fixed 9e27c40b: `.centerTree` shape, auto-performed action, spelling recovery stated).
+7. **"tell me about Matthew Rice"** → "born 28 February 1629, died before 29 November 1717; child of Edmund Rice and Thomasine Frost." — no places, no marriage (Martha Lamson), no children, while "…the family tree on martha lamson" gave parents + marriage + children + depth. Biography must be ONE consistent card: vitals with places, parents, marriages (with dates), children, tree-depth summary, all cited.
