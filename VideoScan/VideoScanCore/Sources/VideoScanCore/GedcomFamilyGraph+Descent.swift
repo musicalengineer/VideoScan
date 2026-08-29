@@ -10,14 +10,17 @@
 // because the search is a breadth-first walk that visits the father
 // before the mother at every step. Pure functions, no I/O.
 //
-// Two entry points, one algorithm:
+// Two entry points, sharing the compiled parent topology:
 //   • `AncestorIndex(graph:descendantID:)` walks UP from one descendant
 //     once (O(their ancestors)) and then answers "path from X down to
 //     me?" in O(path length). The Family Tree model builds one per anchor
 //     at install so every selection change is a handful of dictionary
 //     hops — the 5,000-person pedigree sensor stays at ~0.2 s.
-//   • `descentPath(from:to:)` = build + one query, for one-off callers
-//     (Hallie) and the tests that pin the behaviour.
+//   • `descentPath(from:to:)` walks only until its requested ancestor is
+//     found, for one-off callers (Hallie) and tests. It keeps predecessor
+//     ordinals in a dense array rather than building the full String-keyed
+//     index. Initializing that array is O(all indexed people); the BFS after
+//     that visits only the ancestry needed to find (or rule out) the target.
 
 import Foundation
 
@@ -114,11 +117,48 @@ extension GedcomFamilyGraph {
     /// unknown, when they are the same person, or when the ancestor is
     /// not on any recorded parent line above the descendant.
     ///
-    /// Cost: O(ancestors of the descendant) — build an `AncestorIndex`
-    /// yourself when you will ask about the same descendant repeatedly.
+    /// Cost: O(all indexed people + visited ancestors + returned path): the
+    /// dense predecessor vector is initialized for every indexed person,
+    /// then the BFS stops as soon as `ancestorID` is found. Build an
+    /// `AncestorIndex` yourself for repeated queries to one descendant.
     public func descentPath(from ancestorID: String, to descendantID: String) -> [Person]? {
-        guard people[ancestorID] != nil, people[descendantID] != nil else { return nil }
-        return AncestorIndex(graph: self, descendantID: descendantID).path(from: ancestorID)
+        guard ancestorID != descendantID else { return nil }
+        let index = self.index
+        guard let ancestor = index.ordinal(of: ancestorID),
+              let descendant = index.ordinal(of: descendantID) else { return nil }
+
+        // One-off BFS. `childToward[parent] = child` is the ordinal version
+        // of AncestorIndex's predecessor map (C++: vector<int32_t>). Parent
+        // slices are father-first, and FIFO traversal preserves that tie
+        // break while still choosing the shortest path.
+        let unseen: Int32 = -1
+        var childToward = [Int32](repeating: unseen, count: index.count)
+        childToward[Int(descendant)] = descendant
+        var queue: [Int32] = [descendant]
+        queue.reserveCapacity(min(index.count, 256))
+        var head = 0
+
+        while head < queue.count && childToward[Int(ancestor)] == unseen {
+            let child = queue[head]
+            head += 1
+            for parent in index.parents(of: child) where childToward[Int(parent)] == unseen {
+                childToward[Int(parent)] = child
+                queue.append(parent)
+                if parent == ancestor { break }
+            }
+        }
+        guard childToward[Int(ancestor)] != unseen else { return nil }
+
+        var path: [Person] = []
+        var current = ancestor
+        while true {
+            guard let person = people[index.ids[Int(current)]] else { return nil }
+            path.append(person)
+            if current == descendant { return path }
+            let child = childToward[Int(current)]
+            guard child != unseen else { return nil }
+            current = child
+        }
     }
 
     /// "your great-great-grandmother" / "Donna's 3rd-great-grandfather".
