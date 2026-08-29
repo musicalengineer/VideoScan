@@ -27,10 +27,20 @@ extension GedcomFamilyGraph {
     }
 
     /// Every recorded ancestor both people share, nearest first (smallest
-    /// depthA + depthB, then depthA, then name). Empty when either id is
-    /// unknown, when they are the same person, or when nothing is shared.
-    /// `limit` caps the list (pedigree collapse can make it long); nil =
-    /// all of them.
+    /// depthA + depthB, then depthA, then name, then pointer). Depths are
+    /// the true minimum on each side (level-order BFS), so an ancestor
+    /// pedigree collapse reaches at several depths counts at its nearest.
+    /// Empty when either id is unknown, when they are the same person, or
+    /// when nothing is shared. `limit` caps the list (pedigree collapse
+    /// can make it long); nil = all of them.
+    ///
+    /// Neither person is their own ancestor: for a LINEAL pair (A is d
+    /// generations above B) the nearest hit is A's parent at 1 + (d + 1),
+    /// not A at 0 + d. Callers answering "how are they related" check
+    /// `directRelation(between:and:)` / `descentPath(from:to:)` first
+    /// (Hallie does); the kinship engine's own meeting search seeds self
+    /// at depth 0 and so reads d — both are right, they answer different
+    /// questions (sensor: GedcomCommonAncestorsBruteForceTests).
     public func commonAncestors(of a: String, and b: String, limit: Int? = nil) -> [CommonAncestor] {
         guard a != b, people[a] != nil, people[b] != nil else { return [] }
         let indexA = AncestorIndex(graph: self, descendantID: a)
