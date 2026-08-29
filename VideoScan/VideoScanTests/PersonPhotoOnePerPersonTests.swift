@@ -152,6 +152,12 @@ struct PersonPhotoOnePerPersonTests {
 
     private var donnaAsset: FamilyAssetPerson { FamilyAssetPerson(Self.donna) }
 
+    /// Same file regardless of the `/private/var` vs `/var` spelling the
+    /// store's enumeration and the temp directory disagree on.
+    private func same(_ a: URL?, _ b: URL?) -> Bool {
+        a?.resolvingSymlinksInPath().path == b?.resolvingSymlinksInPath().path
+    }
+
     // MARK: Reproduction
 
     @Test func reproduction_providerGroupPhotoIsWhatTheCardShowedAndAnExplicitChoiceNowWinsInBothViews() throws {
@@ -164,12 +170,12 @@ struct PersonPhotoOnePerPersonTests {
         // photo the provider hands back is the whole-family group shot.
         #expect(store.cardPhotoURL(for: donnaAsset) == nil)
         #expect(store.originalPhotoURL(for: donnaAsset) == nil)
-        #expect(store.photoURLs(for: donnaAsset).first == box.groupPhoto,
+        #expect(same(store.photoURLs(for: donnaAsset).first, box.groupPhoto),
                 "the group folder is attributed to Donna by her married surname")
         let resolver = PersonPhotoResolver(store: store)
         let before = try #require(resolver.treePhoto(for: donnaAsset, bridgedProfile: nil))
         #expect(before.source == .folder)
-        #expect(before.url == box.groupPhoto)
+        #expect(same(before.url, box.groupPhoto))
 
         // Right-click → Pick a photo (the tree side) is now THE choice.
         let chosen = try store.choosePhoto(
@@ -342,7 +348,7 @@ struct PersonPhotoOnePerPersonTests {
         #expect(resolver.treePhoto(for: sr, bridgedProfile: nil) == nil, "Sr has no photo of any kind")
         // Rick (Jr) still gets the group shot through his own attribution.
         let rick = FamilyAssetPerson(Self.rick)
-        #expect(resolver.treePhoto(for: rick, bridgedProfile: nil)?.url == box.groupPhoto)
+        #expect(same(resolver.treePhoto(for: rick, bridgedProfile: nil)?.url, box.groupPhoto))
         // A tree without Donna: nobody bridges, no crash.
         let other = GedcomFamilyGraph(gedcomText: "0 @X@ INDI\n1 NAME Only /One/")
         #expect(PersonPhotoBridge.profile(for: other.people["@X@"]!, profiles: box.profiles, graph: other) == nil)
@@ -391,7 +397,7 @@ struct PersonPhotoOnePerPersonTests {
         // Every poisoned form falls back to the ordinary precedence.
         let resolver = PersonPhotoResolver(store: box.store)
         #expect(resolver.treePhoto(for: donnaAsset, bridgedProfile: box.donnaProfile)?.source == .profileCover)
-        #expect(resolver.treePhoto(for: donnaAsset, bridgedProfile: nil)?.url == box.groupPhoto)
+        #expect(same(resolver.treePhoto(for: donnaAsset, bridgedProfile: nil)?.url, box.groupPhoto))
 
         // A poisoned profile cover (not one component) never resolves either.
         var bad = box.donnaProfile
