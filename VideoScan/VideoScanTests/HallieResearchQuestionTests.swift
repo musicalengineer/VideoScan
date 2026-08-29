@@ -124,7 +124,8 @@ struct HallieResearchQuestionTests {
         #expect(!result.prose.contains("UNCONFIRMED"))
         #expect(result.knowledgeCitations.count == 2)
         #expect(result.knowledgeCitations.allSatisfy { $0.id.hasPrefix(CyberBrainWriter.researchSourceIDPrefix) })
-        #expect(result.knowledgeCitations.map(\.locator).contains("https://www.findagrave.com/memorial/1/david-latta"))
+        #expect(result.knowledgeCitations.map(\.locator).contains(
+            ResearchStore.relativeCachePath(key: "KWCJ-7B2", pageURL: "https://www.findagrave.com/memorial/1/david-latta")))
         #expect(result.basisLine.contains("confirmed only"))
         #expect(result.basisLine.contains("unconfirmed research is never cited"))
         #expect(!result.basisLine.contains("research.hand-edited"))

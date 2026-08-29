@@ -45,7 +45,8 @@ enum ResearchAttestation {
             gedcomPersonID: subject.gedcomPersonID,
             citation: CyberBrainWriter.Testimony.Citation(
                 title: citationTitle(for: finding),
-                locator: finding.url,
+                url: finding.url,
+                locator: ResearchStore.relativeCachePath(key: subject.key, pageURL: finding.url),
                 sourceDate: finding.date,
                 sourceKind: finding.source.cyberBrainSourceKind,
                 retrievedAt: finding.retrievedAt))

@@ -69,9 +69,19 @@ struct ResearchStore: Sendable {
     }
 
     func cacheURL(key: String, pageURL: String) throws -> URL {
+        try cacheDirectory(key: key).appendingPathComponent(Self.cacheFileName(pageURL))
+    }
+
+    static func cacheFileName(_ pageURL: String) -> String {
         let digest = SHA256.hash(data: Data(pageURL.utf8))
-        let name = digest.map { String(format: "%02x", $0) }.joined()
-        return try cacheDirectory(key: key).appendingPathComponent(name + ".json")
+        return digest.map { String(format: "%02x", $0) }.joined() + ".json"
+    }
+
+    /// Archive-relative path of a cached page — the CyberBrain source
+    /// locator for a confirmed finding (source locators are
+    /// archive-relative by contract; the URL itself lives in the notes).
+    static func relativeCachePath(key: String, pageURL: String) -> String {
+        "People/\(key)/research/cache/\(cacheFileName(pageURL))"
     }
 
     // MARK: Dossier

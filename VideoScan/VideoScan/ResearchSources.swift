@@ -376,7 +376,7 @@ struct FindAGraveSource: ResearchSource {
         let matches = regex.matches(in: html, options: [], range: nsRange)
         var findings: [ResearchFinding] = []
         var seen: Set<String> = []
-        for match in matches {
+        for (offset, match) in matches.enumerated() {
             guard let pathRange = Range(match.range(at: 1), in: html),
                   let idRange = Range(match.range(at: 2), in: html),
                   let slugRange = Range(match.range(at: 3), in: html)
@@ -385,15 +385,22 @@ struct FindAGraveSource: ResearchSource {
             guard seen.insert(memorialID).inserted else { continue }
             let path = String(html[pathRange])
             let slug = String(html[slugRange])
-            // Window: from the anchor forward ~1500 chars covers the name,
-            // dates and cemetery of one result card.
-            let windowEnd = html.index(pathRange.upperBound, offsetBy: 1500, limitedBy: html.endIndex) ?? html.endIndex
+            // Window: from this anchor to the next DIFFERENT memorial's
+            // anchor (or ~1500 chars) — one result card, never its neighbour.
+            var windowEnd = html.index(pathRange.upperBound, offsetBy: 1500, limitedBy: html.endIndex) ?? html.endIndex
+            for next in matches[(offset + 1)...] {
+                guard let nextID = Range(next.range(at: 2), in: html), html[nextID] != memorialID,
+                      let nextStart = Range(next.range(at: 0), in: html)?.lowerBound
+                else { continue }
+                if nextStart < windowEnd { windowEnd = nextStart }
+                break
+            }
             let window = String(html[pathRange.upperBound..<windowEnd])
             let name = ResearchText.firstCapture(#"<h2[^>]*class="[^"]*name-grave[^"]*"[^>]*>(.*?)</h2>"#,
                                                  in: window, options: [.dotMatchesLineSeparators])
                 .map(ResearchText.stripHTML)
                 ?? Self.nameFromSlug(slug)
-            let dates = ResearchText.firstCapture(#"((?:c\.\s*)?\d{4}\s*[–\-]\s*(?:c\.\s*)?\d{4}|\d{4}\s*[–\-]\s*unknown|unknown\s*[–\-]\s*\d{4})"#,
+            let dates = ResearchText.firstCapture(#"((?:c\.\s*)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+)?\d{4}\s*[–\-]\s*(?:c\.\s*)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+)?\d{4}|\d{4}\s*[–\-]\s*unknown|unknown\s*[–\-]\s*\d{4})"#,
                                                   in: ResearchText.stripHTML(window))
             let cemetery = ResearchText.firstCapture(#"class="[^"]*addr-cemet[^"]*"[^>]*>(.*?)</"#,
                                                      in: window, options: [.dotMatchesLineSeparators])
@@ -435,7 +442,7 @@ struct WikipediaSource: ResearchSource {
         var seen: Set<String> = []
         // Surname guard: a hit that does not even mention the surname is
         // noise ("David" alone matches half the encyclopedia).
-        let surname = primary.split(separator: " ").last.map(String.init) ?? primary
+        let surname = plan.surnameToken.isEmpty ? primary : plan.surnameToken
         if let url = Self.wikipediaURL(query: primary) {
             try Task.checkCancellation()
             let result = try await fetcher.fetch(url)

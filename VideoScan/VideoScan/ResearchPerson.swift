@@ -261,6 +261,16 @@ struct ResearchQueryPlan: Equatable, Sendable, Codable {
         return nil
     }
 
+    /// The family name the adapters filter on: the last token of the first
+    /// variant once a Jr/Sr/II… suffix is dropped ("David McGill Latta Sr"
+    /// → "Latta").
+    var surnameToken: String {
+        let suffixes: Set<String> = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]
+        var parts = (nameVariants.first ?? "").split(separator: " ").map(String.init)
+        while let last = parts.last, suffixes.contains(last.lowercased()) { parts.removeLast() }
+        return parts.last ?? ""
+    }
+
     /// One-line summary for the log and the pane ("3 names · 1842–1926 ·
     /// 4 places"). Counts only — no names — so the log stays private.
     var countsSummary: String {

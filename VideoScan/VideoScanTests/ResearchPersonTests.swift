@@ -314,11 +314,11 @@ struct ResearchSourceAdapterTests {
         let recorder = FixtureResearchFetcher.RequestRecorder()
         let source = FindAGraveSource(fetcher: fetcher(recorder: recorder))
         let findings = try await source.search(plan: ResearchQueryPlan.build(subject: david(), now: now))
-        #expect(findings.count == 2)
+        try #require(findings.count == 2)
         let memorial = try #require(findings.first)
         #expect(memorial.title == "David McGill Latta Sr")
         #expect(memorial.url == "https://www.findagrave.com/memorial/123456789/david-mcgill-latta")
-        #expect(memorial.date == "1847 – 1921")
+        #expect(memorial.date == "12 Mar 1847 – 3 Jan 1921")
         #expect(memorial.excerpt.contains("Pine Grove Cemetery"))
         let second = findings[1]
         #expect(second.url == "https://www.findagrave.com/memorial/987654321/david-latta")
@@ -341,6 +341,7 @@ struct ResearchSourceAdapterTests {
         let source = WikipediaSource(fetcher: fetcher())
         let findings = try await source.search(plan: ResearchQueryPlan.build(subject: david(), now: now))
         #expect(findings.map(\.source) == [.wikipedia, .wikidata])
+        try #require(findings.count == 2)
         #expect(findings[0].title == "Latta, Pennsylvania")
         #expect(findings[0].url == "https://en.wikipedia.org/wiki/Latta,_Pennsylvania")
         #expect(findings[0].excerpt == "Latta is a borough named for David Latta")
@@ -351,7 +352,7 @@ struct ResearchSourceAdapterTests {
     @Test func webSearchUnwrapsRedirectsAndSurvivesNoParse() async throws {
         let source = WebSearchSource(fetcher: fetcher())
         let findings = try await source.search(plan: ResearchQueryPlan.build(subject: david(), now: now))
-        #expect(findings.count == 2)
+        try #require(findings.count == 2)
         #expect(findings[0].url == "https://berkshirehistory.org/latta")
         #expect(findings[0].title == "Latta family of Dalton")
         #expect(findings[0].excerpt == "The Latta paper mill on the north branch, 1875")
@@ -515,7 +516,9 @@ struct ResearchAttestationTests {
         #expect(source.id.hasPrefix(CyberBrainWriter.researchSourceIDPrefix))
         #expect(source.type == .officialRecord)
         #expect(source.attribution == "confirmed by Rick")
-        #expect(source.locator == "https://chroniclingamerica.loc.gov/lccn/sn84020551/1875-05-12/ed-1/seq-3/")
+        #expect(source.locator == ResearchStore.relativeCachePath(
+            key: "KWCJ-7B2", pageURL: "https://chroniclingamerica.loc.gov/lccn/sn84020551/1875-05-12/ed-1/seq-3/"))
+        #expect(CyberBrainWriter.researchURL(of: source) == "https://chroniclingamerica.loc.gov/lccn/sn84020551/1875-05-12/ed-1/seq-3/")
         #expect(source.sourceDate?.value == "1875-05-12")
         #expect(source.notes?.contains("retrieved 2026-08-29") == true)
         try CyberBrainValidator.validate(receipt.archive)
@@ -565,6 +568,8 @@ struct ResearchAttestationTests {
         let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
         let index = try CyberBrainIndex(archive: CyberBrainLoader(rootURL: root).load())
         #expect(index.people(gedcomPersonID: "@I1@").map(\.id) == [receipt.personID])
-        #expect(index.source(id: receipt.sourceID)?.locator?.hasPrefix("https://chroniclingamerica") == true)
+        let source = try #require(index.source(id: receipt.sourceID))
+        #expect(CyberBrainWriter.researchURL(of: source)?.hasPrefix("https://chroniclingamerica") == true)
+        #expect(source.locator == ResearchStore.relativeCachePath(key: "KWCJ-7B2", pageURL: CyberBrainWriter.researchURL(of: source) ?? ""))
     }
 }
