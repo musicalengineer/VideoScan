@@ -47,7 +47,7 @@ enum HalliePronounceWords {
         var best: (String, Int)?
         for candidate in canonical {
             let distance = editDistance(word, candidate)
-            if distance <= 2, best == nil || distance < best!.1 { best = (candidate, distance) }
+            if distance <= 2, distance < (best?.1 ?? Int.max) { best = (candidate, distance) }
         }
         return best?.0
     }
@@ -214,7 +214,7 @@ enum HalliePronunciationFreeform {
         let order = Array(tokens.indices.filter { $0 < verbAt }) + Array(tokens.indices.filter { $0 > verbAt })
         guard let nameAt = order.first(where: { at in
             let token = tokens[at]
-            return token.count >= 2 && token.first!.isLetter && !stopWords.contains(token.lowercased())
+            return token.count >= 2 && token.first?.isLetter == true && !stopWords.contains(token.lowercased())
                 && !HalliePronounceWords.isPronounceWord(token) && isKnownName(token)
         }) else { return nil }
         let word = tokens[nameAt]
@@ -227,93 +227,18 @@ enum HalliePronunciationFreeform {
         for (at, token) in tokens.enumerated() where at != nameAt && !HalliePronounceWords.isPronounceWord(token) && !token.isEmpty {
             rest.append(token)
         }
-        var cues: [Cue] = []
-        var respellings: [String] = []
-        var at = 0
-        // Position (in `rest`) of the last respelling token, so "latt ah"
-        // folds into one respelling.
-        var respellingsEndAt = -1
-        func lower(_ i: Int) -> String? { i < rest.count ? rest[i].lowercased() : nil }
-        while at < rest.count {
-            let token = rest[at]
-            let low = token.lowercased()
-            // "like X" / "as in X" / "rhymes with X" / "sounds like X".
-            var exemplarAt: Int?
-            if low == "like" || low == "unlike" { exemplarAt = at + 1 }
-            else if low == "as", lower(at + 1) == "in" { exemplarAt = at + 2 }
-            else if low == "rhymes", lower(at + 1) == "with" { exemplarAt = at + 2 }
-            else if low == "sounds", lower(at + 1) == "like" { exemplarAt = at + 2 }
-            if let exemplarAt, exemplarAt < rest.count {
-                var candidate = rest[exemplarAt]
-                var consumed = exemplarAt
-                if candidate.lowercased() == "the" || candidate.lowercased() == "in", exemplarAt + 1 < rest.count {
-                    candidate = rest[exemplarAt + 1]; consumed = exemplarAt + 1
-                }
-                if looksLikeExplicitRespelling(candidate) || (isRespellingCandidate(candidate, nameKey: nameKey) && exemplarVowel(candidate) == nil) {
-                    respellings.append(candidate)
-                } else if low != "unlike", !stopWords.contains(candidate.lowercased()), candidate.first?.isLetter == true,
-                          !cues.contains(.exemplar(candidate.lowercased())) {
-                    cues.append(.exemplar(candidate.lowercased()))
-                }
-                at = consumed + 1
-                continue
-            }
-            // "short a first" / "long e on the La" / "short a on the first syllable".
-            if low == "short" || low == "long", let letter = lower(at + 1), letter.count == 1, "aeiou".contains(letter) {
-                let length: HalliePronunciationHint.VowelLength = low == "short" ? .short : .long
-                var position: Int?
-                var consumed = at + 1
-                var look = at + 2
-                while look < rest.count, ["on", "in", "the", "sound", "vowel", "syllable", "for"].contains(rest[look].lowercased()) { look += 1 }
-                if look < rest.count, let ordinal = ordinals[rest[look].lowercased()] {
-                    position = ordinal; consumed = look
-                    if look + 1 < rest.count, rest[look + 1].lowercased() == "syllable" { consumed = look + 1 }
-                } else if look < rest.count, let index = syllablePosition(named: rest[look], of: word),
-                          ["on", "in", "the"].contains(rest[look - 1].lowercased()) {
-                    position = index; consumed = look
-                }
-                cues.append(.vowel(letter: Character(letter), length: length, position: position))
-                at = consumed + 1
-                continue
-            }
-            // "ah second" / "second ah" / "then ah".
-            if vowelSounds.contains(low) {
-                var position: Int?
-                var consumed = at
-                if let ordinal = lower(at + 1).flatMap({ ordinals[$0] }) { position = ordinal; consumed = at + 1 }
-                else if at > 0, let ordinal = ordinals[rest[at - 1].lowercased()] { position = ordinal }
-                else if at > 0, rest[at - 1].lowercased() == "then" { position = 1 }
-                // A vowel sound right after a respelling candidate is its
-                // second syllable ("latt ah"), not a cue.
-                if let last = respellings.last, respellingsEndAt == at - 1, !last.contains("-"), position == nil {
-                    respellings[respellings.count - 1] = last + "-" + token
-                    respellingsEndAt = at
-                } else {
-                    cues.append(.sound(low, position: position))
-                }
-                at = consumed + 1
-                continue
-            }
-            // "stress on the first syllable" / "accent on the second".
-            if ["stress", "stressed", "accent", "emphasis", "emphasize", "emphasise"].contains(low) {
-                var look = at + 1
-                while look < rest.count, ["on", "is", "the", "goes", "falls"].contains(rest[look].lowercased()) { look += 1 }
-                if look < rest.count, let ordinal = ordinals[rest[look].lowercased()] {
-                    cues.append(.stress(ordinal))
-                    at = look + (look + 1 < rest.count && rest[look + 1].lowercased() == "syllable" ? 2 : 1)
-                    continue
-                }
-            }
-            // An explicit respelling, or a word close enough to the name to
-            // be one ("Laddah", "Lattah", "latt").
-            if !stopWords.contains(low), !ordinals.keys.contains(low),
-               looksLikeExplicitRespelling(token) || isRespellingCandidate(token, nameKey: nameKey) {
-                respellings.append(token)
-                respellingsEndAt = at
-            }
-            at += 1
-        }
+        var scanner = CueScanner(rest: rest, word: word, nameKey: nameKey)
+        scanner.scan()
+        let cues = scanner.cues
+        let respellings = scanner.respellings
 
+        return resolve(word: word, nameKey: nameKey, rest: rest, cues: cues, respellings: respellings, isQuestion: isQuestion)
+    }
+
+    /// Question shape → query; typed respellings → teach (ranked); cues
+    /// alone → a derived respelling, else a kept hint.
+    private static func resolve(word: String, nameKey: String, rest: [String], cues: [Cue],
+                                respellings: [String], isQuestion: Bool) -> HallieFreeformPronunciation {
         let rawHint = rest.joined(separator: " ")
         if isQuestion, respellings.isEmpty {
             return HallieFreeformPronunciation(word: word, kind: .query, alternatives: [], rawHint: rawHint,
@@ -344,6 +269,126 @@ enum HalliePronunciationFreeform {
         }
         return HallieFreeformPronunciation(word: word, kind: .hintOnly, alternatives: [], rawHint: rawHint,
                                            cueSummary: summary, uncertain: false, explicit: false)
+    }
+
+    /// One left-to-right pass over the words around the pronounce-word.
+    /// Each `scan…` consumes what it recognises and returns true.
+    private struct CueScanner {
+        let rest: [String]
+        let word: String
+        let nameKey: String
+        var cues: [Cue] = []
+        var respellings: [String] = []
+        var at = 0
+        /// Position (in `rest`) of the last respelling token, so "latt ah"
+        /// folds into one respelling.
+        var respellingsEndAt = -1
+
+        init(rest: [String], word: String, nameKey: String) {
+            self.rest = rest
+            self.word = word
+            self.nameKey = nameKey
+        }
+
+        func lower(_ i: Int) -> String? { i < rest.count ? rest[i].lowercased() : nil }
+
+        mutating func scan() {
+            while at < rest.count {
+                if scanExemplar() || scanVowel() || scanSound() || scanStress() { continue }
+                scanRespelling()
+                at += 1
+            }
+        }
+
+        /// "like X" / "as in X" / "rhymes with X" / "sounds like X".
+        private mutating func scanExemplar() -> Bool {
+            let low = rest[at].lowercased()
+            var exemplarAt: Int?
+            if low == "like" || low == "unlike" { exemplarAt = at + 1 }
+            else if low == "as", lower(at + 1) == "in" { exemplarAt = at + 2 }
+            else if low == "rhymes", lower(at + 1) == "with" { exemplarAt = at + 2 }
+            else if low == "sounds", lower(at + 1) == "like" { exemplarAt = at + 2 }
+            guard let exemplarAt, exemplarAt < rest.count else { return false }
+            var candidate = rest[exemplarAt]
+            var consumed = exemplarAt
+            if ["the", "in"].contains(candidate.lowercased()), exemplarAt + 1 < rest.count {
+                candidate = rest[exemplarAt + 1]; consumed = exemplarAt + 1
+            }
+            let candidateLow = candidate.lowercased()
+            if looksLikeExplicitRespelling(candidate)
+                || (isRespellingCandidate(candidate, nameKey: nameKey) && exemplarVowel(candidate) == nil) {
+                respellings.append(candidate)
+            } else if low != "unlike", !stopWords.contains(candidateLow), candidate.first?.isLetter == true,
+                      !cues.contains(.exemplar(candidateLow)) {
+                cues.append(.exemplar(candidateLow))
+            }
+            at = consumed + 1
+            return true
+        }
+
+        /// "short a first" / "long e on the La" / "short a on the first syllable".
+        private mutating func scanVowel() -> Bool {
+            let low = rest[at].lowercased()
+            guard low == "short" || low == "long", let letter = lower(at + 1), letter.count == 1, "aeiou".contains(letter) else { return false }
+            let length: HalliePronunciationHint.VowelLength = low == "short" ? .short : .long
+            var position: Int?
+            var consumed = at + 1
+            var look = at + 2
+            while look < rest.count, ["on", "in", "the", "sound", "vowel", "syllable", "for"].contains(rest[look].lowercased()) { look += 1 }
+            if look < rest.count, let ordinal = ordinals[rest[look].lowercased()] {
+                position = ordinal; consumed = look
+                if look + 1 < rest.count, rest[look + 1].lowercased() == "syllable" { consumed = look + 1 }
+            } else if look < rest.count, let index = syllablePosition(named: rest[look], of: word),
+                      ["on", "in", "the"].contains(rest[look - 1].lowercased()) {
+                position = index; consumed = look
+            }
+            cues.append(.vowel(letter: Character(letter), length: length, position: position))
+            at = consumed + 1
+            return true
+        }
+
+        /// "ah second" / "second ah" / "then ah" — or the second half of
+        /// "latt ah", which folds into the respelling before it.
+        private mutating func scanSound() -> Bool {
+            let token = rest[at]
+            let low = token.lowercased()
+            guard vowelSounds.contains(low) else { return false }
+            var position: Int?
+            var consumed = at
+            if let ordinal = lower(at + 1).flatMap({ ordinals[$0] }) { position = ordinal; consumed = at + 1 }
+            else if at > 0, let ordinal = ordinals[rest[at - 1].lowercased()] { position = ordinal }
+            else if at > 0, rest[at - 1].lowercased() == "then" { position = 1 }
+            if let last = respellings.last, respellingsEndAt == at - 1, !last.contains("-"), position == nil {
+                respellings[respellings.count - 1] = last + "-" + token
+                respellingsEndAt = at
+            } else {
+                cues.append(.sound(low, position: position))
+            }
+            at = consumed + 1
+            return true
+        }
+
+        /// "stress on the first syllable" / "accent on the second".
+        private mutating func scanStress() -> Bool {
+            guard ["stress", "stressed", "accent", "emphasis", "emphasize", "emphasise"].contains(rest[at].lowercased()) else { return false }
+            var look = at + 1
+            while look < rest.count, ["on", "is", "the", "goes", "falls"].contains(rest[look].lowercased()) { look += 1 }
+            guard look < rest.count, let ordinal = ordinals[rest[look].lowercased()] else { return false }
+            cues.append(.stress(ordinal))
+            at = look + (look + 1 < rest.count && rest[look + 1].lowercased() == "syllable" ? 2 : 1)
+            return true
+        }
+
+        /// An explicit respelling, or a word close enough to the name to be
+        /// one ("Laddah", "Lattah", "latt").
+        private mutating func scanRespelling() {
+            let token = rest[at]
+            let low = token.lowercased()
+            guard !stopWords.contains(low), ordinals[low] == nil,
+                  looksLikeExplicitRespelling(token) || isRespellingCandidate(token, nameKey: nameKey) else { return }
+            respellings.append(token)
+            respellingsEndAt = at
+        }
     }
 
     /// Hyphenated ("LAT-uh"), CamelCase ("MahGill") or all-caps-syllable
