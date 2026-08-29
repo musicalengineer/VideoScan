@@ -13,6 +13,12 @@ machine by ordinary file copy. CI needs none of it; only the local
 PersonFinder manifest suite (`tests/run_personfinder_tests.py`) reads real
 photos.
 
+`pronunciation_audit_cases.json` is a text-only, human-audited oracle for
+Hallie's genealogy-name speech gate. Pass-through entries deliberately make
+no phonetic claim. A new `written` → `spoken` correction belongs there only
+after a person has listened to and approved it. The file is ready for a later
+nightly acoustic runner, but does not enable or schedule one.
+
 ## If you are anyone else
 
 **You must supply your own photos and videos.** The person-finding features
