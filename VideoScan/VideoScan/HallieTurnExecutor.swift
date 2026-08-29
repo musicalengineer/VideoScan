@@ -952,6 +952,38 @@ enum HallieTurnExecutor {
             }
             let stage: ClarificationStage = choices[0].source == .peopleProfile
                 ? .profileIdentity : .gedcomPerson
+            // Family-tree namesakes: anchors first, capped, or the ask for
+            // a surname/year (HallieWhichOne, 2026-08-29) — the same rule
+            // as the two-person route.
+            if stage == .gedcomPerson, let typed = payload.people.first {
+                let people = choices.compactMap { choice -> GedcomFamilyGraph.Person? in
+                    if case .gedcomPersonID(let id) = choice.id { return graph.people[id] }
+                    return nil
+                }
+                let arrangement = HallieWhichOne.arrange(
+                    people, graph: graph,
+                    ownerFamilySearchID: context.speakers.ownerFamilySearchID)
+                let shown = arrangement.shown.map { person in
+                    Candidate(
+                        id: .gedcomPersonID(person.id),
+                        canonicalName: person.name,
+                        label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+                }
+                return withOwnerNote(Result(
+                    route: .graph,
+                    outcome: .needsClarification,
+                    prose: HallieWhichOne.prose(
+                        typed: typed, arrangement: arrangement, labels: shown.map(\.label)),
+                    basisLine: HallieWhichOne.basis(typed: typed, arrangement: arrangement),
+                    queryDescription: queryDescription,
+                    citations: [],
+                    catalogPersonName: nil,
+                    clarification: arrangement.offersChips
+                        ? Clarification(
+                            intent: request.intent, stage: stage, candidates: shown,
+                            continuationToken: context.continuationToken)
+                        : nil))
+            }
             let clarification = Clarification(
                 intent: request.intent,
                 stage: stage,

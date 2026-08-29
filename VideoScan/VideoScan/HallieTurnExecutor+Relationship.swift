@@ -141,7 +141,31 @@ extension HallieTurnExecutor {
 
             var resolution: SlotResolution?
             var lastAnswer: Result?
-            for spelling in spellings {
+            // The owner FIRST (live 2026-08-28: "me (Rick) and Donna" reached
+            // this route as "rick" and searched a 16k tree for Richards).
+            // A slot that is the speaker — bound from "me"/"I", or the
+            // owner's own first name or nickname typed by the owner — is
+            // pinned through the shared owner chain (FamilySearch ID pin >
+            // exactly one matching root > fail closed) before any name
+            // search, exactly as the single-subject graph route does.
+            if pinned[index] == nil, voices[index] != .archivist,
+               voices[index] == .owner
+                || HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName) {
+                switch HallieOwnerResolver.resolve(
+                    typed, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
+                case .one(let owner, let note):
+                    resolution = .gedcom(
+                        id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
+                case .none(let reason?):
+                    return Result(
+                        route: .graph, outcome: .declined, prose: reason,
+                        basisLine: "Basis: “\(typed)” is the owner's own name and could not be pinned to one family-tree record; nothing was looked up.",
+                        queryDescription: queryDescription, citations: [], catalogPersonName: nil)
+                case .many, .none:
+                    break
+                }
+            }
+            for spelling in spellings where resolution == nil {
                 let attempt = resolveSlot(
                     spelling, selection: pinned[index], context: context,
                     inputs: inputs, query: query, graph: graph)
@@ -185,10 +209,43 @@ extension HallieTurnExecutor {
                 if let note { notes.append(note) }
             case .clarify(let candidates, let stage)?:
                 let who = payload.people[index]
+                // Family-tree namesakes: anchors first, capped, or the ask
+                // for a surname/year (HallieWhichOne, 2026-08-29).
+                if stage == .gedcomPerson {
+                    let people = candidates.compactMap { candidate -> GedcomFamilyGraph.Person? in
+                        if case .gedcomPersonID(let id) = candidate.id { return graph.people[id] }
+                        return nil
+                    }
+                    let arrangement = HallieWhichOne.arrange(
+                        people, graph: graph,
+                        ownerFamilySearchID: context.speakers.ownerFamilySearchID)
+                    let shown = arrangement.shown.map { person in
+                        Candidate(
+                            id: .gedcomPersonID(person.id),
+                            canonicalName: person.name,
+                            label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+                    }
+                    return Result(
+                        route: .graph,
+                        outcome: .needsClarification,
+                        prose: HallieWhichOne.prose(
+                            typed: who, arrangement: arrangement, labels: shown.map(\.label)),
+                        basisLine: HallieWhichOne.basis(typed: who, arrangement: arrangement),
+                        queryDescription: queryDescription,
+                        citations: [],
+                        catalogPersonName: nil,
+                        clarification: arrangement.offersChips
+                            ? makeClarification(
+                                intent: request.intent.replacing(pinnedGraphSubjects: pinned),
+                                stage: stage,
+                                candidates: shown,
+                                context: context)
+                            : nil)
+                }
                 return Result(
                     route: .graph,
                     outcome: .needsClarification,
-                    prose: "Which \(who) do you mean?",
+                    prose: "Which \(HallieWhichOne.display(who)) do you mean?",
                     basisLine: "Basis: “\(who)” matches more than one stable identity; no family fact was selected.",
                     queryDescription: queryDescription,
                     citations: [],
