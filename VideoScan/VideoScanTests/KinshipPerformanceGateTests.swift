@@ -66,7 +66,11 @@ struct KinshipPerformanceGateTests {
         return out
     }
 
+    /// The static fixtures are lazy: touch them so no test times the parse.
+    private func warmFixtures() { _ = Self.graph.people.count; _ = Self.profiles.count }
+
     @Test func engineBuildsUnder20ms() {
+        warmFixtures()
         let clock = ContinuousClock()
         var built: FamilyKinshipInference?
         let elapsed = clock.measure { built = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph) }
@@ -78,6 +82,7 @@ struct KinshipPerformanceGateTests {
     }
 
     @Test func firstDeepQueryUnder50msThenWarmRepeatsAreFree() {
+        warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
         let clock = ContinuousClock()
         let cold = clock.measure { _ = inf.relation(from: node(0, in: inf), to: node(19, in: inf)) }
@@ -97,17 +102,26 @@ struct KinshipPerformanceGateTests {
         #expect(durations[94] < Self.budget(20), "deep p95 \(durations[94])")
         #expect(durations[99] < Self.budget(50), "deep max \(durations[99])")
         let afterDistinct = inf.counters
-        #expect(afterDistinct.pairMisses == 101 && afterDistinct.pairHits == 0, "\(afterDistinct)")
+        // The cold pair (0, 19) is one of the 100: 100 misses + 1 hit.
+        #expect(afterDistinct.pairMisses == 100 && afterDistinct.pairHits == 1, "\(afterDistinct)")
 
-        // Exactness against the graph's own reckoning: the meeting depth sum.
+        // Exactness: every tree hop is a real parent/child link in the compiled
+        // index, and the route is never longer than the graph's own nearest
+        // common ancestor reckoning.
+        let index = Self.graph.index
         var checked = 0
         for (i, (a, b)) in deepPairs.enumerated() {
             guard let d = answers[i] ?? nil,
                   case .tree(let ida) = node(a, in: inf), case .tree(let idb) = node(b, in: inf) else { continue }
-            let nearest = Self.graph.commonAncestors(of: ida, and: idb, limit: 1).first
+            for hop in d.route where hop.provenance == .tree {
+                guard case .tree(let f) = hop.from, case .tree(let t) = hop.to,
+                      let fo = index.ordinal(of: f), let to = index.ordinal(of: t) else { Issue.record("non-tree hop"); continue }
+                let linked = hop.relation == .parent ? index.parents(of: fo).contains(to) : index.children(of: fo).contains(to)
+                #expect(linked, "\(a)→\(b): \(hop.relation) \(f) → \(t) is not a FAM link")
+            }
             let treeHops = d.route.filter { $0.provenance == .tree }.count
-            if let nearest {
-                #expect(treeHops == nearest.depthA + nearest.depthB, "\(a)→\(b): route \(treeHops) vs tree \(nearest.depthA)+\(nearest.depthB)")
+            if let nearest = Self.graph.commonAncestors(of: ida, and: idb, limit: 1).first {
+                #expect(treeHops <= nearest.depthA + nearest.depthB, "\(a)→\(b): route \(treeHops) vs tree \(nearest.depthA)+\(nearest.depthB)")
             } else if Self.graph.descentPath(from: ida, to: idb) == nil, Self.graph.descentPath(from: idb, to: ida) == nil {
                 Issue.record("\(a)→\(b): engine found a route the graph does not")
             }
@@ -124,12 +138,13 @@ struct KinshipPerformanceGateTests {
         let afterWarm = inf.counters
         #expect(warmTotal < Self.budget(250), "1,000 warm queries \(warmTotal)")
         #expect(warm[949] < Self.budget(1), "warm p95 \(warm[949])")
-        #expect(afterWarm.pairHits == 1_000 && afterWarm.pairMisses == afterDistinct.pairMisses, "\(afterWarm)")
+        #expect(afterWarm.pairHits == 1_001 && afterWarm.pairMisses == afterDistinct.pairMisses, "\(afterWarm)")
         #expect(afterWarm.ancestorSearches == afterDistinct.ancestorSearches, "zero extra ancestor scans")
         #expect(afterWarm.adjacencySorts == afterDistinct.adjacencySorts, "no per-query sorts")
     }
 
     @Test func tenThousandLocalOnlyQueriesUnder250ms() {
+        warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: nil)
         var rng = KinshipInferenceTests.SplitMix(seed: 7)
         let nodes = (0..<100).map { node($0, in: inf) }
@@ -145,6 +160,7 @@ struct KinshipPerformanceGateTests {
     }
 
     @Test func cacheStaysUnderBudgetAndRSSSettlesOnSecondChurn() {
+        warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
         var rng = KinshipInferenceTests.SplitMix(seed: 11)
         let nodes = (0..<100).map { node($0, in: inf) }
@@ -169,6 +185,7 @@ struct KinshipPerformanceGateTests {
     }
 
     @Test func thirtyTwoConcurrentIdenticalQueriesAreSingleFlight() {
+        warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
         let a = node(0, in: inf), b = node(19, in: inf)
         DispatchQueue.concurrentPerform(iterations: 32) { _ in _ = inf.relation(from: a, to: b) }
@@ -179,6 +196,7 @@ struct KinshipPerformanceGateTests {
     }
 
     @Test func saveValidationDoesNoFullAncestorSort() {
+        warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
         let before = inf.counters
         let clock = ContinuousClock()
@@ -196,6 +214,7 @@ struct KinshipPerformanceGateTests {
     }
 
     @Test @MainActor func centerInvalidatesOnGraphReplacementAndKinshipEditsOnly() {
+        warmFixtures()
         let center = KinshipDisplayCenter()
         center.install(graph: Self.graph)
         _ = center.inference(for: Self.profiles)

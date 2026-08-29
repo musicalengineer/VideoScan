@@ -196,7 +196,10 @@ struct KinshipInferenceTests {
         #expect(viaDad?.route.first?.to == .tree(gedcomID: "@I2@"))
         #expect(viaDad?.route.first?.provenance == .profileRow(profileIdentity: inf2.identity(of: rick)))
         #expect(inf2.identity(of: rick).hasPrefix("uuid:"))          // not the contested FSID
-        #expect(inf2.relation(from: rick, to: .tree(gedcomID: "@I1@"))?.term == nil)   // the tree Rick is a stranger
+        // The tree's own Rick is now a stranger who shares Dad: the data says "brother", with the evidence caveat.
+        let treeRick = inf2.relation(from: rick, to: .tree(gedcomID: "@I1@"))
+        #expect(treeRick?.term == "brother")
+        #expect(treeRick?.caveats.first?.hasPrefix("full or half not established") == true)
     }
 
     @Test func treeIdentityAndSiblingBasisRoundTripAndDefault() throws {
@@ -554,8 +557,9 @@ struct KinshipInferenceTests {
         let inf = KinshipFixture.inference(profiles)
         let tim = KinshipFixture.node("Tim", in: inf)
         let parents = inf.parents(of: tim)
-        #expect(parents.map(\.node) == [KinshipFixture.node("Dad", in: inf), KinshipFixture.node("Eileen", in: inf)])
-        #expect(parents.map { $0.provenance.isExplicit } == [false, true])
+        // Canonical order: explicit (Eileen, a row) before attested (Dad).
+        #expect(parents.map(\.node) == [KinshipFixture.node("Eileen", in: inf), KinshipFixture.node("Dad", in: inf)])
+        #expect(parents.map { $0.provenance.isExplicit } == [true, false])
         #expect(inf.attestationProblems.isEmpty)
         #expect(inf.relation(from: tim, to: Self.martha)?.term == "8th-great-grandmother")
         // attestedHalf with an explicit NON-shared parent inherits the shared one.
@@ -568,7 +572,7 @@ struct KinshipInferenceTests {
             ]),
         ], graph: nil)
         let hal = KinshipFixture.node("Hal", in: half)
-        #expect(half.parents(of: hal).map(\.node) == [KinshipFixture.node("P1", in: half), KinshipFixture.node("P3", in: half)])
+        #expect(half.parents(of: hal).map(\.node) == [KinshipFixture.node("P3", in: half), KinshipFixture.node("P1", in: half)])   // explicit first
         #expect(half.relation(from: KinshipFixture.node("Al", in: half), to: hal)?.term == "half-brother")
         // A half row whose shared parent does not resolve is NOT half.
         let stale = KinshipFixture.inference([
@@ -798,13 +802,14 @@ struct KinshipInferenceTests {
     /// wins every time.
     @Test func equalCostTierBRoutesPickTheStableEntry() {
         let graph = KinshipFixture.pedigree5001
+        let base = [
+            KinshipFixture.profile("Root", sex: .female, pin: "S000-001"),
+            KinshipFixture.profile("Pa", sex: .male, pin: "S000-016"),
+            KinshipFixture.profile("Ma", sex: .female, pin: "S000-017"),
+            KinshipFixture.profile("Kid", sex: .male, kinships: [KinshipFixture.row(.child, of: "Pa"), KinshipFixture.row(.child, of: "Ma")]),
+        ]
         func build(_ reversed: Bool) -> FamilyKinshipInference {
-            var profiles = [
-                KinshipFixture.profile("Root", sex: .female, pin: "S000-001"),
-                KinshipFixture.profile("Pa", sex: .male, pin: "S000-016"),
-                KinshipFixture.profile("Ma", sex: .female, pin: "S000-017"),
-                KinshipFixture.profile("Kid", sex: .male, kinships: [KinshipFixture.row(.child, of: "Pa"), KinshipFixture.row(.child, of: "Ma")]),
-            ]
+            var profiles = base                       // same uuids in both orders
             if reversed { profiles.reverse(); profiles[0].kinships.reverse() }
             return KinshipFixture.inference(profiles, graph: graph)
         }

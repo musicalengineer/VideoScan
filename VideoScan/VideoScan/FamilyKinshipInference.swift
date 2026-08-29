@@ -23,10 +23,13 @@
 // Query = two tiers, both bounded:
 //   Tier A — breadth-first over the canonical adjacency (built and sorted
 //            ONCE per engine: hop kind parent < child < spouse < sibling,
-//            explicit before attested, then identity key; pure-tree
-//            vertices use the index's own deterministic order), ≤ maxHops
-//            (4) and ≤ `expansionBudget` vertex expansions, so a tree with
-//            heavy intermarriage cannot make one question cost seconds.
+//            explicit before attested, then identity key), ≤ maxHops (4)
+//            and ≤ `expansionBudget` vertex expansions. Only HELD vertices
+//            (profiles, pinned people, tree people carrying rows) and the
+//            start vertex are expanded; a pure-tree vertex met on the way
+//            is a destination, never a springboard — blood relations
+//            through the tree are Tier B's job, so a tree with heavy
+//            intermarriage cannot make one question cost seconds.
 //   Tier B — climb PARENT hops (blood only) to each endpoint's pinned tree
 //            vertices, then a level-synchronous bidirectional ancestor
 //            search on ordinals finds the nearest common ancestor: cost is
@@ -47,7 +50,7 @@
 // Memory, worst case: adjacency ≈ (profiles + pinned) × hops × ~120 B —
 // kilobytes; a Tier B search holds two ordinal→(depth, via) maps sized by
 // the explored ancestry (≤ 39k × 24 B ≈ 1 MB transient); the pair memo is
-// capped at `QueryCache.entryLimit` entries / `QueryCache.byteBudget`.
+// capped at `KinshipQueryCache.entryLimit` entries / `KinshipQueryCache.byteBudget`.
 //
 // C++ readers: `struct` = value type; `final class … : @unchecked Sendable`
 // with an `NSCondition` is the idiom for a shared mutable cache — "I
@@ -166,7 +169,7 @@ struct FamilyKinshipInference: Sendable {
     /// Attestations that contradict each other (attested-full sibling rows
     /// implying > 2 parents): NOTHING is inherited for that vertex.
     private(set) var attestationProblems: [Node: String] = [:]
-    private let cache = QueryCache()
+    private let cache = KinshipQueryCache()
 
     init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil, maxHops: Int = 4, expansionBudget: Int = 4_000) {
         self.init(overlay: FamilyKinshipOverlay(profiles: profiles, graph: graph),
@@ -466,7 +469,7 @@ struct FamilyKinshipInference: Sendable {
     /// or nothing links them within reach. Memoised per ordered pair.
     func relation(from: Node, to: Node) -> Derived? {
         guard from != to else { return nil }
-        return cache.result(for: QueryCache.Key(from: from, to: to)) {
+        return cache.result(for: KinshipQueryCache.Key(from: from, to: to)) {
             if let route = shortestRoute(from: from, to: to) { return describe(route, from: from, to: to) }
             if let route = treeRoute(from: from, to: to) { return describe(route, from: from, to: to) }
             if let honest = unattestedSiblingRoute(from: from, to: to) { return honest }
@@ -484,7 +487,7 @@ struct FamilyKinshipInference: Sendable {
         while index < queue.count, index < expansionBudget {
             let (current, path) = queue[index]
             index += 1
-            guard path.count < maxHops else { continue }
+            guard path.count < maxHops, path.isEmpty || adjacency[current] != nil else { continue }
             for hop in hops(from: current) where !visited.contains(hop.to) {
                 visited.insert(hop.to)
                 let next = path + [hop]
@@ -534,7 +537,8 @@ struct FamilyKinshipInference: Sendable {
             guard index < expansionBudget else { return nil }
             let (node, path) = queue[index]
             index += 1
-            guard path.count < maxHops else { continue }
+            // Expand held vertices and the start only (see file comment).
+            guard path.count < maxHops, path.isEmpty || adjacency[node] != nil else { continue }
             for hop in hops(from: node) where !visited.contains(hop.to) {
                 let next = path + [hop]
                 if hop.to == b { return next }
@@ -807,87 +811,90 @@ struct FamilyKinshipInference: Sendable {
         }
         return i + 1
     }
+}
 
-    // MARK: Pair memo
+// MARK: - Pair memo
 
-    /// Per-ordered-pair result memo. Bounded by entries and bytes (oldest
-    /// quarter evicted when either is exceeded); identical concurrent
-    /// queries are single-flight: the second waits for the first's result
-    /// instead of computing again. All counters live here.
-    private final class QueryCache: @unchecked Sendable {
-        struct Key: Hashable { let from: Node; let to: Node }
-        static let entryLimit = 4_096
-        static let byteBudget = 8 * 1_024 * 1_024
+/// Per-ordered-pair result memo. Bounded by entries and bytes (oldest
+/// quarter evicted when either is exceeded); identical concurrent
+/// queries are single-flight: the second waits for the first's result
+/// instead of computing again. All counters live here.
+private final class KinshipQueryCache: @unchecked Sendable {
+    typealias Node = FamilyKinshipOverlay.Node
+    typealias Derived = FamilyKinshipInference.Derived
+    typealias Counters = FamilyKinshipInference.Counters
+    struct Key: Hashable { let from: Node; let to: Node }
+    static let entryLimit = 4_096
+    static let byteBudget = 8 * 1_024 * 1_024
 
-        private let condition = NSCondition()
-        private var results: [Key: Derived?] = [:]
-        private var order: [Key] = []
-        private var bytes = 0
-        private var inFlight = Set<Key>()
-        private var stats = Counters()
+    private let condition = NSCondition()
+    private var results: [Key: Derived?] = [:]
+    private var order: [Key] = []
+    private var bytes = 0
+    private var inFlight = Set<Key>()
+    private var stats = Counters()
 
-        var counters: Counters {
-            condition.lock(); defer { condition.unlock() }
-            var c = stats
-            c.cachedEntries = results.count
-            c.cachedBytes = bytes
-            return c
-        }
+    var counters: Counters {
+        condition.lock(); defer { condition.unlock() }
+        var c = stats
+        c.cachedEntries = results.count
+        c.cachedBytes = bytes
+        return c
+    }
 
-        func recordSorts(_ n: Int) { condition.lock(); stats.adjacencySorts += n; condition.unlock() }
-        func recordExpansions(_ n: Int) { condition.lock(); stats.expansions += n; condition.unlock() }
-        func recordAncestorSearch() { condition.lock(); stats.ancestorSearches += 1; condition.unlock() }
+    func recordSorts(_ n: Int) { condition.lock(); stats.adjacencySorts += n; condition.unlock() }
+    func recordExpansions(_ n: Int) { condition.lock(); stats.expansions += n; condition.unlock() }
+    func recordAncestorSearch() { condition.lock(); stats.ancestorSearches += 1; condition.unlock() }
 
-        func drop() {
-            condition.lock()
-            results.removeAll(keepingCapacity: false)
-            order.removeAll(keepingCapacity: false)
-            bytes = 0
-            condition.unlock()
-        }
+    func drop() {
+        condition.lock()
+        results.removeAll(keepingCapacity: false)
+        order.removeAll(keepingCapacity: false)
+        bytes = 0
+        condition.unlock()
+    }
 
-        func result(for key: Key, compute: () -> Derived?) -> Derived? {
-            condition.lock()
-            while true {
-                if let hit = results[key] {
-                    stats.pairHits += 1
-                    condition.unlock()
-                    return hit
-                }
-                if inFlight.contains(key) {
-                    stats.singleFlightWaits += 1
-                    condition.wait()
-                    continue
-                }
-                break
+    func result(for key: Key, compute: () -> Derived?) -> Derived? {
+        condition.lock()
+        while true {
+            if let hit = results[key] {
+                stats.pairHits += 1
+                condition.unlock()
+                return hit
             }
-            stats.pairMisses += 1
-            inFlight.insert(key)
-            condition.unlock()
-            let value = compute()
-            condition.lock()
-            stats.pairComputes += 1
-            inFlight.remove(key)
-            results[key] = .some(value)
-            order.append(key)
-            bytes += 64 + (value?.estimatedBytes ?? 0)
-            if results.count > Self.entryLimit || bytes > Self.byteBudget { evictOldestQuarter() }
-            condition.broadcast()
-            condition.unlock()
-            return value
-        }
-
-        private func evictOldestQuarter() {
-            let drop = max(1, order.count / 4)
-            for key in order.prefix(drop) {
-                if let removed = results.removeValue(forKey: key) {
-                    bytes -= 64 + (removed?.estimatedBytes ?? 0)
-                    stats.pairEvictions += 1
-                }
+            if inFlight.contains(key) {
+                stats.singleFlightWaits += 1
+                condition.wait()
+                continue
             }
-            order.removeFirst(drop)
-            if results.isEmpty { bytes = 0 }
+            break
         }
+        stats.pairMisses += 1
+        inFlight.insert(key)
+        condition.unlock()
+        let value = compute()
+        condition.lock()
+        stats.pairComputes += 1
+        inFlight.remove(key)
+        results[key] = .some(value)
+        order.append(key)
+        bytes += 64 + (value?.estimatedBytes ?? 0)
+        if results.count > Self.entryLimit || bytes > Self.byteBudget { evictOldestQuarter() }
+        condition.broadcast()
+        condition.unlock()
+        return value
+    }
+
+    private func evictOldestQuarter() {
+        let drop = max(1, order.count / 4)
+        for key in order.prefix(drop) {
+            if let removed = results.removeValue(forKey: key) {
+                bytes -= 64 + (removed?.estimatedBytes ?? 0)
+                stats.pairEvictions += 1
+            }
+        }
+        order.removeFirst(drop)
+        if results.isEmpty { bytes = 0 }
     }
 }
 

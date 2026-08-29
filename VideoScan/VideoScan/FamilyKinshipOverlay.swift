@@ -212,28 +212,7 @@ struct FamilyKinshipOverlay: Sendable {
                     gedcomID: bridged?.id, treeName: bridged?.name,
                     identity: Self.identity(snapshot: snapshot, bridged: bridged, graph: graph))
             }
-            let canonicalWord = PersonResolver.normalize(snapshot.canonicalName)
-            for alias in snapshot.aliases {
-                let word = PersonResolver.normalize(alias)
-                guard Self.relationalWords.contains(word), word != canonicalWord else { continue }
-                let line = "Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead"
-                warnings.append(line)
-                kinshipLog.warning("\(line, privacy: .public)")
-            }
-            for spelling in [snapshot.canonicalName] + snapshot.aliases {
-                let key = PersonResolver.normalize(spelling)
-                guard !key.isEmpty else { continue }
-                if !(nodesBySpelling[key]?.contains(node) ?? false) {
-                    nodesBySpelling[key, default: []].append(node)
-                }
-            }
-            let canonicalKey = PersonResolver.normalize(snapshot.canonicalName)
-            if !(canonicalNodesBySpelling[canonicalKey]?.contains(node) ?? false) {
-                canonicalNodesBySpelling[canonicalKey, default: []].append(node)
-            }
-            if !(nodesByCanonicalName[snapshot.canonicalName]?.contains(node) ?? false) {
-                nodesByCanonicalName[snapshot.canonicalName, default: []].append(node)
-            }
+            registerSpellings(of: snapshot, node: node)
         }
         // Pass 2: edges + inverses. `snapshot is relation of anchor` ⇒
         // anchor → relation → snapshot, and snapshot → inverse → anchor.
@@ -255,6 +234,30 @@ struct FamilyKinshipOverlay: Sendable {
                     outgoing[edge.from, default: []].append(edge)
                 }
             }
+        }
+    }
+
+    /// Spelling → vertex maps for PersonResolver verdicts, plus the
+    /// relational-alias hygiene nudge (codex #772).
+    private mutating func registerSpellings(of snapshot: ArchivistGraphProfileSnapshot, node: Node) {
+        let canonicalWord = PersonResolver.normalize(snapshot.canonicalName)
+        for alias in snapshot.aliases {
+            let word = PersonResolver.normalize(alias)
+            guard Self.relationalWords.contains(word), word != canonicalWord else { continue }
+            note("Alias '\(alias)' on \(snapshot.canonicalName) looks relational — use a Relationship row instead")
+        }
+        for spelling in [snapshot.canonicalName] + snapshot.aliases {
+            let key = PersonResolver.normalize(spelling)
+            guard !key.isEmpty else { continue }
+            if !(nodesBySpelling[key]?.contains(node) ?? false) {
+                nodesBySpelling[key, default: []].append(node)
+            }
+        }
+        if !(canonicalNodesBySpelling[canonicalWord]?.contains(node) ?? false) {
+            canonicalNodesBySpelling[canonicalWord, default: []].append(node)
+        }
+        if !(nodesByCanonicalName[snapshot.canonicalName]?.contains(node) ?? false) {
+            nodesByCanonicalName[snapshot.canonicalName, default: []].append(node)
         }
     }
 
