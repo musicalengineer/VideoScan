@@ -269,7 +269,7 @@ struct TreeIdentityDeriverTests {
         // the Jr/Sr trap is a question, never a guess (and never Jr).
         let dad = d.derive(TreeIdentitySubject(dadAsRichardBreen))
         #expect(dad.certainCandidate == nil)
-        if case .ambiguous(let c) = dad { #expect(Set(c.map(\.personID)) == ["@", "@"]) } else { Issue.record("expected ambiguous, got \(dad)") }
+        if case .ambiguous(let c) = dad { #expect(Set(c.map(\.personID)) == ["@I1@", "@I2@"]) } else { Issue.record("expected ambiguous, got \(dad)") }
     }
 
     @Test func deriveAllSkipsPinnedQuarantinedAndNotInTree() {
