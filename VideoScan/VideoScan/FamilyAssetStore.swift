@@ -202,6 +202,19 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
         }
     }
 
+    /// The pulls a refused compiled generation was built from (live miss
+    /// #8, 2026-08-29): non-empty when there is NO graph only because this
+    /// version refused an older generation (codec/schema) and its sources
+    /// are on disk unchanged. Empty with a graph, or with genuinely no
+    /// tree. Never cached — the loader's version check is cheap and the
+    /// next promote clears it.
+    func needsRecompile(for configuration: FamilyAssetConfiguration,
+                        store: FamilyGraphCompiledStore?) -> [URL] {
+        let result = outcome(for: configuration, store: store)
+        guard result.loaded == nil else { return [] }
+        return result.outcome?.needsRecompile ?? []
+    }
+
     /// Forget the cached graph (tests; or after an in-app ingest when the
     /// caller wants the next turn to see it without waiting for a key miss —
     /// the pointer change already forces one).

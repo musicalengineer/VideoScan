@@ -502,7 +502,28 @@ enum HallieLineageQuestion: Equatable, Sendable {
             if a.name == nil && b.name == nil { return nil }
             return .commonAncestor(a: a.name, b: b.name)
         }
+        if isOurCommonAncestorQuestion(lower) { return .commonAncestor(a: nil, b: nil) }
         return nil
+    }
+
+    /// "find our nearest common ancestor" / "how are we related" / "do we
+    /// share an ancestor" (live miss #9, 2026-08-29). "our" / "we" / "us"
+    /// = the owner and the person the conversation is about — or, with no
+    /// one in focus, the owner's spouse from the tree. Carried as
+    /// `.commonAncestor(a: nil, b: nil)`: the conversation step fills in
+    /// the focus (it has the memory), the answer falls back to the spouse,
+    /// and with neither it asks "Between you and whom?".
+    static func isOurCommonAncestorQuestion(_ lower: String) -> Bool {
+        let patterns: [Regex<Substring>] = [
+            /\bour\s+(?:nearest\s+|closest\s+|most recent\s+|latest\s+|recent\s+|first\s+)?(?:common|shared)\s+ancestors?\b/,
+            /\b(?:common|shared)\s+ancestors?\s+(?:of|between|for|shared by)\s+(?:the two of us|us two|us both|both of us|us)\b/,
+            /\b(?:how|so how)\s+(?:are|were)\s+we\s+(?:related|connected|linked|kin)\b/,
+            /^(?:so\s+)?(?:are|were)\s+we\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood|to each other))?\s*$/,
+            /\bdo\s+we\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
+            /\bwhat\s+do\s+we\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
+            /\bwhere\s+do\s+our\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
+        ]
+        return patterns.contains { lower.firstMatch(of: $0) != nil }
     }
 
     /// The typed side of a pair: `(name: nil)` for the owner, nil when the
@@ -963,7 +984,7 @@ enum HallieLineageAnswer {
         case .commonAncestor(let a, let b):
             return commonAncestor(a, b, context: context)
         case .centerTree(let person):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             return centerTree(person, graph: graph, context: context)
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
@@ -978,20 +999,20 @@ enum HallieLineageAnswer {
         case .kinshipNamed(let apposition):
             return kinshipApposition(apposition, context: context)
         case .superlative(let kind, let scope, _):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             return superlative(kind, scope: scope, graph: graph, context: context)
         case .deepAncestor(let person, let depth, let sex, let side):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
                 return deepAncestors(of: p, depth: depth, sex: sex, side: side, graph: graph, basisNote: note)
             }
         case .surnameTree(let surname):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             return surnameTree(surname, graph: graph)
         case .ancestorLine(let person, let line, let generations, let untilYear):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
@@ -999,7 +1020,7 @@ enum HallieLineageAnswer {
                                     graph: graph, basisNote: note)
             }
         case .originTrail(let person, let country, let line):
-            guard let graph = context.graph else { return noTree() }
+            guard let graph = context.graph else { return noTree(context) }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
@@ -2058,7 +2079,7 @@ enum HallieLineageAnswer {
     /// walk earns "I can trace". Deterministic; no model call.
     static func gedcomProvenance(person: String?, surname: String?,
                                  context: HallieTurnExecutor.Context) -> Result {
-        guard let graph = context.graph else { return noTree() }
+        guard let graph = context.graph else { return noTree(context) }
         var parts: [String] = []
         var source = "The tree I have comes from "
         source += graph.sourceFileName.map { "the GEDCOM file “\($0)”" } ?? "a GEDCOM file"
@@ -2221,6 +2242,35 @@ enum HallieLineageAnswer {
             name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
+    enum OwnerSpouse { case spouse(GedcomFamilyGraph.Person, note: String?), ask(Result) }
+
+    /// The owner's spouse from the tree (first recorded family unit with a
+    /// spouse), for "our" with nobody in focus. `.ask` when the owner does
+    /// not resolve to one record or has no spouse recorded.
+    static func ownerSpouse(context: HallieTurnExecutor.Context, graph: GedcomFamilyGraph) -> OwnerSpouse {
+        switch resolveDetailed(nil, context: context, graph: graph) {
+        case .success(let owner, let note):
+            if let spouse = graph.familyUnits(of: owner).compactMap(\.spouse).first {
+                return .spouse(spouse, note: note)
+            }
+            return .ask(betweenYouAndWhom(reason: "the tree records no spouse for \(owner.name)"))
+        case .ambiguous, .failure:
+            return .ask(betweenYouAndWhom(reason: "the owner is not pinned to one tree record"))
+        }
+    }
+
+    /// "Between you and whom?" — the ask for an "our" question with nobody
+    /// in focus and no spouse to fall back on. No clarification object:
+    /// the next sentence is a fresh ask.
+    static func betweenYouAndWhom(reason: String) -> Result {
+        Result(
+            route: .graph, outcome: .needsClarification,
+            prose: "Between you and whom? Name the other person — for example, “nearest common ancestor of me and Donna”.",
+            basisLine: "Basis: “our” names the owner and one more person, but nobody was in focus and \(reason); nothing was looked up.",
+            queryDescription: "common ancestor: our (between you and whom)",
+            citations: [], catalogPersonName: nil)
+    }
+
     /// The which-one for one side, with a chip per namesake that RESUMES
     /// this ask (2026-08-29: "donna 1959" after "Which Donna do you mean…"
     /// used to become a catalog search because the answer carried no
@@ -2254,10 +2304,23 @@ enum HallieLineageAnswer {
     static func commonAncestor(_ typedA: String?, _ typedB: String?,
                                request: HallieTurnExecutor.Request,
                                context: HallieTurnExecutor.Context) -> Result? {
-        guard let graph = context.graph else { return noTree() }
+        guard let graph = context.graph else { return noTree(context) }
         var notes: [String] = []
         var pinned = request.intent.pinnedGraphSubjects
         var floating = request.selectedIdentity
+        // "our nearest common ancestor" with no one in conversation focus
+        // (live miss #9): the owner and the owner's spouse from the tree,
+        // pinned by record so a namesake never asks which-one. With no
+        // spouse recorded either, ask — never "me and myself".
+        if typedA == nil, typedB == nil, pinned[1] == nil {
+            switch ownerSpouse(context: context, graph: graph) {
+            case .spouse(let spouse, let note):
+                pinned[1] = .gedcomPersonID(spouse.id)
+                notes.append("“Our” = you and your spouse \(spouse.name), from the tree." + (note.map { " " + $0 } ?? ""))
+            case .ask(let result):
+                return result
+            }
+        }
         // C++ readers: a two-case enum instead of std::variant — the
         // resolved person, or the answer that stops the question.
         enum Side { case ok(GedcomFamilyGraph.Person), stop(Result) }
@@ -2424,7 +2487,7 @@ enum HallieLineageAnswer {
             // pin, a qualifier that fits no namesake) is already the
             // honest answer.
             if let resolved, resolved.outcome != .declined { return resolved }
-            guard let typed else { return resolved ?? noTree() }
+            guard let typed else { return resolved ?? noTree(context) }
             let shown = HallieLineageQuestion.capitalizedName(typed)
             if let profile = HallieTurnExecutor.PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
                 return Result(
@@ -2487,10 +2550,48 @@ enum HallieLineageAnswer {
             offeredActions: people.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) })
     }
 
-    static func noTree() -> Result {
-        Result(route: .graph, outcome: .declined,
+    /// The honest no-graph decline. With a context whose loader refused a
+    /// compiled generation (`needsRecompile`, live miss #8) the tree IS on
+    /// disk, so the answer is the recompile offer; otherwise the genuine
+    /// no-GEDCOM wording, unchanged.
+    static func noTree(_ context: HallieTurnExecutor.Context? = nil) -> Result {
+        if let context, let recompile = needsRecompileResult(context, queryDescription: "lineage: tree needs recompile") {
+            return recompile
+        }
+        return Result(route: .graph, outcome: .declined,
                prose: "I don’t have a family tree loaded, so I can’t walk the lines yet. Add a GEDCOM (.ged) file to the authorized 40_Family_Tree/GEDCOM folder and ask again.",
                basisLine: "Basis: no GEDCOM loaded; nothing was looked up.",
                queryDescription: "lineage: no tree", citations: [], catalogPersonName: nil)
+    }
+
+    /// Nil unless the context says the compiled tree was refused for
+    /// version reasons with its pulls still on disk. The prose is fixed
+    /// (never re-composed) and the offered action is marked to be
+    /// performed by a client that can (the app), listed by one that
+    /// cannot (shell, web).
+    static func needsRecompileResult(_ context: HallieTurnExecutor.Context,
+                                     queryDescription: String) -> Result? {
+        guard context.graph == nil, !context.needsRecompile.isEmpty else { return nil }
+        return needsRecompile(context.needsRecompile, queryDescription: queryDescription)
+    }
+
+    static func needsRecompile(_ sources: [URL], queryDescription: String = "lineage: tree needs recompile") -> Result {
+        let prose = needsRecompileProse(sources)
+        return Result(
+            route: .graph, outcome: .declined, prose: prose,
+            basisLine: "Basis: the compiled family tree (\(sources.count) pulls) was built by an older version and refused after the update; the pull files are on disk unchanged. Nothing was looked up.",
+            queryDescription: queryDescription, citations: [], catalogPersonName: nil,
+            offeredActions: [.recompileFamilyTree],
+            answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose),
+            performsFirstOfferedAction: true)
+    }
+
+    /// The exact sentence (Rick 2026-08-29): "The family tree is on disk
+    /// but needs recompiling after the update (2 pulls: a.ged, b.ged). I
+    /// can do that now — it takes about 10 seconds."
+    static func needsRecompileProse(_ sources: [URL]) -> String {
+        let names = sources.map(\.lastPathComponent).joined(separator: ", ")
+        let pulls = sources.count == 1 ? "1 pull" : "\(sources.count) pulls"
+        return "The family tree is on disk but needs recompiling after the update (\(pulls): \(names)). I can do that now — it takes about 10 seconds."
     }
 }

@@ -22,6 +22,13 @@ extension HallieTurnExecutor {
         context: Context,
         dependencies: Dependencies
     ) async throws -> Result? {
+        // Live miss #8 (2026-08-29): a tree on disk whose compiled
+        // generation this version refused is not "no tree" — every graph
+        // ask gets the recompile offer before any binding or lookup.
+        if let recompile = HallieLineageAnswer.needsRecompileResult(
+            context, queryDescription: graphQueryDescription(rawPayload)) {
+            return recompile
+        }
         if let wedding = HallieMarriageDate.answer(
             question: request.intent.originalQuestion,
             payload: rawPayload, context: context) {

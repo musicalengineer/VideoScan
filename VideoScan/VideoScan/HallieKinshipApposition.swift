@@ -151,7 +151,7 @@ extension HallieLineageAnswer {
     /// → which-one chips; none → the set, honestly. Never a guard sentence.
     static func kinshipApposition(_ q: HallieKinshipApposition,
                                   context: HallieTurnExecutor.Context) -> Result {
-        guard let graph = context.graph else { return noTree() }
+        guard let graph = context.graph else { return noTree(context) }
         let subject: GedcomFamilyGraph.Person
         var note: String?
         switch resolve(q.possessor, context: context, graph: graph) {
