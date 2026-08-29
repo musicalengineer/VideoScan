@@ -50,6 +50,24 @@ extension HallieTurnExecutor {
         /// caption or correct it (2026-08-26). Cleared by the next archive
         /// answer that shows no photo; follow-ups and tellings keep it.
         private(set) var lastPhotoAttachment: HalliePhotoAttachment?
+        /// The last SUBSTANTIVE exchange — the original ask, how it was
+        /// read, what was answered, and any which-one candidates offered —
+        /// for a repair turn ("that's wrong", "you gave me people from the
+        /// 1300s"). A which-one keeps the ORIGINAL question (the intent's),
+        /// not the chip reply; declines that ran nothing (translator
+        /// failures, follow-up refusals) and repairs themselves leave it in
+        /// place so a second complaint still points at the same ask.
+        private(set) var lastExchange: Exchange?
+
+        struct Exchange: Sendable, Equatable {
+            let question: String
+            let ast: ArchivistQueryAST?
+            let route: Route
+            let outcome: Outcome
+            let answer: String
+            /// The which-one offers, when the answer asked which; else [].
+            let candidates: [Candidate]
+        }
 
         init() {}
 
@@ -62,11 +80,12 @@ extension HallieTurnExecutor {
         /// talk and capability answers carry no AST and leave memory
         /// untouched; a reset clears it; a refined or paged query replaces
         /// it like any other.
-        mutating func record(intent: Intent?, result: Result) {
+        mutating func record(intent: Intent?, result: Result, question: String? = nil) {
             if result.route == .reset {
                 reset()
                 return
             }
+            recordExchange(intent: intent, result: result, question: question)
             switch result.route {
             case .presence, .cross, .aggregate, .temporal, .graph, .telling:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
@@ -128,6 +147,32 @@ extension HallieTurnExecutor {
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
+        }
+
+        private mutating func recordExchange(intent: Intent?, result: Result, question: String?) {
+            if result.outcome == .repaired { return }
+            let asked = result.clarification?.intent.originalQuestion
+                ?? intent?.originalQuestion
+                ?? question
+            let substantive: Bool
+            if result.clarification != nil || intent != nil {
+                substantive = true
+            } else {
+                switch result.route {
+                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent:
+                    substantive = result.outcome == .answered || result.outcome == .needsClarification
+                case .followUp, .capability, .help, .smalltalk, .conversation, .reset:
+                    substantive = false
+                }
+            }
+            guard substantive, let asked, !asked.isEmpty else { return }
+            lastExchange = Exchange(
+                question: asked,
+                ast: result.clarification?.intent.ast ?? intent?.ast,
+                route: result.route,
+                outcome: result.outcome,
+                answer: result.prose,
+                candidates: result.clarification?.candidates ?? [])
         }
 
         /// Who a bare "he" / "she" / "they" stands for right now: the
@@ -515,6 +560,13 @@ extension HallieTurnExecutor {
         rosterAnswer: (() -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?
     ) -> PreTranslation {
+        // A turn ABOUT the previous answer ("that's wrong", "you presented
+        // me a list of people born hundreds of years ago") is repaired from
+        // memory — never translated into a search (live miss #4, 2026-08-28).
+        // With nothing to repair the same words route as a fresh question.
+        if let exchange = memory.lastExchange, HallieRepairTurn.isRepair(question) {
+            return .answer(HallieRepairTurn.answer(question, exchange: exchange))
+        }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
         // does not become either an invented family-tree fact or a catalog

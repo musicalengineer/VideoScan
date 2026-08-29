@@ -42,6 +42,10 @@ enum HallieTurnExecutor {
         /// Hallie tried to DO something the turn asked for (a save) and it
         /// did not happen. Never dressed up as an answer (codex #700).
         case failed
+        /// A conversation-repair turn ("that's wrong", "you gave me people
+        /// from the 1300s"): the previous answer was acknowledged and
+        /// restated, nothing was searched (HallieRepairTurn, 2026-08-29).
+        case repaired
     }
 
     enum IdentitySource: Sendable, Equatable {
@@ -625,6 +629,7 @@ enum HallieTurnExecutor {
         case .unsupported: return "unsupported"
         case .needsClarification: return "needs-clarification"
         case .failed: return "failed"
+        case .repaired: return "repaired"
         }
     }
 
@@ -1006,6 +1011,38 @@ enum HallieTurnExecutor {
             }
             let stage: ClarificationStage = choices[0].source == .peopleProfile
                 ? .profileIdentity : .gedcomPerson
+            // Family-tree namesakes: anchors first, capped, or the ask for
+            // a surname/year (HallieWhichOne, 2026-08-29) — the same rule
+            // as the two-person route.
+            if stage == .gedcomPerson, let typed = payload.people.first {
+                let people = choices.compactMap { choice -> GedcomFamilyGraph.Person? in
+                    if case .gedcomPersonID(let id) = choice.id { return graph.people[id] }
+                    return nil
+                }
+                let arrangement = HallieWhichOne.arrange(
+                    people, graph: graph,
+                    ownerFamilySearchID: context.speakers.ownerFamilySearchID)
+                let shown = arrangement.shown.map { person in
+                    Candidate(
+                        id: .gedcomPersonID(person.id),
+                        canonicalName: person.name,
+                        label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+                }
+                return withOwnerNote(Result(
+                    route: .graph,
+                    outcome: .needsClarification,
+                    prose: HallieWhichOne.prose(
+                        typed: typed, arrangement: arrangement, labels: shown.map(\.label)),
+                    basisLine: HallieWhichOne.basis(typed: typed, arrangement: arrangement),
+                    queryDescription: queryDescription,
+                    citations: [],
+                    catalogPersonName: nil,
+                    clarification: arrangement.offersChips
+                        ? Clarification(
+                            intent: request.intent, stage: stage, candidates: shown,
+                            continuationToken: context.continuationToken)
+                        : nil))
+            }
             let clarification = Clarification(
                 intent: request.intent,
                 stage: stage,

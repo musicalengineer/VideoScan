@@ -568,7 +568,9 @@ struct HallieTwoRootOwnerTests {
     @Test func bareNameSharedWithANamesakeResolvesToTheRoot() throws {
         var text = mergedGraph().gedcomText()
         // Add a 16th-century namesake on Donna's side, no FSID, no parents.
-        text = text.replacingOccurrences(of: "0 TRLR", with: "0 @I900@ INDI\n1 NAME Agatha Donna /Knauss/\n1 SEX F\n1 BIRT\n2 DATE ABT 1520\n0 TRLR")
+        // (2026-08-29: a bare name is a GIVEN name — "Agatha Donna Knauss"
+        // is no longer a namesake for "Donna"; "Donna Agatha Knauss" is.)
+        text = text.replacingOccurrences(of: "0 TRLR", with: "0 @I900@ INDI\n1 NAME Donna Agatha /Knauss/\n1 SEX F\n1 BIRT\n2 DATE ABT 1520\n0 TRLR")
         let graph = GedcomFamilyGraph(gedcomText: text)
         #expect(graph.people(namedLike: "Donna").count >= 2)
         let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Rick", b: "Donna"), context: context(graph)))

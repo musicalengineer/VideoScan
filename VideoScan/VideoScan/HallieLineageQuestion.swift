@@ -482,18 +482,18 @@ enum HallieLineageQuestion: Equatable, Sendable {
     static func commonAncestorQuestion(in lower: String) -> HallieLineageQuestion? {
         guard lower.firstMatch(of: mediaNoun) == nil else { return nil }
         let patterns: [Regex<(Substring, Substring, Substring)>] = [
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:related|connected|linked|kin)\b/,
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .'-]*?)\s+related\s+to\s+([a-z][a-z .'-]*?)\s*$/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
             // "most recent" / "latest" / "recent" common ancestor, and a
             // trailing "born 1959" qualifier (Rick 2026-08-28 live).
-            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\b(?:do|did|does)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
-            /\bwhat\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
-            /\b([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
-            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z][a-z .'-]*?)\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\bwhere\s+(?:do|does|did)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:and|&)\s+([a-z][a-z .'-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
+            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\b(?:do|did|does)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
+            /\bwhat\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
+            /\b([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
+            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\bwhere\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
         ]
         for pattern in patterns {
             guard let m = lower.firstMatch(of: pattern) else { continue }
@@ -507,7 +507,30 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     /// The typed side of a pair: `(name: nil)` for the owner, nil when the
     /// words are not a person at all ("they", "the family").
+    /// A side may carry a gloss (live 2026-08-28: "me (Rick) and Donna"):
+    /// "me (rick)", "rick (me)", "myself, rick", "(rick)". Parentheticals
+    /// and comma appositives are split into parts; an owner word in ANY
+    /// part binds the side to the owner, otherwise the first part that is
+    /// a person is the name. A bare "(rick)" is the name "Rick" — the
+    /// resolver's owner-spelling rule then makes it the owner when the
+    /// speaker is Rick.
     private static func commonAncestorName(_ raw: String) -> (name: String?, Void)? {
+        let cleaned = raw.trimmingCharacters(in: .whitespaces)
+        guard cleaned.contains("(") || cleaned.contains(")") || cleaned.contains(",") else {
+            return commonAncestorSide(cleaned)
+        }
+        var inner: [String] = []
+        for m in cleaned.matches(of: /\(([^()]*)\)/) { inner.append(String(m.1)) }
+        let outer = cleaned.replacing(/\([^()]*\)/, with: " ")
+        let parts = (outer.split(separator: ",").map(String.init) + inner)
+            .map { $0.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "()"))) }
+            .filter { !$0.isEmpty }
+        let sides = parts.compactMap(commonAncestorSide)
+        if sides.contains(where: { $0.name == nil }) { return (nil, ()) }
+        return sides.first
+    }
+
+    private static func commonAncestorSide(_ raw: String) -> (name: String?, Void)? {
         var s = raw.trimmingCharacters(in: .whitespaces)
         for lead in ["the ", "my wife ", "my husband "] where s.hasPrefix(lead) && s.count > lead.count {
             if lead == "the " { return nil }
@@ -1047,18 +1070,26 @@ enum HallieLineageAnswer {
         case .failure(let r): return .failure(r)
         case .ambiguous(let people):
             let name = typed ?? context.speakers.ownerName ?? ""
-            return .failure(whichOne(name, among: people))
+            return .failure(whichOne(name, among: people, graph: graph,
+                                     ownerFamilySearchID: context.speakers.ownerFamilySearchID))
         }
     }
 
     /// The declined which-one sentence, with each namesake's years so the
     /// next reply can say "the one born in 1651".
-    static func whichOne(_ typed: String, among people: [GedcomFamilyGraph.Person]) -> Result {
-        let labels = people.map { ArchivistBiographyPolicy.disambiguationCandidate(for: $0).label }
+    /// Anchors (roots, pinned owner) first, capped at `HallieWhichOne.cap`;
+    /// past the cap with no anchor the sentence asks for a surname or year
+    /// instead of listing strangers (2026-08-29).
+    static func whichOne(_ typed: String, among people: [GedcomFamilyGraph.Person],
+                         graph: GedcomFamilyGraph? = nil,
+                         ownerFamilySearchID: String? = nil) -> Result {
+        let arrangement = HallieWhichOne.arrange(
+            people, graph: graph, ownerFamilySearchID: ownerFamilySearchID)
+        let labels = arrangement.shown.map { ArchivistBiographyPolicy.disambiguationCandidate(for: $0).label }
         return Result(
             route: .graph, outcome: .needsClarification,
-            prose: "Which \(HallieLineageQuestion.capitalizedName(typed)) do you mean — " + HallieNameQualifier.joined(labels, conjunction: "or") + "?",
-            basisLine: "Basis: the family tree has \(people.count) people by that name; nothing was looked up.",
+            prose: HallieWhichOne.prose(typed: typed, arrangement: arrangement, labels: labels),
+            basisLine: HallieWhichOne.basis(typed: typed, arrangement: arrangement),
             queryDescription: "lineage: resolve \(typed)", citations: [], catalogPersonName: nil)
     }
 
@@ -2199,7 +2230,11 @@ enum HallieLineageAnswer {
         request: HallieTurnExecutor.Request, pinned: [Int: HallieTurnExecutor.CandidateID],
         context: HallieTurnExecutor.Context, graph: GedcomFamilyGraph
     ) -> Result {
-        let asked = whichOne(typed, among: people)
+        let ownerFamilySearchID = context.speakers.ownerFamilySearchID
+        let asked = whichOne(typed, among: people, graph: graph, ownerFamilySearchID: ownerFamilySearchID)
+        // The chips are exactly the people the sentence names, in its
+        // order (roots first, capped — HallieWhichOne, miss #2).
+        let shown = HallieWhichOne.arrange(people, graph: graph, ownerFamilySearchID: ownerFamilySearchID).shown
         return Result(
             route: .graph, outcome: .needsClarification,
             prose: asked.prose, basisLine: asked.basisLine,
@@ -2207,7 +2242,7 @@ enum HallieLineageAnswer {
             clarification: HallieTurnExecutor.makeClarification(
                 intent: request.intent.replacing(pinnedGraphSubjects: pinned),
                 stage: .gedcomPerson,
-                candidates: people.map { HallieTurnExecutor.gedcomCandidate($0, graph: graph) },
+                candidates: shown.map { HallieTurnExecutor.gedcomCandidate($0, graph: graph) },
                 context: context))
     }
 

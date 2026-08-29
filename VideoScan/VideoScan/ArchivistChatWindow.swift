@@ -991,8 +991,14 @@ struct ArchivistChatWindow: View {
                     text: "Okay — I won't guess which person you meant."))
                 return
             }
-            // A non-matching reply is a new question, not a candidate guess.
-            pendingHallieClarification = nil
+            // A complaint about the list itself ("you presented me a list of
+            // people born hundreds of years ago", live 2026-08-28) keeps the
+            // question pending: the repair reply re-asks it narrowed, and a
+            // typed or tapped name afterwards still selects from it.
+            // Any other non-matching reply is a new question.
+            if !HallieRepairTurn.isRepair(text) {
+                pendingHallieClarification = nil
+            }
         }
         messages.append(ArchivistMessage(role: .user, text: text))
         // Every question — including "play the first one" and "show more" —
@@ -1046,7 +1052,7 @@ struct ArchivistChatWindow: View {
                     telling: telling)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                commitHallie(response)
+                commitHallie(response, question: text)
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
@@ -1116,17 +1122,24 @@ struct ArchivistChatWindow: View {
         }
     }
 
-    private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
+    private func commitHallie(_ response: HallieAppTurnCoordinator.Response, question: String? = nil) {
         // Rick 2026-08-22: "in-app, there's no audio." On by default; the
         // settings sheet has the switch and the voice picker.
         if HallieSpeaker.isEnabled() {
             HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
         }
         lastResponder = response.responderHost
-        pendingHallieClarification = response.pendingClarification
+        // A repair reply re-asks the pending which-one; keep it so the next
+        // typed or tapped name still selects from it.
+        if response.result.outcome == .repaired, response.pendingClarification == nil {
+            // keep pendingHallieClarification as is
+        } else {
+            pendingHallieClarification = response.pendingClarification
+        }
         hallieTelling = response.telling
         hallieMemory.record(intent: response.executedIntent,
-                            result: response.result)
+                            result: response.result,
+                            question: question)
         let citations = response.citations
         let isFollowUpAction = response.result.route == .followUp
             && response.result.mediaAction != nil
