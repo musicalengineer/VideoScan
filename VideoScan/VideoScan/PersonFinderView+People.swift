@@ -16,10 +16,10 @@
 // pending rows; it opens ConfirmPersonSheet in blind holdout mode and
 // disappears once every row is answered.
 //
-// 2026-08-29: added the tree-link badge (TreeLinkBadge.swift) top-leading
-// on each card + the "Show:" tree-link filter chip in the header. Badge
-// states come from TreeIdentityCenter.treeLinkBadges(for:) — memoised, one
-// dictionary lookup per card; clicking runs showInFamilyTree.
+// 2026-08-29: the gallery shows one GEDCOM concept: a green check means the
+// profile has a usable, collision-free `.pinned` tree identity. The header's
+// session-only "Show Missing GEDCOM" checkbox filters to every other reducer
+// state. Rich derived/ambiguous/problem diagnostics remain in the editor.
 
 import SwiftUI
 import AppKit
@@ -44,15 +44,6 @@ extension PersonFinderView {
     /// pass). Reading it in the body is a key compare + dictionary return.
     var treeLinkBadges: [String: TreeLinkBadge] {
         identityCenter.treeLinkBadges(for: model.savedProfiles)
-    }
-
-    /// The gallery's profiles after the "Show:" tree-link chip. `.all` is
-    /// the saved order untouched; otherwise one O(people) filter over the
-    /// memoised badge map (the ForEach is O(people) already).
-    var visibleProfiles: [POIProfile] {
-        guard peopleTreeFilter != .all, kinshipCenter.graph != nil else { return model.savedProfiles }
-        let badges = treeLinkBadges
-        return model.savedProfiles.filter { peopleTreeFilter.matches(badges[$0.id]) }
     }
 
     /// Inline undo affordance for the most recent POI delete. Stays visible
@@ -146,7 +137,16 @@ extension PersonFinderView {
     }
 
     var peopleGallery: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // Build the memoised reducer map once per gallery evaluation, then
+        // perform at most one O(people) filter before entering card bodies.
+        // Each card below does one dictionary lookup; no reducer work occurs
+        // in the ForEach body.
+        let treeLinks = treeLinkBadges
+        let displayedProfiles = showMissingGEDCOM
+            ? model.savedProfiles.filter { !TreeLinkBadge.hasGEDCOMID(treeLinks[$0.id]) }
+            : model.savedProfiles
+
+        return VStack(alignment: .leading, spacing: 6) {
             // Inline undo banner — armed by deletePOI, dismissed by undo /
             // dismiss / superseded by next delete / app relaunch. No timers.
             // Sits ABOVE the header so it never reflows the grid below
@@ -160,26 +160,28 @@ extension PersonFinderView {
                 Text("Family")
                     .font(.headline)
                 Spacer()
-                // Tree-link filter (2026-08-29). Only meaningful once a
-                // tree is installed; the badge map is the memoised one the
-                // cards read, so filtering is a dictionary lookup per card.
-                if !model.savedProfiles.isEmpty, kinshipCenter.graph != nil {
-                    Picker("Show", selection: $peopleTreeFilter) {
-                        ForEach(TreeLinkFilter.allCases) { f in
-                            Text(f.rawValue).tag(f)
-                        }
+                if !model.savedProfiles.isEmpty {
+                    Label {
+                        Text("GEDCOM ID")
+                            .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
                     }
-                    .pickerStyle(.segmented)
+                    .font(.callout)
+                    .help("A green check means this person has a usable GEDCOM ID in the current family tree")
+                    .accessibilityLabel("Green check means GEDCOM ID linked")
+
+                    Toggle("Show Missing GEDCOM", isOn: $showMissingGEDCOM)
+                    .toggleStyle(.checkbox)
                     .controlSize(.small)
                     .fixedSize()
-                    .help("Filter people by their family-tree link: Linked = pinned to a tree record, Needs confirm = derived / ambiguous / pin problem, Not linked = no match or marked not in the tree")
-                    .accessibilityIdentifier("pf.people.treeFilter")
-                }
-                if !model.savedProfiles.isEmpty {
-                    let shown = visibleProfiles.count
-                    Text(shown == model.savedProfiles.count
+                    .help("Show only people who do not yet have a usable GEDCOM ID")
+                    .accessibilityIdentifier("pf.people.showMissingGEDCOM")
+
+                    Text(displayedProfiles.count == model.savedProfiles.count
                          ? "\(model.savedProfiles.count) people"
-                         : "\(shown) of \(model.savedProfiles.count) people")
+                         : "\(displayedProfiles.count) of \(model.savedProfiles.count) people")
                         .font(.callout)
                         .foregroundColor(.secondary)
                 }
@@ -255,9 +257,7 @@ extension PersonFinderView {
 
                         // Build set of all people currently being scanned across all active jobs
                         let scanningNames = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.name.lowercased() })
-                        // One memoised map for every card (TreeIdentityCenter).
-                        let treeLinks = treeLinkBadges
-                        ForEach(visibleProfiles) { profile in
+                        ForEach(displayedProfiles) { profile in
                             let isBeingScanned = scanningNames.contains(profile.name.lowercased())
                             let isActive = isBeingScanned
                             PersonCard(profile: profile,
@@ -280,14 +280,15 @@ extension PersonFinderView {
                                 .overlay(alignment: .topTrailing) {
                                     holdoutReviewBadge(for: profile)
                                 }
-                                // Tree-link badge — top-leading, mirror of
-                                // the Review badge. Click = the same flow
-                                // as "Show in Family Tree" (nag-button
-                                // pattern: the badge performs the fix).
+                                // A green check is the only tree state shown
+                                // in the gallery. Derived, ambiguous, broken,
+                                // absent, and not-in-tree all appear only via
+                                // "Show Missing GEDCOM" and editor details.
                                 .overlay(alignment: .topLeading) {
-                                    if let badge = treeLinks[profile.id] {
-                                        TreeLinkBadgeView(badge: badge,
-                                                          fontSize: personNameFontSize * 0.72) {
+                                    if let badge = treeLinks[profile.id],
+                                       TreeLinkBadge.hasGEDCOMID(badge) {
+                                        GEDCOMIDCheckView(badge: badge,
+                                                          personName: profile.name) {
                                             showInFamilyTree(profile)
                                         }
                                         .accessibilityIdentifier("pf.treelink.\(profile.name)")

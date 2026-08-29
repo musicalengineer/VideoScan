@@ -1,17 +1,18 @@
 // TreeLinkBadge.swift
-// The little "GEDCOM ID flag" on each People-tab card (Rick, 2026-08-29:
-// "so we know the biography and gedcom are satisfied about that person").
+// GEDCOM-link state shared by the People gallery and person editor.
 //
-// Two halves, kept apart so the first is testable without a window:
+// Three pieces, kept apart so the first is testable without a window:
 //
-//   • `TreeLinkBadge` — a pure value: which of the five visible states a
+//   • `TreeLinkBadge` — a pure value: which of the five reducer states a
 //     profile is in, the short label, and the tooltip. Built by
 //     `TreeLinkBadge.state(for:profile:)` from the Show-in-Family-Tree
 //     reducer's verdict plus the profile's persisted pin fields. `nil` means
-//     "no badge" (no tree installed, or nothing derivable yet).
-//   • `TreeLinkBadgeView` — the capsule. Clicking it runs the SAME flow as
-//     right-click → "Show in Family Tree" (nag-button pattern: the badge is
-//     the entry point that performs the fix).
+//     "no reducer verdict" (no tree installed, or nothing derivable yet).
+//   • `GEDCOMIDCheckView` — the People-card's deliberately minimal green
+//     check. It is shown only for `.pinned`; hover/accessibility retains the
+//     exact tree name and code, and clicking opens that person in the tree.
+//   • `TreeLinkBadgeView` — the richer state capsule retained in the editor,
+//     where diagnostics such as "confirm" and "fix pin" are useful.
 //
 // The per-profile map is memoised in TreeIdentityCenter.treeLinkBadges(for:)
 // — one pass per (tree generation, identity signature, pinsRevision,
@@ -79,6 +80,14 @@ struct TreeLinkBadge: Equatable, Sendable {
         }
     }
 
+    /// The single People-gallery definition of "has a GEDCOM ID". A raw
+    /// `treeIdentity` value is insufficient: only the reducer's `.pinned`
+    /// verdict proves the ID is usable, collision-free, and resolvable in
+    /// the currently loaded tree.
+    static func hasGEDCOMID(_ badge: TreeLinkBadge?) -> Bool {
+        badge?.kind == .pinned
+    }
+
     /// "picked: Rick, 2026-08-29" → "confirmed 2026-08-29";
     /// "derived: owner setting (Show in Family Tree)" → "derived: owner setting";
     /// nil → "pinned before attestations were recorded".
@@ -132,37 +141,31 @@ struct TreeLinkBadge: Equatable, Sendable {
     var isOutline: Bool { kind == .notInTree }
 }
 
-/// The People-tab header's "Show:" chip.
-enum TreeLinkFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case linked = "Linked"
-    case needsConfirm = "Needs confirm"
-    case notLinked = "Not linked"
+// MARK: - View
 
-    var id: String { rawValue }
+/// Compact People-card indicator. The caller supplies only a `.pinned`
+/// badge; all richer reducer states remain editor diagnostics rather than
+/// visual noise in the family gallery.
+struct GEDCOMIDCheckView: View {
+    let badge: TreeLinkBadge
+    let personName: String
+    let action: () -> Void
 
-    /// Does a profile with this badge (nil = none) pass the filter?
-    func matches(_ badge: TreeLinkBadge?) -> Bool {
-        switch self {
-        case .all:
-            return true
-        case .linked:
-            return badge?.kind == .pinned
-        case .needsConfirm:
-            switch badge?.kind {
-            case .derived?, .ambiguous?, .pinProblem?: return true
-            default: return false
-            }
-        case .notLinked:
-            switch badge?.kind {
-            case nil, .notInTree?: return true
-            default: return false
-            }
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.green)
+                .padding(4)
+                .background(.regularMaterial, in: Circle())
         }
+        .buttonStyle(.plain)
+        .help("Show \(personName) in Family Tree · \(badge.tooltip)")
+        .accessibilityLabel("Show \(personName) in Family Tree")
+        .accessibilityValue(badge.tooltip)
     }
 }
-
-// MARK: - View
 
 /// The capsule. `fontSize` is the card's derived caption size; it is then
 /// scaled with the user's Dynamic Type setting (`@ScaledMetric` ≈ a

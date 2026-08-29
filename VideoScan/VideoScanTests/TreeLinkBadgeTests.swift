@@ -3,7 +3,7 @@
 // flag in the People tab"). Five dimensions:
 //   1. Logic     — `TreeLinkBadge.state(for:profile:)` matrix over every
 //                  ShowInTreeState + the persisted pin fields (attestation
-//                  wording); the filter chip's membership per state
+//                  wording); GEDCOM-ID / missing-GEDCOM membership per state
 //   2. Scale     — n/a (one dictionary lookup per card; the memo test below
 //                  pins "one build per revision")
 //   3. Media     — n/a
@@ -18,11 +18,18 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
+private func treeLinkFixtureCandidate(_ id: String) -> TreeIdentityCandidate {
+    guard let person = TreeIdentityFixture.graph.people[id] else {
+        preconditionFailure("TreeIdentityFixture is missing \(id)")
+    }
+    return TreeIdentityCandidate(person)
+}
+
 @Suite("TreeLinkBadge — state mapping")
 struct TreeLinkBadgeStateTests {
     typealias F = TreeIdentityFixture
-    let jr = TreeIdentityCandidate(F.graph.people["@I1@"]!)
-    let sr = TreeIdentityCandidate(F.graph.people["@I2@"]!)
+    let jr = treeLinkFixtureCandidate("@I1@")
+    let sr = treeLinkFixtureCandidate("@I2@")
 
     @Test func noTreeAndNoneHideTheBadge() {
         #expect(TreeLinkBadge.state(for: .noTree, profile: F.rick) == nil)
@@ -105,39 +112,34 @@ struct TreeLinkBadgeStateTests {
     }
 }
 
-@Suite("TreeLinkFilter — chip membership")
-struct TreeLinkFilterTests {
+@Suite("TreeLinkBadge — GEDCOM ID membership")
+struct TreeLinkBadgeGEDCOMIDTests {
     private func badge(_ kind: TreeLinkBadge.Kind) -> TreeLinkBadge {
         TreeLinkBadge(kind: kind, label: "", tooltip: "")
     }
 
-    @Test func membershipMatrix() {
-        #expect(TreeLinkFilter.all.matches(nil))
-        for kind in TreeLinkBadge.Kind.allCases { #expect(TreeLinkFilter.all.matches(badge(kind))) }
-
-        #expect(TreeLinkFilter.linked.matches(badge(.pinned)))
-        #expect(!TreeLinkFilter.linked.matches(badge(.derived)))
-        #expect(!TreeLinkFilter.linked.matches(nil))
-
-        #expect(TreeLinkFilter.needsConfirm.matches(badge(.derived)))
-        #expect(TreeLinkFilter.needsConfirm.matches(badge(.ambiguous)))
-        #expect(TreeLinkFilter.needsConfirm.matches(badge(.pinProblem)))
-        #expect(!TreeLinkFilter.needsConfirm.matches(badge(.pinned)))
-        #expect(!TreeLinkFilter.needsConfirm.matches(badge(.notInTree)))
-        #expect(!TreeLinkFilter.needsConfirm.matches(nil))
-
-        #expect(TreeLinkFilter.notLinked.matches(nil))
-        #expect(TreeLinkFilter.notLinked.matches(badge(.notInTree)))
-        #expect(!TreeLinkFilter.notLinked.matches(badge(.pinned)))
-        #expect(!TreeLinkFilter.notLinked.matches(badge(.derived)))
+    @Test func onlyPinnedHasGEDCOMID() {
+        #expect(TreeLinkBadge.hasGEDCOMID(badge(.pinned)))
+        #expect(!TreeLinkBadge.hasGEDCOMID(nil))
+        #expect(!TreeLinkBadge.hasGEDCOMID(badge(.derived)))
+        #expect(!TreeLinkBadge.hasGEDCOMID(badge(.ambiguous)))
+        #expect(!TreeLinkBadge.hasGEDCOMID(badge(.pinProblem)))
+        #expect(!TreeLinkBadge.hasGEDCOMID(badge(.notInTree)))
     }
 
-    @Test func everyBadgeLandsInExactlyOneNonAllBucket() {
-        let buckets: [TreeLinkFilter] = [.linked, .needsConfirm, .notLinked]
-        for kind in TreeLinkBadge.Kind.allCases {
-            #expect(buckets.filter { $0.matches(badge(kind)) }.count == 1, "\(kind)")
-        }
-        #expect(buckets.filter { $0.matches(nil) }.count == 1)
+    /// Regression sensor for the People-tab checkbox: "Show Missing GEDCOM"
+    /// is exactly the complement of hasGEDCOMID, including a nil badge.
+    @Test func showMissingGEDCOMIncludesEveryNonPinnedState() {
+        let isMissingGEDCOM: (TreeLinkBadge?) -> Bool = { !TreeLinkBadge.hasGEDCOMID($0) }
+        let states: [TreeLinkBadge?] = [
+            nil,
+            badge(.derived),
+            badge(.ambiguous),
+            badge(.pinProblem),
+            badge(.notInTree)
+        ]
+        #expect(states.allSatisfy(isMissingGEDCOM))
+        #expect(!isMissingGEDCOM(badge(.pinned)))
     }
 }
 
@@ -164,7 +166,7 @@ struct TreeLinkBadgeMemoTests {
         #expect(center.badgeComputeCount == 1, "same inputs → memo hit")
     }
 
-    @Test func sameInputsHitTheMemoAndPinsRevisionInvalidatesIt() async {
+    @Test func sameInputsHitTheMemoAndPinsRevisionInvalidatesIt() async throws {
         let (center, kinship) = makeCenter()
         center.store = { _ in }
         kinship.install(graph: F.graph)
@@ -193,15 +195,18 @@ struct TreeLinkBadgeMemoTests {
 
         // A pin bumps pinsRevision → the next read rebuilds even with the
         // SAME profile array handed in (production reloads it anyway).
-        let jr = TreeIdentityCandidate(F.graph.people["@I1@"]!)
+        let jrPerson = try #require(
+            F.graph.people["@I1@"]
+        )
+        let jr = TreeIdentityCandidate(jrPerson)
         let outcome = center.pin(jr, on: unpinnedRick, among: profiles, attestation: "picked: Rick Breen, 2026-08-29")
-        #expect(outcome.profile != nil)
+        let savedProfile = try #require(outcome.profile)
         _ = center.treeLinkBadges(for: profiles)
         #expect(center.badgeComputeCount == 3, "pinsRevision invalidates the memo")
 
         // With the saved profile in the array the badge is now the pin.
         var reloaded = profiles
-        reloaded[0] = outcome.profile!
+        reloaded[0] = savedProfile
         let pinned = center.treeLinkBadges(for: reloaded)
         #expect(pinned["rick"]?.kind == .pinned)
         #expect(pinned["rick"]?.label == "GVQV-NW3")
