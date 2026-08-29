@@ -108,7 +108,9 @@ struct PersonPhotoOnePerPersonTests {
     /// name does NOT match the tree spelling + a People-tab profile "Donna"
     /// (aliases mom/mommy, no pin) with a cover in its own reference folder.
     private func sandbox(withProfileCover: Bool = true) throws -> Sandbox {
-        let base = fileManager.temporaryDirectory
+        // Canonical (/private/var, not /var): the store canonicalizes its
+        // root, and the expectations compare URLs.
+        let base = fileManager.temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("OnePhotoPerPerson-\(UUID().uuidString)", isDirectory: true)
         let root = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
         var store = FamilyAssetStore(root: root, cacheRoot: base.appendingPathComponent("support/thumbs"))
