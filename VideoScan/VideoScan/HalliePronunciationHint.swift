@@ -99,8 +99,11 @@ extension HallieTellingMode {
 
     private static let hintPatterns: [HintPattern] = [
         // "Latta should be pronounced La (as in Lag) and Tah, so short a on Latta"
+        // Syllables are joined by "and"/"then" only: a hyphenated form
+        // ("LAT-uh") is a respelling (detectPronunciation), and a comma
+        // list would swallow "no, MahGill".
         HintPattern(
-            #"^(?:the (?:name|word) )?"# + nameGroup + verbs + #"(?:\s+(?:as|like))?\s+((?:[A-Za-z]+(?:\s*\(as in [A-Za-z]+\))?)(?:(?:,\s*|\s+and\s+|,\s*and\s+|\s*-\s*|\s+then\s+)(?:[A-Za-z]+(?:\s*\(as in [A-Za-z]+\))?))+)(?:[,;]?\s*so\b.*)?[.!]?$"#,
+            #"^(?:the (?:name|word) )?"# + nameGroup + verbs + #"(?:\s+(?:as|like))?\s+((?:[A-Za-z]+(?:\s*\(as in [A-Za-z]+\))?)(?:(?:,?\s+and\s+|,?\s+then\s+)(?:[A-Za-z]+(?:\s*\(as in [A-Za-z]+\))?))+)(?:[,;]?\s*so\b.*)?[.!]?$"#,
             [.name, .syllables]),
         // "Latta should be pronounced with a short a on the La", "Latta has a long e"
         HintPattern(
@@ -201,7 +204,7 @@ extension HallieTellingMode {
 
     /// "La (as in Lag) and Tah" → [La/Lag, Tah/nil].
     static func parseSyllables(_ raw: String) -> [HalliePronunciationHint.Syllable] {
-        let pieces = raw.replacingOccurrences(of: #"\s*,\s*and\s+|\s+and\s+|\s*,\s*|\s*-\s*|\s+then\s+"#, with: "|",
+        let pieces = raw.replacingOccurrences(of: #"\s*,?\s+and\s+|\s*,?\s+then\s+"#, with: "|",
                                               options: [.regularExpression, .caseInsensitive])
             .split(separator: "|")
         let exemplar = try! NSRegularExpression(pattern: #"^([A-Za-z]+)\s*(?:\(as in ([A-Za-z]+)\))?$"#, options: [.caseInsensitive])

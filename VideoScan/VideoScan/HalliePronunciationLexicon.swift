@@ -517,7 +517,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
 
     /// One log fragment per fired entry: "Nathaniel→nuh-THAN-yul (person Nathaniel McGill)".
     func logLine(for fired: [Entry]) -> String {
-        fired.map { "\($0.written)→\($0.spoken)\($0.phonemes.map { " /\($0)/" } ?? "") (\(source(of: $0)))" }.joined(separator: ", ")
+        fired.map { "\($0.written)→\($0.spoken) (\(source(of: $0)))" }.joined(separator: ", ")
     }
 
     private static func key(_ written: String) -> String {

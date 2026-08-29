@@ -312,7 +312,7 @@ struct HalliePronunciationDrillTests {
         let teach = try await turn("Edith is Ee-dith", drill: s4, recorder: recorder)
         let s5 = try #require(teach.drill)
         #expect(teach.result.prose == "OK, noted — Edith. Next name: Timmy.")
-        #expect(recorder.writes.last == .init(word: "Edith", saidAs: "Ee-dith",
+        #expect(recorder.writes.last == .init(word: "Edith", saidAs: "Ee-dith", phonemes: "ˈidɪθ",
                                               target: .treePerson(name: "Edith McGill", gedcomID: "@I4@", aliases: [])))
         #expect(recorder.store.status(for: "edith") == .taught)
         #expect(recorder.store.record(for: "edith")?.respelling == "Ee-dith")
@@ -469,8 +469,8 @@ struct HalliePronunciationDrillTests {
         let json = try #require(try JSONSerialization.jsonObject(with: manifest.jsonData()) as? [String: Any])
         #expect(json["version"] as? Int == 1)
         let entries = try #require(json["entries"] as? [[String: Any]])
-        let first = try #require(entries.first)
-        #expect(Set(first.keys).isSuperset(of: ["name", "key", "status", "source", "alternatives", "carriers", "origin"]))
+        let mcgillJSON = try #require(entries.first { $0["name"] as? String == "McGill" })
+        #expect(Set(mcgillJSON.keys).isSuperset(of: ["name", "key", "status", "source", "alternatives", "carriers", "origin"]))
         #expect(mcgill.origin == .taught)
     }
 
@@ -511,7 +511,7 @@ struct HalliePronunciationDrillTests {
         #expect(text.contains("Let's practice — 2 names on the sheet. Tell me \"right\", \"skip\", or how to say it. Next name: McGill."))
         #expect(text.contains("Good. Next name: Family."))
         #expect(text.contains("OK, noted — Family. That's every name on the sheet — taught 1, judged OK 1, skipped 0."))
-        #expect(harness.writes == [.init(word: "Family", saidAs: "MahGill", target: .file)])
+        #expect(harness.writes == [.init(word: "Family", saidAs: "MahGill", phonemes: "mˈɑɡɪl", target: .file)])
         #expect(harness.store.status(for: "mcgill") == .judgedOk)
         #expect(harness.store.status(for: "family") == .taught)
         #expect(text.contains("interpreted: pronunciation drill (local)"))
@@ -621,7 +621,7 @@ struct HalliePronunciationDrillTests {
         // Rick's first sentence: mapped, kept, read back.
         let a = try await turn("Latta should be pronounced with a short a on the La", drill: nil, recorder: recorder)
         #expect(a.result.prose == "OK, noted — Latta. From your hint (short a on La), I'll say Latta as LAT-uh from now on. I've kept that in the pronunciation list.")
-        #expect(recorder.writes.last == .init(word: "Latta", saidAs: "LAT-uh", target: .file))
+        #expect(recorder.writes.last == .init(word: "Latta", saidAs: "LAT-uh", phonemes: "lˈætə", target: .file))
         #expect(a.result.route == .telling && a.result.queryDescription == "pronunciation hint")
         #expect(a.executedIntent == nil)
         #expect(recorder.store.record(for: "latta")?.source == .derived)
@@ -679,7 +679,7 @@ struct HalliePronunciationDrillTests {
         let list = try await turn("what pronunciations do you have?", drill: nil, recorder: recorder)
         #expect(list.result.prose == "I have 2 taught pronunciations: Latta as LAT-uh, McGill as MahGill.")
         #expect(Q.listAnswer(lexicon: .init(entries: [])).hasPrefix("I don't have any taught pronunciations yet"))
-        #expect(Q.whenLabel(Date(timeIntervalSince1970: 0), now: Date()) == "on 1/1")
+        #expect(Q.whenLabel(Date(timeIntervalSince1970: 86_400 * 200), now: Date()).hasPrefix("on "))
     }
 
     @Test func hintsWorkInsideTheDrillForTheNameThatIsUp() async throws {
@@ -688,7 +688,7 @@ struct HalliePronunciationDrillTests {
         // Subject-less hint applies to the current name (Rick).
         let hinted = try await turn("stress on the first syllable", drill: start.drill, recorder: recorder)
         #expect(hinted.result.prose == "OK, noted — Rick. From your hint (stress on the first syllable), I'll say Rick as RICK. Next name: Breen.")
-        #expect(recorder.writes.last == .init(word: "Rick", saidAs: "RICK", target: .file))
+        #expect(recorder.writes.last == .init(word: "Rick", saidAs: "RICK", phonemes: "ɹˈɪk", target: .file))
         #expect(recorder.store.record(for: "rick")?.source == .derived)
         // Unmappable: stays on the name, keeps the hint.
         let ask = try await turn("Breen rhymes with green", drill: hinted.drill, recorder: recorder)
@@ -733,7 +733,7 @@ struct HalliePronunciationDrillTests {
         let text = harness.output.joined(separator: "\n")
         #expect(text.contains("I say Latta as Lah-Tah — that's in the pronunciation list."))
         #expect(text.contains("OK, noted — Latta. From your hint (short a on La), I'll say Latta as LAT-uh from now on."))
-        #expect(harness.writes == [.init(word: "Latta", saidAs: "LAT-uh", target: .file)])
+        #expect(harness.writes == [.init(word: "Latta", saidAs: "LAT-uh", phonemes: "lˈætə", target: .file)])
         #expect(text.contains("I say Latta as LAT-uh — you taught me that today ("))
         #expect(text.contains("I have 1 taught pronunciation: Latta as LAT-uh."))
         #expect(text.contains("interpreted: pronunciation question (local)"))

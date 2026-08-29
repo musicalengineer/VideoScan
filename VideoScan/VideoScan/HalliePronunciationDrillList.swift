@@ -277,12 +277,14 @@ struct PronunciationDrillList: Equatable, Sendable {
             return total
         }
         for index in people.indices { _ = count(index) }
-        let rest = people.indices.sorted { a, b in
-            descendantCount[a] != descendantCount[b]
-                ? descendantCount[a] > descendantCount[b]
-                : people[a].id < people[b].id
+        // Bucket by count (a counting sort: O(people), no comparator
+        // closure); ties keep the input order, which is the graph's own
+        // deterministic order.
+        var buckets: [Int: [Int]] = [:]
+        for index in people.indices { buckets[descendantCount[index], default: []].append(index) }
+        for total in buckets.keys.sorted(by: >) {
+            for index in buckets[total] ?? [] { place(index, source: .tree) }
         }
-        for index in rest { place(index, source: .tree) }
         return PronunciationDrillList(items: items)
     }
 

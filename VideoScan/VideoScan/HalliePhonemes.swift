@@ -128,7 +128,8 @@ enum HalliePhonemes {
                 continue
             }
             if let (spelling, phone) = consonants.first(where: { rest.hasPrefix($0.0) }) {
-                out += phone
+                // "GILL", "Latta": a doubled letter is one sound.
+                if !out.hasSuffix(phone) || phone.count > 1 { out += phone }
                 index += spelling.count
                 continue
             }

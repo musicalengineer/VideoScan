@@ -178,13 +178,6 @@ enum HalliePronunciationDrillMode {
         if let told = HallieTellingMode.detectPronunciation(cleaned) {
             return .teach(Correction(word: told.word, alternatives: told.alternatives))
         }
-        // "Latta should be pronounced with a short a on the La" (named), or
-        // "with a short a on the La" / "stress on the first syllable" about
-        // the name that is up.
-        if let hinted = HallieTellingMode.detectPronunciationHint(cleaned)
-            ?? session.current.flatMap({ HallieTellingMode.detectPronunciationHint("\($0.name) \(cleaned)") }) {
-            return .hint(hinted)
-        }
         // "no — MahGill" / "no, it's MahGill".
         if let rest = capture(noPattern, cleaned),
            let alternatives = alternatives(rest) {
@@ -203,6 +196,13 @@ enum HalliePronunciationDrillMode {
             if session.current?.key == key || session.list.items.contains(where: { $0.key == key }) {
                 return .teach(Correction(word: word, alternatives: alternatives))
             }
+        }
+        // "Latta should be pronounced with a short a on the La" (named), or
+        // "with a short a on the La" / "stress on the first syllable" about
+        // the name that is up.
+        if let hinted = HallieTellingMode.detectPronunciationHint(cleaned)
+            ?? session.current.flatMap({ HallieTellingMode.detectPronunciationHint("\($0.name) \(cleaned)") }) {
+            return .hint(hinted)
         }
         // "either MahGill or MicGill" / "MahGill or MicGill".
         if matches(alternativesPattern, cleaned),
