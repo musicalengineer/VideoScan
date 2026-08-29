@@ -663,6 +663,62 @@ struct KinshipInferenceTests {
         #expect(overlay?.node(profileStableID: "eileen") == .profile(stableID: "eileen"))
     }
 
+    @Test func identicalDuplicateProfilePinsCollapseRegardlessOfOrder() {
+        let first = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "duplicate-rick",
+            canonicalName: "Archive Subject Seven",
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let second = first
+
+        for definitions in [[first, second], [second, first]] {
+            let overlay = FamilyKinshipOverlay(
+                snapshots: definitions, graph: KinshipFixture.graph)
+            #expect(overlay.node(profileStableID: first.stableID)
+                    == .tree(gedcomID: "@I1@"))
+            #expect(overlay.pinProblem(forProfileStableID: first.stableID) == nil)
+        }
+    }
+
+    @Test func conflictingDuplicateProfilePinsFailClosedRegardlessOfOrder() {
+        let rick = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "conflicting-profile",
+            canonicalName: "Archive Subject Seven",
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let donna = HallieTurnExecutor.ProfileSnapshot(
+            stableID: rick.stableID,
+            canonicalName: rick.canonicalName,
+            treeIdentity: .familySearchID("DONN-A03"))
+
+        for definitions in [[rick, donna], [donna, rick]] {
+            let overlay = FamilyKinshipOverlay(
+                snapshots: definitions, graph: KinshipFixture.graph)
+            #expect(overlay.node(profileStableID: rick.stableID)
+                    == .profile(stableID: rick.stableID))
+            #expect(overlay.pinProblem(forProfileStableID: rick.stableID)?
+                .contains("duplicate profile definitions disagree") == true)
+        }
+    }
+
+    @Test func readableAndUnreadableDuplicatePinsFailClosedRegardlessOfOrder() {
+        let readable = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "mixed-readable-profile",
+            canonicalName: "Archive Subject Seven",
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let unreadable = HallieTurnExecutor.ProfileSnapshot(
+            stableID: readable.stableID,
+            canonicalName: readable.canonicalName,
+            treeIdentityUnreadable: true)
+
+        for definitions in [[readable, unreadable], [unreadable, readable]] {
+            let overlay = FamilyKinshipOverlay(
+                snapshots: definitions, graph: KinshipFixture.graph)
+            #expect(overlay.node(profileStableID: readable.stableID)
+                    == .profile(stableID: readable.stableID))
+            #expect(overlay.pinProblem(forProfileStableID: readable.stableID)?
+                .contains("duplicate profile definitions disagree") == true)
+        }
+    }
+
     @Test func hallieExecutorWalksFromADurableProfilePinIntoTheTree() async throws {
         // End-to-end sensor for the People-tab -> GEDCOM seam. The profile's
         // display name and aliases deliberately match NO tree record, so a

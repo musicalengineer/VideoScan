@@ -294,9 +294,13 @@ final class GedcomScaleSensorTests: XCTestCase {
         let overlay = try XCTUnwrap(overlays.last)
         for snapshot in snapshots {
             guard let node = overlay.node(profileStableID: snapshot.stableID),
-                  case .tree = node else {
+                  case .tree(let gedcomID) = node else {
                 return XCTFail("pointer pin did not bridge: \(snapshot.stableID)")
             }
+            XCTAssertEqual(
+                overlay.member(node)?.identity,
+                "tree-pointer:\(gedcomID)@\(fingerprint)",
+                "pointer-pin provenance must retain the export fingerprint")
         }
         print("SCALE[\(Self.config)] Hallie 100k x 32 pointer-pin overlay p50 \(median) ms")
         XCTAssertLessThan(median, 500 * Self.slack,

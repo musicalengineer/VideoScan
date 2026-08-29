@@ -270,17 +270,37 @@ struct FamilyKinshipOverlay: Sendable {
     /// Resolve every `treeIdentity` pin, failing closed: a pin the tree
     /// does not carry, or two profiles pinned to one tree person, bridge
     /// NOBODY and leave a pin problem for the editor / validation.
+    private struct PinDefinition: Hashable {
+        let identity: TreeIdentity?
+        let unreadable: Bool
+    }
+
     private mutating func resolvePins(_ snapshots: [ArchivistGraphProfileSnapshot]) -> [String: GedcomFamilyGraph.Person] {
         var resolved: [String: GedcomFamilyGraph.Person] = [:]
-        var claimants: [String: [String]] = [:]
-        for snapshot in snapshots {
-            if snapshot.treeIdentityUnreadable {
-                let why = "\(snapshot.canonicalName)'s family-tree pin could not be read (written by a newer app version?) — kept as is, not used"
-                pinProblems[snapshot.stableID] = why
+        var claimants: [String: Set<String>] = [:]
+        let definitionsByStableID = Dictionary(
+            grouping: snapshots, by: \.stableID)
+        for stableID in definitionsByStableID.keys.sorted() {
+            guard let definitions = definitionsByStableID[stableID] else { continue }
+            let displayName = definitions.map(\.canonicalName).sorted().first ?? stableID
+            let meanings = Set(definitions.map {
+                PinDefinition(
+                    identity: $0.treeIdentity,
+                    unreadable: $0.treeIdentityUnreadable)
+            })
+            guard meanings.count == 1, let meaning = meanings.first else {
+                let why = "\(displayName)'s duplicate profile definitions disagree about the family-tree pin — pin the profile again"
+                pinProblems[stableID] = why
                 note(why)
                 continue
             }
-            guard let pin = snapshot.treeIdentity else { continue }
+            if meaning.unreadable {
+                let why = "\(displayName)'s family-tree pin could not be read (written by a newer app version?) — kept as is, not used"
+                pinProblems[stableID] = why
+                note(why)
+                continue
+            }
+            guard let pin = meaning.identity else { continue }
             let person: GedcomFamilyGraph.Person?
             switch pin {
             case .familySearchID(let fsid):
@@ -290,17 +310,19 @@ struct FamilyKinshipOverlay: Sendable {
             }
             guard let person else {
                 let why = graph == nil
-                    ? "\(snapshot.canonicalName)'s family-tree pin can't be checked — no tree is installed"
-                    : "\(snapshot.canonicalName)'s family-tree pin points at a person this tree doesn't carry — pin them again"
-                pinProblems[snapshot.stableID] = why
+                    ? "\(displayName)'s family-tree pin can't be checked — no tree is installed"
+                    : "\(displayName)'s family-tree pin points at a person this tree doesn't carry — pin them again"
+                pinProblems[stableID] = why
                 note(why)
                 continue
             }
-            resolved[snapshot.stableID] = person
-            claimants[person.id, default: []].append(snapshot.stableID)
+            resolved[stableID] = person
+            claimants[person.id, default: []].insert(stableID)
         }
         for (personID, ids) in claimants where ids.count > 1 {
-            let names = ids.compactMap { id in snapshots.first { $0.stableID == id }?.canonicalName }.sorted()
+            let names = ids.compactMap { id in
+                definitionsByStableID[id]?.map(\.canonicalName).sorted().first
+            }.sorted()
             let treeName = graph?.people[personID]?.name ?? personID
             let why = "\(names.joined(separator: " and ")) are both pinned to \(treeName) in the family tree — only one profile can be that person"
             for id in ids {
@@ -398,7 +420,11 @@ struct FamilyKinshipOverlay: Sendable {
 
     /// "fsid:<FamilySearch ID>", or pointer@fingerprint for exports without.
     static func treeIdentity(_ person: GedcomFamilyGraph.Person, graph: GedcomFamilyGraph?) -> String {
-        treeIdentity(person, fingerprint: graph.map(fingerprint(of:)))
+        if let fsid = person.familySearchID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fsid.isEmpty {
+            return "fsid:" + fsid.uppercased()
+        }
+        return treeIdentity(person, fingerprint: graph.map(fingerprint(of:)))
     }
 
     /// Variant for an overlay that has already paid for the export
