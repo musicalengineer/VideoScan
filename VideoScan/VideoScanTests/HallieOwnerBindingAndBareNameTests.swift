@@ -138,7 +138,9 @@ private let rickSentence = "Can you find the closest common ancestor between me 
 private func expectMarthaStyleAnswer(_ r: HallieTurnExecutor.Result?, sourceLocation: SourceLocation = #_sourceLocation) {
     guard let r else { Issue.record("no answer", sourceLocation: sourceLocation); return }
     #expect(r.outcome == .answered, "got: \(r.prose)", sourceLocation: sourceLocation)
-    #expect(r.prose.contains("Richard Harding Breen Jr and Donna Hudson share 1 recorded ancestor; the nearest is Z Common"), "got: \(r.prose)", sourceLocation: sourceLocation)
+    // Either side order ("donna and me (rick)" leads with Donna).
+    #expect(r.prose.contains("share 1 recorded ancestor; the nearest is Z Common"), "got: \(r.prose)", sourceLocation: sourceLocation)
+    #expect(r.prose.contains("Richard Harding Breen Jr") && r.prose.contains("Donna Hudson"), "got: \(r.prose)", sourceLocation: sourceLocation)
     #expect(!r.prose.lowercased().hasPrefix("which"), sourceLocation: sourceLocation)
 }
 
