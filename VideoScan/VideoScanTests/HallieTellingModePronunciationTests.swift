@@ -51,17 +51,17 @@ extension HallieTellingModeTests {
     @Test func pronunciationRepliesConfirmAndSayWhereItWasKept() {
         let told = HallieTellingMode.PronunciationTelling(word: "Nathaniel", saidAs: "nuh-THAN-yul")
         #expect(HallieTellingMode.pronunciationReply(told, scope: .person(name: "Nathaniel McGill"))
-                == "Got it — I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that with Nathaniel McGill.")
+                == "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that with Nathaniel McGill.")
         #expect(HallieTellingMode.pronunciationReply(told, scope: .person(name: "nathaniel"))
-                == "Got it — I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that on Nathaniel's record.")
+                == "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that on Nathaniel's record.")
         #expect(HallieTellingMode.pronunciationReply(told, scope: .file).hasPrefix(
-            "Got it — I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that in the pronunciation list"))
+            "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that in the pronunciation list"))
         #expect(HallieTellingMode.pronunciationFailureReply(told, error: "disk full").contains("disk full"))
         // Spoken through the lexicon, the confirmation is the proof: the
         // name is respelled, the respelling is left alone.
         let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Nathaniel", spoken: "nuh-THAN-yul")])
         #expect(lexicon.apply(to: HallieTellingMode.pronunciationReply(told, scope: .file)).spoken
-                    .hasPrefix("Got it — I'll say nuh-THAN-yul as nuh-THAN-yul from now on."))
+                    .hasPrefix("OK, noted — nuh-THAN-yul. I'll say nuh-THAN-yul as nuh-THAN-yul from now on."))
     }
 }
 
