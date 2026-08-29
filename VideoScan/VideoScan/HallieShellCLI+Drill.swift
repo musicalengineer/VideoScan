@@ -56,7 +56,47 @@ extension HallieShellCLI {
             case .next:
                 advance(&session, store: store)
                 return await step(Mode.nextReply(session), session: session, state: &state, output: output, dependencies: dependencies)
+            case .hint(let hinted):
+                let key = FamilyIdentityText.normalized(hinted.word)
+                guard session.current?.key == key || session.list.items.contains(where: { $0.key == key })
+                        || dependencies.loadLexicon().entries.contains(where: { FamilyIdentityText.normalized($0.written) == key }) else {
+                    return await emit(Mode.unrecognizedReply(session), state: &state, output: output, dependencies: dependencies)
+                }
+                guard let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) else {
+                    if let item = session.list.items.first(where: { $0.key == key }) {
+                        store.set(item, status: store.status(for: key), hint: hinted.hint.description)
+                    } else {
+                        store.set(name: hinted.word, status: store.status(for: key), hint: hinted.hint.description)
+                    }
+                    _ = save(store, session: session, options: options, dependencies: dependencies)
+                    return await emit(Mode.hintNeedsSpellingReply(hinted, session: session), state: &state, output: output, dependencies: dependencies)
+                }
+                return await teachInDrill(.init(word: hinted.word, alternatives: [respelling]), hint: hinted.hint, session: session,
+                                          store: store, options: options, state: &state, output: output, dependencies: dependencies)
             case .teach(let correction):
+                return await teachInDrill(correction, hint: nil, session: session, store: store,
+                                          options: options, state: &state, output: output, dependencies: dependencies)
+            }
+        }
+
+        guard Mode.detectStart(text) else { return nil }
+        return await startDrill(options: options, state: &state, output: output, dependencies: dependencies)
+    }
+
+    private static func teachInDrill(
+        _ correction: HalliePronunciationDrillMode.Correction,
+        hint: HalliePronunciationHint?,
+        session: HalliePronunciationDrillMode.Session,
+        store: PronunciationDrillStore,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        typealias Mode = HalliePronunciationDrillMode
+        var session = session
+        var store = store
+        let origin: PronunciationDrillStore.Origin = hint == nil ? .taught : .derived
                 guard let word = correction.word ?? session.current?.name else {
                     return await end(session, state: &state, output: output, dependencies: dependencies)
                 }
@@ -79,21 +119,27 @@ extension HallieShellCLI {
                 let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
                 let key = FamilyIdentityText.normalized(word)
                 if let item = session.list.items.first(where: { $0.key == key }) {
-                    store.set(item, status: status, respelling: saidAs)
+                    store.set(item, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
                 } else {
-                    store.set(name: word, status: status, respelling: saidAs)
+                    store.set(name: word, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
                 }
                 session.taught += 1
                 let movedOn = session.current?.key == key
                 if movedOn { advance(&session, store: store) }
                 note += save(store, session: session, options: options, dependencies: dependencies)
                 return await step(
-                    Mode.taughtReply(word: word, alternatives: correction.alternatives, session: session, movedOn: movedOn) + note,
+                    Mode.taughtReply(word: word, alternatives: correction.alternatives, hint: hint, session: session, movedOn: movedOn) + note,
                     session: session, state: &state, output: output, dependencies: dependencies)
-            }
-        }
+    }
 
-        guard Mode.detectStart(text) else { return nil }
+    /// Build the sheet and put the first pending name.
+    private static func startDrill(
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        typealias Mode = HalliePronunciationDrillMode
         state.pendingClarification = nil
         let store = dependencies.loadDrillStore()
         let list = PronunciationDrillList.build(

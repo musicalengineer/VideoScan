@@ -142,8 +142,11 @@ struct PronunciationDrillList: Equatable, Sendable {
             switch anchor {
             case .profile(let id): return profile.uuid == id
             case .profileName(let name):
-                let key = FamilyIdentityText.normalized(name)
-                return ([profile.canonicalName] + profile.aliases).contains { FamilyIdentityText.normalized($0) == key }
+                // Legacy name anchors resolve like the kinship overlay does:
+                // by stable ID, then by canonical spelling / alias.
+                let key = PersonResolver.normalize(name)
+                if PersonResolver.normalize(profile.stableID) == key { return true }
+                return ([profile.canonicalName] + profile.aliases).contains { PersonResolver.normalize($0) == key }
             case .treePerson, .treePointer: return false
             }
         }
@@ -188,54 +191,68 @@ struct PronunciationDrillList: Equatable, Sendable {
         lexicon: HalliePronunciationLexicon,
         store: PronunciationDrillStore
     ) -> PronunciationDrillList {
-        let byID = Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Everything below works on array INDICES, not ids or copies of
+        // `Person` (each carries three arrays): 39k people order in well
+        // under the 200 ms budget even in a Debug build. Keys are
+        // normalized exactly once per word.
         let taught = Set(lexicon.entries.map { FamilyIdentityText.normalized($0.written) })
+        let indexByID: [String: Int] = Dictionary(
+            people.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var keys: [[String]] = []
+        keys.reserveCapacity(people.count)
+        var surnameKeys: [String?] = []
+        surnameKeys.reserveCapacity(people.count)
+        for person in people {
+            let personKeys = person.words.map { FamilyIdentityText.normalized($0) }
+            keys.append(personKeys)
+            surnameKeys.append(person.surname.map { FamilyIdentityText.normalized($0) } ?? personKeys.last)
+        }
+        let profileWords = profiles.names.map { FamilyTreePronunciationChips.nameWords($0) }
+        let profileKeys = profileWords.map { $0.map { FamilyIdentityText.normalized($0) } }
 
         // Carrier counts per word over everyone (tree + profiles).
         var carriers: [String: Int] = [:]
-        for person in people { for word in person.words { carriers[FamilyIdentityText.normalized(word), default: 0] += 1 } }
-        for name in profiles.names {
-            for word in FamilyTreePronunciationChips.nameWords(name) { carriers[FamilyIdentityText.normalized(word), default: 0] += 1 }
-        }
+        for personKeys in keys { for key in personKeys { carriers[key, default: 0] += 1 } }
+        for personKeys in profileKeys { for key in personKeys { carriers[key, default: 0] += 1 } }
 
         var items: [Item] = []
         var placed: Set<String> = []
-        func place(_ words: [String], surname: String?, source: Source) {
-            let surnameKey = surname.map { FamilyIdentityText.normalized($0) }
-                ?? words.last.map { FamilyIdentityText.normalized($0) }
-            // Given names first, then the surname — the order a name is said.
-            let ordered = words.filter { FamilyIdentityText.normalized($0) != surnameKey }
-                + words.filter { FamilyIdentityText.normalized($0) == surnameKey }
-            for word in ordered {
-                let key = FamilyIdentityText.normalized(word)
-                guard placed.insert(key).inserted else { continue }
-                let status = store.status(for: key)
-                if taught.contains(key), status != .alternativesPending { continue }
-                items.append(Item(
-                    key: key, name: word,
-                    kind: key == surnameKey ? .surname : .given,
-                    source: source, carriers: carriers[key] ?? 1))
+        func placeWord(_ word: String, key: String, kind: Kind, source: Source) {
+            guard placed.insert(key).inserted else { return }
+            if taught.contains(key), store.status(for: key) != .alternativesPending { return }
+            items.append(Item(key: key, name: word, kind: kind, source: source, carriers: carriers[key] ?? 1))
+        }
+        /// Given names first, then the surname — the order a name is said.
+        func place(_ words: [String], keys wordKeys: [String], surnameKey: String?, source: Source) {
+            var surnameAt: Int?
+            for (at, key) in wordKeys.enumerated() {
+                if key == surnameKey { if surnameAt == nil { surnameAt = at }; continue }
+                placeWord(words[at], key: key, kind: .given, source: source)
             }
+            if let surnameAt { placeWord(words[surnameAt], key: wordKeys[surnameAt], kind: .surname, source: source) }
+        }
+        func place(_ index: Int, source: Source) {
+            place(people[index].words, keys: keys[index], surnameKey: surnameKeys[index], source: source)
         }
 
         // 1. People-tab household.
-        for name in profiles.names {
-            place(FamilyTreePronunciationChips.nameWords(name), surname: nil, source: .peopleTab)
+        for (at, words) in profileWords.enumerated() {
+            place(words, keys: profileKeys[at], surnameKey: nil, source: .peopleTab)
         }
 
         // 2. Roots' near ancestry: breadth-first up to N generations,
         //    spouses beside each person (a spouse's surname is said as often).
-        var frontier = rootIDs.compactMap { byID[$0] }
-        var visited: Set<String> = Set(frontier.map(\.id))
+        var frontier = rootIDs.compactMap { indexByID[$0] }
+        var visited = Set(frontier)
         for _ in 0...nearAncestryGenerations {
             guard !frontier.isEmpty else { break }
-            var next: [Person] = []
-            for person in frontier {
-                place(person.words, surname: person.surname, source: .nearAncestry)
-                for spouse in person.spouseIDs.compactMap({ byID[$0] }) {
-                    place(spouse.words, surname: spouse.surname, source: .nearAncestry)
+            var next: [Int] = []
+            for index in frontier {
+                place(index, source: .nearAncestry)
+                for spouse in people[index].spouseIDs.compactMap({ indexByID[$0] }) {
+                    place(spouse, source: .nearAncestry)
                 }
-                for parent in person.parentIDs.compactMap({ byID[$0] }) where visited.insert(parent.id).inserted {
+                for parent in people[index].parentIDs.compactMap({ indexByID[$0] }) where visited.insert(parent).inserted {
                     next.append(parent)
                 }
             }
@@ -244,26 +261,28 @@ struct PronunciationDrillList: Equatable, Sendable {
 
         // 3. Everyone else by descendant count (memoized DFS — O(people);
         //    pedigree collapse double-counts a little, which only affects
-        //    ORDER). `[String: Int]` memo ≈ std::unordered_map.
-        var descendantCount: [String: Int] = [:]
-        var onPath: Set<String> = []
-        func count(_ id: String) -> Int {
-            if let known = descendantCount[id] { return known }
-            guard let person = byID[id], onPath.insert(id).inserted else { return 0 }
+        //    ORDER). `-1` = not yet counted, `-2` = on the current path
+        //    (cycle guard); a plain array beats a hash map here.
+        var descendantCount = [Int](repeating: -1, count: people.count)
+        func count(_ index: Int) -> Int {
+            let known = descendantCount[index]
+            if known >= 0 { return known }
+            if known == -2 { return 0 }
+            descendantCount[index] = -2
             var total = 0
-            for child in person.childIDs { total += 1 + count(child) }
-            onPath.remove(id)
-            descendantCount[id] = total
+            for child in people[index].childIDs {
+                if let childIndex = indexByID[child] { total += 1 + count(childIndex) }
+            }
+            descendantCount[index] = total
             return total
         }
-        let rest = people
-            .map { ($0, count($0.id)) }
-            .sorted { a, b in
-                a.1 != b.1 ? a.1 > b.1 : a.0.id < b.0.id
-            }
-        for (person, _) in rest {
-            place(person.words, surname: person.surname, source: .tree)
+        for index in people.indices { _ = count(index) }
+        let rest = people.indices.sorted { a, b in
+            descendantCount[a] != descendantCount[b]
+                ? descendantCount[a] > descendantCount[b]
+                : people[a].id < people[b].id
         }
+        for index in rest { place(index, source: .tree) }
         return PronunciationDrillList(items: items)
     }
 
@@ -281,14 +300,66 @@ struct PronunciationDrillList: Equatable, Sendable {
 /// the other Hallie JSON files (Settings Persistence rule: nothing writes
 /// on mutation).
 struct PronunciationDrillStore: Codable, Equatable, Sendable {
+    /// How a respelling came to be on the record (phoneme-ready for the
+    /// variations picker, Rick 2026-08-29): typed by Rick, derived from a
+    /// descriptive hint, picked from offered variations, or matched from a
+    /// recording of his voice.
+    enum Origin: String, Codable, Sendable, Equatable {
+        case taught, derived, picked, recorded
+    }
+
     struct Record: Codable, Equatable, Sendable {
         /// The spelling as shown to Rick.
         var name: String
         var status: PronunciationDrillStatus
-        /// The respelling Rick gave ("MahGill | MicGill" when two).
+        /// The respelling the voice uses (first alternative).
         var respelling: String?
-        var source: PronunciationDrillList.Source?
-        var updatedAt: Date
+        /// Optional phoneme string (misaki / IPA) for an inline override;
+        /// nothing writes it yet.
+        var phonemes: String?
+        /// Every kept alternative, first = spoken.
+        var alternatives: [String]
+        /// Where the respelling came from; nil when only judged/skipped.
+        var source: Origin?
+        /// Where the name sits on the sheet (people-tab / near-ancestry / tree).
+        var listSource: PronunciationDrillList.Source?
+        /// When Rick last attested this record.
+        var attestedAt: Date
+        /// Rick's raw descriptive hint ("La (as in Lag) and Tah"), kept even
+        /// when it could not be mapped so the picker can use it.
+        var hint: String?
+
+        init(name: String, status: PronunciationDrillStatus, respelling: String? = nil, phonemes: String? = nil,
+             alternatives: [String] = [], source: Origin? = nil, listSource: PronunciationDrillList.Source? = nil,
+             attestedAt: Date, hint: String? = nil) {
+            self.name = name
+            self.status = status
+            self.respelling = respelling ?? alternatives.first
+            self.phonemes = phonemes
+            self.alternatives = alternatives.isEmpty ? (respelling.map { [$0] } ?? []) : alternatives
+            self.source = source
+            self.listSource = listSource
+            self.attestedAt = attestedAt
+            self.hint = hint
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case name, status, respelling, phonemes, alternatives, source, listSource, attestedAt, hint
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                name: try c.decode(String.self, forKey: .name),
+                status: try c.decode(PronunciationDrillStatus.self, forKey: .status),
+                respelling: try c.decodeIfPresent(String.self, forKey: .respelling),
+                phonemes: try c.decodeIfPresent(String.self, forKey: .phonemes),
+                alternatives: try c.decodeIfPresent([String].self, forKey: .alternatives) ?? [],
+                source: try c.decodeIfPresent(Origin.self, forKey: .source),
+                listSource: try c.decodeIfPresent(PronunciationDrillList.Source.self, forKey: .listSource),
+                attestedAt: try c.decode(Date.self, forKey: .attestedAt),
+                hint: try c.decodeIfPresent(String.self, forKey: .hint))
+        }
     }
 
     static let fileName = "pronunciation-drill.json"
@@ -312,23 +383,37 @@ struct PronunciationDrillStore: Codable, Equatable, Sendable {
 
     func record(for key: String) -> Record? { names[key] }
 
+    /// Record a judgement or a teach for a name on the sheet. Fields not
+    /// given keep their previous value (a "right" after a teach keeps the
+    /// respelling; a hint keeps the status).
     mutating func set(_ item: PronunciationDrillList.Item, status: PronunciationDrillStatus,
-                      respelling: String? = nil, at date: Date = Date()) {
-        names[item.key] = Record(
-            name: item.name, status: status,
-            respelling: respelling ?? names[item.key]?.respelling,
-            source: item.source, updatedAt: date)
+                      alternatives: [String]? = nil, origin: Origin? = nil, hint: String? = nil,
+                      at date: Date = Date()) {
+        set(key: item.key, name: item.name, status: status, alternatives: alternatives,
+            origin: origin, listSource: item.source, hint: hint, at: date)
     }
 
     /// Set by normalized key for a name that is not on the sheet (a one-off
     /// "pronounce X like Y" for a name the list did not carry).
     mutating func set(name: String, status: PronunciationDrillStatus,
-                      respelling: String?, at date: Date = Date()) {
-        let key = FamilyIdentityText.normalized(name)
+                      alternatives: [String]? = nil, origin: Origin? = nil, hint: String? = nil,
+                      at date: Date = Date()) {
+        set(key: FamilyIdentityText.normalized(name), name: name, status: status,
+            alternatives: alternatives, origin: origin, listSource: nil, hint: hint, at: date)
+    }
+
+    private mutating func set(key: String, name: String, status: PronunciationDrillStatus,
+                              alternatives: [String]?, origin: Origin?,
+                              listSource: PronunciationDrillList.Source?, hint: String?, at date: Date) {
+        let previous = names[key]
         names[key] = Record(
             name: name, status: status,
-            respelling: respelling ?? names[key]?.respelling,
-            source: names[key]?.source, updatedAt: date)
+            phonemes: previous?.phonemes,
+            alternatives: alternatives ?? previous?.alternatives ?? [],
+            source: origin ?? previous?.source,
+            listSource: listSource ?? previous?.listSource,
+            attestedAt: date,
+            hint: hint ?? previous?.hint)
     }
 
     /// Counts for the log line / closing sentence.
@@ -402,7 +487,14 @@ struct PronunciationDrillManifest: Codable, Equatable, Sendable {
         /// Every kept alternative, first = spoken.
         let alternatives: [String]
         let status: PronunciationDrillStatus
+        /// Where the name sits on the sheet, or the lexicon layer for a
+        /// taught name that is off the sheet.
         let source: String
+        /// taught | derived | picked | recorded, when a respelling exists.
+        let origin: PronunciationDrillStore.Origin?
+        let phonemes: String?
+        /// Rick's raw descriptive hint, if any.
+        let hint: String?
         let carriers: Int
     }
 
@@ -430,7 +522,9 @@ struct PronunciationDrillManifest: Codable, Equatable, Sendable {
                 name: item.name, key: item.key, kind: item.kind,
                 respelling: alternatives.first, alternatives: alternatives,
                 status: store.status(for: item.key),
-                source: item.source.rawValue, carriers: item.carriers))
+                source: item.source.rawValue,
+                origin: record?.source, phonemes: record?.phonemes, hint: record?.hint,
+                carriers: item.carriers))
         }
         // Taught names that are off the sheet (already in the lexicon).
         for entry in lexicon.entries {
@@ -444,6 +538,7 @@ struct PronunciationDrillManifest: Codable, Equatable, Sendable {
                 alternatives: alternatives,
                 status: record?.status ?? .taught,
                 source: lexicon.source(of: entry).description,
+                origin: record?.source ?? .taught, phonemes: record?.phonemes, hint: record?.hint,
                 carriers: record == nil ? 0 : 1))
         }
         return PronunciationDrillManifest(version: PronunciationDrillStore.currentVersion, generatedAt: date, entries: entries)

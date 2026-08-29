@@ -197,7 +197,7 @@ struct HalliePronunciationDrillTests {
 
     @Test func aTaughtNameStaysOnTheSheetOnlyWhileAlternativesArePending() {
         var store = PronunciationDrillStore()
-        store.set(name: "McGill", status: .alternativesPending, respelling: "MahGill | MicGill")
+        store.set(name: "McGill", status: .alternativesPending, alternatives: ["MahGill", "MicGill"], origin: .taught)
         let taught = HalliePronunciationLexicon(entries: [
             .init(written: "McGill", spoken: "MahGill | MicGill"), .init(written: "Latta", spoken: "LAT-uh"),
         ])
@@ -363,7 +363,8 @@ struct HalliePronunciationDrillTests {
         recorder.failWith = "read-only volume"
         let failed = try await turn("no — Rik", drill: start.drill, recorder: recorder)
         #expect(failed.result.outcome == .failed)
-        #expect(failed.result.prose == "I couldn't save that — read-only volume. Saying Rick the new way won't stick, sorry. Still on: Rick.")
+        #expect(failed.result.prose.contains("read-only volume"))
+        #expect(failed.result.prose.hasSuffix("Saying Rick the new way won't stick, sorry. Still on: Rick."))
         #expect(!failed.result.prose.contains("OK, noted"))
         #expect(failed.drill?.current?.name == "Rick")
         #expect(recorder.store.status(for: "rick") == .untested)
@@ -409,13 +410,17 @@ struct HalliePronunciationDrillTests {
 
         var store = PronunciationDrillStore()
         let item = PronunciationDrillList.Item(key: "mcgill", name: "McGill", kind: .surname, source: .peopleTab, carriers: 2)
-        store.set(item, status: .taught, respelling: "MahGill", at: Date(timeIntervalSince1970: 1_700_000_000))
-        store.set(name: "Edith", status: .judgedOk, respelling: nil, at: Date(timeIntervalSince1970: 1_700_000_001))
+        store.set(item, status: .taught, alternatives: ["MahGill"], origin: .taught, at: Date(timeIntervalSince1970: 1_700_000_000))
+        store.set(name: "Edith", status: .judgedOk, at: Date(timeIntervalSince1970: 1_700_000_001))
         let list = PronunciationDrillList(items: [item])
         try store.save(to: url, manifest: .build(list: list, lexicon: Self.lexicon, store: store))
         let back = PronunciationDrillStore.load(from: url, log: sink)
         #expect(back == store)
-        #expect(back.record(for: "mcgill")?.source == .peopleTab)
+        #expect(back.record(for: "mcgill")?.listSource == .peopleTab)
+        #expect(back.record(for: "mcgill")?.source == .taught)
+        #expect(back.record(for: "mcgill")?.respelling == "MahGill")
+        #expect(back.record(for: "mcgill")?.alternatives == ["MahGill"])
+        #expect(back.record(for: "mcgill")?.phonemes == nil)
         #expect(back.tally.taught == 1 && back.tally.judgedOk == 1 && back.tally.skipped == 0)
         #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent(PronunciationDrillStore.manifestFileName).path))
 
@@ -436,8 +441,8 @@ struct HalliePronunciationDrillTests {
 
     @Test func manifestCarriesNameRespellingStatusAndSource() throws {
         var store = PronunciationDrillStore()
-        store.set(name: "McGill", status: .alternativesPending, respelling: "MahGill | MicGill")
-        store.set(name: "Rick", status: .judgedOk, respelling: nil)
+        store.set(name: "McGill", status: .alternativesPending, alternatives: ["MahGill", "MicGill"], origin: .taught)
+        store.set(name: "Rick", status: .judgedOk)
         let lexicon = HalliePronunciationLexicon.merged([
             HalliePronunciationLexicon(entries: [.init(written: "McGill", spoken: "MahGill | MicGill")]),
             Self.lexicon,
@@ -465,7 +470,8 @@ struct HalliePronunciationDrillTests {
         #expect(json["version"] as? Int == 1)
         let entries = try #require(json["entries"] as? [[String: Any]])
         let first = try #require(entries.first)
-        #expect(Set(first.keys).isSuperset(of: ["name", "key", "status", "source", "alternatives", "carriers"]))
+        #expect(Set(first.keys).isSuperset(of: ["name", "key", "status", "source", "alternatives", "carriers", "origin"]))
+        #expect(mcgill.origin == .taught)
     }
 
     // MARK: - 7. Shell parity
@@ -563,13 +569,173 @@ struct HalliePronunciationDrillTests {
                 people: people, rootIDs: ["p0"], profiles: profiles, lexicon: lexicon, store: PronunciationDrillStore())
         }
         #expect(elapsed < .milliseconds(200), "took \(elapsed)")
-        #expect(list.items.count == 2 + 3_900 + 390 - 1)
-        #expect(list.items.prefix(2).map(\.name) == ["Rick", "Breen"])
+        #expect(list.items.count == 3 + 3_900 + 390 - 1)
+        #expect(list.items.prefix(3).map(\.name) == ["Rick", "Breen", "Donna"])
         // The root's own name is next (near ancestry, generation 0).
-        #expect(list.items[2].name == "Given0")
+        #expect(list.items[3].name == "Given0")
         #expect(!list.items.contains { $0.name == "Surname7" })
         // Finding the next pending name is cheap too.
         let hop = clock.measure { _ = list.nextPending(from: 0, store: PronunciationDrillStore()) }
         #expect(hop < .milliseconds(20))
+    }
+
+    // MARK: - 9. Descriptive hints (live miss #14) and questions (#15)
+
+    @Test func ricksHintSentencesAreHintsNotSearches() throws {
+        typealias H = HalliePronunciationHint
+        let a = try #require(HallieTellingMode.detectPronunciationHint("Latta should be pronounced with a short a on the La"))
+        #expect(a == .init(word: "Latta", hint: .vowel(letter: "a", length: .short, syllable: "La")))
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: a.hint) == "LAT-uh")
+
+        let b = try #require(HallieTellingMode.detectPronunciationHint(
+            "Latta should be pronounced La (as in Lag) and Tah, so short a on Latta"))
+        #expect(b == .init(word: "Latta", hint: .syllables([.init(text: "La", exemplar: "Lag"), .init(text: "Tah", exemplar: nil)])))
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: b.hint) == "LA-tah")
+        #expect(b.hint.description == "La (as in Lag) and Tah")
+
+        // The rest of the vocabulary.
+        #expect(HallieTellingMode.detectPronunciationHint("Nathaniel with the stress on the second syllable")?.hint == .stress(.second))
+        #expect(HalliePronunciationRespelling.respelling(for: "Nathaniel", hint: .stress(.second)) == "na-THA-niel")
+        #expect(HallieTellingMode.detectPronunciationHint("the a in Latta is like in father")?.hint == .vowelLike(letter: "a", exemplar: "father"))
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: .vowelLike(letter: "a", exemplar: "father")) == "LAHT-uh")
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: .vowel(letter: "a", length: .long, syllable: nil)) == "LAY-tuh")
+        #expect(HallieTellingMode.detectPronunciationHint("McGill has a hard g")?.hint == .hardG)
+        #expect(HallieTellingMode.detectPronunciationHint("the t in Latta is silent")?.hint == .silent("t"))
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: .silent("t")) == "LA-uh")
+        #expect(HallieTellingMode.detectPronunciationHint("Latta rhymes with data")?.hint == .rhymes(with: "data"))
+        #expect(HalliePronunciationRespelling.respelling(for: "Latta", hint: .rhymes(with: "data")) == nil)
+        // A syllable the name does not have cannot be mapped.
+        #expect(HalliePronunciationRespelling.respelling(for: "Edith", hint: .vowel(letter: "a", length: .short, syllable: "La")) == nil)
+        #expect(HalliePronunciationRespelling.syllables("Latta") == ["lat", "ta"])
+        #expect(HalliePronunciationRespelling.syllables("Edith") == ["e", "dith"])
+        #expect(HalliePronunciationRespelling.syllables("McLaughlin") == ["mclaugh", "lin"])
+
+        // Not hints: questions, ordinary sentences, plain respellings.
+        #expect(HallieTellingMode.detectPronunciationHint("is Latta pronounced with a short a?") == nil)
+        #expect(HallieTellingMode.detectPronunciationHint("Donna went home with a short nap") == nil)
+        #expect(HallieTellingMode.detectPronunciationHint("Latta is pronounced LAT-uh") == nil)
+    }
+
+    @Test func hintsAreKeptAndReadBackOrAskedForASpellingNeverSearched() async throws {
+        let recorder = Recorder()
+        // Rick's first sentence: mapped, kept, read back.
+        let a = try await turn("Latta should be pronounced with a short a on the La", drill: nil, recorder: recorder)
+        #expect(a.result.prose == "OK, noted — Latta. From your hint (short a on La), I'll say Latta as LAT-uh from now on. I've kept that in the pronunciation list.")
+        #expect(recorder.writes.last == .init(word: "Latta", saidAs: "LAT-uh", target: .file))
+        #expect(a.result.route == .telling && a.result.queryDescription == "pronunciation hint")
+        #expect(a.executedIntent == nil)
+        #expect(recorder.store.record(for: "latta")?.source == .derived)
+        #expect(recorder.store.record(for: "latta")?.hint == "short a on La")
+
+        // Rick's second sentence: explicit syllables with an exemplar.
+        let b = try await turn("Latta should be pronounced La (as in Lag) and Tah, so short a on Latta", drill: nil, recorder: recorder)
+        #expect(b.result.prose.hasPrefix("OK, noted — Latta. From your hint (La (as in Lag) and Tah), I'll say Latta as LA-tah from now on."))
+        #expect(recorder.writes.last?.saidAs == "LA-tah")
+        let last = try #require(recorder.writes.last)
+        let spoken = HallieSpeaker.spokenText(b.result.prose, lexicon: .init(entries: [.init(written: last.word, spoken: last.saidAs)]))
+        #expect(spoken.hasPrefix("OK, noted — LA-tah."))
+
+        // Not mappable: the hint is kept for the variations picker; ask.
+        let c = try await turn("Latta rhymes with data", drill: nil, recorder: recorder)
+        #expect(c.result.prose == "I've noted “rhymes with data” for Latta — I'll offer you a few ways to say it next; for now, spell it out for me like “LAT-uh”?")
+        #expect(recorder.writes.count == 2)
+        #expect(recorder.store.record(for: "latta")?.hint == "rhymes with data")
+        #expect(recorder.store.record(for: "latta")?.respelling == "LA-tah")
+
+        // An unknown subject is not a hint (nil → ordinary answering).
+        #expect(HallieAppTurnCoordinator.isKnownName("Zorblax", dependencies: dependencies(recorder)) == false)
+        #expect(HallieAppTurnCoordinator.knownSpelling("latta", dependencies: dependencies(recorder)) == "Latta")
+        #expect(HallieAppTurnCoordinator.knownSpelling("timmy", dependencies: dependencies(recorder)) == "Timmy")
+    }
+
+    @Test func pronunciationQuestionsAreAnsweredFromTheLexicon() async throws {
+        typealias Q = HalliePronunciationQuery
+        #expect(Q.detect("tell me latta pronounciations") == .name("latta"))
+        #expect(Q.detect("how do you say McGill?") == .name("McGill"))
+        #expect(Q.detect("How is Edith pronounced") == .name("Edith"))
+        #expect(Q.detect("what's the pronunciation of Latta?") == .name("Latta"))
+        #expect(Q.detect("what pronunciations do you have?") == .list)
+        #expect(Q.detect("list the pronunciations") == .list)
+        #expect(Q.detect("which names have I taught you?") == .list)
+        #expect(Q.detect("show me videos of Latta") == nil)
+        #expect(Q.detect("tell me about Latta") == nil)
+
+        let recorder = Recorder()
+        // Taught in the fixture lexicon (file layer), not by Rick today.
+        let known = try await turn("tell me latta pronounciations", drill: nil, recorder: recorder)
+        #expect(known.result.prose == "I say Latta as LAT-uh — that's in the pronunciation list.")
+        #expect(known.result.route == .telling && known.executedIntent == nil)
+        // Untaught but known name.
+        let untaught = try await turn("how do you say Timmy?", drill: nil, recorder: recorder)
+        #expect(untaught.result.prose == "I don't have a note for Timmy; I'd say it as Kokoro does — tell me how (\"pronounce Timmy like LAT-uh\").")
+        // After Rick teaches it, the answer says when.
+        _ = try await turn("pronounce McGill like MahGill or MicGill", drill: nil, recorder: recorder)
+        let today = try await turn("how do you say McGill?", drill: nil, recorder: recorder)
+        let label = Q.whenLabel(Date(), now: Date())
+        #expect(today.result.prose == "I say McGill as MahGill (or MicGill) — you taught me that \(label).")
+        #expect(label.hasPrefix("today ("))
+        #expect(HallieSpeaker.spokenText(today.result.prose, lexicon: recorder.taughtLexicon).hasPrefix("I say MahGill as MahGill"))
+        // The list form.
+        let list = try await turn("what pronunciations do you have?", drill: nil, recorder: recorder)
+        #expect(list.result.prose == "I have 2 taught pronunciations: Latta as LAT-uh, McGill as MahGill.")
+        #expect(Q.listAnswer(lexicon: .init(entries: [])).hasPrefix("I don't have any taught pronunciations yet"))
+        #expect(Q.whenLabel(Date(timeIntervalSince1970: 0), now: Date()) == "on 1/1")
+    }
+
+    @Test func hintsWorkInsideTheDrillForTheNameThatIsUp() async throws {
+        let recorder = Recorder()
+        let start = try await turn("let's practice names", drill: nil, recorder: recorder)
+        // Subject-less hint applies to the current name (Rick).
+        let hinted = try await turn("stress on the first syllable", drill: start.drill, recorder: recorder)
+        #expect(hinted.result.prose == "OK, noted — Rick. From your hint (stress on the first syllable), I'll say Rick as RICK. Next name: Breen.")
+        #expect(recorder.writes.last == .init(word: "Rick", saidAs: "RICK", target: .file))
+        #expect(recorder.store.record(for: "rick")?.source == .derived)
+        // Unmappable: stays on the name, keeps the hint.
+        let ask = try await turn("Breen rhymes with green", drill: hinted.drill, recorder: recorder)
+        #expect(ask.result.prose.hasSuffix("Still on: Breen."))
+        #expect(ask.drill?.current?.name == "Breen")
+        #expect(recorder.store.record(for: "breen")?.hint == "rhymes with green")
+        #expect(recorder.store.status(for: "breen") == .untested)
+    }
+
+    @Test func shellAnswersPronunciationQuestionsAndHintsWithoutSearching() async {
+        final class Harness: @unchecked Sendable {
+            var inputs = ["tell me latta pronounciations", "Latta should be pronounced with a short a on the La",
+                          "how do you say Latta?", "what pronunciations do you have?"]
+            var output: [String] = []
+            var writes: [HallieAppTurnCoordinator.PronunciationWrite] = []
+            var store = PronunciationDrillStore()
+            var lexicon = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "Lah-Tah")])
+            func next() -> String? { inputs.isEmpty ? nil : inputs.removeFirst() }
+        }
+        let harness = Harness()
+        let dependencies = HallieShellCLI.Dependencies(
+            loadCatalog: { _ in [] },
+            loadProfiles: { .loaded([]) },
+            loadGraph: { _ in nil },
+            translateAST: { _, _ in
+                Issue.record("a pronunciation turn must never translate")
+                throw NLTranslatorError.unreachable("fixture")
+            },
+            executeTurn: { _, _ in throw NLTranslatorError.unreachable("fixture") },
+            performMediaAction: { _ in },
+            recordPronunciation: { write in
+                harness.writes.append(write)
+                harness.lexicon = .init(entries: [.init(written: write.word, spoken: write.saidAs)])
+            },
+            loadDrillStore: { harness.store },
+            saveDrillStore: { store, _ in harness.store = store },
+            loadLexicon: { harness.lexicon })
+        var options = HallieShellCLI.Options()
+        options.remember = true
+        _ = await HallieShellCLI.run(options: options, input: harness.next,
+                                     output: { harness.output.append($0) }, dependencies: dependencies)
+        let text = harness.output.joined(separator: "\n")
+        #expect(text.contains("I say Latta as Lah-Tah — that's in the pronunciation list."))
+        #expect(text.contains("OK, noted — Latta. From your hint (short a on La), I'll say Latta as LAT-uh from now on."))
+        #expect(harness.writes == [.init(word: "Latta", saidAs: "LAT-uh", target: .file)])
+        #expect(text.contains("I say Latta as LAT-uh — you taught me that today ("))
+        #expect(text.contains("I have 1 taught pronunciation: Latta as LAT-uh."))
+        #expect(text.contains("interpreted: pronunciation question (local)"))
     }
 }

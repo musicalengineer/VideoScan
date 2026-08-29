@@ -69,33 +69,30 @@ extension HallieAppTurnCoordinator {
             case .next:
                 advance(&session, store: store)
                 return finish(Mode.nextReply(session), saveNote: nil, session: session, telling: telling, referent: referent)
-            case .teach(let correction):
-                guard let word = correction.word ?? session.current?.name else {
-                    return response(Mode.exhaustedReply(session), drill: nil, telling: telling, referent: referent)
+            case .hint(let hinted):
+                // A hint about a name nobody carries is not a judgement.
+                let key = FamilyIdentityText.normalized(hinted.word)
+                guard session.current?.key == key || session.list.items.contains(where: { $0.key == key })
+                        || isKnownName(hinted.word, dependencies: dependencies) else {
+                    return response(Mode.unrecognizedReply(session), drill: session, telling: telling, referent: referent)
                 }
-                let outcome = teach(word: word, alternatives: correction.alternatives, dependencies: dependencies)
-                switch outcome {
-                case .failure(let error):
-                    return response(
-                        Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
-                        drill: session, telling: telling, referent: referent, outcome: .failed,
-                        basis: "pronunciation NOT kept (\(error.localizedDescription))")
-                case .success:
-                    let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
-                    let key = FamilyIdentityText.normalized(word)
+                guard let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) else {
+                    // Not mappable: keep the hint on the record (the variations
+                    // picker will offer ways to say it), ask for a spelling.
                     if let item = session.list.items.first(where: { $0.key == key }) {
-                        store.set(item, status: status, respelling: HalliePronunciationLexicon.joinedAlternatives(correction.alternatives))
+                        store.set(item, status: store.status(for: key), hint: hinted.hint.description)
                     } else {
-                        store.set(name: word, status: status, respelling: HalliePronunciationLexicon.joinedAlternatives(correction.alternatives))
+                        store.set(name: hinted.word, status: store.status(for: key), hint: hinted.hint.description)
                     }
-                    session.taught += 1
-                    let movedOn = session.current?.key == key
-                    if movedOn { advance(&session, store: store) }
-                    let saved = save(store, session: session, dependencies: dependencies)
-                    return finish(
-                        Mode.taughtReply(word: word, alternatives: correction.alternatives, session: session, movedOn: movedOn),
-                        saveNote: saved, session: session, telling: telling, referent: referent)
+                    _ = save(store, session: session, dependencies: dependencies)
+                    return response(Mode.hintNeedsSpellingReply(hinted, session: session),
+                                    drill: session, telling: telling, referent: referent)
                 }
+                return applyTeach(Mode.Correction(word: hinted.word, alternatives: [respelling]), hint: hinted.hint,
+                                  session: session, store: store, telling: telling, referent: referent, dependencies: dependencies)
+            case .teach(let correction):
+                return applyTeach(correction, hint: nil, session: session, store: store,
+                                  telling: telling, referent: referent, dependencies: dependencies)
             }
         }
 
@@ -118,6 +115,47 @@ extension HallieAppTurnCoordinator {
         return response(
             Mode.openingReply(session, remaining: session.remaining(store: store), resumed: resumed),
             drill: session, telling: telling, referent: referent)
+    }
+
+    /// One correction (typed, alternatives, or a mapped hint) while drilling.
+    private static func applyTeach(
+        _ correction: HalliePronunciationDrillMode.Correction,
+        hint: HalliePronunciationHint?,
+        session: HalliePronunciationDrillMode.Session,
+        store: PronunciationDrillStore,
+        telling: HallieTellingMode.Session?,
+        referent: CapturedReferent,
+        dependencies: Dependencies
+    ) -> Response {
+        typealias Mode = HalliePronunciationDrillMode
+        var session = session
+        var store = store
+        guard let word = correction.word ?? session.current?.name else {
+            return response(Mode.exhaustedReply(session), drill: nil, telling: telling, referent: referent)
+        }
+        switch teach(word: word, alternatives: correction.alternatives, dependencies: dependencies) {
+        case .failure(let error):
+            return response(
+                Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
+                drill: session, telling: telling, referent: referent, outcome: .failed,
+                basis: "pronunciation NOT kept (\(error.localizedDescription))")
+        case .success:
+            let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
+            let key = FamilyIdentityText.normalized(word)
+            let origin: PronunciationDrillStore.Origin = hint == nil ? .taught : .derived
+            if let item = session.list.items.first(where: { $0.key == key }) {
+                store.set(item, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+            } else {
+                store.set(name: word, status: status, alternatives: correction.alternatives, origin: origin, hint: hint?.description)
+            }
+            session.taught += 1
+            let movedOn = session.current?.key == key
+            if movedOn { advance(&session, store: store) }
+            let saved = save(store, session: session, dependencies: dependencies)
+            return finish(
+                Mode.taughtReply(word: word, alternatives: correction.alternatives, hint: hint, session: session, movedOn: movedOn),
+                saveNote: saved, session: session, telling: telling, referent: referent)
+        }
     }
 
     // MARK: - Steps

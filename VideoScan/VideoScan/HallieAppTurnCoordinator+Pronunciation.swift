@@ -1,11 +1,14 @@
 // HallieAppTurnCoordinator+Pronunciation.swift
 // The chat window's side of "Nathaniel is pronounced nuh-THAN-yul"
-// (HallieTellingMode.detectPronunciation, 2026-08-26) and "pronounce McGill
-// like MahGill or MicGill" (alternatives, 2026-08-29). Decides WHOSE name
-// the word is — one CyberBrain person, one tree person, or nobody in
+// (HallieTellingMode.detectPronunciation, 2026-08-26), "pronounce McGill
+// like MahGill or MicGill" (alternatives), descriptive hints ("Latta
+// should be pronounced with a short a on the La") and pronunciation
+// QUESTIONS ("tell me latta pronounciations") — 2026-08-29. Decides WHOSE
+// name the word is — one CyberBrain person, one tree person, or nobody in
 // particular — and hands a typed write to the dependency that owns the
-// file. The reply opens with the read-back ("OK, noted — McGill.") and is
-// spoken with the new entry in force, which is the proof Rick asked for.
+// file. Every reply that kept something opens with the read-back
+// ("OK, noted — McGill.") and is spoken with the new entry in force.
+// None of these turns ever reaches translation or a catalog search.
 
 import Foundation
 import VideoScanCore
@@ -30,20 +33,52 @@ extension HallieAppTurnCoordinator {
         let target: PronunciationTarget
     }
 
-    /// Handle the turn if it tells Hallie how to say a name. Nil otherwise.
-    /// `telling` is passed straight through so a correction mid-interview
-    /// does not end the interview.
+    /// Handle the turn if it tells Hallie how to say a name, hints at it,
+    /// or asks how she says one. Nil otherwise. `telling` is passed straight
+    /// through so a correction mid-interview does not end the interview.
     static func pronunciationResponse(
         question: String,
         telling: HallieTellingMode.Session?,
         referent: CapturedReferent,
         dependencies: Dependencies
     ) -> Response? {
-        guard let told = HallieTellingMode.detectPronunciation(question) else { return nil }
-        let prose: String
-        let outcome: HallieTurnExecutor.Outcome
-        let basis: String
-        switch teach(word: told.word, alternatives: told.alternatives, dependencies: dependencies) {
+        if let told = HallieTellingMode.detectPronunciation(question) {
+            return teachResponse(word: told.word, alternatives: told.alternatives, hint: nil,
+                                 telling: telling, referent: referent, dependencies: dependencies)
+        }
+        if let query = HalliePronunciationQuery.detect(question) {
+            return queryResponse(query, telling: telling, referent: referent, dependencies: dependencies)
+        }
+        if let hinted = HallieTellingMode.detectPronunciationHint(question),
+           isKnownName(hinted.word, dependencies: dependencies) {
+            if let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) {
+                return teachResponse(word: hinted.word, alternatives: [respelling], hint: hinted,
+                                     telling: telling, referent: referent, dependencies: dependencies)
+            }
+            // Understood, not mappable: keep the hint for the variations
+            // picker and ask for a spelling. Never a search.
+            var store = dependencies.loadDrillStore()
+            store.set(name: hinted.word, status: store.status(for: FamilyIdentityText.normalized(hinted.word)),
+                      hint: hinted.hint.description)
+            let manifest = PronunciationDrillManifest.build(
+                list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
+            _ = try? dependencies.saveDrillStore(store, manifest)
+            return pronunciationReply(
+                HallieTellingMode.hintNeedsSpellingReply(hinted), outcome: .answered,
+                basis: "listening — pronunciation hint understood, needs a respelling",
+                description: "pronunciation hint", telling: telling, referent: referent)
+        }
+        return nil
+    }
+
+    /// One taught name (typed respelling, alternatives, or a mapped hint):
+    /// write, confirm with the read-back, note it on the drill sheet.
+    private static func teachResponse(
+        word: String, alternatives: [String], hint: HalliePronunciationHintTelling?,
+        telling: HallieTellingMode.Session?, referent: CapturedReferent, dependencies: Dependencies
+    ) -> Response {
+        let told = HallieTellingMode.PronunciationTelling(word: word, alternatives: alternatives)
+        switch teach(word: word, alternatives: alternatives, dependencies: dependencies) {
         case .success(let target):
             let scope: HallieTellingMode.PronunciationScope
             switch target {
@@ -52,34 +87,112 @@ extension HallieAppTurnCoordinator {
             case .file:
                 scope = .file
             }
-            prose = HallieTellingMode.pronunciationReply(told, scope: scope)
-            outcome = .answered
-            basis = "pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record"))"
+            let prose = hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
+                ?? HallieTellingMode.pronunciationReply(told, scope: scope)
             // The sheet learns of a one-off teach so the drill never asks
             // for a name Rick just corrected. Best effort: the lexicon is
             // the truth; the sheet is bookkeeping.
             var store = dependencies.loadDrillStore()
-            store.set(name: told.word,
-                      status: told.alternatives.count > 1 ? .alternativesPending : .taught,
-                      respelling: told.saidAs)
+            store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
+                      alternatives: alternatives, origin: hint == nil ? .taught : .derived, hint: hint?.hint.description)
             let manifest = PronunciationDrillManifest.build(
                 list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
             if (try? dependencies.saveDrillStore(store, manifest)) == nil {
                 appLog.write("[hallie-voice] drill: sheet not updated after a one-off teach")
             }
+            return pronunciationReply(
+                prose, outcome: .answered,
+                basis: "listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record"))",
+                description: hint == nil ? "pronunciation" : "pronunciation hint",
+                telling: telling, referent: referent)
         case .failure(let error):
             // Honest failure (codex #700): no "OK, noted", not an answer, and
             // the basis says it was NOT kept.
-            prose = HallieTellingMode.pronunciationFailureReply(told, error: error.localizedDescription)
-            outcome = .failed
-            basis = "pronunciation NOT kept (\(error.localizedDescription))"
+            return pronunciationReply(
+                HallieTellingMode.pronunciationFailureReply(told, error: error.localizedDescription),
+                outcome: .failed,
+                basis: "listening — pronunciation NOT kept (\(error.localizedDescription))",
+                description: "pronunciation", telling: telling, referent: referent)
         }
+    }
+
+    /// "how do you say McGill" / "tell me latta pronounciations" / "what
+    /// pronunciations do you have". A name the archive does not know at
+    /// all is not a pronunciation question (nil → ordinary answering).
+    private static func queryResponse(
+        _ query: HalliePronunciationQuery,
+        telling: HallieTellingMode.Session?, referent: CapturedReferent, dependencies: Dependencies
+    ) -> Response? {
+        let lexicon = dependencies.loadLexicon()
+        let prose: String
+        switch query {
+        case .list:
+            prose = HalliePronunciationQuery.listAnswer(lexicon: lexicon)
+        case .name(let typed):
+            let key = FamilyIdentityText.normalized(typed)
+            let entry = lexicon.entries.first { FamilyIdentityText.normalized($0.written) == key }
+            guard entry != nil || isKnownName(typed, dependencies: dependencies) else { return nil }
+            let store = dependencies.loadDrillStore()
+            let record = store.record(for: key)
+            let taughtAt = (record?.status == .taught || record?.status == .alternativesPending) ? record?.attestedAt : nil
+            prose = HalliePronunciationQuery.nameAnswer(
+                word: entry?.written ?? knownSpelling(typed, dependencies: dependencies) ?? typed,
+                entry: entry, source: entry.map { lexicon.source(of: $0) }, taughtAt: taughtAt)
+        }
+        return pronunciationReply(
+            prose, outcome: .answered, basis: "pronunciation notes — the voice lexicon and the drill sheet",
+            description: "pronunciation question", telling: telling, referent: referent)
+    }
+
+    /// Is `word` a name the archive carries — in the lexicon, on a tree
+    /// record, a People-tab profile, or a CyberBrain person?
+    static func isKnownName(_ word: String, dependencies: Dependencies) -> Bool {
+        knownSpelling(word, dependencies: dependencies) != nil
+    }
+
+    /// The archive's spelling of `word`, or nil when nobody carries it.
+    static func knownSpelling(_ word: String, dependencies: Dependencies) -> String? {
+        let key = FamilyIdentityText.normalized(word)
+        guard !key.isEmpty else { return nil }
+        if let entry = dependencies.loadLexicon().entries.first(where: { FamilyIdentityText.normalized($0.written) == key }) {
+            return entry.written
+        }
+        func spelling(in names: [String]) -> String? {
+            for name in names {
+                for part in FamilyTreePronunciationChips.nameWords(name) where FamilyIdentityText.normalized(part) == key {
+                    return part
+                }
+            }
+            return nil
+        }
+        if let profiles = dependencies.loadProfiles() {
+            for profile in profiles {
+                if let found = spelling(in: [profile.canonicalName] + profile.aliases) { return found }
+            }
+        }
+        if let graph = dependencies.loadGraph() {
+            for person in graph.people.values {
+                if let found = spelling(in: [person.name] + person.alternateNames) { return found }
+            }
+        }
+        if let brain = dependencies.loadCyberBrain() {
+            for person in brain.archive.people {
+                if let found = spelling(in: [person.canonicalName] + person.aliases) { return found }
+            }
+        }
+        return nil
+    }
+
+    private static func pronunciationReply(
+        _ prose: String, outcome: HallieTurnExecutor.Outcome, basis: String, description: String,
+        telling: HallieTellingMode.Session?, referent: CapturedReferent
+    ) -> Response {
         let result = HallieTurnExecutor.Result(
             route: .telling,
             outcome: outcome,
             prose: prose,
-            basisLine: "Basis: listening — \(basis); no model call, no catalog query.",
-            queryDescription: "pronunciation",
+            basisLine: "Basis: \(basis); no model call, no catalog query.",
+            queryDescription: description,
             citations: [],
             catalogPersonName: nil)
         return Response(

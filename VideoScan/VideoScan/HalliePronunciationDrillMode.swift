@@ -62,6 +62,9 @@ enum HalliePronunciationDrillMode {
         /// "no — MahGill", "say it like MahGill", "either MahGill or
         /// MicGill", "pronounce McGill like MahGill", "Edith is Ee-dith".
         case teach(Correction)
+        /// A descriptive hint ("with a short a on the La", "Latta rhymes
+        /// with data"), for the current name unless one is named.
+        case hint(HalliePronunciationHintTelling)
         /// "skip".
         case skip
         /// "stop" / "that's enough".
@@ -175,6 +178,13 @@ enum HalliePronunciationDrillMode {
         if let told = HallieTellingMode.detectPronunciation(cleaned) {
             return .teach(Correction(word: told.word, alternatives: told.alternatives))
         }
+        // "Latta should be pronounced with a short a on the La" (named), or
+        // "with a short a on the La" / "stress on the first syllable" about
+        // the name that is up.
+        if let hinted = HallieTellingMode.detectPronunciationHint(cleaned)
+            ?? session.current.flatMap({ HallieTellingMode.detectPronunciationHint("\($0.name) \(cleaned)") }) {
+            return .hint(hinted)
+        }
         // "no — MahGill" / "no, it's MahGill".
         if let rest = capture(noPattern, cleaned),
            let alternatives = alternatives(rest) {
@@ -244,8 +254,12 @@ enum HalliePronunciationDrillMode {
 
     /// After a teach: the read-back FIRST (spoken with the new entry in
     /// force), then the next name. `word` is the name that was taught.
-    static func taughtReply(word: String, alternatives: [String], session: Session, movedOn: Bool) -> String {
+    static func taughtReply(word: String, alternatives: [String], hint: HalliePronunciationHint? = nil,
+                            session: Session, movedOn: Bool) -> String {
         var text = HallieTellingMode.pronunciationReadBack(word)
+        if let hint, let respelling = alternatives.first {
+            text += " From your hint (\(hint.description)), I'll say \(word) as \(respelling)."
+        }
         if alternatives.count > 1 {
             text += " I'll say \(alternatives[0]) and keep \(alternatives.dropFirst().joined(separator: " and ")) too."
         }
@@ -254,6 +268,13 @@ enum HalliePronunciationDrillMode {
         } else {
             text += " " + exhaustedReply(session)
         }
+        return text
+    }
+
+    /// A hint Hallie could not map: ask for a spelling, stay on the name.
+    static func hintNeedsSpellingReply(_ told: HalliePronunciationHintTelling, session: Session) -> String {
+        var text = HallieTellingMode.hintNeedsSpellingReply(told)
+        if let item = session.current { text += " Still on: \(item.name)." }
         return text
     }
 

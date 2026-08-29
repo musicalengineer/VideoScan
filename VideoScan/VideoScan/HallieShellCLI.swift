@@ -775,6 +775,13 @@ enum HallieShellCLI {
                 output: output, dependencies: dependencies) {
             return outcome
         }
+        // "pronounce X like Y", hints, and "how do you say X" are answered
+        // from the lexicon (HallieShellCLI+Pronunciation) — never searched.
+        if let outcome = await pronunciationTurn(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
         // Listening comes first: while someone is telling Hallie about a
         // person, every turn is theirs to classify (a statement to keep,
         // "that's all", or a question that ends the telling). An explicit
