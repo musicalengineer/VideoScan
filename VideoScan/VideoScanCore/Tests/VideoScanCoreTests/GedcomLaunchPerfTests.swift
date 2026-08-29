@@ -11,7 +11,7 @@ final class GedcomLaunchPerfTests: XCTestCase {
 
     #if DEBUG
     static let config = "Debug"
-    static let slack = 5.0
+    static let slack = 8.0  // Debug: 100k decode measured 648 ms mid-suite (M4, 8/29); Release slack stays 1.0
     #else
     static let config = "Release"
     static let slack = 1.0
