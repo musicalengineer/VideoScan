@@ -365,12 +365,26 @@ struct FamilyKinshipInference: Sendable {
     /// Durable identity of a vertex ("uuid:…" / "fsid:…"), for provenance
     /// and confirmation keys. Never a display name, never an @I pointer
     /// unless the export carries no FSIDs.
-    func identity(of node: Node) -> String { Self.identity(of: node, overlay: overlay) }
+    func identity(of node: Node) -> String { identity(cached: node) }
 
     private static func identity(of node: Node, overlay: FamilyKinshipOverlay) -> String {
         if let member = overlay.member(node), !member.identity.isEmpty { return member.identity }
         if case .tree(let id) = node, let graph = overlay.treeGraph, let person = graph.people[id] {
             return FamilyKinshipOverlay.treeIdentity(person, graph: graph)
+        }
+        return node.auditID
+    }
+
+    /// Instance identity: same rule, but a tree person WITHOUT an FSID uses
+    /// the export fingerprint computed ONCE per engine (a SHA over every
+    /// name — never per hop).
+    private func identity(cached node: Node) -> String {
+        if let member = overlay.member(node), !member.identity.isEmpty { return member.identity }
+        if case .tree(let id) = node, let graph = overlay.treeGraph, let person = graph.people[id] {
+            if let fsid = person.familySearchID?.trimmingCharacters(in: .whitespacesAndNewlines), !fsid.isEmpty {
+                return "fsid:" + fsid.uppercased()
+            }
+            return "tree-pointer:" + person.id + "@" + cache.fingerprint { FamilyKinshipOverlay.fingerprint(of: graph) }
         }
         return node.auditID
     }
@@ -856,6 +870,7 @@ private final class KinshipQueryCache: @unchecked Sendable {
     private var ancestorOrder: [Int32] = []
     private var ancestorBytes = 0
     static let ancestorMapLimit = 24
+    private var fingerprintValue: String?
 
     var counters: Counters {
         condition.lock(); defer { condition.unlock() }
@@ -878,6 +893,16 @@ private final class KinshipQueryCache: @unchecked Sendable {
         ancestorOrder.removeAll(keepingCapacity: false)
         ancestorBytes = 0
         condition.unlock()
+    }
+
+    /// The tree fingerprint, computed at most once per engine.
+    func fingerprint(_ build: () -> String) -> String {
+        condition.lock()
+        if let fingerprintValue { condition.unlock(); return fingerprintValue }
+        condition.unlock()
+        let value = build()
+        condition.lock(); fingerprintValue = value; condition.unlock()
+        return value
     }
 
     /// One ancestor map per tree entry, built at most once while cached.
