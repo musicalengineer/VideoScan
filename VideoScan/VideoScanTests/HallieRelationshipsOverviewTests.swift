@@ -22,12 +22,14 @@ struct HallieRelationshipsOverviewTests {
 
     /// Primitive rows on Rick only (the way Rick enters them): spouse Donna,
     /// sibling Tim (basis unspecified), four children, parents Dad and Ma.
+    /// A row reads "Rick is the <relation> of <anchor>" — `.parent` of Matt,
+    /// `.child` of Dad (same convention as KinshipFixture.family).
     /// Anna has no rows and nobody's rows point at her.
     private static let profiles: [Profile] = [
         Profile(stableID: "rick", canonicalName: "Rick", aliases: ["Dicky", "Richy"],
                 kinships: [row(.spouse, "Donna"), row(.sibling, "Tim"),
-                           row(.child, "Matt"), row(.child, "Mark"), row(.child, "Dan"), row(.child, "Beth"),
-                           row(.parent, "Dad"), row(.parent, "Ma")],
+                           row(.parent, "Matt"), row(.parent, "Mark"), row(.parent, "Dan"), row(.parent, "Beth"),
+                           row(.child, "Dad"), row(.child, "Ma")],
                 sex: .male),
         Profile(stableID: "donna", canonicalName: "Donna", sex: .female),
         Profile(stableID: "tim", canonicalName: "Tim", aliases: ["Timmy"], sex: .male),
