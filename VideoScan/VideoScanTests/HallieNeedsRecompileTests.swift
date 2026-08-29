@@ -333,6 +333,8 @@ struct HallieNeedsRecompileTests {
         check(try #require(HallieLineageAnswer.answer(.centerTree(person: "Martha Lamson"), context: ctx)), "center tree")
         check(try #require(HallieLineageAnswer.answer(.ancestorLine(person: nil, line: .maternal, generations: 5), context: ctx)), "ancestor line")
         check(HallieLineageAnswer.noTree(ctx), "noTree(context)")
+        check(try #require(HallieLineageAnswer.answer(.gedcomAwareness, context: ctx)), "what is gedcom")
+        check(try #require(HallieLineageAnswer.answer(.getFamilyTree, context: ctx)), "get family tree")
         // The executor's graph route (preflight + guard).
         check(try await HallieTurnExecutor.execute(
             .init(intent: intent("who is Rick's father", people: ["Rick"], operation: .kinship)), context: ctx), "kinship")
@@ -413,9 +415,11 @@ struct HallieNeedsRecompileTests {
         #expect(cache.needsRecompile(for: configuration, store: store).isEmpty)
         let after = HallieTurnExecutor.Context(graph: loaded.graph, needsRecompile: pending, speakers: speakers)
         #expect(HallieLineageAnswer.needsRecompileResult(after, queryDescription: "x") == nil)
-        let reAsk = HallieLineageAnswer.answer(.surnameTree(surname: "Lamson"), context: after)
-        #expect(reAsk?.prose != Self.expectedProse)
-        #expect(!(reAsk?.prose ?? "").contains("needs recompiling"))
+        let reAsk = try #require(HallieLineageAnswer.answer(.gedcomAwareness, context: after))
+        let reAskProse = reAsk.prose
+        #expect(reAskProse != Self.expectedProse)
+        #expect(!reAskProse.contains("needs recompiling"), "\(reAskProse)")
+        #expect(reAskProse.contains("\(people) people and"), "\(reAskProse)")
 
         // 4. Nothing pending → the center says so without running.
         let again = await center.recompile(configuration: configuration, store: store, cache: cache, progress: { _ in })

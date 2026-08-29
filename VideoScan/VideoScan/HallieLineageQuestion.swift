@@ -976,8 +976,12 @@ enum HallieLineageAnswer {
                        context: HallieTurnExecutor.Context) -> Result? {
         switch question {
         case .gedcomAwareness:
+            // "No family tree is loaded" would be false while a refused
+            // generation waits on a recompile (live miss #8).
+            if let recompile = needsRecompileResult(context, queryDescription: "capability gedcom") { return recompile }
             return gedcomAwareness(context.graph)
         case .getFamilyTree:
+            if let recompile = needsRecompileResult(context, queryDescription: "lineage: get family tree") { return recompile }
             return getFamilyTreeAnswer(context.graph)
         case .gedcomProvenance(let person, let surname):
             return gedcomProvenance(person: person, surname: surname, context: context)
