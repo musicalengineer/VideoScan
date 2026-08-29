@@ -14,6 +14,8 @@
 //   • The one-line identity banner the Family Tree tab shows after a focus
 //     ("Rick is Richard Harding Breen Jr … — Not right?") lives here too, so
 //     the People tab can set it and the tree tab can render it.
+//   • `treeLinkBadges(for:)` memoises the per-card tree-link badge map
+//     (TreeLinkBadge) so the gallery never runs the reducer per render.
 //
 // Reads the tree from KinshipDisplayCenter (the People tab's tree source),
 // writes profiles through an injectable `store` (production: save()), and
@@ -191,6 +193,61 @@ final class TreeIdentityCenter: ObservableObject {
         return ShowInTreeReducer.state(profile: profile, profiles: profiles, graph: graph,
                                        fingerprint: fingerprint,
                                        derivation: verdict)
+    }
+
+    // MARK: Tree-link badges (People-tab cards)
+
+    /// Memo key for the per-profile badge map: every input the reducer
+    /// reads. `derivationRunCount` stands in for "the derivations dict
+    /// changed"; `pinsRevision` for the writes.
+    struct BadgeMemoKey: Equatable {
+        let generation: Int
+        let signature: Int
+        let pinsRevision: Int
+        let derivationRunCount: Int
+    }
+
+    private var badgeMemo: (key: BadgeMemoKey, map: [String: TreeLinkBadge])?
+    /// Count of badge-map builds — tests pin the memo and its invalidation.
+    private(set) var badgeComputeCount = 0
+
+    /// Badge per profile id for the People gallery. Built once per
+    /// (tree generation, identity signature, pinsRevision, derivation pass)
+    /// and handed back on every render after that, so a card is one
+    /// dictionary lookup — never per-card reducer work. Unpinned profiles
+    /// the derivation pass has not covered get no badge until it lands
+    /// (the `.task(id:)` in the gallery re-derives; no synchronous derive
+    /// here, unlike `showInTreeState(for:)`).
+    /// Memory: one small struct per profile — a few KB for a family.
+    func treeLinkBadges(for profiles: [POIProfile]) -> [String: TreeLinkBadge] {
+        let key = BadgeMemoKey(generation: kinshipCenter.graphGeneration,
+                               signature: Self.identitySignature(of: profiles),
+                               pinsRevision: pinsRevision,
+                               derivationRunCount: derivationRunCount)
+        if let badgeMemo, badgeMemo.key == key { return badgeMemo.map }
+        guard let graph = kinshipCenter.graph else {
+            badgeMemo = (key, [:])
+            badgeComputeCount += 1
+            return [:]
+        }
+        let fingerprint = kinshipCenter.graphFingerprint
+        var map: [String: TreeLinkBadge] = [:]
+        map.reserveCapacity(profiles.count)
+        for profile in profiles {
+            let pointerFingerprint: String? = {
+                if case .pointer? = profile.treeIdentity { return fingerprint }
+                return nil
+            }()
+            let state = ShowInTreeReducer.state(profile: profile, profiles: profiles, graph: graph,
+                                                fingerprint: pointerFingerprint,
+                                                derivation: derivations[profile.id])
+            if let badge = TreeLinkBadge.state(for: state, profile: profile) {
+                map[profile.id] = badge
+            }
+        }
+        badgeMemo = (key, map)
+        badgeComputeCount += 1
+        return map
     }
 
     /// Candidates behind a tree-picker search, for the which-one sheet's

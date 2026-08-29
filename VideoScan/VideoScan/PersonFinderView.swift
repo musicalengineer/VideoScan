@@ -128,6 +128,10 @@ struct PersonFinderView: View {
     @ObservedObject var identityCenter = TreeIdentityCenter.shared
     /// The which-one sheet behind "Show in Family Tree" (item-binding form).
     @State var identityPickTarget: TreeIdentityPickTarget?
+    /// The People header's "Show: All · Linked · Needs confirm · Not linked"
+    /// tree-link chip (2026-08-29). Session-scoped on purpose — a filter
+    /// that survived relaunch would hide people silently.
+    @State var peopleTreeFilter: TreeLinkFilter = .all
     /// Exact-record hint for the Family Tree tab (same key FamilyTreeDemoView
     /// reads); set alongside `ftHighlight` when the profile is pinned.
     @AppStorage("ftHighlightedPersonID") var ftHighlightID: String = ""
