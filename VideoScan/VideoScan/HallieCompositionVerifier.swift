@@ -289,7 +289,7 @@ enum HallieCompositionVerifier {
         guard !word.isEmpty else { return false }
         // Whole word only: "Casanov." is not "Nov."
         if let before = scalars.last, before.isLetter || before.isNumber { return false }
-        if word.count == 1 { return word.first!.isUppercase && word != "I" }
+        if word.count == 1, let letter = word.first { return letter.isUppercase && letter != "I" }
         return abbreviations.contains(word.lowercased())
     }
 
@@ -369,9 +369,13 @@ enum HallieCompositionVerifier {
                     // "Oct. 17": mid-sentence unless tags close it here.
                     let afterTags = endOfTags(from: lookahead)
                     let tagged = afterTags > lookahead
-                    let following = nextNonSpace(from: afterTags)
-                    let closesHere = tagged && (following == nil || following == "\n"
-                        || following!.isUppercase || following == "\"" || following == "“")
+                    let closesHere: Bool
+                    if let following = nextNonSpace(from: afterTags) {
+                        closesHere = tagged && (following == "\n" || following.isUppercase
+                            || following == "\"" || following == "“")
+                    } else {
+                        closesHere = tagged
+                    }
                     if !closesHere {
                         index = lookahead
                         continue
