@@ -367,7 +367,7 @@ struct HallieSurnameRosterTests {
         // Repeated anchor and non-anchor records retain legacy multiplicity
         // and ordering. This also guards the bounded path from deduplicating.
         let duplicateAnchor = try #require(many.people["@I9@"])
-        let duplicateNonAnchor = try #require(many.people["@I4@"])
+        let duplicateNonAnchor = try #require(many.people["@I2@"])
         let duplicates = ArchivistBiographyPolicy.orderedPeople(
             ordered + [duplicateAnchor, duplicateNonAnchor, duplicateAnchor])
         let withDuplicates = HallieWhichOne.arrangeAlreadyOrdered(
@@ -375,6 +375,7 @@ struct HallieSurnameRosterTests {
         #expect(withDuplicates == legacyWhichOneArrangement(
             duplicates, graph: many, ownerFamilySearchID: "LATE-009"))
         #expect(withDuplicates.shown.filter { $0.id == "@I9@" }.count == 3)
+        #expect(withDuplicates.shown.filter { $0.id == "@I2@" }.count == 2)
 
         // More roots than the visible cap must remain anchor-first and
         // bounded, including when an additional owner anchor sorts late.
