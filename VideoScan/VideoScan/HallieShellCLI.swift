@@ -741,6 +741,27 @@ enum HallieShellCLI {
                 output: output, dependencies: dependencies)
         }
         if let pending = state.pendingClarification {
+            // A discriminator that fits several of the choices narrows the
+            // list; one that fits nobody is said and the same question
+            // stays open (same wording as the chat window, 2026-08-29).
+            switch HallieTurnExecutor.clarificationReply(question, from: pending.value.candidates) {
+            case .narrowed(let subset, let discriminator):
+                let narrowed = pending.value.narrowed(to: subset) ?? pending.value
+                state.pendingClarification = Session.PendingClarification(
+                    value: narrowed, context: pending.context)
+                return await reaskClarification(
+                    narrowed,
+                    preface: HallieTurnExecutor.narrowedClarificationPreface(
+                        count: narrowed.candidates.count, discriminator: discriminator),
+                    state: &state, output: output, dependencies: dependencies)
+            case .unmatched(let discriminator):
+                return await reaskClarification(
+                    pending.value,
+                    preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator),
+                    state: &state, output: output, dependencies: dependencies)
+            case .selected, .notASelection:
+                break
+            }
             // A clarifying question must expire when the person changes the
             // subject. Before this, a pending clarification was cleared only
             // by :cancel, so one "which Tim did you mean?" swallowed every
@@ -1081,6 +1102,29 @@ enum HallieShellCLI {
             await dependencies.recordTranscript([event])
             return .interpretationFailed
         }
+    }
+
+    /// Re-ask the pending which-one with a preface, transcribed like any
+    /// other clarification turn. No continuation runs.
+    private static func reaskClarification(
+        _ clarification: HallieTurnExecutor.Clarification,
+        preface: String,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        let text = preface + "Which person do you mean?"
+        output(text)
+        printClarification(clarification, output: output)
+        let event = transcriptEvent(
+            kind: .assistant,
+            text: text,
+            basisLine: "The reply did not select exactly one stable identity.",
+            outcome: "needs-clarification",
+            offeredActions: clarification.candidates.map(\.label),
+            state: &state)
+        await dependencies.recordTranscript([event])
+        return .declined
     }
 
     private static func clarificationSelection(

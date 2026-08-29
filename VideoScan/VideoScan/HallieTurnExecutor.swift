@@ -69,13 +69,39 @@ enum HallieTurnExecutor {
         let canonicalName: String
         let label: String
         let source: IdentitySource
+        /// Facts a typed which-one reply may discriminate by beyond the
+        /// label's years — places and the names of parents and spouses
+        /// ("the one from Sudbury", "Matthew Rice's wife"). Normalized
+        /// (PersonResolver.normalize); never shown. Empty for People-tab
+        /// and CyberBrain choices.
+        let discriminators: [String]
 
-        init(id: CandidateID, canonicalName: String, label: String) {
+        init(id: CandidateID, canonicalName: String, label: String,
+             discriminators: [String] = []) {
             self.id = id
             self.canonicalName = canonicalName
             self.label = label
             self.source = id.source
+            self.discriminators = discriminators
         }
+    }
+
+    /// One family-tree person as a which-one choice: the shared
+    /// birth/death label plus the discriminating facts a reply may name.
+    static func gedcomCandidate(
+        _ person: GedcomFamilyGraph.Person,
+        graph: GedcomFamilyGraph
+    ) -> Candidate {
+        var facts: [String] = []
+        if let place = person.birthPlace { facts.append(place) }
+        if let place = person.deathPlace { facts.append(place) }
+        facts += graph.relatives(.parents, of: person).map(\.name)
+        facts += graph.marriages(of: person).compactMap { $0.spouse?.name }
+        return Candidate(
+            id: .gedcomPersonID(person.id),
+            canonicalName: person.name,
+            label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label,
+            discriminators: facts.map(PersonResolver.normalize))
     }
 
     enum ClarificationStage: Sendable, Equatable {
@@ -202,6 +228,19 @@ enum HallieTurnExecutor {
             self.stage = stage
             self.candidates = candidates
             self.continuationToken = continuationToken
+        }
+
+        /// The same pending question over a subset of its choices ("two of
+        /// them were born in 1520 — which?"). The subset must come from
+        /// this clarification's own candidates; anything else is refused
+        /// (nil) so a client cannot widen or forge the list.
+        func narrowed(to subset: [Candidate]) -> Clarification? {
+            guard !subset.isEmpty,
+                  subset.allSatisfy({ chosen in candidates.contains { $0.id == chosen.id } })
+            else { return nil }
+            return Clarification(
+                intent: intent, stage: stage, candidates: subset,
+                continuationToken: continuationToken)
         }
     }
 
@@ -744,6 +783,21 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let rawPayload):
+            // The lineage common-ancestor shape resolves both names through
+            // the lineage chain (owner pin, CyberBrain alias, tree index) —
+            // not the graph preflight — and carries which-one chips that
+            // resume it (2026-08-29).
+            if rawPayload.operation == .commonAncestor {
+                let names = rawPayload.people.map { name -> String? in
+                    HallieLineageAnswer.isFirstPerson(name) ? nil : name
+                }
+                guard names.count == 2 else {
+                    return invalidContinuationResult(for: ast)
+                }
+                return HallieLineageAnswer.commonAncestor(
+                    names[0], names[1], request: request, context: context)
+                    ?? invalidContinuationResult(for: ast)
+            }
             // Everything that must happen BEFORE a family-tree lookup on a
             // fresh turn — wedding-date guard, bare-pronoun guard, "my dad"
             // rebinding, "I"/"you" binding — lives in +GraphPreflight; a
@@ -1117,14 +1171,13 @@ enum HallieTurnExecutor {
                     // Same-name family-tree people (Sr./Jr.) need labels the
                     // user can tell apart; mirror the graph path's
                     // birth/death or pointer suffix.
-                    let label = graph?.people[candidate.id].map {
-                        ArchivistBiographyPolicy.disambiguationCandidate(
-                            for: $0).label
-                    } ?? "\(candidate.canonicalName) (\(candidate.id))"
+                    if let graph, let person = graph.people[candidate.id] {
+                        return gedcomCandidate(person, graph: graph)
+                    }
                     return Candidate(
                         id: .gedcomPersonID(candidate.id),
                         canonicalName: candidate.canonicalName,
-                        label: label)
+                        label: "\(candidate.canonicalName) (\(candidate.id))")
                 }
                 return Candidate(
                     id: .cyberBrainPersonID(candidate.id),

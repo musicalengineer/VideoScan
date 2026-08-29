@@ -2176,18 +2176,79 @@ enum HallieLineageAnswer {
     /// say how far each side was walked.
     static func commonAncestor(_ typedA: String?, _ typedB: String?,
                                context: HallieTurnExecutor.Context) -> Result? {
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "",
+            ast: .graph(.init(people: [typedA ?? "me", typedB ?? "me"], operation: .commonAncestor)))
+        return commonAncestor(typedA, typedB,
+                              request: HallieTurnExecutor.Request(intent: intent), context: context)
+    }
+
+    /// "me" / "I" / "myself" in a common-ancestor intent stands for the
+    /// signed-in owner (the lineage resolver's nil).
+    static func isFirstPerson(_ name: String) -> Bool {
+        ["me", "i", "myself", "my", "us", "we"].contains(
+            name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// The which-one for one side, with a chip per namesake that RESUMES
+    /// this ask (2026-08-29: "donna 1959" after "Which Donna do you mean…"
+    /// used to become a catalog search because the answer carried no
+    /// continuation). `pinned` keeps the other side's earlier choice.
+    private static func commonAncestorWhichOne(
+        _ typed: String, among people: [GedcomFamilyGraph.Person],
+        request: HallieTurnExecutor.Request, pinned: [Int: HallieTurnExecutor.CandidateID],
+        context: HallieTurnExecutor.Context, graph: GedcomFamilyGraph
+    ) -> Result {
+        let asked = whichOne(typed, among: people)
+        return Result(
+            route: .graph, outcome: .needsClarification,
+            prose: asked.prose, basisLine: asked.basisLine,
+            queryDescription: asked.queryDescription, citations: [], catalogPersonName: nil,
+            clarification: HallieTurnExecutor.makeClarification(
+                intent: request.intent.replacing(pinnedGraphSubjects: pinned),
+                stage: .gedcomPerson,
+                candidates: people.map { HallieTurnExecutor.gedcomCandidate($0, graph: graph) },
+                context: context))
+    }
+
+    /// The executor's entry: identity for both slots through the lineage
+    /// chain, honouring a chip choice (`request.selectedIdentity`) for the
+    /// first ambiguous slot and earlier choices (`pinnedGraphSubjects`),
+    /// then the pure answer. Nil = neither side is a person the tree
+    /// knows (the question goes on as typed).
+    static func commonAncestor(_ typedA: String?, _ typedB: String?,
+                               request: HallieTurnExecutor.Request,
+                               context: HallieTurnExecutor.Context) -> Result? {
         guard let graph = context.graph else { return noTree() }
         var notes: [String] = []
+        var pinned = request.intent.pinnedGraphSubjects
+        var floating = request.selectedIdentity
         // C++ readers: a two-case enum instead of std::variant — the
         // resolved person, or the answer that stops the question.
         enum Side { case ok(GedcomFamilyGraph.Person), stop(Result) }
-        func person(_ typed: String?) -> Side {
+        func person(_ typed: String?, slot: Int) -> Side {
+            if let choice = pinned[slot] {
+                guard case .gedcomPersonID(let id) = choice, let p = graph.people[id] else {
+                    return .stop(HallieTurnExecutor.invalidContinuationResult(for: request.intent.ast))
+                }
+                return .ok(p)
+            }
             switch resolveDetailed(typed, context: context, graph: graph) {
             case .success(let p, let note):
                 if let note { notes.append(note) }
                 return .ok(p)
             case .ambiguous(let people):
-                return .stop(whichOne(typed ?? context.speakers.ownerName ?? "", among: people))
+                // The one chip choice we were handed belongs to the first
+                // slot that turns out ambiguous; consume it here.
+                if let choice = floating, case .gedcomPersonID(let id) = choice,
+                   let p = people.first(where: { $0.id == id }) {
+                    pinned[slot] = choice
+                    floating = nil
+                    return .ok(p)
+                }
+                return .stop(commonAncestorWhichOne(
+                    typed ?? context.speakers.ownerName ?? "", among: people,
+                    request: request, pinned: pinned, context: context, graph: graph))
             case .failure(let r):
                 return .stop(r ?? Result(
                     route: .graph, outcome: .declined,
@@ -2197,7 +2258,7 @@ enum HallieLineageAnswer {
                     citations: [], catalogPersonName: nil))
             }
         }
-        let sideA = person(typedA), sideB = person(typedB)
+        let sideA = person(typedA, slot: 0), sideB = person(typedB, slot: 1)
         // Neither side is a person the tree knows ("how are astronomy and
         // philosophy related", codex #776): not ours — the question goes
         // on as typed instead of a graph decline.
@@ -2208,6 +2269,10 @@ enum HallieLineageAnswer {
         let pa: GedcomFamilyGraph.Person, pb: GedcomFamilyGraph.Person
         switch sideA { case .stop(let r): return r; case .ok(let p): pa = p }
         switch sideB { case .stop(let r): return r; case .ok(let p): pb = p }
+        // A chip choice nobody needed means the continuation is stale.
+        if floating != nil {
+            return HallieTurnExecutor.invalidContinuationResult(for: request.intent.ast)
+        }
         let basis = ArchivistBiographyPolicy.gedcomBasis
             + " Ancestor sets of both people intersected; nearest by total generations first."
             + (notes.isEmpty ? "" : " " + notes.joined(separator: " "))

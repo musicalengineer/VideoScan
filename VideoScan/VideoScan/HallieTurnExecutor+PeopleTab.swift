@@ -230,7 +230,7 @@ extension HallieTurnExecutor {
             case .death:
                 outcome = .declined
                 sentences.append("The People profile for \(name) doesn't record that.")
-            case .kinship, .familyTree, .relationship:
+            case .kinship, .familyTree, .relationship, .commonAncestor:
                 outcome = .declined
                 let what = payload.relation.map { "\($0.rawValue) " } ?? "relatives "
                 sentences.append(

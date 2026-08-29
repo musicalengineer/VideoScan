@@ -481,6 +481,16 @@ extension HallieTurnExecutor {
                 playAfterAnswer: playAfterAnswer, lineageAnswer: lineageAnswer)
         }
         if let lineageAnswer, let answer = lineageAnswer(lineage) {
+            // A common-ancestor ask stopped by "Which Donna do you mean?"
+            // runs as an intent instead, so the executor's which-one chips
+            // resume THIS ask for the chosen namesake (2026-08-29).
+            if case .commonAncestor(let a, let b) = lineage,
+               answer.outcome == .needsClarification {
+                return .run(Intent(
+                    originalQuestion: question,
+                    ast: .graph(.init(people: [a ?? "me", b ?? "me"], operation: .commonAncestor)),
+                    playAfterAnswer: playAfterAnswer))
+            }
             return .answer(answer)
         }
         // A photo ask the lineage answer declined to settle (several

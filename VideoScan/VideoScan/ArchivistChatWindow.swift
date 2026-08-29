@@ -943,12 +943,35 @@ struct ArchivistChatWindow: View {
         if let pending = pendingHallieClarification {
             let folded = PersonResolver.normalize(text)
             // Shared matcher: numbers, exact names, "the one born in 1785",
-            // older/younger, ordinals (HallieClarificationReply.swift).
-            if let selected = HallieTurnExecutor.clarificationSelection(
+            // older/younger, ordinals, places, parents, spouses
+            // (HallieClarificationReply.swift). A discriminator that fits
+            // several narrows the list; one that fits nobody is said, and
+            // the same question stays open (live 2026-08-28: "the one born
+            // in 1959" used to fall through to the translator).
+            switch HallieTurnExecutor.clarificationReply(
                 text, from: pending.clarification.candidates) {
+            case .selected(let selected):
                 messages.append(ArchivistMessage(role: .user, text: text))
                 continueHallie(pending: pending, selecting: selected)
                 return
+            case .narrowed(let subset, let discriminator):
+                messages.append(ArchivistMessage(role: .user, text: text))
+                let narrowed = pending.narrowed(to: subset) ?? pending
+                pendingHallieClarification = narrowed
+                appendHallieClarification(
+                    narrowed,
+                    preface: HallieTurnExecutor.narrowedClarificationPreface(
+                        count: narrowed.clarification.candidates.count,
+                        discriminator: discriminator))
+                return
+            case .unmatched(let discriminator):
+                messages.append(ArchivistMessage(role: .user, text: text))
+                appendHallieClarification(
+                    pending,
+                    preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator))
+                return
+            case .notASelection:
+                break
             }
             if ["yes", "y", "yeah", "yep", "correct", "right",
                 "that's right", "thats right"]

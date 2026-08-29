@@ -346,6 +346,9 @@ extension HallieTurnExecutor {
                             canonicalName: candidate.canonicalName,
                             label: candidate.label)
                     case .gedcomPersonID(let id):
+                        if let person = inputs.graph.people[id] {
+                            return gedcomCandidate(person, graph: inputs.graph)
+                        }
                         return Candidate(
                             id: .gedcomPersonID(id),
                             canonicalName: candidate.canonicalName,
