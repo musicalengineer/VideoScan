@@ -73,8 +73,11 @@ extension HallieTurnExecutor {
     ) -> Result {
         let shown = HallieNameQualifier.parse(typed)?.name ?? typed
         let candidates = people.map { person -> Candidate in
-            let label = ArchivistBiographyPolicy.disambiguationCandidate(for: person).label
-            return Candidate(id: .gedcomPersonID(person.id), canonicalName: person.name, label: label)
+            guard let graph = context.graph else {
+                let label = ArchivistBiographyPolicy.disambiguationCandidate(for: person).label
+                return Candidate(id: .gedcomPersonID(person.id), canonicalName: person.name, label: label)
+            }
+            return gedcomCandidate(person, graph: graph)
         }
         let asked = HallieLineageAnswer.whichOne(shown, among: people)
         return Result(

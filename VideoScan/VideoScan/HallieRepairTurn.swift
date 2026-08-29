@@ -262,6 +262,7 @@ enum HallieRepairTurn {
         case .graph(let g):
             switch g.operation {
             case .relationship: return "a family-tree question about how the two are related" + (g.people.count == 2 ? " (\(g.people[0]) and \(g.people[1]))" : "")
+            case .commonAncestor: return "a question about the closest common ancestor" + (g.people.count == 2 ? " of \(g.people[0]) and \(g.people[1])" : "")
             case .kinship: return "a family-tree question\(list(g.people))" + (g.relation.map { " (\($0.rawValue))" } ?? "")
             case .familyTree: return "a request for the family tree\(list(g.people))"
             case .biography: return "a request to tell you\(list(g.people))"

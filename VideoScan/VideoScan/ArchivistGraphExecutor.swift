@@ -194,7 +194,7 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         case .death: operation = .death
         case .kinship: operation = .kinship
         case .familyTree: operation = .familyTree
-        case .relationship: operation = .relationship
+        case .relationship, .commonAncestor: operation = .relationship
         }
         self.voices = voices
         // Raw values are the shared closed vocabulary; a wire relation that
