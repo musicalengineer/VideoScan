@@ -977,7 +977,7 @@ public struct GedcomFamilyGraph: Sendable {
         return (display, surname)
     }
 
-    static func isFamilySearchID(_ value: String) -> Bool {
+    public static func isFamilySearchID(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 2, parts[0].count == 4, parts[1].count == 3 else {
             return false
