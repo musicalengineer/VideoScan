@@ -754,7 +754,12 @@ enum HallieShellCLI {
                     clarificationSelection(reply, from: pending.value.candidates)
                         .map(String.init(describing:))
                 })
-            if decision == .abandon {
+            if HallieRepairTurn.isRepair(question) {
+                // A complaint about the which-one list itself ("those people
+                // are from the 1300s"): the question stays pending and the
+                // repair reply (pre-translation) re-asks it, narrowed; a
+                // typed name / year / number afterwards still selects.
+            } else if decision == .abandon {
                 state.pendingClarification = nil
                 output(HallieClarificationPolicy.abandonNote)
                 // fall through: answer THIS question as a fresh turn
@@ -799,7 +804,7 @@ enum HallieShellCLI {
             case .answer(let result):
                 state.lastResponder = "local"
                 // "start over" clears memory; other local answers leave it.
-                state.memory.record(intent: nil, result: result)
+                state.memory.record(intent: nil, result: result, question: question)
                 if options.diagnostics {
                     output("interpreted: \(HallieTurnExecutor.label(result.route))")
                 }
@@ -819,7 +824,7 @@ enum HallieShellCLI {
                 await dependencies.recordTranscript([event])
                 if outcome == .mediaFailure { return .declined }
                 switch result.outcome {
-                case .answered: return .answered
+                case .answered, .repaired: return .answered
                 case .declined, .needsClarification, .failed: return .declined
                 case .unsupported: return .unsupported
                 }
@@ -970,7 +975,7 @@ enum HallieShellCLI {
                     allowActions: options.allowActions)
             }
             switch result.outcome {
-            case .answered: return .answered
+            case .answered, .repaired: return .answered
             case .declined: return .declined
             case .unsupported: return .unsupported
             case .needsClarification: return .declined
@@ -1059,7 +1064,7 @@ enum HallieShellCLI {
                 state: &state)
             await dependencies.recordTranscript([event])
             switch result.outcome {
-            case .answered: return .answered
+            case .answered, .repaired: return .answered
             case .declined, .needsClarification, .failed: return .declined
             case .unsupported: return .unsupported
             }

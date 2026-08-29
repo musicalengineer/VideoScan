@@ -42,6 +42,10 @@ enum HallieTurnExecutor {
         /// Hallie tried to DO something the turn asked for (a save) and it
         /// did not happen. Never dressed up as an answer (codex #700).
         case failed
+        /// A conversation-repair turn ("that's wrong", "you gave me people
+        /// from the 1300s"): the previous answer was acknowledged and
+        /// restated, nothing was searched (HallieRepairTurn, 2026-08-29).
+        case repaired
     }
 
     enum IdentitySource: Sendable, Equatable {
@@ -586,6 +590,7 @@ enum HallieTurnExecutor {
         case .unsupported: return "unsupported"
         case .needsClarification: return "needs-clarification"
         case .failed: return "failed"
+        case .repaired: return "repaired"
         }
     }
 
