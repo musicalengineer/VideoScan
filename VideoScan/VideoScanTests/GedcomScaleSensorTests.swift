@@ -122,6 +122,11 @@ final class GedcomScaleSensorTests: XCTestCase {
     func testRealCompiledArtifactLaunchPathWithinBudget() throws {
         guard let url = Self.realArtifactURL() else { throw XCTSkip("no promoted artifact") }
         let data = try Data(contentsOf: url)
+        // An older-codec generation is a skip until the app recompiles it.
+        do { _ = try GedcomCompiledTree.decode(data) } catch let error as GedcomCompiledTree.CodecError {
+            if case .versionMismatch = error { throw XCTSkip("promoted artifact is older than the current codec: \(error)") }
+            throw error
+        }
         var graph: GedcomFamilyGraph?
         let decode = profile { graph = try? GedcomCompiledTree.decode(data) }
         let g = try XCTUnwrap(graph)

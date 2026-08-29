@@ -51,10 +51,17 @@ final class GedcomLaunchPerfTests: XCTestCase {
         guard let url = Self.realArtifactURL() else { throw XCTSkip("no promoted artifact") }
         var data = Data()
         let read = ms { data = try! Data(contentsOf: url) }
+        // A promoted generation compiled by an older build is a skip, not
+        // a failure: the app recompiles it (Recompile button) on its next
+        // launch, and until then there is nothing to measure.
+        do { _ = try GedcomCompiledTree.decode(data) } catch let error as GedcomCompiledTree.CodecError {
+            if case .versionMismatch = error { throw XCTSkip("promoted artifact is older than the current codec: \(error)") }
+            throw error
+        }
         var people = 0
         let d = try profile { people = try GedcomCompiledTree.decode(data).people.count }
         print("LAUNCH[\(Self.config)] real artifact \(data.count / 1024) KB read \(read) ms; decode cold \(d.cold) ms p50 \(d.p50) ms p95 \(d.p95) ms (\(people) people)")
-        XCTAssertLessThan(d.p95, 120 * Self.slack, "decode p95 budget (Release)")
+        XCTAssertLessThan(d.p95, 60 * Self.slack, "decode p95 budget (measured 28 ms Release, M4 Max, 2026-08-29)")
     }
 
     func testSynthetic39kAnd100kDecode() throws {
@@ -63,7 +70,8 @@ final class GedcomLaunchPerfTests: XCTestCase {
             let data = GedcomCompiledTree.encode(graph)
             let d = try profile { _ = try GedcomCompiledTree.decode(data) }
             print("LAUNCH[\(Self.config)] synthetic \(n) artifact \(data.count / 1024) KB decode cold \(d.cold) ms p50 \(d.p50) ms p95 \(d.p95) ms")
-            XCTAssertLessThan(d.p95, (n == 100_000 ? 300 : 120) * Self.slack)
+            XCTAssertLessThan(d.p95, (n == 100_000 ? 120 : 50) * Self.slack,
+                              "decode p95 budget (measured 19 / 56 ms Release, M4 Max, 2026-08-29)")
         }
     }
 }

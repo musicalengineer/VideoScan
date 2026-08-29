@@ -154,7 +154,8 @@ struct FamilyTreeLaunchBundleTests {
         let fresh = FamilyAssetIdentityDirectory(graph: graph, aliases: aliases, ownerGedcomID: "@I1@", ownerName: "Rick Breen")
         let frozen = Self.frozenDirectory(graph: graph, aliases: aliases, ownerGedcomID: "@I1@", ownerName: "Rick Breen")
         #expect(fresh == frozen)
-        #expect(fresh.member("@I2@")?.surnameTokens == ["hudson", "van", "buren"])
+        // Own surname plus BOTH spouses' surnames (Breen via F1, Van Buren via F2).
+        #expect(fresh.member("@I2@")?.surnameTokens == ["hudson", "breen", "van", "buren"])
         #expect(fresh.member("@I1@")?.suffix == "jr")
         #expect(fresh.member("@I1@")?.aliasTokens == ["rick"])
         #expect(fresh.member("@I3@")?.aliasTokens == ["edie"])   // "van" is a tree surname token
