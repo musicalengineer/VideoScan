@@ -177,6 +177,13 @@ enum HallieShellCLI {
         var recordTestimony: (CyberBrainWriter.Testimony) throws -> CyberBrainIndex?
         /// Who "I" is, for attribution. Injected so tests never read prefs.
         var speakers: () -> HallieTurnExecutor.Speakers
+        /// The name drill (2026-08-29): keep a taught pronunciation, and the
+        /// sheet's load/save. Defaults record nothing and keep the sheet in
+        /// memory; production writes only with `--remember`.
+        var recordPronunciation: (HallieAppTurnCoordinator.PronunciationWrite) throws -> Void
+        var loadDrillStore: () -> PronunciationDrillStore
+        var saveDrillStore: (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void
+        var loadLexicon: () -> HalliePronunciationLexicon
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -218,10 +225,18 @@ enum HallieShellCLI {
             recordTestimony: @escaping (CyberBrainWriter.Testimony) throws -> CyberBrainIndex? = { _ in nil },
             speakers: @escaping () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
-            }
+            },
+            recordPronunciation: @escaping (HallieAppTurnCoordinator.PronunciationWrite) throws -> Void = { _ in },
+            loadDrillStore: @escaping () -> PronunciationDrillStore = { PronunciationDrillStore() },
+            saveDrillStore: @escaping (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void = { _, _ in },
+            loadLexicon: @escaping () -> HalliePronunciationLexicon = { .shipped }
         ) {
             self.recordTestimony = recordTestimony
             self.speakers = speakers
+            self.recordPronunciation = recordPronunciation
+            self.loadDrillStore = loadDrillStore
+            self.saveDrillStore = saveDrillStore
+            self.loadLexicon = loadLexicon
             self.loadCatalog = loadCatalog
             self.configureFamilyAssets = configureFamilyAssets
             self.loadProfiles = loadProfiles
@@ -404,7 +419,13 @@ enum HallieShellCLI {
                     }
                     let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
                     return try CyberBrainIndex(archive: receipt.archive)
-                })
+                },
+                recordPronunciation: { write in
+                    try HallieAppTurnCoordinator.recordPronunciationLive(write)
+                },
+                loadDrillStore: { PronunciationDrillStore.load() },
+                saveDrillStore: { store, manifest in try store.save(manifest: manifest) },
+                loadLexicon: { HalliePronunciationLexicon.resolved() })
         }
     }
 
@@ -687,6 +708,8 @@ enum HallieShellCLI {
         var pendingClarification: PendingClarification?
         /// Non-nil while a family member is telling Hallie about someone.
         var telling: HallieTellingMode.Session?
+        /// Non-nil while the name drill runs ("let's practice names").
+        var drill: HalliePronunciationDrillMode.Session?
         /// Catalog-wide numbers, computed once per session on first use.
         var catalogStats: HallieCatalogStats?
         /// Conversation memory: the last result set / AST for follow-ups
@@ -745,6 +768,20 @@ enum HallieShellCLI {
         let userEvent = transcriptEvent(
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
+        // The name drill owns the turn while it runs; a question steps out
+        // of it and is answered below (HallieShellCLI+Drill).
+        if let outcome = await drillTurn(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
+        // "pronounce X like Y", hints, and "how do you say X" are answered
+        // from the lexicon (HallieShellCLI+Pronunciation) — never searched.
+        if let outcome = await pronunciationTurn(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
         // Listening comes first: while someone is telling Hallie about a
         // person, every turn is theirs to classify (a statement to keep,
         // "that's all", or a question that ends the telling). An explicit

@@ -27,6 +27,7 @@ final class HallieWebBridge {
         var memory = HallieTurnExecutor.ConversationMemory()
         var history: [HallieGroundedComposer.HistoryTurn] = []
         var telling: HallieTellingMode.Session?
+        var drill: HalliePronunciationDrillMode.Session?
         var pendingClarification: HallieAppTurnCoordinator.PendingClarification?
         var lastCitations: [HallieTurnExecutor.Citation] = []
         var lastSeen = Date()
@@ -180,6 +181,7 @@ final class HallieWebBridge {
                     composeWithModel: config.composeWithModel,
                     history: session.history,
                     telling: session.telling,
+                    drill: session.drill,
                     dependencies: turnDependencies)
                 session.history.append(.init(user: text, assistant: response.result.prose))
                 if session.history.count > HallieGroundedComposer.historyTurns {
@@ -192,6 +194,7 @@ final class HallieWebBridge {
                 session.pendingClarification = response.pendingClarification
             }
             session.telling = response.telling
+            session.drill = response.drill
             session.memory.record(intent: response.executedIntent, result: response.result,
                                   question: object["text"] as? String)
             let isFollowUpAction = response.result.route == .followUp

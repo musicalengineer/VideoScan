@@ -73,9 +73,9 @@ struct HalliePronunciationCoordinatorTests {
     @Test func aCyberBrainNameWritesToThatPerson() async throws {
         let recorder = Recorder()
         let response = try await run("Nathaniel is pronounced nah-thahn-yul", recorder: recorder, brain: try brain())
-        #expect(recorder.writes == [.init(word: "Nathaniel", saidAs: "nah-thahn-yul",
+        #expect(recorder.writes == [.init(word: "Nathaniel", saidAs: "nah-thahn-yul", phonemes: "nˈɑθɑnjəl",
                                           target: .cyberBrainPerson(id: "person.nathaniel", name: "Nathaniel McGill"))])
-        #expect(response.result.prose == "Got it — I'll say Nathaniel as nah-thahn-yul from now on. I've kept that with Nathaniel McGill.")
+        #expect(response.result.prose == "OK, noted — Nathaniel. I'll say Nathaniel as nah-thahn-yul from now on. I've kept that with Nathaniel McGill.")
         #expect(response.result.route == .telling)
         #expect(response.responderHost == HallieAppTurnCoordinator.localResponder)
         #expect(response.executedIntent == nil)
@@ -84,18 +84,18 @@ struct HalliePronunciationCoordinatorTests {
     @Test func aTreeOnlyNameMintsThatPersonAndASharedNameGoesToTheFile() async throws {
         let recorder = Recorder()
         _ = try await run("say Edith as EE-dith", recorder: recorder, brain: try brain())
-        #expect(recorder.writes.last == .init(word: "Edith", saidAs: "EE-dith",
+        #expect(recorder.writes.last == .init(word: "Edith", saidAs: "EE-dith", phonemes: "ˈidɪθ",
                                               target: .treePerson(name: "Edith Latta", gedcomID: "@I1@", aliases: [])))
 
         // McGill: one CyberBrain person AND two tree people carry it — the
         // brain's single carrier wins (his record, word applies everywhere).
         let withBrain = try await run("you're mispronouncing McGill, it's muh-GILL", recorder: recorder, brain: try brain())
         #expect(recorder.writes.last?.target == .cyberBrainPerson(id: "person.nathaniel", name: "Nathaniel McGill"))
-        #expect(withBrain.result.prose.hasPrefix("Got it — I'll say McGill as muh-GILL from now on."))
+        #expect(withBrain.result.prose.hasPrefix("OK, noted — McGill. I'll say McGill as muh-GILL from now on."))
 
         // Without a brain, two tree McGills → nobody's record: the file.
         let noBrain = try await run("you're mispronouncing McGill, it's muh-GILL", recorder: recorder, brain: nil)
-        #expect(recorder.writes.last == .init(word: "McGill", saidAs: "muh-GILL", target: .file))
+        #expect(recorder.writes.last == .init(word: "McGill", saidAs: "muh-GILL", phonemes: "məɡˈɪl", target: .file))
         #expect(noBrain.result.prose.contains("pronunciation list"))
     }
 
@@ -111,7 +111,7 @@ struct HalliePronunciationCoordinatorTests {
         #expect(response.result.prose.contains("won't stick"))
         // codex #700: a failed save is not an answer and never says "Got it".
         #expect(response.result.outcome == .failed)
-        #expect(!response.result.prose.contains("Got it"))
+        #expect(!response.result.prose.contains("OK, noted"))
         #expect(response.result.basisLine.contains("NOT kept"))
         #expect(!response.result.basisLine.contains("pronunciation kept"))
         #expect(response.telling == session)

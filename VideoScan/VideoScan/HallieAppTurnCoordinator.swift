@@ -85,6 +85,10 @@ enum HallieAppTurnCoordinator {
         /// The listening session to carry into the next turn while a family
         /// member is telling Hallie about someone; nil otherwise.
         var telling: HallieTellingMode.Session? = nil
+        /// The name drill in progress ("let's practice names",
+        /// HalliePronunciationDrillMode) to carry into the next turn; nil
+        /// when none, or when this turn ended it.
+        var drill: HalliePronunciationDrillMode.Session? = nil
     }
 
     /// The responder label for turns that never reached a model.
@@ -127,6 +131,15 @@ enum HallieAppTurnCoordinator {
         /// 2026-08-26). Default records nothing; live writes through
         /// CyberBrainWriter.setPronunciation or pronunciations.json.
         let recordPronunciation: @Sendable (PronunciationWrite) throws -> Void
+        /// The name drill's sheet (2026-08-29): the judged status per name,
+        /// loaded once per drill turn and saved explicitly after a change.
+        /// Defaults keep everything in memory so tests never touch
+        /// Hallie/pronunciation-drill.json; live reads and writes it.
+        let loadDrillStore: @Sendable () -> PronunciationDrillStore
+        let saveDrillStore: @Sendable (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void
+        /// What the voice currently has (people → file → shipped), so the
+        /// sheet leaves out names already taught. Default = shipped table.
+        let loadLexicon: @Sendable () -> HalliePronunciationLexicon
         /// Mark a photo as NOT showing a tree person (photo, GEDCOM ID,
         /// noted by, caption). Default does nothing; live writes the
         /// `.notof.json` sidecar through FamilyAssetStore.
@@ -172,6 +185,9 @@ enum HallieAppTurnCoordinator {
             recordTestimony: @escaping @Sendable (CyberBrainWriter.Testimony) throws -> Void = { _ in },
             recordPhotoCaption: @escaping @Sendable (CyberBrainWriter.PhotoCaption) throws -> Void = { _ in },
             recordPronunciation: @escaping @Sendable (PronunciationWrite) throws -> Void = { _ in },
+            loadDrillStore: @escaping @Sendable () -> PronunciationDrillStore = { PronunciationDrillStore() },
+            saveDrillStore: @escaping @Sendable (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void = { _, _ in },
+            loadLexicon: @escaping @Sendable () -> HalliePronunciationLexicon = { .shipped },
             excludePhoto: @escaping @Sendable (URL, String, String?, String?) throws -> Void = { _, _, _, _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
@@ -216,6 +232,9 @@ enum HallieAppTurnCoordinator {
             self.recordTestimony = recordTestimony
             self.recordPhotoCaption = recordPhotoCaption
             self.recordPronunciation = recordPronunciation
+            self.loadDrillStore = loadDrillStore
+            self.saveDrillStore = saveDrillStore
+            self.loadLexicon = loadLexicon
             self.excludePhoto = excludePhoto
             self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
@@ -344,6 +363,11 @@ enum HallieAppTurnCoordinator {
             recordPronunciation: { write in
                 try recordPronunciationLive(write)
             },
+            loadDrillStore: { PronunciationDrillStore.load() },
+            saveDrillStore: { store, manifest in
+                try store.save(manifest: manifest)
+            },
+            loadLexicon: { HalliePronunciationLexicon.resolved() },
             excludePhoto: { photo, gedcomID, notedBy, caption in
                 let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
                 let sidecar = try store.excludePhoto(
@@ -416,10 +440,19 @@ enum HallieAppTurnCoordinator {
         composeWithModel: Bool = false,
         history: [HallieGroundedComposer.HistoryTurn] = [],
         telling: HallieTellingMode.Session? = nil,
+        drill: HalliePronunciationDrillMode.Session? = nil,
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
 
+        // The name drill ("let's practice names", 2026-08-29) owns the turn
+        // while it runs: judgements, corrections, skip, stop. A question
+        // steps out of it and falls through.
+        if let handled = drillResponse(
+            question: question, drill: drill, telling: telling,
+            referent: referent, dependencies: dependencies) {
+            return handled
+        }
         // "Nathaniel is pronounced …" is one word, one respelling; it is
         // kept and confirmed even mid-interview (the session rides through).
         if let handled = pronunciationResponse(
