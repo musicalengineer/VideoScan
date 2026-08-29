@@ -637,6 +637,15 @@ public struct GedcomFamilyGraph: Sendable {
     public var rootPerson: Person? { rootPersonID.flatMap { people[$0] } }
     /// Every root, in source order (Rick, then Donna for the merged tree).
     public var roots: [Person] { rootPersonIDs.compactMap { people[$0] } }
+    /// True when the roots are RECORDED — a VideoScan merge artifact
+    /// (`_VS_MERGED` / `_VS_ROOT` in HEAD) or more than one root, which
+    /// only a HEAD listing can produce — rather than the first-INDI
+    /// assumption a plain export falls back to. Callers that let a root
+    /// settle an otherwise ambiguous name must check this: an assumed root
+    /// is a "who is me" hint, not evidence that a bare name means them
+    /// (2026-08-28: "photos of Nathaniel Parker" with Sr first in file).
+    /// Derived, so it survives the compiled-tree cache without a codec bump.
+    public var rootsAreRecorded: Bool { isMergedArtifact || rootPersonIDs.count > 1 }
 
     /// The person carrying this FamilySearch ID ("GVQV-NW3"), case- and
     /// whitespace-tolerant. O(1) — indexed at parse. Nil for an empty or
