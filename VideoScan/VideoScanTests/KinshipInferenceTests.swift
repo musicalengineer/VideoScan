@@ -663,6 +663,104 @@ struct KinshipInferenceTests {
         #expect(overlay?.node(profileStableID: "eileen") == .profile(stableID: "eileen"))
     }
 
+    @Test func hallieExecutorWalksFromADurableProfilePinIntoTheTree() async throws {
+        // End-to-end sensor for the People-tab -> GEDCOM seam. The profile's
+        // display name and aliases deliberately match NO tree record, so a
+        // green answer can only have crossed the explicit FamilySearch pin.
+        let local = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "durable-rick",
+            canonicalName: "Archive Subject Seven",
+            aliases: [],
+            kinships: [],
+            sex: .male,
+            uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000077"),
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let graph = KinshipFixture.graph
+        #expect(graph.people(matching: local.canonicalName).isEmpty,
+                "fixture accidentally permits a name bridge")
+
+        let context = HallieTurnExecutor.Context(
+            profiles: [local], graph: graph,
+            speakers: HallieTurnExecutor.Speakers(
+                ownerName: "Someone Else", archivistName: "Hallie Mae"))
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "how is Archive Subject Seven related to Martha Lamson?",
+            ast: .graph(.init(
+                people: ["Archive Subject Seven", "Martha Lamson"],
+                operation: .relationship)))
+
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: intent), context: context)
+        #expect(result.outcome == .answered, "got: \(result.prose)")
+        #expect(result.prose.contains("Martha Lamson"), "got: \(result.prose)")
+        #expect(result.prose.contains("8th-great-grandmother"), "got: \(result.prose)")
+        #expect(result.basisLine.contains("People profile identity bridge"),
+                "the durable identity crossing must remain auditable: \(result.basisLine)")
+        #expect(result.basisLine.contains("Archive Subject Seven")
+                && result.basisLine.contains("Richard Harding Breen Jr"),
+                "the profile and pinned tree identity must both be named: \(result.basisLine)")
+        #expect(result.basisLine.contains("path (GEDCOM)"),
+                "the relationship must come from the tree path: \(result.basisLine)")
+        #expect(!result.basisLine.contains("local only"),
+                "a GEDCOM ancestor answer must not be presented as a local-only row")
+    }
+
+    @Test func hallieExecutorDoesNotNameBridgeAfterAStaleProfilePin() async throws {
+        // The canonical name DOES match @I1@. A stale pin must still win by
+        // failing closed; otherwise this test would produce a persuasive but
+        // unaudited 8th-great-grandmother answer through the matching name.
+        let stale = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "stale-rick",
+            canonicalName: "Richard Harding Breen Jr",
+            treeIdentity: .familySearchID("NOPE-000"))
+        let result = try await relationshipResult(
+            profiles: [stale], first: stale.canonicalName)
+
+        #expect(result.outcome == .declined, "got: \(result.prose)")
+        #expect(result.basisLine.contains("People profile identity route"))
+        #expect(result.basisLine.contains("points at a person this tree doesn't carry"))
+        #expect(result.basisLine.contains("No name-based GEDCOM bridge was attempted"))
+        #expect(!result.basisLine.contains("path (GEDCOM)"))
+    }
+
+    @Test func hallieExecutorDoesNotNameBridgeAfterCollidingProfilePins() async throws {
+        // Both profiles claim @I1@. Even though the first profile's display
+        // name exactly matches that record, neither claimant may bridge.
+        let matching = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "collision-a",
+            canonicalName: "Richard Harding Breen Jr",
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let other = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "collision-b",
+            canonicalName: "Archive Subject Eight",
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let result = try await relationshipResult(
+            profiles: [matching, other], first: matching.canonicalName)
+
+        #expect(result.outcome == .declined, "got: \(result.prose)")
+        #expect(result.basisLine.contains("People profile identity route"))
+        #expect(result.basisLine.contains("are both pinned to Richard Harding Breen Jr"))
+        #expect(result.basisLine.contains("No name-based GEDCOM bridge was attempted"))
+        #expect(!result.basisLine.contains("path (GEDCOM)"))
+    }
+
+    private func relationshipResult(
+        profiles: [HallieTurnExecutor.ProfileSnapshot], first: String
+    ) async throws -> HallieTurnExecutor.Result {
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "how is \(first) related to Martha Lamson?",
+            ast: .graph(.init(
+                people: [first, "Martha Lamson"],
+                operation: .relationship)))
+        return try await HallieTurnExecutor.execute(
+            .init(intent: intent),
+            context: .init(
+                profiles: profiles,
+                graph: KinshipFixture.graph,
+                speakers: .init(
+                    ownerName: "Someone Else", archivistName: "Hallie Mae")))
+    }
+
 
     // MARK: 2. Scale — see KinshipPerformanceGateTests (Release gate, codex #845)
 
