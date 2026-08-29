@@ -664,7 +664,7 @@ struct KinshipInferenceTests {
     }
 
     @Test func identicalDuplicateProfilePinsCollapseRegardlessOfOrder() {
-        let first = HallieTurnExecutor.ProfileSnapshot(
+        let first = ArchivistGraphProfileSnapshot(
             stableID: "duplicate-rick",
             canonicalName: "Archive Subject Seven",
             treeIdentity: .familySearchID("GVQV-NW3"))
@@ -680,11 +680,11 @@ struct KinshipInferenceTests {
     }
 
     @Test func conflictingDuplicateProfilePinsFailClosedRegardlessOfOrder() {
-        let rick = HallieTurnExecutor.ProfileSnapshot(
+        let rick = ArchivistGraphProfileSnapshot(
             stableID: "conflicting-profile",
             canonicalName: "Archive Subject Seven",
             treeIdentity: .familySearchID("GVQV-NW3"))
-        let donna = HallieTurnExecutor.ProfileSnapshot(
+        let donna = ArchivistGraphProfileSnapshot(
             stableID: rick.stableID,
             canonicalName: rick.canonicalName,
             treeIdentity: .familySearchID("DONN-A03"))
@@ -700,11 +700,11 @@ struct KinshipInferenceTests {
     }
 
     @Test func readableAndUnreadableDuplicatePinsFailClosedRegardlessOfOrder() {
-        let readable = HallieTurnExecutor.ProfileSnapshot(
+        let readable = ArchivistGraphProfileSnapshot(
             stableID: "mixed-readable-profile",
             canonicalName: "Archive Subject Seven",
             treeIdentity: .familySearchID("GVQV-NW3"))
-        let unreadable = HallieTurnExecutor.ProfileSnapshot(
+        let unreadable = ArchivistGraphProfileSnapshot(
             stableID: readable.stableID,
             canonicalName: readable.canonicalName,
             treeIdentityUnreadable: true)
