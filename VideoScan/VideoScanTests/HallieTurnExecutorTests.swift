@@ -120,7 +120,7 @@ struct HallieTurnExecutorTests {
         let result = try await HallieTurnExecutor.execute(
             .graph(.init(people: ["ricks"], operation: .familyTree)), context: context)
         #expect(result.outcome == .answered)
-        #expect(result.prose.hasPrefix("Richard Breen's family tree — 1 child: Timothy Breen"))
+        #expect(result.prose.hasPrefix("Richard Breen had 1 recorded child, Timothy Breen."))
         #expect(result.basisLine.hasPrefix("Basis: reading “ricks” as “rick’s”; "))
         #expect(result.offeredActions == [.openFamilyTree(personName: "Richard Breen")])
 
@@ -402,7 +402,7 @@ struct HallieTurnExecutorTests {
             pending: gedcomChoice, selecting: .gedcomPersonID("@I2@"),
             context: context)
         #expect(answer.outcome == .answered)
-        #expect(answer.prose.contains("2 FEB 1920"))
+        #expect(answer.prose.contains("2 February 1920"))
         #expect(answer.catalogPersonName == "Mary Smith")
 
         let wrongSource = try await HallieTurnExecutor.continue(
@@ -536,7 +536,7 @@ struct HallieTurnExecutorTests {
         #expect(answer.route == .graph)
         #expect(answer.outcome == .answered)
         #expect(answer.catalogPersonName == "Alex River")
-        #expect(answer.prose.contains("born 1 JAN 1900"))
+        #expect(answer.prose.contains("born 1 January 1900"))
 
         let decline = try await HallieTurnExecutor.execute(
             ast, context: .init(graph: nil))
