@@ -9,8 +9,9 @@
 import Foundation
 
 enum ArchivistConversationCommand: Equatable, Sendable {
-    /// Show the help card.
-    case help
+    /// Show the help card — the whole card, or one topic's section
+    /// ("help with pronunciation", Rick 2026-08-29 17:50).
+    case help(topic: HelpTopic? = nil)
     /// A one-line friendly reply.
     case smalltalk(Smalltalk)
     /// Clear conversation memory.
@@ -32,7 +33,71 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         case affirmation
     }
 
+    /// A topic the help card can be scoped to. Deterministic: "help with
+    /// <topic>" never reaches the social-lane model.
+    enum HelpTopic: Equatable, Sendable, CaseIterable {
+        /// Pronunciation: teaching names, the drill, asking how one is said.
+        case names
+        /// Kinship questions.
+        case relationships
+        /// Family-tree navigation.
+        case tree
+        /// Research findings.
+        case research
+    }
+
     // MARK: - Detection
+
+    /// "help with pronunciation" / "help me with names" / "pronunciation
+    /// help" / "how do i teach you names" → the topic; "help with X" for
+    /// an unknown X → `.help(topic: nil)` (the whole card). Nil when the
+    /// words are not a help request at all ("help me find donna" is a
+    /// search, untouched).
+    static func detectHelpTopic(words: [String]) -> ArchivistConversationCommand? {
+        guard words.count >= 2, words.count <= 8 else { return nil }
+        var topicWords: [String]?
+        if words[0] == "help" {
+            var rest = Array(words.dropFirst())
+            if rest.first == "me" || rest.first == "us" { rest.removeFirst() }
+            if let first = rest.first, ["with", "on", "for", "about", "regarding"].contains(first) {
+                topicWords = Array(rest.dropFirst())
+            } else if rest.count == 1, helpTopic(for: rest) != nil {
+                topicWords = rest   // "help pronunciation"
+            }
+        } else if words.last == "help", words.count <= 3 {
+            topicWords = Array(words.dropLast())   // "pronunciation help"
+        } else {
+            // "how do i teach you names" — every remaining word must be from
+            // the closed how-to vocabulary, so "how do you pronounce Latta"
+            // (a pronunciation question about a name) is never help.
+            for lead in howToLeads where words.joined(separator: " ").hasPrefix(lead + " ") {
+                let rest = Array(words.dropFirst(lead.split(separator: " ").count))
+                guard rest.allSatisfy({ howToTopicVocabulary.contains($0) }) else { continue }
+                if let topic = helpTopic(for: rest) { return .help(topic: topic) }
+            }
+        }
+        guard let topicWords else { return nil }
+        guard !topicWords.isEmpty else { return .help() }
+        return .help(topic: helpTopic(for: topicWords))
+    }
+
+    /// The topic named by a few words, nil for none of ours.
+    static func helpTopic(for words: [String]) -> HelpTopic? {
+        let text = words.joined(separator: " ")
+        if words.contains(where: { $0.hasPrefix("pronunc") || $0.hasPrefix("pronounc") || $0.hasPrefix("prounounc") })
+            || words.contains("names") || words.contains("name") || text.contains("saying names") || text.contains("say names")
+            || text.contains("teach you") || text.contains("practice") || text.contains("practise") {
+            return .names
+        }
+        if words.contains(where: { $0.hasPrefix("relat") || $0 == "kinship" || $0 == "kin" || $0 == "cousins" }) {
+            return .relationships
+        }
+        if words.contains("tree") || words.contains("center") || words.contains("centre") || words.contains("navigate") {
+            return .tree
+        }
+        if words.contains(where: { $0.hasPrefix("research") }) { return .research }
+        return nil
+    }
 
     /// Whole-message forms only. Anything with real content beyond these
     /// phrases ("thanks, now show me rick") is not a command and falls
@@ -43,7 +108,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lowered.isEmpty else { return nil }
         // "?" / "??" alone is a request for help.
-        if lowered.allSatisfy({ "?!.".contains($0) }) { return .help }
+        if lowered.allSatisfy({ "?!.".contains($0) }) { return .help() }
 
         // Strip trailing punctuation, then a leading/trailing "hallie" and
         // politeness so "thanks hallie!" and "hallie, help" both classify.
@@ -68,8 +133,9 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         }
         let phrase = words.joined(separator: " ")
 
-        if helpPhrases.contains(phrase) { return .help }
+        if helpPhrases.contains(phrase) { return .help() }
         if resetPhrases.contains(phrase) { return .reset }
+        if let scoped = detectHelpTopic(words: words) { return scoped }
         if let smalltalk = smalltalkPhrases[phrase] { return .smalltalk(smalltalk) }
 
         // Family members naturally combine a salutation and a social
@@ -116,7 +182,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         // here.
         for lead in howToLeads where phrase == lead || phrase.hasPrefix(lead + " ") {
             if phrase == lead || words.allSatisfy({ helpVocabulary.contains($0) }) {
-                return .help
+                return .help()
             }
         }
         // "what can you do", "what can i ask you about", "what do you know
@@ -128,7 +194,7 @@ enum ArchivistConversationCommand: Equatable, Sendable {
            words.contains(where: { ["can", "could", "do", "should"].contains($0) }),
            words.contains(where: { ["you", "ask", "hallie"].contains($0) }),
            words.allSatisfy({ helpVocabulary.contains($0) }) {
-            return .help
+            return .help()
         }
         return nil
     }
@@ -171,6 +237,15 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         "what kinds of questions can i ask", "what questions can i ask",
         "what can you help with", "what can you help me with",
         "can you help me", "can you help", "help please",
+    ]
+
+    /// Words a topic how-to may use ("how do i teach you names", "how do
+    /// i practice names", "how do i research someone").
+    private static let howToTopicVocabulary: Set<String> = [
+        "teach", "you", "your", "a", "the", "names", "name", "pronunciation", "pronunciations", "pronounce",
+        "practice", "practise", "drill", "research", "someone", "somebody", "person", "people", "tree",
+        "family", "navigate", "center", "centre", "move", "around", "relationships", "relationship",
+        "related", "kinship", "find", "out", "how", "who", "is", "are", "to", "with", "in", "on", "me", "us", "it",
     ]
 
     private static let howToLeads: [String] = [
@@ -311,6 +386,12 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         • show Donna's family tree
         • tell me about Thankful Pratt
 
+        Names and the tree
+        • let's practice names · pronounce McGill like MahGill or MicGill · how do you say Latta
+        • how is Tim related to Rick? · how is Rick related to everyone in the People tab?
+        • center the family tree on Martha Lamson
+        • what do we know about David Latta from research?
+
         Follow-ups (after an answer)
         • play the first one · show more · reveal that one · show it in the catalog
         • narrow it down a step at a time: “playing guitar” · “in Westford” · “around 2005” · “with Donna”
@@ -319,6 +400,56 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         Housekeeping
         • start over · help
         """
+
+    /// One topic's section of the card, with the intro line the card has.
+    static func helpSection(_ topic: HelpTopic) -> String {
+        switch topic {
+        case .names:
+            return """
+                Names — how I say them
+                • let's practice names — I put one name at a time to you; say "right", "skip", or how to say it
+                • pronounce McGill like MahGill or MicGill · Nathaniel is pronounced nuh-THAN-yul
+                • either MahGill or MicGill (both kept; the first is what I say)
+                • Latta should be pronounced with a short a on the La · La (as in Lag) and Tah
+                • how do you say Latta? · what pronunciations do you have?
+                """
+        case .relationships:
+            return """
+                Relationships
+                • how is Tim related to Rick? · how am I related to Donna?
+                • how is Rick related to everyone in the People tab?
+                • who is Rick's dad? · who was Donna's great grandmother on her maternal side?
+                """
+        case .tree:
+            return """
+                The family tree
+                • show Donna's family tree · center the family tree on Martha Lamson
+                • trace the Latta line back 5 generations · the Latta family tree
+                • tell me about Thankful Pratt
+                """
+        case .research:
+            return """
+                Research
+                • what do we know about David Latta from research?
+                • tell me about Thankful Pratt
+                """
+        }
+    }
+
+    /// Example chips for a scoped card.
+    static func helpExamples(_ topic: HelpTopic) -> [(question: String, label: String)] {
+        switch topic {
+        case .names:
+            return [("let's practice names", "Try: let's practice names"),
+                    ("how do you say Latta?", "Try: how do you say Latta?")]
+        case .relationships:
+            return [("how is Tim related to Rick?", "Try: how is Tim related to Rick?")]
+        case .tree:
+            return [("center the family tree on Martha Lamson", "Try: center the family tree on Martha Lamson")]
+        case .research:
+            return [("what do we know about David Latta from research?", "Try: what do we know about David Latta from research?")]
+        }
+    }
 
     /// Three example questions offered as clickable chips under the card.
     static let helpExamples: [(question: String, label: String)] = [

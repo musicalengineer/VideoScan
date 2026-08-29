@@ -20,7 +20,7 @@ struct ArchivistConversationCommandTests {
         "i don't know what to ask", "what now?",
     ])
     func helpPhrasesShowTheHelpCard(text: String) {
-        #expect(Command.detect(text) == .help, Comment(rawValue: text))
+        #expect(Command.detect(text) == .help(), Comment(rawValue: text))
     }
 
     @Test(arguments: [
@@ -131,13 +131,61 @@ struct ArchivistConversationCommandTests {
             "tell me about Thankful Pratt",
             "play the first one", "show more", "reveal that one",
             "show it in the catalog", "and in the 90s?", "start over",
+            // Names and the tree (2026-08-29): the drill, teaching, asking,
+            // kinship, centering, research.
+            "let's practice names", "pronounce McGill like MahGill or MicGill", "how do you say Latta",
+            "how is Tim related to Rick?", "how is Rick related to everyone in the People tab?",
+            "center the family tree on Martha Lamson", "what do we know about David Latta from research?",
         ] {
             #expect(card.contains(example), Comment(rawValue: example))
         }
-        for heading in ["Videos", "Family", "Follow-ups", "Housekeeping"] {
+        for heading in ["Videos", "Family", "Names and the tree", "Follow-ups", "Housekeeping"] {
             #expect(card.contains(heading), Comment(rawValue: heading))
         }
         #expect(Command.helpExamples.count == 3)
+    }
+
+    // Topic-scoped help (Rick 2026-08-29 17:50): "help with pronunciation"
+    // reached the social-lane model. Deterministic now: the matching
+    // section only; an unknown topic gets the whole card; "help me find
+    // donna" stays a search (realContentIsNeverACommand).
+    @Test func helpWithATopicShowsThatSectionOnlyAndNeverTheModel() throws {
+        #expect(Command.detect("help") == .help())
+        #expect(Command.detect("help with pronunciation") == .help(topic: .names))
+        #expect(Command.detect("help with names") == .help(topic: .names))
+        #expect(Command.detect("Hallie, help me with pronunciations please") == .help(topic: .names))
+        #expect(Command.detect("pronunciation help") == .help(topic: .names))
+        #expect(Command.detect("how do I teach you names") == .help(topic: .names))
+        #expect(Command.detect("how do i practice names") == .help(topic: .names))
+        #expect(Command.detect("help with relationships") == .help(topic: .relationships))
+        #expect(Command.detect("help with the family tree") == .help(topic: .tree))
+        #expect(Command.detect("how do I research someone") == .help(topic: .research))
+        #expect(Command.detect("help with cooking") == .help())
+        // A pronunciation question about a name is not help.
+        #expect(Command.detect("how do you pronounce Latta") == nil)
+        #expect(Command.detect("how do you say Latta?") == nil)
+
+        let names = Command.helpSection(.names)
+        for line in ["let's practice names", "pronounce McGill like MahGill or MicGill", "how do you say Latta?",
+                     "either MahGill or MicGill", "Latta should be pronounced with a short a on the La"] {
+            #expect(names.contains(line), Comment(rawValue: line))
+        }
+        #expect(!names.contains("Christmas videos"))
+        #expect(Command.helpSection(.relationships).contains("how is Tim related to Rick?"))
+        #expect(Command.helpSection(.tree).contains("center the family tree on Martha Lamson"))
+        #expect(Command.helpSection(.research).contains("what do we know about David Latta from research?"))
+
+        guard case .answer(let scoped) = pre("help with pronunciation") else {
+            Issue.record("help with pronunciation should answer locally"); return
+        }
+        #expect(scoped.route == .help)
+        #expect(scoped.prose == Command.helpSection(.names))
+        #expect(scoped.basisLine.contains("no model call"))
+        #expect(scoped.offeredActions.map(HallieTurnExecutor.offerLabel) == ["Try: let's practice names", "Try: how do you say Latta?"])
+        guard case .answer(let whole) = pre("help with names") else { Issue.record("help with names"); return }
+        #expect(whole.prose == Command.helpSection(.names))
+        guard case .answer(let full) = pre("help") else { Issue.record("help"); return }
+        #expect(full.prose == Command.helpCard)
     }
 
     // MARK: Through the pre-translation step

@@ -861,4 +861,159 @@ struct HalliePronunciationDrillTests {
         let manifest = try #require(recorder.lastManifest)
         #expect(manifest.entries.first { $0.name == "McGill" }?.phonemes == "mˈɑɡɪl")
     }
+
+    // MARK: - 11. Free-form teaches (live misses #17/#18, 2026-08-29 17:35–17:58)
+
+    /// Rick's exact sentences, as typed. None may reach translation.
+    static let rickFreeformSentences: [String] = [
+        "Latta is prounounced like Ladder but with Laddah or Lattah short a first ah second, like ladder but latt ah",
+        "the family name \"Latta\" should be pronounced with a short a, like in Ladder, but it would be \"Latt uh\"",
+        "you should pronounce \"Latta\" like \"Ladder\" but \"Latt ah\"",
+    ]
+
+    @Test func pronounceWordsAreReadTypoTolerantly() {
+        typealias W = HalliePronounceWords
+        #expect(W.canonicalForm("prounounced") == "pronounced")
+        #expect(W.canonicalForm("pronunced") == "pronounced")
+        #expect(W.canonicalForm("Pronounciation") == "pronunciation")
+        #expect(W.canonicalForm("pronounciations") == "pronunciations")
+        #expect(W.canonicalForm("pronounce") == "pronounce")
+        #expect(W.canonicalForm("pronouncing") == "pronouncing")
+        #expect(W.canonicalForm("pronoun") == nil)
+        #expect(W.canonicalForm("pronouns") == nil)
+        #expect(W.canonicalForm("produce") == nil)
+        #expect(W.canonicalForm("province") == nil)
+        #expect(W.canonicalForm("Latta") == nil)
+        #expect(W.normalize("Latta is prounounced Lah-Tah") == "Latta is pronounced Lah-Tah")
+        #expect(W.normalize("tell me latta pronounciations") == "tell me latta pronunciations")
+        #expect(W.normalize("Prounounce it LAT-uh!") == "Pronounce it LAT-uh!")
+        #expect(W.editDistance("kitten", "sitting") == 3)
+        // The strict detectors read the corrected word.
+        #expect(HallieTellingMode.detectPronunciation("Latta is prounounced Lah-Tah")
+                == .init(word: "Latta", saidAs: "Lah-Tah"))
+        #expect(HallieTellingMode.detectPronunciationHint("Latta should be prounounced with a short a on the La")?.hint
+                == .vowel(letter: "a", length: .short, syllable: "La"))
+        #expect(HalliePronunciationQuery.detect("how do you prounounce Latta?") == .name("Latta"))
+    }
+
+    @Test func ricksFreeformSentencesParseToTeaches() throws {
+        typealias F = HalliePronunciationFreeform
+        let known: (String) -> Bool = { ["latta", "mcgill", "edith"].contains(FamilyIdentityText.normalized($0)) }
+
+        // #17: two respellings plus a description and an exemplar. Explicit
+        // respellings win; both kept; the one the cues support best and
+        // that sits nearest the written name is spoken.
+        let a = try #require(F.detect(Self.rickFreeformSentences[0], isKnownName: known))
+        #expect(a.word == "Latta" && a.kind == .teach && a.explicit)
+        #expect(a.alternatives == ["LAT-tah", "LAD-dah"])
+        #expect(a.cueSummary == "short a, then ah")
+        #expect(a.uncertain)
+        #expect(a.rawHint.contains("Laddah or Lattah"))
+
+        // #18: "the family name", quoted, "Latt uh" as two words.
+        let b = try #require(F.detect(Self.rickFreeformSentences[1], isKnownName: known))
+        #expect(b.word == "Latta" && b.kind == .teach)
+        #expect(b.alternatives == ["LAT-uh"])
+        #expect(b.cueSummary == "short a")
+        #expect(!b.uncertain)
+
+        // 17:58: second-person imperative; "but <respelling>" beats the exemplar.
+        let c = try #require(F.detect(Self.rickFreeformSentences[2], isKnownName: known))
+        #expect(c.word == "Latta" && c.kind == .teach)
+        #expect(c.alternatives == ["LAT-ah"])
+        #expect(c.cueSummary == "like ladder")
+
+        // Plain alternatives, no cues: as typed, first spoken.
+        let d = try #require(F.detect("Latta is prounounced Laddah or Lattah, both are fine", isKnownName: known))
+        #expect(d.alternatives == ["Laddah", "Lattah"] && !d.uncertain && d.cueSummary == nil)
+
+        // Exemplar only: the vowel comes from the exemplar table / gold lexicon.
+        let e = try #require(F.detect("Latta is prounounced like ladder", isKnownName: known))
+        #expect(e.kind == .teach && e.alternatives == ["LAT-uh"] && !e.explicit)
+        #expect(F.exemplarVowel("ladder") == "æ")
+        #expect(F.exemplarVowel("father") == "ɑ")
+        let f = try #require(F.detect("Latta is prounounced with a short a first and ah second", isKnownName: known))
+        #expect(f.kind == .teach && f.alternatives == ["LAT-ah"] && !f.explicit)
+        #expect(f.cueSummary == "short a, then ah")
+
+        // Question shape → a query; nothing mappable → a kept hint.
+        #expect(F.detect("is Latta prounounced with a short a?", isKnownName: known)?.kind == .query)
+        #expect(F.detect("Latta is prounounced the Scottish way", isKnownName: known)?.kind == .hintOnly)
+
+        // Not ours: no pronounce-word, or no name the archive knows.
+        #expect(F.detect("Latta is said like Ladder", isKnownName: known) == nil)
+        #expect(F.detect("Zorblax is prounounced ZOR-blax", isKnownName: known) == nil)
+        #expect(F.detect("Donna's pronouns are she and her", isKnownName: { _ in true }) == nil)
+
+        // Canonical forms and support scoring.
+        #expect(F.canonicalRespelling("Lattah", cues: [.vowel(letter: "a", length: .short, position: 0)]) == "LAT-tah")
+        #expect(F.canonicalRespelling("latt-uh", cues: [.exemplar("ladder")]) == "LAT-uh")
+        #expect(F.canonicalRespelling("LAT-uh", cues: [.stress(1)]) == "LAT-uh")
+        #expect(F.canonicalRespelling("MahGill", cues: [.stress(1)]) == "MahGill")
+        #expect(F.support("LAT-tah", cues: [.vowel(letter: "a", length: .short, position: 0), .sound("ah", position: 1), .exemplar("ladder")]) == 3)
+        #expect(F.support("LAY-tuh", cues: [.vowel(letter: "a", length: .short, position: 0)]) == 0)
+        #expect(HalliePhonemes.derive(respelling: "LAT-tah") == "lˈætɑ")
+        #expect(HalliePhonemes.derive(respelling: "LAD-dah") == "lˈædɑ")
+    }
+
+    @Test func ricksFreeformSentencesAreKeptAndReadBackNeverSearched() async throws {
+        let recorder = Recorder()
+        // #17 — uncertain: says what was chosen and the alternative, invites "no — …".
+        let a = try await turn(Self.rickFreeformSentences[0], drill: nil, recorder: recorder)
+        #expect(a.result.prose == "OK, noted — Latta. I'll say LAT-tah (short a, then ah) and keep LAD-dah too. Say 'no — …' if that's off. I've kept that in the pronunciation list.")
+        #expect(a.result.route == .telling && a.result.queryDescription == "pronunciation" && a.executedIntent == nil)
+        #expect(recorder.writes.last == .init(word: "Latta", saidAs: "LAT-tah | LAD-dah", phonemes: "lˈætɑ", target: .file))
+        #expect(recorder.store.record(for: "latta")?.status == .alternativesPending)
+        #expect(recorder.store.record(for: "latta")?.source == .taught)
+        #expect(recorder.store.record(for: "latta")?.alternatives == ["LAT-tah", "LAD-dah"])
+        #expect(recorder.store.record(for: "latta")?.hint?.contains("Laddah or Lattah") == true)
+        // The read-back is spoken with the new entry in force.
+        let spoken = HallieSpeaker.spokenText(a.result.prose, lexicon: recorder.taughtLexicon)
+        #expect(spoken.hasPrefix("OK, noted — LAT-tah."))
+
+        // #18 — one respelling, cues agree.
+        let b = try await turn(Self.rickFreeformSentences[1], drill: nil, recorder: recorder)
+        #expect(b.result.prose == "OK, noted — Latta. I'll say Latta as LAT-uh (short a) from now on. I've kept that in the pronunciation list.")
+        #expect(recorder.writes.last == .init(word: "Latta", saidAs: "LAT-uh", phonemes: "lˈætə", target: .file))
+        #expect(recorder.store.record(for: "latta")?.status == .taught)
+
+        // 17:58 — second-person imperative.
+        let c = try await turn(Self.rickFreeformSentences[2], drill: nil, recorder: recorder)
+        #expect(c.result.prose.hasPrefix("OK, noted — Latta. I'll say Latta as LAT-ah (like ladder) from now on."))
+        #expect(recorder.writes.last?.saidAs == "LAT-ah")
+
+        // The earlier sentences still take their own paths.
+        let d = try await turn("Latta is prounounced Lah-Tah", drill: nil, recorder: recorder)
+        #expect(d.result.prose.hasPrefix("OK, noted — Latta. I'll say Latta as Lah-Tah from now on."))
+        let e = try await turn("Latta should be prounounced with a short a on the La", drill: nil, recorder: recorder)
+        #expect(e.result.prose.hasPrefix("OK, noted — Latta. From your hint (short a on La), I'll say Latta as LAT-uh from now on."))
+        // (The fixture lexicon is first-write-wins, so the sheet still says LAT-tah.)
+        let f = try await turn("tell me latta pronounciations", drill: nil, recorder: recorder)
+        #expect(f.result.prose.hasPrefix("I say Latta as LAT-tah (or LAD-dah) — you taught me that today ("))
+
+        // Question shape through the free-form path; unmappable → kept, asked.
+        let g = try await turn("is Latta prounounced with a short a?", drill: nil, recorder: recorder)
+        #expect(g.result.prose.hasPrefix("I say Latta as LAT-tah"))
+        #expect(g.result.queryDescription == "pronunciation question")
+        let h = try await turn("Latta is prounounced the Scottish way", drill: nil, recorder: recorder)
+        #expect(h.result.prose == "I've noted what you said about Latta — spell it out for me like “LAT-uh” and I'll say it that way?")
+        #expect(recorder.store.record(for: "latta")?.hint == "is the Scottish way")
+        #expect(recorder.writes.count == 5)
+    }
+
+    @Test func freeformTeachesWorkInsideTheDrill() async throws {
+        let recorder = Recorder()
+        let start = try await turn("let's practice names", drill: nil, recorder: recorder)
+        // A name off the sheet (Latta is already taught) but known to the archive.
+        let taught = try await turn(Self.rickFreeformSentences[0], drill: start.drill, recorder: recorder)
+        #expect(taught.result.prose == "OK, noted — Latta. I'll say LAT-tah and keep LAD-dah too. Still on: Rick.")
+        #expect(recorder.writes.last?.saidAs == "LAT-tah | LAD-dah")
+        #expect(taught.drill?.current?.name == "Rick")
+        // The name that is up, with a typo'd verb.
+        let rick = try await turn("Rick is prounounced RICK", drill: taught.drill, recorder: recorder)
+        #expect(rick.result.prose.hasPrefix("OK, noted — Rick."))
+        #expect(rick.drill?.current?.name == "Breen")
+        // A free-form sentence about a name nobody carries is not a judgement.
+        #expect(HalliePronunciationDrillMode.classify("Zorblax is prounounced like ladder but Zorblah", session: rick.drill!) == .unrecognized)
+    }
 }

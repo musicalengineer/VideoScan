@@ -156,7 +156,7 @@ extension HallieTellingMode {
     /// respelling (detectPronunciation handles that), a question, or
     /// anything without a name.
     static func detectPronunciationHint(_ text: String) -> HalliePronunciationHintTelling? {
-        let cleaned = text
+        let cleaned = HalliePronounceWords.normalize(text)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -387,7 +387,15 @@ enum HalliePronunciationRespelling {
         if ah.contains(word), letter == "a" { return .spelled("ah") }
         if shortWords.contains(word) { return .short }
         if longWords.contains(word) { return .long }
-        return nil
+        // Beyond the table: misaki's gold lexicon when the helper is installed.
+        guard let vowel = HalliePronunciationFreeform.exemplarVowel(word),
+              let hint = HalliePronunciationFreeform.vowelSpelling(vowel, letter: letter) else { return nil }
+        switch hint {
+        case .vowel(_, .short, _): return .short
+        case .vowel(_, .long, _): return .long
+        case .vowelLike: return .spelled("ah")
+        default: return nil
+        }
     }
 
     /// The syllable Rick named ("La" → the one starting "la"), else the
@@ -445,7 +453,7 @@ enum HalliePronunciationQuery: Equatable, Sendable {
     ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
 
     static func detect(_ text: String) -> HalliePronunciationQuery? {
-        let cleaned = text
+        let cleaned = HalliePronounceWords.normalize(text)
             .replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
