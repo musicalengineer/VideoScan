@@ -689,6 +689,22 @@ enum ArchivistGraphExecutor {
             }
         }
 
+        // A bare given name ("rick", live 2026-08-28 on a 16k tree) is a
+        // GIVEN-name question: the primary NAME record's first token, exact
+        // or through the diminutive table (Rick ↔ Richard). Neither
+        // `people(matching:)` (which prefers a NAME record EQUAL to the
+        // token — FamilySearch stubs like an alternate name "Rich") nor
+        // `people(namedLike:)` (which expands RECORD tokens too, so the
+        // surname "Rich"/"Dick" becomes "richard") is asked first: both
+        // offered Catherine Auker (b. 1374) for "rick". Several namesakes
+        // are RETURNED for the caller's capped which-one / owner chain.
+        if let bare = bareGivenName(typedName) {
+            let byGivenName = inputs.graph.people(givenName: bare, expandDiminutives: true)
+            if !byGivenName.isEmpty {
+                return .people(
+                    byGivenName, profileRoute: nil, spellingCorrection: nil)
+            }
+        }
         let exactPeople = inputs.graph.people(matching: typedName)
         if !exactPeople.isEmpty {
             return .people(
@@ -698,11 +714,19 @@ enum ArchivistGraphExecutor {
         // Breen Jr", live 2026-08-26). Unlike `people(matching:)` this
         // RETURNS several candidates instead of collapsing them to
         // not-found — the caller's ambiguity chips (or the owner chain)
-        // decide, never a silent pick.
-        let loosePeople = inputs.graph.people(namedLike: typedName)
-        if !loosePeople.isEmpty {
-            return .people(
-                loosePeople, profileRoute: nil, spellingCorrection: nil)
+        // decide, never a silent pick. Never for a bare token: with no
+        // given-name hit, its only extra reach is the record-side
+        // diminutive collision above.
+        if bareGivenName(typedName) == nil {
+            let loosePeople = inputs.graph.people(namedLike: typedName)
+            if !loosePeople.isEmpty {
+                return .people(
+                    loosePeople, profileRoute: nil, spellingCorrection: nil)
+            }
+        } else if typedName.count <= 4 {
+            // "rick" is one edit from "rich": a four-letter bare token is
+            // never spelling-recovered against 39k names.
+            return .people([], profileRoute: nil, spellingCorrection: nil)
         }
         let fuzzyIDs = HallieSpellingRecovery.bestMatches(
             typed: typedName,
@@ -714,6 +738,35 @@ enum ArchivistGraphExecutor {
         let correction = fuzzyPeople.count == 1 ? typedName : nil
         return .people(
             fuzzyPeople, profileRoute: nil, spellingCorrection: correction)
+    }
+
+    /// One typed token that is a name (not a generational suffix, not a
+    /// FamilySearch ID): the token, lowercased and diacritic-free. Nil for
+    /// anything longer, so multi-word names keep their record-containment
+    /// rules.
+    static func bareGivenName(_ typed: String) -> String? {
+        let tokens = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed))
+        guard tokens.count == 1, let token = tokens.first,
+              !GedcomFamilyGraph.nameSuffixes.contains(token),
+              !GedcomFamilyGraph.isFamilySearchID(
+                  typed.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())
+        else { return nil }
+        return token
+    }
+
+    /// The People-profile bridge's exact lookup. A one-word canonical name
+    /// or alias ("Rick", "Rich", "Richard") means a GIVEN name, matched
+    /// exactly on the primary NAME record — never a NAME record that merely
+    /// EQUALS the word (Catherine Auker's alternate name "Rich", live
+    /// 2026-08-28) and, as before, never through the diminutive table on
+    /// this side (the son "Timmy" must not bridge to the brother "Tim").
+    private static func exactPeople(
+        _ term: String, graph: GedcomFamilyGraph
+    ) -> [GedcomFamilyGraph.Person] {
+        if let bare = bareGivenName(term) {
+            return graph.people(givenName: bare, expandDiminutives: false)
+        }
+        return graph.people(matching: term)
     }
 
     /// The profile is already selected by stable ID. Only that profile's
@@ -728,8 +781,8 @@ enum ArchivistGraphExecutor {
             requestedName: requestedName,
             profileCanonicalName: profile.canonicalName)
 
-        let canonicalMatches = graph.people(
-            matching: profile.canonicalName)
+        let canonicalMatches = exactPeople(
+            profile.canonicalName, graph: graph)
         if !canonicalMatches.isEmpty {
             return .people(
                 canonicalMatches, profileRoute: profileRoute,
@@ -745,7 +798,7 @@ enum ArchivistGraphExecutor {
         for wordCount in tiers.keys.sorted(by: >) {
             var matchesByID: [String: GedcomFamilyGraph.Person] = [:]
             for term in (tiers[wordCount] ?? []).sorted(by: nameOrder) {
-                for person in graph.people(matching: term) {
+                for person in exactPeople(term, graph: graph) {
                     matchesByID[person.id] = person
                 }
             }

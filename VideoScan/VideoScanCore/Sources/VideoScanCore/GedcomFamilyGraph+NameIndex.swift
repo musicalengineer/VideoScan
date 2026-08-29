@@ -31,6 +31,52 @@ extension GedcomFamilyGraph {
         }
     }
 
+    /// The spellings a bare given name stands for (2026-08-29): a nickname
+    /// means itself and its formal name ("rick" → rick, richard); a formal
+    /// name means itself and every nickname the curated table maps to it
+    /// ("richard" → richard, dick, rich, richie, rick, ricky). A nickname
+    /// NEVER reaches a sibling nickname — Rick's father is Dick, two people.
+    public static func givenNameForms(of token: String) -> [String] {
+        if let formal = diminutives[token] { return [token, formal] }
+        return [token] + diminutives.filter { $0.value == token }.map(\.key).sorted()
+    }
+
+    /// Bare given-name lookup (live 2026-08-28: "rick" on a 16k tree offered
+    /// Catherine Auker b. 1374, whose alternate NAME record is the bare
+    /// token "Rich" — `people(namedLike:)` expands RECORD tokens through
+    /// the diminutive table too, so a surname or alternate-name stub "Rich"
+    /// / "Dick" becomes "richard" and collides with typed "rick").
+    ///
+    /// The rule for ONE typed token: the person's PRIMARY NAME record's
+    /// first token (the given name) is the typed token or — with
+    /// `expandDiminutives` — one of `givenNameForms(of:)`. Surnames, middle
+    /// names, alternate-name stubs and married names never match a bare
+    /// token. Name order, like every lookup. O(log tokens + hits).
+    /// C++ readers: the givenNames posting list narrows (any record's first
+    /// token); the primary-record check is the exact predicate.
+    public func people(givenName typed: String, expandDiminutives: Bool) -> [Person] {
+        guard let token = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed)).first,
+              !Self.nameSuffixes.contains(token) else { return [] }
+        let keys = expandDiminutives ? Self.givenNameForms(of: token) : [token]
+        let keySet = Set(keys)
+        let index = self.index
+        var ordinals: [Int32] = []
+        for key in keys { ordinals = PostingTable.union(ordinals, index.givenNames.postings(for: key)) }
+        let hits = ordinals.filter { o in
+            let primary = index.records(of: o).lowerBound
+            guard let first = index.tokenIDs(ofRecord: primary).first else { return false }
+            return keySet.contains(index.tokens.keys[Int(first)])
+        }
+        return peopleInNameOrder(hits, index: index)
+    }
+
+    /// The linear form of `people(givenName:expandDiminutives:)`, for the
+    /// equivalence test and any caller without an index.
+    public static func personHasGivenName(_ person: Person, forms: Set<String>) -> Bool {
+        guard let first = FamilyIdentityText.tokens(person.name).first else { return false }
+        return forms.contains(first)
+    }
+
     /// Inverted token → person-id index over every NAME record. Built once
     /// per graph (O(people × name tokens), ~tens of ms for 16k people);
     /// lookups touch only the people who share a token with the query.
