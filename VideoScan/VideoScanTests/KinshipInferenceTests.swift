@@ -663,6 +663,48 @@ struct KinshipInferenceTests {
         #expect(overlay?.node(profileStableID: "eileen") == .profile(stableID: "eileen"))
     }
 
+    @Test func hallieExecutorWalksFromADurableProfilePinIntoTheTree() async throws {
+        // End-to-end sensor for the People-tab → GEDCOM seam. The profile's
+        // display name and aliases deliberately match NO tree record, so a
+        // green answer can only have crossed the explicit FamilySearch pin.
+        let local = HallieTurnExecutor.ProfileSnapshot(
+            stableID: "durable-rick",
+            canonicalName: "Archive Subject Seven",
+            aliases: [],
+            kinships: [],
+            sex: .male,
+            uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000077"),
+            treeIdentity: .familySearchID("GVQV-NW3"))
+        let graph = KinshipFixture.graph
+        #expect(graph.people(matching: local.canonicalName).isEmpty,
+                "fixture accidentally permits a name bridge")
+
+        let context = HallieTurnExecutor.Context(
+            profiles: [local], graph: graph,
+            speakers: HallieTurnExecutor.Speakers(
+                ownerName: "Someone Else", archivistName: "Hallie Mae"))
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "how is Archive Subject Seven related to Martha Lamson?",
+            ast: .graph(.init(
+                people: ["Archive Subject Seven", "Martha Lamson"],
+                operation: .relationship)))
+
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: intent), context: context)
+        #expect(result.outcome == .answered, "got: \(result.prose)")
+        #expect(result.prose.contains("Martha Lamson"), "got: \(result.prose)")
+        #expect(result.prose.contains("8th-great-grandmother"), "got: \(result.prose)")
+        #expect(result.basisLine.contains("People profile identity bridge"),
+                "the durable identity crossing must remain auditable: \(result.basisLine)")
+        #expect(result.basisLine.contains("Archive Subject Seven")
+                && result.basisLine.contains("Richard Harding Breen Jr"),
+                "the profile and pinned tree identity must both be named: \(result.basisLine)")
+        #expect(result.basisLine.contains("path (GEDCOM)"),
+                "the relationship must come from the tree path: \(result.basisLine)")
+        #expect(!result.basisLine.contains("local only"),
+                "a GEDCOM ancestor answer must not be presented as a local-only row")
+    }
+
 
     // MARK: 2. Scale — see KinshipPerformanceGateTests (Release gate, codex #845)
 

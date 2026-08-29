@@ -11,6 +11,23 @@ final class GedcomScaleSensorTests: XCTestCase {
     static let bigTree = URL(fileURLWithPath:
         "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
+    /// One shared 100k fixture for Hallie's high-risk name routes. Building
+    /// it once keeps the scale sensor bounded while both tests still execute
+    /// the complete HallieTurnExecutor path over production-sized indexes.
+    static let hallie100k: (graph: GedcomFamilyGraph,
+                            owner: GedcomFamilyGraph.Person,
+                            ownerGiven: String,
+                            ownerFSID: String) = {
+        let graph = GedcomFamilyGraph(
+            gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
+        let ownerID = graph.rootPersonID!
+        let owner = graph.people[ownerID]!
+        let ownerGiven = FamilyIdentityText.tokens(owner.name).first!
+        let ownerFSID = owner.familySearchID!
+        _ = graph.index // fixture construction is outside each query budget
+        return (graph, owner, ownerGiven, ownerFSID)
+    }()
+
     #if DEBUG
     static let slack = 3.0
     /// The sub-millisecond lookups run ~9× slower unoptimized (generic
@@ -209,6 +226,72 @@ final class GedcomScaleSensorTests: XCTestCase {
         let decode = medianMS(5) { _ = try? GedcomCompiledTree.decode(data) }
         print("SCALE[\(Self.config)] 100k artifact: \(data.count / 1024) KB, encode \(encode) ms, decode \(decode) ms")
         XCTAssertLessThan(decode, 150 * Self.slack, "snapshot load budget (measured 72 → 54 ms Release M4 Max, 2026-08-29)")
+    }
+
+    func testHallieBareNameOwnerBindingOnSharedHundredThousandPersonTree()
+        async throws {
+        let fixture = Self.hallie100k
+        let context = HallieTurnExecutor.Context(
+            profiles: [], graph: fixture.graph,
+            speakers: .init(
+                ownerName: fixture.owner.name,
+                archivistName: "Hallie Mae",
+                ownerFamilySearchID: fixture.ownerFSID))
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "who is \(fixture.ownerGiven)?",
+            ast: .graph(.init(
+                people: [fixture.ownerGiven], operation: .biography)))
+
+        let started = ContinuousClock.now
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: intent), context: context)
+        let elapsed = ContinuousClock.now - started
+        #if DEBUG
+        let budget = Duration.milliseconds(500)
+        #else
+        let budget = Duration.milliseconds(50)
+        #endif
+
+        XCTAssertEqual(result.outcome, .answered, result.prose)
+        XCTAssertTrue(
+            result.basisLine.contains("FamilySearch ID \(fixture.ownerFSID)"),
+            result.basisLine)
+        XCTAssertFalse(result.prose.hasPrefix("Which"), result.prose)
+        XCTAssertLessThan(
+            elapsed, budget,
+            "100k bare-name owner binding took \(elapsed); budget \(budget)")
+    }
+
+    func testHallieSurnameRosterOnSharedHundredThousandPersonTree()
+        async throws {
+        let fixture = Self.hallie100k
+        let context = HallieTurnExecutor.Context(
+            profiles: [], graph: fixture.graph,
+            speakers: .init(
+                ownerName: fixture.owner.name,
+                archivistName: "Hallie Mae",
+                ownerFamilySearchID: fixture.ownerFSID))
+        let request = HallieTurnExecutor.Request(intent: .init(
+            originalQuestion: "tell me about Pa Breen",
+            ast: .graph(.init(people: ["Pa Breen"], operation: .biography))))
+
+        let started = ContinuousClock.now
+        let result = try await HallieTurnExecutor.execute(
+            request, context: context)
+        let elapsed = ContinuousClock.now - started
+        #if DEBUG
+        let budget = Duration.seconds(2)
+        #else
+        let budget = Duration.milliseconds(250)
+        #endif
+
+        XCTAssertEqual(result.outcome, .needsClarification, result.prose)
+        XCTAssertTrue(result.prose.hasPrefix("I don't know a “Pa” Breen."), result.prose)
+        XCTAssertEqual(result.clarification?.candidates.count, HallieWhichOne.cap)
+        XCTAssertTrue(result.basisLine.contains("Breens offered"), result.basisLine)
+        XCTAssertLessThan(
+            elapsed, budget,
+            "100k surname-roster turn took \(elapsed); budget \(budget)")
     }
 
     @MainActor
