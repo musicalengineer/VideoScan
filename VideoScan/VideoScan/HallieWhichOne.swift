@@ -43,13 +43,42 @@ enum HallieWhichOne {
         graph: GedcomFamilyGraph?,
         ownerFamilySearchID: String? = nil
     ) -> Arrangement {
+        arrangeAlreadyOrdered(
+            ArchivistBiographyPolicy.orderedPeople(people),
+            graph: graph,
+            ownerFamilySearchID: ownerFamilySearchID)
+    }
+
+    /// Anchor-first arrangement for a collection already in
+    /// `ArchivistBiographyPolicy.orderedPeople` order. Surname families
+    /// guarantee this ordering, and filtering members by a given name
+    /// preserves it. Keep storage bounded to what the UI can show instead
+    /// of re-sorting and materializing thousands of family members twice.
+    static func arrangeAlreadyOrdered(
+        _ people: [GedcomFamilyGraph.Person],
+        graph: GedcomFamilyGraph?,
+        ownerFamilySearchID: String? = nil
+    ) -> Arrangement {
         var anchorIDs = Set(graph?.rootPersonIDs ?? [])
         if let pinned = graph?.person(familySearchID: ownerFamilySearchID) { anchorIDs.insert(pinned.id) }
-        let ordered = ArchivistBiographyPolicy.orderedPeople(people)
-        let anchors = ordered.filter { anchorIDs.contains($0.id) }
-        let others = ordered.filter { !anchorIDs.contains($0.id) }
-        let shown = Array((anchors + others).prefix(cap))
-        return Arrangement(shown: shown, total: people.count, anchored: !anchors.isEmpty)
+        var anchors: [GedcomFamilyGraph.Person] = []
+        var others: [GedcomFamilyGraph.Person] = []
+        anchors.reserveCapacity(cap)
+        others.reserveCapacity(cap)
+        var anchored = false
+        for person in people {
+            if anchorIDs.contains(person.id) {
+                anchored = true
+                if anchors.count < cap { anchors.append(person) }
+            } else if others.count < cap {
+                others.append(person)
+            }
+        }
+        let remaining = max(0, cap - anchors.count)
+        var shown = anchors
+        shown.append(contentsOf: others.prefix(remaining))
+        return Arrangement(
+            shown: shown, total: people.count, anchored: anchored)
     }
 
     /// The echo of what was typed: typed casing, capitalized per word. A

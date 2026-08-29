@@ -79,7 +79,7 @@ extension HallieTurnExecutor {
             return .resolved(.gedcomPersonID(named[0].id), note: note(nil))
         }
         if named.count > 1 {
-            let arrangement = HallieWhichOne.arrange(
+            let arrangement = HallieWhichOne.arrangeAlreadyOrdered(
                 named, graph: graph, ownerFamilySearchID: context.speakers.ownerFamilySearchID)
             let shown = chips(arrangement.shown)
             let echo = "\(split.given) \(family.surname)"
@@ -100,7 +100,7 @@ extension HallieTurnExecutor {
         }
 
         // 3. The roster.
-        let arrangement = HallieWhichOne.arrange(
+        let arrangement = HallieWhichOne.arrangeAlreadyOrdered(
             family.people, graph: graph, ownerFamilySearchID: context.speakers.ownerFamilySearchID)
         let shown = chips(arrangement.shown)
         return .roster(Result(

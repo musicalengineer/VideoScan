@@ -233,10 +233,15 @@ enum HallieSpellingRecovery {
         typed: String,
         candidates: [(identity: String, spellings: [String])]
     ) -> [String] {
+        // The query is invariant across the candidate scan. On a 100k
+        // GEDCOM, tokenizing it inside `nameScore` once per person was a
+        // measurable part of every failed-name Hallie turn.
+        let typedTokens = tokens(typed)
+        guard !typedTokens.isEmpty, typedTokens.count <= 6 else { return [] }
         var scores: [String: Int] = [:]
         for candidate in candidates {
             for spelling in candidate.spellings {
-                guard let score = nameScore(typed, spelling) else { continue }
+                guard let score = nameScore(typedTokens, spelling) else { continue }
                 scores[candidate.identity] = min(
                     scores[candidate.identity] ?? Int.max, score)
             }
@@ -245,12 +250,9 @@ enum HallieSpellingRecovery {
         return scores.compactMap { $0.value == best ? $0.key : nil }.sorted()
     }
 
-    private static func nameScore(_ typed: String, _ candidate: String) -> Int? {
-        let typedTokens = tokens(typed)
+    private static func nameScore(_ typedTokens: [String], _ candidate: String) -> Int? {
         let candidateTokens = tokens(candidate)
-        guard !typedTokens.isEmpty,
-              typedTokens.count <= 6,
-              candidateTokens.count <= 8,
+        guard candidateTokens.count <= 8,
               typedTokens.count <= candidateTokens.count else { return nil }
 
         func assign(

@@ -324,4 +324,25 @@ struct HallieSurnameRosterTests {
         #expect(r.clarification?.candidates.count == HallieWhichOne.cap)
         #expect(r.basisLine.contains("6 of 41 O'Connors offered"), "got: \(r.basisLine)")
     }
+
+    @Test func alreadyOrderedArrangementMatchesGeneralPathWithLateAnchor() throws {
+        var text = "0 HEAD\n"
+        for i in 1...9 {
+            text += "0 @I\(i)@ INDI\n1 NAME Person\(i) /O'Connor/\n"
+            if i == 9 { text += "1 _FSFTID LATE-009\n" }
+        }
+        text += "0 TRLR\n"
+        let many = GedcomFamilyGraph(gedcomText: text)
+        let ordered = ArchivistBiographyPolicy.orderedPeople(
+            many.people(withSurname: "O'Connor"))
+        let expected = HallieWhichOne.arrange(
+            ordered, graph: many, ownerFamilySearchID: "LATE-009")
+        let optimized = HallieWhichOne.arrangeAlreadyOrdered(
+            ordered, graph: many, ownerFamilySearchID: "LATE-009")
+
+        #expect(optimized == expected)
+        #expect(optimized.shown.prefix(2).map(\.id) == ["@I1@", "@I9@"])
+        #expect(optimized.shown.count == HallieWhichOne.cap)
+        #expect(optimized.overflow == 3)
+    }
 }
