@@ -39,6 +39,10 @@ struct VolumeEditor: View {
                     relocatedBanner(summary)
                 }
                 if showHeader { Divider() }
+                if ViewerModeCenter.shared.isViewer {
+                    viewerMappingSection
+                    Divider()
+                }
                 workflowSection
                 Divider()
                 hardwareSection
@@ -199,6 +203,35 @@ struct VolumeEditor: View {
         f.dateStyle = .medium
         f.timeStyle = .none
         return f.string(from: d)
+    }
+
+    // MARK: Remote viewer — SMB mapping (Phase 1, docs/remote_use_design.md)
+
+    /// Per-volume opt-in: when this volume is mounted on the viewer (SMB
+    /// share from the master, same name and identity), play files from the
+    /// mount at full quality instead of streaming. The viewer's OWN
+    /// preference — never synced, never written to the catalog.
+    private var viewerMappingSection: some View {
+        let volumeName = MediaStreamResolver.volumeName(ofPath: target.searchPath) ?? URL(fileURLWithPath: target.searchPath).lastPathComponent
+        let settings = ViewerMediaSettings()
+        let mountPath = settings.mountPath(for: volumeName) ?? "/Volumes/\(volumeName)"
+        let mounted = FileManager.default.fileExists(atPath: mountPath)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("On this viewer").font(.headline)
+            Toggle(isOn: Binding(
+                get: { settings.isOptedIn(volumeName) },
+                set: { settings.setOptedIn($0, volumeName: volumeName) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Play from the mounted volume when it is connected (SMB)")
+                    Text(mounted
+                         ? "\(mountPath) is mounted — files play at full quality from it."
+                         : "\(mountPath) is not mounted — files stream from \(ViewerModeCenter.shared.masterDisplayName) until it is.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
+        }
     }
 
     private var workflowSection: some View {

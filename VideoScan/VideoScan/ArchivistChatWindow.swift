@@ -1351,6 +1351,12 @@ struct ArchivistChatWindow: View {
     }
 
     private func play(_ rec: VideoRecord) {
+        // Remote viewer (Phase 1): the file lives on the master. Stream it
+        // (or play an opted-in mount); say honestly when neither is possible.
+        if ViewerModeCenter.shared.isViewer {
+            playOnViewer(rec)
+            return
+        }
         // Cached reachability gate first (nonblocking); the existence
         // probe for the ONE chosen file runs OFF-MAIN — a synchronous
         // fileExists here against a sleeping drive is the 60-second
@@ -1392,6 +1398,62 @@ struct ArchivistChatWindow: View {
                 role: .assistant,
                 text: "▶️ Playing “\(filename)” in \(player) — it's front "
                     + "and center; click me to bring this chat back on top."))
+        }
+    }
+
+    /// Viewer playback: resolve, prepare an access copy when the master
+    /// must transcode, then open the stream (VLC or the system handler)
+    /// and step aside like the local path does.
+    private func playOnViewer(_ rec: VideoRecord) {
+        let filename = rec.filename
+        let configuration = MediaStreamResolver.Configuration.fromDefaults(
+            masterHostname: ViewerModeCenter.shared.masterDisplayName + ".local")
+        Task { @MainActor in
+            // Fresh reachability for this attempt (4 s cap), then resolve.
+            _ = await ViewerMediaStatus.shared.refresh(configuration: configuration)
+            let resolver = MediaStreamResolver.current(designation: model.masterArchive)
+            switch resolver.resolve(rec) {
+            case .local(let url):
+                MediaOpener.open([rec])
+                ArchivistWindowFloat.stepAsideForPlayback()
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "▶️ Playing “\(filename)” from the mounted volume (\(url.deletingLastPathComponent().path))."))
+            case .stream(let url, let native):
+                if !native {
+                    let progressID = UUID()
+                    messages.append(ArchivistMessage(
+                        id: progressID, role: .assistant,
+                        text: "\(ViewerModeCenter.shared.masterDisplayName) is preparing “\(filename)” for streaming…"))
+                    let result = await MediaStreamClient().prepare(
+                        streamURL: url, statusURL: resolver.statusURL(recordID: rec.id),
+                        onProgress: { seconds in
+                            Task { @MainActor in
+                                if let i = messages.firstIndex(where: { $0.id == progressID }) {
+                                    messages[i].text = "\(ViewerModeCenter.shared.masterDisplayName) is preparing “\(filename)” for streaming… \(seconds)s"
+                                }
+                            }
+                        })
+                    switch result {
+                    case .ready: break
+                    case .failed(let reason):
+                        messages.append(ArchivistMessage(role: .assistant, text: "I couldn't stream “\(filename)”: \(reason)."))
+                        return
+                    case .timedOut:
+                        messages.append(ArchivistMessage(role: .assistant, text: "“\(filename)” is taking too long to prepare on \(ViewerModeCenter.shared.masterDisplayName) — try again in a few minutes."))
+                        return
+                    }
+                }
+                MediaOpener.openStream(url)
+                ArchivistWindowFloat.stepAsideForPlayback()
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "▶️ Streaming “\(filename)” from \(ViewerModeCenter.shared.masterDisplayName) — click me to bring this chat back on top."))
+            case .masterOffline(let master):
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I can't play “\(filename)” right now — \(master) is offline and its volume isn't mounted here."))
+            }
         }
     }
 
