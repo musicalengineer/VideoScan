@@ -96,8 +96,10 @@ private let donnaPull = """
 1 SEX M
 1 BIRT
 2 DATE 1840
+2 PLAC Boston, Suffolk, Massachusetts
 1 DEAT
-2 DATE 1910
+2 DATE AFT 1910
+2 PLAC Sudbury, Middlesex, Massachusetts
 1 FAMS @F4@
 1 _FSFTID ZCOM-MON
 0 @F1@ FAM
@@ -193,12 +195,118 @@ struct HallieCommonAncestorAnswerTests {
         // their fathers are the cousin pair: Sr 2 up, Walter 3 up.
         let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Richard Breen Sr", b: "Walter Hudson"), context: context(graph)))
         #expect(r.outcome == .answered)
-        #expect(r.prose.contains("Richard Harding Breen Sr and Walter Hudson share 1 recorded ancestor; the nearest is Z Common (b. 1840) — Richard Harding Breen Sr’s grandfather and Walter Hudson’s great-grandfather, making them 1st cousins once removed."), "got: \(r.prose)")
+        #expect(r.prose.contains("Richard Harding Breen Sr and Walter Hudson share 1 recorded ancestor; the nearest is Z Common (b. 1840, Boston, Suffolk, Massachusetts – d. after 1910, Sudbury, Middlesex, Massachusetts) — Richard Harding Breen Sr’s grandfather and Walter Hudson’s great-grandfather, making them 1st cousins once removed."), "got: \(r.prose)")
         #expect(r.prose.contains("Richard Harding Breen Sr’s line: Z Common → George Breen → Richard Harding Breen Sr."))
         #expect(r.prose.contains("Walter Hudson’s line: Z Common → Mabel Common → Harold Hudson → Walter Hudson."))
         #expect(r.catalogPersonName == "Z Common")
         #expect(r.offeredActions.first == .openFamilyTreePerson(personID: "@I5@", personName: "Z Common"))
         #expect(r.basisLine.hasPrefix(ArchivistBiographyPolicy.gedcomBasis))
+    }
+
+    /// Two first cousins (Abel, Beth) under one grandfather Z (the
+    /// `zLines` record) whose mother W (approximate year + a place that
+    /// must stay out of the prose) is the second, farther shared ancestor.
+    private func cousinGraph(zLines: String) -> GedcomFamilyGraph {
+        GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Z /Common/
+        1 SEX M
+        \(zLines)
+        1 FAMC @F9@
+        1 FAMS @F0@
+        0 @I2@ INDI
+        1 NAME W /Common/
+        1 SEX F
+        1 BIRT
+        2 DATE ABT 1602
+        2 PLAC Must Not Appear
+        1 FAMS @F9@
+        0 @I3@ INDI
+        1 NAME Pa /Common/
+        1 SEX M
+        1 FAMC @F0@
+        1 FAMS @F1@
+        0 @I4@ INDI
+        1 NAME Ma /Common/
+        1 SEX F
+        1 FAMC @F0@
+        1 FAMS @F2@
+        0 @I5@ INDI
+        1 NAME Abel /Common/
+        1 SEX M
+        1 FAMC @F1@
+        0 @I6@ INDI
+        1 NAME Beth /Common/
+        1 SEX F
+        1 FAMC @F2@
+        0 @F9@ FAM
+        1 WIFE @I2@
+        1 CHIL @I1@
+        0 @F0@ FAM
+        1 HUSB @I1@
+        1 CHIL @I3@
+        1 CHIL @I4@
+        0 @F1@ FAM
+        1 HUSB @I3@
+        1 CHIL @I5@
+        0 @F2@ FAM
+        1 WIFE @I4@
+        1 CHIL @I6@
+        0 TRLR
+        """)
+    }
+
+    private func nearestSentence(zLines: String) throws -> String {
+        let g = cousinGraph(zLines: zLines)
+        let r = try #require(HallieLineageAnswer.answer(.commonAncestor(a: "Abel Common", b: "Beth Common"), context: context(g)))
+        #expect(r.outcome == .answered)
+        return r.prose
+    }
+
+    // Rick 2026-08-28: the nearest ancestor carries the record's critical
+    // info — "Martha Lamson (b. 1633 – d. after 1717, Sudbury, Middlesex,
+    // Massachusetts Bay Colony)". Qualifiers as recorded, places when
+    // recorded, nothing invented, never "living".
+    @Test func nearestCarriesBothVitalsWithPlaces() throws {
+        let prose = try nearestSentence(zLines: """
+        1 BIRT
+        2 DATE ABT 1633
+        2 PLAC Boston, Suffolk, Massachusetts Bay Colony
+        1 DEAT
+        2 DATE AFT 1717
+        2 PLAC Sudbury, Middlesex, Massachusetts Bay Colony
+        """)
+        #expect(prose.hasPrefix("Abel Common and Beth Common share 2 recorded ancestors; the nearest is Z Common (b. about 1633, Boston, Suffolk, Massachusetts Bay Colony – d. after 1717, Sudbury, Middlesex, Massachusetts Bay Colony) — Abel Common’s grandfather and Beth Common’s grandfather, making them 1st cousins."), "got: \(prose)")
+        // "Also shared:" stays readable — years (with qualifier) only, no places.
+        #expect(prose.contains("Also shared: W Common (b. about 1602) (3/3 generations up)."), "got: \(prose)")
+        #expect(!prose.contains("Must Not Appear"))
+    }
+
+    @Test func nearestWithOnlyADeathPlaceOmitsTheBirthPlaceGracefully() throws {
+        let prose = try nearestSentence(zLines: """
+        1 BIRT
+        2 DATE 1633
+        1 DEAT
+        2 DATE AFT 1717
+        2 PLAC Sudbury, Middlesex, Massachusetts Bay Colony
+        """)
+        #expect(prose.contains("the nearest is Z Common (b. 1633 – d. after 1717, Sudbury, Middlesex, Massachusetts Bay Colony) — "), "got: \(prose)")
+    }
+
+    @Test func nearestWithOnlyABirthYearSaysJustThat() throws {
+        let prose = try nearestSentence(zLines: """
+        1 BIRT
+        2 DATE 12 MAR 1633
+        """)
+        #expect(prose.contains("the nearest is Z Common (b. 1633) — "), "got: \(prose)")
+        #expect(!prose.lowercased().contains("living"))
+    }
+
+    @Test func nearestWithNoVitalsHasNoParenthetical() throws {
+        let prose = try nearestSentence(zLines: "1 BIRT\n2 PLAC Somewhere Without A Year")
+        #expect(prose.contains("the nearest is Z Common — "), "got: \(prose)")
+        #expect(!prose.contains("Somewhere Without A Year"), "a place without a year is not a date claim")
     }
 
     @Test func ownerResolvesThroughTheSameChain() throws {
