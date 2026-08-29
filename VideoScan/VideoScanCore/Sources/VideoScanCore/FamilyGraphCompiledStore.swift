@@ -73,6 +73,20 @@ public struct FamilyGraphCompiledStore {
     /// The ingest gate. Injected so a test can force a failure.
     public var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
         = GedcomCompiledTree.verify(decoded:against:)
+    /// Remote-viewer read mode (docs/remote_use_design.md Phase 1): the
+    /// generation was compiled on the MASTER and arrived by verified sync,
+    /// so its raw sources are not on this disk (they name master paths).
+    /// True skips the per-source re-hash in `usableManifest` — the sync
+    /// manifest already proved the artifact's bytes. False (default) keeps
+    /// the master's rule: a source missing or changed on disk is a miss.
+    public var trustsManifestSources = false
+    /// Remote-viewer write refusal: `ingest`, `rollback` and every other
+    /// pointer/generation writer return "not promoted" without touching
+    /// the root, and say so in the log. The app sets it from
+    /// ViewerModeCenter; a CLI never sets it.
+    public var refusesWrites = false
+    /// The log line every refused write starts with (test sensor).
+    public static let refusedWritePrefix = "[family-tree] refused write on a viewer:"
 
     public struct Pointer: Codable, Equatable {
         public var schema: UInt32
@@ -278,10 +292,25 @@ public struct FamilyGraphCompiledStore {
         return nil
     }
 
+    /// Remote viewer (Phase 1): the pointer names a generation this build
+    /// refuses for VERSION reasons (schema/codec/index). Unlike
+    /// `multiSourceGenerationNeedingRecompile` it does not require the
+    /// sources on disk or more than one of them — a viewer cannot
+    /// recompile anyway; it can only show "compiled on the master — sync
+    /// again". Nil when the pointer matches or there is no pointer.
+    public func generationRefusedForVersion() -> (generation: String, sources: [URL])? {
+        guard let pointer = readPointer(), !Self.versionsMatch(pointer) else { return nil }
+        let manifest = readManifest(pointer.current)
+        let sources = manifest?.sources.map { URL(fileURLWithPath: $0.path) } ?? []
+        return (pointer.current, sources)
+    }
+
     /// The generation's manifest when it verified clean and every source
     /// it records is still on disk with the same key; nil (logged) otherwise.
+    /// With `trustsManifestSources` the on-disk check is skipped (viewer).
     private func usableManifest(_ generation: String) -> Manifest? {
         guard let manifest = readManifest(generation), manifest.verification.isEmpty else { return nil }
+        if trustsManifestSources { return manifest }
         for source in manifest.sources {
             let url = URL(fileURLWithPath: source.path)
             guard let key = try? sourceKeys(for: [url]).first, key == source.key else {
@@ -321,6 +350,10 @@ public struct FamilyGraphCompiledStore {
     /// the pointer on disk is still the one we based the decision on (an
     /// ingest may have promoted a fresh generation meanwhile).
     private func repoint(from seen: Pointer, current: String, sourceKeys: [String]) {
+        if refusesWrites {
+            log("\(Self.refusedWritePrefix) repoint to \(current) — pointer untouched")
+            return
+        }
         do {
             try withLock {
                 guard readPointer() == seen else { return }
@@ -360,6 +393,10 @@ public struct FamilyGraphCompiledStore {
     /// as `previous`, and prune never deletes a freshly promoted sibling.
     public func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
                        progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
+        if refusesWrites {
+            log("\(Self.refusedWritePrefix) ingest (\(sources.count) sources) — the tree is compiled on the master")
+            return nil
+        }
         do {
             return try withLock { ingestLocked(graph: graph, sources: sources, mergeReport: mergeReport, progress: progress) }
         } catch {
@@ -470,6 +507,10 @@ public struct FamilyGraphCompiledStore {
     /// untouched in every false case.
     @discardableResult
     public func rollback() -> Bool {
+        if refusesWrites {
+            log("\(Self.refusedWritePrefix) rollback — pointer untouched")
+            return false
+        }
         do {
             return try withLock {
                 guard var pointer = readPointer(), let previous = pointer.previous,

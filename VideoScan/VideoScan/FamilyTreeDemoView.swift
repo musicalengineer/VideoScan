@@ -91,11 +91,20 @@ struct FamilyTreeDemoView: View {
             if !model.needsRecompile.isEmpty {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
-                        .font(.system(size: 12))
-                    Spacer()
-                    Button("Recompile") { Task { await model.recompile() } }
-                        .disabled(model.isRecompiling)
+                    if ViewerModeCenter.shared.isViewer {
+                        // Remote viewer (Phase 1): the tree is compiled on the
+                        // master; this build cannot read that generation. No
+                        // Recompile here — the fix is on the master, then a sync.
+                        Text(FamilyTreeViewerBanner.compiledElsewhereText())
+                            .font(.system(size: 12))
+                        Spacer()
+                    } else {
+                        Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
+                            .font(.system(size: 12))
+                        Spacer()
+                        Button("Recompile") { Task { await model.recompile() } }
+                            .disabled(model.isRecompiling)
+                    }
                 }
                 .foregroundStyle(.orange)
                 .padding(.horizontal, 14)
@@ -762,6 +771,7 @@ struct FamilyTreeDemoView: View {
                 }
                 Spacer()
                 Button("Add note") { saveDraftNote() }
+                    .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -845,6 +855,7 @@ struct FamilyTreeDemoView: View {
                 .controlSize(.small)
                 .help("Hear it")
                 Button("Save") { savePronunciation(word) }
+                    .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(draft.isEmpty)

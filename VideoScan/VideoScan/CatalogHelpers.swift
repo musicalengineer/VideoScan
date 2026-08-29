@@ -1346,10 +1346,40 @@ struct CatalogContent: View {
                                         case .filmstrip:
                                             model.requestFilmstrip(for: rec)
                                         case .avPlayer:
-                                            let url = URL(fileURLWithPath: rec.fullPath)
-                                            player = AVPlayer(url: url)
-                                            isPlaying = true
-                                            player?.play()
+                                            // Remote viewer (Phase 1): the file is
+                                            // on the master — play its stream (or a
+                                            // mapped mount) instead of the master path.
+                                            if ViewerModeCenter.shared.isViewer {
+                                                let resolver = MediaStreamResolver.current(designation: model.masterArchive)
+                                                switch resolver.resolve(rec) {
+                                                case .local(let url):
+                                                    player = AVPlayer(url: url)
+                                                    isPlaying = true
+                                                    player?.play()
+                                                case .stream(let url, let native):
+                                                    if native {
+                                                        player = AVPlayer(url: url)
+                                                        isPlaying = true
+                                                        player?.play()
+                                                    } else {
+                                                        let status = resolver.statusURL(recordID: rec.id)
+                                                        Task { @MainActor in
+                                                            if await MediaStreamClient().prepare(streamURL: url, statusURL: status) == .ready {
+                                                                player = AVPlayer(url: url)
+                                                                isPlaying = true
+                                                                player?.play()
+                                                            }
+                                                        }
+                                                    }
+                                                case .masterOffline:
+                                                    appLog.write("Viewer: preview of \(rec.filename) refused — master offline, volume not mounted")
+                                                }
+                                            } else {
+                                                let url = URL(fileURLWithPath: rec.fullPath)
+                                                player = AVPlayer(url: url)
+                                                isPlaying = true
+                                                player?.play()
+                                            }
                                         }
                                     } label: {
                                         Image(systemName: "play.circle.fill")
@@ -1570,9 +1600,20 @@ enum MediaOpener {
     /// primaryAction/button closure already on the main actor.
     @MainActor
     static func open(_ records: [VideoRecord]) {
-        let reachable = records.filter { rec in
-            if VolumeReachability.isReachable(path: rec.fullPath) { return true }
-            mediaOpenLog.info("Skipping unreachable file: \(rec.fullPath, privacy: .public)")
+        // Remote viewer (Phase 1): catalog paths are master-local. Resolve
+        // each record to an opted-in mount, the master's stream, or an
+        // honest offline state; only local resolutions continue below,
+        // each with the URL it resolved to. On the master `resolve` is the
+        // identity (`.local(masterPath)`), so nothing changes there.
+        let pairs: [(rec: VideoRecord, url: URL)]
+        if ViewerModeCenter.shared.isViewer {
+            pairs = openResolvingForViewer(records)
+        } else {
+            pairs = records.map { ($0, URL(fileURLWithPath: $0.fullPath)) }
+        }
+        let reachable = pairs.filter { pair in
+            if VolumeReachability.isReachable(path: pair.url.path) { return true }
+            mediaOpenLog.info("Skipping unreachable file: \(pair.url.path, privacy: .public)")
             return false
         }
         guard !reachable.isEmpty else { return }
@@ -1580,12 +1621,11 @@ enum MediaOpener {
         var qtURLs: [URL] = []
         var vlcURLs: [URL] = []
         var defaultURLs: [URL] = []
-        for rec in reachable {
-            let url = URL(fileURLWithPath: rec.fullPath)
-            switch preferredPlayer(for: rec, hasVLC: hasVLC) {
-            case .quickTime:     qtURLs.append(url)
-            case .vlc:           vlcURLs.append(url)
-            case .systemDefault: defaultURLs.append(url)
+        for pair in reachable {
+            switch preferredPlayer(for: pair.rec, hasVLC: hasVLC) {
+            case .quickTime:     qtURLs.append(pair.url)
+            case .vlc:           vlcURLs.append(pair.url)
+            case .systemDefault: defaultURLs.append(pair.url)
             }
         }
 
@@ -1593,6 +1633,55 @@ enum MediaOpener {
         if !vlcURLs.isEmpty { launchVLC(vlcURLs) }
         for url in defaultURLs {
             mediaOpenLog.info("Opening in system default handler: \(url.path, privacy: .public)")
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Viewer half of `open(_:)`: streams and offline records are handled
+    /// here; records that map to a local mount come back for the ordinary
+    /// player choice. Streams open in VLC when installed (it scrubs an
+    /// http source well), else the system handler (Safari plays MP4).
+    @MainActor
+    private static func openResolvingForViewer(_ records: [VideoRecord]) -> [(rec: VideoRecord, url: URL)] {
+        let resolver = MediaStreamResolver.current()
+        var local: [(rec: VideoRecord, url: URL)] = []
+        for rec in records {
+            switch resolver.resolve(rec) {
+            case .local(let url):
+                // Re-rooted at the mount (or the same path when the mount
+                // name matches): the ordinary player choice opens this URL.
+                local.append((rec, url))
+            case .stream(let url, let native):
+                mediaOpenLog.info("Viewer: streaming \(rec.filename, privacy: .public) from the master (native: \(native))")
+                if native {
+                    openStream(url)
+                } else {
+                    let status = resolver.statusURL(recordID: rec.id)
+                    Task { @MainActor in
+                        switch await MediaStreamClient().prepare(streamURL: url, statusURL: status) {
+                        case .ready: openStream(url)
+                        case .failed(let reason):
+                            mediaOpenLog.error("Viewer: could not prepare \(rec.filename, privacy: .public) — \(reason, privacy: .public)")
+                        case .timedOut:
+                            mediaOpenLog.error("Viewer: timed out preparing \(rec.filename, privacy: .public)")
+                        }
+                    }
+                }
+            case .masterOffline(let master):
+                mediaOpenLog.info("Viewer: \(rec.filename, privacy: .public) not playable — \(master, privacy: .public) is offline and its volume is not mounted here")
+            }
+        }
+        return local
+    }
+
+    /// Open an http stream from the master in VLC (preferred: scrubbing on
+    /// a ranged http source) or the system default handler.
+    @MainActor
+    static func openStream(_ url: URL) {
+        if hasVLC {
+            launchVLC([url])
+        } else {
+            mediaOpenLog.info("VLC absent; opening stream in system default handler")
             NSWorkspace.shared.open(url)
         }
     }

@@ -191,6 +191,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Write the script, open it in Terminal, and start watching for output.
     /// Nothing runs until the user presses Return in that window.
     func launch() {
+        if ViewerWriteGuard.refuse("FamilySearchPull.launch") { return }
         do {
             guard let toolURL = locator.locate() else {
                 throw FamilySearchPullError.toolNotFound
@@ -244,6 +245,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// watching, a MacFamilyTree export, an Ancestry download): same parse,
     /// same replace prompt, same install. Nothing is copied until Replace.
     func installFromFile(_ url: URL) {
+        if ViewerWriteGuard.refuse("FamilySearchPull.installFromFile") { return }
         watchTask?.cancel()
         watchTask = nil
         guard url.pathExtension.lowercased() == "ged" else {
@@ -495,6 +497,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// loader takes the newest valid file, so this is additive — the
     /// previous tree stays on disk as its own history.
     func install() {
+        if ViewerWriteGuard.refuse("FamilySearchPull.install") { return }
         guard case .ready(let output, let new, _, _) = phase, !isInstalling else { return }
         let people = new.people
         do {
@@ -541,6 +544,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// streams the sources in 1 MB chunks.
     @discardableResult
     func installMerged() -> Task<Void, Never> {
+        if ViewerWriteGuard.refuse("FamilySearchPull.installMerged") { return Task {} }
         if let running = installTask { return running }
         guard case .ready(let output, _, _, _) = phase else { return Task {} }
         isInstalling = true

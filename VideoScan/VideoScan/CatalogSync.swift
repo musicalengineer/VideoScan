@@ -47,6 +47,18 @@
 //    live catalog directory is replaced as a single op. We keep the
 //    *previous* live dir as `.sync-previous/` for one generation in
 //    case the new copy turns out to be wrong after the fact.
+//
+// Phase 1 remote use (docs/remote_use_design.md, 2026-08-29): the scope
+// grew from "catalog + POI" to everything the porch Mac needs to show
+// the same tree, people, notes and voice as the master — see
+// `CatalogSyncScope.phase1`. One entry (People/) normally lives on the
+// Master Archive RAID, outside Application Support; the master lists
+// such external sources in `sync-sources.json` (hashed into the manifest
+// like any other file) and the viewer runs one extra rsync per entry
+// before verifying. The viewer never compiles the tree: it trusts the
+// synced generation's manifest (FamilyGraphCompiledStore
+// .trustsManifestSources) and shows "compiled on <master> — sync again"
+// when the master's generation is one this build cannot read.
 
 import Foundation
 import Combine
@@ -74,6 +86,101 @@ enum CatalogSyncDefaultsKey {
 /// Hard-coded default master. Matches the hostname of Rick's Mac Studio M4 Max
 /// as documented in CLAUDE.md / MEMORY.md. The Plist override above wins.
 let defaultMasterHostname = "RicksM4.local"
+
+// MARK: - Scope (what a viewer mirrors)
+
+/// The allow-list: everything not named here is invisible to a viewer.
+/// Each entry is a path relative to the Application Support/VideoScan
+/// root on BOTH ends. The same list drives the master's manifest, the
+/// viewer's rsync include rules, and the viewer's atomic swap, so the
+/// three can never disagree about what "the synced set" is.
+struct CatalogSyncScope: Equatable, Sendable {
+    enum Entry: Equatable, Sendable {
+        /// One regular file.
+        case file(String)
+        /// A whole directory, recursively (hidden files skipped).
+        case tree(String)
+        /// A FamilyGraphCompiledStore root: the pointer (`current.json`),
+        /// the CURRENT generation directory it names, and `sources/`.
+        /// rsync mirrors every `gen-*` (the store keeps current + one
+        /// previous, ~17 MB each), but only the current one is hashed —
+        /// the previous is a rollback spare the viewer never reads.
+        case compiledStore(String)
+
+        var relativePath: String {
+            switch self {
+            case .file(let p), .tree(let p), .compiledStore(let p): return p
+            }
+        }
+    }
+
+    let entries: [Entry]
+
+    /// Name of the master-written map of external sources (relative path
+    /// → absolute directory on the master) — see `externalSources`.
+    static let externalSourcesFileName = "sync-sources.json"
+
+    /// The pre-Phase-1 scope (catalog + POI). Kept as a named value so the
+    /// manifest stress tests and the old round-trip tests still describe
+    /// exactly what they cover.
+    static let catalogAndPOI = CatalogSyncScope(entries: [
+        .file("catalog.json"),
+        .file("catalog.json.prev"),
+        .tree("POI"),
+    ])
+
+    /// Phase 1 remote use: the tree, its originals, People/ enrichments,
+    /// the CyberBrain, Hallie's pronunciations (+ drill file when one
+    /// exists — the whole `Hallie/` directory is mirrored), and the
+    /// kinship attestation/profile data (which lives inside POI/).
+    static let phase1 = CatalogSyncScope(entries: [
+        .file("catalog.json"),
+        .file("catalog.json.prev"),
+        .tree("POI"),
+        .compiledStore("family-tree/compiled"),
+        .tree("family-tree/originals"),
+        .tree("family-tree/assets/People"),
+        .file("cyberbrain/cyberbrain.json"),
+        .tree("Hallie"),
+        .file(CatalogSyncScope.externalSourcesFileName),
+    ])
+
+    /// Relative paths the atomic swap rotates (each entry once), plus the
+    /// manifest itself.
+    var swapPaths: [String] {
+        entries.map(\.relativePath) + ["manifest.sha256"]
+    }
+
+    /// rsync filter rules. Every ancestor directory of a nested entry
+    /// needs its own `--include=dir/` or rsync prunes the branch before
+    /// it reaches the leaf; the trailing `--exclude=*` then drops all
+    /// else. Order matters: includes first, exclude last.
+    var rsyncIncludeRules: [String] {
+        var rules: [String] = ["--include=manifest.sha256"]
+        var seenDirs = Set<String>()
+        func includeAncestors(of relativePath: String) {
+            let parts = relativePath.split(separator: "/").map(String.init)
+            guard parts.count > 1 else { return }
+            var prefix = ""
+            for part in parts.dropLast() {
+                prefix += part + "/"
+                if seenDirs.insert(prefix).inserted { rules.append("--include=\(prefix)") }
+            }
+        }
+        for entry in entries {
+            includeAncestors(of: entry.relativePath)
+            switch entry {
+            case .file(let p):
+                rules.append("--include=\(p)")
+            case .tree(let p), .compiledStore(let p):
+                if seenDirs.insert(p + "/").inserted { rules.append("--include=\(p)/") }
+                rules.append("--include=\(p)/**")
+            }
+        }
+        rules.append("--exclude=*")
+        return rules
+    }
+}
 
 // MARK: - Dependency seams (so tests can stub the world)
 
@@ -197,8 +304,21 @@ final class CatalogSync: ObservableObject {
     private let paths: CatalogSyncPaths
     private let hostnameSource: HostnameSource
     private let rsyncRunner: RsyncRunner
-    private let masterHostname: String
+    /// The master's hostname as configured ("RicksM4.local"). Read by the
+    /// viewer banner and the media/Hallie resolvers, which all talk to
+    /// the same machine.
+    let masterHostname: String
     private let log: (String) -> Void
+    /// What a viewer mirrors and the master hashes. Injected so the old
+    /// catalog+POI round-trip tests keep their exact coverage.
+    let scope: CatalogSyncScope
+    /// Master side: directories outside Application Support that back a
+    /// scope entry (relative path → absolute directory on this machine).
+    /// Production answers "family-tree/assets/People → <archive>/
+    /// 40_Family_Tree/People" when a Master Archive is designated. Read
+    /// each time the manifest is computed, so a designation made after
+    /// launch is picked up on the next save.
+    let externalSources: @Sendable () -> [String: URL]
 
     /// True when this Mac is the catalog master (full read/write).
     let mode: CatalogSyncMode
@@ -232,18 +352,39 @@ final class CatalogSync: ObservableObject {
             forKey: CatalogSyncDefaultsKey.masterHostname
         ) ?? defaultMasterHostname
 
+        let paths = CatalogSyncPaths.standard()
         return CatalogSync(
-            paths: CatalogSyncPaths.standard(),
+            paths: paths,
             hostnameSource: SystemHostnameSource(),
             rsyncRunner: SystemRsyncRunner(),
             masterHostname: masterHost,
             remoteUser: NSUserName(),
             isInert: TestEnvironment.isTestHost,
+            scope: .phase1,
+            externalSources: { Self.productionExternalSources(liveDir: paths.liveDir) },
             log: { line in
                 NSLog("VideoScan: %@", line)
                 appLog.write(line)
             }
         )
+    }
+
+    /// People/ lives under the designated Master Archive's 40_Family_Tree
+    /// when there is one; then it is external to Application Support and
+    /// the viewer needs its own rsync for it. With no archive designated
+    /// the assets root is already inside Application Support and the
+    /// main rsync covers it.
+    nonisolated static func productionExternalSources(liveDir: URL) -> [String: URL] {
+        let assets = FamilyAssetConfigurationCenter.shared.snapshot().roots.assets
+        return externalSources(assetsRoot: assets, liveDir: liveDir)
+    }
+
+    /// Pure mapping so a test can pin it without the configuration center.
+    nonisolated static func externalSources(assetsRoot: URL, liveDir: URL) -> [String: URL] {
+        let people = assetsRoot.appendingPathComponent("People", isDirectory: true)
+        let root = liveDir.standardizedFileURL.path
+        if people.standardizedFileURL.path.hasPrefix(root + "/") { return [:] }
+        return ["family-tree/assets/People": people]
     }
 
     /// When true, all mutating entry points (manifest write, sync pull,
@@ -257,6 +398,8 @@ final class CatalogSync: ObservableObject {
         masterHostname: String,
         remoteUser: String,
         isInert: Bool = false,
+        scope: CatalogSyncScope = .phase1,
+        externalSources: @escaping @Sendable () -> [String: URL] = { [:] },
         log: @escaping (String) -> Void
     ) {
         self.paths = paths
@@ -265,6 +408,8 @@ final class CatalogSync: ObservableObject {
         self.masterHostname = masterHostname
         self.remoteUser = remoteUser
         self.isInert = isInert
+        self.scope = scope
+        self.externalSources = externalSources
         self.log = log
         if isInert {
             log("CatalogSync: inert — test host detected; sync disabled")
@@ -300,16 +445,18 @@ final class CatalogSync: ObservableObject {
 
     var isReadOnly: Bool { mode == .viewer }
 
+    /// The role the rest of the app reads (ViewerModeCenter). Installed by
+    /// VideoScanApp right after construction; tests install directly.
+    var viewerRole: RemoteViewerRole {
+        mode == .master ? .master : .viewer(masterHostname: masterHostname)
+    }
+
     // MARK: - Manifest (master side)
 
-    /// Files that participate in the manifest, relative to liveDir.
-    /// Anything not in this allow-list is invisible to the viewer.
-    nonisolated private static let manifestRoots = ["catalog.json", "catalog.json.prev", "POI"]
-
-    /// Write `manifest.sha256` in liveDir covering catalog.json, .prev, and
-    /// everything under POI/. No-op on a viewer (defense in depth — the
-    /// viewer's CatalogStore is read-only, but if the delegate hook is ever
-    /// wired up by mistake this still won't clobber the master's manifest).
+    /// Write `manifest.sha256` in liveDir covering every scope entry. No-op
+    /// on a viewer (defense in depth — the viewer's CatalogStore is
+    /// read-only, but if the delegate hook is ever wired up by mistake
+    /// this still won't clobber the master's manifest).
     ///
     /// Best-effort: a write failure is logged but doesn't propagate. The
     /// viewer will simply see a stale or missing manifest and refuse to swap.
@@ -317,7 +464,8 @@ final class CatalogSync: ObservableObject {
         if isInert { return }
         guard mode == .master else { return }
         do {
-            let count = try Self.computeAndWriteManifest(liveDir: paths.liveDir)
+            let count = try Self.computeAndWriteManifest(
+                liveDir: paths.liveDir, scope: scope, externalSources: externalSources())
             log("CatalogSync: wrote manifest.sha256 (\(count) files)")
         } catch {
             log("CatalogSync: failed to write manifest.sha256: \(error.localizedDescription)")
@@ -360,12 +508,14 @@ final class CatalogSync: ObservableObject {
         manifestRefreshRunning = true
         manifestRefreshCount += 1
         let liveDir = paths.liveDir
+        let scope = self.scope
+        let external = externalSources()
         manifestRefreshTask = Task { [weak self] in
             // Task.detached: explicitly OFF the main actor. (A plain
             // nonisolated async call would inherit the caller's actor —
             // see the "approachable concurrency" trap notes.)
             let outcome: Result<Int, Error> = await Task.detached(priority: .utility) {
-                Result { try Self.computeAndWriteManifest(liveDir: liveDir) }
+                Result { try Self.computeAndWriteManifest(liveDir: liveDir, scope: scope, externalSources: external) }
             }.value
             guard let self else { return }
             self.manifestRefreshDidFinish(outcome)
@@ -399,47 +549,135 @@ final class CatalogSync: ObservableObject {
 
     /// Compute + atomically write manifest.sha256 under `liveDir`. Returns
     /// the number of files covered. Pure filesystem work, safe off-main.
-    nonisolated static func computeAndWriteManifest(liveDir: URL) throws -> Int {
-        let lines = try computeManifestLines(rootDir: liveDir)
+    ///
+    /// With external sources, `sync-sources.json` is (re)written FIRST so
+    /// the manifest hashes the map the viewer will read; with none, a
+    /// stale map from an earlier designation is removed.
+    nonisolated static func computeAndWriteManifest(
+        liveDir: URL,
+        scope: CatalogSyncScope = .phase1,
+        externalSources: [String: URL] = [:]
+    ) throws -> Int {
+        try writeExternalSourcesFile(externalSources, in: liveDir)
+        let lines = try computeManifestLines(rootDir: liveDir, scope: scope, externalSources: externalSources)
         let text = lines.joined(separator: "\n") + "\n"
         let manifestURL = liveDir.appendingPathComponent("manifest.sha256")
         try text.write(to: manifestURL, atomically: true, encoding: .utf8)
         return lines.count
     }
 
+    /// `sync-sources.json`: `{"family-tree/assets/People": "/Volumes/…/People"}`.
+    /// Sorted keys so the bytes — and therefore the manifest hash — are
+    /// stable for an unchanged map.
+    nonisolated static func writeExternalSourcesFile(_ sources: [String: URL], in liveDir: URL) throws {
+        let url = liveDir.appendingPathComponent(CatalogSyncScope.externalSourcesFileName)
+        guard !sources.isEmpty else {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+            return
+        }
+        let object = sources.mapValues { $0.standardizedFileURL.path }
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Parse `sync-sources.json` (relative path → absolute master path).
+    /// Paths must be absolute and relative keys must stay inside the
+    /// root (no `..`, no leading `/`); anything else is dropped.
+    nonisolated static func readExternalSourcesFile(in dir: URL) -> [String: String] {
+        let url = dir.appendingPathComponent(CatalogSyncScope.externalSourcesFileName)
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return [:] }
+        return object.filter { key, value in
+            !key.hasPrefix("/") && !key.isEmpty
+                && !key.split(separator: "/").contains(where: { $0 == ".." || $0 == "." })
+                && value.hasPrefix("/")
+        }
+    }
+
     /// Compute the manifest lines (sorted) for everything under `rootDir`
-    /// that lives within `manifestRoots`. Pure function — no I/O on the
-    /// app-support tree other than reads.
-    nonisolated static func computeManifestLines(rootDir: URL) throws -> [String] {
+    /// the scope names. Pure function — no I/O on the app-support tree
+    /// other than reads. An external source is hashed from ITS directory
+    /// but recorded under the scope's relative path, which is where the
+    /// viewer stages it.
+    nonisolated static func computeManifestLines(
+        rootDir: URL,
+        scope: CatalogSyncScope = .phase1,
+        externalSources: [String: URL] = [:]
+    ) throws -> [String] {
         let fm = FileManager.default
         var entries: [(relPath: String, hash: String)] = []
 
-        for top in manifestRoots {
-            let url = rootDir.appendingPathComponent(top)
+        func hashTree(at url: URL, recordedUnder relPrefix: String) throws {
+            // Recursively walk. enumerator() handles symlinks safely
+            // (doesn't follow by default).
+            guard let walker = fm.enumerator(at: url,
+                                             includingPropertiesForKeys: [.isRegularFileKey],
+                                             options: [.skipsHiddenFiles]) else { return }
+            for case let fileURL as URL in walker {
+                let vals = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+                guard vals.isRegularFile == true else { continue }
+                let inner = relativePath(of: fileURL, under: url)
+                let hash = try sha256Hex(of: fileURL)
+                entries.append((relPrefix + "/" + inner, hash))
+            }
+        }
+
+        func hashFile(at url: URL, recordedAs rel: String) throws {
+            let hash = try sha256Hex(of: url)
+            entries.append((rel, hash))
+        }
+
+        for entry in scope.entries {
+            let rel = entry.relativePath
+            let url = externalSources[rel] ?? rootDir.appendingPathComponent(rel)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue {
-                // Recursively walk top. enumerator() handles symlinks safely
-                // (doesn't follow by default).
-                guard let walker = fm.enumerator(at: url,
-                                                 includingPropertiesForKeys: [.isRegularFileKey],
-                                                 options: [.skipsHiddenFiles]) else { continue }
-                for case let fileURL as URL in walker {
-                    let vals = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
-                    guard vals.isRegularFile == true else { continue }
-                    let rel = relativePath(of: fileURL, under: rootDir)
-                    let hash = try sha256Hex(of: fileURL)
-                    entries.append((rel, hash))
+            switch entry {
+            case .file:
+                guard !isDir.boolValue else { continue }
+                try hashFile(at: url, recordedAs: rel)
+            case .tree:
+                if isDir.boolValue {
+                    try hashTree(at: url, recordedUnder: rel)
+                } else {
+                    try hashFile(at: url, recordedAs: rel)
                 }
-            } else {
-                let rel = relativePath(of: url, under: rootDir)
-                let hash = try sha256Hex(of: url)
-                entries.append((rel, hash))
+            case .compiledStore:
+                guard isDir.boolValue else { continue }
+                for name in compiledStoreFiles(in: url) {
+                    let fileURL = url.appendingPathComponent(name)
+                    var fileIsDir: ObjCBool = false
+                    guard fm.fileExists(atPath: fileURL.path, isDirectory: &fileIsDir) else { continue }
+                    if fileIsDir.boolValue {
+                        try hashTree(at: fileURL, recordedUnder: rel + "/" + name)
+                    } else {
+                        try hashFile(at: fileURL, recordedAs: rel + "/" + name)
+                    }
+                }
             }
         }
 
         entries.sort { $0.relPath < $1.relPath }
         return entries.map { "\($0.hash)  \($0.relPath)" }
+    }
+
+    /// The pieces of a compiled-store root that the manifest covers: the
+    /// pointer, the generation it names as current, and `sources/`. Read
+    /// with a tolerant JSON peek rather than VideoScanCore's Pointer type
+    /// so a pointer from a NEWER master build (extra fields, bumped
+    /// schema) still tells us which generation directory to hash.
+    nonisolated static func compiledStoreFiles(in root: URL) -> [String] {
+        var names = ["current.json", "sources"]
+        let pointer = root.appendingPathComponent("current.json")
+        if let data = try? Data(contentsOf: pointer),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let current = object["current"] as? String,
+           !current.isEmpty, !current.contains("/"), !current.hasPrefix(".") {
+            names.append(current)
+        }
+        return names
     }
 
     /// Relative path from `root` to `url`, using `/` separators.
@@ -476,6 +714,18 @@ final class CatalogSync: ObservableObject {
 
     // MARK: - Sync (viewer side)
 
+    /// SSH options shared by every rsync: BatchMode=yes so we never block
+    /// on a password prompt; tight timeouts so an offline master fails
+    /// fast rather than hanging the launch sync.
+    static let sshOptions = "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+
+    /// Backslash-escape spaces so openrsync + the remote shell both see a
+    /// single source path, not two split at the space (see
+    /// `rsyncArguments`).
+    nonisolated static func escapedRemotePath(_ path: String) -> String {
+        path.replacingOccurrences(of: " ", with: "\\ ")
+    }
+
     /// rsync arguments built from the include/exclude rules in the brief.
     /// Source ends in `/` so rsync mirrors the *contents* of the master's
     /// VideoScan dir, not the dir itself.
@@ -493,25 +743,29 @@ final class CatalogSync: ObservableObject {
     /// file-list error fires before catalog transfer can start.
     func rsyncArguments(stagingDir: URL) -> [String] {
         let remoteRoot = "/Users/\(remoteUser)/Library/Application Support/VideoScan/"
-        // Escape spaces so openrsync + the remote shell both see a
-        // single source path, not two split at the space.
-        let escapedRoot = remoteRoot.replacingOccurrences(of: " ", with: "\\ ")
-        let source = "\(remoteUser)@\(masterHostname):\(escapedRoot)"
+        let source = "\(remoteUser)@\(masterHostname):\(Self.escapedRemotePath(remoteRoot))"
         return [
             "-a",                                       // archive — preserve times/perms
             "--delete",                                  // mirror semantics
-            // SSH options: BatchMode=yes so we never block on a password prompt;
-            // tight timeouts so an offline master fails fast rather than hanging
-            // the launch sync.
-            "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new",
-            "--include=catalog.json",
-            "--include=catalog.json.prev",
-            "--include=manifest.sha256",
-            "--include=POI/",
-            "--include=POI/**",
-            "--exclude=*",
+            "-e", Self.sshOptions,
+        ] + scope.rsyncIncludeRules + [
             source,
             stagingDir.path + "/"
+        ]
+    }
+
+    /// rsync arguments for ONE external source (e.g. People/ on the
+    /// master's RAID) into its staged relative path. Whole directory, no
+    /// filter rules.
+    func rsyncArguments(externalSource masterPath: String, stagingDir: URL, relativePath: String) -> [String] {
+        let remote = masterPath.hasSuffix("/") ? masterPath : masterPath + "/"
+        let source = "\(remoteUser)@\(masterHostname):\(Self.escapedRemotePath(remote))"
+        return [
+            "-a", "--delete",
+            "-e", Self.sshOptions,
+            "--exclude=.*",                              // no .DS_Store / dotfiles
+            source,
+            stagingDir.appendingPathComponent(relativePath, isDirectory: true).path + "/"
         ]
     }
 
@@ -575,6 +829,24 @@ final class CatalogSync: ObservableObject {
             log("CatalogSync: \(reason)")
             state.phase = .failed(reason: reason)
             return
+        }
+
+        // 1b. External sources the master named (People/ on its RAID).
+        //     Each is one more rsync into its staged relative path. A
+        //     failure here fails the whole sync — a verified-but-partial
+        //     tree is exactly what the manifest exists to prevent.
+        let external = Self.readExternalSourcesFile(in: paths.stagingDir)
+        for (rel, masterPath) in external.sorted(by: { $0.key < $1.key }) {
+            let dest = paths.stagingDir.appendingPathComponent(rel, isDirectory: true)
+            let extArgs = rsyncArguments(externalSource: masterPath, stagingDir: paths.stagingDir, relativePath: rel)
+            log("CatalogSync: rsync external \(rel) from \(masterPath)")
+            let extOutcome = await rsyncRunner.run(args: extArgs, destDir: dest)
+            if !extOutcome.succeeded {
+                let reason = "rsync \(rel) exit \(extOutcome.exitCode): \(extOutcome.stderr.prefix(200))"
+                log("CatalogSync: \(reason)")
+                state.phase = .failed(reason: reason)
+                return
+            }
         }
 
         // 2. Verify manifest in the staging dir. If the master never wrote
@@ -667,23 +939,24 @@ final class CatalogSync: ObservableObject {
 
     // MARK: - Atomic swap
 
-    /// Replace the live catalog/POI tree with the staged copy.
+    /// Replace the live synced set with the staged copy.
     ///
     /// We can't `mv staging live` directly because live also contains
     /// per-machine state we deliberately exclude from sync (sqlite caches,
     /// scan_jobs/, last_sync.txt, .sync-staging itself). So instead:
     ///
-    ///   1. For each top-level entry the manifest covers, move the live
-    ///      copy into .sync-previous/.
+    ///   1. For each scope path, move the live copy into .sync-previous/
+    ///      (nested paths keep their parents: `family-tree/compiled` lands
+    ///      at `.sync-previous/family-tree/compiled`).
     ///   2. Move the staged copy into liveDir.
     ///   3. Drop the staging dir on the floor.
     ///
-    /// Each individual move uses FileManager.replaceItem (which is
-    /// rename(2)-backed on the same filesystem), so file-level swaps are
-    /// atomic. The directory-level operation isn't a single atomic point —
-    /// a power-loss mid-swap leaves a half-rotated state — but the next
-    /// successful sync will re-mirror from the master, and the viewer is
-    /// read-only so there's nothing user-typed to lose.
+    /// Each individual move is rename(2)-backed on the same filesystem, so
+    /// file-level swaps are atomic. The directory-level operation isn't a
+    /// single atomic point — a power-loss mid-swap leaves a half-rotated
+    /// state — but the next successful sync will re-mirror from the
+    /// master, and the viewer is read-only so there's nothing user-typed
+    /// to lose.
     func atomicSwap() throws {
         let fm = FileManager.default
 
@@ -693,17 +966,19 @@ final class CatalogSync: ObservableObject {
         }
         try fm.createDirectory(at: paths.previousDir, withIntermediateDirectories: true)
 
-        for entry in Self.manifestRoots + ["manifest.sha256"] {
+        for entry in scope.swapPaths {
             let liveItem = paths.liveDir.appendingPathComponent(entry)
             let stagedItem = paths.stagingDir.appendingPathComponent(entry)
             let prevItem = paths.previousDir.appendingPathComponent(entry)
 
             // 1. Stash the old live copy if present.
             if fm.fileExists(atPath: liveItem.path) {
+                try fm.createDirectory(at: prevItem.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try fm.moveItem(at: liveItem, to: prevItem)
             }
             // 2. Move the new copy into place if rsync produced one.
             if fm.fileExists(atPath: stagedItem.path) {
+                try fm.createDirectory(at: liveItem.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try fm.moveItem(at: stagedItem, to: liveItem)
             }
         }
@@ -741,4 +1016,3 @@ extension CatalogSync: CatalogStoreObserver {
         scheduleManifestRefresh()
     }
 }
-

@@ -674,7 +674,14 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// bar and is still snappy for state transitions. The MFO window's
     /// per-job rows subscribe to the job directly, so their progress
     /// bars stay smooth — they aren't affected by this throttle.
-    func add(_ job: any MediaFileOperationJob) {
+    /// False when the job was refused (remote viewer, Phase 1: every MFO
+    /// kind — compare, extract, rip, reformat, verify, rebuild, balance,
+    /// promote, relocate… — reads or writes the master's media and runs
+    /// only there). Callers `guard add(job) else { return job }` so a
+    /// refused job is never started.
+    @discardableResult
+    func add(_ job: any MediaFileOperationJob) -> Bool {
+        if ViewerWriteGuard.refuse("MediaFileOperationsCenter.add(\(type(of: job)))") { return false }
         jobs.insert(job, at: 0)
         jobForwarders[job.id] = job.objectWillChange
             .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
@@ -690,6 +697,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         // will never publish another change, so check once right away.
         scheduleTerminalCheck(job)
         trimFinished()
+        return true
     }
 
     /// Drop every non-active job (the "Clear Finished" button).
@@ -878,7 +886,7 @@ final class MediaFileOperationsCenter: ObservableObject {
     func startCompare(recordA: VideoRecord, recordB: VideoRecord) -> PairCompareJob {
         let gates = gatePlan(forPaths: [recordA.fullPath, recordB.fullPath])
         let job = PairCompareJob(recordA: recordA, recordB: recordB, gates: gates)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("compare started: \(recordA.filename, privacy: .public) vs \(recordB.filename, privacy: .public) (gates: \(gates.count))")
         logStart(job, plan: "duplicate check")
@@ -897,7 +905,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         let job = ExtractFramesJob(record: record,
                                    destinationParent: destinationParent,
                                    gates: gates)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
         logStart(job, plan: "best portrait frames → \(destinationParent.lastPathComponent)/")
@@ -917,7 +925,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                                   destinationParent: destinationParent,
                                   gates: gates,
                                   options: options)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
         logStart(job, plan: "\(options.sampling.logDescription) → \(destinationParent.lastPathComponent)/")
@@ -934,7 +942,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                        model: VideoScanModel,
                        orchestrator: CaptionOrchestrator?) -> ReformatJob {
         let job = ReformatJob(record: record, model: model, orchestrator: orchestrator)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("reformat started: \(record.filename, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "legacy codec → H.264/AAC \(job.outputURL.lastPathComponent)")
@@ -958,7 +966,7 @@ final class MediaFileOperationsCenter: ObservableObject {
             outputURL: outputURL,
             model: model
         )
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("transcode started: \(record.filename, privacy: .public) preset=\(preset.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(preset.rawValue) → \(job.outputURL.lastPathComponent)")
@@ -980,7 +988,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                       plannedOutput: URL? = nil) -> CleanupJob {
         let job = CleanupJob(record: record, recipe: recipe, model: model,
                              plannedOutput: plannedOutput)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("cleanup started: \(record.filename, privacy: .public) recipe=\(recipe.id, privacy: .public) v\(recipe.version) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(recipe.displayName) → \(job.outputURL.lastPathComponent)")
@@ -1006,7 +1014,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         let job = TrimJob(record: record, range: range, model: model,
                           plannedOutput: plannedOutput,
                           probedIntra: probedIntra)
-        add(job)
+        guard add(job) else { return job }
         // Same-record dedupe guard (QA MAJOR 2, 2026-07-17). The context
         // menu greys out "Trim Master…" while a trim runs, but the Center
         // is the last line of defense for every caller: two trims of one
@@ -1059,7 +1067,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         }
         let job = BalanceAudioJob(record: record, analysis: analysis,
                                   model: model, plannedOutput: plannedOutput)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("balanceAudio started: \(record.filename, privacy: .public) class=\(analysis.classification.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(analysis.classification.rawValue) → \(job.outputURL.lastPathComponent)")
@@ -1117,7 +1125,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                                   shape: shape, model: model,
                                   plannedOutput: plannedOutput,
                                   gates: gatePlan(forPaths: [record.fullPath]))
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("rebuildAudio started: \(record.filename, privacy: .public) (\(reason, privacy: .public)) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(reason) → \(job.outputURL.lastPathComponent)")
@@ -1172,7 +1180,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                                        model: model)
             }
         }
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("verifyAudio started: \(record.filename, privacy: .public) (autoRepair=\(autoRepair))")
         logStart(job, plan: autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track")
@@ -1191,7 +1199,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                          stages: Set<AnalyzeStage> = AnalyzeStage.all) -> AnalyzeJob {
         let job = AnalyzeJob(record: record, model: model,
                              orchestrator: orchestrator, stages: stages)
-        add(job)
+        guard add(job) else { return job }
         job.start()
         fileOpsLog.info("analyze started: \(record.filename, privacy: .public) stages=\(stages.map(\.rawValue).joined(separator: ","), privacy: .public)")
         logStart(job, plan: "stages \(stages.map(\.rawValue).sorted().joined(separator: "+"))")

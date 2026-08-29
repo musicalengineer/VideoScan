@@ -530,6 +530,13 @@ final class FamilyTreeLiveModel: ObservableObject {
     func recompile() async {
         let sources = needsRecompile
         guard !sources.isEmpty, !isRecompiling, let store = compiledStore else { return }
+        // Remote viewer (Phase 1): the tree is compiled on the master. The
+        // banner never offers this button there, but the Hallie chip path
+        // reaches here too — refuse, log, and say where it happens.
+        if ViewerWriteGuard.refuse("FamilyTreeLiveModel.recompile") {
+            loadWarning = "The family tree is compiled \(ViewerModeCenter.shared.masterOnlyHint); sync again after it updates."
+            return
+        }
         isRecompiling = true
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -1127,6 +1134,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// the pane from the archive the writer handed back — no re-read.
     /// Throws the writer's error so the view can show it verbatim.
     func addNote(_ text: String, kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
+        // Remote viewer (Phase 1): the CyberBrain is the master's; synced, never written here.
+        try ViewerWriteGuard.check("FamilyTreeLiveModel.addNote")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
