@@ -120,7 +120,7 @@ struct HallieTurnExecutorTests {
         let result = try await HallieTurnExecutor.execute(
             .graph(.init(people: ["ricks"], operation: .familyTree)), context: context)
         #expect(result.outcome == .answered)
-        #expect(result.prose.hasPrefix("Richard Breen's family tree — 1 child: Timothy Breen"))
+        #expect(result.prose.hasPrefix("Richard Breen had 1 recorded child, Timothy Breen."))
         #expect(result.basisLine.hasPrefix("Basis: reading “ricks” as “rick’s”; "))
         #expect(result.offeredActions == [.openFamilyTree(personName: "Richard Breen")])
 

@@ -304,6 +304,11 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// For a two-person `relationship` query: which people-list slot the
     /// ambiguity / not-found conclusion is about (0 or 1). Nil otherwise.
     let subjectIndex: Int?
+    /// The claim-per-sentence plan behind `prose` when the executor built
+    /// one (the person card, 2026-08-29): the composer phrases these
+    /// claims, each cited to its GEDCOM pointers, instead of re-splitting
+    /// the prose. Nil = derive the plan from the prose as before.
+    let answerPlan: HallieAnswerPlan?
 
     init(
         conclusion: ArchivistGraphConclusion,
@@ -315,7 +320,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         ambiguityCandidates: [ArchivistGraphAmbiguityCandidate],
         catalogPersonName: String?,
         familyTreeFocus: ArchivistFamilyTreeFocus? = nil,
-        subjectIndex: Int? = nil
+        subjectIndex: Int? = nil,
+        answerPlan: HallieAnswerPlan? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -327,6 +333,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.catalogPersonName = catalogPersonName
         self.familyTreeFocus = familyTreeFocus
         self.subjectIndex = subjectIndex
+        self.answerPlan = answerPlan
     }
 
     /// The same result tagged with the people-list slot it concerns.
@@ -337,7 +344,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
             profileCandidates: profileCandidates,
             ambiguityCandidates: ambiguityCandidates,
             catalogPersonName: catalogPersonName,
-            familyTreeFocus: familyTreeFocus, subjectIndex: index)
+            familyTreeFocus: familyTreeFocus, subjectIndex: index,
+            answerPlan: answerPlan)
     }
 }
 
@@ -763,22 +771,14 @@ enum ArchivistGraphExecutor {
         identityBridge: ArchivistGraphEvidence.IdentityBridge?
     ) -> ArchivistGraphResult {
         switch query.operation {
-        case .biography:
-            guard query.relation == nil else {
+        case .biography, .familyTree:
+            // ONE person card for both asks (live 2026-08-29: "tell me
+            // about Matthew Rice" and "…family tree on Matthew Rice" drew
+            // two different biographies). See HallieBiographyCard.
+            if query.operation == .biography, query.relation != nil {
                 return declineUnexpectedRelation()
             }
-            let answer = ArchivistBiographyPolicy.biography(
-                personID: person.id, in: graph)
-            return fromPolicy(
-                answer,
-                evidence: biographyEvidence(
-                    for: person, in: graph, identityBridge: identityBridge),
-                identityBridge: identityBridge,
-                unresolvedProfileRoute: nil)
-
-        case .familyTree:
-            let answer = ArchivistFamilyTreePolicy.summary(
-                personID: person.id, in: graph)
+            let (answer, plan) = HallieBiographyCard.answer(for: person, in: graph)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(
@@ -794,7 +794,9 @@ enum ArchivistGraphExecutor {
                 profileCandidates: result.profileCandidates,
                 ambiguityCandidates: result.ambiguityCandidates,
                 catalogPersonName: result.catalogPersonName,
-                familyTreeFocus: .person(name: person.name))
+                familyTreeFocus: query.operation == .familyTree
+                    ? .person(name: person.name) : nil,
+                answerPlan: plan)
 
         case .birth, .death:
             guard query.relation == nil else {

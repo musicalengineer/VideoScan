@@ -975,7 +975,8 @@ enum HallieTurnExecutor {
             queryDescription: queryDescription,
             citations: [],
             catalogPersonName: result.catalogPersonName,
-            offeredActions: familyTreeOffers(result.familyTreeFocus))
+            offeredActions: familyTreeOffers(result.familyTreeFocus),
+            answerPlan: result.answerPlan)
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {
@@ -1278,7 +1279,8 @@ enum HallieTurnExecutor {
             queryDescription: queryDescription,
             citations: [],
             catalogPersonName: result.catalogPersonName,
-            offeredActions: familyTreeOffers(result.familyTreeFocus))
+            offeredActions: familyTreeOffers(result.familyTreeFocus),
+            answerPlan: result.answerPlan)
         // "who are Rick's sons" arrives here (CyberBrain knows "rick"); the
         // tree stops in 1959, but the family has told Hallie about the sons.
         return FamilyKnowledgeSupplement.apply(
