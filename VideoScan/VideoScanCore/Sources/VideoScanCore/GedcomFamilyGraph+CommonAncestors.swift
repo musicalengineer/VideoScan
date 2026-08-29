@@ -35,28 +35,26 @@ extension GedcomFamilyGraph {
         guard a != b, people[a] != nil, people[b] != nil else { return [] }
         let indexA = AncestorIndex(graph: self, descendantID: a)
         let indexB = AncestorIndex(graph: self, descendantID: b)
-        let depthsA = indexA.depths
-        let depthsB = indexB.depths
-        // Iterate the smaller set (C++: pick the smaller unordered_map to
-        // probe the larger).
-        let (small, large) = depthsA.count <= depthsB.count ? (depthsA, depthsB) : (depthsB, depthsA)
-        var hits: [(id: String, dA: Int, dB: Int)] = []
-        for (id, _) in small {
-            guard let dA = depthsA[id], let dB = depthsB[id] else { continue }
-            hits.append((id, dA, dB))
+        let index = self.index
+        // One linear pass over ordinals (two Int32 loads each) — no
+        // string hashing; the sort below fixes the order exactly as
+        // before (total depth, depth above A, name, id).
+        var hits: [(o: Int32, dA: Int, dB: Int)] = []
+        for o in 0..<Int32(index.count) {
+            guard let dA = indexA.depth(ofOrdinal: o), let dB = indexB.depth(ofOrdinal: o) else { continue }
+            hits.append((o, dA, dB))
         }
-        _ = large
         hits.sort { x, y in
             if x.dA + x.dB != y.dA + y.dB { return x.dA + x.dB < y.dA + y.dB }
             if x.dA != y.dA { return x.dA < y.dA }
-            let nx = people[x.id]?.name ?? "", ny = people[y.id]?.name ?? ""
-            return nx == ny ? x.id < y.id : nx < ny
+            let nx = people[index.ids[Int(x.o)]]?.name ?? "", ny = people[index.ids[Int(y.o)]]?.name ?? ""
+            return nx == ny ? index.ids[Int(x.o)] < index.ids[Int(y.o)] : nx < ny
         }
         let kept = limit.map { Array(hits.prefix($0)) } ?? hits
         return kept.compactMap { hit in
-            guard let person = people[hit.id],
-                  let pathA = indexA.path(from: hit.id),
-                  let pathB = indexB.path(from: hit.id) else { return nil }
+            guard let person = people[index.ids[Int(hit.o)]],
+                  let pathA = indexA.path(fromOrdinal: hit.o),
+                  let pathB = indexB.path(fromOrdinal: hit.o) else { return nil }
             return CommonAncestor(person: person, depthA: hit.dA, depthB: hit.dB,
                                   pathA: pathA, pathB: pathB)
         }
@@ -65,7 +63,7 @@ extension GedcomFamilyGraph {
     /// How many generations of ancestors the tree records above someone
     /// (0 = no parents attached). Used to say "I walked N generations".
     public func ancestorDepth(of id: String) -> Int {
-        AncestorIndex(graph: self, descendantID: id).depths.values.max() ?? 0
+        AncestorIndex(graph: self, descendantID: id).maxDepth
     }
 
     /// The English kinship term for two people whose nearest common

@@ -589,8 +589,33 @@ public struct GedcomFamilyGraph: Sendable {
         }
     }
 
+    /// The sidebar / card life-dates line (moved here from the Family
+    /// Tree model 2026-08-29 so the compiled index can carry it). Years
+    /// when both dates carry one ("1929–2008"); otherwise the raw GEDCOM
+    /// text, prefixed so "b."/"d." is explicit. Never claims "Living" —
+    /// absence of a death date is not evidence.
+    public static func lifeYearsLabel(birth: String?, death: String?) -> String? {
+        let birthYear = year(in: birth)
+        let deathYear = year(in: death)
+        switch (birthYear, deathYear) {
+        case let (b?, d?):
+            return "\(b)–\(d)"
+        case let (b?, nil):
+            if let death, !death.isEmpty { return "\(b) – d. \(death)" }
+            return "b. \(b)"
+        case let (nil, d?):
+            if let birth, !birth.isEmpty { return "b. \(birth) – \(d)" }
+            return "d. \(d)"
+        case (nil, nil):
+            let parts = [birth.map { "b. \($0)" }, death.map { "d. \($0)" }]
+                .compactMap { $0 }
+                .filter { $0.count > 3 }
+            return parts.isEmpty ? nil : parts.joined(separator: " – ")
+        }
+    }
+
     /// First four-digit run in a raw GEDCOM date string, or nil.
-    static func year(in raw: String?) -> Int? {
+    public static func year(in raw: String?) -> Int? {
         guard let raw else { return nil }
         var digits = ""
         for character in raw {

@@ -45,7 +45,25 @@ final class KinshipDisplayCenter: ObservableObject {
     }
 
     @Published private(set) var graph: GedcomFamilyGraph?
-    @Published private(set) var treePeople: [TreePersonChoice] = []
+    /// The editor's tree-picker choices, built LAZILY on first use
+    /// (2026-08-29): the sort of 39k names ran on the main actor at every
+    /// install although only the picker reads it. Reset per install.
+    var treePeople: [TreePersonChoice] {
+        if let treePeopleCache { return treePeopleCache }
+        var built: [TreePersonChoice] = []
+        if let graph {
+            built.reserveCapacity(graph.people.count)
+            for person in graph.people.values {
+                let fsid: String? = person.familySearchID.flatMap { $0.isEmpty ? nil : $0 }
+                built.append(TreePersonChoice(pointer: person.id, familySearchID: fsid,
+                                              name: person.name, birthYear: person.birthYear))
+            }
+            built.sort { $0.name == $1.name ? $0.pointer < $1.pointer : $0.name < $1.name }
+        }
+        treePeopleCache = built
+        return built
+    }
+    private var treePeopleCache: [TreePersonChoice]?
     /// Bumps on every `install(graph:)` — the overlay cache key (codex #778:
     /// a same-count tree replacement must rebuild, so people.count is not
     /// the key).
@@ -81,10 +99,7 @@ final class KinshipDisplayCenter: ObservableObject {
     private func apply(graph newGraph: GedcomFamilyGraph?) {
         graph = newGraph
         graphFingerprint = newGraph.map(FamilyKinshipOverlay.fingerprint(of:))
-        treePeople = (newGraph?.people ?? [:]).values
-            .map { TreePersonChoice(pointer: $0.id, familySearchID: $0.familySearchID.flatMap { $0.isEmpty ? nil : $0 },
-                                    name: $0.name, birthYear: $0.birthYear) }
-            .sorted { $0.name == $1.name ? $0.pointer < $1.pointer : $0.name < $1.name }
+        treePeopleCache = nil
         graphGeneration += 1
     }
 
