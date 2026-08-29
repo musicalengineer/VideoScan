@@ -172,6 +172,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     @Published private(set) var selectedID: String?
     @Published private(set) var selectedPerson: FamilyTreePersonSummary?
     @Published private(set) var selectedRelatives = FamilyTreeRelatives()
+    /// Genealogy block for the inspector (Born/Died lines, marriages,
+    /// FamilySearch ID). Live people only; nil for the demo tree.
+    @Published private(set) var selectedLife: FamilyTreeLifeSummary?
+    @Published private(set) var selectedMarriages: [FamilyTreeMarriage] = []
+    @Published private(set) var selectedFamilySearchID: String?
     @Published private(set) var scene: FamilyTreeScene = .empty
     @Published private(set) var loadWarning: String?
     /// codex #826: the N source pulls of a compiled generation that only a
@@ -1232,12 +1237,27 @@ final class FamilyTreeLiveModel: ObservableObject {
                 spouses: graph.relatives(.spouse, of: person).map(Self.summary),
                 children: graph.relatives(.children, of: person).map(Self.summary),
                 siblings: graph.relatives(.siblings, of: person).map(Self.summary))
+            selectedLife = FamilyTreeLifeSummary(person)
+            // `enumerated()` ≈ iterating with an index; the index keeps two
+            // marriages to an unnamed spouse from colliding on `id`.
+            selectedMarriages = graph.marriages(of: person).enumerated().map { index, marriage in
+                FamilyTreeMarriage(id: "\(index)-\(marriage.spouse?.id ?? "?")",
+                                   spouse: marriage.spouse.map(Self.summary),
+                                   marriageDate: marriage.date)
+            }
+            selectedFamilySearchID = person.familySearchID
         } else if !isLive, let id = selectedID {
             selectedPerson = FamilyTreeDemoData.person(id)
             selectedRelatives = FamilyTreeRelatives()
+            selectedLife = nil
+            selectedMarriages = []
+            selectedFamilySearchID = nil
         } else {
             selectedPerson = nil
             selectedRelatives = FamilyTreeRelatives()
+            selectedLife = nil
+            selectedMarriages = []
+            selectedFamilySearchID = nil
         }
         rebuildScene()
     }
