@@ -596,7 +596,7 @@ struct HallieAppV2IntegrationTests {
             dependencies: dependencies)
         #expect(translations.values == ["Who was Nan?"])
         #expect(answer.result.outcome == .answered)
-        #expect(answer.result.prose.contains("2 FEB 1920"))
+        #expect(answer.result.prose.contains("2 February 1920"))
         #expect(answer.biographyPhoto == photo)
         #expect(answer.pendingClarification == nil)
         #expect(answer.responderHost == "fixture-host")
