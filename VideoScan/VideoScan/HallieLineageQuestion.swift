@@ -1408,6 +1408,23 @@ enum HallieLineageAnswer {
             }
             return out.reversed()
         }
+        /// True when `id` already sits on the recorded route below `from`
+        /// (which is at 1-based `level`). Ids only — no Person is copied.
+        /// This runs once per parent of every expanded person, so on a
+        /// 16k-person pedigree it is the walk's hot loop (2026-08-28: the
+        /// Person-copying `route(to:)` here cost ~180k struct copies and
+        /// put the walk on the wrong side of its own time budget in Debug).
+        func routeContains(_ id: String, below from: String, level: Int) -> Bool {
+            var cur = from
+            var l = level
+            while l >= 1 {
+                if cur == id { return true }
+                guard let next = pred[l - 1][cur] else { return false }
+                cur = next
+                l -= 1
+            }
+            return false
+        }
         walk: for level in 1...depth {
             var next: [GedcomFamilyGraph.Person] = []
             var seenHere: Set<String> = []
@@ -1429,7 +1446,7 @@ enum HallieLineageAnswer {
                     // A malformed GEDCOM can make someone their own
                     // ancestor; the route check keeps the walk acyclic.
                     if parent.id == person.id
-                        || route(to: from.id, level: level - 1).contains(where: { $0.id == parent.id }) { continue }
+                        || routeContains(parent.id, below: from.id, level: level - 1) { continue }
                     seenHere.insert(parent.id)
                     predHere[parent.id] = from.id
                     next.append(parent)
@@ -1439,6 +1456,9 @@ enum HallieLineageAnswer {
                 stoppedAtLevel = level
                 break walk
             }
+            // The budget tripped before this level produced anyone: that
+            // is the budget decline below, not "nobody recorded here".
+            if next.isEmpty { break walk }
             levels.append(next)
             pred.append(predHere)
             frontier = next
@@ -1484,7 +1504,7 @@ enum HallieLineageAnswer {
         let atDepth = (levels.last ?? []).filter { sexFilter == nil || $0.sex == sexFilter }
             .sorted { $0.name < $1.name }
         guard !atDepth.isEmpty else {
-            let word = sexFilter == "M" ? "male" : "female"
+            let word = sexFilter == "M" ? "male" : sexFilter == "F" ? "female" : "at all"
             let names = (levels.last ?? []).map(\.name)
             return Result(route: .graph, outcome: .declined,
                           prose: "The tree reaches \(depth) generations above \(person.name) (\(names.joined(separator: ", "))), but records nobody \(word) there, so I can’t name a \(noun).",
