@@ -48,17 +48,23 @@ enum ArchivistDiagnosticLine {
 
 // MARK: - Messages
 
-enum ArchivistFamilyFactKind: Sendable {
+enum ArchivistFamilyFactKind: Sendable, Equatable {
     case biography
     case birth
     case death
 }
 
-struct ArchivistMessage: Identifiable {
+/// `Equatable` (perf 2026-08-29): every transcript row is an
+/// `ArchivistMessageRow` wrapped in `.equatable()`, so a re-render of the
+/// window (a speaker/model publish, a typing tick, one bubble's phase
+/// caption changing) re-diffs ONLY rows whose value actually changed. Without
+/// this, one `isSpeaking` flip re-laid-out every selectable Text in every
+/// bubble — the 17:33 beachball on "help" + Stop.
+struct ArchivistMessage: Identifiable, Equatable {
     enum Role { case user, assistant }
 
-    struct Chip: Identifiable {
-        enum Action {
+    struct Chip: Identifiable, Equatable {
+        enum Action: Equatable {
             /// Apply this composed query to the catalog now.
             case applyQuery(String)
             /// Send this text through the full ask pipeline (used for
@@ -278,10 +284,6 @@ struct ArchivistChatWindow: View {
     /// for QA and are always retained in the structured transcript.
     @AppStorage("archivist.showTechnicalDetails") private var showTechnicalDetails = false
     @State private var showSpeakerSettings = false
-    /// Ask ⇄ Stop while she reads an answer aloud (Rick 2026-08-24:
-    /// "can't stop Hallie" on long lists).
-    @ObservedObject private var hallieSpeaker = HallieSpeaker.shared
-
     var body: some View {
         VStack(spacing: 0) {
             identityHeader
@@ -290,8 +292,15 @@ struct ArchivistChatWindow: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(messages) { message in
-                            bubble(for: message)
-                                .id(message.id)
+                            ArchivistMessageRow(
+                                message: message,
+                                showTechnicalDetails: showTechnicalDetails,
+                                onChip: { handle(chip: $0) },
+                                onPlayCitation: { playCitation($0) },
+                                onRevealCitation: { revealCitation($0) },
+                                onShowCitationInCatalog: { showCitationInCatalog($0) })
+                            .equatable()
+                            .id(message.id)
                         }
                         if isThinking {
                             HStack(spacing: 6) {
@@ -338,19 +347,15 @@ struct ArchivistChatWindow: View {
                     }
                     .disabled(isThinking)
                     .accessibilityIdentifier("archivist.chatInput")
-                if hallieSpeaker.isSpeaking {
-                    // The Ask button becomes Stop while she speaks — one
-                    // obvious control in one place (⌘. also works).
-                    Button("Stop") { hallieSpeaker.stop() }
-                        .keyboardShortcut(".", modifiers: .command)
-                        .tint(.red)
-                        .accessibilityIdentifier("archivist.stopSpeaking")
-                } else {
-                    Button("Ask", action: send)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(isThinking
-                                  || input.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
+                // The Ask button becomes Stop while she speaks — one
+                // obvious control in one place (⌘. also works). The
+                // subview is the ONLY observer of HallieSpeaker, so a
+                // speaking-state flip re-renders one button, not the
+                // transcript (perf 2026-08-29).
+                ArchivistAskStopButton(
+                    canAsk: !isThinking
+                        && !input.trimmingCharacters(in: .whitespaces).isEmpty,
+                    ask: send)
             }
             .padding(10)
         }
@@ -634,121 +639,13 @@ struct ArchivistChatWindow: View {
     }
 
     // MARK: Bubbles
+    //
+    // Rows live in `ArchivistMessageRow` (Equatable, below). Media evidence
+    // is `ArchivistCitationEvidenceView`, which observes the model on its
+    // own — so a records change still refreshes a citation row's archived
+    // badge, while a plain text row is never touched.
 
-    @ViewBuilder
-    private func bubble(for message: ArchivistMessage) -> some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 40) }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(message.text)
-                    .font(.system(size: 17))
-                    .textSelection(.enabled)
-                if message.role == .assistant {
-                    Button {
-                        HallieSpeaker.shared.speak(message.text)
-                    } label: {
-                        Label("Read this aloud", systemImage: "speaker.wave.2.fill")
-                            .font(.system(size: 13))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Read this answer aloud")
-                }
-                if showTechnicalDetails, let query = message.queryLine {
-                    Text(query)
-                        .font(.system(size: 15).monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if showTechnicalDetails, let basis = message.basisLine {
-                    Text(basis)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if let photo = message.biographyPhoto {
-                    ArchivistBiographyPhotoView(photo: photo)
-                }
-                if !message.attachments.isEmpty {
-                    HallieAttachmentsView(attachments: message.attachments)
-                }
-                if !message.citations.isEmpty {
-                    citationEvidence(message.citations)
-                }
-                if !message.knowledgeCitations.isEmpty {
-                    knowledgeEvidence(message.knowledgeCitations)
-                }
-                if !message.chips.isEmpty {
-                    FlowChips(chips: message.chips) { chip in
-                        handle(chip: chip)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(message.role == .user
-                          ? Color.accentColor.opacity(0.18)
-                          : Color.secondary.opacity(0.10)))
-            if message.role == .assistant { Spacer(minLength: 40) }
-        }
-    }
-
-    private func citationEvidence(
-        _ citations: [HallieTurnExecutor.Citation]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Evidence samples (up to 25; not all matches)")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
-            ForEach(citations.indices, id: \.self) { index in
-                let citation = citations[index]
-                ArchivistCitationRow(
-                    index: index,
-                    citation: citation,
-                    timestampSuffix: citationTimestamp(citation),
-                    basisLines: showTechnicalDetails
-                        ? citation.bases.map(citationBasis) : [],
-                    record: model.record(forID: citation.recordID),
-                    isArchived: model.record(forID: citation.recordID)
-                        .map { model.pfHasMasterCopy($0) } ?? false,
-                    onPlay: { playCitation(citation) },
-                    onReveal: { revealCitation(citation) },
-                    onShowInCatalog: { showCitationInCatalog(citation) })
-                if index != citations.indices.last { Divider() }
-            }
-        }
-        .padding(.top, 3)
-    }
-
-    private func knowledgeEvidence(
-        _ citations: [HallieTurnExecutor.KnowledgeCitation]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Family archive sources")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
-            ForEach(citations) { citation in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(citation.title)
-                        .font(.system(size: 15, weight: .medium))
-                        .textSelection(.enabled)
-                    let details = [citation.attribution, citation.locator]
-                        .compactMap { $0 }
-                    if !details.isEmpty {
-                        Text(details.joined(separator: " · "))
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-        }
-        .padding(.top, 3)
-    }
-
-    private func citationTimestamp(
+    static func citationTimestamp(
         _ citation: HallieTurnExecutor.Citation
     ) -> String {
         citation.playbackSeconds.map {
@@ -756,7 +653,7 @@ struct ArchivistChatWindow: View {
         } ?? ""
     }
 
-    private func citationBasis(_ basis: ArchivistEvidenceBasis) -> String {
+    static func citationBasis(_ basis: ArchivistEvidenceBasis) -> String {
         basis.summary
     }
 
@@ -774,7 +671,7 @@ struct ArchivistChatWindow: View {
                     filename: citation.filename,
                     fullPath: citation.fullPath,
                     playbackSeconds: citation.playbackSeconds,
-                    bases: citation.bases.map(citationBasis))
+                    bases: citation.bases.map(Self.citationBasis))
             }
             let knowledge = message.knowledgeCitations.map { citation in
                 HallieTranscriptEvent.KnowledgeEvidence(
@@ -2339,6 +2236,183 @@ enum ArchivistPlayPolicy {
 }
 
 // MARK: - Chip flow layout (simple wrapping row)
+
+// MARK: - Transcript row (Equatable)
+
+/// One transcript bubble. `Equatable` on the message VALUE (plus the
+/// technical-details toggle): under `.equatable()` SwiftUI skips this row's
+/// body — and the NSTextField-backed selection overlay behind every
+/// selectable `Text` — unless the message itself changed. The closures are
+/// not part of equality; they are stable window methods.
+struct ArchivistMessageRow: View, Equatable {
+    let message: ArchivistMessage
+    let showTechnicalDetails: Bool
+    let onChip: (ArchivistMessage.Chip) -> Void
+    let onPlayCitation: (HallieTurnExecutor.Citation) -> Void
+    let onRevealCitation: (HallieTurnExecutor.Citation) -> Void
+    let onShowCitationInCatalog: (HallieTurnExecutor.Citation) -> Void
+
+    /// Test seam: every body evaluation reports the message id here, so a
+    /// sensor can prove that N unrelated updates cost 0 row bodies.
+    nonisolated(unsafe) static var bodyProbe: ((UUID) -> Void)?
+
+    static func == (lhs: ArchivistMessageRow, rhs: ArchivistMessageRow) -> Bool {
+        lhs.showTechnicalDetails == rhs.showTechnicalDetails
+            && lhs.message == rhs.message
+    }
+
+    var body: some View {
+        Self.bodyProbe?(message.id)
+        return HStack {
+            if message.role == .user { Spacer(minLength: 40) }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(message.text)
+                    .font(.system(size: 17))
+                    .textSelection(.enabled)
+                if message.role == .assistant {
+                    Button {
+                        HallieSpeaker.shared.speak(message.text)
+                    } label: {
+                        Label("Read this aloud", systemImage: "speaker.wave.2.fill")
+                            .font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Read this answer aloud")
+                }
+                if showTechnicalDetails, let query = message.queryLine {
+                    Text(query)
+                        .font(.system(size: 15).monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if showTechnicalDetails, let basis = message.basisLine {
+                    Text(basis)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if let photo = message.biographyPhoto {
+                    ArchivistBiographyPhotoView(photo: photo)
+                }
+                if !message.attachments.isEmpty {
+                    HallieAttachmentsView(attachments: message.attachments)
+                }
+                if !message.citations.isEmpty {
+                    ArchivistCitationEvidenceView(
+                        citations: message.citations,
+                        showTechnicalDetails: showTechnicalDetails,
+                        onPlay: onPlayCitation,
+                        onReveal: onRevealCitation,
+                        onShowInCatalog: onShowCitationInCatalog)
+                }
+                if !message.knowledgeCitations.isEmpty {
+                    Self.knowledgeEvidence(message.knowledgeCitations)
+                }
+                if !message.chips.isEmpty {
+                    FlowChips(chips: message.chips, onTap: onChip)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(message.role == .user
+                          ? Color.accentColor.opacity(0.18)
+                          : Color.secondary.opacity(0.10)))
+            if message.role == .assistant { Spacer(minLength: 40) }
+        }
+    }
+
+    static func knowledgeEvidence(
+        _ citations: [HallieTurnExecutor.KnowledgeCitation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Family archive sources")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+            ForEach(citations) { citation in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(citation.title)
+                        .font(.system(size: 15, weight: .medium))
+                        .textSelection(.enabled)
+                    let details = [citation.attribution, citation.locator]
+                        .compactMap { $0 }
+                    if !details.isEmpty {
+                        Text(details.joined(separator: " · "))
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+        .padding(.top, 3)
+    }
+}
+
+/// Media evidence under a bubble. Observes the model itself (archived badge,
+/// record lookup) so it refreshes on catalog changes even though its parent
+/// row is Equatable and skipped.
+struct ArchivistCitationEvidenceView: View {
+    @EnvironmentObject var model: VideoScanModel
+    let citations: [HallieTurnExecutor.Citation]
+    let showTechnicalDetails: Bool
+    let onPlay: (HallieTurnExecutor.Citation) -> Void
+    let onReveal: (HallieTurnExecutor.Citation) -> Void
+    let onShowInCatalog: (HallieTurnExecutor.Citation) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Evidence samples (up to 25; not all matches)")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+            ForEach(citations.indices, id: \.self) { index in
+                let citation = citations[index]
+                let record = model.record(forID: citation.recordID)
+                ArchivistCitationRow(
+                    index: index,
+                    citation: citation,
+                    timestampSuffix: ArchivistChatWindow.citationTimestamp(citation),
+                    basisLines: showTechnicalDetails
+                        ? citation.bases.map(ArchivistChatWindow.citationBasis) : [],
+                    record: record,
+                    isArchived: record.map { model.pfHasMasterCopy($0) } ?? false,
+                    onPlay: { onPlay(citation) },
+                    onReveal: { onReveal(citation) },
+                    onShowInCatalog: { onShowInCatalog(citation) })
+                if index != citations.indices.last { Divider() }
+            }
+        }
+        .padding(.top, 3)
+    }
+}
+
+/// Ask ⇄ Stop while she reads an answer aloud (Rick 2026-08-24: "can't stop
+/// Hallie" on long lists). This is the only view observing HallieSpeaker.
+struct ArchivistAskStopButton: View {
+    @ObservedObject private var speaker = HallieSpeaker.shared
+    let canAsk: Bool
+    let ask: () -> Void
+
+    init(canAsk: Bool, ask: @escaping () -> Void) {
+        self.canAsk = canAsk
+        self.ask = ask
+    }
+
+    var body: some View {
+        if speaker.isSpeaking {
+            Button("Stop") { speaker.stop() }
+                .keyboardShortcut(".", modifiers: .command)
+                .tint(.red)
+                .accessibilityIdentifier("archivist.stopSpeaking")
+        } else {
+            Button("Ask", action: ask)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canAsk)
+        }
+    }
+}
 
 private struct FlowChips: View {
     let chips: [ArchivistMessage.Chip]
