@@ -45,7 +45,23 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// user-editable pronunciations.json). Hallie's visible answer and
     /// catalog data are never rewritten.
 
+    /// Published ONLY on a real transition (`setSpeaking`). A Stop over a
+    /// help-card-sized queue fires one `didCancel` per queued utterance;
+    /// each used to republish `false` and re-render the whole chat window
+    /// (perf 2026-08-29, the 17:33 beachball).
     @Published private(set) var isSpeaking = false
+
+    /// Test seams: publishes that happened vs. sets that were asked for
+    /// (the difference is the storm the guard swallows).
+    private(set) var speakingPublishCount = 0
+    private(set) var speakingSetAttempts = 0
+
+    private func setSpeaking(_ value: Bool) {
+        speakingSetAttempts += 1
+        guard isSpeaking != value else { return }
+        speakingPublishCount += 1
+        isSpeaking = value
+    }
     private let synthesizer = AVSpeechSynthesizer()
     private var neuralTask: Task<Void, Never>?
     private var neuralJob: HallieNeuralSpeechJob?
@@ -259,7 +275,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
             utterance.postUtteranceDelay = 0.18
             synthesizer.speak(utterance)
         }
-        isSpeaking = true
+        setSpeaking(true)
     }
 
     /// Kokoro caps one utterance at 510 phoneme tokens, so the answer is
@@ -270,7 +286,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// is halved at a space outside any name and retried; only a chunk that
     /// fails after that hands the rest of the answer to the Apple voice.
     private func speakNeural(_ text: String, voice: HallieNeuralVoice, speed: Float) {
-        isSpeaking = true
+        setSpeaking(true)
         let generation = speechGeneration
         // `text` already carries the lexicon (and any phoneme links): split
         // only, never respell again.
@@ -411,7 +427,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralJob = nil
         tearDownNeuralPlayback()
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
-        isSpeaking = false
+        setSpeaking(false)
     }
 
     private func tearDownNeuralPlayback() {
@@ -435,7 +451,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralTask = nil
         neuralJob = nil
         if continuation.isEmpty {
-            isSpeaking = false
+            setSpeaking(false)
         } else {
             speakWithApple(continuation)
         }
@@ -450,11 +466,11 @@ final class HallieSpeaker: NSObject, ObservableObject {
 extension HallieSpeaker: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
-            if !synthesizer.isSpeaking { self.isSpeaking = false }
+            if !synthesizer.isSpeaking { self.setSpeaking(false) }
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        Task { @MainActor in self.setSpeaking(false) }
     }
 }
 
