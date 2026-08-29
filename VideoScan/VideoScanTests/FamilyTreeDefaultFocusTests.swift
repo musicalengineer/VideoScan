@@ -86,7 +86,10 @@ struct FamilyTreeDefaultFocusTests {
         #expect(model.peopleCount == 4)
         #expect(model.filteredPeople.first?.name.contains("Allen") == true)   // the old silent default
         #expect(model.selectedID == "@I1@")
-        #expect(sink.joined.contains("[family-tree] default focus → Richard Harding Breen Jr (first root)"))
+        // Privacy-safe logging (codex hardening, 8/29): the line carries the
+        // REASON, never the person's name; the name is pinned by selectedID.
+        #expect(sink.joined.contains("[family-tree] default focus applied reason=first root"))
+        #expect(!sink.joined.contains("Richard Harding Breen Jr"))
     }
 
     @Test func reinstallRemembersTheLastFocusInSessionAndInDefaults() {
@@ -114,7 +117,7 @@ struct FamilyTreeDefaultFocusTests {
         let model = model(d)
         withAppLog(sink) { model.install(graph: GedcomFamilyGraph(gedcomText: withoutAllenGedcom)) }
         #expect(model.selectedID == "@I1@")
-        #expect(sink.joined.contains("default focus → Richard Harding Breen Jr (first root)"))
+        #expect(sink.joined.contains("[family-tree] default focus applied reason=first root"))
         // The stale key is replaced by the person actually shown.
         #expect(d.string(forKey: FamilyTreeLiveModel.lastFocusDefaultsKey) == "GVQV-NW3")
     }
