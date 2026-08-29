@@ -289,7 +289,9 @@ enum HallieCompositionVerifier {
         guard !word.isEmpty else { return false }
         // Whole word only: "Casanov." is not "Nov."
         if let before = scalars.last, before.isLetter || before.isNumber { return false }
-        if word.count == 1, let letter = word.first { return letter.isUppercase && letter != "I" }
+        // "Judson L." is an initial; "b. 1633" / "d. 1700" / "c. 1633" are
+        // the genealogical abbreviations; "I" is a word.
+        if word.count == 1, let letter = word.first, letter.isUppercase { return letter != "I" }
         return abbreviations.contains(word.lowercased())
     }
 
@@ -380,9 +382,12 @@ enum HallieCompositionVerifier {
                         index = lookahead
                         continue
                     }
-                } else if character == ".", !runOn,
+                } else if character == ".", !runOn, !beforeTerminator.hasSuffix("]"),
                           let following = nextNonSpace(from: lookahead), following.isLowercase {
                     // An abbreviation the list does not know ("etc. and").
+                    // A period right after a tag is always a sentence end,
+                    // whatever follows — a lowercase continuation there is
+                    // a fragment for the verifier to judge.
                     index = lookahead
                     continue
                 }
@@ -450,14 +455,17 @@ enum HallieCompositionVerifier {
                 if previousWasSpace { continue }
                 previousWasSpace = true
             } else {
+                // "Sr. [c3][c4]." → "Sr." not "Sr..": the tag carried the
+                // sentence's own terminator past the abbreviation's period.
+                // The space stays so "Yes. [c1]. No." reads "Yes. No.".
+                if [".", "!", "?"].contains(character),
+                   collapsed.last == character
+                    || (collapsed.last == " " && collapsed.dropLast().last == character) {
+                    continue
+                }
                 if [".", ",", "!", "?", ";", ":"].contains(character),
                    collapsed.last == " " {
                     collapsed.removeLast()
-                }
-                // "Sr. [c3][c4]." → "Sr." not "Sr..": the tag carried the
-                // sentence's own terminator past the abbreviation's period.
-                if [".", "!", "?"].contains(character), collapsed.last == character {
-                    continue
                 }
                 previousWasSpace = false
             }
