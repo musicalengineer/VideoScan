@@ -154,8 +154,16 @@ extension HallieTurnExecutor {
                 switch HallieOwnerResolver.resolve(
                     typed, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
                 case .one(let owner, let note):
-                    resolution = .gedcom(
-                        id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
+                    // Pin, or a root/namesake that MATCHES the name. The
+                    // single-root chain's last rung ("tree root; X has no
+                    // tree record") is a guess this route never takes: an
+                    // owner the tree does not know declines by name
+                    // (HallieRelationshipTests, unknownOwnerNameDeclines…).
+                    let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID)?.id == owner.id
+                    if pinned || graph.people(namedLike: typed).contains(where: { $0.id == owner.id }) {
+                        resolution = .gedcom(
+                            id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
+                    }
                 case .none(let reason?):
                     return Result(
                         route: .graph, outcome: .declined, prose: reason,

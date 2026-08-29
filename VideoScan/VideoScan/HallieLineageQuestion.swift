@@ -482,18 +482,18 @@ enum HallieLineageQuestion: Equatable, Sendable {
     static func commonAncestorQuestion(in lower: String) -> HallieLineageQuestion? {
         guard lower.firstMatch(of: mediaNoun) == nil else { return nil }
         let patterns: [Regex<(Substring, Substring, Substring)>] = [
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z][a-z .,'()-]*?)\s+related\s+to\s+([a-z][a-z .,'()-]*?)\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z][a-z .,'()-]*?)\s+related\s+to\s+([a-z][a-z .,'()-]*?)\s*$/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
             // "most recent" / "latest" / "recent" common ancestor, and a
             // trailing "born 1959" qualifier (Rick 2026-08-28 live).
-            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\b(?:do|did|does)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
-            /\bwhat\s+(?:do|does|did)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
-            /\b([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
-            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\bwhere\s+(?:do|does|did)\s+([a-z][a-z .,'()-]*?)(?:'s)?\s+(?:and|&)\s+([a-z][a-z .,'()-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
+            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\b(?:do|did|does)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
+            /\bwhat\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
+            /\b([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
+            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\bwhere\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
         ]
         for pattern in patterns {
             guard let m = lower.firstMatch(of: pattern) else { continue }
