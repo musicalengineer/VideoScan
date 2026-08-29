@@ -26,7 +26,7 @@ enum HalliePhonemes {
     static let vowelPhones: Set<Character> = ["ə", "i", "u", "ɑ", "ɔ", "ɛ", "ɜ", "ɪ", "ʊ", "ʌ", "æ", "A", "I", "W", "Y", "O", "ᵊ", "ᵻ"]
 
     /// Multi-letter spellings first (longest match wins at each position).
-    private static let consonants: [(String, String)] = [
+    static let consonants: [(String, String)] = [
         ("tch", "ʧ"), ("dge", "ʤ"), ("ng", "ŋ"), ("sh", "ʃ"), ("zh", "ʒ"), ("th", "θ"), ("dh", "ð"),
         ("ch", "ʧ"), ("ph", "f"), ("ck", "k"), ("wh", "w"), ("gh", "ɡ"), ("qu", "kw"), ("kh", "k"),
         ("b", "b"), ("c", "k"), ("d", "d"), ("f", "f"), ("g", "ɡ"), ("h", "h"), ("j", "ʤ"), ("k", "k"),

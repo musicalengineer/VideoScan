@@ -99,10 +99,32 @@ struct ArchivistMessage: Identifiable {
             /// Remote viewer: continue the MASTER's pending which-one by
             /// stable identity (HallieRemoteClient.select).
             case remoteSelect(HallieTurnExecutor.CandidateID)
+            /// The variations picker (2026-08-29): hear candidate `number`
+            /// spoken with its phoneme override, and mark it as heard.
+            case hearVariant(word: String, number: Int, phonemes: String, respelling: String)
+            /// "That's it" for candidate `number`: kept as taught (`picked`).
+            case pickVariant(word: String, number: Int)
         }
         let id = UUID()
         let label: String
         let action: Action
+    }
+
+    /// The picker's chips for an offer: "1 LAT-uh" … (the heard one marked),
+    /// "That's it (n)" once one was heard, "None of these".
+    static func pickerChips(for offer: HalliePronunciationPicker.Offer) -> [Chip] {
+        var chips = offer.candidates.enumerated().map { index, candidate in
+            Chip(label: HalliePronunciationPicker.chipLabel(number: index + 1, candidate: candidate, heard: offer.heard == index + 1),
+                 action: .hearVariant(word: offer.word, number: index + 1,
+                                      phonemes: candidate.phonemes, respelling: candidate.respelling))
+        }
+        if let heard = offer.heard {
+            chips.append(Chip(label: HalliePronunciationPicker.thatsItLabel(number: heard),
+                              action: .pickVariant(word: offer.word, number: heard)))
+        }
+        chips.append(Chip(label: HalliePronunciationPicker.noneLabel,
+                          action: .askText(HalliePronunciationPicker.noneReplyText, playAfterAnswer: false)))
+        return chips
     }
 
     /// `var` so a progress bubble ("Recompiling the family tree… Reading
@@ -236,6 +258,9 @@ struct ArchivistChatWindow: View {
     @State private var hallieTelling: HallieTellingMode.Session?
     /// The name drill in progress ("let's practice names"), carried turn to turn.
     @State private var hallieDrill: HalliePronunciationDrillMode.Session?
+    /// The variations picker's offer ("here are a few ways to say Latta"),
+    /// carried turn to turn; a chip click or a number resolves it.
+    @State private var halliePicker: HalliePronunciationPicker.Offer?
     /// Set by "play <something>": after the filter answer lands, the
     /// first match auto-plays.
     @State private var playAfterAnswer = false
@@ -959,7 +984,44 @@ struct ArchivistChatWindow: View {
             MainWindowHelper.shared.openMainWindow()
             messages.append(ArchivistMessage(
                 role: .assistant, text: "Opening the People tab."))
+        case .hearVariant(let word, let number, let phonemes, let respelling):
+            hearVariant(word: word, number: number, phonemes: phonemes, respelling: respelling, chipID: chip.id)
+        case .pickVariant(let word, let number):
+            guard let offer = halliePicker, offer.word == word, offer.candidate(number) != nil else {
+                messages.append(ArchivistMessage(
+                    role: .assistant, text: HalliePronunciationPicker.offerPassedReply(word: word)))
+                return
+            }
+            // The number goes through the same turn as a typed "2", so the
+            // chat, the shell and the web keep one path.
+            ask("\(number)")
         }
+    }
+
+    /// A picker chip: say that candidate with its phoneme override (the
+    /// Apple voice gets the respelling) and mark it heard, so "That's it"
+    /// and a typed "that's it" know which one.
+    private func hearVariant(word: String, number: Int, phonemes: String, respelling: String, chipID: UUID) {
+        // A click is a request to hear it, whatever the speak-answers switch.
+        HallieSpeaker.shared.speakPrepared(
+            kokoro: "[\(word)](/\(phonemes)/).",
+            apple: "\(respelling).")
+        appLog.write("[hallie-voice] picker: heard \(number) /\(phonemes)/")
+        guard var offer = halliePicker, offer.word == word else { return }
+        offer.heard = number
+        halliePicker = offer
+        // Rebuild the chips of the message that carries this chip.
+        guard let index = messages.firstIndex(where: { $0.chips.contains { $0.id == chipID } }) else { return }
+        var message = messages[index]
+        let others = message.chips.filter {
+            switch $0.action {
+            case .hearVariant, .pickVariant: return false
+            case .askText(let text, _): return text != HalliePronunciationPicker.noneReplyText
+            default: return true
+            }
+        }
+        message.chips = others + ArchivistMessage.pickerChips(for: offer)
+        messages[index] = message
     }
 
     /// Hallie's "The family tree is on disk but needs recompiling … I can
@@ -1131,6 +1193,7 @@ struct ArchivistChatWindow: View {
         let memory = hallieMemory
         let telling = hallieTelling
         let drill = hallieDrill
+        let picker = halliePicker
         let history = recentHistory()
         let compose = composeWithModel
         let requestID = UUID()
@@ -1160,7 +1223,8 @@ struct ArchivistChatWindow: View {
                     composeWithModel: compose,
                     history: history,
                     telling: telling,
-                    drill: drill)
+                    drill: drill,
+                    picker: picker)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
                 commitHallie(response, question: text)
@@ -1237,7 +1301,13 @@ struct ArchivistChatWindow: View {
         // Rick 2026-08-22: "in-app, there's no audio." On by default; the
         // settings sheet has the switch and the voice picker.
         if HallieSpeaker.isEnabled() {
-            HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
+            if let kokoro = response.pickerSpeech {
+                // The picker's candidates carry their own phoneme overrides
+                // ("One: [Latta](/lˈætə/). Two: …"); no lexicon pass.
+                HallieSpeaker.shared.speakPrepared(kokoro: kokoro, apple: response.pickerSpeechFallback ?? kokoro)
+            } else {
+                HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
+            }
         }
         lastResponder = response.responderHost
         // A repair reply re-asks the pending which-one; keep it so the next
@@ -1249,6 +1319,7 @@ struct ArchivistChatWindow: View {
         }
         hallieTelling = response.telling
         hallieDrill = response.drill
+        halliePicker = response.picker
         hallieMemory.record(intent: response.executedIntent,
                             result: response.result,
                             question: question)
@@ -1294,6 +1365,9 @@ struct ArchivistChatWindow: View {
                 return ArchivistMessage.Chip(label: label, action: .openPeopleTab)
             }
         }
+        // The variations picker: one chip per way to say the name (click =
+        // hear it), then "That's it" for the one heard, and "None of these".
+        let pickerChips = response.picker.map { ArchivistMessage.pickerChips(for: $0) } ?? []
         messages.append(ArchivistMessage(
             role: .assistant,
             text: response.result.prose,
@@ -1309,7 +1383,7 @@ struct ArchivistChatWindow: View {
             outcome: Self.transcriptLabel(response.result.outcome),
             composedBy: response.result.composedBy.rawValue,
             transcriptText: response.result.transcriptText,
-            chips: clarificationChips + offerChips))
+            chips: clarificationChips + offerChips + pickerChips))
         if let action = response.result.mediaAction {
             perform(action)
         } else if response.playAfterAnswer, !lastMatches.isEmpty {

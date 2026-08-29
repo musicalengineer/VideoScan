@@ -89,6 +89,16 @@ enum HallieAppTurnCoordinator {
         /// HalliePronunciationDrillMode) to carry into the next turn; nil
         /// when none, or when this turn ended it.
         var drill: HalliePronunciationDrillMode.Session? = nil
+        /// The variations picker's offer ("here are a few ways to say
+        /// Latta", HalliePronunciationPicker) to carry into the next turn;
+        /// nil when none, or when this turn resolved or dropped it.
+        var picker: HalliePronunciationPicker.Offer? = nil
+        /// When set, the voice says THIS instead of `prose`: text that
+        /// already carries misaki `[Word](/phonemes/)` overrides (the offer
+        /// spoken candidate by candidate). `pickerSpeechFallback` is the
+        /// same for the Apple voice, which cannot read the override syntax.
+        var pickerSpeech: String? = nil
+        var pickerSpeechFallback: String? = nil
     }
 
     /// The responder label for turns that never reached a model.
@@ -441,10 +451,20 @@ enum HallieAppTurnCoordinator {
         history: [HallieGroundedComposer.HistoryTurn] = [],
         telling: HallieTellingMode.Session? = nil,
         drill: HalliePronunciationDrillMode.Session? = nil,
+        picker: HalliePronunciationPicker.Offer? = nil,
         dependencies: Dependencies = .live
     ) async throws -> Response {
         try Task.checkCancellation()
 
+        // The variations picker ("here are a few ways to say Latta",
+        // 2026-08-29) owns a number / "none of these" while its offer is
+        // up, and "say Latta a few ways" opens it. Anything else steps out
+        // of it (the drill or ordinary answering takes the turn).
+        if let handled = pickerResponse(
+            question: question, picker: picker, drill: drill, telling: telling,
+            referent: referent, dependencies: dependencies) {
+            return handled
+        }
         // The name drill ("let's practice names", 2026-08-29) owns the turn
         // while it runs: judgements, corrections, skip, stop. A question
         // steps out of it and falls through.

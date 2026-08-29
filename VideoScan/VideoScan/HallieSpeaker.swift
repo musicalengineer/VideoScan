@@ -225,6 +225,24 @@ final class HallieSpeaker: NSObject, ObservableObject {
         }
     }
 
+    /// Text that ALREADY carries misaki `[Word](/phonemes/)` overrides — the
+    /// variations picker speaking its candidates ("One: [Latta](/lˈætə/).
+    /// Two: …") or one chip. The lexicon is not applied (it would respell
+    /// the word inside the link); `apple` is the same text with respellings
+    /// in place of the overrides, for the Apple voice, which would read the
+    /// brackets aloud.
+    func speakPrepared(kokoro: String, apple: String) {
+        stop()
+        // No lexicon: the caller has done the substitution.
+        appleFallbackLexicon = HalliePronunciationLexicon(entries: [])
+        if let voice = Self.selectedNeuralVoice(), HallieNeuralSpeech.isInstalled {
+            speakNeural(kokoro, voice: voice, speed: Self.speedFactor())
+        } else {
+            appLog.write("[hallie-voice] using Apple speech for prepared text — neural voice unavailable")
+            speakWithApple(Self.sentences(apple, lexicon: HalliePronunciationLexicon(entries: [])))
+        }
+    }
+
     /// The table the current utterance was built with, so an Apple
     /// continuation can turn `[Latta](/…/)` back into its respelling.
     private var appleFallbackLexicon = HalliePronunciationLexicon(entries: [])

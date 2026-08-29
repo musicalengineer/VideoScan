@@ -43,6 +43,13 @@ extension HallieAppTurnCoordinator {
                 return response(Mode.openingReply(session, remaining: session.remaining(store: store), resumed: true),
                                 drill: session, telling: telling, referent: referent)
             case .unrecognized:
+                // A bare "no" with no respelling: offer a few ways to say
+                // the name instead of asking for a spelling (the picker,
+                // Rick 2026-08-29).
+                if let item = session.current, HalliePronunciationPicker.isBareNo(question) {
+                    return offerResponse(word: item.name, hint: nil, respellings: [], round: 0, fromDrill: true,
+                                         drill: session, telling: telling, referent: referent, dependencies: dependencies)
+                }
                 return response(Mode.unrecognizedReply(session), drill: session, telling: telling, referent: referent)
             case .stop:
                 logSession(session)
@@ -77,16 +84,19 @@ extension HallieAppTurnCoordinator {
                     return response(Mode.unrecognizedReply(session), drill: session, telling: telling, referent: referent)
                 }
                 guard let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) else {
-                    // Not mappable: keep the hint on the record (the variations
-                    // picker will offer ways to say it), ask for a spelling.
+                    // Not mappable: keep the hint on the record and offer a
+                    // few ways to say it, built from the hint (the picker).
                     if let item = session.list.items.first(where: { $0.key == key }) {
                         store.set(item, status: store.status(for: key), hint: hinted.hint.description)
                     } else {
                         store.set(name: hinted.word, status: store.status(for: key), hint: hinted.hint.description)
                     }
                     _ = save(store, session: session, dependencies: dependencies)
-                    return response(Mode.hintNeedsSpellingReply(hinted, session: session),
-                                    drill: session, telling: telling, referent: referent)
+                    let word = session.list.items.first(where: { $0.key == key })?.name
+                        ?? knownSpelling(hinted.word, dependencies: dependencies) ?? hinted.word
+                    return offerResponse(word: word, hint: hinted.hint, respellings: [], round: 0, fromDrill: true,
+                                         drill: session, telling: telling, referent: referent, dependencies: dependencies,
+                                         prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
                 }
                 return applyTeach(Mode.Correction(word: hinted.word, alternatives: [respelling]), hint: hinted.hint,
                                   session: session, store: store, telling: telling, referent: referent, dependencies: dependencies)
@@ -201,14 +211,18 @@ extension HallieAppTurnCoordinator {
     /// One taught name, drill or one-off: resolve whose name it is, write
     /// through the injected recorder, log. Shared with the one-off path so
     /// both leave the same trail.
+    /// `phonemes` overrides the derivation when the caller already has the
+    /// exact string (the picker); `origin` is the lexicon's `source` field.
     static func teach(word: String, alternatives: [String], hint: HalliePronunciationHint? = nil,
+                      phonemes explicit: String? = nil, origin: String = "told",
                       dependencies: Dependencies) -> Result<PronunciationTarget, Error> {
         let saidAs = HalliePronunciationLexicon.joinedAlternatives(alternatives)
         let target = resolvePronunciationTarget(
             word: word, cyberBrain: dependencies.loadCyberBrain(), graph: dependencies.loadGraph())
-        let phonemes = derivePhonemes(alternatives: alternatives, hint: hint)
+        let phonemes = explicit ?? derivePhonemes(alternatives: alternatives, hint: hint)
         do {
-            try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, phonemes: phonemes, target: target))
+            try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, phonemes: phonemes,
+                                                                    target: target, origin: origin))
         } catch {
             return .failure(error)
         }

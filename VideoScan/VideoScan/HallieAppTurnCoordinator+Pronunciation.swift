@@ -34,12 +34,16 @@ extension HallieAppTurnCoordinator {
         /// nil when the respelling used a spelling the rules do not read.
         let phonemes: String?
         let target: PronunciationTarget
+        /// The lexicon's `source` field: told (typed / hint) or picked
+        /// (chosen from the variations picker, 2026-08-29).
+        let origin: String
 
-        init(word: String, saidAs: String, phonemes: String? = nil, target: PronunciationTarget) {
+        init(word: String, saidAs: String, phonemes: String? = nil, target: PronunciationTarget, origin: String = "told") {
             self.word = word
             self.saidAs = saidAs
             self.phonemes = phonemes
             self.target = target
+            self.origin = origin
         }
     }
 
@@ -81,18 +85,19 @@ extension HallieAppTurnCoordinator {
                 return teachResponse(word: hinted.word, alternatives: [respelling], hint: hinted,
                                      telling: telling, referent: referent, dependencies: dependencies)
             }
-            // Understood, not mappable: keep the hint for the variations
-            // picker and ask for a spelling. Never a search.
+            // Understood, not mappable: keep the hint on the sheet and
+            // offer a few ways to say it, built from the hint (the
+            // variations picker). Never a search.
             var store = dependencies.loadDrillStore()
             store.set(name: hinted.word, status: store.status(for: FamilyIdentityText.normalized(hinted.word)),
                       hint: hinted.hint.description)
             let manifest = PronunciationDrillManifest.build(
                 list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
             _ = try? dependencies.saveDrillStore(store, manifest)
-            return pronunciationReply(
-                HallieTellingMode.hintNeedsSpellingReply(hinted), outcome: .answered,
-                basis: "listening — pronunciation hint understood, needs a respelling",
-                description: "pronunciation hint", telling: telling, referent: referent)
+            let word = knownSpelling(hinted.word, dependencies: dependencies) ?? hinted.word
+            return offerResponse(word: word, hint: hinted.hint, respellings: [], round: 0, fromDrill: false,
+                                 drill: nil, telling: telling, referent: referent, dependencies: dependencies,
+                                 prefix: "I've noted \u{201C}\(hinted.hint.description)\u{201D} for \(word). ")
         }
         return nil
     }
@@ -300,7 +305,7 @@ extension HallieAppTurnCoordinator {
             try keepPhonemesInFile(write)
         case .file:
             try HalliePronunciationLexicon.setFileEntry(
-                written: write.word, spoken: write.saidAs, phonemes: write.phonemes, origin: "told")
+                written: write.word, spoken: write.saidAs, phonemes: write.phonemes, origin: write.origin)
         }
         PersonPronunciationCache.shared.invalidate()
     }
@@ -312,6 +317,6 @@ extension HallieAppTurnCoordinator {
     private static func keepPhonemesInFile(_ write: PronunciationWrite) throws {
         guard let phonemes = write.phonemes else { return }
         try HalliePronunciationLexicon.setFileEntry(
-            written: write.word, spoken: write.saidAs, phonemes: phonemes, origin: "told")
+            written: write.word, spoken: write.saidAs, phonemes: phonemes, origin: write.origin)
     }
 }

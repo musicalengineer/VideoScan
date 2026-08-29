@@ -710,6 +710,8 @@ enum HallieShellCLI {
         var telling: HallieTellingMode.Session?
         /// Non-nil while the name drill runs ("let's practice names").
         var drill: HalliePronunciationDrillMode.Session?
+        /// Non-nil while the variations picker has a numbered list up.
+        var picker: HalliePronunciationPicker.Offer?
         /// Catalog-wide numbers, computed once per session on first use.
         var catalogStats: HallieCatalogStats?
         /// Conversation memory: the last result set / AST for follow-ups
@@ -768,6 +770,13 @@ enum HallieShellCLI {
         let userEvent = transcriptEvent(
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
+        // The variations picker owns a number / "none of these" while its
+        // list is up, and "say Latta a few ways" opens it (HallieShellCLI+Picker).
+        if let outcome = await pickerTurn(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
         // The name drill owns the turn while it runs; a question steps out
         // of it and is answered below (HallieShellCLI+Drill).
         if let outcome = await drillTurn(
