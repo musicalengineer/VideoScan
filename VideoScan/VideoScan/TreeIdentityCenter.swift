@@ -50,6 +50,15 @@ final class TreeIdentityCenter: ObservableObject {
             case .using:  return ShowInTreeReducer.usingLine(profileName: profileName, candidate: candidate)
             }
         }
+
+        /// The sentence without the code (the banner's first line; the code
+        /// gets its own line — 2026-08-29 layout fix).
+        var headline: String {
+            switch kind {
+            case .pinned: return ShowInTreeReducer.pinnedHeadline(profileName: profileName, candidate: candidate)
+            case .using:  return ShowInTreeReducer.usingHeadline(profileName: profileName, candidate: candidate)
+            }
+        }
     }
 
     @Published private(set) var banner: Banner?

@@ -10,6 +10,10 @@
 // tree. Typing a FamilySearch ID is possible in the search field, but it
 // is the fallback, never the first thing asked for.
 //
+// Layout rule (2026-08-29 fix): the FamilySearch ID is the identifier, so
+// it is never elided; names and the birth line may wrap. Semantic fonts
+// follow the system text size.
+//
 // C++ readers: `@State` ≈ a member the framework keeps alive across
 // re-renders of this value-type view; `.sheet(item:)` presents while the
 // bound optional is non-nil.
@@ -33,10 +37,15 @@ struct TreeIdentityPickerSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(headline)
                 .font(.title3.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
             if let subline {
                 Text(subline)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let current = target.current, target.mode == .changePin {
+                currentRow(current)
             }
 
             let listed = searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -50,7 +59,7 @@ struct TreeIdentityPickerSheet: View {
                         }
                     }
                 }
-                .frame(minHeight: 60, maxHeight: 280)
+                .frame(minHeight: 60, maxHeight: 320)
             } else if !searchText.isEmpty {
                 Text("No one in the tree matches.")
                     .font(.callout)
@@ -65,6 +74,7 @@ struct TreeIdentityPickerSheet: View {
                 Label(error, systemImage: "xmark.octagon.fill")
                     .foregroundStyle(.red)
                     .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack {
@@ -83,7 +93,7 @@ struct TreeIdentityPickerSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 520)
+        .frame(minWidth: 520, idealWidth: 560, maxWidth: 760)
     }
 
     private var headline: String {
@@ -103,12 +113,37 @@ struct TreeIdentityPickerSheet: View {
         case .notFound:
             return "Type a name to search, or say they are not on the tree."
         case .changePin:
-            return target.current.map { "Currently \($0.label) · \($0.code)." }
+            // The current record is shown as its own row (name + code)
+            // instead of a sentence that would elide the code.
+            return "Currently:"
         case .pinProblem(let why):
             return why
         case .notInTree:
             return "Pick a record below to change that."
         }
+    }
+
+    /// "Currently" row for change-pin mode: the same name / years / code
+    /// shape as a candidate row, minus the button.
+    private func currentRow(_ current: TreeIdentityCandidate) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(current.name)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !current.detail.isEmpty {
+                    Text(current.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            codeText(current.code)
+        }
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("people.identity.current")
     }
 
     @ViewBuilder
@@ -123,27 +158,40 @@ struct TreeIdentityPickerSheet: View {
                 error = why
             }
         } label: {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(candidate.name).lineLimit(1)
+                    // Names wrap; the code (trailing) keeps its full width.
+                    Text(candidate.name)
+                        .fixedSize(horizontal: false, vertical: true)
                     if !candidate.detail.isEmpty {
                         Text(candidate.detail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer()
-                Text(candidate.code)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                codeText(candidate.code)
             }
             .contentShape(Rectangle())
-            .padding(.vertical, 3)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 4)
         }
         .buttonStyle(.plain)
+    }
+
+    /// The identifier, never elided: `.fixedSize()` refuses to shrink and
+    /// `.layoutPriority(1)` makes the name column give way first (≈ a
+    /// flex-shrink of 0 on this item).
+    private func codeText(_ code: String) -> some View {
+        Text(code)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .fixedSize()
+            .layoutPriority(1)
     }
 
     private static func today() -> String {
