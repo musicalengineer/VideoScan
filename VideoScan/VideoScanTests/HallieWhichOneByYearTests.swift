@@ -261,7 +261,7 @@ struct HallieCommonAncestorWhichOneTests {
         let asked = try await HallieTurnExecutor.execute(HallieTurnExecutor.Request(intent: intent), context: ctx)
         #expect(asked.outcome == .needsClarification)
         #expect(asked.prose.hasPrefix("Which Donna do you mean — "))
-        #expect(asked.prose.contains("Donna Hudson (b. 4 August 1959)"))
+        #expect(asked.prose.contains("Donna Hudson (b. 4 AUG 1959)"))
         let pending = try #require(asked.clarification)
         #expect(pending.stage == .gedcomPerson)
         #expect(pending.candidates.count == 3)
@@ -312,7 +312,8 @@ struct HallieCommonAncestorWhichOneTests {
 
         let final = try await HallieTurnExecutor.continue(pending: donnas, selecting: .gedcomPersonID("@I2@"), context: ctx)
         #expect(final.outcome == .declined, "\(final.prose)")   // no shared ancestor, honestly
-        #expect(final.prose.contains("Matthew Rice") && final.prose.contains("Donna Hudson"))
+        #expect(final.prose.contains("Matthew Rice"))
+        #expect(final.queryDescription == "common ancestor: Matthew Rice & Donna Hudson")
     }
 
     @Test func narrowedClarificationIsASubsetOfItself() async throws {
@@ -402,7 +403,6 @@ struct HallieCommonAncestorWhichOneClientTests {
         let harness = Harness(
             inputs: ["Find the most recent common ancestor between Richard Harding Breen Jr and donna",
                      "the one born in 1900",
-                     "donna 1520",
                      "donna 1959",
                      ":quit"],
             graph: fixtureGraph())
@@ -424,11 +424,42 @@ struct HallieCommonAncestorWhichOneClientTests {
         #expect(harness.translatedQuestions.isEmpty, "\(harness.translatedQuestions)")
         #expect(harness.output.contains { $0.hasPrefix("Which Donna do you mean — ") })
         #expect(harness.output.contains { $0.hasPrefix("None of them matches “born in 1900”.") })
-        #expect(harness.output.contains { $0.hasPrefix("2 of them match “1520” — which one?") })
-        // After narrowing, the list shown is the two Agathas only.
-        #expect(harness.output.filter { $0 == "choices:" }.count == 3)
+        // The list is shown with the question and again after the miss.
+        #expect(harness.output.filter { $0 == "choices:" }.count == 2)
         #expect(continuations.value == 1)
         #expect(harness.output.contains { $0.contains("Z Common") })
+    }
+
+    @Test func shellNarrowsThenTheOrdinalPicksFromTheSubset() async throws {
+        let harness = Harness(
+            inputs: ["Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+                     "donna 1520",
+                     "the first one",
+                     ":quit"],
+            graph: fixtureGraph())
+        let continuations = LockedCounter()
+        harness.executeRequest = { request, context in
+            try await HallieTurnExecutor.execute(request, context: context)
+        }
+        harness.continueTurn = { pending, selectedID, context in
+            continuations.increment()
+            #expect(pending.candidates.count == 2, "the narrowed list continues")
+            #expect(selectedID == .gedcomPersonID("@I8@"))
+            return try await HallieTurnExecutor.continue(pending: pending, selecting: selectedID, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--catalog", "/isolated/catalog.json"])
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.hasPrefix("2 of them match “1520” — which one?") })
+        #expect(harness.output.contains("  2. Agatha Donna Knauss (b. 1520, d. ABT 1565)"))
+        #expect(!harness.output.contains { $0.hasPrefix("  3. ") })
+        #expect(continuations.value == 1)
+        // Agatha has no recorded parents: the honest decline, for HER.
+        #expect(harness.output.contains { $0.contains("Agatha Donna Knauss") && $0.contains("isn’t in the tree yet") })
     }
 }
 

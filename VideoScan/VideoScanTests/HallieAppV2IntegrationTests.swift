@@ -765,8 +765,13 @@ struct HallieAppV2IntegrationTests {
         // 2026-08-24: typed replies resolve through the shared deterministic
         // matcher (numbers, names, "the one born in 1785", yes) — pinned by
         // its own suite; here we only pin that the app routes through it.
-        #expect(ask.contains("HallieTurnExecutor.clarificationSelection("))
+        // 2026-08-29: the fuller reader — a discriminator fitting several
+        // narrows the list, one fitting nobody is said (live miss #3).
+        #expect(ask.contains("HallieTurnExecutor.clarificationReply("))
         #expect(ask.contains("continueHallie(pending: pending, selecting: selected)"))
+        #expect(ask.contains("case .narrowed(let subset, let discriminator):"))
+        #expect(ask.contains("case .unmatched(let discriminator):"))
+        #expect(ask.contains("HallieTurnExecutor.unmatchedClarificationPreface(discriminator)"))
         #expect(ask.contains("I need the name so I don't guess."))
         #expect(ask.contains("Okay — I won't guess which person you meant."))
     }
