@@ -60,10 +60,15 @@
 #       Aqua session with Automation/Accessibility TCC grants; if they are
 #       ever re-enabled for nightly, that session problem must be solved
 #       first (see docs / GH issue from 2026-07-07 investigation).
+#
+#   2026-08-28 (post-nightly-updates-r1):
+#     - After the result row is published or durably queued, run Homebrew,
+#       Claude, and Codex updates. Update failures remain advisory and cannot
+#       replace the already-recorded nightly verdict or its exit status.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-07-19-poi-cycle-sensor-r1"
+NIGHTLY_SCRIPT_VERSION="2026-08-28-post-nightly-updates-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -77,6 +82,26 @@ mkdir -p "$LOGDIR"
 exec > "$LOGFILE" 2>&1
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Run developer-tool maintenance only after publish_row has returned, which
+# means the result row is either on origin/metrics or in the durable local
+# pending queue. Its result is deliberately advisory: update failures are
+# logged here but never replace the night's recorded test verdict or exit code.
+run_post_nightly_updates_if_recorded() {
+    local publish_rc="$1"
+    local rc
+    if [ "$publish_rc" -ne 0 ] && [ "$publish_rc" -ne 1 ]; then
+        log "ERROR: nightly result was neither published nor queued; post-nightly maintenance will not run."
+        return 0
+    fi
+    log "Nightly result recorded; starting post-nightly developer-tool maintenance."
+    "$REPO/scripts/post_nightly_updates.sh"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "WARNING: post-nightly developer-tool maintenance failed (rc=$rc); nightly verdict is unchanged."
+    fi
+    return 0
+}
 
 # Refresh the privacy-safe person-recognition fields. With no app argument it
 # reports setup readiness only (used even on build-failure rows). After the app
@@ -141,8 +166,9 @@ esac
 # any rows previously queued in PENDING_QUEUE are drained first.
 #
 # Return: 0 if everything (queued backlog + new row) landed on origin,
-#         1 if push failed — in which case the unpushed rows have been
-#         appended to PENDING_QUEUE for the next run to retry.
+#         1 if push failed and the new row was durably appended to
+#           PENDING_QUEUE for the next run to retry,
+#         2 if neither remote publication nor the local queue append worked.
 publish_row() {
     local new_row="$1"
     log "Publishing row: $new_row"
@@ -182,8 +208,10 @@ publish_row() {
             wt_ok=true
         else
             log "ERROR: cannot create metrics worktree even after prune"
-            queue_pending "$new_row"
-            return 1
+            if queue_pending "$new_row"; then
+                return 1
+            fi
+            return 2
         fi
     fi
 
@@ -272,8 +300,10 @@ except Exception:
         return 0
     else
         log "ERROR: push to metrics branch failed after $((push_attempt - 1)) attempts"
-        queue_pending "$new_row"
-        return 1
+        if queue_pending "$new_row"; then
+            return 1
+        fi
+        return 2
     fi
 }
 
@@ -281,8 +311,12 @@ except Exception:
 # publish_row call will drain it.
 queue_pending() {
     local row="$1"
-    echo "$row" >> "$PENDING_QUEUE"
+    if ! printf '%s\n' "$row" >> "$PENDING_QUEUE"; then
+        log "ERROR: could not append nightly result row to $PENDING_QUEUE"
+        return 1
+    fi
     log "  queued row to $PENDING_QUEUE (size now $(wc -l < "$PENDING_QUEUE" | tr -d ' ') rows)"
+    return 0
 }
 
 # Build a status/skipped/failed row when we don't have real test results.
@@ -375,6 +409,8 @@ fi
 if [ "$BUILD_RC" -ne 0 ]; then
     log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
     publish_row "$(with_person_metrics "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    PUBLISH_RC=$?
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 BUILD_END=$(date +%s)
@@ -483,6 +519,8 @@ fi
 if [ "$TOTAL" -eq 0 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
     publish_row "$(with_person_metrics "$(make_status_row failed "zero-tests-ran:test-rc=$TEST_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    PUBLISH_RC=$?
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 
@@ -555,6 +593,7 @@ ROW=$(with_person_metrics "$ROW")
 
 publish_row "$ROW"
 PUBLISH_RC=$?
+run_post_nightly_updates_if_recorded "$PUBLISH_RC"
 
 # ── Cleanup ─────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log

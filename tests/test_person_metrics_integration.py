@@ -40,7 +40,7 @@ class PersonMetricsIntegrationSensors(unittest.TestCase):
 
     def test_nightly_collector_version_and_fallback_expose_cycle_sensor(self):
         script = (ROOT / "scripts/nightly_local_tests.sh").read_text()
-        self.assertIn('NIGHTLY_SCRIPT_VERSION="2026-07-19-poi-cycle-sensor-r1"', script)
+        self.assertIn('NIGHTLY_SCRIPT_VERSION="2026-08-28-post-nightly-updates-r1"', script)
         self.assertIn('"poi_cycle_stream_status":"collector-failed"', script)
 
 

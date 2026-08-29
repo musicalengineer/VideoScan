@@ -271,8 +271,10 @@ struct HallieTurnExecutorKinshipBridgeTests {
             .init(intent: kinship("Rick", .father)), context: context)
         let pending = try #require(first.clarification)
         #expect(pending.stage == .gedcomPerson)
+        // Since 739a77f0 (miss #2) which-one chips list tree roots first
+        // (HallieWhichOne.arrange): @I1@ is the fixture's root.
         #expect(pending.candidates.map(\.id) == [
-            .gedcomPersonID("@I2@"), .gedcomPersonID("@I1@"),
+            .gedcomPersonID("@I1@"), .gedcomPersonID("@I2@"),
         ])
         let labels = pending.candidates.map(\.label)
         #expect(Set(labels).count == 2)
