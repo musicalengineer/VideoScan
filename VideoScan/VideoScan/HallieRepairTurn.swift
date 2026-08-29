@@ -242,7 +242,9 @@ enum HallieRepairTurn {
             case 0: return ""
             case 1: return " about \(names[0])"
             case 2: return " about \(names[0]) and \(names[1])"
-            default: return " about " + names.dropLast().joined(separator: ", ") + ", and \(names.last!)"
+            default:
+                let last = names[names.count - 1]
+                return " about " + names.dropLast().joined(separator: ", ") + ", and \(last)"
             }
         }
         func span(_ start: Int?, _ end: Int?) -> String {
