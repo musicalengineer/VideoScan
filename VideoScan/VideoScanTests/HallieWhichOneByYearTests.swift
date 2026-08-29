@@ -456,7 +456,9 @@ struct HallieCommonAncestorWhichOneClientTests {
         #expect(harness.translatedQuestions.isEmpty)
         #expect(harness.output.contains { $0.hasPrefix("2 of them match “1520” — which one?") })
         #expect(harness.output.contains("  2. Agatha Donna Knauss (b. 1520, d. ABT 1565)"))
-        #expect(!harness.output.contains { $0.hasPrefix("  3. ") })
+        // The full list (3) once, the narrowed list (2) once: "3." appears only in the first.
+        #expect(harness.output.filter { $0.hasPrefix("  3. ") }.count == 1)
+        #expect(harness.output.filter { $0 == "choices:" }.count == 2)
         #expect(continuations.value == 1)
         // Agatha has no recorded parents: the honest decline, for HER.
         #expect(harness.output.contains { $0.contains("Agatha Donna Knauss") && $0.contains("isn’t in the tree yet") })
