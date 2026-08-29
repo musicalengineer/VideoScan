@@ -63,6 +63,9 @@ struct ArchivistMessage: Identifiable {
             /// Recompile the family tree from the pulls on disk (live
             /// miss #8). `thenAsk` = the question to re-run once promoted.
             case recompileFamilyTree(thenAsk: String?)
+            /// Remote viewer: continue the MASTER's pending which-one by
+            /// stable identity (HallieRemoteClient.select).
+            case remoteSelect(HallieTurnExecutor.CandidateID)
         }
         let id = UUID()
         let label: String
@@ -895,6 +898,9 @@ struct ArchivistChatWindow: View {
             messages.append(ArchivistMessage(
                 role: .user, text: candidate.label))
             continueHallie(pending: pending, selecting: candidateID)
+        case .remoteSelect(let candidateID):
+            messages.append(ArchivistMessage(role: .user, text: chip.label))
+            selectOnViewer(candidateID)
         case .openFamilyTree(let personName):
             openFamilyTreeTab(focus: personName, personID: nil, surname: nil)
         case .openFamilyTreePerson(let personID, let personName):
@@ -988,6 +994,13 @@ struct ArchivistChatWindow: View {
 
     private func ask(_ text: String) {
         guard !isThinking else { return }
+        // Remote viewer (Phase 1): the master's Hallie answers; its bridge
+        // owns any pending which-one, so a typed reply goes straight there.
+        if ViewerModeCenter.shared.isViewer {
+            messages.append(ArchivistMessage(role: .user, text: text))
+            askOnViewer(text)
+            return
+        }
         if let pending = pendingHallieClarification {
             let folded = PersonResolver.normalize(text)
             // Shared matcher: numbers, exact names, "the one born in 1785",
@@ -1049,6 +1062,12 @@ struct ArchivistChatWindow: View {
             }
         }
         messages.append(ArchivistMessage(role: .user, text: text))
+        askLocally(text)
+    }
+
+    /// The in-process pipeline (master, and a viewer's local-brain
+    /// fallback): capture the referent, run the coordinator, commit.
+    private func askLocally(_ text: String) {
         // Every question — including "play the first one" and "show more" —
         // goes through the coordinator: follow-ups and capability questions
         // resolve there against conversation memory with no model call, and
@@ -1454,6 +1473,143 @@ struct ArchivistChatWindow: View {
                     role: .assistant,
                     text: "I can't play “\(filename)” right now — \(master) is offline and its volume isn't mounted here."))
             }
+        }
+    }
+
+    // MARK: Remote viewer — the master's Hallie (Phase 1 §3)
+
+    private var viewerConfiguration: MediaStreamResolver.Configuration {
+        MediaStreamResolver.Configuration.fromDefaults(
+            masterHostname: ViewerModeCenter.shared.masterDisplayName + ".local")
+    }
+
+    private var viewerWho: String? {
+        HallieTurnExecutor.Speakers.fromDefaults().ownerName
+    }
+
+    /// Ping, route, ask. Master reachable → its bridge; else a local brain
+    /// over the synced data (with a transcript note); else an honest line.
+    private func askOnViewer(_ text: String) {
+        let configuration = viewerConfiguration
+        let requestID = UUID()
+        activeRequestTask?.cancel()
+        activeRequestID = requestID
+        isThinking = true
+        activeRequestTask = Task { @MainActor in
+            let reachable = await ViewerMediaStatus.shared.refresh(configuration: configuration)
+            guard !Task.isCancelled, activeRequestID == requestID else { return }
+            let master = ViewerModeCenter.shared.masterDisplayName
+            switch HallieViewerRouting.decide(masterReachable: reachable,
+                                              localBrainInstalled: HallieViewerRouting.localBrainInstalled()) {
+            case .master:
+                defer {
+                    if activeRequestID == requestID {
+                        activeRequestID = nil; activeRequestTask = nil; isThinking = false; inputFocused = true
+                    }
+                }
+                let client = HallieRemoteClient(configuration: configuration,
+                                                sessionID: HallieRemoteClient.sessionID())
+                do {
+                    let answer = try await client.ask(text, who: viewerWho)
+                    guard !Task.isCancelled, activeRequestID == requestID else { return }
+                    commitRemote(answer)
+                } catch {
+                    guard !Task.isCancelled, activeRequestID == requestID else { return }
+                    appLog.write("[viewer] Hallie ask via \(master) failed — \(error.localizedDescription)")
+                    messages.append(ArchivistMessage(
+                        role: .assistant,
+                        text: "I couldn't reach \(master)'s Hallie: \(error.localizedDescription).",
+                        basisLine: "No catalog query or media action was performed."))
+                }
+            case .localBrain:
+                appLog.write("[viewer] \(master) unreachable; answering with the local brain over the synced catalog")
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: HallieViewerRouting.localFallbackNote(masterDisplayName: master)))
+                activeRequestID = nil; activeRequestTask = nil; isThinking = false
+                askLocally(text)
+            case .offline:
+                appLog.write("[viewer] \(master) unreachable and no local brain — question not answered")
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: HallieViewerRouting.offlineNote(masterDisplayName: master),
+                    basisLine: "No catalog query or media action was performed."))
+                activeRequestID = nil; activeRequestTask = nil; isThinking = false; inputFocused = true
+            }
+        }
+    }
+
+    /// A which-one chip on a remote answer: the master holds the pending
+    /// clarification; we just send the stable identity back.
+    private func selectOnViewer(_ candidateID: HallieTurnExecutor.CandidateID) {
+        guard !isThinking else { return }
+        let configuration = viewerConfiguration
+        let requestID = UUID()
+        activeRequestID = requestID
+        isThinking = true
+        activeRequestTask = Task { @MainActor in
+            defer {
+                if activeRequestID == requestID {
+                    activeRequestID = nil; activeRequestTask = nil; isThinking = false; inputFocused = true
+                }
+            }
+            let client = HallieRemoteClient(configuration: configuration, sessionID: HallieRemoteClient.sessionID())
+            do {
+                let answer = try await client.select(candidateID, who: viewerWho)
+                guard !Task.isCancelled, activeRequestID == requestID else { return }
+                commitRemote(answer)
+            } catch {
+                guard !Task.isCancelled, activeRequestID == requestID else { return }
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I couldn't continue that choice with \(ViewerModeCenter.shared.masterDisplayName): \(error.localizedDescription)."))
+            }
+        }
+    }
+
+    /// Same bubble shape as `commitHallie`, from the bridge's answer: the
+    /// master's prose/basis/citations, this Mac's voice, chips that either
+    /// re-ask or select on the master, and playback through the resolver.
+    private func commitRemote(_ answer: HallieRemoteAnswer) {
+        if HallieSpeaker.isEnabled() {
+            HallieSpeaker.shared.speak(answer.prose)
+        }
+        let master = ViewerModeCenter.shared.masterDisplayName
+        lastResponder = answer.responder.isEmpty ? master : "\(answer.responder) via \(master)"
+        let citations: [HallieTurnExecutor.Citation] = answer.citations.compactMap { c in
+            guard let id = c.recordID else { return nil }
+            let rec = model.record(forID: id)
+            return HallieTurnExecutor.Citation(recordID: id, fullPath: rec?.fullPath ?? "",
+                                               filename: c.filename.isEmpty ? (rec?.filename ?? "") : c.filename,
+                                               playbackSeconds: nil, bases: [])
+        }
+        lastMatches = citations.compactMap { model.record(forID: $0.recordID) }
+        let chips = answer.chips.map { chip -> ArchivistMessage.Chip in
+            switch chip.action {
+            case .ask(let question):
+                return ArchivistMessage.Chip(label: chip.label, action: .askText(question, playAfterAnswer: false))
+            case .select(let id):
+                return ArchivistMessage.Chip(label: chip.label, action: .remoteSelect(id))
+            }
+        }
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: answer.prose,
+            basisLine: answer.basis,
+            citations: citations,
+            knowledgeCitations: answer.knowledge.map {
+                HallieTurnExecutor.KnowledgeCitation(id: $0.id, title: $0.title,
+                                                     attribution: $0.attribution.isEmpty ? nil : $0.attribution,
+                                                     locator: nil)
+            },
+            responder: lastResponder,
+            model: ollamaModel,
+            route: answer.route,
+            outcome: answer.outcome,
+            composedBy: "master",
+            chips: chips))
+        if let first = answer.play.first, let id = first.recordID, let rec = model.record(forID: id) {
+            play(rec)
         }
     }
 
