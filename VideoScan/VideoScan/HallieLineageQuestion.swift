@@ -117,6 +117,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// the focus action rides along marked for the client to perform
     /// without a tap. `nil` = the owner ("center on me"). Never a search.
     case centerTree(person: String?)
+    /// "tell me about rick's family tree, his brothers, sisters, parents,
+    /// and grandparents" / "show me my family tree" (live miss #16): the
+    /// person card by the family-tree route. The kin words after the tree
+    /// phrase are the card's own categories (they narrow nothing); any
+    /// other trailing words leave the sentence to the shapes below. `nil`
+    /// = the owner.
+    case personTree(person: String?)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -267,6 +274,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .originTrail(person: nil, country: nil, line: .both)
         }
 
+        // "tell me about rick's family tree, his brothers, sisters, parents,
+        // and grandparents" — a person's tree, with the card's own kin
+        // categories trailing. Before the kinship shapes, which would read
+        // "his brothers" as a relation ask; after the trace / origin ones.
+        if let tree = personTreeQuestion(in: lower) { return tree }
         // "X's great great grandpa on his paternal side" / "my maternal
         // grandmother" — AFTER the trace shapes (where a kinship word is an
         // apposition: "from my great great grandmother edith lucy parker")
@@ -355,6 +367,42 @@ enum HallieLineageQuestion: Equatable, Sendable {
         case .centerTree: return .centerTree(person: name)
         default: return self
         }
+    }
+
+    // MARK: A person's family tree (the card)
+
+    /// Trailing words a person-tree ask may carry: the card's own
+    /// categories and the glue between them. Anything else ("back",
+    /// "generations", a year, "from") belongs to another shape.
+    static let personTreeTrailingWords: Set<String> = [
+        "and", "or", "plus", "including", "with", "also", "his", "her", "their", "the", "all",
+        "brother", "brothers", "sister", "sisters", "sibling", "siblings",
+        "parent", "parents", "mother", "father", "mom", "dad", "ma", "pa",
+        "grandparent", "grandparents", "grandmother", "grandfather", "grandma", "grandpa",
+        "child", "children", "kid", "kids", "son", "sons", "daughter", "daughters",
+        "spouse", "spouses", "wife", "husband", "family", "relatives", "relations",
+        "immediate", "close", "aunts", "uncles", "cousins", "in-laws", "etc",
+    ]
+
+    static func personTreeQuestion(in lower: String) -> HallieLineageQuestion? {
+        var s = lower.replacing(/^(?:(?:please|hallie|ok|okay|so|can you|could you|would you|will you),?\s+)+/, with: "")
+        s = s.replacing(/\s+(?:please|for me)\s*$/, with: "")
+        let pattern = /^(?:(?:tell me about|tell me|tell us about|show me|show|give me|describe|what is|what's|whats|about|open|display|i want to see|let me see|let's see|lets see)\s+)?(?:(my|our)|([a-z][a-z .-]*?(?:'[a-z]+)?)'s)\s+(?:own\s+|whole\s+|full\s+|entire\s+)?family\s+tree\b(.*)$/
+        guard let m = s.firstMatch(of: pattern) else { return nil }
+        let trailing = String(m.3)
+            .replacing(/[,;:.!?()]/, with: " ")
+            .split(whereSeparator: \.isWhitespace).map(String.init)
+        guard trailing.allSatisfy({ personTreeTrailingWords.contains($0) }) else { return nil }
+        if m.1 != nil { return .personTree(person: nil) }
+        let name = String(m.2 ?? "").trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, name.split(separator: " ").count <= 5 else { return nil }
+        // Not a person: "the family's tree", "this family tree", pronouns
+        // ("his family tree" is a follow-up the pronoun route owns).
+        if name.firstMatch(of: /^(?:the|a|an|this|that|these|those|his|her|their|your|whose|which|what)(?:\s|$)/) != nil { return nil }
+        if name.firstMatch(of: /\b(?:family|families|tree|catalog|video|photo|people)\b/) != nil { return nil }
+        let owners: Set<String> = ["me", "myself", "i", "mine"]
+        if owners.contains(name) { return .personTree(person: nil) }
+        return .personTree(person: capitalizedName(name))
     }
 
     // MARK: Center the Family Tree on a person
@@ -990,6 +1038,10 @@ enum HallieLineageAnswer {
         case .centerTree(let person):
             guard let graph = context.graph else { return noTree(context) }
             return centerTree(person, graph: graph, context: context)
+        case .personTree:
+            // Not answered here: preTranslation turns it into a graph
+            // family-tree intent (the person card) — see lineageTurn.
+            return nil
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
@@ -1196,7 +1248,7 @@ enum HallieLineageAnswer {
         let query = ArchivistGraphQuery(people: [name], operation: .familyTree, relation: nil,
                                         side: nil, surname: nil, voices: [:])
         switch ArchivistGraphExecutor.resolveSubject(name, selection: .unresolved, inputs: inputs, query: query) {
-        case .person(let p, _, let correction):
+        case .person(let p, _, let correction, _):
             // The graph route's own unique-fuzzy recovery ("marhta lamson"
             // → Martha Lamson). Carried as the basis note so no lineage
             // shape substitutes silently (2026-08-29; it was dropped here).

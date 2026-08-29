@@ -406,7 +406,7 @@ extension HallieTurnExecutor {
     ) -> SlotResolution {
         switch ArchivistGraphExecutor.resolveSubject(
             typed, selection: selection, inputs: inputs, query: query) {
-        case .person(let person, let bridge, let correction):
+        case .person(let person, let bridge, let correction, _):
             var notes = bridge.map {
                 "People profile identity bridge “\($0.requestedName)” → “\($0.profileCanonicalName)” → GEDCOM “\($0.effectiveGEDCOMName)”"
             }.map { [$0] } ?? []

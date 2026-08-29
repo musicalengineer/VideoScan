@@ -206,6 +206,8 @@ extension HallieShellCLI {
                     output("offer: recompile the family tree (app: Family Tree tab → Recompile, or ask Hallie there)")
                 case .openPeopleTab:
                     output("offer: open the People tab (app only)")
+                case .showPossibleDuplicate(_, let name):
+                    output("offer: show the possible duplicate parent in the Family Tree, focused on \(name) (app only)")
                 }
             }
         }

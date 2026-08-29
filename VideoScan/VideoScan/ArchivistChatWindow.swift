@@ -1292,6 +1292,12 @@ struct ArchivistChatWindow: View {
                     label: label, action: .recompileFamilyTree(thenAsk: question))
             case .openPeopleTab:
                 return ArchivistMessage.Chip(label: label, action: .openPeopleTab)
+            case .showPossibleDuplicate(let id, let name):
+                // Same navigation as a person focus: the record with both
+                // parents is what Rick needs to see.
+                return ArchivistMessage.Chip(
+                    label: label,
+                    action: .openFamilyTreePerson(personID: id, personName: name))
             }
         }
         messages.append(ArchivistMessage(
