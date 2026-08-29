@@ -403,6 +403,8 @@ enum HallieTurnExecutor {
         /// so the app runs FamilyTreeLiveModel.recompile() itself and then
         /// re-asks the question; the shell and web list it as prose.
         case recompileFamilyTree
+        /// Open the People tab (relationships overview, live miss #12).
+        case openPeopleTab
     }
 
     struct Result: Sendable, Equatable {
