@@ -913,7 +913,8 @@ struct ArchivistChatWindow: View {
     /// Tree"): drop the name into AppStorage, switch the main window to the
     /// Family Tree tab (tag 5), and let that view pick it up.
     private func openFamilyTreeTab(
-        focus personName: String?, personID: String?, surname: String?
+        focus personName: String?, personID: String?, surname: String?,
+        announce: Bool = true
     ) {
         if let personID {
             UserDefaults.standard.set(personID, forKey: "ftHighlightedPersonID")
@@ -930,6 +931,7 @@ struct ArchivistChatWindow: View {
         }
         UserDefaults.standard.set(5, forKey: "selectedTab")
         MainWindowHelper.shared.openMainWindow()
+        guard announce else { return }
         messages.append(ArchivistMessage(
             role: .assistant,
             text: personName.map { "Opening the Family Tree tab focused on \($0)." }
@@ -1159,6 +1161,14 @@ struct ArchivistChatWindow: View {
             perform(action)
         } else if response.playAfterAnswer, !lastMatches.isEmpty {
             play(bestOf: lastMatches)
+        }
+        // "center the family tree on Martha Lamson" (2026-08-29): the user
+        // asked for the navigation, so the chip's own path runs without a
+        // tap. The prose already says what is happening; no second line.
+        if response.result.performsFirstOfferedAction,
+           case .openFamilyTreePerson(let personID, let personName)? = response.result.offeredActions.first {
+            openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
+            appLog.write("[family-tree] Hallie centered on \(personName) (\(personID))")
         }
     }
 

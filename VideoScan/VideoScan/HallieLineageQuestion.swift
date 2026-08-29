@@ -108,6 +108,15 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// ancestor sets intersected, nearest first, with both descent paths
     /// and the cousin term. `nil` = the owner ("me and Donna").
     case commonAncestor(a: String?, b: String?)
+    /// "center (the family tree) on X" / "show me X in the tree" / "focus
+    /// on X" / "take me to X" / "center on her" (live 2026-08-29: "can you
+    /// center on marhta lamson" became a catalog search, and "center the
+    /// family tree on martha lamson" drew a biography with the focus left
+    /// as a chip). A tree NAVIGATION ask: the person is resolved through
+    /// the same chain as every lineage shape, the answer is one line, and
+    /// the focus action rides along marked for the client to perform
+    /// without a tap. `nil` = the owner ("center on me"). Never a search.
+    case centerTree(person: String?)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -158,6 +167,9 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "how are rick and donna related" — two people, one relatedness
         // word; never a media ask ("videos of rick and donna" has none).
         if let pair = commonAncestorQuestion(in: lower) { return pair }
+        // "center the tree on martha lamson" — a navigation verb phrase
+        // with a person; before every shape that could read the name.
+        if let center = centerTreeQuestion(in: lower) { return center }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person
         // in the tree" is a person to find first, not a person named "the
@@ -322,23 +334,74 @@ enum HallieLineageQuestion: Equatable, Sendable {
         return nil
     }
 
-    /// The person a photo / video ask is about, when this is one of those
-    /// shapes; nil for every other shape.
+    /// The person a photo / video / center-the-tree ask is about, when
+    /// this is one of those shapes; nil for every other shape. (These are
+    /// the shapes whose object may be a pronoun — "show me her photo",
+    /// "center on him" — resolved from conversation memory by the caller.)
     var mediaAskPerson: String? {
         switch self {
         case .personPhoto(let person), .personVideos(let person): return person
+        case .centerTree(let person?): return person
         default: return nil
         }
     }
 
-    /// The same media ask about a different person (a pronoun resolved from
+    /// The same ask about a different person (a pronoun resolved from
     /// conversation memory). Other shapes are returned unchanged.
     func replacingMediaAskPerson(with name: String) -> HallieLineageQuestion {
         switch self {
         case .personPhoto: return .personPhoto(person: name)
         case .personVideos: return .personVideos(person: name)
+        case .centerTree: return .centerTree(person: name)
         default: return self
         }
+    }
+
+    // MARK: Center the Family Tree on a person
+
+    /// The verb phrase must be there — "center" alone ("center of the
+    /// family", "center the video") is not a navigation ask, and neither is
+    /// a media noun after the verb ("focus on the video"). Three forms:
+    ///   "(re)center|focus|zoom in [the (family) tree] on|to X"
+    ///   "show (me)|open|find|display|highlight X in|on the (family) tree"
+    ///   "take me to X", "go|jump|navigate to X in the tree" (bare "go to
+    ///   X" needs the tree words — "go to sleep" is not for the tree).
+    /// X may be a pronoun (resolved by the caller from conversation
+    /// memory) or "me" (the owner → nil). A typo in X is the resolver's
+    /// business (spelling recovery in `HallieLineageAnswer.centerTree`).
+    static func centerTreeQuestion(in lower: String) -> HallieLineageQuestion? {
+        var s = lower.replacing(/^(?:(?:please|hallie|ok|okay|can you|could you|would you|will you|now|just)\s+)+/, with: "")
+        s = s.replacing(/\s+(?:please|for me|now)\s*$/, with: "")
+        let treeWords = #"(?:the\s+)?(?:family\s+)?tree(?:\s+view)?"#
+        let m1 = try? Regex(#"^(?:re)?(?:center|centre|focus|zoom(?:\s+in)?)\s+(?:"# + treeWords + #"\s+)?(?:on|to|around)\s+(.+)$"#)
+        let m2 = try? Regex(#"^(?:show(?:\s+me)?|open|find|display|highlight|select|locate|pull\s+up|bring\s+up|look\s+up)\s+(.+?)\s+(?:in|on)\s+"# + treeWords + #"$"#)
+        let m3 = try? Regex(#"^(?:take\s+me|go|jump|navigate|move)\s+(?:over\s+)?to\s+(.+?)(\s+(?:in|on)\s+"# + treeWords + #")?$"#)
+        var raw: String?
+        if let m1, let m = s.firstMatch(of: m1), let o = m.output[1].substring {
+            raw = String(o)
+        } else if let m2, let m = s.firstMatch(of: m2), let o = m.output[1].substring {
+            raw = String(o)
+        } else if let m3, let m = s.firstMatch(of: m3), let o = m.output[1].substring {
+            // "go to X" with no tree words is anything at all; only "take
+            // me to X" stands on its own (Rick's phrasing, 2026-08-29).
+            if m.output[2].substring == nil, !s.hasPrefix("take me") { return nil }
+            raw = String(o)
+        }
+        guard var name = raw?.trimmingCharacters(in: .whitespaces) else { return nil }
+        if let trailing = try? Regex(#"\s+(?:in|on)\s+"# + treeWords + #"$"#) {
+            name = name.replacing(trailing, with: "")
+        }
+        // Letters, spaces, apostrophes, hyphens, dots — never a year, a
+        // quote, or a possessive ("donna's wedding" is not a person).
+        guard name.firstMatch(of: /^[a-z][a-z .'-]*$/) != nil,
+              name.firstMatch(of: /'s?\b/) == nil,
+              name.split(separator: " ").count <= 5 else { return nil }
+        // Not a person: determiners and media / UI nouns.
+        if name.firstMatch(of: /^(?:the|a|an|this|that|these|those|my|our|your|his|her|their)\s/) != nil { return nil }
+        if name.firstMatch(of: /\b(?:videos?|photos?|pictures?|clips?|movies?|footage|films?|images?|catalog|tab|window|screen|page|map|frame|files?|folders?|track|player|people|family)\b/) != nil { return nil }
+        let owners: Set<String> = ["me", "myself", "i"]
+        if owners.contains(name) { return .centerTree(person: nil) }
+        return .centerTree(person: capitalizedName(name))
     }
 
     /// A request to FETCH tree data, as opposed to questions about it.
@@ -827,6 +890,14 @@ enum HalliePersonVitals {
         return body.isEmpty ? "" : " (" + body + ")"
     }
 
+    /// " (b. before 1633, Ridgewell, Essex, England)" — birth only, with
+    /// place: enough to tell namesakes apart on a one-line navigation
+    /// answer without the whole life span. "" when there is no usable year.
+    static func birthParenthetical(_ person: GedcomFamilyGraph.Person) -> String {
+        guard let birth = event("b.", date: person.birthDate, place: person.birthPlace) else { return "" }
+        return " (" + birth + ")"
+    }
+
     /// "b. 1633, Boston – d. after 1717, Sudbury" without the parentheses.
     static func vitals(_ person: GedcomFamilyGraph.Person, places: Bool) -> String {
         let birth = event("b.", date: person.birthDate, place: places ? person.birthPlace : nil)
@@ -868,6 +939,9 @@ enum HallieLineageAnswer {
             return gedcomProvenance(person: person, surname: surname, context: context)
         case .commonAncestor(let a, let b):
             return commonAncestor(a, b, context: context)
+        case .centerTree(let person):
+            guard let graph = context.graph else { return noTree() }
+            return centerTree(person, graph: graph, context: context)
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
         case .personPhoto(let person):
@@ -1352,7 +1426,8 @@ enum HallieLineageAnswer {
                matchCount: r.matchCount, mediaAction: r.mediaAction,
                offeredActions: r.offeredActions, answerPlan: r.answerPlan,
                composedBy: r.composedBy, transcriptText: r.transcriptText,
-               attachments: r.attachments)
+               attachments: r.attachments,
+               performsFirstOfferedAction: r.performsFirstOfferedAction)
     }
 
     // MARK: Deep ancestors (great × 3 and beyond)
@@ -2211,6 +2286,93 @@ enum HallieLineageAnswer {
             queryDescription: query + " → \(z.name)",
             citations: [], catalogPersonName: z.name,
             offeredActions: [.openFamilyTreePerson(personID: z.id, personName: z.name)] + chips)
+    }
+
+    // MARK: Center the Family Tree on a person (2026-08-29)
+
+    /// One line naming whom the tree is being centered on (birth year and
+    /// place tell namesakes apart), with the focus action marked for the
+    /// client to perform. Resolution is the shared chain (exact / qualified
+    /// name, owner pin, recorded root wins, CyberBrain bridge); several
+    /// namesakes → which-one chips that each center on tap; a name the
+    /// tree lacks → the People tab if it knows them (honestly: nothing to
+    /// center on), else the closest tree spelling — one close name is
+    /// taken and SAID ("marhta lamson" → Martha Lamson), several are
+    /// offered. Never a catalog search.
+    static func centerTree(_ typed: String?, graph: GedcomFamilyGraph,
+                           context: HallieTurnExecutor.Context) -> Result {
+        switch resolveDetailed(typed, context: context, graph: graph) {
+        case .success(let person, let note):
+            return centering(on: person, basisNote: note)
+        case .ambiguous(let people):
+            let shown = HallieLineageQuestion.capitalizedName(typed ?? context.speakers.ownerName ?? "")
+            return centerWhichOne(shown, among: people)
+        case .failure(let resolved):
+            // Anything but a plain miss (no owner signed in, a stale owner
+            // pin, a qualifier that fits no namesake) is already the
+            // honest answer.
+            if let resolved, resolved.outcome != .declined { return resolved }
+            guard let typed else { return resolved ?? noTree() }
+            let shown = HallieLineageQuestion.capitalizedName(typed)
+            if let profile = HallieTurnExecutor.PeopleTab.profile(claiming: typed, in: context.profiles ?? []) {
+                return Result(
+                    route: .graph, outcome: .declined,
+                    prose: "\(profile.canonicalName) is in the People tab but not in the family tree, so there's nothing to center on — you'll find \(profile.canonicalName) in the People tab.",
+                    basisLine: "Basis: People tab profile “\(profile.canonicalName)”; no family-tree record matches; nothing else was looked up.",
+                    queryDescription: "lineage: center tree on \(shown) (People tab only)",
+                    citations: [], catalogPersonName: profile.canonicalName)
+            }
+            let close = HallieNameSuggestion.suggest(typed, graph: graph).compactMap { suggestion -> GedcomFamilyGraph.Person? in
+                if case .gedcom(let id) = suggestion.identity { return graph.people[id] }
+                return nil
+            }
+            switch close.count {
+            case 1:
+                let taken = centering(on: close[0], basisNote: "“\(typed)” taken as \(close[0].name), the closest name in the tree")
+                return prefixing("I took “\(typed)” to mean \(close[0].name).", to: taken)
+            case 0:
+                return resolved ?? Result(
+                    route: .graph, outcome: .declined,
+                    prose: "I don't find \(shown) in the family tree, so there's nothing to center on.",
+                    basisLine: "Basis: no family-tree record matches that name; nothing else was looked up.",
+                    queryDescription: "lineage: center tree on \(shown) (not in tree)",
+                    citations: [], catalogPersonName: nil)
+            default:
+                return Result(
+                    route: .graph, outcome: .needsClarification,
+                    prose: "I don't find “\(typed)” — did you mean " + HallieNameQualifier.joined(close.map { ArchivistBiographyPolicy.disambiguationCandidate(for: $0).label }, conjunction: "or") + "? Pick one and I'll center the tree there.",
+                    basisLine: "Basis: no exact match in the family tree; the closest recorded names are offered, nothing was assumed.",
+                    queryDescription: "lineage: center tree on \(shown) (did you mean)",
+                    citations: [], catalogPersonName: nil,
+                    offeredActions: close.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) })
+            }
+        }
+    }
+
+    static func centering(on person: GedcomFamilyGraph.Person, basisNote: String?) -> Result {
+        let prose = "Centering the Family Tree on \(person.name)\(HalliePersonVitals.birthParenthetical(person))."
+        var basis = ArchivistBiographyPolicy.gedcomBasis
+        if let basisNote { basis += " Basis: \(basisNote)." }
+        return Result(
+            route: .graph, outcome: .answered, prose: prose, basisLine: basis,
+            queryDescription: "lineage: center tree on \(person.name)",
+            citations: [], catalogPersonName: person.name,
+            offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
+            // Fixed text: the composer must not re-say a navigation line.
+            answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose),
+            performsFirstOfferedAction: true)
+    }
+
+    /// Which-one with a chip per namesake — each chip IS the centering, so
+    /// the tap finishes the ask (no second round trip).
+    static func centerWhichOne(_ typed: String, among people: [GedcomFamilyGraph.Person]) -> Result {
+        let asked = whichOne(typed, among: people)
+        return Result(
+            route: asked.route, outcome: asked.outcome,
+            prose: asked.prose + " Pick one and I'll center the tree there.",
+            basisLine: asked.basisLine, queryDescription: "lineage: center tree on \(typed) (which one)",
+            citations: [], catalogPersonName: nil,
+            offeredActions: people.map { .openFamilyTreePerson(personID: $0.id, personName: $0.name) })
     }
 
     static func noTree() -> Result {

@@ -447,6 +447,16 @@ extension HallieTurnExecutor {
         // stand for, Hallie asks who — she never looks up "Him".
         if let object = lineage.mediaAskPerson,
            HalliePronounContinuity.isThirdPersonPronoun(object) {
+            // "center on them": the tree centers on one person; the shared
+            // plural line talks about pictures, so say it for the tree.
+            if case .centerTree = lineage, HalliePronounContinuity.plural.contains(object.lowercased()) {
+                return .answer(Result(
+                    route: .graph, outcome: .declined,
+                    prose: "I can center the tree on one person at a time — who do you mean?",
+                    basisLine: "Basis: a plural pronoun names no one person; nothing was looked up.",
+                    queryDescription: "lineage: center tree on pronoun \(object.lowercased()) (plural)",
+                    citations: [], catalogPersonName: nil))
+            }
             switch mediaAskPronounSubject(object, memory: memory) {
             case .subject(let name):
                 lineage = lineage.replacingMediaAskPerson(with: name)
@@ -781,6 +791,8 @@ extension HallieTurnExecutor.Result {
             offeredActions: offeredActions,
             answerPlan: answerPlan,
             composedBy: composedBy,
-            transcriptText: transcriptText)
+            transcriptText: transcriptText,
+            attachments: attachments,
+            performsFirstOfferedAction: performsFirstOfferedAction)
     }
 }
