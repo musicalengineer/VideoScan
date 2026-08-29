@@ -79,11 +79,17 @@ struct ArchivistGraphExecutorTests {
 
         #expect(result == repeated)
         #expect(result.conclusion == .answered)
+        // One person card for .biography and .familyTree (2026-08-29):
+        // a sentence per fact, policy order inside each.
         #expect(result.prose
-                == "Chris River — born 3 MAR 1930; "
-                    + "child of Alex River Sr and Bailey River; "
-                    + "married to Morgan Vale; "
-                    + "parent of Aaron River, Zoe River Jr.")
+                == "Chris River was born 3 March 1930. "
+                    + "He was the child of Alex River Sr and Bailey River. "
+                    + "He had 1 recorded sibling, Zoe River. "
+                    + "He was married to Morgan Vale. "
+                    + "He had 2 recorded children, Aaron River and Zoe River Jr. "
+                    + "His family tree includes 2 recorded ancestors across 1 generation "
+                    + "and 2 recorded descendants across 1 generation.")
+        #expect(execute(people: ["Chris River"], operation: .familyTree).prose == result.prose)
         #expect(result.basisLine == ArchivistBiographyPolicy.gedcomBasis)
         #expect(result.catalogPersonName == "Chris River")
         #expect(result.candidates.isEmpty)
@@ -175,8 +181,9 @@ struct ArchivistGraphExecutorTests {
 
         #expect(first == reversed)
         #expect(first.prose
-                == "Parent One — married to Amy Partner, Zoe Partner; "
-                    + "parent of Aaron Child, Sam Child, Sam Child.")
+                == "Parent One was married to Amy Partner and Zoe Partner. "
+                    + "They had 3 recorded children, Aaron Child, Sam Child and Sam Child. "
+                    + "Their family tree includes 3 recorded descendants across 1 generation.")
         let evidence = try #require(first.evidence)
         #expect(evidence.relationships.map(\.relation) == [.spouse, .children])
         let spouseIDs = evidence.relationships[0].people.map(\.id)

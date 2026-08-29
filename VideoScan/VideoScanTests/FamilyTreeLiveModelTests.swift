@@ -913,6 +913,9 @@ struct FamilyTreeScaleTests {
     }
 
     @Test func fastStepsLogNothingBesidesTheInstallTotal() {
+        // `VS_FAMILY_TREE_TIMING=all` (perf runs) deliberately logs every
+        // step; this test pins the DEFAULT threshold behaviour.
+        guard !FamilyTreeLiveModel.logsEveryStep else { return }
         let sink = InMemoryLogSink()
         let model = FamilyTreeLiveModel(
             originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
@@ -931,6 +934,7 @@ struct FamilyTreeScaleTests {
     }
 
     @Test func slowStepLineIsOnlyWrittenAboveTheThreshold() {
+        guard !FamilyTreeLiveModel.logsEveryStep else { return }
         let sink = InMemoryLogSink()
         withAppLog(sink) {
             FamilyTreeLiveModel.logStep("select: relayout", took: .milliseconds(99), people: 7)

@@ -203,7 +203,7 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         case .death: operation = .death
         case .kinship: operation = .kinship
         case .familyTree: operation = .familyTree
-        case .relationship: operation = .relationship
+        case .relationship, .commonAncestor: operation = .relationship
         }
         self.voices = voices
         // Raw values are the shared closed vocabulary; a wire relation that
@@ -313,6 +313,11 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// For a two-person `relationship` query: which people-list slot the
     /// ambiguity / not-found conclusion is about (0 or 1). Nil otherwise.
     let subjectIndex: Int?
+    /// The claim-per-sentence plan behind `prose` when the executor built
+    /// one (the person card, 2026-08-29): the composer phrases these
+    /// claims, each cited to its GEDCOM pointers, instead of re-splitting
+    /// the prose. Nil = derive the plan from the prose as before.
+    let answerPlan: HallieAnswerPlan?
 
     init(
         conclusion: ArchivistGraphConclusion,
@@ -324,7 +329,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         ambiguityCandidates: [ArchivistGraphAmbiguityCandidate],
         catalogPersonName: String?,
         familyTreeFocus: ArchivistFamilyTreeFocus? = nil,
-        subjectIndex: Int? = nil
+        subjectIndex: Int? = nil,
+        answerPlan: HallieAnswerPlan? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -336,6 +342,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.catalogPersonName = catalogPersonName
         self.familyTreeFocus = familyTreeFocus
         self.subjectIndex = subjectIndex
+        self.answerPlan = answerPlan
     }
 
     /// The same result tagged with the people-list slot it concerns.
@@ -346,7 +353,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
             profileCandidates: profileCandidates,
             ambiguityCandidates: ambiguityCandidates,
             catalogPersonName: catalogPersonName,
-            familyTreeFocus: familyTreeFocus, subjectIndex: index)
+            familyTreeFocus: familyTreeFocus, subjectIndex: index,
+            answerPlan: answerPlan)
     }
 }
 
@@ -690,6 +698,22 @@ enum ArchivistGraphExecutor {
             }
         }
 
+        // A bare given name ("rick", live 2026-08-28 on a 16k tree) is a
+        // GIVEN-name question: the primary NAME record's first token, exact
+        // or through the diminutive table (Rick ↔ Richard). Neither
+        // `people(matching:)` (which prefers a NAME record EQUAL to the
+        // token — FamilySearch stubs like an alternate name "Rich") nor
+        // `people(namedLike:)` (which expands RECORD tokens too, so the
+        // surname "Rich"/"Dick" becomes "richard") is asked first: both
+        // offered Catherine Auker (b. 1374) for "rick". Several namesakes
+        // are RETURNED for the caller's capped which-one / owner chain.
+        if let bare = bareGivenName(typedName) {
+            let byGivenName = inputs.graph.people(givenName: bare, expandDiminutives: true)
+            if !byGivenName.isEmpty {
+                return .people(
+                    byGivenName, profileRoute: nil, spellingCorrection: nil)
+            }
+        }
         let exactPeople = inputs.graph.people(matching: typedName)
         if !exactPeople.isEmpty {
             return .people(
@@ -699,11 +723,19 @@ enum ArchivistGraphExecutor {
         // Breen Jr", live 2026-08-26). Unlike `people(matching:)` this
         // RETURNS several candidates instead of collapsing them to
         // not-found — the caller's ambiguity chips (or the owner chain)
-        // decide, never a silent pick.
-        let loosePeople = inputs.graph.people(namedLike: typedName)
-        if !loosePeople.isEmpty {
-            return .people(
-                loosePeople, profileRoute: nil, spellingCorrection: nil)
+        // decide, never a silent pick. Never for a bare token: with no
+        // given-name hit, its only extra reach is the record-side
+        // diminutive collision above.
+        if bareGivenName(typedName) == nil {
+            let loosePeople = inputs.graph.people(namedLike: typedName)
+            if !loosePeople.isEmpty {
+                return .people(
+                    loosePeople, profileRoute: nil, spellingCorrection: nil)
+            }
+        } else if typedName.count <= 4 {
+            // "rick" is one edit from "rich": a four-letter bare token is
+            // never spelling-recovered against 39k names.
+            return .people([], profileRoute: nil, spellingCorrection: nil)
         }
         let fuzzyIDs = HallieSpellingRecovery.bestMatches(
             typed: typedName,
@@ -715,6 +747,35 @@ enum ArchivistGraphExecutor {
         let correction = fuzzyPeople.count == 1 ? typedName : nil
         return .people(
             fuzzyPeople, profileRoute: nil, spellingCorrection: correction)
+    }
+
+    /// One typed token that is a name (not a generational suffix, not a
+    /// FamilySearch ID): the token, lowercased and diacritic-free. Nil for
+    /// anything longer, so multi-word names keep their record-containment
+    /// rules.
+    static func bareGivenName(_ typed: String) -> String? {
+        let tokens = FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(typed))
+        guard tokens.count == 1, let token = tokens.first,
+              !GedcomFamilyGraph.nameSuffixes.contains(token),
+              !GedcomFamilyGraph.isFamilySearchID(
+                  typed.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())
+        else { return nil }
+        return token
+    }
+
+    /// The People-profile bridge's exact lookup. A one-word canonical name
+    /// or alias ("Rick", "Rich", "Richard") means a GIVEN name, matched
+    /// exactly on the primary NAME record — never a NAME record that merely
+    /// EQUALS the word (Catherine Auker's alternate name "Rich", live
+    /// 2026-08-28) and, as before, never through the diminutive table on
+    /// this side (the son "Timmy" must not bridge to the brother "Tim").
+    private static func exactPeople(
+        _ term: String, graph: GedcomFamilyGraph
+    ) -> [GedcomFamilyGraph.Person] {
+        if let bare = bareGivenName(term) {
+            return graph.people(givenName: bare, expandDiminutives: false)
+        }
+        return graph.people(matching: term)
     }
 
     /// The profile is already selected by stable ID. Only that profile's
@@ -729,8 +790,8 @@ enum ArchivistGraphExecutor {
             requestedName: requestedName,
             profileCanonicalName: profile.canonicalName)
 
-        let canonicalMatches = graph.people(
-            matching: profile.canonicalName)
+        let canonicalMatches = exactPeople(
+            profile.canonicalName, graph: graph)
         if !canonicalMatches.isEmpty {
             return .people(
                 canonicalMatches, profileRoute: profileRoute,
@@ -746,7 +807,7 @@ enum ArchivistGraphExecutor {
         for wordCount in tiers.keys.sorted(by: >) {
             var matchesByID: [String: GedcomFamilyGraph.Person] = [:]
             for term in (tiers[wordCount] ?? []).sorted(by: nameOrder) {
-                for person in graph.people(matching: term) {
+                for person in exactPeople(term, graph: graph) {
                     matchesByID[person.id] = person
                 }
             }
@@ -772,22 +833,14 @@ enum ArchivistGraphExecutor {
         identityBridge: ArchivistGraphEvidence.IdentityBridge?
     ) -> ArchivistGraphResult {
         switch query.operation {
-        case .biography:
-            guard query.relation == nil else {
+        case .biography, .familyTree:
+            // ONE person card for both asks (live 2026-08-29: "tell me
+            // about Matthew Rice" and "…family tree on Matthew Rice" drew
+            // two different biographies). See HallieBiographyCard.
+            if query.operation == .biography, query.relation != nil {
                 return declineUnexpectedRelation()
             }
-            let answer = ArchivistBiographyPolicy.biography(
-                personID: person.id, in: graph)
-            return fromPolicy(
-                answer,
-                evidence: biographyEvidence(
-                    for: person, in: graph, identityBridge: identityBridge),
-                identityBridge: identityBridge,
-                unresolvedProfileRoute: nil)
-
-        case .familyTree:
-            let answer = ArchivistFamilyTreePolicy.summary(
-                personID: person.id, in: graph)
+            let (answer, plan) = HallieBiographyCard.answer(for: person, in: graph)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(
@@ -803,7 +856,9 @@ enum ArchivistGraphExecutor {
                 profileCandidates: result.profileCandidates,
                 ambiguityCandidates: result.ambiguityCandidates,
                 catalogPersonName: result.catalogPersonName,
-                familyTreeFocus: .person(name: person.name))
+                familyTreeFocus: query.operation == .familyTree
+                    ? .person(name: person.name) : nil,
+                answerPlan: plan)
 
         case .birth, .death:
             guard query.relation == nil else {

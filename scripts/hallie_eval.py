@@ -333,6 +333,11 @@ def grade_record(r):
     declined = (outcome == "declined" or bool(DECLINE_PAT.search(a))) and not relaxed_offer
     if relaxed_offer:
         flags.append("~relaxed_offer")
+    # A conversation-repair turn ("that's wrong", "you gave me people from
+    # the 1300s") is acknowledged and restated, never searched. Counted
+    # separately so the repair rate is visible; not a defect.
+    if outcome == "repaired":
+        flags.append("~repaired")
 
     # Expectation mismatches
     if expect in ("catalog", "kinship", "biography") and declined:

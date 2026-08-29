@@ -34,3 +34,14 @@ Logic: rule matrix + derivation matrix (Rick's family as fixture: Dad Sr, Mom, R
 
 ## Plan
 A (2 days): primitives-only editor + validation + inference engine + review sheet + migration. B (1 day): Hallie cross-world shapes + CyberBrain attestations. C: golden answers with Rick's sentences.
+
+## Amendments after codex review (#830/#831/#833, 2026-08-29) — ACCEPTED
+1. **Identity ≠ relationship.** `POIProfile` gains an optional durable `treeIdentity` (FSID preferred; pointer+source fingerprint fallback). It is the ONLY profile→tree bridge; fail closed on stale/colliding pins. Rick and Donna get explicit pins. Name/alias matching becomes a review *suggestion*, never graph identity. `FamilyKinshipOverlay.bridge()` name-guessing is retired.
+2. **Sibling basis is stored.** `sibling` rows carry `basis: .attestedFull | .attestedHalf(sharedParent) | .unspecified`. An unspecified sibling supports sibling/uncle/in-law composition only; shared parents are PROPOSED in the review sheet and become facts only when attested. Half-sibling wording requires complete disjoint second-parent evidence or attestation (one known shared parent + one unknown ≠ half).
+3. **Legacy derived rows are lossless.** Rows of derived kinds that the engine cannot reproduce move to `unresolvedClaims` (raw row + resolution state), shown read-only in the sheet until Rick resolves them. Never edges, never dropped.
+4. **Confirmation scope is small.** Attest only foundational assumptions and the change set (shared parents, spouse vs partner, child rows); show a bounded consequence summary; derive distant facts on demand. Attestations live in a profile-independent atomic ledger (not on Rick's profile); keys = stable identities (uuid/FSID) + normalized edge, never @I pointers.
+5. **Hybrid boundary.** Overlay hops bounded to reach an explicit pinned bridge; then indexed GEDCOM ancestry/path with budgets. No 39k expansion per pair. Local-only queries must work with graph == nil.
+6. **Dates keep precision.** Year-only → compare years only when strictly different; no exact age/order from manufactured Jan 1. "How old was Dad when Tim was born" is a new explicit AST operation (age-at-person-event), deterministic.
+7. **Determinism.** Route search has a stable tie-break (lexical on normalized identity, then hop kind) and operation-specific preference (direct/explicit first; blood for common-ancestor); order-reversal tests.
+8. **Validation additions:** semantic duplicates across inverse rows/profiles; conflicting relations on one resolved pair; dangling/stale anchors; >2 parents after node dedup; sibling vs ancestor/descendant contradiction; cycle check canonicalizes orientation, includes GEDCOM ancestry without O(39k) in the save path. The sex-inconsistency rule is dropped (relations are neutral).
+9. **CyberBrain:** citations generated at query time from primitives + attestations; no per-pair items.

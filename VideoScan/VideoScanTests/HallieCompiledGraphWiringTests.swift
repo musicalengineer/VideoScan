@@ -127,6 +127,45 @@ struct HallieCompiledGraphWiringTests {
         #expect(!box.log.contains("Reading "), "no parse anywhere on the compiled path")
     }
 
+    /// 2026-08-29: the Family Tree tab loads through the same cache. The
+    /// `outcome` API hands back the loader's outcome on a miss AND on a
+    /// hit (same token, `reused`), reports progress phases, and never
+    /// caches an outcome without a graph (needsRecompile).
+    @Test func outcomeAPIReusesTheDecodeAndPassesRecompileThrough() throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let (store, people) = try box.promoteTwoPulls()
+        let cache = FamilyGraphSharedCache(log: { box.log.append($0) })
+        let phases = LogCapture()
+        let first = cache.outcome(for: box.configuration(), store: store, progress: { phases.append($0) })
+        #expect(first.outcome?.compiled == true)
+        #expect(first.outcome?.graph?.people.count == people)
+        #expect(first.loaded?.reused == false)
+        #expect(phases.all.isEmpty, "a compiled hit reports no parse phase: \(phases.all)")
+        let second = cache.outcome(for: box.configuration(), store: store)
+        #expect(second.loaded?.reused == true)
+        #expect(second.loaded?.token == first.loaded?.token)
+        #expect(second.outcome?.compiled == true)
+        #expect(cache.loaderRuns == 1)
+        // The live model's own entry (graph(for:)) is the same decode.
+        #expect(cache.load(for: box.configuration(), store: store)?.token == first.loaded?.token)
+
+        // A generation refused for version reasons: outcome carries the
+        // recompile request, nothing is cached, the loader runs each time.
+        var pointer = try #require(store.readPointer())
+        pointer.codec = 4
+        try JSONEncoder().encode(pointer).write(to: store.pointerURL)
+        let pending = cache.outcome(for: box.configuration(), store: store)
+        #expect(pending.loaded == nil)
+        #expect(pending.outcome?.graph == nil)
+        #expect(pending.outcome?.needsRecompile.count == 2)
+        let pendingAgain = cache.outcome(for: box.configuration(), store: store)
+        #expect(pendingAgain.loaded == nil)
+        #expect(cache.loaderRuns == 3)
+        // Unavailable: nil outcome, nothing cached.
+        let gone = cache.outcome(for: box.configuration(access: .unavailable), store: store)
+        #expect(gone.outcome == nil && gone.loaded == nil)
+    }
+
     /// Source-level wiring sensor: the three Hallie entry points go through
     /// the shared cache with a store. Skipped when the sources are not
     /// beside the test (e.g. a bundle-only run).

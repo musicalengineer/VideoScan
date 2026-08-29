@@ -521,7 +521,7 @@ final class GedcomCompiledTreeTests: XCTestCase {
         XCTAssertEqual(manifest.localDroppedLineCount, 0)
         XCTAssertEqual(manifest.totalDroppedLineCount, d)
         XCTAssertEqual(manifest.schema, 3)
-        XCTAssertEqual(manifest.codec, 4)
+        XCTAssertEqual(manifest.codec, GedcomCompiledTree.codecVersion)
 
         // Mutation: verify catches every provenance figure.
         var bad = promoted.sourceProvenance; bad[0].droppedLineCount += 1
@@ -576,25 +576,39 @@ final class GedcomCompiledTreeTests: XCTestCase {
         XCTAssertFalse(GedcomCompiledTree.verify(decoded: mutated(decoded, provenance: [expected[0]]), against: merged).isEmpty)
     }
 
-    /// #812: a codec-3 blob (same bytes, header version 3) is refused with
-    /// `versionMismatch(codec: 3, …)` and the store's `versionsMatch`
-    /// rejects a codec-3 pointer ("schema changed" → recompile).
-    func testCodecThreeArtifactAndPointerAreRejected() throws {
-        XCTAssertEqual(GedcomCompiledTree.codecVersion, 4)
+    /// #812 (codec 3 → 4) and 2026-08-29 (codec 4 → 5, index 1 → 2): a
+    /// blob with an older header version is refused with
+    /// `versionMismatch` and the store's `versionsMatch` rejects an older
+    /// pointer ("schema changed" → recompile).
+    func testOlderCodecArtifactAndPointerAreRejected() throws {
+        XCTAssertEqual(GedcomCompiledTree.codecVersion, 5)
+        XCTAssertEqual(GedcomFamilyGraph.TreeIndex.formatVersion, 2)
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 30, generations: 3))
-        var v3 = GedcomCompiledTree.encode(graph)
-        // Header: "VSFT" | u32 codec | u32 index — patch the codec to 3.
-        v3.replaceSubrange(4..<8, with: GedcomCompiledTree.le(UInt32(3)))
-        XCTAssertThrowsError(try GedcomCompiledTree.decode(v3)) { error in
-            XCTAssertEqual(error as? GedcomCompiledTree.CodecError,
-                           .versionMismatch(codec: 3, index: GedcomFamilyGraph.TreeIndex.formatVersion))
+        for older: UInt32 in [3, 4] {
+            var blob = GedcomCompiledTree.encode(graph)
+            // Header: "VSFT" | u32 codec | u32 index — patch the codec.
+            blob.replaceSubrange(4..<8, with: GedcomCompiledTree.le(older))
+            XCTAssertThrowsError(try GedcomCompiledTree.decode(blob)) { error in
+                XCTAssertEqual(error as? GedcomCompiledTree.CodecError,
+                               .versionMismatch(codec: older, index: GedcomFamilyGraph.TreeIndex.formatVersion))
+            }
         }
-        let ok = FamilyGraphCompiledStore.Pointer(schema: FamilyGraphCompiledStore.schemaVersion, codec: 4,
+        var oldIndex = GedcomCompiledTree.encode(graph)
+        oldIndex.replaceSubrange(8..<12, with: GedcomCompiledTree.le(UInt32(1)))
+        XCTAssertThrowsError(try GedcomCompiledTree.decode(oldIndex)) { error in
+            XCTAssertEqual(error as? GedcomCompiledTree.CodecError,
+                           .versionMismatch(codec: GedcomCompiledTree.codecVersion, index: 1))
+        }
+        let ok = FamilyGraphCompiledStore.Pointer(schema: FamilyGraphCompiledStore.schemaVersion, codec: 5,
                                                   index: GedcomFamilyGraph.TreeIndex.formatVersion,
                                                   current: "gen-x", previous: nil, sourceKeys: ["k"])
         XCTAssertTrue(FamilyGraphCompiledStore.versionsMatch(ok))
-        var old = ok; old.codec = 3
-        XCTAssertFalse(FamilyGraphCompiledStore.versionsMatch(old))
+        for older: UInt32 in [3, 4] {
+            var old = ok; old.codec = older
+            XCTAssertFalse(FamilyGraphCompiledStore.versionsMatch(old))
+        }
+        var oldIndexPointer = ok; oldIndexPointer.index = 1
+        XCTAssertFalse(FamilyGraphCompiledStore.versionsMatch(oldIndexPointer))
 
         // On disk: a codec-3 pointer makes load/loadCurrent a logged miss.
         let box = try StoreBox(); defer { box.tearDown() }
@@ -602,7 +616,7 @@ final class GedcomCompiledTreeTests: XCTestCase {
         let store = box.store()
         XCTAssertNotNil(store.ingest(graph: try XCTUnwrap(GedcomFamilyGraph(fileURL: url)), sources: [url]))
         var pointer = try XCTUnwrap(store.readPointer())
-        pointer.codec = 3
+        pointer.codec = 4
         try JSONEncoder().encode(pointer).write(to: store.pointerURL)
         XCTAssertNil(store.load(sources: [url]))
         XCTAssertNil(store.loadCurrent())

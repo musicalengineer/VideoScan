@@ -67,15 +67,11 @@ final class GedcomScaleSensorTests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
         let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
         let index = ms { _ = graph.index }
-        var rows: [FamilyTreePersonSummary] = []
-        var identity: FamilyAssetIdentityDirectory?
-        let offMain = ms {
-            rows = FamilyTreeLiveModel.sidebarRows(of: graph)
-            identity = FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
-        }
+        var bundle: FamilyTreeLaunchBundle?
+        let offMain = ms { bundle = FamilyTreeLaunchBundle.build(graph: graph, settings: .fromDefaults()) }
         let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
-        let install = ms { model.install(graph: graph, rows: rows, identity: identity) }
-        print("SCALE[\(Self.config)] real index build: \(index) ms; rows+identity (background): \(offMain) ms; install (main actor): \(install) ms filtered=\(model.filteredPeople.count) cards=\(model.scene.cards.count)")
+        let install = ms { model.install(graph: graph, bundle: bundle) }
+        print("SCALE[\(Self.config)] real index build: \(index) ms; launch bundle (background): \(offMain) ms; install (main actor): \(install) ms filtered=\(model.filteredPeople.count) cards=\(model.scene.cards.count)")
         XCTAssertLessThan(install, 100 * Self.slack, "main-actor install budget (2026-08-28)")
         let search = medianMS { model.searchText = "Breen"; model.searchText = "" }
         print("SCALE[\(Self.config)] real search keystroke pair: \(search) ms → \(model.filteredPeople.count)")
@@ -89,6 +85,84 @@ final class GedcomScaleSensorTests: XCTestCase {
         let decode = medianMS(5) { _ = try? GedcomCompiledTree.decode(data) }
         print("SCALE[\(Self.config)] real artifact: \(data.count / 1024) KB, decode \(decode) ms")
         XCTAssertLessThan(decode, 100 * Self.slack, "decode budget (measured 9 ms Release)")
+    }
+
+    // MARK: Real promoted artifact (39k merged tree, 2026-08-29)
+    //
+    // Where the budgets come from (Release, real 39,250-person artifact;
+    // "before" = codec 4 on the M4 Max, "after" = codec 5 on the M5 Pro
+    // test host / M4 Max Core package, p50 of 10):
+    //   decode                 42 ms → 24 ms (M5) / 20 ms (M4 Core)
+    //   sidebar rows           38 ms →  5 ms
+    //   identity directory    131 ms →  6.6 ms
+    //   launch bundle (‖)       —   →  8.8 ms   (rows + identity + anchors)
+    //   install (main actor)   14 ms →  0.07 ms warm / 4.9 ms cold
+    //   100k install           25 ms →  0.67 ms
+    //   100k decode            72 ms → 43 ms
+    // Debug (M4 Max, Core): real decode 583 ms (in-app log) → 330 ms.
+
+    static let compiledRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/VideoScan/family-tree/compiled")
+
+    /// The promoted `tree.vsft`, read-only, or nil when none is promoted.
+    static func realArtifactURL() -> URL? {
+        // `VS_TREE_ARTIFACT=<path/tree.vsft>` points the sensor at a
+        // scratch compile (e.g. before the production generation has
+        // been recompiled for a new codec).
+        if let override = ProcessInfo.processInfo.environment["VS_TREE_ARTIFACT"] {
+            return FileManager.default.fileExists(atPath: override) ? URL(fileURLWithPath: override) : nil
+        }
+        let pointer = compiledRoot.appendingPathComponent("current.json")
+        guard let data = try? Data(contentsOf: pointer),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let current = json["current"] as? String else { return nil }
+        let url = compiledRoot.appendingPathComponent(current).appendingPathComponent("tree.vsft")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// (cold, p50, p95) of `runs` timings; cold = the first.
+    func profile(_ runs: Int = 10, _ body: () -> Void) -> (cold: Double, p50: Double, p95: Double) {
+        let samples = (0..<runs).map { _ in ms(body) }
+        let sorted = samples.sorted()
+        return (samples[0], sorted[runs / 2], sorted[max(0, Int((Double(runs) * 0.95).rounded(.up)) - 1)])
+    }
+
+    /// The whole launch path on the REAL promoted artifact: decode → rows
+    /// + identity (background) → install (main actor), each step printed
+    /// cold / p50 / p95 over 10 runs. Budgets are Release; ×slack in Debug.
+    @MainActor
+    func testRealCompiledArtifactLaunchPathWithinBudget() throws {
+        guard let url = Self.realArtifactURL() else { throw XCTSkip("no promoted artifact") }
+        let data = try Data(contentsOf: url)
+        // An older-codec generation is a skip until the app recompiles it.
+        do { _ = try GedcomCompiledTree.decode(data) } catch let error as GedcomCompiledTree.CodecError {
+            if case .versionMismatch = error { throw XCTSkip("promoted artifact is older than the current codec: \(error)") }
+            throw error
+        }
+        var graph: GedcomFamilyGraph?
+        let decode = profile { graph = try? GedcomCompiledTree.decode(data) }
+        let g = try XCTUnwrap(graph)
+        let settings = FamilyTreeLaunchBundle.Settings.fromDefaults()
+        let rowsT = profile { _ = FamilyTreeLiveModel.sidebarRows(of: g) }
+        let identityT = profile { _ = FamilyAssetIdentityDirectory(graph: g, speakers: settings.speakers) }
+        var bundle: FamilyTreeLaunchBundle?
+        let bundleT = profile { bundle = FamilyTreeLaunchBundle.build(graph: g, settings: settings) }
+        let sink = InMemoryLogSink()
+        let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        let install = profile(5) { withAppLog(sink) { model.install(graph: g, bundle: bundle) } }
+        let hallieWarm = profile {
+            _ = g.commonAncestors(of: g.rootPersonIDs.first ?? "", and: g.rootPersonIDs.last ?? "", limit: 3)
+        }
+        print("LAUNCH[\(Self.config)] real \(g.people.count) people: decode cold \(decode.cold) p50 \(decode.p50) p95 \(decode.p95) ms; "
+              + "rows cold \(rowsT.cold) p50 \(rowsT.p50) p95 \(rowsT.p95) ms; identity cold \(identityT.cold) p50 \(identityT.p50) p95 \(identityT.p95) ms; "
+              + "bundle (parallel) cold \(bundleT.cold) p50 \(bundleT.p50) p95 \(bundleT.p95) ms; "
+              + "install cold \(install.cold) p50 \(install.p50) p95 \(install.p95) ms; "
+              + "common-ancestor (roots) p50 \(hallieWarm.p50) p95 \(hallieWarm.p95) ms")
+        for line in sink.lines where line.contains("[family-tree]") { print("LAUNCH[\(Self.config)] log: \(line)") }
+        XCTAssertLessThan(decode.p95, 60 * Self.slack, "decode p95 budget (measured 25 ms Release M4 Max, 2026-08-29)")
+        XCTAssertLessThan(bundleT.p95, 60 * Self.slack, "launch bundle p95 budget")
+        XCTAssertLessThan(install.p95, 20 * Self.slack, "main-actor install p95 budget (no O(people) work)")
+        XCTAssertLessThan(hallieWarm.p95, 20 * Self.slack, "Hallie warm common-ancestor budget")
     }
 
     // MARK: 100k synthetic
@@ -134,21 +208,20 @@ final class GedcomScaleSensorTests: XCTestCase {
         let data = GedcomCompiledTree.encode(graph)
         let decode = medianMS(5) { _ = try? GedcomCompiledTree.decode(data) }
         print("SCALE[\(Self.config)] 100k artifact: \(data.count / 1024) KB, encode \(encode) ms, decode \(decode) ms")
-        XCTAssertLessThan(decode, 300 * Self.slack, "snapshot load budget (measured 44 ms Release)")
+        XCTAssertLessThan(decode, 150 * Self.slack, "snapshot load budget (measured 72 → 54 ms Release M4 Max, 2026-08-29)")
     }
 
     @MainActor
     func testHundredThousandPersonSidebarKeystrokeWithinBudget() throws {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
-        let rows = FamilyTreeLiveModel.sidebarRows(of: graph)
-        let identity = FamilyAssetIdentityDirectory(graph: graph, speakers: .fromDefaults())
+        let bundle = FamilyTreeLaunchBundle.build(graph: graph, settings: .fromDefaults())
         let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
-        let install = ms { model.install(graph: graph, rows: rows, identity: identity) }
+        let install = ms { model.install(graph: graph, bundle: bundle) }
         // A narrowing needle (what typing does) and a broad one.
         let narrow = medianMS { model.searchText = "breen"; model.searchText = "bree" }
         let broad = medianMS { model.searchText = "a"; model.searchText = "" }
         print("SCALE[\(Self.config)] 100k install \(install) ms; keystroke narrow \(narrow / 2) ms, broad \(broad / 2) ms")
         XCTAssertLessThan(narrow / 2, 5 * Self.slack, "sidebar keystroke budget")
-        XCTAssertLessThan(install, 500 * Self.slack, "main-actor install budget at 100k")
+        XCTAssertLessThan(install, 50 * Self.slack, "main-actor install budget at 100k (no O(people) work; measured 25 ms Release before, 2026-08-29)")
     }
 }

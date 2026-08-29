@@ -943,12 +943,35 @@ struct ArchivistChatWindow: View {
         if let pending = pendingHallieClarification {
             let folded = PersonResolver.normalize(text)
             // Shared matcher: numbers, exact names, "the one born in 1785",
-            // older/younger, ordinals (HallieClarificationReply.swift).
-            if let selected = HallieTurnExecutor.clarificationSelection(
+            // older/younger, ordinals, places, parents, spouses
+            // (HallieClarificationReply.swift). A discriminator that fits
+            // several narrows the list; one that fits nobody is said, and
+            // the same question stays open (live 2026-08-28: "the one born
+            // in 1959" used to fall through to the translator).
+            switch HallieTurnExecutor.clarificationReply(
                 text, from: pending.clarification.candidates) {
+            case .selected(let selected):
                 messages.append(ArchivistMessage(role: .user, text: text))
                 continueHallie(pending: pending, selecting: selected)
                 return
+            case .narrowed(let subset, let discriminator):
+                messages.append(ArchivistMessage(role: .user, text: text))
+                let narrowed = pending.narrowed(to: subset) ?? pending
+                pendingHallieClarification = narrowed
+                appendHallieClarification(
+                    narrowed,
+                    preface: HallieTurnExecutor.narrowedClarificationPreface(
+                        count: narrowed.clarification.candidates.count,
+                        discriminator: discriminator))
+                return
+            case .unmatched(let discriminator):
+                messages.append(ArchivistMessage(role: .user, text: text))
+                appendHallieClarification(
+                    pending,
+                    preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator))
+                return
+            case .notASelection:
+                break
             }
             if ["yes", "y", "yeah", "yep", "correct", "right",
                 "that's right", "thats right"]
@@ -968,8 +991,14 @@ struct ArchivistChatWindow: View {
                     text: "Okay — I won't guess which person you meant."))
                 return
             }
-            // A non-matching reply is a new question, not a candidate guess.
-            pendingHallieClarification = nil
+            // A complaint about the list itself ("you presented me a list of
+            // people born hundreds of years ago", live 2026-08-28) keeps the
+            // question pending: the repair reply re-asks it narrowed, and a
+            // typed or tapped name afterwards still selects from it.
+            // Any other non-matching reply is a new question.
+            if !HallieRepairTurn.isRepair(text) {
+                pendingHallieClarification = nil
+            }
         }
         messages.append(ArchivistMessage(role: .user, text: text))
         // Every question — including "play the first one" and "show more" —
@@ -1023,7 +1052,7 @@ struct ArchivistChatWindow: View {
                     telling: telling)
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                commitHallie(response)
+                commitHallie(response, question: text)
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
@@ -1093,17 +1122,24 @@ struct ArchivistChatWindow: View {
         }
     }
 
-    private func commitHallie(_ response: HallieAppTurnCoordinator.Response) {
+    private func commitHallie(_ response: HallieAppTurnCoordinator.Response, question: String? = nil) {
         // Rick 2026-08-22: "in-app, there's no audio." On by default; the
         // settings sheet has the switch and the voice picker.
         if HallieSpeaker.isEnabled() {
             HallieSpeaker.shared.speak(response.result.prose, about: response.result.catalogPersonName)
         }
         lastResponder = response.responderHost
-        pendingHallieClarification = response.pendingClarification
+        // A repair reply re-asks the pending which-one; keep it so the next
+        // typed or tapped name still selects from it.
+        if response.result.outcome == .repaired, response.pendingClarification == nil {
+            // keep pendingHallieClarification as is
+        } else {
+            pendingHallieClarification = response.pendingClarification
+        }
         hallieTelling = response.telling
         hallieMemory.record(intent: response.executedIntent,
-                            result: response.result)
+                            result: response.result,
+                            question: question)
         let citations = response.citations
         let isFollowUpAction = response.result.route == .followUp
             && response.result.mediaAction != nil

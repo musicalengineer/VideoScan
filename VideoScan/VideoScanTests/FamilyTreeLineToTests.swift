@@ -8,7 +8,8 @@ import VideoScanCore
 //   Logic — descentPath found / not-an-ancestor / pedigree collapse picks
 //           the shortest (paternal-first); relationshipLabel 1…6 both
 //           sexes; anchors from root + spouse; model options + chain
-//   Scale — 4,000-person single line: descentPath from the top < 50 ms
+//   Scale — 4,000-person single line: descentPath over the compiled topology
+//           from the top < 50 ms (index construction has separate sensors)
 
 // MARK: - Fixture: five generations above Rick (I1), with a collapse.
 //
@@ -143,6 +144,46 @@ struct DescentPathTests {
         #expect(g.relationshipLabel(from: "@I40@", to: "@I1@", possessive: "Rick's") == "Rick's great-grandmother")
     }
 
+    @Test func equalLengthPedigreeCollapsePicksThePaternalRoute() throws {
+        // I50 is grandparent to I1 through both parents. Both routes are two
+        // hops, so only the documented father-first tie break chooses I2.
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Child /Diamond/
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Father /Diamond/
+        1 SEX M
+        1 FAMC @F2@
+        1 FAMS @F1@
+        0 @I3@ INDI
+        1 NAME Mother /Diamond/
+        1 SEX F
+        1 FAMC @F3@
+        1 FAMS @F1@
+        0 @I50@ INDI
+        1 NAME Shared /Ancestor/
+        1 SEX M
+        1 FAMS @F2@
+        1 FAMS @F3@
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 WIFE @I3@
+        1 CHIL @I1@
+        0 @F2@ FAM
+        1 HUSB @I50@
+        1 CHIL @I2@
+        0 @F3@ FAM
+        1 HUSB @I50@
+        1 CHIL @I3@
+        0 TRLR
+        """)
+
+        let path = try #require(g.descentPath(from: "@I50@", to: "@I1@"))
+        #expect(path.map(\.id) == ["@I50@", "@I2@", "@I1@"])
+    }
+
     @Test func relationshipWordsForOneToSixGenerationsBothSexes() {
         let m = (1...6).map { GedcomFamilyGraph.generationLabel(generations: $0, sex: "M") }
         #expect(m == ["father", "grandfather", "great-grandfather", "great-great-grandfather",
@@ -172,6 +213,10 @@ struct DescentPathTests {
         for i in 1..<n { text += "0 @F\(i)@ FAM\n1 HUSB @I\(i + 1)@\n1 CHIL @I\(i)@\n" }
         text += "0 TRLR\n"
         let g = GedcomFamilyGraph(gedcomText: text)
+        // The index is lazy for a text-parsed graph. Production's compiled
+        // artifact already carries it, and GedcomScaleSensorTests budgets
+        // index construction separately. This sensor owns the two walks.
+        _ = g.index
         let start = ContinuousClock.now
         let path = g.descentPath(from: "@I\(n)@", to: "@I1@")
         let missing = g.descentPath(from: "@I1@", to: "@I\(n)@")

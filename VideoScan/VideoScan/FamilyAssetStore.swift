@@ -131,7 +131,8 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var entry: (key: Key, graph: GedcomFamilyGraph, compiled: Bool, token: UUID)?
+    private var entry: (key: Key, graph: GedcomFamilyGraph, compiled: Bool, token: UUID,
+                        outcome: FamilyGraphFileLoader.Outcome)?
     private var loadCount = 0
     private let log: (String) -> Void
 
@@ -148,12 +149,27 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     }
 
     func load(for configuration: FamilyAssetConfiguration,
-              store: FamilyGraphCompiledStore?) -> Loaded? {
+              store: FamilyGraphCompiledStore?,
+              progress: ((String) -> Void)? = nil) -> Loaded? {
+        outcome(for: configuration, store: store, progress: progress).loaded
+    }
+
+    /// The loader's full outcome plus the cached `Loaded` when a graph came
+    /// back (2026-08-29: the Family Tree tab loads through here too, so the
+    /// tab, Hallie and the People-tab probe share ONE decode). A hit
+    /// returns the memo without touching the loader; a miss runs the
+    /// loader under the lock. An outcome without a graph (nothing on disk,
+    /// or `needsRecompile`) is returned but never cached. `outcome` is nil
+    /// only when the archive authority is `.unavailable`.
+    func outcome(for configuration: FamilyAssetConfiguration,
+                 store: FamilyGraphCompiledStore?,
+                 progress: ((String) -> Void)? = nil)
+        -> (outcome: FamilyGraphFileLoader.Outcome?, loaded: Loaded?) {
         guard configuration.access != .unavailable else {
             // Revoked authority: drop what we had so a later republish
             // cannot hand out a tree from before the disconnect.
             lock.withLock { entry = nil }
-            return nil
+            return (nil, nil)
         }
         let key = Key(directory: configuration.gedcomDirectory(),
                       access: configuration.access,
@@ -162,20 +178,27 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                       gedcomFiles: Self.gedcomStamps(in: configuration.gedcomDirectory()))
         return lock.withLock {
             if let entry, entry.key == key {
-                return Loaded(graph: entry.graph, compiled: entry.compiled, token: entry.token, reused: true)
+                let loaded = Loaded(graph: entry.graph, compiled: entry.compiled, token: entry.token, reused: true)
+                return (entry.outcome, loaded)
             }
             loadCount += 1
-            guard let outcome = configuration.loadFamilyGraphOutcome(
-                compiledStore: store, progress: { [log] in log("[hallie] family graph: \($0)") }),
-                  let graph = outcome.graph else {
+            let report: (String) -> Void = { [log] phase in
+                log("[hallie] family graph: \(phase)")
+                progress?(phase)
+            }
+            guard let outcome = configuration.loadFamilyGraphOutcome(compiledStore: store, progress: report) else {
                 entry = nil
-                return nil
+                return (nil, nil)
+            }
+            guard let graph = outcome.graph else {
+                entry = nil
+                return (outcome, nil)
             }
             let token = UUID()
-            entry = (key, graph, outcome.compiled, token)
+            entry = (key, graph, outcome.compiled, token, outcome)
             log("[hallie] family graph loaded (compiled: \(outcome.compiled), \(graph.people.count) people, "
                 + "\(outcome.selectedURL?.lastPathComponent ?? "no source"))")
-            return Loaded(graph: graph, compiled: outcome.compiled, token: token, reused: false)
+            return (outcome, Loaded(graph: graph, compiled: outcome.compiled, token: token, reused: false))
         }
     }
 

@@ -131,6 +131,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logPath.withCString { VSInstallCrashGuard($0) }
         }
 
+        // Decode the promoted family tree + build the tab's bundle on a
+        // utility task now, so the first Family Tree tab / Hallie question
+        // is a memo hit (2026-08-29, 39k-person launch work).
+        FamilyTreeLaunchBundle.prewarm()
+
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
             NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",

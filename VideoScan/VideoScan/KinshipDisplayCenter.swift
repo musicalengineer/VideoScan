@@ -16,11 +16,11 @@
 //
 // Main-thread discipline (codex #845): `install(graph:)` only swaps the
 // reference and bumps the generation. The picker's people list (a 39k
-// projection + sort) is produced on a utility task and published when
-// ready; the tree's content fingerprint (a SHA over 39k names) is computed
-// lazily, off the main actor, the first time an export-local pointer needs
-// it. The inference engine is cached by (graph generation, kinship-relevant
-// profile signature) so a notes edit or a Hallie turn never rebuilds it.
+// projection + sort) is built lazily on first picker use; the tree's
+// content fingerprint (a SHA over 39k names) is computed lazily the first
+// time an export-local pointer needs it. The inference engine is cached by
+// (graph generation, kinship-relevant profile signature) so a notes edit or
+// a Hallie turn never rebuilds it.
 //
 // `@MainActor` ≈ "this must run on the UI thread"; `ObservableObject` +
 // `@Published` ≈ a subject the views subscribe to, so the gallery
@@ -53,9 +53,25 @@ final class KinshipDisplayCenter: ObservableObject {
     }
 
     @Published private(set) var graph: GedcomFamilyGraph?
-    /// Picker list; empty until the off-main projection for the current
-    /// generation lands (a 39k tree takes tens of ms — never on the UI thread).
-    @Published private(set) var treePeople: [TreePersonChoice] = []
+    /// The editor's tree-picker choices, built LAZILY on first use
+    /// (2026-08-29): the sort of 39k names ran on the main actor at every
+    /// install although only the picker reads it. Reset per install.
+    var treePeople: [TreePersonChoice] {
+        if let treePeopleCache { return treePeopleCache }
+        var built: [TreePersonChoice] = []
+        if let graph {
+            built.reserveCapacity(graph.people.count)
+            for person in graph.people.values {
+                let fsid: String? = person.familySearchID.flatMap { $0.isEmpty ? nil : $0 }
+                built.append(TreePersonChoice(pointer: person.id, familySearchID: fsid,
+                                              name: person.name, birthYear: person.birthYear))
+            }
+            built.sort { $0.name == $1.name ? $0.pointer < $1.pointer : $0.name < $1.name }
+        }
+        treePeopleCache = built
+        return built
+    }
+    private var treePeopleCache: [TreePersonChoice]?
     /// Bumps on every `install(graph:)` — the overlay cache key (codex #778:
     /// a same-count tree replacement must rebuild, so people.count is not
     /// the key).
@@ -84,7 +100,6 @@ final class KinshipDisplayCenter: ObservableObject {
 
     /// Lazily computed content fingerprint for the installed generation.
     private var fingerprintCache: (generation: Int, value: String?)?
-    private var projectionGeneration = -1
 
     /// Internal (not private) so tests can build an isolated center; the
     /// app uses `.shared`.
@@ -102,32 +117,7 @@ final class KinshipDisplayCenter: ObservableObject {
         graph = newGraph
         graphGeneration += 1
         fingerprintCache = nil
-        treePeople = []
-        projectTreePeople(newGraph, generation: graphGeneration)
-    }
-
-    /// The picker list for `generation`, produced off the main actor and
-    /// published only if that generation is still current.
-    private func projectTreePeople(_ source: GedcomFamilyGraph?, generation: Int) {
-        guard let source else { projectionGeneration = generation; return }
-        Task.detached(priority: .utility) {
-            // Worst case ~39k people × ~100 B.
-            var choices: [TreePersonChoice] = []
-            choices.reserveCapacity(source.people.count)
-            for person in source.people.values {
-                let fsid: String? = (person.familySearchID?.isEmpty ?? true) ? nil : person.familySearchID
-                choices.append(TreePersonChoice(pointer: person.id, familySearchID: fsid,
-                                                name: person.name, birthYear: person.birthYear))
-            }
-            choices.sort { (lhs: TreePersonChoice, rhs: TreePersonChoice) -> Bool in
-                lhs.name == rhs.name ? lhs.pointer < rhs.pointer : lhs.name < rhs.name
-            }
-            await MainActor.run {
-                guard self.graphGeneration == generation else { return }
-                self.treePeople = choices
-                self.projectionGeneration = generation
-            }
-        }
+        treePeopleCache = nil
     }
 
     /// Content fingerprint of the installed tree, for `.treePointer`

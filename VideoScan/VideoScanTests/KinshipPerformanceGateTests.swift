@@ -234,7 +234,7 @@ struct KinshipPerformanceGateTests {
         center.install(graph: replacement)
         _ = center.inference(for: kin)
         #expect(center.inferenceBuildCount == 3, "same-count graph replacement rebuilds")
-        #expect(center.treePeople.isEmpty, "projection is off-main and lands later")
+
     }
 
     /// Resident set size via Mach task info (bytes).

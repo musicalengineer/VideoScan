@@ -742,6 +742,27 @@ enum HallieShellCLI {
                 output: output, dependencies: dependencies)
         }
         if let pending = state.pendingClarification {
+            // A discriminator that fits several of the choices narrows the
+            // list; one that fits nobody is said and the same question
+            // stays open (same wording as the chat window, 2026-08-29).
+            switch HallieTurnExecutor.clarificationReply(question, from: pending.value.candidates) {
+            case .narrowed(let subset, let discriminator):
+                let narrowed = pending.value.narrowed(to: subset) ?? pending.value
+                state.pendingClarification = Session.PendingClarification(
+                    value: narrowed, context: pending.context)
+                return await reaskClarification(
+                    narrowed,
+                    preface: HallieTurnExecutor.narrowedClarificationPreface(
+                        count: narrowed.candidates.count, discriminator: discriminator),
+                    state: &state, output: output, dependencies: dependencies)
+            case .unmatched(let discriminator):
+                return await reaskClarification(
+                    pending.value,
+                    preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator),
+                    state: &state, output: output, dependencies: dependencies)
+            case .selected, .notASelection:
+                break
+            }
             // A clarifying question must expire when the person changes the
             // subject. Before this, a pending clarification was cleared only
             // by :cancel, so one "which Tim did you mean?" swallowed every
@@ -755,7 +776,12 @@ enum HallieShellCLI {
                     clarificationSelection(reply, from: pending.value.candidates)
                         .map(String.init(describing:))
                 })
-            if decision == .abandon {
+            if HallieRepairTurn.isRepair(question) {
+                // A complaint about the which-one list itself ("those people
+                // are from the 1300s"): the question stays pending and the
+                // repair reply (pre-translation) re-asks it, narrowed; a
+                // typed name / year / number afterwards still selects.
+            } else if decision == .abandon {
                 state.pendingClarification = nil
                 output(HallieClarificationPolicy.abandonNote)
                 // fall through: answer THIS question as a fresh turn
@@ -800,7 +826,7 @@ enum HallieShellCLI {
             case .answer(let result):
                 state.lastResponder = "local"
                 // "start over" clears memory; other local answers leave it.
-                state.memory.record(intent: nil, result: result)
+                state.memory.record(intent: nil, result: result, question: question)
                 if options.diagnostics {
                     output("interpreted: \(HallieTurnExecutor.label(result.route))")
                 }
@@ -820,7 +846,7 @@ enum HallieShellCLI {
                 await dependencies.recordTranscript([event])
                 if outcome == .mediaFailure { return .declined }
                 switch result.outcome {
-                case .answered: return .answered
+                case .answered, .repaired: return .answered
                 case .declined, .needsClarification, .failed: return .declined
                 case .unsupported: return .unsupported
                 }
@@ -972,7 +998,7 @@ enum HallieShellCLI {
                     allowActions: options.allowActions)
             }
             switch result.outcome {
-            case .answered: return .answered
+            case .answered, .repaired: return .answered
             case .declined: return .declined
             case .unsupported: return .unsupported
             case .needsClarification: return .declined
@@ -1015,6 +1041,12 @@ enum HallieShellCLI {
         // history is intentionally excluded so uncited social prose cannot
         // bleed into a catalog/tree answer.
         let outcome = await dependencies.composeAnswer(plan, [], options)
+        // Parity with the app: the same verifier/coverage lines go to
+        // stderr so a shell run can be diffed against the app log.
+        for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan)
+            + HallieGroundedComposer.verifyLogLines(outcome, plan: plan) {
+            FileHandle.standardError.write(Data((line + "\n").utf8))
+        }
         return result.applying(outcome)
     }
 
@@ -1061,7 +1093,7 @@ enum HallieShellCLI {
                 state: &state)
             await dependencies.recordTranscript([event])
             switch result.outcome {
-            case .answered: return .answered
+            case .answered, .repaired: return .answered
             case .declined, .needsClarification, .failed: return .declined
             case .unsupported: return .unsupported
             }
@@ -1083,6 +1115,29 @@ enum HallieShellCLI {
             await dependencies.recordTranscript([event])
             return .interpretationFailed
         }
+    }
+
+    /// Re-ask the pending which-one with a preface, transcribed like any
+    /// other clarification turn. No continuation runs.
+    private static func reaskClarification(
+        _ clarification: HallieTurnExecutor.Clarification,
+        preface: String,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        let text = preface + "Which person do you mean?"
+        output(text)
+        printClarification(clarification, output: output)
+        let event = transcriptEvent(
+            kind: .assistant,
+            text: text,
+            basisLine: "The reply did not select exactly one stable identity.",
+            outcome: "needs-clarification",
+            offeredActions: clarification.candidates.map(\.label),
+            state: &state)
+        await dependencies.recordTranscript([event])
+        return .declined
     }
 
     private static func clarificationSelection(

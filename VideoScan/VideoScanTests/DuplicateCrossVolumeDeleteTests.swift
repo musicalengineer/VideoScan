@@ -431,23 +431,77 @@ struct DuplicateCrossVolumeDeleteTests {
         #expect(extra.duplicateDisposition == .review)
     }
 
-    /// Settings isolation: the toggle round-trips through INJECTED defaults
-    /// only; the model under test never reads/writes the real plist.
-    @Test func toggleSettingRoundTripsInjectedDefaultsOnly() {
+    /// Settings isolation: all duplicate-keeper settings round-trip through
+    /// INJECTED defaults only; the model never reads/writes the real plist.
+    @Test func toggleSettingRoundTripsInjectedDefaultsOnly() throws {
         let name = "DupCrossSettings-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: name) ?? .standard
+        let d = try #require(UserDefaults(suiteName: name))
         d.removePersistentDomain(forName: name)
-        #expect(DuplicateKeeperSettings.restored(from: d).alsoCleanUpWorkingCopies == false)
-        var s = DuplicateKeeperSettings(); s.alsoCleanUpWorkingCopies = true
-        s.save(to: d)
-        #expect(DuplicateKeeperSettings.restored(from: d).alsoCleanUpWorkingCopies == true)
-        #expect(UserDefaults.standard.object(forKey: DuplicateKeeperSettings.workingCopyCleanupKey) == nil,
-                "test host must never write the real preference")
+        defer { d.removePersistentDomain(forName: name) }
+
+        let realKeys = [
+            DuplicateKeeperSettings.precedenceKey,
+            DuplicateKeeperSettings.workingCopyCleanupKey,
+            DuplicateKeeperSettings.lastElectionKey,
+        ]
+        let standard = UserDefaults.standard
+        var originalValues: [String: Any] = [:]
+        for key in realKeys {
+            if let value = standard.object(forKey: key) {
+                originalValues[key] = value
+            }
+        }
+        defer {
+            for key in realKeys {
+                if let value = originalValues[key] {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+
+        func realSnapshot() -> NSDictionary {
+            var values: [String: Any] = [:]
+            for key in realKeys {
+                if let value = standard.object(forKey: key) {
+                    values[key] = value
+                }
+            }
+            return NSDictionary(dictionary: values)
+        }
+
+        let realBefore = realSnapshot()
+        #expect(DuplicateKeeperSettings.restored(from: d) == DuplicateKeeperSettings())
+
+        let token = UUID().uuidString
+        var injected = DuplicateKeeperSettings()
+        injected.volumePrecedence = ["TestA-\(token)", "TestB-\(token)"]
+        injected.alsoCleanUpWorkingCopies = true
+        injected.lastElectionDescriptor = "injected-election-\(token)"
+        injected.save(to: d)
+        #expect(DuplicateKeeperSettings.restored(from: d) == injected,
+                "every setting must round-trip through the named suite")
+        #expect(realBefore.isEqual(to: realSnapshot() as! [AnyHashable: Any]),
+                "injected save changed a real duplicate-keeper preference")
+
+        // Poison every real key with a non-default, run-unique value. The
+        // model must still initialize from its test-host seed, then refuse
+        // to write its own distinct values back to these poisoned keys.
+        standard.set(["Poison-\(token)"], forKey: DuplicateKeeperSettings.precedenceKey)
+        standard.set(true, forKey: DuplicateKeeperSettings.workingCopyCleanupKey)
+        standard.set("poison-election-\(token)", forKey: DuplicateKeeperSettings.lastElectionKey)
+        let poisonBeforeModel = realSnapshot()
+
         let model = VideoScanModel()
-        model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+        #expect(model.duplicateKeeperSettings == DuplicateKeeperSettings(),
+                "test-host model must use seed settings, never real preferences")
+        model.duplicateKeeperSettings.volumePrecedence = ["Model-\(token)"]
+        model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = false
+        model.duplicateKeeperSettings.lastElectionDescriptor = "model-election-\(token)"
         model.saveDuplicateKeeperSettings()
-        #expect(UserDefaults.standard.object(forKey: DuplicateKeeperSettings.workingCopyCleanupKey) == nil)
-        d.removePersistentDomain(forName: name)
+        #expect(poisonBeforeModel.isEqual(to: realSnapshot() as! [AnyHashable: Any]),
+                "test-host model save changed a poisoned real preference")
     }
 
     /// The exact UI strings Rick specified — all in WorkingCopyCleanupText.

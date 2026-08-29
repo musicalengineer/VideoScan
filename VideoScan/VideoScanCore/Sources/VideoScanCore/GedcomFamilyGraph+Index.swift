@@ -161,7 +161,11 @@ extension GedcomFamilyGraph {
     public struct TreeIndex: Sendable, Equatable {
         /// Bump when the derived layout changes so a stored artifact
         /// compiled by an older build is recompiled, not misread.
-        public static let formatVersion: UInt32 = 1
+        /// 2 (2026-08-29): launch tables — per-person identity tokens
+        /// (given / surname / suffix, what FamilyAssetIdentityDirectory's
+        /// tree pass computes) and the sidebar life-years label — so a
+        /// 39k-person launch does no tokenizing and no family-unit walk.
+        public static let formatVersion: UInt32 = 2
 
         // MARK: People
         /// ordinal → GEDCOM pointer, ascending (Swift `String` order).
@@ -230,7 +234,35 @@ extension GedcomFamilyGraph {
         public let sidebarHaystack: [UInt8]
         public let sidebarStart: [Int32]
 
+        // MARK: Launch tables (formatVersion 2)
+        /// Sorted unique `FamilyIdentityText.tokens` over every person's
+        /// name, surname and their spouses' surnames — the key space of
+        /// the three tables below.
+        public let identityKeys: [String]
+        /// ordinal → given-name tokens (name tokens minus generational
+        /// suffixes minus surname tokens), ascending positions into
+        /// `identityKeys`: `givenIDs[givenStart[o]..<givenStart[o+1]]`.
+        public let givenStart: [Int32]
+        public let givenIDs: [Int32]
+        /// ordinal → own surname tokens plus every recorded spouse's
+        /// surname tokens (the `familyUnits(of:)` spouses), ascending.
+        public let surnameTokenStart: [Int32]
+        public let surnameTokenIDs: [Int32]
+        /// ordinal → the LAST generational suffix token in the name
+        /// ("jr", "sr", "ii"…) as a position into `identityKeys`, or −1.
+        public let suffixIDs: [Int32]
+        /// ordinal → the sidebar life-dates line (`lifeYearsLabel`), "" when
+        /// the record carries no dates.
+        public let lifeYears: [String]
+
         public var count: Int { ids.count }
+
+        @inlinable public func givenIDs(of o: Int32) -> ArraySlice<Int32> {
+            givenIDs[Int(givenStart[Int(o)])..<Int(givenStart[Int(o) + 1])]
+        }
+        @inlinable public func surnameTokenIDs(of o: Int32) -> ArraySlice<Int32> {
+            surnameTokenIDs[Int(surnameTokenStart[Int(o)])..<Int(surnameTokenStart[Int(o) + 1])]
+        }
 
         /// Ordinal of a GEDCOM pointer: binary search, O(log people).
         public func ordinal(of id: String) -> Int32? {
@@ -425,6 +457,60 @@ extension GedcomFamilyGraph {
             }
             self.sidebarHaystack = haystack
             self.sidebarStart = starts
+
+            // Launch tables (formatVersion 2): the tree pass of the
+            // group-photo identity directory, per person, and the sidebar
+            // life-years line. Spouses are exactly `familyUnits(of:)`'s —
+            // a FAMS whose FAM names this person in one partner role.
+            let suffixes = GedcomFamilyGraph.nameSuffixes
+            var givenTokens: [[String]] = [], surnameTokens2: [[String]] = [], suffixTokens: [String?] = []
+            givenTokens.reserveCapacity(ids.count); surnameTokens2.reserveCapacity(ids.count)
+            suffixTokens.reserveCapacity(ids.count)
+            var identityKeySet: Set<String> = []
+            var lifeYears: [String] = []
+            lifeYears.reserveCapacity(ids.count)
+            for id in ids {
+                let person = graph.people[id]!
+                var surnameSet = Set(FamilyIdentityText.tokens(person.surname ?? ""))
+                for familyID in person.spouseOfFamilies {
+                    guard let family = graph.families[familyID] else { continue }
+                    let isHusband = family.husband == person.id, isWife = family.wife == person.id
+                    guard isHusband != isWife else { continue }
+                    if let spouseID = isHusband ? family.wife : family.husband, let spouse = graph.people[spouseID] {
+                        surnameSet.formUnion(FamilyIdentityText.tokens(spouse.surname ?? ""))
+                    }
+                }
+                let nameTokens = FamilyIdentityText.tokens(person.name)
+                let suffix = nameTokens.last(where: { suffixes.contains($0) })
+                let given = Set(nameTokens.filter { !suffixes.contains($0) && !surnameSet.contains($0) })
+                identityKeySet.formUnion(given); identityKeySet.formUnion(surnameSet)
+                if let suffix { identityKeySet.insert(suffix) }
+                givenTokens.append(given.sorted()); surnameTokens2.append(surnameSet.sorted()); suffixTokens.append(suffix)
+                lifeYears.append(GedcomFamilyGraph.lifeYearsLabel(birth: person.birthDate, death: person.deathDate) ?? "")
+            }
+            let identityKeys = identityKeySet.sorted()
+            var keyPosition: [String: Int32] = [:]
+            keyPosition.reserveCapacity(identityKeys.count)
+            for (i, key) in identityKeys.enumerated() { keyPosition[key] = Int32(i) }
+            var givenStart: [Int32] = [0], givenIDs: [Int32] = []
+            var surnameTokenStart: [Int32] = [0], surnameTokenIDs: [Int32] = []
+            var suffixIDs: [Int32] = []
+            givenStart.reserveCapacity(ids.count + 1); surnameTokenStart.reserveCapacity(ids.count + 1)
+            suffixIDs.reserveCapacity(ids.count)
+            for i in 0..<ids.count {
+                // Sorted by string above; positions in a sorted key table
+                // are ascending in the same order.
+                givenIDs.append(contentsOf: givenTokens[i].map { keyPosition[$0]! })
+                givenStart.append(Int32(givenIDs.count))
+                surnameTokenIDs.append(contentsOf: surnameTokens2[i].map { keyPosition[$0]! })
+                surnameTokenStart.append(Int32(surnameTokenIDs.count))
+                suffixIDs.append(suffixTokens[i].map { keyPosition[$0]! } ?? -1)
+            }
+            self.identityKeys = identityKeys
+            self.givenStart = givenStart; self.givenIDs = givenIDs
+            self.surnameTokenStart = surnameTokenStart; self.surnameTokenIDs = surnameTokenIDs
+            self.suffixIDs = suffixIDs
+            self.lifeYears = lifeYears
         }
 
         /// Memberwise, for the compiled-artifact decoder.
@@ -438,7 +524,10 @@ extension GedcomFamilyGraph {
                     recordTokenIDs: [Int32], recordLikeIDs: [Int32],
                     marriedStart: [Int32], marriedIDs: [Int32],
                     surnameStart: [Int32], surnameIDs: [Int32],
-                    sidebarOrder: [Int32], sidebarHaystack: [UInt8], sidebarStart: [Int32]) {
+                    sidebarOrder: [Int32], sidebarHaystack: [UInt8], sidebarStart: [Int32],
+                    identityKeys: [String], givenStart: [Int32], givenIDs: [Int32],
+                    surnameTokenStart: [Int32], surnameTokenIDs: [Int32], suffixIDs: [Int32],
+                    lifeYears: [String]) {
             self.ids = ids; self.nameRank = nameRank
             self.parentStart = parentStart; self.parents = parents; self.motherOffset = motherOffset
             self.childStart = childStart; self.children = children
@@ -451,6 +540,11 @@ extension GedcomFamilyGraph {
             self.surnameStart = surnameStart; self.surnameIDs = surnameIDs
             self.sidebarOrder = sidebarOrder
             self.sidebarHaystack = sidebarHaystack; self.sidebarStart = sidebarStart
+            self.identityKeys = identityKeys
+            self.givenStart = givenStart; self.givenIDs = givenIDs
+            self.surnameTokenStart = surnameTokenStart; self.surnameTokenIDs = surnameTokenIDs
+            self.suffixIDs = suffixIDs
+            self.lifeYears = lifeYears
         }
 
         // MARK: Integer predicates (the exact rules of the linear scans)

@@ -235,6 +235,14 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
             /// translator forcing this into one-directional kinship with a
             /// made-up relation ("sel…") that the strict decoder rejected.
             case relationship
+            /// "closest common ancestor of Rick and Donna" — the lineage
+            /// shape (HallieLineageQuestion.commonAncestor) carried as an
+            /// intent so a which-one clarification can resume it (Rick,
+            /// live 2026-08-28: "donna 1959" after "Which Donna…?" became a
+            /// catalog search because the answer had no continuation).
+            /// Minted locally, never by the translator; `people` is the two
+            /// names, "me" for the signed-in owner.
+            case commonAncestor
         }
 
         /// Closed kinship vocabulary. One-hop relations are the original
@@ -323,10 +331,10 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
                     debugDescription: "surname must not be empty")
             }
 
-            if operation == .relationship, people.count != 2 {
+            if operation == .relationship || operation == .commonAncestor, people.count != 2 {
                 throw DecodingError.dataCorruptedError(
                     forKey: .people, in: c,
-                    debugDescription: "relationship requires exactly two people "
+                    debugDescription: "\(operation.rawValue) requires exactly two people "
                         + "(got \(people.count))")
             }
             if operation == .kinship {

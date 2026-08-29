@@ -151,7 +151,7 @@ struct HallieAppTurnCoordinatorFollowUpTests {
                                      calls: calls, graph: graph)
         #expect(tree.result.route == .graph)
         #expect(tree.result.outcome == .answered)
-        #expect(tree.result.prose.hasPrefix("Donna Breen's family tree — 1 child: Timothy Breen"))
+        #expect(tree.result.prose.hasPrefix("Donna Breen had 1 recorded child, Timothy Breen."))
         #expect(tree.result.offeredActions == [.openFamilyTree(personName: "Donna Breen")])
         #expect(!calls.values.contains { $0.hasPrefix("translate:") })
         #expect(calls.values.contains("execute:shape=graph offset=0"))

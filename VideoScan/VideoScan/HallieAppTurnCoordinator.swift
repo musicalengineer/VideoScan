@@ -37,6 +37,17 @@ enum HallieAppTurnCoordinator {
         /// The phrasing settings of the original turn, so a continued
         /// answer is phrased (or not) exactly as the first would have been.
         let composition: Composition
+
+        /// The same pending question over a subset of its own choices
+        /// (a typed reply that fits several). Nil if the subset is not
+        /// drawn from this clarification.
+        func narrowed(to subset: [HallieTurnExecutor.Candidate]) -> PendingClarification? {
+            guard let narrowed = clarification.narrowed(to: subset) else { return nil }
+            return PendingClarification(
+                clarification: narrowed, context: context,
+                responderHost: responderHost, capturedReferentID: capturedReferentID,
+                composition: composition)
+        }
     }
 
     /// Whether and with what this turn's answer may be phrased by the model.
@@ -800,6 +811,9 @@ enum HallieAppTurnCoordinator {
                     result = result.applying(outcome)
                     appLog.write("Hallie: phrased \(HallieTurnExecutor.label(result.route))/\(HallieTurnExecutor.label(result.outcome)) by \(outcome.composedBy.rawValue) (\(outcome.note); dropped \(outcome.dropped.count))")
                     for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan) {
+                        appLog.write(line)
+                    }
+                    for line in HallieGroundedComposer.verifyLogLines(outcome, plan: plan) {
                         appLog.write(line)
                     }
                 }
