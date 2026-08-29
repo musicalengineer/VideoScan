@@ -88,6 +88,18 @@ final class GedcomScaleSensorTests: XCTestCase {
     }
 
     // MARK: Real promoted artifact (39k merged tree, 2026-08-29)
+    //
+    // Where the budgets come from (Release, real 39,250-person artifact;
+    // "before" = codec 4 on the M4 Max, "after" = codec 5 on the M5 Pro
+    // test host / M4 Max Core package, p50 of 10):
+    //   decode                 42 ms → 24 ms (M5) / 20 ms (M4 Core)
+    //   sidebar rows           38 ms →  5 ms
+    //   identity directory    131 ms →  6.6 ms
+    //   launch bundle (‖)       —   →  8.8 ms   (rows + identity + anchors)
+    //   install (main actor)   14 ms →  0.07 ms warm / 4.9 ms cold
+    //   100k install           25 ms →  0.67 ms
+    //   100k decode            72 ms → 43 ms
+    // Debug (M4 Max, Core): real decode 583 ms (in-app log) → 330 ms.
 
     static let compiledRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/VideoScan/family-tree/compiled")
