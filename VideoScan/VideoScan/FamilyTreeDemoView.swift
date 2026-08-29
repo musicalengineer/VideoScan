@@ -48,6 +48,11 @@ struct FamilyTreeDemoView: View {
     /// (the item-binding form, per the chained-sheet note in memory).
     @State private var adjustSource: FamilyPhotoAdjustSource?
     @State private var adjustError: String?
+    /// Research Person… (2026-08-29). `.sheet(item:)` shows the research
+    /// pane while this is non-nil; a refusal (living person, demo tree)
+    /// goes to the alert instead.
+    @State private var researchTarget: ResearchTarget?
+    @State private var researchRefusal: String?
 
     // Cross-tab navigation. Both tabs share state via @AppStorage so a
     // right-click in either place can drop the other a hint.
@@ -143,6 +148,25 @@ struct FamilyTreeDemoView: View {
                     adjustSource = nil
                 },
                 onCancel: { adjustSource = nil })
+        }
+        .sheet(item: $researchTarget) { target in
+            ResearchPersonSheet(
+                model: ResearchPersonModel(
+                    subject: target.subject,
+                    // People/<FSID>/research/ under the family assets root.
+                    store: ResearchStore(
+                        peopleRoot: FamilyAssetConfigurationCenter.shared.snapshot().makeStore().peopleDirectory),
+                    fetcher: URLSessionResearchFetcher(),
+                    speakerName: model.noteAuthor,
+                    record: { try model.recordTestimony($0) }),
+                onClose: { researchTarget = nil })
+        }
+        .alert("Can't research this person", isPresented: Binding(
+            get: { researchRefusal != nil },
+            set: { if !$0 { researchRefusal = nil } })) {
+            Button("OK", role: .cancel) { researchRefusal = nil }
+        } message: {
+            Text(researchRefusal ?? "")
         }
         .sheet(item: $identityPickTarget) { target in
             TreeIdentityPickerSheet(target: target, center: identityCenter,
@@ -528,7 +552,8 @@ struct FamilyTreeDemoView: View {
                                 },
                                 onShowInPeople: { name in
                                     showInPeopleTab(named: name)
-                                }
+                                },
+                                onResearch: { presentResearch(for: card.person.id) }
                             )
                             .position(card.position)
                         }
@@ -898,6 +923,19 @@ struct FamilyTreeDemoView: View {
         }
     }
 
+    /// Right-click → Research Person…: the privacy guard decides between
+    /// the pane (deceased tree record) and a refusal (living, no dates,
+    /// demo tree). Nothing goes online until Run is pressed in the pane.
+    private func presentResearch(for id: String) {
+        switch ResearchEligibility.evaluate(model.treePerson(id: id)) {
+        case .eligible(let subject):
+            model.select(id)
+            researchTarget = ResearchTarget(subject: subject)
+        case .refused(let reason):
+            researchRefusal = reason
+        }
+    }
+
     private func saveDraftNote() {
         let text = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -1184,6 +1222,9 @@ private struct FamilyTreePersonCard: View {
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
     let onShowInPeople: (String) -> Void
+    /// Research Person… (2026-08-29): sourced dossier for a deceased
+    /// tree person, told to Hallie once confirmed.
+    let onResearch: () -> Void
 
     private var person: FamilyTreePersonSummary { card.person }
     private var accent: Color { person.sex.accent }
@@ -1266,6 +1307,9 @@ private struct FamilyTreePersonCard: View {
         .contextMenu {
             Button("Tell me about \(person.name)") {
                 onAskHallie(person.name)
+            }
+            Button("Research \(person.name)…") {
+                onResearch()
             }
             Divider()
             Button("Center on \(person.name)") {
