@@ -61,7 +61,7 @@ extension HallieTurnExecutor {
                 let person = bridged[0]
                 return .resolved(
                     .gedcomPersonID(person.id),
-                    note: note("“\(HallieWhichOne.display(split.given))” = \(person.name) (People tab: \(profile.canonicalName))"))
+                    note: note("“\(HallieSurnameRoster.titleCased(split.given))” = \(person.name) (People tab: \(profile.canonicalName))"))
             }
         }
         if let brain = context.cyberBrain,
@@ -70,7 +70,7 @@ extension HallieTurnExecutor {
            let person = graph.people[gedcomID] {
             return .resolved(
                 .gedcomPersonID(person.id),
-                note: note("“\(HallieWhichOne.display(split.given))” = \(person.name) (family knowledge: \(known.canonicalName))"))
+                note: note("“\(HallieSurnameRoster.titleCased(split.given))” = \(person.name) (family knowledge: \(known.canonicalName))"))
         }
 
         // 2. The given token is a member's own name.

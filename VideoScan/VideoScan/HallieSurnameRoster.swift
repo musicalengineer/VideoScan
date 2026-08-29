@@ -150,6 +150,11 @@ enum HallieSurnameRoster {
         }
     }
 
+    /// The given token as a name: "pa" / "PA" → "Pa".
+    static func titleCased(_ given: String) -> String {
+        given.prefix(1).uppercased() + given.dropFirst().lowercased()
+    }
+
     /// "O'Connors", "Joneses", "Lynches".
     static func plural(_ surname: String) -> String {
         let lower = surname.lowercased()
@@ -164,7 +169,7 @@ enum HallieSurnameRoster {
     /// order; `arrangement` says how many were left out.
     static func prose(given: String, family: Family,
                       arrangement: HallieWhichOne.Arrangement, labels: [String]) -> String {
-        let givenShown = HallieWhichOne.display(given)
+        let givenShown = titleCased(given)
         let plural = plural(family.surname)
         var text = "I don't know a “\(givenShown)” \(family.surname). "
         if arrangement.overflow > 0 {
@@ -184,7 +189,7 @@ enum HallieSurnameRoster {
                       arrangement: HallieWhichOne.Arrangement) -> String {
         var parts: [String] = []
         if let note = family.recoveryNote { parts.append(note) }
-        parts.append("no \(family.surname) in the family tree goes by “\(HallieWhichOne.display(given))”")
+        parts.append("no \(family.surname) in the family tree goes by “\(titleCased(given))”")
         parts.append("\(arrangement.shown.count) of \(arrangement.total) \(plural(family.surname)) offered"
                      + (arrangement.anchored ? ", home people first" : ""))
         parts.append("nothing was looked up")

@@ -140,7 +140,7 @@ struct HallieSurnameRosterTests {
         // The recovered spelling, typed all in caps or mixed, comes out the same way.
         let shouted = try await HallieTurnExecutor.execute(
             ricksSentence("tell me about PA OC'CONNOR"), context: context())
-        #expect(shouted.prose.hasPrefix("I don't know a “PA” O'Connor. The O'Connors in the tree are "), "got: \(shouted.prose)")
+        #expect(shouted.prose.hasPrefix("I don't know a “Pa” O'Connor. The O'Connors in the tree are "), "got: \(shouted.prose)")
         #expect(shouted.basisLine.contains("took “OC'CONNOR” as O'Connor"), "got: \(shouted.basisLine)")
     }
 
@@ -291,6 +291,12 @@ struct HallieSurnameRosterTests {
         #expect(HallieWhichOne.display("rick") == "Rick")
         #expect(HallieWhichOne.display("ann McGill") == "Ann McGill")
         #expect(HallieWhichOne.display("jean-luc") == "Jean-Luc")
+    }
+
+    @Test func givenTokenIsTitleCased() {
+        #expect(HallieSurnameRoster.titleCased("pa") == "Pa")
+        #expect(HallieSurnameRoster.titleCased("PA") == "Pa")
+        #expect(HallieSurnameRoster.titleCased("Nana") == "Nana")
     }
 
     @Test func plurals() {
