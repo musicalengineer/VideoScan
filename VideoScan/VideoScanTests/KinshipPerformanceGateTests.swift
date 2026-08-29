@@ -75,6 +75,7 @@ struct KinshipPerformanceGateTests {
         var built: FamilyKinshipInference?
         let elapsed = clock.measure { built = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph) }
         #expect(elapsed < Self.budget(20), "engine build \(elapsed)")
+        print("KINSHIP_GATE build=\(elapsed) sorts=\(built!.counters.adjacencySorts)")
         let c = built!.counters
         #expect(c.adjacencySorts >= 100 && c.adjacencySorts < 200, "sorts at build \(c.adjacencySorts)")
         #expect(c.expansions == 0 && c.ancestorSearches == 0 && c.pairMisses == 0)
@@ -141,6 +142,7 @@ struct KinshipPerformanceGateTests {
         #expect(afterWarm.pairHits == 1_001 && afterWarm.pairMisses == afterDistinct.pairMisses, "\(afterWarm)")
         #expect(afterWarm.ancestorSearches == afterDistinct.ancestorSearches, "zero extra ancestor scans")
         #expect(afterWarm.adjacencySorts == afterDistinct.adjacencySorts, "no per-query sorts")
+        print("KINSHIP_GATE cold=\(cold) distinct100_total=\(distinctTotal) distinct_p95=\(durations[94]) distinct_max=\(durations[99]) warm1000_total=\(warmTotal) warm_p95=\(warm[949]) warm_max=\(warm[999]) counters=\(afterWarm)")
     }
 
     @Test func tenThousandLocalOnlyQueriesUnder250ms() {
@@ -155,6 +157,7 @@ struct KinshipPerformanceGateTests {
             for (a, b) in pairs where inf.relation(from: a, to: b) != nil { answered += 1 }
         }
         #expect(elapsed < Self.budget(250), "10k graph == nil queries \(elapsed) (\(answered) answered)")
+        print("KINSHIP_GATE local10k=\(elapsed) answered=\(answered) counters=\(inf.counters)")
         #expect(inf.counters.ancestorSearches == 0)
         #expect(answered > 0)
     }
@@ -182,6 +185,7 @@ struct KinshipPerformanceGateTests {
         churn()
         let afterSecond = Self.residentBytes()
         #expect(afterSecond - beforeSecond < 8 * 1_024 * 1_024, "second churn grew RSS by \(afterSecond - beforeSecond) B")
+        print("KINSHIP_GATE rss_first_churn=\(afterFirst - before)B rss_second_churn=\(afterSecond - beforeSecond)B cache=\(c1)")
     }
 
     @Test func thirtyTwoConcurrentIdenticalQueriesAreSingleFlight() {
@@ -193,6 +197,7 @@ struct KinshipPerformanceGateTests {
         #expect(c.pairComputes == 1, "computed \(c.pairComputes) times")
         #expect(c.pairHits + c.pairMisses == 32 && c.pairMisses == 1, "\(c)")
         #expect(c.ancestorSearches <= 2)
+        print("KINSHIP_GATE singleflight=\(c)")
     }
 
     @Test func saveValidationDoesNoFullAncestorSort() {
@@ -210,7 +215,7 @@ struct KinshipPerformanceGateTests {
         #expect(elapsed < Self.budget(50), "save validation \(elapsed)")
         #expect(after.adjacencySorts == before.adjacencySorts, "no sorts during validation")
         #expect(after.expansions - before.expansions < 2 * Self.graph.people.count, "bounded ancestor walk")
-        _ = findings
+        print("KINSHIP_GATE save_validation=\(elapsed) expansions=\(after.expansions - before.expansions) findings=\(findings.map(\.rule))")
     }
 
     @Test @MainActor func centerInvalidatesOnGraphReplacementAndKinshipEditsOnly() {
