@@ -316,20 +316,23 @@ extension HallieTurnExecutor {
         catalogStats: HallieCatalogStats? = nil,
         rosterAnswer: (() -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
-        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
+        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil
     ) -> PreTranslation {
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
                question: first, playAfterAnswer: playAfterAnswer, memory: memory,
                isKnownPerson: isKnownPerson, catalogStats: catalogStats,
                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
-               relationshipsOverview: relationshipsOverview),
+               relationshipsOverview: relationshipsOverview,
+                researchAnswer: researchAnswer),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
                 isKnownPerson: isKnownPerson, catalogStats: catalogStats,
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
-                relationshipsOverview: relationshipsOverview)
+                relationshipsOverview: relationshipsOverview,
+                researchAnswer: researchAnswer)
             if case .answer(let b) = secondTurn, b.route != .reset {
                 return .answer(joinedTwoQuestionAnswer(a, b))
             }
@@ -349,7 +352,8 @@ extension HallieTurnExecutor {
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, catalogStats: catalogStats,
             rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
-            relationshipsOverview: relationshipsOverview)
+            relationshipsOverview: relationshipsOverview,
+                researchAnswer: researchAnswer)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -571,7 +575,8 @@ extension HallieTurnExecutor {
         catalogStats: HallieCatalogStats?,
         rosterAnswer: (() -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
-        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
+        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil
     ) -> PreTranslation {
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
@@ -611,6 +616,12 @@ extension HallieTurnExecutor {
         // Ahead of the roster, which would otherwise catch "tell … people tab".
         if let relationshipsOverview, let ask = HallieRelationshipsOverview.detect(question) {
             return .answer(relationshipsOverview(ask))
+        }
+        // "what do we know about David Latta from research" — the confirmed
+        // Research Person findings only, cited (2026-08-29). Ahead of the
+        // roster and the translator: "research" is not a search term.
+        if let researchAnswer, let ask = HallieResearchQuestion.detect(question) {
+            return .answer(researchAnswer(ask))
         }
         // "who do you know?" — the People tab, the tree, and what the family
         // has told her; answered locally (PeopleTab), never by the model.

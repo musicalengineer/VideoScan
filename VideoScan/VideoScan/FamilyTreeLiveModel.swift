@@ -1166,6 +1166,27 @@ final class FamilyTreeLiveModel: ObservableObject {
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
     }
 
+    /// The live tree record behind a card, for Research Person's
+    /// eligibility check (deceased tree people only). Nil in demo mode or
+    /// for an unknown pointer — both refuse research.
+    func treePerson(id: String) -> GedcomFamilyGraph.Person? {
+        graph?.people[id]
+    }
+
+    /// Research Person's "Tell Hallie": record an already-built testimony
+    /// (a confirmed finding with its citation) through the same writer and
+    /// refresh the notes pane, exactly as `addNote` does.
+    @discardableResult
+    func recordTestimony(_ testimony: CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt {
+        guard let root = cyberBrainRootURL else {
+            throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
+        }
+        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        notesGeneration &+= 1
+        applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
+        return receipt
+    }
+
     private func applyBrain(index: CyberBrainIndex?, status: String?) {
         brainIndex = index
         notesStatus = status

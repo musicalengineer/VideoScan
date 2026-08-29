@@ -651,7 +651,8 @@ enum HallieAppTurnCoordinator {
                 catalogStats: catalogStats,
                 rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) },
-                relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) })
+                relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) },
+                researchAnswer: { HallieResearchQuestion.answer($0, context: sources()) })
         }
         return try await withTaskCancellationHandler {
             try await worker.value

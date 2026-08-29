@@ -55,7 +55,56 @@ public enum CyberBrainWriter {
             /// specific tree record. Recorded as `confirmed` — the owner's
             /// own statement in their own tree (Rick, 2026-08-26).
             case familyTreeNote
+            /// A finding from Research Person (Chronicling America, Find a
+            /// Grave, Wikipedia, the web) that the archivist marked
+            /// CONFIRMED and told Hallie about (2026-08-29). Recorded as
+            /// `confirmed`, with its own source record carrying the URL
+            /// and the retrieval date so Hallie can cite "Berkshire County
+            /// Eagle, 12 May 1875 — confirmed by Rick". Requires `citation`.
+            case researchFinding
         }
+
+        /// Where a research finding came from. Only used with
+        /// `Origin.researchFinding`; one CyberBrain source per locator.
+        public struct Citation: Sendable, Equatable {
+            /// "Berkshire County Eagle, 1875-05-12" / "Find a Grave memorial".
+            public let title: String
+            /// The web address of the fetched page. Kept in the source's
+            /// notes ("URL: …"): a source locator is archive-relative by
+            /// contract (the validator refuses anything else), so the URL
+            /// cannot BE the locator.
+            public let url: String
+            /// Archive-relative path of the cached copy of the page
+            /// (`People/<key>/research/cache/<sha>.json`), when there is
+            /// one. Becomes the source locator.
+            public let locator: String?
+            /// The document's own date when known ("1875-05-12"), else nil.
+            public let sourceDate: String?
+            /// Newspaper/grave pages are `.officialRecord`; encyclopedias
+            /// and web pages `.curatedBiography`.
+            public let sourceKind: CyberBrainSource.Kind
+            /// Day the page was fetched (the cache's retrieved date).
+            public let retrievedAt: Date
+
+            public init(title: String, url: String, locator: String? = nil,
+                        sourceDate: String? = nil,
+                        sourceKind: CyberBrainSource.Kind = .officialRecord,
+                        retrievedAt: Date) {
+                self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.url = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedLocator = locator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                self.locator = trimmedLocator.isEmpty ? nil : trimmedLocator
+                let trimmedDate = sourceDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                self.sourceDate = trimmedDate.isEmpty ? nil : trimmedDate
+                self.sourceKind = sourceKind
+                self.retrievedAt = retrievedAt
+            }
+        }
+
+        /// The document behind a `.researchFinding`; nil for every other
+        /// origin (a research testimony without one is an `emptySubject`
+        /// error — nothing gets stored as "confirmed" without a locator).
+        public let citation: Citation?
 
         public init(
             subjectName: String,
@@ -65,7 +114,8 @@ public enum CyberBrainWriter {
             kind: CyberBrainItem.Kind = .biography,
             date: Date,
             origin: Origin = .conversation,
-            gedcomPersonID: String? = nil
+            gedcomPersonID: String? = nil,
+            citation: Citation? = nil
         ) {
             self.subjectName = subjectName
             self.subjectAliases = subjectAliases
@@ -77,7 +127,27 @@ public enum CyberBrainWriter {
             let trimmedPointer = gedcomPersonID?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             self.gedcomPersonID = trimmedPointer.isEmpty ? nil : trimmedPointer
+            self.citation = citation
         }
+    }
+
+    /// Prefix shared by every research source id, so readers (Hallie's
+    /// "what do we know about X from research") can tell research
+    /// attestations from told-me and note items without a schema change.
+    public static let researchSourceIDPrefix = "source.research."
+    /// The source notes start with this + the page URL (see `Citation.url`).
+    public static let researchURLNotePrefix = "URL: "
+
+    /// The web address a research source was fetched from, read back from
+    /// its notes; nil for any other kind of source.
+    public static func researchURL(of source: CyberBrainSource) -> String? {
+        guard source.id.hasPrefix(researchSourceIDPrefix),
+              let notes = source.notes, notes.hasPrefix(researchURLNotePrefix)
+        else { return nil }
+        let rest = notes.dropFirst(researchURLNotePrefix.count)
+        let url = rest.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first
+            .map(String.init) ?? ""
+        return url.isEmpty ? nil : url
     }
 
     public enum WriteError: Error, Sendable, Equatable, LocalizedError {
@@ -226,6 +296,33 @@ public enum CyberBrainWriter {
                         value: dayStamp, precision: .day, qualifier: .exact,
                         displayText: dayStamp),
                     notes: "Written in the Family Tree inspector about a specific GEDCOM record."))
+            }
+        case .researchFinding:
+            guard let citation = testimony.citation, !citation.url.isEmpty else {
+                throw WriteError.ioFailure("a research finding needs a citation with a URL")
+            }
+            // One source per fetched page: the same page confirmed twice
+            // (two excerpts) shares its record; a different page never does.
+            sourceID = researchSourceIDPrefix + slug(citation.url)
+            itemPrefix = "research"
+            // Rick read the page and pressed Confirmed — the owner's verdict
+            // on a document, the same standing as his own tree note.
+            confidence = .confirmed
+            if !sources.contains(where: { $0.id == sourceID }) {
+                let retrieved = dayString(citation.retrievedAt)
+                sources.append(CyberBrainSource(
+                    id: sourceID,
+                    type: citation.sourceKind,
+                    title: citation.title.isEmpty ? citation.url : citation.title,
+                    attribution: "confirmed by \(speakerLabel)",
+                    sourceDate: citation.sourceDate.map {
+                        CyberBrainQualifiedDate(
+                            value: $0, precision: $0.count >= 10 ? .day : .year,
+                            qualifier: .exact, displayText: $0)
+                    },
+                    locator: citation.locator,
+                    notes: researchURLNotePrefix + citation.url
+                        + " · Found by Research Person, retrieved \(retrieved); confirmed by \(speakerLabel) on \(dayStamp)."))
             }
         }
 
