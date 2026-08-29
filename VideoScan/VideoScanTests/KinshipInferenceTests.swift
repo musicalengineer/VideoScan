@@ -749,7 +749,10 @@ struct KinshipInferenceTests {
             .init(intent: intent), context: context)
         #expect(result.outcome == .answered, "got: \(result.prose)")
         #expect(result.prose.contains("Martha Lamson"), "got: \(result.prose)")
-        #expect(result.prose.contains("8th-great-grandmother"), "got: \(result.prose)")
+        let eightGreats = Array(repeating: "great", count: 8)
+            .joined(separator: "-") + "-grandmother"
+        #expect(result.prose.contains(eightGreats),
+                "the route must preserve all eight greats: \(result.prose)")
         #expect(result.basisLine.contains("People profile identity bridge"),
                 "the durable identity crossing must remain auditable: \(result.basisLine)")
         #expect(result.basisLine.contains("Archive Subject Seven")
