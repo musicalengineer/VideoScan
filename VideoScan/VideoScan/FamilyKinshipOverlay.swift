@@ -380,6 +380,22 @@ struct FamilyKinshipOverlay: Sendable {
     /// Does this vertex have any overlay knowledge at all?
     func knows(_ node: Node) -> Bool { !(outgoing[node] ?? []).isEmpty }
 
+    /// Directed edges out of a vertex (stored rows + implied inverses), for
+    /// FamilyKinshipInference / KinshipValidation. Empty for unknown vertices.
+    func edges(from node: Node) -> [Edge] { outgoing[node] ?? [] }
+
+    /// The installed tree this overlay was built against, so the inference
+    /// engine walks the SAME graph the vertices were bridged to.
+    var treeGraph: GedcomFamilyGraph? { graph }
+
+    /// Every vertex the overlay knows (profiles, bridged tree people,
+    /// placeholders for dangling anchors).
+    var allNodes: [Node] { Array(members.keys) }
+
+    /// The vertex a stored anchor points at, without creating placeholders
+    /// (read-only view for validation of a not-yet-saved row).
+    func node(for anchor: KinshipAnchor) -> Node? { peekAnchor(anchor) }
+
     // MARK: Queries
 
     /// Every relative reachable from `anchor` whose hop chain folds to
@@ -440,14 +456,18 @@ struct FamilyKinshipOverlay: Sendable {
 
     /// The single word for a chain, gendered by the END person's sex, with
     /// "older"/"younger" for siblings when both birthdates are known.
+    /// One composer for the whole app (design §2): the fold table plus the
+    /// lineal / collateral shapes live in `KinshipChainNamer`, so "great-
+    /// grandmother" reads the same here, in Hallie, and in the review sheet.
     func term(for hops: [Edge]) -> String? {
-        guard let relation = KinshipRelation.compose(hops.map(\.relation)),
+        guard let named = KinshipChainNamer.name(hops.map(\.relation)),
               let start = hops.first?.from, let end = hops.last?.to,
               let subject = members[end] else { return nil }
         let anchor = members[start]
-        let age = KinshipDisplay.ageWord(
-            relation, subjectBirth: subject.birthdate, anchorBirth: anchor?.birthdate)
-        return (age.map { $0 + " " } ?? "") + relation.term(sex: subject.sex)
+        let age = named.isSibling
+            ? KinshipDisplay.ageWord(.sibling, subjectBirth: subject.birthdate, anchorBirth: anchor?.birthdate)
+            : nil
+        return named.term(sex: subject.sex, age: age)
     }
 
     /// "brother Tim → wife Sue" — every hop named, so a wrong stored row is
