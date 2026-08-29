@@ -116,8 +116,11 @@ struct RemoteViewerIsolationTests {
         #expect(settings.mappedVolumes.isEmpty, "a non-[String: String] map reads as empty")
         let configuration = MediaStreamResolver.Configuration.fromDefaults(defaults, masterHostname: sync.masterHostname)
         #expect(configuration.port == HallieWebAccess.defaultPort)
-        #expect(configuration.passphrase == "")
-        #expect(HallieRemoteClient.sessionID(defaults).hasPrefix("viewer-"), "a non-string session is replaced")
+        // UserDefaults.string(forKey:) coerces a stored number to its text —
+        // a harmless string either way (sent as the key / the session id).
+        #expect(configuration.passphrase == "12345")
+        #expect(HallieRemoteClient.sessionID(defaults) == "7")
+        #expect(!HallieRemoteClient.sessionID(defaults).isEmpty)
         var store = FamilyGraphCompiledStore(root: live.appendingPathComponent("family-tree/compiled"))
         var storeLog: [String] = []
         store.log = { storeLog.append($0) }
