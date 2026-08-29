@@ -60,7 +60,7 @@ struct HallieRelationshipsOverviewTests {
 
     static let ownerExpected =
         "You're related to 8 of the 9 other people in the People tab. "
-        + "Nearest first: Dad — your father · Ma — your mother · Beth, Dan, Mark, Matt — your children · "
+        + "Nearest first: Dad, Ma — your parents · Beth, Dan, Mark, Matt — your children · "
         + "Donna — your wife · Tim — your brother · Anna — no relationship recorded yet. "
         + "That's from your entries in the People tab; derived where marked."
 
@@ -136,7 +136,7 @@ struct HallieRelationshipsOverviewTests {
         // With no owner configured "rick" is still a People-tab profile —
         // answered in the third person.
         let noOwner = Overview.answer(.init(subject: .named("rick")), context: Self.context(owner: nil))
-        #expect(noOwner.prose.hasPrefix("Rick is related to 8 of the 9 other people in the People tab. Nearest first: Dad — Rick's father"))
+        #expect(noOwner.prose.hasPrefix("Rick is related to 8 of the 9 other people in the People tab. Nearest first: Dad, Ma — Rick's parents"))
         // "me" with no owner set is an honest decline, never a guess.
         let me = Overview.answer(.init(subject: .owner), context: Self.context(owner: nil))
         #expect(me.outcome == .declined)
