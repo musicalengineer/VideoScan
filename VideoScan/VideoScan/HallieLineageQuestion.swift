@@ -370,7 +370,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// memory) or "me" (the owner → nil). A typo in X is the resolver's
     /// business (spelling recovery in `HallieLineageAnswer.centerTree`).
     static func centerTreeQuestion(in lower: String) -> HallieLineageQuestion? {
-        var s = lower.replacing(/^(?:(?:please|hallie|ok|okay|can you|could you|would you|will you|now|just)\s+)+/, with: "")
+        var s = lower.replacing(/^(?:(?:please|hallie|ok|okay|can you|could you|would you|will you|now|just),?\s+)+/, with: "")
         s = s.replacing(/\s+(?:please|for me|now)\s*$/, with: "")
         let treeWords = #"(?:the\s+)?(?:family\s+)?tree(?:\s+view)?"#
         let m1 = try? Regex(#"^(?:re)?(?:center|centre|focus|zoom(?:\s+in)?)\s+(?:"# + treeWords + #"\s+)?(?:on|to|around)\s+(.+)$"#)
@@ -1140,8 +1140,11 @@ enum HallieLineageAnswer {
         let query = ArchivistGraphQuery(people: [name], operation: .familyTree, relation: nil,
                                         side: nil, surname: nil, voices: [:])
         switch ArchivistGraphExecutor.resolveSubject(name, selection: .unresolved, inputs: inputs, query: query) {
-        case .person(let p, _, _):
-            return .success(p)
+        case .person(let p, _, let correction):
+            // The graph route's own unique-fuzzy recovery ("marhta lamson"
+            // → Martha Lamson). Carried as the basis note so no lineage
+            // shape substitutes silently (2026-08-29; it was dropped here).
+            return .success(p, note: correction.map { spellingRecoveryNote(typed: $0, person: p) })
         case .result(let r):
             // The owner ("my line", or their own name typed) gets the
             // fallback chain before the honest decline: the tree spells
@@ -2299,11 +2302,20 @@ enum HallieLineageAnswer {
     /// center on), else the closest tree spelling — one close name is
     /// taken and SAID ("marhta lamson" → Martha Lamson), several are
     /// offered. Never a catalog search.
+    static func spellingRecoveryNote(typed: String, person: GedcomFamilyGraph.Person) -> String {
+        "spelling recovery: “\(typed)” taken as \(person.name), the one close name in the tree"
+    }
+
     static func centerTree(_ typed: String?, graph: GedcomFamilyGraph,
                            context: HallieTurnExecutor.Context) -> Result {
         switch resolveDetailed(typed, context: context, graph: graph) {
         case .success(let person, let note):
-            return centering(on: person, basisNote: note)
+            let taken = centering(on: person, basisNote: note)
+            // A recovered spelling is SAID, never silent (Rick 2026-08-24).
+            if let typed, note?.hasPrefix("spelling recovery") == true {
+                return prefixing("I took “\(typed)” to mean \(person.name).", to: taken)
+            }
+            return taken
         case .ambiguous(let people):
             let shown = HallieLineageQuestion.capitalizedName(typed ?? context.speakers.ownerName ?? "")
             return centerWhichOne(shown, among: people)
@@ -2328,7 +2340,7 @@ enum HallieLineageAnswer {
             }
             switch close.count {
             case 1:
-                let taken = centering(on: close[0], basisNote: "“\(typed)” taken as \(close[0].name), the closest name in the tree")
+                let taken = centering(on: close[0], basisNote: spellingRecoveryNote(typed: typed, person: close[0]))
                 return prefixing("I took “\(typed)” to mean \(close[0].name).", to: taken)
             case 0:
                 return resolved ?? Result(
