@@ -137,7 +137,7 @@ struct FamilyTreeLineStripView: View {
             if let photo {
                 Image(nsImage: photo)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .scaledToFill()
                     .frame(width: photoSide, height: photoSide)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }

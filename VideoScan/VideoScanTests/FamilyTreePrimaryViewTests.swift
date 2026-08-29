@@ -55,6 +55,7 @@ private func tempDirectory() throws -> URL {
 struct FamilyTreeSidebarPreferenceTests {
 
     private func suite() -> UserDefaults {
+        // swiftlint:disable:next force_unwrapping
         UserDefaults(suiteName: "FamilyTreeSidebarPreferenceTests.\(UUID().uuidString)")!
     }
 
