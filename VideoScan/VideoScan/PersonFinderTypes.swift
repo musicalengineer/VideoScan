@@ -543,6 +543,15 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// `kinshipAnchor`, never `.profile(id: uuid)` directly, or the id
     /// dangles after restart ("a removed profile").
     var uuidPersisted: Bool = true
+    /// Durable pin to ONE family-tree person (design amendment 1, 2026-08-29):
+    /// the only profile→tree identity the inference engine accepts. nil =
+    /// not pinned (name matches are review SUGGESTIONS, never identity).
+    /// Additive: absent in older profile.json ⇒ nil; saved explicitly.
+    var treeIdentity: TreeIdentity?
+    /// A `treeIdentity` this build could not read, kept verbatim and written
+    /// back so a newer build's pin is never lost (fail closed: the overlay
+    /// treats the profile as unbridged with a pin problem, never a name).
+    var treeIdentityQuarantined: JSONValue?
 
     /// The anchor other profiles should store for THIS profile: the durable
     /// uuid when it is on disk, otherwise the name (upgraded automatically
@@ -563,7 +572,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case minFaceConfidence, largestFaceOnly, coverImageFilename, notes, aliases
         case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
-        case kinships, kinshipsQuarantined, uuid
+        case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -576,7 +585,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
          sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
          sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
          identityNotes: String? = nil, kinships: [Kinship] = [],
-         uuid: UUID = UUID()) {
+         uuid: UUID = UUID(), treeIdentity: TreeIdentity? = nil) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -601,6 +610,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.identityNotes = identityNotes
         self.kinships = kinships
         self.uuid = uuid
+        self.treeIdentity = treeIdentity
     }
 
     init(from decoder: Decoder) throws {
@@ -651,6 +661,20 @@ struct POIProfile: Codable, Identifiable, Equatable {
         kinships          = readable
         kinshipsQuarantined = quarantined
         uuid              = try c.decodeIfPresent(UUID.self, forKey: .uuid) ?? UUID()
+        // Pin (2026-08-29): decoded as raw JSON first so an unreadable pin is
+        // quarantined, not dropped and not silently replaced by a name match.
+        let rawPin = Self.decodeIdentityField(JSONValue.self, forKey: .treeIdentity, from: c)
+        if let rawPin, let data = try? JSONEncoder().encode(rawPin),
+           let pin = try? JSONDecoder().decode(TreeIdentity.self, from: data) {
+            treeIdentity = pin
+            treeIdentityQuarantined = nil
+        } else {
+            treeIdentity = nil
+            treeIdentityQuarantined = rawPin ?? Self.decodeIdentityField(JSONValue.self, forKey: .treeIdentityQuarantined, from: c)
+            if rawPin != nil {
+                identityLog.notice("POIProfile load: quarantined an unreadable treeIdentity pin (written by a newer app version?) — kept verbatim, not used.")
+            }
+        }
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare

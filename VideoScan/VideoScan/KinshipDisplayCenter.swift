@@ -1,8 +1,8 @@
 // KinshipDisplayCenter.swift
 // UI-side owner of the derived "Relationships" strings for the People
 // gallery and the profile editor (2026-08-27). Holds a memoized
-// FamilyKinshipOverlay for the current profile list. The tree arrives two
-// ways (codex #795 C):
+// FamilyKinshipOverlay and a memoized FamilyKinshipInference for the
+// current profile list. The tree arrives two ways (codex #795 C):
 //   • the production FamilyTreeLiveModel PUSHES every graph it installs
 //     (tree replaced, offline → online, re-pull) through `install(graph:)`,
 //     so the memo follows the tree within one session; once pushed, the
@@ -13,6 +13,14 @@
 //     launch never parses a GEDCOM here (codex #792) — and installs only
 //     when the cache's load token differs from the one already held.
 // Nothing here writes to disk.
+//
+// Main-thread discipline (codex #845): `install(graph:)` only swaps the
+// reference and bumps the generation. The picker's people list (a 39k
+// projection + sort) is built lazily on first picker use; the tree's
+// content fingerprint (a SHA over 39k names) is computed lazily the first
+// time an export-local pointer needs it. The inference engine is cached by
+// (graph generation, kinship-relevant profile signature) so a notes edit or
+// a Hallie turn never rebuilds it.
 //
 // `@MainActor` ≈ "this must run on the UI thread"; `ObservableObject` +
 // `@Published` ≈ a subject the views subscribe to, so the gallery
@@ -68,8 +76,6 @@ final class KinshipDisplayCenter: ObservableObject {
     /// a same-count tree replacement must rebuild, so people.count is not
     /// the key).
     @Published private(set) var graphGeneration = 0
-    /// Content fingerprint of the installed tree, for `.treePointer` anchors.
-    private(set) var graphFingerprint: String?
     /// True once a FamilyTreeLiveModel has pushed a graph: from then on the
     /// live model is the only tree source (it already reloads on repoint /
     /// offline and pushes each install), so the self-load stands down.
@@ -84,11 +90,22 @@ final class KinshipDisplayCenter: ObservableObject {
     private var cachedGeneration = -1
     private var cachedOverlay: FamilyKinshipOverlay?
 
+    private var cachedInference: FamilyKinshipInference?
+    private var inferenceSignature: Int?
+    private var inferenceGeneration = -1
+    /// Bumps each time the engine is (re)built — tests pin invalidation on
+    /// tree replacement and kinship-relevant profile edits, and that a
+    /// notes edit or a repeated Hallie turn does NOT rebuild.
+    private(set) var inferenceBuildCount = 0
+
+    /// Lazily computed content fingerprint for the installed generation.
+    private var fingerprintCache: (generation: Int, value: String?)?
+
     /// Internal (not private) so tests can build an isolated center; the
     /// app uses `.shared`.
     init() {}
 
-    /// Replace the tree (or clear it) and invalidate the overlay cache.
+    /// Replace the tree (or clear it) and invalidate the caches.
     /// Called by FamilyTreeLiveModel on every install (and by tests); a
     /// pushed tree retires the self-load below.
     func install(graph newGraph: GedcomFamilyGraph?) {
@@ -98,9 +115,20 @@ final class KinshipDisplayCenter: ObservableObject {
 
     private func apply(graph newGraph: GedcomFamilyGraph?) {
         graph = newGraph
-        graphFingerprint = newGraph.map(FamilyKinshipOverlay.fingerprint(of:))
-        treePeopleCache = nil
         graphGeneration += 1
+        fingerprintCache = nil
+        treePeopleCache = nil
+    }
+
+    /// Content fingerprint of the installed tree, for `.treePointer`
+    /// anchors. Computed on first use (a SHA over every name) and cached
+    /// per generation — the picker is user-driven, so this never runs on
+    /// a tree install or a gallery render.
+    var graphFingerprint: String? {
+        if let fingerprintCache, fingerprintCache.generation == graphGeneration { return fingerprintCache.value }
+        let value = graph.map(FamilyKinshipOverlay.fingerprint(of:))
+        fingerprintCache = (graphGeneration, value)
+        return value
     }
 
     /// Bring the tree in from the shared cache when no live model has
@@ -114,7 +142,6 @@ final class KinshipDisplayCenter: ObservableObject {
         probeInFlight = true
         let known = sharedCacheToken
         Task.detached(priority: .utility) {
-            // Worst case ~16k people × ~100 B for the picker list.
             let loaded = FamilyGraphSharedCache.shared.load(
                 for: FamilyAssetConfigurationCenter.shared.snapshot(), store: .app)
             await MainActor.run {
@@ -137,6 +164,42 @@ final class KinshipDisplayCenter: ObservableObject {
         cachedGeneration = graphGeneration
         cachedOverlay = built
         return built
+    }
+
+    /// Memoized derivation engine (design §2: "memoised per graph
+    /// generation"). Keyed by the graph generation and the KINSHIP-RELEVANT
+    /// profile signature (`kinshipSignature(of:)`), so unrelated edits and
+    /// repeated calls with equal inputs reuse the engine and its memo.
+    func inference(for profiles: [POIProfile]) -> FamilyKinshipInference {
+        let signature = Self.kinshipSignature(of: profiles)
+        if let cachedInference, inferenceSignature == signature, inferenceGeneration == graphGeneration {
+            return cachedInference
+        }
+        let built = FamilyKinshipInference(profiles: profiles, graph: graph)
+        inferenceBuildCount += 1
+        inferenceSignature = signature
+        inferenceGeneration = graphGeneration
+        cachedInference = built
+        return built
+    }
+
+    /// Hash of every field the engine reads — name, uuid, aliases, sex,
+    /// birthdate, kinships, pin — and nothing else (notes, thresholds and
+    /// photos never invalidate).
+    static func kinshipSignature(of profiles: [POIProfile]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(profiles.count)
+        for p in profiles {
+            hasher.combine(p.name)
+            hasher.combine(p.uuid)
+            hasher.combine(p.aliases)
+            hasher.combine(p.sex)
+            hasher.combine(p.birthdate)
+            hasher.combine(p.kinships)
+            hasher.combine(p.treeIdentity)
+            hasher.combine(p.treeIdentityQuarantined != nil)
+        }
+        return hasher.finalize()
     }
 
     /// The pinned owner (Hallie's "who is talking to her" settings) when a

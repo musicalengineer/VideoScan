@@ -807,7 +807,8 @@ struct ArchivistGraphExecutorTests {
         // People-tab relationship overlay — still identity, still no notes,
         // photos, or paths. Any further field must be justified here.
         #expect(Mirror(reflecting: snapshot).children.compactMap(\.label)
-                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate", "uuid"])
+                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate", "uuid",
+                    "treeIdentity", "treeIdentityUnreadable"])   // 2026-08-29: the tree PIN is identity
         #expect(!String(reflecting: snapshot).contains(profile.referencePath))
         #expect(!String(reflecting: snapshot).contains(profile.notes))
         #expect(!String(reflecting: snapshot).contains(profile.identityNotes!))

@@ -277,6 +277,10 @@ enum HallieTurnExecutor {
         let kinships: [Kinship]
         let sex: PersonSex?
         let uuid: UUID?
+        /// The profile's family-tree pin (2026-08-29): the ONLY way a Hallie
+        /// profile becomes a tree vertex in the kinship overlay. Seam for
+        /// Phase B (engine-backed answers); carried, not yet reasoned over.
+        let treeIdentity: TreeIdentity?
 
         init(
             stableID: String,
@@ -286,7 +290,8 @@ enum HallieTurnExecutor {
             note: String = "",
             kinships: [Kinship] = [],
             sex: PersonSex? = nil,
-            uuid: UUID? = nil
+            uuid: UUID? = nil,
+            treeIdentity: TreeIdentity? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
@@ -296,6 +301,7 @@ enum HallieTurnExecutor {
             self.kinships = kinships
             self.sex = sex
             self.uuid = uuid
+            self.treeIdentity = treeIdentity
         }
     }
 
@@ -961,7 +967,8 @@ enum HallieTurnExecutor {
                     kinships: $0.kinships,
                     sex: $0.sex,
                     birthdate: $0.birthdate,
-                    uuid: $0.uuid)
+                    uuid: $0.uuid,
+                    treeIdentity: $0.treeIdentity)
             },
             ownerName: context.speakers.ownerName)
         let selection: ArchivistGraphSubjectSelection

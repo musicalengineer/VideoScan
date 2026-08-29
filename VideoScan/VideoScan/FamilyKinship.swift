@@ -20,6 +20,7 @@
 // object ({"profile":{"name":"Tim"}}), which is stable across builds.
 
 import Foundation
+import VideoScanCore
 
 /// The closed relation vocabulary. Ungendered on purpose: sex lives on the
 /// profile (or the tree record), so the word shown is derived, not stored.
@@ -305,19 +306,189 @@ indirect enum JSONValue: Codable, Hashable, Sendable {
     }
 }
 
+/// What a `sibling` row asserts about shared parents (design amendment 2,
+/// codex #830, 2026-08-29). The inference engine treats `.unspecified` as
+/// "sibling, uncle, in-law composition only" and PROPOSES shared parents
+/// for the review sheet; only an attested basis lets ancestry flow through
+/// the row. Wire: "attestedFull" | "unspecified" | {"attestedHalf":{"sharedParent":…}}.
+enum SiblingBasis: Hashable, Sendable {
+    case unspecified
+    case attestedFull
+    case attestedHalf(sharedParent: KinshipAnchor)
+}
+
+extension SiblingBasis: Codable {
+    private enum Key: String, CodingKey { case attestedHalf }
+    private enum HalfKey: String, CodingKey { case sharedParent }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(), let word = try? single.decode(String.self) {
+            switch word {
+            case "unspecified": self = .unspecified; return
+            case "attestedFull": self = .attestedFull; return
+            default: break
+            }
+        }
+        let c = try decoder.container(keyedBy: Key.self)
+        let h = try c.nestedContainer(keyedBy: HalfKey.self, forKey: .attestedHalf)
+        self = .attestedHalf(sharedParent: try h.decode(KinshipAnchor.self, forKey: .sharedParent))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .unspecified:
+            var c = encoder.singleValueContainer(); try c.encode("unspecified")
+        case .attestedFull:
+            var c = encoder.singleValueContainer(); try c.encode("attestedFull")
+        case .attestedHalf(let shared):
+            var c = encoder.container(keyedBy: Key.self)
+            var h = c.nestedContainer(keyedBy: HalfKey.self, forKey: .attestedHalf)
+            try h.encode(shared, forKey: .sharedParent)
+        }
+    }
+}
+
+/// A profile's durable pin to ONE family-tree person (design amendment 1:
+/// identity ≠ relationship). This is the only profile→tree bridge the
+/// inference engine accepts; name/alias matching is a review suggestion.
+///   • `.familySearchID` survives re-exports (preferred).
+///   • `.pointer` is export-local: valid only while the installed tree's
+///     content fingerprint matches (Ancestry exports without FSIDs).
+/// Wire: {"familySearchID":"GVQV-NW3"} | {"pointer":{"pointer":"@I1@","sourceFingerprint":"…"}}.
+enum TreeIdentity: Hashable, Sendable {
+    case familySearchID(String)
+    case pointer(pointer: String, sourceFingerprint: String)
+
+    /// The anchor form other rows would use for the same person.
+    var asAnchor: KinshipAnchor {
+        switch self {
+        case .familySearchID(let id): return .treePerson(familySearchID: id)
+        case .pointer(let p, let f): return .treePointer(pointer: p, sourceFingerprint: f)
+        }
+    }
+}
+
+extension TreeIdentity: Codable {
+    private enum Key: String, CodingKey { case familySearchID, pointer }
+    private enum PointerKey: String, CodingKey { case pointer, sourceFingerprint }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        if let id = try c.decodeIfPresent(String.self, forKey: .familySearchID) {
+            self = .familySearchID(id)
+        } else if c.contains(.pointer) {
+            let p = try c.nestedContainer(keyedBy: PointerKey.self, forKey: .pointer)
+            self = .pointer(pointer: try p.decode(String.self, forKey: .pointer),
+                            sourceFingerprint: try p.decode(String.self, forKey: .sourceFingerprint))
+        } else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "TreeIdentity: no known case key"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Key.self)
+        switch self {
+        case .familySearchID(let id):
+            try c.encode(id, forKey: .familySearchID)
+        case .pointer(let pointer, let fingerprint):
+            var p = c.nestedContainer(keyedBy: PointerKey.self, forKey: .pointer)
+            try p.encode(pointer, forKey: .pointer)
+            try p.encode(fingerprint, forKey: .sourceFingerprint)
+        }
+    }
+}
+
 /// One stored fact on a profile: "this profile is `relation` of `relativeTo`".
 /// Example on Tim's profile: (.sibling, .profile("Rick")) ⇒ Tim is Rick's
 /// sibling; with Tim's sex and both birthdates known this displays as
-/// "Rick's younger brother".
-struct Kinship: Codable, Hashable, Sendable {
+/// "Rick's younger brother". `basis` matters only for sibling rows; it is
+/// written only when set, so older profile.json shapes are unchanged.
+struct Kinship: Hashable, Sendable {
     var relation: KinshipRelation
     var relativeTo: KinshipAnchor
     var note: String?
+    var basis: SiblingBasis
 
-    init(relation: KinshipRelation, relativeTo: KinshipAnchor, note: String? = nil) {
+    init(relation: KinshipRelation, relativeTo: KinshipAnchor, note: String? = nil,
+         basis: SiblingBasis = .unspecified) {
         self.relation = relation
         self.relativeTo = relativeTo
         self.note = note
+        self.basis = basis
+    }
+}
+
+extension Kinship: Codable {
+    private enum CodingKeys: String, CodingKey { case relation, relativeTo, note, basis }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        relation = try c.decode(KinshipRelation.self, forKey: .relation)
+        relativeTo = try c.decode(KinshipAnchor.self, forKey: .relativeTo)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        basis = try c.decodeIfPresent(SiblingBasis.self, forKey: .basis) ?? .unspecified
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(relation, forKey: .relation)
+        try c.encode(relativeTo, forKey: .relativeTo)
+        try c.encodeIfPresent(note, forKey: .note)
+        if basis != .unspecified { try c.encode(basis, forKey: .basis) }
+    }
+}
+
+/// What is known about when someone was born, at its native precision:
+/// a profile carries a full date; a tree record carries a GEDCOM year
+/// interval ("ABT 1931", "BET 1930 AND 1932"). Never widened into a fake
+/// January 1 (design amendment 6).
+enum BirthKnowledge: Equatable, Sendable {
+    case date(Date)
+    case years(GedcomYearInterval)
+
+    private static let utcCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return cal
+    }()
+
+    /// Year interval at the knowledge's precision (a date → its exact year).
+    var years: GedcomYearInterval {
+        switch self {
+        case .date(let d):     return .exact(Self.utcCalendar.component(.year, from: d))
+        case .years(let y):    return y
+        }
+    }
+
+    /// A single year for sentences ("born 1965"), nil when only a bound or
+    /// nothing is known.
+    var spokenYear: String { years.spoken }
+
+    /// True only when `self` is PROVABLY earlier: full dates that differ, or
+    /// year intervals that do not touch.
+    func isStrictlyBefore(_ other: BirthKnowledge) -> Bool {
+        if case .date(let a) = self, case .date(let b) = other { return a < b }
+        return years.endsBefore(other.years)
+    }
+
+    /// "older" / "younger" for the subject relative to the anchor; nil unless
+    /// the order is provable at the available precision.
+    static func ageWord(subject: BirthKnowledge?, anchor: BirthKnowledge?) -> String? {
+        guard let subject, let anchor else { return nil }
+        if subject.isStrictlyBefore(anchor) { return "older" }
+        if anchor.isStrictlyBefore(subject) { return "younger" }
+        return nil
+    }
+
+    /// The smallest possible gap in years between two births (0 when the
+    /// intervals overlap or a bound is open). Used for "born N years apart".
+    static func provableGapYears(_ a: BirthKnowledge, _ b: BirthKnowledge) -> Int {
+        let ya = a.years, yb = b.years
+        var gap = 0
+        if let al = ya.lower, let bu = yb.upper { gap = max(gap, al - bu) }
+        if let bl = yb.lower, let au = ya.upper { gap = max(gap, bl - au) }
+        return gap
     }
 }
 
@@ -350,6 +521,18 @@ enum KinshipDisplay {
         let age = ageWord(relation, subjectBirth: subjectBirth, anchorBirth: anchorBirth)
         let term = relation.term(sex: subjectSex)
         return possessive(anchorName) + " " + (age.map { $0 + " " } ?? "") + term
+    }
+
+    /// Same phrase with a precomputed age word ("older"/"younger"/nil) from
+    /// `BirthKnowledge.ageWord`, which respects date precision.
+    static func phrase(
+        relation: KinshipRelation,
+        anchorName: String,
+        subjectSex: PersonSex?,
+        ageWord: String?
+    ) -> String {
+        let term = relation.term(sex: subjectSex)
+        return possessive(anchorName) + " " + (ageWord.map { $0 + " " } ?? "") + term
     }
 
     static func possessive(_ name: String) -> String {

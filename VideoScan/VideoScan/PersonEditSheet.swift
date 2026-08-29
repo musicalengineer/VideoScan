@@ -55,11 +55,20 @@ struct PersonEditSheet: View {
         let id = UUID()
         var relation: KinshipRelation
         var anchor: KinshipAnchor?
+        /// Sibling rows only (design amendment 2): round-trips through the
+        /// sheet unchanged unless Rick attests it here.
+        var basis: SiblingBasis = .unspecified
 
         var kinship: Kinship? {
-            anchor.map { Kinship(relation: relation, relativeTo: $0) }
+            anchor.map { Kinship(relation: relation, relativeTo: $0,
+                                 basis: relation == .sibling ? basis : .unspecified) }
         }
     }
+
+    /// Save-time findings (KinshipValidation.validate(batch:)) shown above
+    /// the buttons; errors block Save, warnings are shown once.
+    @State private var saveFindings: [KinshipValidation.Finding] = []
+    @State private var warningsAcknowledged = false
 
     init(profile: POIProfile,
          otherProfiles: [POIProfile] = [],
@@ -83,7 +92,7 @@ struct PersonEditSheet: View {
         _eyeColor = State(initialValue: profile.eyeColor)
         _identityNotes = State(initialValue: profile.identityNotes ?? "")
         _kinshipRows = State(initialValue: profile.kinships.map {
-            KinshipRow(relation: $0.relation, anchor: $0.relativeTo)
+            KinshipRow(relation: $0.relation, anchor: $0.relativeTo, basis: $0.basis)
         })
     }
 
@@ -125,6 +134,29 @@ struct PersonEditSheet: View {
             return kinship
         }
         return p
+    }
+
+    /// Validate the COMPLETE relationship batch (codex #835 b) before
+    /// writing anything: errors block; warnings are shown once and the
+    /// next Save proceeds.
+    private func attemptSave() {
+        let p = currentProfile
+        let results = KinshipValidation.validate(
+            batch: p.kinships, subjectProfileStableID: p.id,
+            profiles: otherProfiles + [p], graph: kinshipCenter.graph,
+            currentRows: originalProfile.kinships)
+        let findings = results.flatMap(\.findings)
+        if findings.blocksSave {
+            saveFindings = findings
+            return
+        }
+        if !findings.isEmpty, !warningsAcknowledged {
+            saveFindings = findings
+            warningsAcknowledged = true
+            return
+        }
+        onSave(p)
+        dismiss()
     }
 
     private var isNewPerson: Bool {
@@ -261,8 +293,7 @@ struct PersonEditSheet: View {
                 Spacer()
 
                 Button("Save") {
-                    onSave(currentProfile)
-                    dismiss()
+                    attemptSave()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -453,13 +484,30 @@ struct PersonEditSheet: View {
         Section {
             ForEach($kinshipRows) { $row in
                 HStack(spacing: 8) {
+                    // Only the four primitives are entered (design: store
+                    // primitives, derive everything else); a legacy derived
+                    // row keeps showing its own word until Rick changes it.
                     Picker("", selection: $row.relation) {
-                        ForEach(KinshipRelation.allCases, id: \.self) { relation in
+                        ForEach(Self.enterableRelations(including: row.relation), id: \.self) { relation in
                             Text(relation.label).tag(relation)
                         }
                     }
                     .labelsHidden()
                     .frame(width: 150)
+
+                    if row.relation == .sibling {
+                        Picker("", selection: Binding(
+                            get: { row.basis == .attestedFull ? 1 : (row.basis == .unspecified ? 0 : 2) },
+                            set: { if $0 == 1 { row.basis = .attestedFull } else if $0 == 0 { row.basis = .unspecified } }
+                        )) {
+                            Text("shared parents?").tag(0)
+                            Text("full (same parents)").tag(1)
+                            if case .attestedHalf = row.basis { Text("half").tag(2) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
+                        .help("Full: this sibling shares both parents, so ancestry is inherited through the link. Unspecified: the link is used for sibling / uncle / in-law words only.")
+                    }
 
                     Text("of")
                         .foregroundStyle(.secondary)
@@ -512,6 +560,18 @@ struct PersonEditSheet: View {
                 Label("Add relationship", systemImage: "plus")
             }
             .buttonStyle(.link)
+            if !saveFindings.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(saveFindings.enumerated()), id: \.offset) { _, finding in
+                        Label(finding.message, systemImage: finding.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(finding.isError ? Color.red : Color.orange)
+                            .font(.callout)
+                    }
+                    if !saveFindings.blocksSave {
+                        Text("Press Save again to keep these rows anyway.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
         } header: {
             Text("Relationships")
         } footer: {
@@ -898,5 +958,14 @@ struct CoverCropEditor: View {
         }
         .padding(16)
         .frame(width: 280)
+    }
+}
+
+extension PersonEditSheet {
+    /// The four storable primitives, plus the row's current relation when
+    /// it is a legacy derived kind (so the picker can still show it).
+    static func enterableRelations(including current: KinshipRelation) -> [KinshipRelation] {
+        let primitives: [KinshipRelation] = [.parent, .child, .spouse, .sibling]
+        return primitives.contains(current) ? primitives : primitives + [current]
     }
 }

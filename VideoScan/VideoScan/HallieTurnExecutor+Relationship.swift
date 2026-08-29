@@ -67,16 +67,12 @@ extension HallieTurnExecutor {
         if let recompile = HallieLineageAnswer.needsRecompileResult(context, queryDescription: queryDescription) {
             return recompile
         }
-        guard let graph = context.graph else {
-            return Result(
-                route: .graph,
-                outcome: .declined,
-                prose: "I don't have an imported family tree, so I can't work out how two people are related.",
-                basisLine: "Basis: no readable GEDCOM was available.",
-                queryDescription: queryDescription,
-                citations: [],
-                catalogPersonName: nil)
-        }
+        // Local-only (2026-08-29, codex #835): the People-tab overlay answers
+        // without a GEDCOM — "how is Tim related to Rick?" needs no tree.
+        // An empty placeholder graph carries the overlay stage; the GEDCOM
+        // ladder below still requires a real tree (see the guard after it).
+        let graphIsInstalled = context.graph != nil
+        let graph = context.graph ?? GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR")
 
         let inputs = ArchivistGraphInputs(
             graph: graph,
@@ -88,7 +84,8 @@ extension HallieTurnExecutor {
                     kinships: $0.kinships,
                     sex: $0.sex,
                     birthdate: $0.birthdate,
-                    uuid: $0.uuid)
+                    uuid: $0.uuid,
+                    treeIdentity: $0.treeIdentity)
             },
             ownerName: context.speakers.ownerName)
         var voices: [Int: ArchivistGraphQuery.Voice] = [:]
@@ -128,6 +125,16 @@ extension HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil,
                 offeredActions: offers)
+        }
+        guard graphIsInstalled else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I don't have an imported family tree, so I can't work out how two people are related.",
+                basisLine: "Basis: no readable GEDCOM was available; the People-tab relationships don't link them.",
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil)
         }
         var floating = request.selectedIdentity
         var subjects: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
