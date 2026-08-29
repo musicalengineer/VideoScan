@@ -44,10 +44,20 @@ enum PersonEditSheetKinshipSave {
         currentRows: [Kinship],
         warningsAcknowledged: Bool
     ) -> Evaluation {
+        // PersonFinderView passes the complete saved-profile array, including
+        // the original version of the subject being edited. Replace that
+        // snapshot in place; appending the edited copy would leave two rows
+        // for one logical person and let validation select stale kinships.
+        var validationProfiles = otherProfiles
+        if let subjectIndex = validationProfiles.firstIndex(where: { $0.uuid == profile.uuid }) {
+            validationProfiles[subjectIndex] = profile
+        } else {
+            validationProfiles.append(profile)
+        }
         let results = KinshipValidation.validate(
             batch: profile.kinships,
             subjectProfileStableID: profile.id,
-            profiles: otherProfiles + [profile],
+            profiles: validationProfiles,
             graph: graph,
             currentRows: currentRows)
         let findings = results.flatMap(\.findings)
@@ -64,10 +74,6 @@ enum PersonEditSheetKinshipSave {
 
     /// Privacy-safe audit records. Finding messages contain names and dates,
     /// so only stable rule identifiers and severity cross the log boundary.
-    static func attemptLine(rowCount: Int) -> String {
-        "[kinship-save] validation attempt rows=\(rowCount)"
-    }
-
     static func resultLine(
         _ evaluation: Evaluation,
         elapsed: Duration
@@ -212,7 +218,6 @@ struct PersonEditSheet: View {
     /// next Save proceeds.
     private func attemptSave() {
         let p = currentProfile
-        appLog.write(PersonEditSheetKinshipSave.attemptLine(rowCount: p.kinships.count))
         let clock = ContinuousClock()
         let start = clock.now
         let evaluation = PersonEditSheetKinshipSave.evaluate(

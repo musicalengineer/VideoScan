@@ -211,6 +211,98 @@ final class GedcomScaleSensorTests: XCTestCase {
         XCTAssertLessThan(decode, 150 * Self.slack, "snapshot load budget (measured 72 → 54 ms Release M4 Max, 2026-08-29)")
     }
 
+    func testHallieNameRoutesOnHundredThousandPersonTree() async throws {
+        // Keep the fixture local so its graph/index can be released before
+        // the other 100k sensors allocate theirs. Index construction is
+        // deliberately outside the query budget, matching a warmed app.
+        let graph = GedcomFamilyGraph(
+            gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
+        let ownerID = try XCTUnwrap(graph.rootPersonID)
+        let owner = try XCTUnwrap(graph.people[ownerID])
+        let ownerGiven = try XCTUnwrap(FamilyIdentityText.tokens(owner.name).first)
+        let ownerFSID = try XCTUnwrap(owner.familySearchID)
+        _ = graph.index
+        let context = HallieTurnExecutor.Context(
+            profiles: [], graph: graph,
+            speakers: .init(
+                ownerName: owner.name,
+                archivistName: "Hallie Mae",
+                ownerFamilySearchID: ownerFSID))
+        let ownerRequest = HallieTurnExecutor.Request(intent: .init(
+            originalQuestion: "who is \(ownerGiven)?",
+            ast: .graph(.init(
+                people: [ownerGiven], operation: .biography))))
+        let surnameRequest = HallieTurnExecutor.Request(intent: .init(
+            originalQuestion: "tell me about Pa Breen",
+            ast: .graph(.init(
+                people: ["Pa Breen"], operation: .biography))))
+
+        var ownerSamples: [Double] = []
+        var surnameSamples: [Double] = []
+        for _ in 0..<5 {
+            var started = DispatchTime.now().uptimeNanoseconds
+            let ownerResult = try await HallieTurnExecutor.execute(
+                ownerRequest, context: context)
+            ownerSamples.append(Double(
+                DispatchTime.now().uptimeNanoseconds - started) / 1e6)
+            XCTAssertEqual(ownerResult.outcome, .answered, ownerResult.prose)
+            XCTAssertTrue(ownerResult.basisLine.contains("FamilySearch ID \(ownerFSID)"))
+
+            started = DispatchTime.now().uptimeNanoseconds
+            let surnameResult = try await HallieTurnExecutor.execute(
+                surnameRequest, context: context)
+            surnameSamples.append(Double(
+                DispatchTime.now().uptimeNanoseconds - started) / 1e6)
+            XCTAssertEqual(surnameResult.outcome, .needsClarification, surnameResult.prose)
+            XCTAssertEqual(surnameResult.clarification?.candidates.count, HallieWhichOne.cap)
+            XCTAssertTrue(surnameResult.basisLine.contains("Breens offered"))
+        }
+        let ownerMedian = ownerSamples.sorted()[ownerSamples.count / 2]
+        let surnameMedian = surnameSamples.sorted()[surnameSamples.count / 2]
+        print("SCALE[\(Self.config)] Hallie 100k owner p50 \(ownerMedian) ms; surname p50 \(surnameMedian) ms")
+        XCTAssertLessThan(ownerMedian, 50 * Self.slack, "100k bare-name owner binding budget")
+        XCTAssertLessThan(surnameMedian, 250 * Self.slack, "100k surname-roster budget")
+    }
+
+    func testHundredThousandPersonPointerPinsHashTreeOnlyOnce() throws {
+        // Ancestry/non-FamilySearch exports use pointer+fingerprint pins.
+        // Thirty-two pins used to sort and SHA the entire tree once per
+        // profile while constructing every Hallie overlay.
+        let withoutFSIDs = GedcomSyntheticPedigree.gedcom(people: 100_000)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.contains("_FSFTID") }
+            .joined(separator: "\n")
+        let graph = GedcomFamilyGraph(gedcomText: withoutFSIDs)
+        let fingerprint = FamilyKinshipOverlay.fingerprint(of: graph)
+        let pinnedIDs = Array(graph.people.keys.sorted().prefix(32))
+        let snapshots = pinnedIDs.enumerated().map { offset, id in
+            ArchivistGraphProfileSnapshot(
+                stableID: "pointer-profile-\(offset)",
+                canonicalName: "Pointer Profile \(offset)",
+                treeIdentity: .pointer(
+                    pointer: id, sourceFingerprint: fingerprint))
+        }
+
+        var overlays: [FamilyKinshipOverlay] = []
+        let samples = (0..<3).map { _ -> Double in
+            let started = DispatchTime.now().uptimeNanoseconds
+            overlays.append(FamilyKinshipOverlay(
+                snapshots: snapshots, graph: graph))
+            return Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+        }
+        let median = samples.sorted()[samples.count / 2]
+        let overlay = try XCTUnwrap(overlays.last)
+        for snapshot in snapshots {
+            guard let node = overlay.node(profileStableID: snapshot.stableID),
+                  case .tree = node else {
+                return XCTFail("pointer pin did not bridge: \(snapshot.stableID)")
+            }
+        }
+        print("SCALE[\(Self.config)] Hallie 100k x 32 pointer-pin overlay p50 \(median) ms")
+        XCTAssertLessThan(median, 500 * Self.slack,
+                          "pointer pins must reuse one tree fingerprint")
+    }
+
     @MainActor
     func testHundredThousandPersonSidebarKeystrokeWithinBudget() throws {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))

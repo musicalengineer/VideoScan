@@ -34,11 +34,12 @@ struct LoggingHardeningTests {
     func blockingBatchDoesNotSave() {
         let anchor = POIProfile(name: "Anchor", referencePath: "/fixture/anchor")
         var subject = POIProfile(name: "Subject", referencePath: "/fixture/subject")
+        let savedSubject = subject
         let row = Kinship(relation: .spouse, relativeTo: .profile(id: anchor.uuid))
         subject.kinships = [row, row]
 
         let evaluation = PersonEditSheetKinshipSave.evaluate(
-            profile: subject, otherProfiles: [anchor], graph: nil,
+            profile: subject, otherProfiles: [anchor, savedSubject], graph: nil,
             currentRows: [], warningsAcknowledged: false)
 
         #expect(evaluation.decision == .blocked)
@@ -54,18 +55,60 @@ struct LoggingHardeningTests {
                                birthdate: Self.date(1900))
         var younger = POIProfile(name: "Younger", referencePath: "/fixture/younger",
                                  birthdate: Self.date(2000))
+        let savedYounger = younger
         younger.kinships = [Kinship(relation: .spouse, relativeTo: .profile(id: older.uuid))]
 
         let first = PersonEditSheetKinshipSave.evaluate(
-            profile: younger, otherProfiles: [older], graph: nil,
+            profile: younger, otherProfiles: [older, savedYounger], graph: nil,
             currentRows: [], warningsAcknowledged: false)
         let second = PersonEditSheetKinshipSave.evaluate(
-            profile: younger, otherProfiles: [older], graph: nil,
+            profile: younger, otherProfiles: [older, savedYounger], graph: nil,
             currentRows: [], warningsAcknowledged: true)
 
         #expect(first.findings.map(\.rule).contains(.spouseAgeGap))
         #expect(first.decision == .warningConfirmationRequired)
         #expect(second.decision == .save)
+    }
+
+    @Test("the editor's complete saved-profile array does not create a false duplicate")
+    func savedSubjectIsReplacedByEditedSubject() {
+        let anchor = POIProfile(name: "Anchor", referencePath: "/fixture/anchor")
+        var edited = POIProfile(name: "Subject", referencePath: "/fixture/subject")
+        let saved = edited
+        edited.kinships = [Kinship(
+            relation: .spouse, relativeTo: .profile(id: anchor.uuid))]
+
+        let evaluation = PersonEditSheetKinshipSave.evaluate(
+            profile: edited,
+            otherProfiles: [anchor, saved],
+            graph: nil,
+            currentRows: saved.kinships,
+            warningsAcknowledged: false)
+
+        #expect(evaluation.decision == .save)
+        #expect(!evaluation.findings.contains { $0.rule == .duplicateRow })
+    }
+
+    @Test("renaming a profile still replaces its saved validation snapshot by UUID")
+    func renamedSubjectIsReplacedByUUID() {
+        let anchor = POIProfile(name: "Anchor", referencePath: "/fixture/anchor")
+        let saved = POIProfile(name: "Old Subject Name", referencePath: "/fixture/subject")
+        var edited = saved
+        edited.name = "New Subject Name"
+        edited.kinships = [Kinship(
+            relation: .spouse, relativeTo: .profile(id: anchor.uuid))]
+
+        #expect(saved.id != edited.id, "fixture must exercise a name-derived ID change")
+        #expect(saved.uuid == edited.uuid, "durable profile identity must survive rename")
+        let evaluation = PersonEditSheetKinshipSave.evaluate(
+            profile: edited,
+            otherProfiles: [anchor, saved],
+            graph: nil,
+            currentRows: saved.kinships,
+            warningsAcknowledged: false)
+
+        #expect(evaluation.decision == .save)
+        #expect(!evaluation.findings.contains { $0.rule == .duplicateRow })
     }
 
     @Test("sibling basis and existing note survive the save path")
@@ -81,9 +124,10 @@ struct LoggingHardeningTests {
         #expect(merged[0].note == "private family lore")
 
         var subject = POIProfile(name: "Subject", referencePath: "/fixture/subject")
+        let savedSubject = subject
         subject.kinships = merged
         let evaluation = PersonEditSheetKinshipSave.evaluate(
-            profile: subject, otherProfiles: [anchor], graph: nil,
+            profile: subject, otherProfiles: [anchor, savedSubject], graph: nil,
             currentRows: [], warningsAcknowledged: false)
         #expect(evaluation.decision == .save)
         #expect(evaluation.profile.kinships[0].basis == .attestedFull)
@@ -127,9 +171,27 @@ struct LoggingHardeningTests {
 
         #expect(recompile == "[family-tree] Hallie recompile started reask=true")
         #expect(!recompile.contains("Private Person"))
-        #expect(failure == "[hallie] interpretation failed category=SensitiveError")
+        #expect(failure == "[hallie] interpretation failed reason=unexpected category=SensitiveError")
         #expect(!failure.contains("1875"))
         #expect(ArchivistDiagnosticLine.focusRequested.contains("focus requested"))
         #expect(!ArchivistDiagnosticLine.focusRequested.contains("centered"))
+    }
+
+    @Test("translator diagnostics retain actionable categories without private prose")
+    func translatorFailureCategoriesArePrivacySafe() {
+        let secret = "Private Person asked about 1875"
+        let cases: [(NLTranslatorError, String)] = [
+            (.badResponse(secret), "reason=bad-response"),
+            (.unreachable(secret), "reason=unreachable"),
+            (.serverError(status: 503, detail: secret),
+             "reason=server-error http_status=503"),
+            (.modelUnavailable(secret), "reason=model-unavailable"),
+        ]
+
+        for (error, expected) in cases {
+            let line = ArchivistDiagnosticLine.failure(.continuation, error: error)
+            #expect(line == "[hallie] continuation failed \(expected)")
+            #expect(!line.contains(secret))
+        }
     }
 }

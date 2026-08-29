@@ -214,7 +214,9 @@ struct FamilyKinshipOverlay: Sendable {
                     birthYears: bridged?.birthYearInterval,
                     profileStableID: snapshot.stableID,
                     gedcomID: bridged?.id, treeName: bridged?.name,
-                    identity: Self.identity(snapshot: snapshot, bridged: bridged, graph: graph))
+                    identity: Self.identity(
+                        snapshot: snapshot, bridged: bridged,
+                        fingerprint: fingerprint))
             }
             registerSpellings(of: snapshot, node: node)
         }
@@ -366,7 +368,8 @@ struct FamilyKinshipOverlay: Sendable {
             members[node] = Member(node: node, name: person.name, sex: Self.sex(of: person),
                                    birthdate: nil, birthYears: person.birthYearInterval,
                                    profileStableID: nil, gedcomID: person.id,
-                                   identity: Self.treeIdentity(person, graph: graph))
+                                   identity: Self.treeIdentity(
+                                    person, fingerprint: fingerprint))
         }
         return node
     }
@@ -395,15 +398,26 @@ struct FamilyKinshipOverlay: Sendable {
 
     /// "fsid:<FamilySearch ID>", or pointer@fingerprint for exports without.
     static func treeIdentity(_ person: GedcomFamilyGraph.Person, graph: GedcomFamilyGraph?) -> String {
+        treeIdentity(person, fingerprint: graph.map(fingerprint(of:)))
+    }
+
+    /// Variant for an overlay that has already paid for the export
+    /// fingerprint. Pointer-pinned profiles must never re-hash the complete
+    /// tree once per profile.
+    private static func treeIdentity(
+        _ person: GedcomFamilyGraph.Person,
+        fingerprint: String?
+    ) -> String {
         if let fsid = person.familySearchID?.trimmingCharacters(in: .whitespacesAndNewlines), !fsid.isEmpty {
             return "fsid:" + fsid.uppercased()
         }
-        return "tree-pointer:" + person.id + "@" + (graph.map(fingerprint(of:)) ?? "")
+        return "tree-pointer:" + person.id + "@" + (fingerprint ?? "")
     }
 
     private static func identity(snapshot: ArchivistGraphProfileSnapshot, bridged: GedcomFamilyGraph.Person?,
-                                 graph: GedcomFamilyGraph?) -> String {
-        bridged.map { treeIdentity($0, graph: graph) } ?? profileIdentity(snapshot)
+                                 fingerprint: String?) -> String {
+        bridged.map { treeIdentity($0, fingerprint: fingerprint) }
+            ?? profileIdentity(snapshot)
     }
 
     /// Tree people whose name matches the profile's canonical name or an

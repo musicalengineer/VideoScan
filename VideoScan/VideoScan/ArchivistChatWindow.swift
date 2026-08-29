@@ -29,7 +29,20 @@ enum ArchivistDiagnosticLine {
     static let filmOfferSuppressed = "[hallie] film offer suppressed reason=person-predates-medium"
 
     static func failure(_ operation: FailureOperation, error: Error) -> String {
-        "[hallie] \(operation.rawValue) failed category=\(String(describing: type(of: error)))"
+        let prefix = "[hallie] \(operation.rawValue) failed"
+        guard let translator = error as? NLTranslatorError else {
+            return prefix + " reason=unexpected category=\(String(describing: type(of: error)))"
+        }
+        switch translator {
+        case .badResponse:
+            return prefix + " reason=bad-response"
+        case .unreachable:
+            return prefix + " reason=unreachable"
+        case .serverError(let status, _):
+            return prefix + " reason=server-error http_status=\(status)"
+        case .modelUnavailable:
+            return prefix + " reason=model-unavailable"
+        }
     }
 }
 
