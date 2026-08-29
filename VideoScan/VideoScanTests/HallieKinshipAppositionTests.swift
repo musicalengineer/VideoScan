@@ -287,12 +287,12 @@ struct HallieKinshipAppositionTests {
     @Test func theLiveMarriedNameUtterancesAnswerAndSayTheMaidenName() async throws {
         let full = try await graphTurn(["muriel lamb breen"], .biography)
         #expect(full.outcome == .answered, Comment(rawValue: full.prose))
-        #expect(full.prose.hasPrefix("Muriel Lamb (Breen) — born APR 1902"), Comment(rawValue: full.prose))
+        #expect(full.prose.hasPrefix("Muriel Lamb (Breen) was born April 1902"), Comment(rawValue: full.prose))
         #expect(full.prose.contains("married to George Breen"))
         #expect(full.basisLine.contains("by her married name (married George Breen)"), Comment(rawValue: full.basisLine))
         let maiden = try await graphTurn(["muriel lamb"], .biography)
         #expect(maiden.outcome == .answered)
-        #expect(maiden.prose.hasPrefix("Muriel Lamb — born APR 1902"), Comment(rawValue: maiden.prose))
+        #expect(maiden.prose.hasPrefix("Muriel Lamb was born April 1902"), Comment(rawValue: maiden.prose))
         let wrong = try await graphTurn(["muriel smith breen"], .biography)
         #expect(wrong.outcome != .answered)
     }

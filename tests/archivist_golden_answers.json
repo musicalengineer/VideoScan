@@ -217,7 +217,7 @@
       "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"donna\"],\"operation\":\"familyTree\"}}",
       "expectedRoute": "graph",
       "expectedOutcome": "answered",
-      "expectedProseContains": "Donna Breen's family tree — parents: Elaine Bowser and Frank Bowser; grandparents: Ann Smith; married to Richard Harding Breen Jr; 1 child: Timothy Breen; 4 recorded ancestors across 3 generations and 1 recorded descendant across 1 generation.",
+      "expectedProseContains": "Donna Breen was the child of Elaine Bowser and Frank Bowser; her recorded grandparent was Ann Smith. She was married to Richard Harding Breen Jr. She had 1 recorded child, Timothy Breen. Her family tree includes 4 recorded ancestors across 3 generations and 1 recorded descendant across 1 generation.",
       "expectedBasisContains": "CyberBrain identity “donna” → “Donna Breen” → GEDCOM “Donna Breen”",
       "expectedOfferedActions": [
         "Open in Family Tree: Donna Breen"
@@ -241,7 +241,7 @@
       "continuation": {
         "select": "cyberBrain:person.rick.jr",
         "expectedOutcome": "answered",
-        "expectedProse": "Richard Harding Breen Jr's family tree — parents: Mary Breen and Richard Harding Breen Sr; married to Donna Breen; 1 child: Timothy Breen; 2 recorded ancestors across 1 generation and 1 recorded descendant across 1 generation.",
+        "expectedProse": "Richard Harding Breen Jr was born 4 July 1962. He was the child of Mary Breen and Richard Harding Breen Sr. He was married to Donna Breen. He had 1 recorded child, Timothy Breen. His family tree includes 2 recorded ancestors across 1 generation and 1 recorded descendant across 1 generation.",
         "expectedBasisContains": "CyberBrain identity “rick” → “Richard Harding Breen” → GEDCOM “Richard Harding Breen Jr”"
       },
       "evidence": [
@@ -471,7 +471,7 @@
           "local": true,
           "expectedRoute": "graph",
           "expectedOutcome": "answered",
-          "expectedProseContains": "Donna Breen's family tree",
+          "expectedProseContains": "Donna Breen was the child of Elaine Bowser and Frank Bowser",
           "expectedOfferedActions": [
             "Open in Family Tree: Donna Breen"
           ]

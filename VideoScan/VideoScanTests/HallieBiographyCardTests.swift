@@ -176,6 +176,20 @@ struct HallieBiographyCardTests {
         #expect(r.answerPlan == nil)
     }
 
+    /// Grandparents ride inside the parents claim (the old family-tree
+    /// summary named them; the sentence budget has no room for a seventh).
+    @Test func grandparentsAreFoldedIntoTheParentsClaim() async throws {
+        let r = try await ask("Isaac Rice", .familyTree)
+        #expect(r.prose.hasPrefix(
+            "Isaac Rice was the child of Martha Lamson and Matthew Rice; "
+            + "his recorded grandparents were Edmund Rice and Thomasine Frost. "
+            + "He had 1 recorded sibling, Patience Rice. "
+            + "He had 1 recorded child, Abigail Rice. "
+            + "His family tree includes 4 recorded ancestors across 2 generations"), Comment(rawValue: r.prose))
+        #expect(r.answerPlan?.claims[0].evidenceIDs == ["@I5@", "@I4@", "@I1@", "@I2@", "@I3@"])
+        #expect(try await ask("Isaac Rice", .biography).prose == r.prose)
+    }
+
     @Test func recordedDatesKeepTheirQualifierAndPrecision() {
         let d = HallieBiographyCard.spokenDate
         #expect(d("28 FEB 1629") == "28 February 1629")

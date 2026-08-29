@@ -73,11 +73,18 @@ enum HallieBiographyCard {
         if let vitals = vitalsClause(person) {
             sentences.append(.init(text: "\(name) \(vitals).", evidenceIDs: [person.id]))
         }
-        // 2. Parents.
+        // 2. Parents, with grandparents folded in (the family-tree summary
+        //    always named them; one claim keeps the sentence budget).
         if !summary.parents.isEmpty {
+            var text = "\(lead()) was the child of \(joinedNames(summary.parents))"
+            if !summary.grandparents.isEmpty {
+                let plural = summary.grandparents.count > 1
+                text += "; \(pronoun.possessive) recorded grandparent\(plural ? "s were" : " was") "
+                    + listedNames(summary.grandparents)
+            }
             sentences.append(.init(
-                text: "\(lead()) was the child of \(joinedNames(summary.parents)).",
-                evidenceIDs: [person.id] + summary.parents.map(\.id)))
+                text: text + ".",
+                evidenceIDs: [person.id] + summary.parents.map(\.id) + summary.grandparents.map(\.id)))
         }
         // 3. Siblings.
         if !summary.siblings.isEmpty {
@@ -88,7 +95,7 @@ enum HallieBiographyCard {
                 evidenceIDs: [person.id] + summary.siblings.map(\.id)))
         }
         // 4. Marriage(s) with the MARR date when the family record has one.
-        let marriages = graph.marriages(of: person)
+        let marriages = orderedMarriages(graph.marriages(of: person))
         if !marriages.isEmpty, let clause = marriageClause(marriages) {
             sentences.append(.init(
                 text: "\(lead()) \(clause).",
@@ -169,20 +176,7 @@ enum HallieBiographyCard {
     /// spouse is stated as such. Nil when no marriage says anything.
     static func marriageClause(_ marriages: [GedcomFamilyGraph.Marriage]) -> String? {
         var parts: [String] = []
-        // Policy order (name, then pointer), not FAMS file order, so two
-        // equivalent GEDCOM orderings read the same; nameless last.
-        let ordered = marriages.sorted { lhs, rhs in
-            switch (lhs.spouse, rhs.spouse) {
-            case (nil, nil): return (lhs.date ?? "") < (rhs.date ?? "")
-            case (nil, _): return false
-            case (_, nil): return true
-            case (let a?, let b?):
-                let left = FamilyIdentityText.normalized(a.name)
-                let right = FamilyIdentityText.normalized(b.name)
-                return left != right ? left < right : a.id < b.id
-            }
-        }
-        for marriage in ordered {
+        for marriage in orderedMarriages(marriages) {
             let date = spokenDate(marriage.date)
             switch (marriage.spouse, date) {
             case (let spouse?, let date?):
@@ -197,6 +191,22 @@ enum HallieBiographyCard {
         }
         guard !parts.isEmpty else { return nil }
         return "was married to " + joined(parts)
+    }
+
+    /// Policy order (name, then pointer), not FAMS file order, so two
+    /// equivalent GEDCOM orderings read — and cite — the same; nameless last.
+    static func orderedMarriages(_ marriages: [GedcomFamilyGraph.Marriage]) -> [GedcomFamilyGraph.Marriage] {
+        marriages.sorted { lhs, rhs in
+            switch (lhs.spouse, rhs.spouse) {
+            case (nil, nil): return (lhs.date ?? "") < (rhs.date ?? "")
+            case (nil, _): return false
+            case (_, nil): return true
+            case (let a?, let b?):
+                let left = FamilyIdentityText.normalized(a.name)
+                let right = FamilyIdentityText.normalized(b.name)
+                return left != right ? left < right : a.id < b.id
+            }
+        }
     }
 
     /// "2 recorded ancestors across 1 generation and 27 recorded

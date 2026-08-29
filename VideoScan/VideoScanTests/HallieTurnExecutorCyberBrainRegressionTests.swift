@@ -126,9 +126,9 @@ struct HallieTurnExecutorCyberBrainRegressionTests {
             context: context)
         #expect(junior.outcome == .answered)
         #expect(junior.clarification == nil)
-        #expect(junior.prose.contains("4 JUL 1962"))
+        #expect(junior.prose.contains("4 July 1962"))
         #expect(junior.prose.contains("child of Mary Breen and Richard Breen"))
-        #expect(!junior.prose.contains("12 MAR 1931"))
+        #expect(!junior.prose.contains("12 March 1931"))
         #expect(junior.catalogPersonName == "Richard Breen")
 
         let senior = try await HallieTurnExecutor.continue(
@@ -137,9 +137,9 @@ struct HallieTurnExecutorCyberBrainRegressionTests {
             context: context)
         #expect(senior.outcome == .answered)
         #expect(senior.clarification == nil)
-        #expect(senior.prose.contains("12 MAR 1931"))
+        #expect(senior.prose.contains("12 March 1931"))
         #expect(senior.prose.contains("married to Mary Breen"))
-        #expect(!senior.prose.contains("4 JUL 1962"))
+        #expect(!senior.prose.contains("4 July 1962"))
     }
 
     /// The same two turns must produce the same answer with and without a
@@ -231,7 +231,7 @@ struct HallieTurnExecutorCyberBrainRegressionTests {
         #expect(brainResult.prose == plainResult.prose)
         #expect(brainResult.basisLine == plainResult.basisLine)
         #expect(brainResult.basisLine.contains("GEDCOM"))
-        #expect(brainResult.prose.contains("1 JAN 1940"))
+        #expect(brainResult.prose.contains("1 January 1940"))
         #expect(brainResult.catalogPersonName == "Ellen Stone")
         #expect(brainResult.knowledgeCitations.isEmpty)
     }
@@ -264,7 +264,7 @@ struct HallieTurnExecutorCyberBrainRegressionTests {
         #expect(continued.outcome == .answered)
         #expect(continued.clarification == nil)
         #expect(continued.prose.contains("Rick Jones"))
-        #expect(continued.prose.contains("9 SEP 1970"))
+        #expect(continued.prose.contains("9 September 1970"))
         #expect(!continued.prose.contains("no longer available"))
         #expect(continued.catalogPersonName == "Rick Jones")
     }
