@@ -186,9 +186,14 @@ final class HallieWebBridge {
                     session.history.removeFirst(session.history.count - HallieGroundedComposer.historyTurns)
                 }
             }
-            session.pendingClarification = response.pendingClarification
+            if response.result.outcome == .repaired, response.pendingClarification == nil {
+                // A repair re-asked the pending which-one; keep it selectable.
+            } else {
+                session.pendingClarification = response.pendingClarification
+            }
             session.telling = response.telling
-            session.memory.record(intent: response.executedIntent, result: response.result)
+            session.memory.record(intent: response.executedIntent, result: response.result,
+                                  question: object["text"] as? String)
             let isFollowUpAction = response.result.route == .followUp
                 && response.result.mediaAction != nil
             if !isFollowUpAction { session.lastCitations = response.citations }
