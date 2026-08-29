@@ -1089,7 +1089,12 @@ enum HallieLineageAnswer {
                 // them a root of the tree (Rick 2026-08-28 live: "Donna"
                 // → Agatha Donna Knauss b. 1520 vs Donna Hudson b. 1959):
                 // the root is who the family means. Stated in the basis.
-                let roots = namesakes.filter { graph.rootPersonIDs.contains($0.id) }
+                // Only a RECORDED root (merge HEAD) counts: a plain export's
+                // root is the first-INDI assumption, and "photos of
+                // Nathaniel Parker" with Sr first in the file must still ask
+                // Sr or Caleb (regression 2026-08-28, HalliePhotoAskWhichOneTests).
+                let roots = graph.rootsAreRecorded
+                    ? namesakes.filter { graph.rootPersonIDs.contains($0.id) } : []
                 if roots.count == 1 {
                     let others = namesakes.count - 1
                     return .success(roots[0], note: "“\(name)” taken as \(roots[0].name), a root of this tree (\(others) other namesake\(others == 1 ? "" : "s") in it).")

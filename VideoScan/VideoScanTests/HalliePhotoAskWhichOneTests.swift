@@ -108,6 +108,32 @@ struct HalliePhotoAskWhichOneTests {
         #expect(Exec.clarificationSelection("Nathaniel Parker Sr", from: pending.candidates) == .gedcomPersonID("@I1@"))
     }
 
+    // Regression 2026-08-28: d0f832fc let "exactly one namesake is a root"
+    // settle a bare name; a plain export's root is only the first-INDI
+    // ASSUMPTION (Sr here), so the which-one was swallowed and the photo
+    // ask never reached the executor. An assumed root must not decide;
+    // a recorded (merge-HEAD) root may.
+    @Test func anAssumedFirstRecordRootDoesNotSettleTheWhichOne() async throws {
+        let graph = self.graph
+        #expect(graph.rootPersonID == "@I1@", "the fallback root is the first INDI")
+        #expect(!graph.rootsAreRecorded)
+        guard case .ambiguous(let people) = HallieLineageAnswer.resolveDetailed("Nathaniel Parker", context: context, graph: graph) else {
+            Issue.record("an assumed root settled a two-namesake name"); return
+        }
+        #expect(people.map(\.name).sorted() == ["Nathaniel Caleb Parker", "Nathaniel Parker Sr"])
+        // The same tree with Sr RECORDED as the root (a merge HEAD): the
+        // root rule applies and the photo ask is answered in place.
+        let recorded = GedcomFamilyGraph(gedcomText: tree.replacingOccurrences(
+            of: "0 HEAD\n", with: "0 HEAD\n1 _VS_MERGED Y\n1 _VS_ROOT @I1@\n"))
+        #expect(recorded.rootsAreRecorded)
+        let ctx = Exec.Context(profiles: [], graph: recorded,
+                               speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        guard case .answer(let r) = pre("are there are photos of Nathaniel Parker", context: ctx) else {
+            Issue.record("a recorded root should settle the name in place"); return
+        }
+        #expect(r.prose == Self.nathanielLine)
+    }
+
     @Test func aUniqueNameIsStillAnsweredLocallyWithoutTheExecutor() {
         let context = self.context
         guard case .answer(let r) = pre("are there are photos of Nathaniel Parker Sr", context: context) else {
