@@ -108,9 +108,7 @@ struct PersonPhotoOnePerPersonTests {
     /// name does NOT match the tree spelling + a People-tab profile "Donna"
     /// (aliases mom/mommy, no pin) with a cover in its own reference folder.
     private func sandbox(withProfileCover: Bool = true) throws -> Sandbox {
-        // Canonical (/private/var, not /var): the store canonicalizes its
-        // root, and the expectations compare URLs.
-        let base = fileManager.temporaryDirectory.resolvingSymlinksInPath()
+        let base = fileManager.temporaryDirectory
             .appendingPathComponent("OnePhotoPerPerson-\(UUID().uuidString)", isDirectory: true)
         let root = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
         var store = FamilyAssetStore(root: root, cacheRoot: base.appendingPathComponent("support/thumbs"))
@@ -130,8 +128,14 @@ struct PersonPhotoOnePerPersonTests {
         if withProfileCover { donna.coverImageFilename = cover.lastPathComponent }
         var rick = POIProfile(name: "Rick", referencePath: base.appendingPathComponent("POI/rick").path)
         rick.aliases = ["Richard Breen"]
-        return Sandbox(base: base, store: store, groupPhoto: group.standardizedFileURL,
-                       ownFolderPhoto: own.standardizedFileURL, poiFolder: poi,
+        // Expected archive URLs come from the store's canonical root
+        // (/private/var, not the /var the temp dir spells) — the store
+        // canonicalizes, and the expectations compare URLs.
+        let canonicalPeople = store.peopleDirectory
+        return Sandbox(base: base, store: store,
+                       groupPhoto: canonicalPeople.appendingPathComponent("RickDonnaBreenFamily/SouthEastMontana1995.png"),
+                       ownFolderPhoto: canonicalPeople.appendingPathComponent("Donna_Elaine_Hudson/DonnaOrangeShorts1990.png"),
+                       poiFolder: poi,
                        cover: cover.standardizedFileURL, profiles: [donna, rick])
     }
 
