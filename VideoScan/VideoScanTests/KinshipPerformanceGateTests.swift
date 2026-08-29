@@ -88,7 +88,7 @@ struct KinshipPerformanceGateTests {
         let cold = clock.measure { _ = inf.relation(from: node(0, in: inf), to: node(19, in: inf)) }
         let afterCold = inf.counters
         #expect(cold < Self.budget(50), "first deep query \(cold)")
-        #expect(afterCold.pairMisses == 1 && afterCold.ancestorSearches <= 1, "\(afterCold)")
+        #expect(afterCold.pairMisses == 1 && afterCold.ancestorSearches <= 2, "\(afterCold)")   // one depth map per entry
 
         // 100 distinct deep queries: exact answers, then 1,000 warm repeats.
         var durations: [Duration] = []
@@ -192,7 +192,7 @@ struct KinshipPerformanceGateTests {
         let c = inf.counters
         #expect(c.pairComputes == 1, "computed \(c.pairComputes) times")
         #expect(c.pairHits + c.pairMisses == 32 && c.pairMisses == 1, "\(c)")
-        #expect(c.ancestorSearches <= 1)
+        #expect(c.ancestorSearches <= 2)
     }
 
     @Test func saveValidationDoesNoFullAncestorSort() {

@@ -143,6 +143,9 @@ struct FamilyKinshipInference: Sendable {
         var singleFlightWaits = 0
         /// Tier B bidirectional ancestor searches run.
         var ancestorSearches = 0
+        /// Memoised ancestor maps reused instead of rebuilt.
+        var ancestorMapHits = 0
+        var cachedAncestorBytes = 0
         /// Vertices expanded (Tier A) + ordinals examined (Tier B / isAncestor).
         var expansions = 0
         /// Adjacency lists sorted — happens at build only.
@@ -621,61 +624,76 @@ struct FamilyKinshipInference: Sendable {
         return best?.route
     }
 
-    /// Level-synchronous bidirectional search up the parent links from two
-    /// ordinals; the first meeting with the smallest depth sum wins (ties
-    /// by the deterministic expansion order). Explores only the ancestry
-    /// up to the meeting depth. `a == b` ⇒ the trivial meeting.
+    /// Nearest common ancestor of two ordinals via two memoised ancestor
+    /// depth maps (one BFS per tree entry, ever), then one linear scan over
+    /// the ordinals both maps reach: smallest depth sum wins, ties by the
+    /// lower ordinal (deterministic). `a == b` ⇒ the trivial meeting; one
+    /// being above the other ⇒ depth 0 on that side. Cost per pair after
+    /// warm-up: O(people) Int16 compares (~µs in Release), no allocation
+    /// beyond the result.
     private func nearestCommonAncestor(_ a: Int32, _ b: Int32, index: GedcomFamilyGraph.TreeIndex) -> Meeting? {
-        cache.recordAncestorSearch()
         if a == b { return Meeting(ordinal: a, upA: [], upB: []) }
-        var seenA: [Int32: (depth: Int, via: Int32)] = [a: (0, -1)]
-        var seenB: [Int32: (depth: Int, via: Int32)] = [b: (0, -1)]
-        var frontierA: [Int32] = [a], frontierB: [Int32] = [b]
-        var levelA = 0, levelB = 0
+        let mapA = cache.ancestorMap(for: a) { AncestorDepthMap(from: a, index: index) }
+        let mapB = cache.ancestorMap(for: b) { AncestorDepthMap(from: b, index: index) }
         var best: (ordinal: Int32, sum: Int)?
-        var examined = 0
-        defer { cache.recordExpansions(examined) }
-        while !frontierA.isEmpty || !frontierB.isEmpty {
-            if let best, best.sum <= levelA + levelB + 1 { break }
-            if levelA + levelB >= Self.generationCap * 2 { break }
-            let expandA = !frontierA.isEmpty && (frontierB.isEmpty || frontierA.count <= frontierB.count)
-            var next: [Int32] = []
-            let frontier = expandA ? frontierA : frontierB
-            let level = (expandA ? levelA : levelB) + 1
-            for o in frontier {
-                for p in index.parents(of: o) {
-                    examined += 1
-                    if expandA {
-                        guard seenA[p] == nil else { continue }
-                        seenA[p] = (level, o)
-                        if let other = seenB[p] { consider(p, level + other.depth, &best) }
-                    } else {
-                        guard seenB[p] == nil else { continue }
-                        seenB[p] = (level, o)
-                        if let other = seenA[p] { consider(p, other.depth + level, &best) }
-                    }
-                    next.append(p)
+        let count = min(mapA.depth.count, mapB.depth.count)
+        mapA.depth.withUnsafeBufferPointer { da in
+            mapB.depth.withUnsafeBufferPointer { db in
+                for i in 0..<count {
+                    let x = da[i], y = db[i]
+                    guard x >= 0, y >= 0 else { continue }
+                    let sum = Int(x) + Int(y)
+                    if let b = best, b.sum <= sum { continue }
+                    best = (Int32(i), sum)
                 }
             }
-            if expandA { frontierA = next; levelA = level } else { frontierB = next; levelB = level }
         }
         guard let best else { return nil }
-        func climb(_ seen: [Int32: (depth: Int, via: Int32)], from start: Int32) -> [Int32] {
-            // ancestor → … → start, returned as start-side chain EXCLUDING both ends.
+        func climb(_ map: AncestorDepthMap, from start: Int32) -> [Int32] {
+            // ancestor → … → start, returned as the chain EXCLUDING both ends.
             var chain: [Int32] = []
             var current = best.ordinal
-            while let entry = seen[current], entry.via >= 0 {
-                if entry.via != start { chain.append(entry.via) }
-                current = entry.via
+            while current != start {
+                let via = map.via[Int(current)]
+                guard via >= 0 else { break }
+                if via != start { chain.append(via) }
+                current = via
             }
             return chain.reversed()
         }
-        return Meeting(ordinal: best.ordinal, upA: climb(seenA, from: a), upB: climb(seenB, from: b))
+        return Meeting(ordinal: best.ordinal, upA: climb(mapA, from: a), upB: climb(mapB, from: b))
     }
 
-    private func consider(_ ordinal: Int32, _ sum: Int, _ best: inout (ordinal: Int32, sum: Int)?) {
-        if let b = best, b.sum < sum || (b.sum == sum && b.ordinal <= ordinal) { return }
-        best = (ordinal, sum)
+    /// Every ancestor of one ordinal with its generation and the child it
+    /// was first reached through (paternal-first BFS, shortest depth).
+    /// Two flat arrays sized to the tree: 6 bytes per person, no strings.
+    struct AncestorDepthMap: Sendable {
+        let depth: [Int16]      // -1 = not an ancestor; 0 = the person
+        let via: [Int32]        // child toward the start; -1 at the start
+
+        init(from start: Int32, index: GedcomFamilyGraph.TreeIndex) {
+            var depth = [Int16](repeating: -1, count: index.count)
+            var via = [Int32](repeating: -1, count: index.count)
+            depth[Int(start)] = 0
+            var frontier: [Int32] = [start]
+            var level: Int16 = 0
+            while !frontier.isEmpty, level < Int16(FamilyKinshipInference.generationCap) {
+                level += 1
+                var next: [Int32] = []
+                for o in frontier {
+                    for p in index.parents(of: o) where depth[Int(p)] < 0 {
+                        depth[Int(p)] = level
+                        via[Int(p)] = o
+                        next.append(p)
+                    }
+                }
+                frontier = next
+            }
+            self.depth = depth
+            self.via = via
+        }
+
+        var estimatedBytes: Int { depth.count * 6 + 64 }
     }
 
     // MARK: Honest answer through an unattested sibling row
@@ -833,25 +851,59 @@ private final class KinshipQueryCache: @unchecked Sendable {
     private var bytes = 0
     private var inFlight = Set<Key>()
     private var stats = Counters()
+    /// Ancestor depth maps by ordinal, oldest-first eviction.
+    private var ancestorMaps: [Int32: FamilyKinshipInference.AncestorDepthMap] = [:]
+    private var ancestorOrder: [Int32] = []
+    private var ancestorBytes = 0
+    static let ancestorMapLimit = 24
 
     var counters: Counters {
         condition.lock(); defer { condition.unlock() }
         var c = stats
         c.cachedEntries = results.count
         c.cachedBytes = bytes
+        c.cachedAncestorBytes = ancestorBytes
         return c
     }
 
     func recordSorts(_ n: Int) { condition.lock(); stats.adjacencySorts += n; condition.unlock() }
     func recordExpansions(_ n: Int) { condition.lock(); stats.expansions += n; condition.unlock() }
-    func recordAncestorSearch() { condition.lock(); stats.ancestorSearches += 1; condition.unlock() }
 
     func drop() {
         condition.lock()
         results.removeAll(keepingCapacity: false)
         order.removeAll(keepingCapacity: false)
         bytes = 0
+        ancestorMaps.removeAll(keepingCapacity: false)
+        ancestorOrder.removeAll(keepingCapacity: false)
+        ancestorBytes = 0
         condition.unlock()
+    }
+
+    /// One ancestor map per tree entry, built at most once while cached.
+    func ancestorMap(for ordinal: Int32, build: () -> FamilyKinshipInference.AncestorDepthMap)
+        -> FamilyKinshipInference.AncestorDepthMap {
+        condition.lock()
+        if let hit = ancestorMaps[ordinal] {
+            stats.ancestorMapHits += 1
+            condition.unlock()
+            return hit
+        }
+        stats.ancestorSearches += 1
+        condition.unlock()
+        let built = build()
+        condition.lock()
+        if ancestorMaps[ordinal] == nil {
+            ancestorMaps[ordinal] = built
+            ancestorOrder.append(ordinal)
+            ancestorBytes += built.estimatedBytes
+            while ancestorMaps.count > Self.ancestorMapLimit, let oldest = ancestorOrder.first {
+                ancestorOrder.removeFirst()
+                if let gone = ancestorMaps.removeValue(forKey: oldest) { ancestorBytes -= gone.estimatedBytes }
+            }
+        }
+        condition.unlock()
+        return built
     }
 
     func result(for key: Key, compute: () -> Derived?) -> Derived? {
