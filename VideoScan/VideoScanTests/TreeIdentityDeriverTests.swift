@@ -256,15 +256,20 @@ struct TreeIdentityDeriverTests {
         let rickPinned = F.profile("Rick", sex: .male, born: 1962, pin: "GVQV-NW3")
         let imposter = F.profile("Richard", aliases: ["Richard Harding Breen Jr"], sex: .male)
         let v = F.deriver([rickPinned, imposter], ownerFSID: nil).derive(TreeIdentitySubject(imposter))
-        #expect(v == TreeIdentityDerivation.none)
+        // Jr is Rick's; the only thing left to offer is Sr — as a question.
+        #expect(v.certainCandidate == nil)
+        if case .ambiguous(let c) = v { #expect(!c.contains { $0.personID == "@" }) } else { Issue.record("expected ambiguous, got \(v)") }
     }
 
     @Test func twoOwnerSpelledProfilesGetNoOwnerPinByName() {
         let dadAsRichardBreen = F.profile("Dad", aliases: ["Richard Breen"], sex: .male, born: 1931)
         let d = F.deriver([F.rick, dadAsRichardBreen])
         #expect(F.reason(d.derive(TreeIdentitySubject(F.rick))) != .ownerSetting)
-        // Dad still lands on Sr through name + birth, never on the owner pin.
-        #expect(F.certainID(d.derive(TreeIdentitySubject(dadAsRichardBreen))) == "@I2@")
+        // Dad's "Richard Breen" reaches BOTH Richards and one is the root:
+        // the Jr/Sr trap is a question, never a guess (and never Jr).
+        let dad = d.derive(TreeIdentitySubject(dadAsRichardBreen))
+        #expect(dad.certainCandidate == nil)
+        if case .ambiguous(let c) = dad { #expect(Set(c.map(\.personID)) == ["@", "@"]) } else { Issue.record("expected ambiguous, got \(dad)") }
     }
 
     @Test func deriveAllSkipsPinnedQuarantinedAndNotInTree() {
@@ -617,5 +622,52 @@ struct TreeIdentityCenterTests {
         await center.refresh(profiles: [F.rick, F.donna])
         #expect(writes == 0)
         #expect(center.derivations["rick"]?.isAutoAcceptable == true)
+    }
+}
+
+// MARK: - Root rule guards (added after the first M5 run)
+
+@Suite("TreeIdentityDeriver — root rule guards")
+struct TreeIdentityRootGuardTests {
+    typealias F = TreeIdentityFixture
+
+    /// SENSOR: a non-owner profile spelled like the root AND a compatible
+    /// non-root namesake is asked, never handed the root.
+    @Test func rootBesideAnotherNamesakeIsAQuestion() {
+        let dad = F.profile("Dad", aliases: ["Richard Breen"], sex: .male)   // no birth year
+        let v = F.deriver([F.donna, dad], ownerName: "Donna Breen", ownerFSID: nil).derive(TreeIdentitySubject(dad))
+        #expect(v.certainCandidate == nil)
+    }
+
+    @Test func ownerKeepsOwnerStrengthRootRule() {
+        // "Rick" (no birth year) reaches Jr AND Sr; being the owner profile
+        // the one matching root wins — the HallieOwnerResolver precedent.
+        let rick = F.profile("Rick", sex: .male)
+        let v = F.deriver([rick, F.donna], ownerFSID: nil).derive(TreeIdentitySubject(rick))
+        #expect(F.certainID(v) == "@I1@")
+        #expect(F.reason(v) == .treeRoot)
+    }
+
+    @Test func assumedFirstINDIRootIsNotEvidenceForOthers() {
+        // Plain export: first INDI is only an assumed root. Two Mary Kellys,
+        // the first in the file — a Mary profile is asked, not pinned.
+        let gedcom = """
+        0 HEAD
+        0 @P1@ INDI
+        1 NAME Mary /Kelly/
+        1 SEX F
+        1 _FSFTID MARY-001
+        0 @P2@ INDI
+        1 NAME Mary /Kelly/
+        1 SEX F
+        1 _FSFTID MARY-002
+        0 TRLR
+        """
+        let graph = GedcomFamilyGraph(gedcomText: gedcom)
+        #expect(!graph.rootsAreRecorded)
+        let mary = F.profile("Mary Kelly", sex: .female)
+        let v = TreeIdentityDeriver(graph: graph, profiles: [mary], ownerName: "Rick Breen", ownerFamilySearchID: nil)
+            .derive(TreeIdentitySubject(mary))
+        #expect(v.certainCandidate == nil)
     }
 }
