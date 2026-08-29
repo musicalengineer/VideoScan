@@ -552,6 +552,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// back so a newer build's pin is never lost (fail closed: the overlay
     /// treats the profile as unbridged with a pin problem, never a name).
     var treeIdentityQuarantined: JSONValue?
+    /// How `treeIdentity` came to be (2026-08-29, auto-derived identity):
+    /// "derived: owner setting", "derived: tree root", "picked: Rick, 2026-08-29".
+    /// Additive; nil for pins written before the field existed.
+    var treeIdentityAttestation: String?
+    /// Rick said this person is NOT on the family tree (a living relative
+    /// FamilySearch never carries). "Show in Family Tree" stops asking
+    /// which record they are. Additive; absent ⇒ false.
+    var notInFamilyTree: Bool = false
 
     /// The anchor other profiles should store for THIS profile: the durable
     /// uuid when it is on disk, otherwise the name (upgraded automatically
@@ -573,6 +581,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
         case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
+        case treeIdentityAttestation, notInFamilyTree
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -675,6 +684,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
                 identityLog.notice("POIProfile load: quarantined an unreadable treeIdentity pin (written by a newer app version?) — kept verbatim, not used.")
             }
         }
+        treeIdentityAttestation = try c.decodeIfPresent(String.self, forKey: .treeIdentityAttestation)
+        notInFamilyTree = Self.decodeIdentityField(Bool.self, forKey: .notInFamilyTree, from: c) ?? false
     }
 
     /// Lenient per-field decode for the identity enums. Replaces bare
@@ -707,6 +718,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
     // moving the user's home directory can't break things.
 
     func save() throws {
+        // Remote viewer (Phase 1): POI/ is synced FROM the master; never
+        // written here (the kinship attestations ride in profile.json).
+        try ViewerWriteGuard.check("POIProfile.save")
         let folder = POIStorage.folder(for: name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write(profileJSONAt: POIStorage.profileURL(for: name), folder: folder)

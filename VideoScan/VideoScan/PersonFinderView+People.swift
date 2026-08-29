@@ -280,8 +280,7 @@ extension PersonFinderView {
                                     }
                                     Divider()
                                     Button("Show \(profile.name) in Family Tree") {
-                                        ftHighlight = profile.name
-                                        selectedTab = 5
+                                        showInFamilyTree(profile)
                                     }
                                     Divider()
                                     Button("Edit \(profile.name)\u{2026}") {
@@ -393,6 +392,24 @@ extension PersonFinderView {
         // One-time background tree load so tree-anchored relationships show
         // a name, not a bare FamilySearch ID (KinshipDisplayCenter).
         .task { kinshipCenter.loadTreeIfNeeded() }
+        // Auto-derive tree identities for unpinned profiles (off main,
+        // memoised per tree generation + identity signature); owner / root
+        // verdicts are pinned at once (TreeIdentityCenter).
+        .task(id: identityCenter.refreshKey(for: model.savedProfiles)) {
+            await identityCenter.refresh(profiles: model.savedProfiles)
+        }
+        .onChange(of: identityCenter.pinsRevision) { _, _ in
+            model.savedProfiles = POIProfile.listAll()
+        }
+        .sheet(item: $identityPickTarget) { target in
+            TreeIdentityPickerSheet(target: target, center: identityCenter,
+                                    profiles: model.savedProfiles,
+                                    onPinned: { candidate in
+                                        identityPickTarget = nil
+                                        focusFamilyTree(profileName: target.profile.name, candidate: candidate, banner: .pinned)
+                                    },
+                                    onDismiss: { identityPickTarget = nil })
+        }
         .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
                isPresented: Binding(
             get: { confirmDeleteProfile != nil },

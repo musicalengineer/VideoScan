@@ -439,6 +439,10 @@ struct VideoScanApp: App {
                                 .max(by: { $0.searchPath.count < $1.searchPath.count })?
                                 .mediaTech ?? .unknown
                         }
+                        // Remote viewer (Phase 1): publish the role BEFORE the
+                        // model applies it — publishFamilyAssetConfiguration,
+                        // the compiled store and every write guard read it.
+                        ViewerModeCenter.shared.install(catalogSync.viewerRole)
                         // Apply viewer-vs-master semantics to model + store.
                         catalogModel.applyReadOnlyMode(catalogSync.isReadOnly)
                         // NOW the daemon may activate: master spawns/

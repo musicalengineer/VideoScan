@@ -17,6 +17,9 @@ struct FamilyGraphFileLoader {
         /// its source files are still on disk unchanged. `graph` is nil
         /// then — deliberately: the loader never demotes an N-pull tree
         /// to the newest single file; the UI shows "Recompile" for these.
+        /// On a remote viewer (`readOnly`) the same field carries the
+        /// master's refused generation, and the UI shows "compiled on the
+        /// master — sync again" instead.
         var needsRecompile: [URL] = []
     }
 
@@ -29,6 +32,15 @@ struct FamilyGraphFileLoader {
     var compiledStore: FamilyGraphCompiledStore? = nil
     /// Phase captions for the UI while a compile runs (>1 s on a big pull).
     var progress: (String) -> Void = { _ in }
+    /// Remote viewer (docs/remote_use_design.md Phase 1): the tree is
+    /// compiled on the master and arrives by verified sync. In this mode
+    /// the loader ONLY decodes the promoted generation — it never parses
+    /// a .ged, never ingests, never promotes — and a generation this build
+    /// refuses for version reasons is reported through `needsRecompile`
+    /// for the viewer banner. Defaults to the process role so production
+    /// callers need no plumbing; tests that inject a store keep `false`
+    /// unless they set the center.
+    var readOnly: Bool = ViewerModeCenter.shared.isViewer
 
     func loadNewest() -> GedcomFamilyGraph? {
         loadNewestOutcome().graph
@@ -54,7 +66,12 @@ struct FamilyGraphFileLoader {
     /// A damaged newer export is retained in `rejectedURLs` so the UI can
     /// say what happened instead of pretending there was no file or
     /// displaying an empty live tree.
+    ///
+    /// Remote viewer (`readOnly`): only the promoted generation counts —
+    /// rules 1 and 4 never run, because both parse and promote.
     func loadNewestOutcome() -> Outcome {
+        if readOnly { return loadPromotedOnly() }
+
         let keys: Set<URLResourceKey> = [
             .contentModificationDateKey,
             .isRegularFileKey,
@@ -138,13 +155,43 @@ struct FamilyGraphFileLoader {
                        candidateCount: newestFirst.count)
     }
 
+    /// The viewer's whole load: decode the master's promoted generation
+    /// (its manifest already trusted by the sync verify), else report the
+    /// generation this build refuses, else "no tree". No .ged is opened.
+    private func loadPromotedOnly() -> Outcome {
+        guard let store = compiledStore else {
+            return Outcome(graph: nil, selectedURL: nil, rejectedURLs: [], candidateCount: 0)
+        }
+        if let current = store.loadCurrent() {
+            return Outcome(graph: current.graph,
+                           selectedURL: current.manifest.sources.first.map { URL(fileURLWithPath: $0.path) },
+                           rejectedURLs: [],
+                           candidateCount: current.manifest.sources.count,
+                           compiled: true)
+        }
+        if let refused = store.generationRefusedForVersion() {
+            store.log("[family-tree] viewer: compiled generation \(refused.generation) was built by another version — sync again after the master updates")
+            return Outcome(graph: nil, selectedURL: nil, rejectedURLs: [],
+                           candidateCount: refused.sources.count, compiled: false,
+                           // A viewer cannot recompile; the sources listed here
+                           // are the master's paths, shown only for the banner.
+                           needsRecompile: refused.sources.isEmpty
+                               ? [URL(fileURLWithPath: refused.generation)] : refused.sources)
+        }
+        return Outcome(graph: nil, selectedURL: nil, rejectedURLs: [], candidateCount: 0)
+    }
+
     /// "Recompile" (codex #826): parse `sources` in order, merge left to
     /// right (first file is the authority, as the CLI does), ingest with
     /// the same physical sources, and return the promoted graph. Nil,
     /// logged by the store, when a file does not parse or the ingest is
-    /// refused / fails verification.
+    /// refused / fails verification. Refused outright on a viewer.
     func recompile(sources: [URL]) -> GedcomFamilyGraph? {
         guard let store = compiledStore, !sources.isEmpty else { return nil }
+        if readOnly {
+            store.log("\(FamilyGraphCompiledStore.refusedWritePrefix) recompile — the tree is compiled on the master")
+            return nil
+        }
         var graphs: [GedcomFamilyGraph] = []
         for url in sources {
             progress("Reading \(url.lastPathComponent)…")

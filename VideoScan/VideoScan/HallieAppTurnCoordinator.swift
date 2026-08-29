@@ -683,7 +683,8 @@ enum HallieAppTurnCoordinator {
                 },
                 catalogStats: catalogStats,
                 rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
-                lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) })
+                lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) },
+                relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) })
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -810,15 +811,31 @@ enum HallieAppTurnCoordinator {
                 graph = nil
                 cyberBrain = nil
             }
+            // Derivable-but-unconfirmed identities (2026-08-29): an unpinned
+            // profile the deriver is CERTAIN about bridges for this turn,
+            // and the answer says "(taking Rick as …)". Pinned / stale /
+            // colliding pins are untouched — they still fail closed.
+            var assumed: [String: String] = [:]
+            var bridgedProfiles = profiles
+            if route == .graph, let graph, let snapshots = profiles {
+                let speakers = dependencies.loadSpeakers()
+                let result = TreeIdentityDeriver.assumingCertainPins(
+                    snapshots: snapshots, graph: graph,
+                    ownerName: speakers.ownerName,
+                    ownerFamilySearchID: speakers.ownerFamilySearchID)
+                bridgedProfiles = result.snapshots
+                assumed = result.assumed
+            }
             let context = HallieTurnExecutor.Context(
                 presenceRecords: presenceRecords,
                 aggregateRecords: aggregateRecords,
-                profiles: profiles,
+                profiles: bridgedProfiles,
                 graph: graph,
                 needsRecompile: needsRecompile,
                 cyberBrain: cyberBrain,
                 selectedTemporalDate: selectedDate,
-                speakers: dependencies.loadSpeakers())
+                speakers: dependencies.loadSpeakers(),
+                assumedTreeBridges: assumed)
             try Task.checkCancellation()
             return context
         }

@@ -800,6 +800,7 @@ final class CatalogStore {
         if Self.isRunningTests && self === CatalogStore.shared { return false }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.saveNow refused — read-only viewer mode")
+            ViewerWriteGuard.refuse("CatalogStore.saveNow")
             lastWriteError = .readOnlyViewer
             CatalogWriteJournal.record(.readOnlyViewer, catalogURL: fileURL)
             return false
@@ -839,6 +840,7 @@ final class CatalogStore {
         if Self.isRunningTests && self === CatalogStore.shared { return }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.scheduleSave refused — read-only viewer mode")
+            ViewerWriteGuard.refuse("CatalogStore.scheduleSave")
             return
         }
         debounceTask?.cancel()

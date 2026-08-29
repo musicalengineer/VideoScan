@@ -116,10 +116,16 @@ extension HallieTurnExecutor {
                     question: "who is \(other.name)?",
                     label: "tell me about \(other.name)"))
             }
+            // A bridge this turn only ASSUMED (derivable, not yet pinned)
+            // is said out loud: "(taking Rick as Richard Harding Breen Jr)".
+            let taken = [overlay.evidence?.subjectID, overlay.evidence?.counterpart?.id]
+                .compactMap { $0 }
+                .compactMap { context.assumedTreeBridges[$0] }
+            let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
             return Result(
                 route: .graph,
                 outcome: .answered,
-                prose: overlay.prose,
+                prose: overlay.prose + aside,
                 basisLine: overlay.basisLine,
                 queryDescription: queryDescription,
                 citations: [],

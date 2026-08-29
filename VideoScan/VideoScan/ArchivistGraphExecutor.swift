@@ -569,11 +569,17 @@ enum ArchivistGraphExecutor {
     private struct ProfileMeaning: Equatable {
         let canonicalName: String
         let aliases: [String]
+        /// A tree pin is identity, not display metadata. Two definitions of
+        /// one stable profile that disagree here are conflicting identities,
+        /// even when their names happen to match.
+        let treeIdentity: TreeIdentity?
+        let treeIdentityUnreadable: Bool
     }
 
     private struct ProfileRoute {
         let requestedName: String
         let profileCanonicalName: String
+        let pinProblem: String?
     }
 
     /// Same specificity rule as FamilyTreeIdentityResolver, expressed over a
@@ -609,7 +615,7 @@ enum ArchivistGraphExecutor {
             let profile = deterministicProfileSnapshot(
                 stableID: rawID, definitions: definitions)
             return resolveSelectedProfile(
-                profile, requestedName: typedName, graph: inputs.graph)
+                profile, requestedName: typedName, inputs: inputs)
         }
     }
 
@@ -656,7 +662,7 @@ enum ArchivistGraphExecutor {
 
         if let profile = identities.first {
             return resolveSelectedProfile(
-                profile, requestedName: typedName, graph: inputs.graph)
+                profile, requestedName: typedName, inputs: inputs)
         }
 
         // Exact identity lookup failed. Recover only the unique nearest
@@ -686,7 +692,7 @@ enum ArchivistGraphExecutor {
             }
             if let recovered = fuzzyProfiles.first {
                 let resolution = resolveSelectedProfile(
-                    recovered, requestedName: typedName, graph: inputs.graph)
+                    recovered, requestedName: typedName, inputs: inputs)
                 switch resolution {
                 case .people(let people, let route, _):
                     return .people(
@@ -778,17 +784,48 @@ enum ArchivistGraphExecutor {
         return graph.people(matching: term)
     }
 
-    /// The profile is already selected by stable ID. Only that profile's
-    /// canonical name and aliases may bridge to GEDCOM; no other profile can
-    /// capture the continuation through a reciprocal/shared alias.
+    /// The profile is already selected by stable ID. Its durable tree pin is
+    /// authoritative when present. Legacy unpinned profiles retain their
+    /// exact canonical/alias route; no other profile can capture the
+    /// continuation through a reciprocal/shared alias.
     private static func resolveSelectedProfile(
         _ profile: ArchivistGraphProfileSnapshot,
         requestedName: String,
-        graph: GedcomFamilyGraph
+        inputs: ArchivistGraphInputs
     ) -> Resolution {
         let profileRoute = ProfileRoute(
             requestedName: requestedName,
-            profileCanonicalName: profile.canonicalName)
+            profileCanonicalName: profile.canonicalName,
+            pinProblem: nil)
+
+        // Identity != spelling. Once a profile carries a durable tree pin,
+        // the already-built overlay is the sole authority for crossing into
+        // GEDCOM. It resolves FSIDs/pointers and deliberately rejects stale,
+        // unreadable, and colliding pins. Never fall through to canonical or
+        // alias matching after a rejected pin: that would turn a visible
+        // identity error into a convincing answer about the wrong person.
+        if profile.treeIdentity != nil || profile.treeIdentityUnreadable {
+            let pinProblem = inputs.kinshipOverlay.pinProblem(
+                forProfileStableID: profile.stableID)
+            guard pinProblem == nil,
+                  case .tree(let gedcomID)? = inputs.kinshipOverlay.node(
+                    profileStableID: profile.stableID),
+                  let person = inputs.graph.people[gedcomID]
+            else {
+                return .people(
+                    [], profileRoute: ProfileRoute(
+                        requestedName: requestedName,
+                        profileCanonicalName: profile.canonicalName,
+                        pinProblem: pinProblem
+                            ?? "the saved family-tree pin did not resolve"),
+                    spellingCorrection: nil)
+            }
+            return .people(
+                [person], profileRoute: profileRoute,
+                spellingCorrection: nil)
+        }
+
+        let graph = inputs.graph
 
         let canonicalMatches = exactPeople(
             profile.canonicalName, graph: graph)
@@ -1071,10 +1108,14 @@ enum ArchivistGraphExecutor {
         _ route: ProfileRoute?
     ) -> String? {
         guard let route else { return nil }
-        return "Checked: People profile identity route “"
+        let prefix = "Checked: People profile identity route “"
             + route.requestedName + "” → “"
-            + route.profileCanonicalName
-            + "”; imported family tree (GEDCOM), but no unique GEDCOM "
+            + route.profileCanonicalName + "”"
+        if let problem = route.pinProblem {
+            return prefix + "; " + problem
+                + ". No name-based GEDCOM bridge was attempted."
+        }
+        return prefix + "; imported family tree (GEDCOM), but no unique GEDCOM "
             + "identity was resolved."
     }
 
@@ -1152,7 +1193,9 @@ enum ArchivistGraphExecutor {
             canonicalName: canonicalName,
             aliases: Array(Set(profile.aliases.map { normalize($0) }))
                 .filter { !$0.isEmpty && $0 != canonicalName }
-                .sorted())
+                .sorted(),
+            treeIdentity: profile.treeIdentity,
+            treeIdentityUnreadable: profile.treeIdentityUnreadable)
     }
 
     private static func deterministicProfileSnapshot(
@@ -1169,10 +1212,15 @@ enum ArchivistGraphExecutor {
             !$0.isEmpty && $0 != canonicalMeaning
         }.sorted()
             .compactMap { aliasesByMeaning[$0]?.sorted(by: nameOrder).first }
+        // `profileMeaning` already proved every definition agrees on these
+        // identity fields, so any representative is deterministic in value.
+        let representative = definitions.sorted(by: profileOrder)[0]
         return ArchivistGraphProfileSnapshot(
             stableID: stableID,
             canonicalName: canonicalName,
-            aliases: aliases)
+            aliases: aliases,
+            treeIdentity: representative.treeIdentity,
+            treeIdentityUnreadable: representative.treeIdentityUnreadable)
     }
 
     static func personOrder(

@@ -277,6 +277,9 @@ extension HallieAppTurnCoordinator {
     /// rename + backups/), or the JSON file; then drop the voice cache so
     /// the very next utterance uses it.
     static func recordPronunciationLive(_ write: PronunciationWrite) throws {
+        // Remote viewer (Phase 1): pronunciations.json and the CyberBrain
+        // are synced from the master; a viewer never writes them.
+        try ViewerWriteGuard.check("Pronunciation.record")
         switch write.target {
         case .cyberBrainPerson(let id, let name):
             guard let root = FamilyTreeNotesStorage.productionRootURL else {

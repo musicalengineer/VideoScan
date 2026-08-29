@@ -315,18 +315,21 @@ extension HallieTurnExecutor {
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats? = nil,
         rosterAnswer: (() -> Result)? = nil,
-        lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil
     ) -> PreTranslation {
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
                question: first, playAfterAnswer: playAfterAnswer, memory: memory,
                isKnownPerson: isKnownPerson, catalogStats: catalogStats,
-               rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer),
+               rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
+               relationshipsOverview: relationshipsOverview),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
                 isKnownPerson: isKnownPerson, catalogStats: catalogStats,
-                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
+                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
+                relationshipsOverview: relationshipsOverview)
             if case .answer(let b) = secondTurn, b.route != .reset {
                 return .answer(joinedTwoQuestionAnswer(a, b))
             }
@@ -345,7 +348,8 @@ extension HallieTurnExecutor {
         return preTranslationSingle(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, catalogStats: catalogStats,
-            rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer)
+            rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
+            relationshipsOverview: relationshipsOverview)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -566,7 +570,8 @@ extension HallieTurnExecutor {
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats?,
         rosterAnswer: (() -> Result)?,
-        lineageAnswer: ((HallieLineageQuestion) -> Result?)?
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil
     ) -> PreTranslation {
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
@@ -600,6 +605,12 @@ extension HallieTurnExecutor {
         }
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
+        }
+        // "how am I related to the people in the People tab?" — one subject
+        // against the whole tab, from the kinship engine (live miss #12).
+        // Ahead of the roster, which would otherwise catch "tell … people tab".
+        if let relationshipsOverview, let ask = HallieRelationshipsOverview.detect(question) {
+            return .answer(relationshipsOverview(ask))
         }
         // "who do you know?" — the People tab, the tree, and what the family
         // has told her; answered locally (PeopleTab), never by the model.
@@ -821,6 +832,7 @@ extension HallieTurnExecutor {
         case .getFamilyTree: return "Get Family Tree…"
         case .ask(_, let label): return label
         case .recompileFamilyTree: return "Recompile the family tree"
+        case .openPeopleTab: return "Open the People tab"
         }
     }
 

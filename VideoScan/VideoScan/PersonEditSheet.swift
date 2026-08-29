@@ -4,6 +4,89 @@
 
 import SwiftUI
 import PhotosUI
+import VideoScanCore
+
+/// Pure save gate shared by the sheet and regression tests. The UI owns
+/// presentation and dismissal; this seam owns only validation and the
+/// three-way decision, like a small command validator in C++.
+enum PersonEditSheetKinshipSave {
+    enum Decision: String, Equatable {
+        case blocked
+        case warningConfirmationRequired
+        case save
+    }
+
+    struct Evaluation {
+        let profile: POIProfile
+        let findings: [KinshipValidation.Finding]
+        let decision: Decision
+    }
+
+    /// New row values win, while an existing row's free-form note survives
+    /// an edit. Sibling basis is part of the new row value and is never
+    /// overwritten by the old row.
+    static func preservingNotes(in rows: [Kinship], from currentRows: [Kinship]) -> [Kinship] {
+        rows.map { row in
+            var result = row
+            if let existing = currentRows.first(where: {
+                $0.relation == row.relation && $0.relativeTo == row.relativeTo
+            }) {
+                result.note = existing.note
+            }
+            return result
+        }
+    }
+
+    static func evaluate(
+        profile: POIProfile,
+        otherProfiles: [POIProfile],
+        graph: GedcomFamilyGraph?,
+        currentRows: [Kinship],
+        warningsAcknowledged: Bool
+    ) -> Evaluation {
+        // PersonFinderView passes the complete saved-profile array, including
+        // the original version of the subject being edited. Replace that
+        // snapshot in place; appending the edited copy would leave two rows
+        // for one logical person and let validation select stale kinships.
+        var validationProfiles = otherProfiles
+        if let subjectIndex = validationProfiles.firstIndex(where: { $0.uuid == profile.uuid }) {
+            validationProfiles[subjectIndex] = profile
+        } else {
+            validationProfiles.append(profile)
+        }
+        let results = KinshipValidation.validate(
+            batch: profile.kinships,
+            subjectProfileStableID: profile.id,
+            profiles: validationProfiles,
+            graph: graph,
+            currentRows: currentRows)
+        let findings = results.flatMap(\.findings)
+        let decision: Decision
+        if findings.blocksSave {
+            decision = .blocked
+        } else if !findings.isEmpty, !warningsAcknowledged {
+            decision = .warningConfirmationRequired
+        } else {
+            decision = .save
+        }
+        return Evaluation(profile: profile, findings: findings, decision: decision)
+    }
+
+    /// Privacy-safe audit records. Finding messages contain names and dates,
+    /// so only stable rule identifiers and severity cross the log boundary.
+    static func resultLine(
+        _ evaluation: Evaluation,
+        elapsed: Duration
+    ) -> String {
+        let rules = Set(evaluation.findings.map {
+            "\($0.severity.rawValue):\($0.rule.rawValue)"
+        }).sorted()
+        let elapsedMS = max(0, Int((elapsed / .milliseconds(1)).rounded()))
+        return "[kinship-save] validation result=\(evaluation.decision.rawValue) "
+            + "elapsed_ms=\(elapsedMS) rows=\(evaluation.profile.kinships.count) "
+            + "rules=\(rules.isEmpty ? "none" : rules.joined(separator: ","))"
+    }
+}
 
 // MARK: - Person Edit Sheet
 
@@ -124,15 +207,9 @@ struct PersonEditSheet: View {
         p.identityNotes = trimmedIdentity.isEmpty ? nil : trimmedIdentity
         // Rows without a chosen person are dropped on save, never stored
         // half-filled. Notes on existing rows survive untouched.
-        p.kinships = kinshipRows.compactMap { row in
-            guard var kinship = row.kinship else { return nil }
-            if let existing = originalProfile.kinships.first(where: {
-                $0.relation == kinship.relation && $0.relativeTo == kinship.relativeTo
-            }) {
-                kinship.note = existing.note
-            }
-            return kinship
-        }
+        p.kinships = PersonEditSheetKinshipSave.preservingNotes(
+            in: kinshipRows.compactMap(\.kinship),
+            from: originalProfile.kinships)
         return p
     }
 
@@ -141,22 +218,25 @@ struct PersonEditSheet: View {
     /// next Save proceeds.
     private func attemptSave() {
         let p = currentProfile
-        let results = KinshipValidation.validate(
-            batch: p.kinships, subjectProfileStableID: p.id,
-            profiles: otherProfiles + [p], graph: kinshipCenter.graph,
-            currentRows: originalProfile.kinships)
-        let findings = results.flatMap(\.findings)
-        if findings.blocksSave {
-            saveFindings = findings
+        let clock = ContinuousClock()
+        let start = clock.now
+        let evaluation = PersonEditSheetKinshipSave.evaluate(
+            profile: p, otherProfiles: otherProfiles, graph: kinshipCenter.graph,
+            currentRows: originalProfile.kinships,
+            warningsAcknowledged: warningsAcknowledged)
+        appLog.write(PersonEditSheetKinshipSave.resultLine(
+            evaluation, elapsed: clock.now - start))
+        saveFindings = evaluation.findings
+        switch evaluation.decision {
+        case .blocked:
             return
-        }
-        if !findings.isEmpty, !warningsAcknowledged {
-            saveFindings = findings
+        case .warningConfirmationRequired:
             warningsAcknowledged = true
             return
+        case .save:
+            onSave(evaluation.profile)
+            dismiss()
         }
-        onSave(p)
-        dismiss()
     }
 
     private var isNewPerson: Bool {
