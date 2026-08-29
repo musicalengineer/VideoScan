@@ -122,6 +122,28 @@ struct HallieSurnameRosterTests {
         #expect(r.clarification?.candidates.count == 3)
     }
 
+    /// Live addition to #11 (2026-08-29): "tell me about pa o'connor" echoed
+    /// the typed lowercase "Pa o'connor". Once the surname has resolved, the
+    /// roster and the offer render it in the tree's own casing, and the
+    /// given token is title-cased.
+    @Test func theRosterAndTheOfferUseTheTreesCasingOfTheSurname() async throws {
+        let r = try await HallieTurnExecutor.execute(
+            ricksSentence("tell me about pa o'connor"), context: context())
+        #expect(r.outcome == .needsClarification, "got: \(r.prose)")
+        #expect(r.prose == "I don't know a “Pa” O'Connor. The O'Connors in the tree are "
+                + "Christopher Dennis O'Connor (b. 12 JUN 1870, d. 1941), Mary Catherine O'Connor (b. 3 SEP 1932), "
+                + "and Mary O'Connor (b. 1905) — which one? "
+                + "(Or “let me tell you about Pa O'Connor” and I'll remember the name.)", "got: \(r.prose)")
+        #expect(!r.prose.contains("o'connor"), "got: \(r.prose)")
+        #expect(!r.prose.contains("Pa o"), "got: \(r.prose)")
+        #expect(r.basisLine.contains("no O'Connor in the family tree goes by “Pa”"), "got: \(r.basisLine)")
+        // The recovered spelling, typed all in caps or mixed, comes out the same way.
+        let shouted = try await HallieTurnExecutor.execute(
+            ricksSentence("tell me about PA OC'CONNOR"), context: context())
+        #expect(shouted.prose.hasPrefix("I don't know a “PA” O'Connor. The O'Connors in the tree are "), "got: \(shouted.prose)")
+        #expect(shouted.basisLine.contains("took “OC'CONNOR” as O'Connor"), "got: \(shouted.basisLine)")
+    }
+
     // MARK: Alias path
 
     @Test func aPeopleTabAliasForTheGivenTokenBridgesToTheBiography() async throws {
@@ -262,6 +284,13 @@ struct HallieSurnameRosterTests {
         #expect(HallieSurnameRoster.members(named: "pa", in: family).isEmpty)
         // The surname token itself is not a given name.
         #expect(HallieSurnameRoster.members(named: "connor", in: family).isEmpty)
+    }
+
+    @Test func whichOneEchoKeepsApostropheSurnamesAndTypedCasing() {
+        #expect(HallieWhichOne.display("mary o'connor") == "Mary O'Connor")
+        #expect(HallieWhichOne.display("rick") == "Rick")
+        #expect(HallieWhichOne.display("ann McGill") == "Ann McGill")
+        #expect(HallieWhichOne.display("jean-luc") == "Jean-Luc")
     }
 
     @Test func plurals() {

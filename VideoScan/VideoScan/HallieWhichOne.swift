@@ -52,9 +52,22 @@ enum HallieWhichOne {
         return Arrangement(shown: shown, total: people.count, anchored: !anchors.isEmpty)
     }
 
-    /// The echo of what was typed: typed casing, capitalized per word.
+    /// The echo of what was typed: typed casing, capitalized per word. A
+    /// word the user already cased ("McGill", "O'Connor") is kept; a
+    /// lowercase one is capitalized at its start and after an apostrophe or
+    /// hyphen ("o'connor" → "O'Connor", not Foundation's "O'connor" —
+    /// live miss #11, 2026-08-29).
     static func display(_ typed: String) -> String {
-        HallieLineageQuestion.capitalizedName(typed)
+        typed.split(separator: " ").map { word -> String in
+            let base = word.contains(where: \.isUppercase) ? String(word) : word.lowercased()
+            var out = ""
+            var upNext = true
+            for character in base {
+                out.append(upNext ? Character(character.uppercased()) : character)
+                upNext = character == "'" || character == "\u{2019}" || character == "-"
+            }
+            return out
+        }.joined(separator: " ")
     }
 
     /// The which-one sentence. With chips: "Which Rick do you mean — A, B,
