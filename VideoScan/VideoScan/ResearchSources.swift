@@ -346,8 +346,11 @@ struct FindAGraveSource: ResearchSource {
     /// The window's edges come from the plan's tolerance already, so the
     /// filters are the plan's own span.
     static func searchURL(name: String, plan: ResearchQueryPlan) -> URL? {
-        let parts = name.split(separator: " ").map(String.init)
-        guard let last = parts.last, parts.count >= 1 else { return nil }
+        // "David McGill Latta Sr" → first "David", last "Latta" (suffix dropped).
+        let suffixes: Set<String> = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]
+        var parts = name.split(separator: " ").map(String.init)
+        while let tail = parts.last, suffixes.contains(tail.lowercased()) { parts.removeLast() }
+        guard let last = parts.last else { return nil }
         let first = parts.count > 1 ? parts[0] : ""
         var query = "firstname=\(ResearchText.percentEncoded(first))"
             + "&lastname=\(ResearchText.percentEncoded(last))"
