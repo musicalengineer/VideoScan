@@ -84,7 +84,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
         cleaned = cleaned.replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
         cleaned = cleaned.replacingOccurrences(of: " — ", with: ", ")
         // A sentence ends at . ! ? … followed by a space or the end of the
-        // line — so "Cape_1993.mov" and "Richard H. Breen" stay whole.
+        // line — so "Cape_1993.mov" and "Richard H. Breen" stay whole. The
+        // initial / abbreviation rule is the verifier's (one splitter
+        // policy for prose and speech; live 2026-08-29).
         let pieces = cleaned.components(separatedBy: .newlines).flatMap { line -> [String] in
             var out: [String] = []
             var current = ""
@@ -93,7 +95,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 current.append(character)
                 let next = index + 1 < chars.count ? chars[index + 1] : " "
                 if ".!?…".contains(character), next == " " || next == "\t",
-                   !(character == "." && current.count >= 2 && current.dropLast().last?.isUppercase == true && current.count <= 3) {
+                   !(character == "." && HallieCompositionVerifier.endsWithAbbreviation(String(current.dropLast()))) {
                     out.append(current); current = ""
                 }
             }

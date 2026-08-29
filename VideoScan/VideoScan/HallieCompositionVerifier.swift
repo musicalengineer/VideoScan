@@ -261,20 +261,82 @@ enum HallieCompositionVerifier {
 
     // MARK: - Sentences
 
+    /// Words that end in a period without ending a sentence. Lowercased;
+    /// matched as a whole word immediately before the period. "may" is
+    /// deliberately absent (a real word far more often than a month), and
+    /// "I" is excluded from the initials rule below ("… and so did I.").
+    static let abbreviations: Set<String> = [
+        "mr", "mrs", "ms", "dr", "sr", "jr", "st", "b", "d", "abt", "c", "ca",
+        "bef", "aft", "bapt", "bur",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+        "nov", "dec",
+    ]
+
+    /// True when `prefix` (the text up to but not including a period) ends
+    /// in an initial ("Judson L") or a known abbreviation ("Breen Sr",
+    /// "b", "Oct"). Live 2026-08-29: "Judson L. Parker" and "Richard
+    /// Harding Breen Sr. [c3][c4]." were both split mid-name, which lost a
+    /// tag, shipped a ", Mary Elizabeth Smith …" fragment, and produced a
+    /// lone "." sentence. Shared with HallieSpeaker so speech breathes at
+    /// the same places the verifier does.
+    static func endsWithAbbreviation(_ prefix: String) -> Bool {
+        var word = ""
+        var scalars = prefix[...]
+        while let last = scalars.last, last.isLetter {
+            word.insert(last, at: word.startIndex)
+            scalars = scalars.dropLast()
+        }
+        guard !word.isEmpty else { return false }
+        // Whole word only: "Casanov." is not "Nov."
+        if let before = scalars.last, before.isLetter || before.isNumber { return false }
+        if word.count == 1 { return word.first!.isUppercase && word != "I" }
+        return abbreviations.contains(word.lowercased())
+    }
+
     /// Split prose into sentences. A sentence ends at `.`, `!`, or `?`
     /// followed by whitespace, a tag, a closing quote, or the end of text
     /// (so "12.5s" and "donna_cape.mov" survive) or at a line break, and any
     /// bracket tags that immediately follow the terminator belong to the
-    /// sentence they close ("… born in 1920. [c1]").
+    /// sentence they close ("… born in 1920. [c1]"), as does a terminator
+    /// glued after those tags ("… Sr. [c3][c4]." never yields a lone ".").
+    /// A period after an initial or abbreviation (`endsWithAbbreviation`)
+    /// is not a terminator unless tags follow it AND the text then ends or
+    /// starts a new capitalised sentence. A period followed by a lowercase
+    /// word ("etc. and") is not a terminator either.
     static func splitSentences(_ text: String) -> [String] {
         var sentences: [String] = []
         var current = ""
         let scalars = Array(text)
         var index = 0
+        let terminators: Set<Character> = [".", "!", "?"]
         func flush() {
             let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { sentences.append(trimmed) }
             current = ""
+            guard !trimmed.isEmpty else { return }
+            // Punctuation-only pieces are never sentences: glue them to the
+            // sentence they trail ("Yes. [c1]." → one sentence).
+            if trimmed.allSatisfy({ $0.isPunctuation || $0.isSymbol }) {
+                if !sentences.isEmpty { sentences[sentences.count - 1] += trimmed }
+                return
+            }
+            sentences.append(trimmed)
+        }
+        /// Index just past any run of " [...]" tag groups starting at `from`,
+        /// or `from` itself when there is none.
+        func endOfTags(from: Int) -> Int {
+            var probe = from
+            while true {
+                var spaces = probe
+                while spaces < scalars.count, scalars[spaces] == " " { spaces += 1 }
+                guard spaces < scalars.count, scalars[spaces] == "[",
+                      let close = scalars[spaces...].firstIndex(of: "]") else { return probe }
+                probe = close + 1
+            }
+        }
+        func nextNonSpace(from: Int) -> Character? {
+            var probe = from
+            while probe < scalars.count, scalars[probe] == " " { probe += 1 }
+            return probe < scalars.count ? scalars[probe] : nil
         }
         while index < scalars.count {
             let character = scalars[index]
@@ -284,14 +346,15 @@ enum HallieCompositionVerifier {
                 continue
             }
             current.append(character)
-            if character == "." || character == "!" || character == "?" {
+            if terminators.contains(character) {
+                let beforeTerminator = String(current.dropLast())
                 // Consume run-on terminators ("?!", "...").
                 var lookahead = index + 1
-                while lookahead < scalars.count,
-                      [".", "!", "?"].contains(scalars[lookahead]) {
+                while lookahead < scalars.count, terminators.contains(scalars[lookahead]) {
                     current.append(scalars[lookahead])
                     lookahead += 1
                 }
+                let runOn = lookahead > index + 1
                 // Decimal / filename / abbreviation guard: "12.5s",
                 // "donna_cape.mov", "b.1920" — a terminator glued to the next
                 // word does not end a sentence.
@@ -301,21 +364,39 @@ enum HallieCompositionVerifier {
                     index = lookahead
                     continue
                 }
+                if character == ".", !runOn, endsWithAbbreviation(beforeTerminator) {
+                    // "Judson L. Parker", "Breen Sr., Mary", "b. 1633",
+                    // "Oct. 17": mid-sentence unless tags close it here.
+                    let afterTags = endOfTags(from: lookahead)
+                    let tagged = afterTags > lookahead
+                    let following = nextNonSpace(from: afterTags)
+                    let closesHere = tagged && (following == nil || following == "\n"
+                        || following!.isUppercase || following == "\"" || following == "“")
+                    if !closesHere {
+                        index = lookahead
+                        continue
+                    }
+                } else if character == ".", !runOn,
+                          let following = nextNonSpace(from: lookahead), following.isLowercase {
+                    // An abbreviation the list does not know ("etc. and").
+                    index = lookahead
+                    continue
+                }
                 // Closing quotes / parentheses stay with the sentence.
                 while lookahead < scalars.count,
                       ["\"", "”", "’", "'", ")"].contains(scalars[lookahead]) {
                     current.append(scalars[lookahead])
                     lookahead += 1
                 }
-                // Consume trailing tags: whitespace then "[...]" groups.
-                var probe = lookahead
-                while true {
-                    var spaces = probe
-                    while spaces < scalars.count, scalars[spaces] == " " { spaces += 1 }
-                    guard spaces < scalars.count, scalars[spaces] == "[",
-                          let close = scalars[spaces...].firstIndex(of: "]") else { break }
-                    current.append(contentsOf: scalars[probe...close])
-                    probe = close + 1
+                // Consume trailing tags: whitespace then "[...]" groups, and
+                // a terminator glued right after them.
+                var probe = endOfTags(from: lookahead)
+                if probe > lookahead {
+                    current.append(contentsOf: scalars[lookahead..<probe])
+                    if probe < scalars.count, terminators.contains(scalars[probe]) {
+                        current.append(scalars[probe])
+                        probe += 1
+                    }
                 }
                 flush()
                 index = probe
@@ -369,6 +450,11 @@ enum HallieCompositionVerifier {
                    collapsed.last == " " {
                     collapsed.removeLast()
                 }
+                // "Sr. [c3][c4]." → "Sr." not "Sr..": the tag carried the
+                // sentence's own terminator past the abbreviation's period.
+                if [".", "!", "?"].contains(character), collapsed.last == character {
+                    continue
+                }
                 previousWasSpace = false
             }
             collapsed.append(character)
@@ -388,20 +474,43 @@ enum HallieCompositionVerifier {
         return text.range(of: pattern, options: .regularExpression) != nil
     }
 
+    /// Live 2026-08-29: ", Mary Elizabeth Smith, and Sewell Stone Parker
+    /// [c2]." reached the reader as a whole sentence. A sentence must open
+    /// with a letter, digit, or opening quote/parenthesis — never with
+    /// punctuation or a conjunction — and a bare tag is no sentence at all.
+    /// A dropped fragment does not count as citing its claim, so the
+    /// coverage rule restores the claim's own sentence.
     static func isSentenceFragment(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first else { return true }
         if trimmed.hasPrefix("'s ") || trimmed.hasPrefix("’s ") { return true }
+        if !(first.isLetter || first.isNumber || "\"“‘'(".contains(first)) { return true }
+        let lowered = trimmed.lowercased()
+        if ["and ", "or ", "nor "].contains(where: { lowered.hasPrefix($0) }) { return true }
         return first.isLowercase
     }
 
     // MARK: - Fact leak check
 
+    /// "12,578" and "12578" are the same number. The plan states counts
+    /// without separators; a model writing them the readable way was being
+    /// dropped as `leakedNumber` (live 2026-08-29, "12,578 ancestors").
+    /// Applied on both sides before tokenizing so neither can differ.
+    static func foldingThousandsSeparators(_ text: String) -> String {
+        var out = text
+        while true {
+            let folded = out.replacingOccurrences(
+                of: #"(\d),(\d{3})(?!\d)"#, with: "$1$2", options: .regularExpression)
+            if folded == out { return out }
+            out = folded
+        }
+    }
+
     /// Lowercased alphanumeric tokens with possessives folded ("Donna's" →
     /// "donna"). Shared by the claim side and the sentence side so the two
     /// cannot tokenize differently.
     static func tokens(of text: String) -> [String] {
-        text.lowercased()
+        foldingThousandsSeparators(text).lowercased()
             .replacingOccurrences(of: "’s", with: "")
             .replacingOccurrences(of: "'s", with: "")
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
@@ -496,7 +605,7 @@ enum HallieCompositionVerifier {
     }
 
     static func leak(in sentence: String, allowed: Set<String>) -> Dropped.Reason? {
-        let words = sentence
+        let words = foldingThousandsSeparators(sentence)
             .replacingOccurrences(of: "’s", with: "")
             .replacingOccurrences(of: "'s", with: "")
             .split(whereSeparator: { $0 == " " || $0 == "\n" })
