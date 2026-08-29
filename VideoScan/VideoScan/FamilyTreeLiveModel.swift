@@ -1272,10 +1272,20 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard let graph, let person = graph.people[personID] else { return nil }
         let profiles = profilesProvider()
         guard !profiles.isEmpty else { return nil }
-        return PersonPhotoBridge.profile(
+        // Memo per (profiles snapshot, installed graph): the card body asks
+        // for every card on every render; the bridge runs a resolver per
+        // profile. Snapshot equality is a dozen structs — cheap.
+        if bridgeMemo.profiles != profiles || bridgeMemo.sourceKey != installedSourceKey {
+            bridgeMemo = (profiles, installedSourceKey, [:])
+        }
+        if let hit = bridgeMemo.byPersonID[personID] { return hit }
+        let bridged = PersonPhotoBridge.profile(
             for: person, profiles: profiles, graph: graph,
             fingerprint: { [weak self] in self?.kinshipCenter?.graphFingerprint })
+        bridgeMemo.byPersonID[personID] = .some(bridged)
+        return bridged
     }
+    private var bridgeMemo: (profiles: [POIProfile], sourceKey: String?, byPersonID: [String: POIProfile?]) = ([], nil, [:])
 
     /// A photo choice was written (either view): make the cards re-read.
     func notePhotoChoiceWritten() {
