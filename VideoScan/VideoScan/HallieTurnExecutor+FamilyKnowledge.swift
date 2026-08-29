@@ -209,7 +209,9 @@ extension HallieTurnExecutor {
                 offeredActions: result.offeredActions,
                 answerPlan: result.answerPlan,
                 composedBy: result.composedBy,
-                transcriptText: result.transcriptText)
+                transcriptText: result.transcriptText,
+                attachments: result.attachments,
+                performsFirstOfferedAction: result.performsFirstOfferedAction)
         }
     }
 }

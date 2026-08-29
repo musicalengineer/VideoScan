@@ -324,7 +324,9 @@ enum HallieTurnExecutor {
     }
 
     /// Something the client may offer as a next step (a chip in the app, a
-    /// line in the shell). Never performed automatically.
+    /// line in the shell). Never performed automatically — unless the
+    /// result says so with `performsFirstOfferedAction` (a navigation ask
+    /// such as "center the tree on Martha Lamson", 2026-08-29).
     enum OfferedAction: Sendable, Equatable {
         /// Open the Family Tree tab focused on this person.
         case openFamilyTree(personName: String)
@@ -369,6 +371,10 @@ enum HallieTurnExecutor {
         /// lineage or tree card (2026-08-22). Presentation only: never part
         /// of the fact basis, never shown to the translator or composer.
         let attachments: [HallieAttachment]
+        /// The user ASKED for the first offered action ("center the tree
+        /// on X"): a client with that surface performs it without a tap;
+        /// a client without one (shell, web) just lists it. Off by default.
+        let performsFirstOfferedAction: Bool
 
         init(
             route: Route,
@@ -386,7 +392,8 @@ enum HallieTurnExecutor {
             answerPlan: HallieAnswerPlan? = nil,
             composedBy: HallieComposedBy = .template,
             transcriptText: String? = nil,
-            attachments: [HallieAttachment] = []
+            attachments: [HallieAttachment] = [],
+            performsFirstOfferedAction: Bool = false
         ) {
             self.route = route
             self.outcome = outcome
@@ -404,6 +411,7 @@ enum HallieTurnExecutor {
             self.composedBy = composedBy
             self.transcriptText = transcriptText
             self.attachments = attachments
+            self.performsFirstOfferedAction = performsFirstOfferedAction
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -415,7 +423,8 @@ enum HallieTurnExecutor {
                 knowledgeCitations: knowledgeCitations, catalogPersonName: catalogPersonName,
                 clarification: clarification, matchCount: matchCount, mediaAction: mediaAction,
                 offeredActions: offeredActions, answerPlan: answerPlan, composedBy: composedBy,
-                transcriptText: transcriptText, attachments: attachments + extra)
+                transcriptText: transcriptText, attachments: attachments + extra,
+                performsFirstOfferedAction: performsFirstOfferedAction)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -439,7 +448,8 @@ enum HallieTurnExecutor {
                 composedBy: composition.composedBy,
                 transcriptText: composition.composedBy == .model
                     ? composition.transcriptText : nil,
-                attachments: attachments)
+                attachments: attachments,
+                performsFirstOfferedAction: performsFirstOfferedAction)
         }
     }
 
