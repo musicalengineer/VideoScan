@@ -13,3 +13,6 @@ Also: Family Tree navigation has no timing logs (load → layout → focus); add
 ## 8/29 morning (main 9e27c40b)
 6. **"can you center on marhta lamson"** → catalog search (fixed 9e27c40b: `.centerTree` shape, auto-performed action, spelling recovery stated).
 7. **"tell me about Matthew Rice"** → "born 28 February 1629, died before 29 November 1717; child of Edmund Rice and Thomasine Frost." — no places, no marriage (Martha Lamson), no children, while "…the family tree on martha lamson" gave parents + marriage + children + depth. Biography must be ONE consistent card: vitals with places, parents, marriages (with dates), children, tree-depth summary, all cited.
+
+## Feature idea (Rick 8/29 11:45) — "Research Person"
+Right-click tree person → Research: FSID-keyed pane under People/<FSID>/research/; sources: FamilySearch record hints, Find a Grave, Chronicling America (LoC newspapers), Wikipedia/Wikidata, web search constrained by dates/places; LLM summary with per-sentence citations; findings marked confirmed/plausible/wrong + lore → CyberBrain attestations Hallie cites. Deceased/tree people only (privacy). Design doc after kinship lands.
