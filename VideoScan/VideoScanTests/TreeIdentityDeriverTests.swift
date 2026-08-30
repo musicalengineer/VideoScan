@@ -706,6 +706,44 @@ struct TreeIdentityCenterTests {
         #expect(saved.map(\.name).sorted() == ["Donna", "Rick"])
     }
 
+    /// SENSOR: SwiftUI `.task(id:)` cancels A before it starts B. The
+    /// detached worker does not inherit that cancellation, so the parent
+    /// refresh must reject its result and release the same-key in-flight
+    /// slot itself.
+    @Test func cancelledRefreshCannotPublishOrWedgeSameKey() async {
+        let (center, kinship) = makeCenter()
+        let gate = TreeIdentityDerivationGate()
+        var saved: [POIProfile] = []
+        center.store = { saved.append($0) }
+        center.derivationPass = { graph, subjects, speakers in
+            await gate.holdFirstPass()
+            return TreeIdentityDeriver(
+                graph: graph,
+                subjects: subjects,
+                ownerName: speakers.ownerName,
+                ownerFamilySearchID: speakers.ownerFamilySearchID
+            ).deriveAll()
+        }
+        let profiles = [F.rick, F.donna]
+        kinship.install(graph: F.graph)
+
+        let cancelledRefresh = Task { await center.refresh(profiles: profiles) }
+        await gate.waitUntilStarted()
+        cancelledRefresh.cancel()
+        await gate.release()
+        await cancelledRefresh.value
+
+        #expect(center.derivations.isEmpty)
+        #expect(center.derivationRunCount == 0)
+        #expect(center.pinsRevision == 0)
+        #expect(saved.isEmpty, "a cancelled refresh must not persist trusted-source pins")
+
+        await center.refresh(profiles: profiles)
+        #expect(center.derivationRunCount == 1, "cancellation must clear the same-key in-flight slot")
+        #expect(center.pinsRevision == 1)
+        #expect(saved.map(\.name).sorted() == ["Donna", "Rick"])
+    }
+
     /// SENSOR: A's memo hit is still an active refresh decision. It must
     /// supersede a different B pass instead of letting B land afterward.
     @Test func memoHitARejectsInFlightBWhenInputsReturnToA() async {

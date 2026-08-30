@@ -178,7 +178,8 @@ final class TreeIdentityCenter: ObservableObject {
         // A graph clear/replacement or newer profile pass supersedes this
         // one while it is off actor. Detached work ignores parent Task
         // cancellation, so acceptance must be guarded explicitly.
-        guard refreshEpoch == epoch,
+        guard !Task.isCancelled,
+              refreshEpoch == epoch,
               inFlightKey == key,
               derivationInput(for: profiles).key == key else {
             if inFlightKey == key { inFlightKey = nil }
