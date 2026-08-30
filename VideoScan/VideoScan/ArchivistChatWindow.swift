@@ -1679,6 +1679,10 @@ struct ArchivistChatWindow: View {
             return answerDate(personText: personText,
                               wantsBirth: birth,
                               original: text)
+        case .lifePlace(let personText, let birth):
+            return answerPlace(personText: personText,
+                               wantsBirth: birth,
+                               original: text)
         case .biography(let personText):
             return answerWhoIs(personText: personText,
                 original: text)
@@ -1720,6 +1724,33 @@ struct ArchivistChatWindow: View {
             return true
         }
         let answer = ArchivistBiographyPolicy.lifeDate(
+            for: personText, birth: wantsBirth,
+            candidates: candidates, in: graph)
+        appendFamilyAnswer(answer, kind: wantsBirth ? .birth : .death, graph: graph)
+        return true
+    }
+
+    /// "Where was X born?" — mirrors `answerDate` exactly, including the
+    /// ambiguity path, so a place question resolves identity the same way
+    /// a date question does.
+    private func answerPlace(personText: String, wantsBirth: Bool,
+                             original: String) -> Bool {
+        guard let graph = loadFamilyGraph() else {
+            if declineForRecompile(original: original) { return true }
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't have the family tree loaded yet, so I can't answer that reliably.",
+                basisLine: "Checked: no imported family tree is available."))
+            return true
+        }
+        let resolution = FamilyTreeIdentityResolver(
+            graph: graph, profiles: POIProfile.listAll()).resolve(personText)
+        guard case .people(let candidates) = resolution else {
+            appendProfileAmbiguity(resolution, typedName: personText,
+                                   original: original)
+            return true
+        }
+        let answer = ArchivistBiographyPolicy.lifePlace(
             for: personText, birth: wantsBirth,
             candidates: candidates, in: graph)
         appendFamilyAnswer(answer, kind: wantsBirth ? .birth : .death, graph: graph)

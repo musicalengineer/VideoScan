@@ -4,6 +4,7 @@ import VideoScanCore
 enum ArchivistGeneralQuestion: Equatable {
     case ancestry
     case lifeDate(personText: String, birth: Bool)
+    case lifePlace(personText: String, birth: Bool)
     case biography(personText: String)
 }
 
@@ -54,6 +55,19 @@ enum ArchivistQuestionParser {
             let person = cleanName(String(match.1))
             guard !person.isEmpty else { return nil }
             return .lifeDate(
+                personText: person,
+                birth: String(match.2).lowercased() == "born")
+        }
+
+        // "where was Martha Lamson born" / "where did she die" / "where is
+        // X buried". Added 2026-08-30 after Donna asked exactly the first
+        // of these on the web client and the question matched no pattern
+        // at all — it fell through before reaching any answer.
+        if let match = trimmed.firstMatch(
+            of: /where (?:was|were|did|is)\s+(.+?)\s+(born|die|died|buried)/.ignoresCase()) {
+            let person = cleanName(String(match.1))
+            guard !person.isEmpty else { return nil }
+            return .lifePlace(
                 personText: person,
                 birth: String(match.2).lowercased() == "born")
         }

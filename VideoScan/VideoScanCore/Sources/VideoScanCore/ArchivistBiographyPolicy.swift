@@ -113,10 +113,27 @@ public enum ArchivistBiographyPolicy {
                                   in graph: GedcomFamilyGraph)
         -> ArchivistBiographyAnswer {
 
+        // Vitals, in Rick's order (2026-08-30): dates AND places. Places
+        // were parsed, stored and used for disambiguation, but never
+        // reached a stated fact — so "where was Martha Lamson born?"
+        // could not be answered even though the GEDCOM carries 44,469
+        // PLAC lines. Donna hit this on the web client.
         var facts: [String] = []
-        if let born = person.birthDate { facts.append("born \(born)") }
-        if let died = person.deathDate {
-            facts.append("resting in peace since \(died)")
+        switch (person.birthDate, cleanPlace(person.birthPlace)) {
+        case (let date?, let place?): facts.append("born \(date) in \(place)")
+        case (let date?, nil):        facts.append("born \(date)")
+        case (nil, let place?):       facts.append("born in \(place)")
+        case (nil, nil):              break
+        }
+        switch (person.deathDate, cleanPlace(person.deathPlace)) {
+        case (let date?, let place?):
+            facts.append("resting in peace since \(date), in \(place)")
+        case (let date?, nil):
+            facts.append("resting in peace since \(date)")
+        case (nil, let place?):
+            facts.append("died in \(place)")
+        case (nil, nil):
+            break
         }
         let parents = orderedPeople(
             graph.relatives(.parents, of: person)).map(\.name)
@@ -133,6 +150,13 @@ public enum ArchivistBiographyPolicy {
         if !children.isEmpty {
             facts.append("parent of \(children.joined(separator: ", "))")
         }
+        // Marriage DATES: the spouse names above say who, never when.
+        let marriageDates = graph.marriages(of: person).compactMap { marriage -> String? in
+            guard let date = marriage.date else { return nil }
+            guard let spouse = marriage.spouse?.name else { return "married \(date)" }
+            return "married \(spouse) \(date)"
+        }
+        facts.append(contentsOf: marriageDates)
 
         let hasDetails = !facts.isEmpty
         let text = hasDetails
@@ -207,6 +231,77 @@ public enum ArchivistBiographyPolicy {
             text: text,
             basis: gedcomBasis,
             catalogPersonName: person.name)
+    }
+
+    /// "Where was X born / die?" — the sibling of `lifeDate`. Added
+    /// 2026-08-30: the parser had no `where` pattern at all, so the
+    /// question fell through before reaching any answer.
+    public static func lifePlace(for typedName: String, birth: Bool,
+                                 candidates: [GedcomFamilyGraph.Person],
+                                 in graph: GedcomFamilyGraph)
+        -> ArchivistBiographyAnswer {
+        guard candidates.count == 1, let person = candidates.first else {
+            return unresolved(typedName: typedName, candidates: candidates)
+        }
+        return lifePlace(for: person, birth: birth)
+    }
+
+    public static func lifePlace(personID: String, birth: Bool,
+                                 in graph: GedcomFamilyGraph)
+        -> ArchivistBiographyAnswer {
+        guard let person = graph.people[personID] else {
+            return ArchivistBiographyAnswer(
+                state: .notFound,
+                text: "That family-tree person is no longer available.",
+                basis: gedcomBasis,
+                catalogPersonName: nil)
+        }
+        return lifePlace(for: person, birth: birth)
+    }
+
+    private static func lifePlace(for person: GedcomFamilyGraph.Person,
+                                  birth: Bool) -> ArchivistBiographyAnswer {
+        let place = cleanPlace(birth ? person.birthPlace : person.deathPlace)
+        guard let place else {
+            return ArchivistBiographyAnswer(
+                state: .missingFact,
+                text: "The family tree doesn't record "
+                    + (birth ? "a birthplace" : "a place of death")
+                    + " for \(person.name).",
+                basis: gedcomBasis,
+                catalogPersonName: person.name)
+        }
+        // The date is included when the record has it: someone asking where
+        // almost always wants when as well, and it costs nothing.
+        let date = birth ? person.birthDate : person.deathDate
+        let text: String
+        if birth {
+            text = date.map { "\(person.name) was born in \(place), \($0)." }
+                ?? "\(person.name) was born in \(place)."
+        } else {
+            text = date.map { "\(person.name) died in \(place), \($0)." }
+                ?? "\(person.name) died in \(place)."
+        }
+        return ArchivistBiographyAnswer(state: .answered, text: text,
+                                        basis: gedcomBasis,
+                                        catalogPersonName: person.name)
+    }
+
+    /// A place worth saying out loud.
+    ///
+    /// The real export carries placeholder junk — "xx" appears literally,
+    /// alongside honest values from "England" to "Yorkshire, England". We
+    /// deliberately do NOT normalise or geocode: Hallie says what the
+    /// record says. This only suppresses values that are not places at
+    /// all, so she says "doesn't record a birthplace" rather than
+    /// "was born in xx".
+    public static func cleanPlace(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        let placeholders: Set<String> = ["xx", "x", "?", "??", "n/a", "na",
+                                         "unknown", "unk", "-", "--"]
+        if placeholders.contains(trimmed.lowercased()) { return nil }
+        return trimmed
     }
 
     private static func unresolved(typedName: String,
