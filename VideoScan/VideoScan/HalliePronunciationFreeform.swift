@@ -617,7 +617,7 @@ enum HalliePronunciationFreeform {
     /// and keep LAD-dah too. Say 'no — …' if that's off." Plain
     /// alternatives: "OK, noted — Latta. I'll say Lattah and keep Laddah
     /// too." One respelling: the ordinary "I'll say Latta as X from now on."
-    static func teachReply(_ told: HallieFreeformPronunciation, scope: HallieTellingMode.PronunciationScope) -> String {
+    private static func teachLead(_ told: HallieFreeformPronunciation) -> String {
         guard let spoken = told.alternatives.first else { return HallieTellingMode.pronunciationReadBack(told.word) }
         let cue = told.cueSummary.map { " (\($0))" } ?? ""
         var text = HallieTellingMode.pronunciationReadBack(told.word)
@@ -627,6 +627,11 @@ enum HalliePronunciationFreeform {
         } else {
             text += " I'll say \(told.word) as \(spoken)\(cue) from now on."
         }
+        return text
+    }
+
+    static func teachReply(_ told: HallieFreeformPronunciation, scope: HallieTellingMode.PronunciationScope) -> String {
+        let text = teachLead(told)
         switch scope {
         case .person(let name) where FamilyIdentityText.normalized(name) != FamilyIdentityText.normalized(told.word):
             return text + " I've kept that with \(name)."
@@ -635,6 +640,11 @@ enum HalliePronunciationFreeform {
         case .file:
             return text + " I've kept that in the pronunciation list."
         }
+    }
+
+    static func transientTeachReply(_ told: HallieFreeformPronunciation) -> String {
+        teachLead(told)
+            + " I'll use that for this session only; run with --remember to save it."
     }
 
     /// Nothing mappable: the raw hint is kept; ask for a spelling.

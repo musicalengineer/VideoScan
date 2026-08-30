@@ -39,6 +39,13 @@ struct HalliePronunciationPickerTests {
         }
     }
 
+    private final class DependencyProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: Set<String> = []
+        func hit(_ name: String) { lock.withLock { _ = storage.insert(name) } }
+        var hits: Set<String> { lock.withLock { storage } }
+    }
+
     private func dependencies(_ recorder: Recorder) -> HallieAppTurnCoordinator.Dependencies {
         HallieAppTurnCoordinator.Dependencies(
             startLocalBrain: { $0 },
@@ -84,6 +91,62 @@ struct HalliePronunciationPickerTests {
             .appendingPathComponent("picker-gold-\(UUID().uuidString).json")
         try JSONSerialization.data(withJSONObject: table).write(to: url)
         return (MisakiGoldLexicon(url: url), url)
+    }
+
+    private func preservationDependencies(
+        _ probe: DependencyProbe,
+        gold: MisakiGoldLexicon,
+        ast: ArchivistQueryAST,
+        result: HallieTurnExecutor.Result
+    ) -> HallieAppTurnCoordinator.Dependencies {
+        HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { _ in probe.hit("startLocalBrain"); return ["brain"] },
+            translateAST: { _, _, _ in
+                probe.hit("translateAST")
+                return .init(ast: ast, responderHost: "translation")
+            },
+            interpretTurn: { _, _, _ in
+                probe.hit("interpretTurn")
+                return .init(value: .archive(ast), responderHost: "interpretation")
+            },
+            composeConversation: { _, _, _, _, _ in
+                probe.hit("composeConversation")
+                return .init(
+                    value: .init(text: "social", composedByModel: false, note: "probe"),
+                    responderHost: "conversation")
+            },
+            loadProfiles: {
+                probe.hit("loadProfiles")
+                return [.init(stableID: "probe", canonicalName: "Probe Person")]
+            },
+            loadGraph: { probe.hit("loadGraph"); return nil },
+            loadNeedsRecompile: {
+                probe.hit("loadNeedsRecompile")
+                return [URL(fileURLWithPath: "/probe/needs-recompile")]
+            },
+            loadCyberBrain: { probe.hit("loadCyberBrain"); return nil },
+            recordTestimony: { _ in probe.hit("recordTestimony") },
+            recordPhotoCaption: { _ in probe.hit("recordPhotoCaption") },
+            recordPronunciation: { _ in probe.hit("recordPronunciation") },
+            loadDrillStore: { probe.hit("loadDrillStore"); return .init() },
+            saveDrillStore: { _, _ in probe.hit("saveDrillStore") },
+            loadLexicon: {
+                probe.hit("loadLexicon")
+                return .init(entries: [.init(written: "Probe", spoken: "PROBE")])
+            },
+            loadPronunciationGold: { probe.hit("loadPronunciationGold"); return gold },
+            excludePhoto: { _, _, _, _ in probe.hit("excludePhoto") },
+            loadSpeakers: {
+                probe.hit("originalSpeakers")
+                return .init(ownerName: "Wrong", archivistName: "Wrong")
+            },
+            executeRequest: { _, _ in probe.hit("executeRequest"); return result },
+            continueTurn: { _, _, _ in probe.hit("continueTurn"); return result },
+            resolveBiographyPhoto: { _ in probe.hit("resolveBiographyPhoto"); return nil },
+            composeAnswer: { plan, _, _, _ in
+                probe.hit("composeAnswer")
+                return .template(plan, note: "probe")
+            })
     }
 
     private static var lattaOffer: HalliePronunciationPicker.Offer {
@@ -158,6 +221,9 @@ struct HalliePronunciationPickerTests {
         #expect(P.hearSpeech(offer, number: 2) == "Number 2: [Latta](/lˈæɾə/).")
         #expect(P.pickedReply(word: "Latta", candidate: offer.candidates[1], number: 2, scope: .file)
                 == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I've kept that in the pronunciation list for that name.")
+        #expect(P.transientPickedReply(
+            word: "Latta", candidate: offer.candidates[1], number: 2)
+            == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I'll use that for this session only; run with --remember to save it.")
         // The chat window's chips: five to hear, "That's it" only once one was heard, "None of these".
         #expect(ArchivistMessage.pickerChips(for: offer).map(\.label) == ["1 LAT-uh", "2 LAD-uh", "3 LAH-tah", "4 la-TAH", "5 LAT-ah", "None of these"])
         var heard = offer
@@ -337,15 +403,68 @@ struct HalliePronunciationPickerTests {
         #expect(withGold.picker?.candidates.first?.respelling == "LAY-duh")
     }
 
-    @Test func replacingWebSpeakersPreservesTheInjectedGoldSource() throws {
-        let recorder = Recorder()
+    @Test func replacingWebSpeakersPreservesEveryInjectedDependency() async throws {
+        let probe = DependencyProbe()
         let (gold, goldURL) = try goldFixture(["data": "dˈAɾə"])
         defer { try? FileManager.default.removeItem(at: goldURL) }
-        recorder.gold = gold
-        let replaced = dependencies(recorder).replacingSpeakers(
+        let ast = ArchivistQueryAST.temporal(.init(
+            subject: "Tim", operation: .age, reference: .currentSelection))
+        let result = HallieTurnExecutor.Result(
+            route: .temporal, outcome: .answered, prose: "executed",
+            basisLine: "probe", queryDescription: nil, citations: [],
+            catalogPersonName: nil)
+        let plan = HallieAnswerPlan(
+            route: .help, shape: .fixed, fallbackText: "composed")
+        let source = preservationDependencies(
+            probe, gold: gold, ast: ast, result: result)
+        let replaced = source.replacingSpeakers(
             .init(ownerName: "Donna Breen", archivistName: "Hallie Mae"))
+
+        #expect(try await replaced.startLocalBrain([]) == ["brain"])
+        #expect(try await replaced.translateAST("", [], "").responderHost == "translation")
+        #expect(try await replaced.interpretTurn("", [], "").responderHost == "interpretation")
+        #expect(await replaced.composeConversation(.casual, "", [], [], "").responderHost == "conversation")
+        #expect(replaced.loadProfiles()?.first?.stableID == "probe")
+        #expect(replaced.loadGraph() == nil)
+        #expect(replaced.loadNeedsRecompile().first?.path == "/probe/needs-recompile")
+        #expect(replaced.loadCyberBrain() == nil)
+        try replaced.recordTestimony(.init(
+            subjectName: "Probe", speakerName: "Tester", text: "test", date: .distantPast))
+        try replaced.recordPhotoCaption(.init(
+            subjects: [.init(name: "Probe")], speakerName: "Tester",
+            text: "test", photoPath: "/probe.jpg", date: .distantPast))
+        try replaced.recordPronunciation(.init(
+            word: "Probe", saidAs: "PROBE", phonemes: nil, target: .file))
+        let store = replaced.loadDrillStore()
+        try replaced.saveDrillStore(
+            store,
+            .build(list: .init(items: []), lexicon: .shipped, store: store))
+        #expect(replaced.loadLexicon().entries.first?.written == "Probe")
         #expect(replaced.loadPronunciationGold().phonemes(for: "data") == "dˈAɾə")
+        try replaced.excludePhoto(URL(fileURLWithPath: "/probe.jpg"), "@I1@", nil, nil)
         #expect(replaced.loadSpeakers().ownerName == "Donna Breen")
+        let context = HallieTurnExecutor.Context(profiles: [
+            .init(stableID: "tim-a", canonicalName: "Tim"),
+            .init(stableID: "tim-b", canonicalName: "Timmy", aliases: ["Tim"]),
+        ])
+        let request = HallieTurnExecutor.Request(intent: .init(
+            originalQuestion: "How old was Tim?", ast: ast, playAfterAnswer: false))
+        #expect(try await replaced.executeRequest(request, context).prose == "executed")
+        let ambiguous = try await HallieTurnExecutor.execute(request, context: context)
+        let clarification = try #require(ambiguous.clarification)
+        #expect(try await replaced.continueTurn(
+            clarification, .profileStableID("tim-a"), context).prose == "executed")
+        #expect(replaced.resolveBiographyPhoto("Probe") == nil)
+        #expect(await replaced.composeAnswer(plan, [], [], "").displayText == "composed")
+
+        #expect(probe.hits == [
+            "startLocalBrain", "translateAST", "interpretTurn", "composeConversation",
+            "loadProfiles", "loadGraph", "loadNeedsRecompile", "loadCyberBrain",
+            "recordTestimony", "recordPhotoCaption", "recordPronunciation",
+            "loadDrillStore", "saveDrillStore", "loadLexicon", "loadPronunciationGold",
+            "excludePhoto", "executeRequest", "continueTurn", "resolveBiographyPhoto",
+            "composeAnswer",
+        ])
     }
 
     // MARK: - 4. Shell parity
@@ -414,8 +533,11 @@ struct HalliePronunciationPickerTests {
             options: HallieShellCLI.Options(), input: harness.next,
             output: { harness.output.append($0) }, dependencies: dependencies)
         let text = harness.output.joined(separator: "\n")
-        #expect(text.contains("OK, noted — Latta. I'll say Latta as LAT-uh (number 1) from now on."))
-        #expect(text.contains("run with --remember to save it"))
+        #expect(text.contains(
+            "OK, noted — Latta. I'll say Latta as LAT-uh (number 1) from now on. "
+                + "I'll use that for this session only; run with --remember to save it."))
+        #expect(!text.contains("I've kept that in the pronunciation list"))
+        #expect(!text.contains("I've kept that on Latta's record"))
         #expect(!harness.wrote && !harness.saved)
     }
 
@@ -453,6 +575,10 @@ struct HalliePronunciationPickerTests {
             options: HallieShellCLI.Options(), input: harness.next,
             output: { harness.output.append($0) }, dependencies: dependencies(harness))
         let text = harness.output.joined(separator: "\n")
+        #expect(text.contains(
+            "OK, noted — Latta. I'll say Latta as LAH-tah (or LAY-tuh) from now on. "
+                + "I'll use that for this session only; run with --remember to save it."))
+        #expect(!text.contains("I've kept that in the pronunciation list for that name"))
         #expect(text.contains("I say Latta as LAH-tah (or LAY-tuh)"))
         #expect(text.contains("Latta as LAH-tah"))
         #expect(text.contains("1. LAH-tah /lˈɑtɑ/ — as you spelled it"))
@@ -469,41 +595,6 @@ struct HalliePronunciationPickerTests {
         #expect(freshText.contains("I say Latta as LAT-uh"))
         #expect(!freshText.contains("LAH-tah"))
         #expect(fresh.recorded == 0 && fresh.saved == 0)
-    }
-
-    @Test func shellCapturesInjectedSpeakersInsteadOfReadingProcessDefaults() async {
-        final class Harness: @unchecked Sendable {
-            var inputs = ["who is in the archive?"]
-            var output: [String] = []
-            var captured: HallieTurnExecutor.Speakers?
-            func next() -> String? { inputs.isEmpty ? nil : inputs.removeFirst() }
-        }
-        let harness = Harness()
-        let injected = HallieTurnExecutor.Speakers(
-            ownerName: "Injected Owner \(UUID().uuidString)",
-            archivistName: "Injected Archivist")
-        let dependencies = HallieShellCLI.Dependencies(
-            loadCatalog: { _ in [] },
-            loadProfiles: { .loaded([]) },
-            loadGraph: { _ in nil },
-            translateAST: { _, _ in
-                .init(ast: .presence(.init(people: ["Donna"])), responderHost: "fixture")
-            },
-            executeTurn: { _, context in
-                harness.captured = context.speakers
-                return .init(
-                    route: .presence, outcome: .answered,
-                    prose: "captured \(context.speakers.ownerName ?? "none")",
-                    basisLine: "Basis: fixture", queryDescription: "fixture",
-                    citations: [], catalogPersonName: nil)
-            },
-            performMediaAction: { _ in },
-            speakers: { injected })
-        _ = await HallieShellCLI.run(
-            options: HallieShellCLI.Options(), input: harness.next,
-            output: { harness.output.append($0) }, dependencies: dependencies)
-        #expect(harness.captured == injected)
-        #expect(harness.output.contains("captured \(injected.ownerName ?? "none")"))
     }
 
     @Test func shellPickerUsesOnlyItsInjectedGoldSource() async throws {

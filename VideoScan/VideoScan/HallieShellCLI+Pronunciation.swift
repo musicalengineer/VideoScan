@@ -89,10 +89,19 @@ extension HallieShellCLI {
         case .cyberBrainPerson(_, let name), .treePerson(let name, _, _): scope = .person(name: name)
         case .file: scope = .file
         }
-        var prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
-            ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
-            ?? HallieTellingMode.pronunciationReply(told, scope: scope)
-        var basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
+        var prose: String
+        var basis: String
+        if options.remember {
+            prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
+                ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
+                ?? HallieTellingMode.pronunciationReply(told, scope: scope)
+            basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
+        } else {
+            prose = freeform.map(HalliePronunciationFreeform.transientTeachReply)
+                ?? hint.map { HallieTellingMode.transientHintReply($0, respelling: told.spoken) }
+                ?? HallieTellingMode.transientPronunciationReply(told)
+            basis = "Basis: listening — pronunciation NOT saved (no --remember); no model call, no catalog query."
+        }
         let phonemes = HallieAppTurnCoordinator.derivePhonemes(
             alternatives: alternatives, hint: hint?.hint,
             gold: dependencies.loadPronunciationGold())
@@ -117,8 +126,6 @@ extension HallieShellCLI {
                 spoken: told.saidAs,
                 phonemes: phonemes,
                 origin: "told")
-            prose += " (Kept for this session only — run with --remember to save it.)"
-            basis = "Basis: listening — pronunciation NOT saved (no --remember); no model call, no catalog query."
         }
         return await emitPronunciation(prose, description: hint == nil ? "pronunciation" : "pronunciation hint",
                                        basis: basis, state: &state, output: output, dependencies: dependencies)

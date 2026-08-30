@@ -115,7 +115,9 @@ extension HallieShellCLI {
         case .cyberBrainPerson(_, let name), .treePerson(let name, _, _): scope = .person(name: name)
         case .file: scope = .file
         }
-        var prose = Picker.pickedReply(word: word, candidate: candidate, number: number, scope: scope)
+        var prose = options.remember
+            ? Picker.pickedReply(word: word, candidate: candidate, number: number, scope: scope)
+            : Picker.transientPickedReply(word: word, candidate: candidate, number: number)
         if options.remember {
             do {
                 try dependencies.recordPronunciation(.init(word: word, saidAs: candidate.respelling, phonemes: candidate.phonemes,
@@ -133,7 +135,6 @@ extension HallieShellCLI {
                 spoken: candidate.respelling,
                 phonemes: candidate.phonemes,
                 origin: "picked")
-            prose += " (Kept for this session only — run with --remember to save it.)"
         }
         var store = dependencies.loadDrillStore()
         let key = FamilyIdentityText.normalized(word)

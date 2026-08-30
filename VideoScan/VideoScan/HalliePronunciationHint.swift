@@ -234,6 +234,15 @@ extension HallieTellingMode {
         }
     }
 
+    static func transientHintReply(
+        _ told: HalliePronunciationHintTelling,
+        respelling: String
+    ) -> String {
+        pronunciationReadBack(told.word)
+            + " From your hint (\(told.hint.description)), I'll say \(told.word) as \(respelling) from now on."
+            + " I'll use that for this session only; run with --remember to save it."
+    }
+
     /// A hint Hallie cannot turn into a spelling safely: ask, never search.
     static func hintNeedsSpellingReply(_ told: HalliePronunciationHintTelling) -> String {
         "I've noted \u{201C}\(told.hint.description)\u{201D} for \(told.word) — I'll offer you a few ways to say it next; for now, spell it out for me like \u{201C}LAT-uh\u{201D}?"

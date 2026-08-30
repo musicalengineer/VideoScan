@@ -278,6 +278,19 @@ enum HalliePronunciationPicker {
             .replacingOccurrences(of: " from now on.", with: " (number \(number)) from now on.")
     }
 
+    static func transientPickedReply(
+        word: String,
+        candidate: PronunciationVariations.Candidate,
+        number: Int
+    ) -> String {
+        let telling = HallieTellingMode.PronunciationTelling(
+            word: word, alternatives: [candidate.respelling])
+        return HallieTellingMode.transientPronunciationReply(telling)
+            .replacingOccurrences(
+                of: " from now on.",
+                with: " (number \(number)) from now on.")
+    }
+
     static func outOfRangeReply(_ offer: Offer, number: Int) -> String {
         "I offered \(offer.candidates.count) way\(offer.candidates.count == 1 ? "" : "s") to say \(offer.word) — tell me a number from 1 to \(offer.candidates.count), or \"none of these\"."
     }
