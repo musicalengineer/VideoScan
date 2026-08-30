@@ -533,14 +533,18 @@ else
     # and exits during grace, but its descendant ignores TERM. The retained
     # leader must keep the PGID reserved until the descendant receives KILL.
     MIXED_FIXTURE="$SANDBOX/watchdog-mixed-term-fixture.sh"
-    MIXED_READY="$SANDBOX/watchdog-mixed-ready"
+    MIXED_CHILD_READY="$SANDBOX/watchdog-mixed-child-ready"
+    MIXED_CHILD_TERM_SEEN="$SANDBOX/watchdog-mixed-child-term-seen"
     MIXED_CHILD_PID_FILE="$SANDBOX/watchdog-mixed-child.pid"
     SENTINEL_SIGNAL="$SANDBOX/watchdog-sentinel-signal"
     printf '%s\n' \
         '#!/usr/bin/env bash' \
-        '( trap "" TERM; while :; do sleep 1; done ) &' \
+        '(' \
+        '  trap '\''touch "$WATCHDOG_MIXED_CHILD_TERM_SEEN"'\'' TERM' \
+        '  : > "$WATCHDOG_MIXED_CHILD_READY"' \
+        '  while :; do sleep 1; done' \
+        ') &' \
         'printf "%s\n" "$!" > "$WATCHDOG_MIXED_CHILD_PID_FILE"' \
-        ': > "$WATCHDOG_MIXED_READY"' \
         'while :; do sleep 1; done' \
         > "$MIXED_FIXTURE"
     chmod +x "$MIXED_FIXTURE"
@@ -554,8 +558,9 @@ else
         source "$WATCHDOG_LIB"
         log() { echo "[watchdog-test] $*"; }
         export VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY=1
-        export VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE="$MIXED_READY"
-        export WATCHDOG_MIXED_READY="$MIXED_READY"
+        export VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE="$MIXED_CHILD_READY"
+        export WATCHDOG_MIXED_CHILD_READY="$MIXED_CHILD_READY"
+        export WATCHDOG_MIXED_CHILD_TERM_SEEN="$MIXED_CHILD_TERM_SEEN"
         export WATCHDOG_MIXED_CHILD_PID_FILE="$MIXED_CHILD_PID_FILE"
         run_with_process_group_watchdog \
             999 0.05 "$SANDBOX/watchdog-mixed-command.log" "$MIXED_FIXTURE"
@@ -569,12 +574,13 @@ else
     done
     if [ "$MIXED_RC" -eq 124 ] &&
        ! kill -0 "$MIXED_CHILD_PID" 2>/dev/null &&
+       [ -e "$MIXED_CHILD_TERM_SEEN" ] &&
        kill -0 "$SENTINEL_PID" 2>/dev/null &&
        [ ! -e "$SENTINEL_SIGNAL" ] &&
        ! grep -q 'CONTAMINATION:' "$SANDBOX/watchdog-mixed-output.log"; then
-        pass "leader TERM exit still escalates TERM-ignoring child; unrelated process untouched"
+        pass "child observed/survived TERM, then escalation killed it; unrelated process untouched"
     else
-        fail "mixed TERM escalation broke (rc=$MIXED_RC child_alive=$(kill -0 "$MIXED_CHILD_PID" 2>/dev/null && echo yes || echo no) sentinel_alive=$(kill -0 "$SENTINEL_PID" 2>/dev/null && echo yes || echo no) contamination=$(grep -c 'CONTAMINATION:' "$SANDBOX/watchdog-mixed-output.log" || true))"
+        fail "mixed TERM escalation broke (rc=$MIXED_RC child_alive=$(kill -0 "$MIXED_CHILD_PID" 2>/dev/null && echo yes || echo no) term_seen=$([ -e "$MIXED_CHILD_TERM_SEEN" ] && echo yes || echo no) sentinel_alive=$(kill -0 "$SENTINEL_PID" 2>/dev/null && echo yes || echo no) contamination=$(grep -c 'CONTAMINATION:' "$SANDBOX/watchdog-mixed-output.log" || true))"
     fi
     kill -KILL "$SENTINEL_PID" 2>/dev/null || true
     wait "$SENTINEL_PID" 2>/dev/null || true
