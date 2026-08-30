@@ -182,7 +182,9 @@ final class TreeIdentityCenter: ObservableObject {
               refreshEpoch == epoch,
               inFlightKey == key,
               derivationInput(for: profiles).key == key else {
-            if inFlightKey == key { inFlightKey = nil }
+            // Key equality is insufficient after K → L → new K: the old
+            // K continuation must not clear the new K owner's slot.
+            if refreshEpoch == epoch, inFlightKey == key { inFlightKey = nil }
             return
         }
         inFlightKey = nil
