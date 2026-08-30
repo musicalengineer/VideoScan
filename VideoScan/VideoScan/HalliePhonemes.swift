@@ -38,6 +38,9 @@ enum HalliePhonemes {
     /// differ only where the convention does ("uh" = ʌ stressed, ə not).
     private struct Vowel { let stressed: String; let unstressed: String }
     private static let vowels: [(String, Vowel)] = [
+        // Keep before "oo": an intuitive letter-name respelling such as
+        // "EKS-kyoo-zee" is /ju/, not a y-vowel followed by stray "oo".
+        ("yoo", Vowel(stressed: "ju", unstressed: "ju")),
         ("eye", Vowel(stressed: "I", unstressed: "I")),
         ("igh", Vowel(stressed: "I", unstressed: "I")),
         ("air", Vowel(stressed: "ɛɹ", unstressed: "ɛɹ")),

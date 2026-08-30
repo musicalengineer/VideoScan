@@ -170,6 +170,9 @@ extension HallieTellingMode {
 
     /// No "OK, noted": nothing was kept. The reason is the error's own words.
     static func pronunciationFailureReply(_ telling: PronunciationTelling, error: String) -> String {
-        "I couldn't save that — \(error). Saying \(telling.word) as \(telling.spoken) won't stick past this answer, sorry."
+        let prefix = "could not save: "
+        let detail = error.lowercased().hasPrefix(prefix)
+            ? String(error.dropFirst(prefix.count)) : error
+        return "I couldn't save that — \(detail). Saying \(telling.word) as \(telling.spoken) won't stick past this answer, sorry."
     }
 }

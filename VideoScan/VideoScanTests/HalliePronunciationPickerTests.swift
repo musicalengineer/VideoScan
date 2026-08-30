@@ -116,6 +116,7 @@ struct HalliePronunciationPickerTests {
         #expect(P.detectRequest("let me pick") == .init(word: nil))
         #expect(P.detectRequest("let me pick Latta") == .init(word: "Latta"))
         #expect(P.detectRequest("let me choose how to say Latta") == .init(word: "Latta"))
+        #expect(P.detectRequest("I want to pick how to pronounce McGill") == .init(word: "McGill"))
         #expect(P.detectRequest("which sounds right?") == .init(word: nil))
         #expect(P.detectRequest("which one sounds right for Edith") == .init(word: "Edith"))
         #expect(P.detectRequest("give me a few ways to say Latta") == .init(word: "Latta"))
@@ -125,7 +126,8 @@ struct HalliePronunciationPickerTests {
         #expect(P.detectRequest("pronounce Latta like LAT-uh") == nil)
         #expect(P.detectRequest("who is Latta?") == nil)
         #expect(P.detectRequest("play the first one") == nil)
-        for text in ["no", "No.", "nope", "not right", "wrong", "that's not it", "not quite", "no, that's wrong"] {
+        for text in ["no", "No.", "nope", "not right", "wrong", "that's not it", "not quite",
+                     "no, that's wrong", "no, that's not right"] {
             #expect(P.isBareNo(text), "\(text)")
         }
         for text in ["no — MahGill", "not LAT-uh", "no it's Lah-Tah", "skip", "right"] {
@@ -270,7 +272,7 @@ struct HalliePronunciationPickerTests {
         #expect(offer.candidates.map(\.respelling) == ["RICK", "REEK", "REYEK"])
         let picked = try await turn("1", picker: offer, drill: offered.drill, recorder: recorder)
         #expect(picked.picker == nil)
-        #expect(picked.result.prose == "OK, noted — Rick. I'll say Rick as RICK (number 1) from now on. I've kept that with Rick Breen. Next name: Breen.")
+        #expect(picked.result.prose == "OK, noted — Rick. I'll say Rick as RICK (number 1) from now on. I've kept that in the pronunciation list, since more than one person carries that name. Next name: Breen.")
         #expect(picked.drill?.current?.name == "Breen")
         #expect(picked.drill?.taught == 1)
         #expect(recorder.writes == [.init(word: "Rick", saidAs: "RICK", phonemes: "ɹˈɪk", target: .file, origin: "picked")])
@@ -289,9 +291,10 @@ struct HalliePronunciationPickerTests {
         let offer = try #require(offered.picker)
         #expect(offered.result.prose == "I've noted \u{201C}rhymes with data\u{201D} for Latta. Here are a few ways to say Latta — click the one that's right:")
         #expect(offer.hint == .rhymes(with: "data"))
+        #expect(offer.candidates.map(\.respelling) == ["LAY-duh", "LAT-uh", "LAD-uh", "LAH-tah", "la-TAH"])
         #expect(recorder.store.record(for: "latta")?.hint == "rhymes with data")
-        let picked = try await turn("4", picker: offer, recorder: recorder)
-        #expect(picked.result.prose.hasPrefix("OK, noted — Latta. I'll say Latta as la-TAH (number 4) from now on."))
+        let picked = try await turn("1", picker: offer, recorder: recorder)
+        #expect(picked.result.prose.hasPrefix("OK, noted — Latta. I'll say Latta as LAY-duh (number 1) from now on."))
         #expect(recorder.store.record(for: "latta")?.hint == "rhymes with data")
         #expect(recorder.store.record(for: "latta")?.source == .picked)
 

@@ -57,6 +57,8 @@ extension HallieTellingModeTests {
         #expect(HallieTellingMode.pronunciationReply(told, scope: .file).hasPrefix(
             "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that in the pronunciation list"))
         #expect(HallieTellingMode.pronunciationFailureReply(told, error: "disk full").contains("disk full"))
+        #expect(HallieTellingMode.pronunciationFailureReply(told, error: "could not save: disk full")
+            == "I couldn't save that — disk full. Saying Nathaniel as nuh-THAN-yul won't stick past this answer, sorry.")
         // Spoken through the lexicon, the confirmation is the proof: the
         // name is respelled, the respelling is left alone.
         let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Nathaniel", spoken: "nuh-THAN-yul")])

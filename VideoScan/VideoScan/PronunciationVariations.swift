@@ -563,6 +563,10 @@ enum PronunciationVariations {
             if shape.flapAt == index {
                 // "tt"/"t" → "d": what the flap sounds like to an American ear.
                 coda = coda.replacingOccurrences(of: "tt", with: "d").replacingOccurrences(of: "t", with: "d")
+            } else if coda == "ck", openVowels.contains(pick.vowel) {
+                // A long/open vowel takes plain "k" in the phonetic
+                // display: RICK, but REEK / REYEK rather than REECK.
+                coda = "k"
             }
             parts.append(Display(onset: syllable.onsetLetters,
                                  nucleus: vowelSpelling(pick.vowel, grapheme: syllable.vowelLetters, isFinal: index == word.count - 1),
@@ -632,12 +636,20 @@ enum PronunciationVariations {
         pieces.append(current)
         let mapped = pieces.enumerated().map { index, piece -> String in
             // Onset and coda were mapped to letters as they were gathered.
+            // A short final vowel + /l/ reads naturally with doubled l
+            // (GILL); the phonemes themselves cannot retain orthography.
+            let coda = readableCoda(
+                piece.coda, doublesFinalL: short.contains(piece.vowel))
             let letters = piece.onset
                 + vowelSpelling(piece.vowel, grapheme: "", isFinal: index == pieces.count - 1)
-                + piece.coda
+                + coda
             return piece.stressed ? letters.uppercased() : letters.lowercased()
         }
         return mapped.joined(separator: "-")
+    }
+
+    private static func readableCoda(_ coda: String, doublesFinalL: Bool) -> String {
+        doublesFinalL && coda == "l" ? "ll" : coda
     }
 
     /// "Lah-Tah" → "LAH-tah"; "latt-UH" stays "latt-UH"; a CamelCase
