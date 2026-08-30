@@ -65,10 +65,16 @@
 #     - After the result row is published or durably queued, run Homebrew,
 #       Claude, and Codex updates. Update failures remain advisory and cannot
 #       replace the already-recorded nightly verdict or its exit status.
+#
+#   2026-08-30 (xcodebuild-watchdog-r3):
+#     - Build and test xcodebuild invocations run in private process groups
+#       behind hard deadlines. Timeout rows take precedence over ordinary
+#       return codes and zero-test discovery, so metrics publication remains
+#       mandatory even when a removable-volume read wedges in the kernel.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-08-28-post-nightly-updates-r1"
+NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r3"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -77,11 +83,169 @@ METRICS_WT="/tmp/nightly-metrics-wt"
 PERSON_EVAL_MANIFEST="${VIDEOSCAN_PERSON_EVAL_MANIFEST:-$REPO/output/person-eval-private/nightly/manifest.json}"
 PERSON_EVAL_REPORT="${VIDEOSCAN_PERSON_EVAL_REPORT:-$REPO/output/person-eval-private/nightly/latest-report.json}"
 PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason":"quality-holdout-not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"poi_cycle_stream_status":"not-collected"}'
+NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-1800}"
+NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
+NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
+NIGHTLY_WATCHDOG_DID_TIMEOUT=false
 
 mkdir -p "$LOGDIR"
 exec > "$LOGFILE" 2>&1
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+nightly_timeout_reason() { printf '%s-timeout:%ss' "$1" "$2"; }
+
+# Run one command in a private process group with a hard deadline.
+#
+# One foreground Python supervisor owns the child from Popen through deadline
+# handling. start_new_session gives xcodebuild a private PGID, and retaining the
+# unreaped Popen child reserves that numeric PID/PGID until after TERM/KILL, so
+# no second shell actor can signal a recycled process group. A child that still
+# cannot be reaped after KILL is reported as contamination; the supervisor exits
+# 124 promptly rather than blocking metrics publication in waitpid.
+# Args: timeout_seconds term_grace_seconds output_log command [args...]
+run_with_process_group_watchdog() {
+    local timeout_seconds="$1"
+    local grace_seconds="$2"
+    local output_log="$3"
+    shift 3
+
+    local state_dir timeout_file command_rc
+    state_dir=$(mktemp -d "${TMPDIR:-/tmp}/videoscan-nightly-watchdog.XXXXXX") || return 125
+    timeout_file="$state_dir/timeout"
+    : > "$output_log"
+    NIGHTLY_WATCHDOG_DID_TIMEOUT=false
+
+    python3 -c '
+import errno
+import os
+import signal
+import subprocess
+import sys
+import time
+
+timeout = float(sys.argv[1])
+grace = float(sys.argv[2])
+output_path = sys.argv[3]
+timeout_marker = sys.argv[4]
+command = sys.argv[5:]
+test_immediate = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY") == "1"
+test_ready = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE")
+test_unreapable = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_UNREAPABLE") == "1"
+pre_signal_ready = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_READY_FILE")
+pre_signal_release = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_RELEASE_FILE")
+
+with open(output_path, "wb") as output:
+    child = subprocess.Popen(
+        command,
+        stdout=output,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        if test_immediate:
+            limit = time.monotonic() + 2.0
+            while test_ready and not os.path.exists(test_ready) and time.monotonic() < limit:
+                if child.poll() is not None:
+                    sys.exit(child.returncode)
+                time.sleep(0.01)
+            raise subprocess.TimeoutExpired(command, timeout)
+        sys.exit(child.wait(timeout=timeout))
+    except subprocess.TimeoutExpired:
+        with open(timeout_marker, "w", encoding="utf-8"):
+            pass
+
+        # Test-only rendezvous: let a child exit after the deadline but before
+        # signaling. It stays unreaped here, so its PID/PGID cannot be reused.
+        if pre_signal_ready:
+            with open(pre_signal_ready, "w", encoding="utf-8"):
+                pass
+        if pre_signal_release:
+            limit = time.monotonic() + 2.0
+            while not os.path.exists(pre_signal_release) and time.monotonic() < limit:
+                time.sleep(0.01)
+            if os.path.exists(pre_signal_release):
+                time.sleep(0.05)
+
+        def signal_group(sig):
+            try:
+                os.killpg(child.pid, sig)
+                return True
+            except OSError as error:
+                # Darwin reports EPERM as well as ESRCH for an empty group
+                # whose unreaped leader remains reserved by this supervisor.
+                if error.errno in (errno.ESRCH, errno.EPERM):
+                    return False
+                raise
+
+        term_delivered = signal_group(signal.SIGTERM)
+        if term_delivered and grace > 0:
+            # Do not waitpid/poll here: even if the leader exits on TERM, it
+            # stays unreaped and reserves the numeric PID/PGID while descendants
+            # receive their full grace interval.
+            time.sleep(grace)
+
+        group_alive = signal_group(0)
+        if group_alive:
+            signal_group(signal.SIGKILL)
+
+        if not test_unreapable and group_alive:
+            # Retain the leader while KILL propagates, so every group probe is
+            # immune to numeric PGID reuse. Never waitpid until the group is
+            # empty; a kernel-blocked member therefore cannot wedge publication.
+            kill_deadline = time.monotonic() + 1.0
+            while signal_group(0) and time.monotonic() < kill_deadline:
+                time.sleep(0.01)
+            group_alive = signal_group(0)
+
+        if not test_unreapable and not group_alive:
+            try:
+                child.wait(timeout=0.1)
+                sys.exit(124)
+            except subprocess.TimeoutExpired:
+                pass
+
+        print(
+            f"CONTAMINATION: watchdog could not reap PID/PGID {child.pid} "
+            "after TERM/KILL; supervisor is detaching",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(124)
+' "$timeout_seconds" "$grace_seconds" "$output_log" "$timeout_file" "$@"
+    command_rc=$?
+    if [ -e "$timeout_file" ]; then
+        NIGHTLY_WATCHDOG_DID_TIMEOUT=true
+    fi
+    rm -rf "$state_dir"
+    return "$command_rc"
+}
+
+# One precedence function owns the published test verdict. In particular, a
+# watchdog timeout is never rewritten as zero-tests-ran or a normal test rc.
+# Args: timed_out timeout_seconds total failed ui_runner_hung test_rc
+classify_nightly_test_result() {
+    local timed_out="$1"
+    local timeout_seconds="$2"
+    local total="$3"
+    local failed="$4"
+    local ui_runner_hung="$5"
+    local test_rc="$6"
+    STATUS="ok"
+    REASON=""
+    if $timed_out; then
+        STATUS="failed"
+        REASON=$(nightly_timeout_reason test "$timeout_seconds")
+    elif [ "$total" -eq 0 ]; then
+        STATUS="failed"
+        REASON="zero-tests-ran:test-rc=$test_rc"
+    elif [ "$failed" -gt 0 ]; then
+        STATUS="failed"
+        REASON="failed-tests:$failed"
+    elif $ui_runner_hung; then
+        REASON="ui-runner-hung"
+    fi
+}
 
 # Run developer-tool maintenance only after publish_row has returned, which
 # means the result row is either on origin/metrics or in the durable local
@@ -143,6 +307,91 @@ base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
 print(json.dumps(base, separators=(",", ":")))
 '
+}
+
+# Build and publish the current parsed test result. COV_LOGIC="null" omits the
+# coverage field. Keeping this path callable before any optional post-test work
+# is what lets a watchdog timeout durably record partial counts immediately.
+make_current_test_result_row() {
+    local ts cov_field=""
+    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    if [ "$COV_LOGIC" != "null" ]; then
+        cov_field=",\"coverage_logic_pct\":$COV_LOGIC"
+    fi
+    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
+        "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
+        "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
+        "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
+        "$FAILED_NAMES_JSON" "$cov_field"
+}
+
+publish_current_test_result() {
+    local row
+    row=$(with_person_metrics "$(make_current_test_result_row)")
+    publish_row "$row"
+    PUBLISH_RC=$?
+}
+
+# Timeout publication is deliberately tiny: no xcresult traversal, live person
+# evaluator, or other optional work can run before publish_row has returned.
+record_timed_out_test_result() {
+    COV_LOGIC="null"
+    publish_current_test_result
+}
+
+# Optional post-test work is kept behind orchestrate_post_test_result so the
+# actual timeout branch can be exercised without invoking xccov or the live
+# person evaluator. Neither command is part of the durable-row critical path.
+collect_optional_post_test_metrics() {
+    COV_LOGIC="null"
+    if [ -d /tmp/nightly-results.xcresult ]; then
+        log "xcresult exists, extracting coverage..."
+        xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 \
+            | head -5 | while read -r line; do log "  xccov: $line"; done
+        LOGIC_NUMS=$(xcrun xccov view --report --files-for-target VideoScan.app \
+            /tmp/nightly-results.xcresult 2>/dev/null \
+            | awk '
+                NF < 3 { next }
+                $0 ~ /^--/ { next }
+                $0 ~ /^ID/ { next }
+                $2 ~ /(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$/ { next }
+                {
+                    if (match($5, /\([0-9]+\/[0-9]+\)/)) {
+                        frag = substr($5, RSTART+1, RLENGTH-2)
+                        split(frag, a, "/")
+                        if (a[1] != "" && a[2] != "") {
+                            cov += a[1]
+                            tot += a[2]
+                        }
+                    }
+                }
+                END {
+                    if (tot > 0) printf "%.3f", (cov/tot)*100
+                    else         printf "null"
+                }')
+        COV_LOGIC="${LOGIC_NUMS:-null}"
+    fi
+    log "Logic-only coverage: ${COV_LOGIC}%"
+
+    PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+    refresh_person_metrics "$PERSON_EVAL_APP"
+}
+
+# Return 124 after recording a timeout row, 2 for the existing zero-test path,
+# or 0 after normal optional metrics. Timeout is checked first by construction.
+orchestrate_post_test_result() {
+    local timed_out="$1"
+    local total="$2"
+    if $timed_out; then
+        log "FATAL: test watchdog expired; recording partial counts before optional metrics"
+        record_timed_out_test_result
+        return 124
+    fi
+    if [ "$total" -eq 0 ]; then
+        return 2
+    fi
+    collect_optional_post_test_metrics
+    return 0
 }
 
 log "=== Nightly local test run starting (script v$NIGHTLY_SCRIPT_VERSION) ==="
@@ -383,7 +632,12 @@ refresh_person_metrics
 NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
 
 run_nightly_build() {
-    xcodebuild build-for-testing \
+    local build_log="/tmp/nightly-build-output.log"
+    run_with_process_group_watchdog \
+        "$NIGHTLY_BUILD_TIMEOUT_SECONDS" \
+        "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
+        "$build_log" \
+        xcodebuild build-for-testing \
         -project VideoScan/VideoScan.xcodeproj \
         -scheme VideoScan \
         -configuration Debug \
@@ -391,22 +645,38 @@ run_nightly_build() {
         -derivedDataPath "$NIGHTLY_DD" \
         -enableCodeCoverage YES \
         CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
-        -quiet 2>&1 | tail -10
-    return "${PIPESTATUS[0]:-$?}"
+        -quiet
+    local rc=$?
+    tail -10 "$build_log" 2>/dev/null || true
+    return "$rc"
 }
 
 log "Building..."
 BUILD_START=$(date +%s)
 run_nightly_build
 BUILD_RC=$?
-if [ "$BUILD_RC" -ne 0 ]; then
+BUILD_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
+if $BUILD_TIMED_OUT; then
+    log "FATAL: build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
+    publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    PUBLISH_RC=$?
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    exit 1
+elif [ "$BUILD_RC" -ne 0 ]; then
     log "Build failed (rc=$BUILD_RC) — wiping DerivedData and retrying once (stale-module-cache guard)"
     rm -rf "$NIGHTLY_DD"
     run_nightly_build
     BUILD_RC=$?
+    BUILD_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
 fi
 
-if [ "$BUILD_RC" -ne 0 ]; then
+if $BUILD_TIMED_OUT; then
+    log "FATAL: clean-retry build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
+    publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    PUBLISH_RC=$?
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    exit 1
+elif [ "$BUILD_RC" -ne 0 ]; then
     log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
     publish_row "$(with_person_metrics "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
@@ -422,8 +692,13 @@ log "Running ALL tests with coverage..."
 log "  (VideoScanUITests target skipped: all its tests are plan-skipped, and the"
 log "   locked-screen launchd session can't enable automation mode — see 2026-07-07-r1)"
 TEST_START=$(date +%s)
-# Trap any unexpected error during xcodebuild so we still publish.
-xcodebuild test-without-building \
+# A private-process-group watchdog guarantees this call returns to the
+# publication path even if xcodebuild or a test blocks in a kernel read.
+run_with_process_group_watchdog \
+    "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
+    "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
+    /tmp/nightly-test-output.log \
+    xcodebuild test-without-building \
     -project VideoScan/VideoScan.xcodeproj \
     -scheme VideoScan \
     -configuration Debug \
@@ -432,12 +707,17 @@ xcodebuild test-without-building \
     -enableCodeCoverage YES \
     -resultBundlePath /tmp/nightly-results.xcresult \
     -skip-testing:VideoScanUITests \
-    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
-    2>&1 | tee /tmp/nightly-test-output.log
-TEST_RC="${PIPESTATUS[0]:-$?}"
+    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=
+TEST_RC=$?
+TEST_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
+cat /tmp/nightly-test-output.log 2>/dev/null || true
 TEST_END=$(date +%s)
 ELAPSED=$((TEST_END - TEST_START))
-log "Tests completed in ${ELAPSED}s (rc=$TEST_RC)"
+if $TEST_TIMED_OUT; then
+    log "Tests hit hard timeout after ${NIGHTLY_TEST_TIMEOUT_SECONDS}s (rc=$TEST_RC)"
+else
+    log "Tests completed in ${ELAPSED}s (rc=$TEST_RC)"
+fi
 
 # ── Parse results ───────────────────────────────────────────────────
 # Swift Testing + XCTest markers. Extracted into a function so
@@ -516,83 +796,33 @@ if grep -qE 'test runner hung|Timed out while enabling automation' /tmp/nightly-
     log "Note: UI test runner hung/timed out (unit-test count is still valid)"
 fi
 
-if [ "$TOTAL" -eq 0 ]; then
+classify_nightly_test_result \
+    "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
+    "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC"
+
+orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
+POST_TEST_ROUTE_RC=$?
+if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
+    exit 1
+fi
+
+if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
-    publish_row "$(with_person_metrics "$(make_status_row failed "zero-tests-ran:test-rc=$TEST_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
     run_post_nightly_updates_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 
-# Note on TEST_RC: non-zero is expected when any test fails OR when the
-# UI runner times out. We still want to publish the row with the real
-# pass/fail counts, so we don't gate on TEST_RC. We only flag "failed"
-# status when there are actual test failures.
-STATUS="ok"
-REASON=""
-if [ "$FAILED" -gt 0 ]; then
-    STATUS="failed"
-    REASON="failed-tests:$FAILED"
-elif $UI_RUNNER_HUNG; then
-    # Unit tests passed but UI runner hung — flag it in the row but
-    # don't call the run failed (the unit suite IS the source of truth).
-    STATUS="ok"
-    REASON="ui-runner-hung"
-fi
+# Note on TEST_RC: non-zero is expected when any test fails. Classification
+# above is driven by the parsed result, except that a hard timeout always wins.
 
-# ── Coverage ────────────────────────────────────────────────────────
-COV_LOGIC="null"
-if [ -d /tmp/nightly-results.xcresult ]; then
-    log "xcresult exists, extracting coverage..."
-    xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 | head -5 | while read -r line; do log "  xccov: $line"; done
-    LOGIC_NUMS=$(xcrun xccov view --report --files-for-target VideoScan.app /tmp/nightly-results.xcresult 2>/dev/null \
-        | awk '
-            NF < 3 { next }
-            $0 ~ /^--/ { next }
-            $0 ~ /^ID/ { next }
-            $2 ~ /(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$/ { next }
-            {
-                if (match($5, /\([0-9]+\/[0-9]+\)/)) {
-                    frag = substr($5, RSTART+1, RLENGTH-2)
-                    split(frag, a, "/")
-                    if (a[1] != "" && a[2] != "") {
-                        cov += a[1]
-                        tot += a[2]
-                    }
-                }
-            }
-            END {
-                if (tot > 0) printf "%.3f", (cov/tot)*100
-                else         printf "null"
-            }')
-    COV_LOGIC="${LOGIC_NUMS:-null}"
-fi
-log "Logic-only coverage: ${COV_LOGIC}%"
-
-# Run the optional private benchmark only after the core test result is known.
-# It has a separate bounded budget and process-group timeout, so it cannot
-# orphan a VideoScan scanner. Missing config returns immediately.
-PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
-refresh_person_metrics "$PERSON_EVAL_APP"
-
-# ── Build JSON row (matches TestDriver MetricsPublisher format) ─────
-TS=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-COV_FIELD=""
-if [ "$COV_LOGIC" != "null" ]; then
-    COV_FIELD=",\"coverage_logic_pct\":$COV_LOGIC"
-fi
-
-# "failed_names" is ADDITIVE (2026-07-09-r1): [] on green runs. Do not
-# rename/remove existing fields — the dashboard reads this schema.
-ROW=$(printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
-    "$TS" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
-    "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
-    "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
-    "$FAILED_NAMES_JSON" "$COV_FIELD")
-ROW=$(with_person_metrics "$ROW")
-
-publish_row "$ROW"
-PUBLISH_RC=$?
+# ── Publish JSON row (matches TestDriver MetricsPublisher format) ───
+# "failed_names" is additive; make_current_test_result_row also includes
+# coverage only when the normal, non-timeout extraction produced it.
+publish_current_test_result
 run_post_nightly_updates_if_recorded "$PUBLISH_RC"
 
 # ── Cleanup ─────────────────────────────────────────────────────────
