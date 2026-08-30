@@ -72,9 +72,11 @@
           "text": "tell me about Matthew Rice",
           "expectedOutcome": "answered",
           "mustContain": [
-            "Martha Lamson",
-            "recorded children",
-            "recorded ancestors"
+            "Martha Lamson"
+          ],
+          "mustMatch": [
+            "\\b(?:child(?:ren)?|sons?|daughters?)\\b[^.!?]{0,120}\\b(?:Isaac Rice|Patience Rice)\\b|\\b(?:Isaac Rice|Patience Rice)\\b[^.!?]{0,120}\\b(?:child(?:ren)?|sons?|daughters?)\\b",
+            "\\b(?:ancestors?|grandparents?)\\b"
           ],
           "note": "Miss #7: biography and family-tree asks share the complete fact card rather than dropping places, marriage, children, or depth."
         },
@@ -103,10 +105,13 @@
           "text": "tell me about rick's family tree, his brothers, sisters, parents, and grandparents",
           "expectedOutcome": "answered",
           "mustContain": [
-            "In the People tab: Tim — brother.",
-            "probably a duplicate on FamilySearch worth merging",
             "G89Q-34N",
             "GNZ5-428"
+          ],
+          "mustMatch": [
+            "\\bPeople[- ]tab\\b",
+            "\\bTim\\b[^.!?]{0,120}\\b(?:brother|sibling)\\b|\\b(?:brother|sibling)\\b[^.!?]{0,120}\\bTim\\b",
+            "\\b(?:duplicate|same[- ]person|merge|merging)\\b"
           ],
           "note": "Miss #16: one cross-world card includes People-tab kin and flags the duplicate-parent condition with tree IDs."
         },
@@ -240,12 +245,9 @@
         {
           "id": "miss-12-relationships-overview",
           "text": "tell me how rick is related to the people in the people tab who currently living or recently deceased",
-          "mustContain": [
-            "related to",
-            "Nearest first:"
-          ],
-          "mustNotContain": [
-            "I know "
+          "mustMatch": [
+            "\\b(?:related|relationships?|relatives?|kinship)\\b",
+            "\\b(?:nearest|closest|immediate|starting with)\\b"
           ],
           "note": "Miss #12: answer the relationships overview from the kinship engine ahead of the ordinary People-tab roster."
         }

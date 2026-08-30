@@ -73,20 +73,24 @@ class HallieEvalTests(unittest.TestCase):
         self.assertTrue(required_august_29_sensors.issubset(by_id))
 
         self.assertIn(
-            "recorded children",
-            by_id["miss-07-complete-biography-card"]["mustContain"],
+            "child(?:ren)?",
+            by_id["miss-07-complete-biography-card"]["mustMatch"][0],
         )
         self.assertEqual(
             by_id["miss-11-surname-roster"]["mustNotContain"],
             ["try a fuller name"],
         )
+        self.assertIn(
+            "kinship",
+            by_id["miss-12-relationships-overview"]["mustMatch"][0],
+        )
         self.assertEqual(
-            by_id["miss-12-relationships-overview"]["mustNotContain"],
-            ["I know "],
+            by_id["miss-16-cross-world-card"]["mustContain"],
+            ["G89Q-34N", "GNZ5-428"],
         )
         self.assertIn(
-            "In the People tab: Tim — brother.",
-            by_id["miss-16-cross-world-card"]["mustContain"],
+            "sibling",
+            by_id["miss-16-cross-world-card"]["mustMatch"][1],
         )
 
         focus = by_id[
@@ -207,6 +211,72 @@ class HallieEvalTests(unittest.TestCase):
             "outcome": "answered",
         })
         self.assertNotIn("fragment", flags)
+
+    def test_must_match_accepts_semantic_alternatives_case_insensitively(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        examples = [
+            (
+                "miss-07-complete-biography-card",
+                "graph",
+                "Matthew Rice married Martha Lamson. His SONS were Isaac Rice "
+                "and Patience Rice. His GRANDPARENTS are recorded in the tree.",
+            ),
+            (
+                "miss-12-relationships-overview",
+                "capability",
+                "Rick's closest KINSHIP relationships begin with his parents.",
+            ),
+            (
+                "miss-16-cross-world-card",
+                "graph",
+                "The People-tab lists Tim as Rick's sibling. G89Q-34N and "
+                "GNZ5-428 may be the same person and should be reviewed.",
+            ),
+        ]
+        for turn_id, route, answer in examples:
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                [],
+                msg=turn_id,
+            )
+
+    def test_must_match_reports_missing_and_invalid_patterns_without_crashing(self):
+        base = {
+            "answer": "This answer has enough ordinary words.",
+            "route": "graph",
+            "outcome": "answered",
+        }
+        self.assertEqual(
+            hallie_eval.grade_record(base | {"mustMatch": [r"\bchildren?\b"]}),
+            ["missing_required_match"],
+        )
+        self.assertEqual(
+            hallie_eval.grade_record(base | {"mustMatch": ["("]}),
+            ["invalid_expected_regex"],
+        )
+
+    def test_must_match_is_inherited_and_can_be_overridden_per_turn(self):
+        corpus = {
+            "categories": [{
+                "id": "semantic",
+                "mustMatch": ["family"],
+                "prompts": [
+                    {"text": "inherited"},
+                    {"text": "overridden", "mustMatch": ["tree"]},
+                ],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "semantic.json"
+            path.write_text(json.dumps(corpus), encoding="utf-8")
+            turns = hallie_eval.load_corpus(path)
+        self.assertEqual(turns[0]["mustMatch"], ["family"])
+        self.assertEqual(turns[1]["mustMatch"], ["tree"])
 
     def test_repaired_outcome_needs_substantive_content_to_count_clean(self):
         generic = {

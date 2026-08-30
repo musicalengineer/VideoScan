@@ -381,6 +381,22 @@ def grade_record(r):
         if required.lower() not in lowered:
             flags.append("missing_required_text")
             break
+    # Semantic answer contracts can tolerate model wording changes while
+    # still pinning the required concepts. Patterns are corpus-authored,
+    # case-insensitive, and may span lines. A malformed expectation is a
+    # grading defect, never a reason for the evaluator itself to crash.
+    required_patterns = r.get("mustMatch") or []
+    if isinstance(required_patterns, str):
+        required_patterns = [required_patterns]
+    for pattern in required_patterns:
+        try:
+            matches = re.search(pattern, a, re.I | re.S)
+        except (re.error, TypeError):
+            flags.append("invalid_expected_regex")
+            continue
+        if not matches:
+            flags.append("missing_required_match")
+            break
     if r.get("noFabricatedPersonalMemory") and PERSONAL_MEMORY_PAT.search(a):
         flags.append("fabricated_personal_memory")
     if r.get("forbidRawInternals") and RAW_INTERNAL_PAT.search(a):
