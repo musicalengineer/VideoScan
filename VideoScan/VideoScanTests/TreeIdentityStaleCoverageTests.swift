@@ -4,37 +4,51 @@
 // no defaults, disk, app launch, sleeps, or timing races.
 
 import Foundation
+import Dispatch
 import Testing
 import VideoScanCore
 @testable import VideoScan
 
-private actor TreeIdentityCoverageGate {
+/// A semaphore wait runs on a detached worker so the MainActor stays free for
+/// `TreeIdentityCenter.refresh`. Unlike a bare continuation, both rendezvous
+/// have a hard failure bound and cannot strand the test process.
+private final class TreeIdentityCoverageGate: @unchecked Sendable {
+    private static let timeout = DispatchTimeInterval.seconds(5)
+    private let stateLock = NSLock()
     private var firstPass = true
-    private var started = false
-    private var released = false
-    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    private let started = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
 
-    func holdFirstPass() async {
-        guard firstPass else { return }
+    private func claimFirstPass() -> Bool {
+        stateLock.lock()
+        let shouldHold = firstPass
         firstPass = false
-        started = true
-        let waiters = startedWaiters
-        startedWaiters.removeAll()
-        waiters.forEach { $0.resume() }
-        guard !released else { return }
-        await withCheckedContinuation { releaseWaiter = $0 }
+        stateLock.unlock()
+        return shouldHold
     }
 
-    func waitUntilStarted() async {
-        guard !started else { return }
-        await withCheckedContinuation { startedWaiters.append($0) }
+    private static func waitForSignal(_ semaphore: DispatchSemaphore) -> Bool {
+        semaphore.wait(timeout: .now() + timeout) == .success
+    }
+
+    func holdFirstPass() async -> Bool {
+        let shouldHold = claimFirstPass()
+        guard shouldHold else { return true }
+
+        started.signal()
+        return await Task.detached { [released] in
+            Self.waitForSignal(released)
+        }.value
+    }
+
+    func waitUntilStarted() async -> Bool {
+        await Task.detached { [started] in
+            Self.waitForSignal(started)
+        }.value
     }
 
     func release() {
-        released = true
-        releaseWaiter?.resume()
-        releaseWaiter = nil
+        released.signal()
     }
 }
 
@@ -62,7 +76,8 @@ struct TreeIdentityStaleCoverageTests {
         gate: TreeIdentityCoverageGate
     ) {
         center.derivationPass = { graph, subjects, speakers in
-            await gate.holdFirstPass()
+            let released = await gate.holdFirstPass()
+            #expect(released, "held derivation did not receive its release signal")
             return TreeIdentityDeriver(
                 graph: graph,
                 subjects: subjects,
@@ -85,10 +100,16 @@ struct TreeIdentityStaleCoverageTests {
 
         kinship.install(graph: F.graph)
         let heldA = Task { await center.refresh(profiles: profiles) }
-        await gate.waitUntilStarted()
+        let started = await gate.waitUntilStarted()
+        #expect(started, "held derivation did not start")
+        guard started else {
+            gate.release()
+            await heldA.value
+            return
+        }
 
         kinship.install(graph: F.graph)
-        await gate.release()
+        gate.release()
         await heldA.value
 
         #expect(center.derivations.isEmpty)
@@ -109,7 +130,13 @@ struct TreeIdentityStaleCoverageTests {
         kinship.install(graph: F.graph)
 
         let heldA = Task { await center.refresh(profiles: [F.rick]) }
-        await gate.waitUntilStarted()
+        let started = await gate.waitUntilStarted()
+        #expect(started, "held derivation did not start")
+        guard started else {
+            gate.release()
+            await heldA.value
+            return
+        }
 
         var revised = F.rick
         revised.notInFamilyTree = true
@@ -117,7 +144,7 @@ struct TreeIdentityStaleCoverageTests {
         #expect(center.derivations.isEmpty)
         #expect(center.derivationRunCount == 1)
 
-        await gate.release()
+        gate.release()
         await heldA.value
 
         #expect(center.derivations.isEmpty)
@@ -164,8 +191,8 @@ struct TreeIdentityStaleCoverageTests {
         1 NAME Blake /River/
         1 SEX M
         1 BIRT
-        2 DATE 1901
-        2 PLAC Albany, New York
+        2 DATE 1900
+        2 PLAC Boston, Massachusetts
         0 TRLR
         """)
         let reviewed = TreeIdentityCandidate(try #require(graphA.people["@P1@"]))
@@ -185,48 +212,67 @@ struct TreeIdentityStaleCoverageTests {
         #expect(center.pinsRevision == 0)
     }
 
-    /// Candidate equality is the pin action token's content guard. A reused
-    /// GEDCOM pointer or FamilySearch ID with changed visible facts is not
-    /// the candidate the person reviewed.
-    @Test func sameIDsWithChangedDetailsAreDifferentCandidates() throws {
+    /// Every stored field participates in the synthesized equality used by
+    /// the pin action token. Each variant changes exactly one field, so this
+    /// fails if equality ever degrades to (for example) IDs + name.
+    @Test func everyStoredFieldParticipatesInCandidateEquality() throws {
         func candidate(
-            name: String,
-            birthDate: String,
-            birthPlace: String
+            personID: String = "@I1@",
+            name: String = "Alex /River/",
+            familySearchID: String? = "SAME-001",
+            birthDate: String? = "1900",
+            birthPlace: String? = "Boston, Massachusetts",
+            sex: String = "M"
         ) throws -> TreeIdentityCandidate {
+            let familySearchLine = familySearchID.map { "1 _FSFTID \($0)" } ?? ""
+            let birthLines: String = {
+                guard birthDate != nil || birthPlace != nil else { return "" }
+                let dateLine = birthDate.map { "2 DATE \($0)" } ?? ""
+                let placeLine = birthPlace.map { "2 PLAC \($0)" } ?? ""
+                return ["1 BIRT", dateLine, placeLine]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+            }()
             let graph = GedcomFamilyGraph(gedcomText: """
             0 HEAD
-            0 @I1@ INDI
+            0 \(personID) INDI
             1 NAME \(name)
-            1 SEX M
-            1 _FSFTID SAME-001
-            1 BIRT
-            2 DATE \(birthDate)
-            2 PLAC \(birthPlace)
+            1 SEX \(sex)
+            \(familySearchLine)
+            \(birthLines)
             0 TRLR
             """)
-            return TreeIdentityCandidate(try #require(graph.people["@I1@"]))
+            return TreeIdentityCandidate(try #require(graph.people[personID]))
         }
 
-        let reviewed = try candidate(
-            name: "Alex /River/",
-            birthDate: "1900",
-            birthPlace: "Boston, Massachusetts"
-        )
-        let unchanged = try candidate(
-            name: "Alex /River/",
-            birthDate: "1900",
-            birthPlace: "Boston, Massachusetts"
-        )
-        let changed = try candidate(
-            name: "Blake /River/",
-            birthDate: "1901",
-            birthPlace: "Albany, New York"
-        )
+        let reviewed = try candidate()
+        let unchanged = try candidate()
+        let oneFieldVariants: [(String, TreeIdentityCandidate)] = [
+            ("personID", try candidate(personID: "@I2@")),
+            ("name", try candidate(name: "Blake /River/")),
+            ("familySearchID", try candidate(familySearchID: "OTHER-002")),
+            ("birthDate", try candidate(birthDate: "1901")),
+            ("birthPlace", try candidate(birthPlace: "Albany, New York")),
+            ("sex", try candidate(sex: "F"))
+        ]
+
+        func storedFields(_ value: TreeIdentityCandidate) -> [String?] {
+            [
+                value.personID,
+                value.name,
+                value.familySearchID,
+                value.birthDate,
+                value.birthPlace,
+                value.sex
+            ]
+        }
 
         #expect(reviewed == unchanged)
-        #expect(reviewed.personID == changed.personID)
-        #expect(reviewed.familySearchID == changed.familySearchID)
-        #expect(reviewed != changed)
+        for (field, changed) in oneFieldVariants {
+            let differences = zip(storedFields(reviewed), storedFields(changed))
+                .filter { pair in pair.0 != pair.1 }
+            #expect(differences.count == 1, "fixture must change only \(field)")
+            #expect(reviewed != changed, "candidate equality omitted \(field)")
+        }
     }
 }
