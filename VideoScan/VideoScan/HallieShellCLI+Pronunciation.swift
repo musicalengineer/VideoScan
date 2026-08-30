@@ -28,7 +28,9 @@ extension HallieShellCLI {
         }
         if let hinted = HallieTellingMode.detectPronunciationHint(text),
            knownSpelling(hinted.word, state: state, dependencies: dependencies) != nil {
-            if let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) {
+            if let respelling = HalliePronunciationRespelling.respelling(
+                for: hinted.word, hint: hinted.hint,
+                gold: dependencies.loadPronunciationGold()) {
                 return await teachOneOff(word: hinted.word, alternatives: [respelling], hint: hinted,
                                          options: options, state: &state, output: output, dependencies: dependencies)
             }
@@ -47,7 +49,9 @@ extension HallieShellCLI {
         }
         // Free-form (live miss #17): typo-tolerant pronounce-word + known name.
         let known = { (token: String) in knownSpelling(token, state: state, dependencies: dependencies) != nil }
-        if let free = HalliePronunciationFreeform.detect(text, isKnownName: known) {
+        if let free = HalliePronunciationFreeform.detect(
+            text, isKnownName: known,
+            gold: dependencies.loadPronunciationGold()) {
             switch free.kind {
             case .teach:
                 return await teachOneOff(word: free.word, alternatives: free.alternatives, hint: nil, freeform: free,
@@ -85,11 +89,22 @@ extension HallieShellCLI {
         case .cyberBrainPerson(_, let name), .treePerson(let name, _, _): scope = .person(name: name)
         case .file: scope = .file
         }
-        var prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
-            ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
-            ?? HallieTellingMode.pronunciationReply(told, scope: scope)
-        var basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
-        let phonemes = HallieAppTurnCoordinator.derivePhonemes(alternatives: alternatives, hint: hint?.hint)
+        var prose: String
+        var basis: String
+        if options.remember {
+            prose = freeform.map { HalliePronunciationFreeform.teachReply($0, scope: scope) }
+                ?? hint.map { HallieTellingMode.hintReply($0, respelling: told.spoken, scope: scope) }
+                ?? HallieTellingMode.pronunciationReply(told, scope: scope)
+            basis = "Basis: listening — pronunciation kept (\(scope == .file ? "pronunciations.json" : "person record")); no model call, no catalog query."
+        } else {
+            prose = freeform.map(HalliePronunciationFreeform.transientTeachReply)
+                ?? hint.map { HallieTellingMode.transientHintReply($0, respelling: told.spoken) }
+                ?? HallieTellingMode.transientPronunciationReply(told)
+            basis = "Basis: listening — pronunciation NOT saved (no --remember); no model call, no catalog query."
+        }
+        let phonemes = HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: alternatives, hint: hint?.hint,
+            gold: dependencies.loadPronunciationGold())
         if options.remember {
             do {
                 try dependencies.recordPronunciation(.init(word: word, saidAs: told.saidAs, phonemes: phonemes, target: target))
@@ -106,8 +121,11 @@ extension HallieShellCLI {
                 basis = "Basis: listening — pronunciation NOT kept (\(error.localizedDescription)); no model call, no catalog query."
             }
         } else {
-            prose += " (Kept for this session only — run with --remember to save it.)"
-            basis = "Basis: listening — pronunciation NOT saved (no --remember); no model call, no catalog query."
+            state.rememberPronunciation(
+                word: word,
+                spoken: told.saidAs,
+                phonemes: phonemes,
+                origin: "told")
         }
         return await emitPronunciation(prose, description: hint == nil ? "pronunciation" : "pronunciation hint",
                                        basis: basis, state: &state, output: output, dependencies: dependencies)
@@ -117,7 +135,7 @@ extension HallieShellCLI {
         _ query: HalliePronunciationQuery,
         state: inout Session, output: (String) -> Void, dependencies: Dependencies
     ) async -> AnswerOutcome? {
-        let lexicon = dependencies.loadLexicon()
+        let lexicon = state.pronunciationLexicon(base: dependencies.loadLexicon())
         let prose: String
         switch query {
         case .list:
@@ -129,9 +147,14 @@ extension HallieShellCLI {
             guard entry != nil || spelling != nil else { return nil }
             let record = dependencies.loadDrillStore().record(for: key)
             let taughtAt = (record?.status == .taught || record?.status == .alternativesPending) ? record?.attestedAt : nil
+            let isTransient = state.transientPronunciations.contains {
+                FamilyIdentityText.normalized($0.written) == key
+            }
             prose = HalliePronunciationQuery.nameAnswer(
                 word: entry?.written ?? spelling ?? typed,
-                entry: entry, source: entry.map { lexicon.source(of: $0) }, taughtAt: taughtAt)
+                entry: entry,
+                source: isTransient ? nil : entry.map { lexicon.source(of: $0) },
+                taughtAt: isTransient ? nil : taughtAt)
         }
         return await emitPronunciation(prose, description: "pronunciation question",
                                        basis: HalliePronunciationQuery.basisLine,
@@ -142,7 +165,10 @@ extension HallieShellCLI {
     static func knownSpelling(_ word: String, state: Session, dependencies: Dependencies) -> String? {
         let key = FamilyIdentityText.normalized(word)
         guard !key.isEmpty else { return nil }
-        if let entry = dependencies.loadLexicon().entries.first(where: { FamilyIdentityText.normalized($0.written) == key }) {
+        let lexicon = state.pronunciationLexicon(base: dependencies.loadLexicon())
+        if let entry = lexicon.entries.first(where: {
+            FamilyIdentityText.normalized($0.written) == key
+        }) {
             return entry.written
         }
         func spelling(in names: [String]) -> String? {

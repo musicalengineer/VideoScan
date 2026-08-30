@@ -635,9 +635,10 @@ struct HalliePronunciationDrillTests {
         let spoken = HallieSpeaker.spokenText(b.result.prose, lexicon: .init(entries: [.init(written: last.word, spoken: last.saidAs)]))
         #expect(spoken.hasPrefix("OK, noted — LA-tah."))
 
-        // Not mappable: the hint is kept for the variations picker; ask.
+        // Not mappable: the hint is kept and the variations picker opens.
         let c = try await turn("Latta rhymes with data", drill: nil, recorder: recorder)
-        #expect(c.result.prose == "I've noted “rhymes with data” for Latta — I'll offer you a few ways to say it next; for now, spell it out for me like “LAT-uh”?")
+        #expect(c.result.prose == "I've noted “rhymes with data” for Latta. Here are a few ways to say Latta — click the one that's right:")
+        #expect(c.picker?.word == "Latta" && c.picker?.hint == .rhymes(with: "data"))
         #expect(recorder.writes.count == 2)
         #expect(recorder.store.record(for: "latta")?.hint == "rhymes with data")
         #expect(recorder.store.record(for: "latta")?.respelling == "LA-tah")
@@ -690,9 +691,10 @@ struct HalliePronunciationDrillTests {
         #expect(hinted.result.prose == "OK, noted — Rick. From your hint (stress on the first syllable), I'll say Rick as RICK. Next name: Breen.")
         #expect(recorder.writes.last == .init(word: "Rick", saidAs: "RICK", phonemes: "ɹˈɪk", target: .file))
         #expect(recorder.store.record(for: "rick")?.source == .derived)
-        // Unmappable: stays on the name, keeps the hint.
+        // Unmappable: stays on the name, keeps the hint, opens the picker.
         let ask = try await turn("Breen rhymes with green", drill: hinted.drill, recorder: recorder)
-        #expect(ask.result.prose.hasSuffix("Still on: Breen."))
+        #expect(ask.result.prose == "I've noted “rhymes with green” for Breen. Here are a few ways to say Breen — click the one that's right:")
+        #expect(ask.picker?.word == "Breen" && ask.picker?.fromDrill == true)
         #expect(ask.drill?.current?.name == "Breen")
         #expect(recorder.store.record(for: "breen")?.hint == "rhymes with green")
         #expect(recorder.store.status(for: "breen") == .untested)
@@ -747,6 +749,9 @@ struct HalliePronunciationDrillTests {
         #expect(P.derive(respelling: "Lah-Tah") == "lˈɑtɑ")
         #expect(P.derive(respelling: "LA-tah") == "lˈætɑ")
         #expect(P.derive(respelling: "muh-GILL") == "məɡˈɪl")
+        #expect(P.derive(respelling: "EKS-kyoo-zee") == "ˈɛkskjuzi")
+        #expect(P.derive(respelling: "YOO") == "jˈu")
+        #expect(P.derive(respelling: "KYOO") == "kjˈu")
         #expect(P.derive(respelling: "EE-dith") == "ˈidɪθ")
         #expect(P.derive(respelling: "nuh-THAN-yul") == "nəθˈænjəl")
         #expect(P.derive(respelling: "beh-THY-uh") == "bɛθˈIə")
@@ -779,8 +784,8 @@ struct HalliePronunciationDrillTests {
         #expect(!gold.isAvailable && gold.phonemes(for: "lag") == nil)
         #expect(HalliePhonemes.exemplarVowel("lag", gold: gold) == nil)
         if MisakiGoldLexicon.shared.isAvailable {
-            #expect(HalliePhonemes.exemplarVowel("lag") == "æ")
-            #expect(HalliePhonemes.exemplarVowel("father") == "ɑ")
+            #expect(HalliePhonemes.exemplarVowel("lag", gold: .shared) == "æ")
+            #expect(HalliePhonemes.exemplarVowel("father", gold: .shared) == "ɑ")
         }
     }
 

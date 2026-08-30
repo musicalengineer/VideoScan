@@ -150,6 +150,10 @@ enum HallieAppTurnCoordinator {
         /// What the voice currently has (people → file → shipped), so the
         /// sheet leaves out names already taught. Default = shipped table.
         let loadLexicon: @Sendable () -> HalliePronunciationLexicon
+        /// Misaki's optional exemplar table for picker hints such as
+        /// "rhymes with data". Injectable so tests and headless installs
+        /// never depend on this Mac's helper bundle.
+        let loadPronunciationGold: @Sendable () -> MisakiGoldLexicon
         /// Mark a photo as NOT showing a tree person (photo, GEDCOM ID,
         /// noted by, caption). Default does nothing; live writes the
         /// `.notof.json` sidecar through FamilyAssetStore.
@@ -198,6 +202,7 @@ enum HallieAppTurnCoordinator {
             loadDrillStore: @escaping @Sendable () -> PronunciationDrillStore = { PronunciationDrillStore() },
             saveDrillStore: @escaping @Sendable (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void = { _, _ in },
             loadLexicon: @escaping @Sendable () -> HalliePronunciationLexicon = { .shipped },
+            loadPronunciationGold: @escaping @Sendable () -> MisakiGoldLexicon = { .empty },
             excludePhoto: @escaping @Sendable (URL, String, String?, String?) throws -> Void = { _, _, _, _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
@@ -245,6 +250,7 @@ enum HallieAppTurnCoordinator {
             self.loadDrillStore = loadDrillStore
             self.saveDrillStore = saveDrillStore
             self.loadLexicon = loadLexicon
+            self.loadPronunciationGold = loadPronunciationGold
             self.excludePhoto = excludePhoto
             self.loadSpeakers = loadSpeakers
             self.executeRequest = executeRequest
@@ -378,6 +384,7 @@ enum HallieAppTurnCoordinator {
                 try store.save(manifest: manifest)
             },
             loadLexicon: { HalliePronunciationLexicon.resolved() },
+            loadPronunciationGold: { .shared },
             excludePhoto: { photo, gedcomID, notedBy, caption in
                 let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
                 let sidecar = try store.excludePhoto(

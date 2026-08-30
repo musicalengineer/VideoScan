@@ -22,7 +22,7 @@ extension HallieShellCLI {
         if let previous = state.telling {
             let closing = HallieTellingMode.closingReply(
                 previous, persisted: previous.persistedCount == previous.passages.count && options.remember,
-                speaker: dependencies.speakers().ownerName)
+                speaker: state.speakers.ownerName)
             output(closing)
             state.telling = nil
         }
@@ -57,7 +57,7 @@ extension HallieShellCLI {
         dependencies: Dependencies
     ) async -> AnswerOutcome? {
         guard var session = state.telling else { return nil }
-        let speaker = dependencies.speakers().ownerName
+        let speaker = state.speakers.ownerName
         switch HallieTellingMode.classify(text, session: session) {
         case .switchSubject(let opening):
             return await beginTelling(
@@ -124,7 +124,7 @@ extension HallieShellCLI {
         let isFirst = session.passages.isEmpty
         session.passages.append(statement)
         guard options.remember else { return }
-        let speaker = dependencies.speakers().ownerName ?? ""
+        let speaker = state.speakers.ownerName ?? ""
         let now = Date()
         do {
             // The relation the speaker gave ("Rick's dad") is a fact about
@@ -155,7 +155,7 @@ extension HallieShellCLI {
         output: (String) -> Void,
         dependencies: Dependencies
     ) async -> AnswerOutcome {
-        let speaker = dependencies.speakers().ownerName ?? "you"
+        let speaker = state.speakers.ownerName ?? "you"
         let result = HallieTurnExecutor.Result(
             route: .telling,
             outcome: .answered,

@@ -164,7 +164,12 @@ enum HalliePronunciationDrillMode {
     /// What a turn means while a name is up. Pure; the caller applies it.
     /// `isKnownName` lets a free-form teach name someone off the sheet
     /// ("Latta is prounounced like Ladder but Laddah or Lattah").
-    static func classify(_ text: String, session: Session, isKnownName: (String) -> Bool = { _ in false }) -> Reply {
+    static func classify(
+        _ text: String,
+        session: Session,
+        isKnownName: (String) -> Bool = { _ in false },
+        gold: MisakiGoldLexicon = .empty
+    ) -> Reply {
         let cleaned = clean(text)
         guard !cleaned.isEmpty else { return .unrecognized }
         if cleaned.hasSuffix("?") { return .leave }
@@ -220,10 +225,15 @@ enum HalliePronunciationDrillMode {
         }
         // Free-form: a pronounce-word (typo-tolerant) plus a name on the
         // sheet or one the archive knows (live miss #17).
-        if let free = HalliePronunciationFreeform.detect(cleaned, isKnownName: { token in
-            let key = FamilyIdentityText.normalized(token)
-            return session.current?.key == key || session.list.items.contains { $0.key == key } || isKnownName(token)
-        }) {
+        if let free = HalliePronunciationFreeform.detect(
+            cleaned,
+            isKnownName: { token in
+                let key = FamilyIdentityText.normalized(token)
+                return session.current?.key == key
+                    || session.list.items.contains { $0.key == key }
+                    || isKnownName(token)
+            },
+            gold: gold) {
             switch free.kind {
             case .teach: return .teach(Correction(word: free.word, alternatives: free.alternatives))
             case .query: return .leave

@@ -68,8 +68,48 @@ struct PronunciationVariationsTests {
         let gold = try Self.goldFixture(["data": "dˈAɾə"])
         let candidates = PronunciationVariations.candidates(for: "Latta", hint: .rhymes(with: "data"), gold: gold)
         #expect(candidates.first == .init(phonemes: "lˈAɾə", respelling: "LAY-duh", label: "rhymes with data"))
+        // Defaults are inert too: headless callers never inherit this Mac's
+        // optional helper installation by accident.
+        #expect(PronunciationVariations.candidates(
+            for: "Latta", hint: .rhymes(with: "data")).first?.respelling == "LAT-uh")
+        #expect(HalliePronunciationPicker.makeOffer(
+            word: "Latta", hint: .rhymes(with: "data"))?.candidates.first?.respelling == "LAT-uh")
         // Without the gold lexicon the rhyme cannot be read: the systematic list alone.
         #expect(respellings("Latta", hint: .rhymes(with: "data")).first == "LAT-uh")
+    }
+
+    @Test func exemplarTeachingUsesOnlyTheExplicitGoldSource() throws {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-exemplar-gold-\(UUID().uuidString).json")
+        let noGold = MisakiGoldLexicon(url: missing)
+        let hint = HalliePronunciationHint.syllables([
+            .init(text: "La", exemplar: "Velvet"),
+            .init(text: "Tah", exemplar: nil),
+        ])
+        let known: (String) -> Bool = {
+            FamilyIdentityText.normalized($0) == "latta"
+        }
+
+        #expect(HalliePhonemes.exemplarVowel("velvet") == nil)
+        #expect(HalliePhonemes.exemplarVowel("velvet", gold: noGold) == nil)
+        #expect(HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: ["LA-tah"], hint: hint) == "lˈætɑ")
+        #expect(HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: ["LA-tah"], hint: hint, gold: noGold) == "lˈætɑ")
+        #expect(HalliePronunciationFreeform.detect(
+            "Latta is prounounced like velvet", isKnownName: known)?.kind == .hintOnly)
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+
+        // Deliberately disagree with the installed gold table. Every route
+        // must honor this injected value and never fall through to `.shared`.
+        let poisoned = try Self.goldFixture(["velvet": "vˈAlvət"])
+        #expect(HalliePhonemes.exemplarVowel("velvet", gold: poisoned) == "A")
+        #expect(HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: ["LA-tah"], hint: hint, gold: poisoned) == "lˈAtɑ")
+        let taught = HalliePronunciationFreeform.detect(
+            "Latta is prounounced like velvet", isKnownName: known, gold: poisoned)
+        #expect(taught?.kind == .teach)
+        #expect(taught?.alternatives == ["LAY-tuh"])
     }
 
     @Test func ricksOwnRespellingsComeFirstExactly() {
@@ -139,6 +179,7 @@ struct PronunciationVariationsTests {
         #expect(PronunciationVariations.respelling(fromPhonemes: "lˈAɾə") == "LAY-duh")
         #expect(PronunciationVariations.respelling(fromPhonemes: "lˈætɑ") == "LAT-ah")
         #expect(PronunciationVariations.respelling(fromPhonemes: "məɡˈɪl") == "muh-GILL")
+        #expect(PronunciationVariations.respelling(fromPhonemes: "ˈælən") == "AL-uhn")
         #expect(PronunciationVariations.respelling(fromPhonemes: "ˈidɪθ") == "EE-dith")
         #expect(PronunciationVariations.normalisedRespelling("Lah-Tah") == "LAH-tah")
         #expect(PronunciationVariations.normalisedRespelling("MahGill") == "MAH-gill")

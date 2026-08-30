@@ -61,7 +61,7 @@ enum HalliePronunciationPicker {
     /// empty (nothing left to offer).
     static func makeOffer(
         word: String, hint: HalliePronunciationHint? = nil, respellings: [String] = [],
-        round: Int = 0, fromDrill: Bool = false, gold: MisakiGoldLexicon = .shared
+        round: Int = 0, fromDrill: Bool = false, gold: MisakiGoldLexicon = .empty
     ) -> Offer? {
         let all = PronunciationVariations.allCandidates(for: word, hint: hint, respellings: respellings, gold: gold)
         let start = round * Offer.pageSize
@@ -166,6 +166,7 @@ enum HalliePronunciationPicker {
         // "say Latta a few (different) ways (until I pick)", "pronounce it several ways", "say Latta 4 ways"
         #"^(?:please\s+|can you\s+|could you\s+)?(?:say|pronounce|try|read)\s+"# + name + #"\s+(?:in\s+)?(?:a few|a couple of|a couple|some|several|three|four|five|\d)\s+(?:different\s+|other\s+)?ways(?:\s+.*)?[.!]?$"#,
         // "let me pick (Latta)", "let me choose how to say Latta", "I want to pick"
+        #"^(?:let me|lemme|i want to|i'd like to|i would like to|can i)\s+(?:pick|choose)\s+(?:how to say|how you say|how to pronounce|the pronunciation of)\s+"# + name + #"[.!?]?$"#,
         #"^(?:let me|lemme|i want to|i'd like to|i would like to|can i)\s+(?:pick|choose)(?:\s+(?:one|the right one|the best one|how to say|how you say|how to pronounce|the pronunciation)(?:\s+(?:for|of)\s+"# + name + #")?|\s+"# + name + #")?[.!?]?$"#,
         // "which sounds right (for Latta)?", "which one sounds right"
         #"^(?:which|what)\s+(?:one\s+|way\s+)?sounds\s+(?:right|best|closest)(?:\s+(?:for|to you for)\s+"# + name + #")?\??$"#,
@@ -195,7 +196,7 @@ enum HalliePronunciationPicker {
     }
 
     private static let bareNoPattern = try! NSRegularExpression(
-        pattern: #"^(?:no|nope|nah|wrong|not right|not quite|incorrect|that's wrong|thats wrong|that's not it|thats not it|that's not right|thats not right|not like that|no that's wrong|no that's not right|no,? not right|no,? that's not it|not that|still wrong|still not right|nope,? not it)(?:[,!.]?\s*(?:hallie|sorry))?[.!]?$"#,
+        pattern: #"^(?:no|nope|nah|wrong|not right|not quite|incorrect|that's wrong|thats wrong|that's not it|thats not it|that's not right|thats not right|not like that|no,?\s+that's wrong|no,?\s+that's not right|no,? not right|no,? that's not it|not that|still wrong|still not right|nope,? not it)(?:[,!.]?\s*(?:hallie|sorry))?[.!]?$"#,
         options: [.caseInsensitive])
 
     /// A bare "no" / "not right" with no respelling — in the drill this
@@ -275,6 +276,19 @@ enum HalliePronunciationPicker {
         let telling = HallieTellingMode.PronunciationTelling(word: word, alternatives: [candidate.respelling])
         return HallieTellingMode.pronunciationReply(telling, scope: scope)
             .replacingOccurrences(of: " from now on.", with: " (number \(number)) from now on.")
+    }
+
+    static func transientPickedReply(
+        word: String,
+        candidate: PronunciationVariations.Candidate,
+        number: Int
+    ) -> String {
+        let telling = HallieTellingMode.PronunciationTelling(
+            word: word, alternatives: [candidate.respelling])
+        return HallieTellingMode.transientPronunciationReply(telling)
+            .replacingOccurrences(
+                of: " from now on.",
+                with: " (number \(number)) from now on.")
     }
 
     static func outOfRangeReply(_ offer: Offer, number: Int) -> String {

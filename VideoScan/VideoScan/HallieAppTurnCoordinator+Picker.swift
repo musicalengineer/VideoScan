@@ -94,7 +94,10 @@ extension HallieAppTurnCoordinator {
         prefix: String = ""
     ) -> Response {
         typealias Picker = HalliePronunciationPicker
-        guard let offer = Picker.makeOffer(word: word, hint: hint, respellings: respellings, round: round, fromDrill: fromDrill) else {
+        guard let offer = Picker.makeOffer(
+            word: word, hint: hint, respellings: respellings,
+            round: round, fromDrill: fromDrill,
+            gold: dependencies.loadPronunciationGold()) else {
             let prose = round == 0 ? Picker.cannotOfferReply(word: word) : Picker.exhaustedReply(word: word)
             return response(prefix + prose + stillOn(drill), picker: nil, drill: drill, telling: telling, referent: referent)
         }

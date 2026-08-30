@@ -60,7 +60,7 @@ enum PronunciationVariations {
         hint: HalliePronunciationHint? = nil,
         respellings: [String] = [],
         limit: Int = defaultLimit,
-        gold: MisakiGoldLexicon = .shared
+        gold: MisakiGoldLexicon = .empty
     ) -> [Candidate] {
         Array(allCandidates(for: name, hint: hint, respellings: respellings, gold: gold).prefix(max(0, limit)))
     }
@@ -71,7 +71,7 @@ enum PronunciationVariations {
         for name: String,
         hint: HalliePronunciationHint? = nil,
         respellings: [String] = [],
-        gold: MisakiGoldLexicon = .shared
+        gold: MisakiGoldLexicon = .empty
     ) -> [Candidate] {
         var out: [Candidate] = []
         var seen: Set<String> = []
@@ -436,7 +436,8 @@ enum PronunciationVariations {
         // The hint file's own respelling, displayed from its phonemes so the
         // chip reads the way the sound goes ("LAT-ah", not "LA-tah").
         func fromHintFile() {
-            guard let respelling = HalliePronunciationRespelling.respelling(for: name, hint: hint),
+            guard let respelling = HalliePronunciationRespelling.respelling(
+                for: name, hint: hint, gold: gold),
                   let phonemes = HalliePhonemes.derive(respelling: respelling) else { return }
             out.append(Candidate(phonemes: phonemes, respelling: self.respelling(fromPhonemes: phonemes), label: tag))
         }
@@ -459,7 +460,8 @@ enum PronunciationVariations {
         case .syllables(let given):
             // The hint file's own respelling ("LA-tah"), exemplar vowels
             // pinned from the gold lexicon when it is installed…
-            if let respelling = HalliePronunciationRespelling.respelling(for: name, hint: hint) {
+            if let respelling = HalliePronunciationRespelling.respelling(
+                for: name, hint: hint, gold: gold) {
                 var pins: [Int: String] = [:]
                 for (index, part) in given.enumerated() {
                     if let exemplar = part.exemplar, let vowel = HalliePhonemes.exemplarVowel(exemplar, gold: gold) { pins[index] = vowel }
@@ -563,6 +565,10 @@ enum PronunciationVariations {
             if shape.flapAt == index {
                 // "tt"/"t" → "d": what the flap sounds like to an American ear.
                 coda = coda.replacingOccurrences(of: "tt", with: "d").replacingOccurrences(of: "t", with: "d")
+            } else if coda == "ck", openVowels.contains(pick.vowel) {
+                // A long/open vowel takes plain "k" in the phonetic
+                // display: RICK, but REEK / REYEK rather than REECK.
+                coda = "k"
             }
             parts.append(Display(onset: syllable.onsetLetters,
                                  nucleus: vowelSpelling(pick.vowel, grapheme: syllable.vowelLetters, isFinal: index == word.count - 1),
@@ -632,12 +638,21 @@ enum PronunciationVariations {
         pieces.append(current)
         let mapped = pieces.enumerated().map { index, piece -> String in
             // Onset and coda were mapped to letters as they were gathered.
+            // A short final vowel + /l/ reads naturally with doubled l
+            // (GILL); the phonemes themselves cannot retain orthography.
+            let coda = readableCoda(
+                piece.coda,
+                doublesFinalL: index == pieces.count - 1 && short.contains(piece.vowel))
             let letters = piece.onset
                 + vowelSpelling(piece.vowel, grapheme: "", isFinal: index == pieces.count - 1)
-                + piece.coda
+                + coda
             return piece.stressed ? letters.uppercased() : letters.lowercased()
         }
         return mapped.joined(separator: "-")
+    }
+
+    private static func readableCoda(_ coda: String, doublesFinalL: Bool) -> String {
+        doublesFinalL && coda == "l" ? "ll" : coda
     }
 
     /// "Lah-Tah" → "LAH-tah"; "latt-UH" stays "latt-UH"; a CamelCase

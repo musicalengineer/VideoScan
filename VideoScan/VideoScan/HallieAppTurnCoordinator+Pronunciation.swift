@@ -50,12 +50,17 @@ extension HallieAppTurnCoordinator {
     /// Phonemes for the spoken (first) alternative. An "as in <word>"
     /// exemplar pins that syllable's vowel from misaki's gold lexicon when
     /// the helper bundle is installed; otherwise the respelling rules decide.
-    static func derivePhonemes(alternatives: [String], hint: HalliePronunciationHint?) -> String? {
+    static func derivePhonemes(
+        alternatives: [String],
+        hint: HalliePronunciationHint?,
+        gold: MisakiGoldLexicon = .empty
+    ) -> String? {
         guard let spoken = alternatives.first else { return nil }
         var pinned: [Int: String] = [:]
         if case .syllables(let given)? = hint {
             for (index, syllable) in given.enumerated() {
-                if let exemplar = syllable.exemplar, let vowel = HalliePhonemes.exemplarVowel(exemplar) {
+                if let exemplar = syllable.exemplar,
+                   let vowel = HalliePhonemes.exemplarVowel(exemplar, gold: gold) {
                     pinned[index] = vowel
                 }
             }
@@ -81,7 +86,9 @@ extension HallieAppTurnCoordinator {
         }
         if let hinted = HallieTellingMode.detectPronunciationHint(question),
            isKnownName(hinted.word, dependencies: dependencies) {
-            if let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) {
+            let gold = dependencies.loadPronunciationGold()
+            if let respelling = HalliePronunciationRespelling.respelling(
+                for: hinted.word, hint: hinted.hint, gold: gold) {
                 return teachResponse(word: hinted.word, alternatives: [respelling], hint: hinted,
                                      telling: telling, referent: referent, dependencies: dependencies)
             }
@@ -102,7 +109,10 @@ extension HallieAppTurnCoordinator {
         // Free-form (live miss #17): a pronounce-word, typo-tolerant, plus
         // a name the archive knows — a teach, a question, or a kept hint.
         // Never translation, never a search.
-        if let free = HalliePronunciationFreeform.detect(question, isKnownName: { isKnownName($0, dependencies: dependencies) }) {
+        if let free = HalliePronunciationFreeform.detect(
+            question,
+            isKnownName: { isKnownName($0, dependencies: dependencies) },
+            gold: dependencies.loadPronunciationGold()) {
             switch free.kind {
             case .teach:
                 return teachResponse(word: free.word, alternatives: free.alternatives, hint: nil, freeform: free,
@@ -152,7 +162,10 @@ extension HallieAppTurnCoordinator {
             var store = dependencies.loadDrillStore()
             let derived = hint != nil || freeform?.explicit == false
             store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,
-                      alternatives: alternatives, phonemes: derivePhonemes(alternatives: alternatives, hint: hint?.hint),
+                      alternatives: alternatives,
+                      phonemes: derivePhonemes(
+                        alternatives: alternatives, hint: hint?.hint,
+                        gold: dependencies.loadPronunciationGold()),
                       origin: derived ? .derived : .taught, hint: hint?.hint.description ?? freeform?.rawHint)
             let manifest = PronunciationDrillManifest.build(
                 list: PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)

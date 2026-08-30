@@ -184,6 +184,7 @@ enum HallieShellCLI {
         var loadDrillStore: () -> PronunciationDrillStore
         var saveDrillStore: (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void
         var loadLexicon: () -> HalliePronunciationLexicon
+        var loadPronunciationGold: () -> MisakiGoldLexicon
 
         init(
             loadCatalog: @escaping (URL) -> [VideoRecord]?,
@@ -229,7 +230,8 @@ enum HallieShellCLI {
             recordPronunciation: @escaping (HallieAppTurnCoordinator.PronunciationWrite) throws -> Void = { _ in },
             loadDrillStore: @escaping () -> PronunciationDrillStore = { PronunciationDrillStore() },
             saveDrillStore: @escaping (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void = { _, _ in },
-            loadLexicon: @escaping () -> HalliePronunciationLexicon = { .shipped }
+            loadLexicon: @escaping () -> HalliePronunciationLexicon = { .shipped },
+            loadPronunciationGold: @escaping () -> MisakiGoldLexicon = { .empty }
         ) {
             self.recordTestimony = recordTestimony
             self.speakers = speakers
@@ -237,6 +239,7 @@ enum HallieShellCLI {
             self.loadDrillStore = loadDrillStore
             self.saveDrillStore = saveDrillStore
             self.loadLexicon = loadLexicon
+            self.loadPronunciationGold = loadPronunciationGold
             self.loadCatalog = loadCatalog
             self.configureFamilyAssets = configureFamilyAssets
             self.loadProfiles = loadProfiles
@@ -425,7 +428,8 @@ enum HallieShellCLI {
                 },
                 loadDrillStore: { PronunciationDrillStore.load() },
                 saveDrillStore: { store, manifest in try store.save(manifest: manifest) },
-                loadLexicon: { HalliePronunciationLexicon.resolved() })
+                loadLexicon: { HalliePronunciationLexicon.resolved() },
+                loadPronunciationGold: { .shared })
         }
     }
 
@@ -628,6 +632,7 @@ enum HallieShellCLI {
             graph: graph,
             needsRecompile: needsRecompile,
             cyberBrain: cyberBrain,
+            speakers: dependencies.speakers(),
             model: options.model,
             runID: options.logRunID)
 
@@ -694,6 +699,10 @@ enum HallieShellCLI {
         /// Rebuilt after every testimony write so "tell me about Dad Breen"
         /// answers from what was just said.
         var cyberBrain: CyberBrainIndex?
+        /// Captured once from the injected dependency. Every turn and render
+        /// in this session uses the same identity; process defaults are never
+        /// consulted again.
+        let speakers: HallieTurnExecutor.Speakers
         let model: String
         var runID: String?
         var transcriptSessionID = UUID()
@@ -712,6 +721,9 @@ enum HallieShellCLI {
         var drill: HalliePronunciationDrillMode.Session?
         /// Non-nil while the variations picker has a numbered list up.
         var picker: HalliePronunciationPicker.Offer?
+        /// No-`--remember` teaches live here for this interactive session.
+        /// This layer is never written and is discarded by `:reset`.
+        var transientPronunciations: [HalliePronunciationLexicon.Entry] = []
         /// Catalog-wide numbers, computed once per session on first use.
         var catalogStats: HallieCatalogStats?
         /// Conversation memory: the last result set / AST for follow-ups
@@ -742,6 +754,28 @@ enum HallieShellCLI {
 
         func record(_ id: UUID) -> VideoRecord? { records.first { $0.id == id } }
 
+        func pronunciationLexicon(base: HalliePronunciationLexicon) -> HalliePronunciationLexicon {
+            HalliePronunciationLexicon.merged([
+                HalliePronunciationLexicon(entries: transientPronunciations),
+                base,
+            ])
+        }
+
+        mutating func rememberPronunciation(
+            word: String,
+            spoken: String,
+            phonemes: String?,
+            origin: String
+        ) {
+            let key = FamilyIdentityText.normalized(word)
+            transientPronunciations.removeAll {
+                FamilyIdentityText.normalized($0.written) == key
+            }
+            transientPronunciations.insert(
+                .init(written: word, spoken: spoken, phonemes: phonemes, origin: origin),
+                at: 0)
+        }
+
         var identityContext: HallieTurnExecutor.Context {
             HallieTurnExecutor.Context(
                 profiles: profiles?.map {
@@ -754,9 +788,9 @@ enum HallieShellCLI {
                 graph: graph,
                 needsRecompile: needsRecompile,
                 cyberBrain: cyberBrain,
-                // Same owner binding the full path uses (2026-08-22): "trace
-                // the family back to Ireland" needs to know whose family.
-                speakers: HallieTurnExecutor.Speakers.fromDefaults())
+                // Same captured owner binding the full path uses (2026-08-22):
+                // "trace the family back to Ireland" needs to know whose family.
+                speakers: speakers)
         }
     }
 
@@ -1030,7 +1064,7 @@ enum HallieShellCLI {
                 needsRecompile: state.needsRecompile,
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate,
-                speakers: HallieTurnExecutor.Speakers.fromDefaults())
+                speakers: state.speakers)
             let request = HallieTurnExecutor.Request(intent: intent)
             var result = try await dependencies.executeRequest(request, context)
             state.memory.record(intent: intent, result: result)
@@ -1363,6 +1397,7 @@ enum HallieShellCLI {
         state.telling = nil
         state.drill = nil
         state.picker = nil
+        state.transientPronunciations = []
         state.memory.reset()
         state.history = []
         state.socialHistory = []

@@ -38,6 +38,9 @@ enum HalliePhonemes {
     /// differ only where the convention does ("uh" = ʌ stressed, ə not).
     private struct Vowel { let stressed: String; let unstressed: String }
     private static let vowels: [(String, Vowel)] = [
+        // Keep before "oo": an intuitive letter-name respelling such as
+        // "EKS-kyoo-zee" is /ju/, not a y-vowel followed by stray "oo".
+        ("yoo", Vowel(stressed: "u", unstressed: "u")),
         ("eye", Vowel(stressed: "I", unstressed: "I")),
         ("igh", Vowel(stressed: "I", unstressed: "I")),
         ("air", Vowel(stressed: "ɛɹ", unstressed: "ɛɹ")),
@@ -130,6 +133,9 @@ enum HalliePhonemes {
                     out += "j"; index += 1; continue
                 }
                 sawVowel = true
+                // `yoo` carries a /j/ onset; stress belongs on its /u/
+                // nucleus (YOO = jˈu, KYOO = kjˈu), as Misaki does.
+                if spelling == "yoo" { out += "j" }
                 out += (stressed ? "ˈ" : "") + (pinnedVowel ?? (stressed ? vowel.stressed : vowel.unstressed))
                 index += spelling.count
                 continue
@@ -151,7 +157,7 @@ enum HalliePhonemes {
 
     /// The stressed vowel of a word in misaki's gold lexicon ("lag" → "æ"),
     /// nil when the bundle is absent or the word is not there.
-    static func exemplarVowel(_ word: String, gold: MisakiGoldLexicon = .shared) -> String? {
+    static func exemplarVowel(_ word: String, gold: MisakiGoldLexicon = .empty) -> String? {
         guard let phones = gold.phonemes(for: word) else { return nil }
         return stressedVowel(in: phones)
     }
@@ -181,6 +187,9 @@ enum HalliePhonemes {
 /// `NSLock` ≈ std::mutex around the lazy load.
 final class MisakiGoldLexicon: @unchecked Sendable {
     static let shared = MisakiGoldLexicon()
+    /// Deterministic no-bundle source for tests and headless/default seams.
+    /// Production dependencies opt into `shared` explicitly.
+    static let empty = MisakiGoldLexicon(url: nil)
 
     private let lock = NSLock()
     private var table: [String: String]?

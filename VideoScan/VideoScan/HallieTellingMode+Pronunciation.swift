@@ -152,24 +152,39 @@ extension HallieTellingMode {
     /// "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now
     /// on." plus where it was kept. With alternatives: "… as MahGill (or
     /// MicGill) …".
-    static func pronunciationReply(_ telling: PronunciationTelling, scope: PronunciationScope) -> String {
+    private static func pronunciationLead(_ telling: PronunciationTelling) -> String {
         let alternatives = telling.alternatives
         let said = alternatives.count > 1
             ? "\(alternatives[0]) (or \(alternatives.dropFirst().joined(separator: " or ")))"
             : telling.spoken
-        let lead = pronunciationReadBack(telling.word) + " I'll say \(telling.word) as \(said) from now on."
+        return pronunciationReadBack(telling.word)
+            + " I'll say \(telling.word) as \(said) from now on."
+    }
+
+    static func pronunciationReply(_ telling: PronunciationTelling, scope: PronunciationScope) -> String {
+        let lead = pronunciationLead(telling)
         switch scope {
         case .person(let name) where FamilyIdentityText.normalized(name) != FamilyIdentityText.normalized(telling.word):
             return lead + " I've kept that with \(name)."
         case .person:
             return lead + " I've kept that on \(telling.word)'s record."
         case .file:
-            return lead + " I've kept that in the pronunciation list, since more than one person carries that name."
+            return lead + " I've kept that in the pronunciation list for that name."
         }
+    }
+
+    /// A shell teach without `--remember` changes only the current Session.
+    /// Never imply that a person record or pronunciations.json was written.
+    static func transientPronunciationReply(_ telling: PronunciationTelling) -> String {
+        pronunciationLead(telling)
+            + " I'll use that for this session only; run with --remember to save it."
     }
 
     /// No "OK, noted": nothing was kept. The reason is the error's own words.
     static func pronunciationFailureReply(_ telling: PronunciationTelling, error: String) -> String {
-        "I couldn't save that — \(error). Saying \(telling.word) as \(telling.spoken) won't stick past this answer, sorry."
+        let prefix = "could not save: "
+        let detail = error.lowercased().hasPrefix(prefix)
+            ? String(error.dropFirst(prefix.count)) : error
+        return "I couldn't save that — \(detail). Saying \(telling.word) as \(telling.spoken) won't stick past this answer, sorry."
     }
 }
