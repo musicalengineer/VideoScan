@@ -516,6 +516,7 @@ extension HallieAppTurnCoordinator.Dependencies {
             loadNeedsRecompile: loadNeedsRecompile,
             loadCyberBrain: loadCyberBrain,
             recordTestimony: recordTestimony,
+            loadPronunciationGold: loadPronunciationGold,
             loadSpeakers: { speakers },
             executeRequest: executeRequest,
             continueTurn: continueTurn,

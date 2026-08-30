@@ -784,8 +784,8 @@ struct HalliePronunciationDrillTests {
         #expect(!gold.isAvailable && gold.phonemes(for: "lag") == nil)
         #expect(HalliePhonemes.exemplarVowel("lag", gold: gold) == nil)
         if MisakiGoldLexicon.shared.isAvailable {
-            #expect(HalliePhonemes.exemplarVowel("lag") == "æ")
-            #expect(HalliePhonemes.exemplarVowel("father") == "ɑ")
+            #expect(HalliePhonemes.exemplarVowel("lag", gold: .shared) == "æ")
+            #expect(HalliePhonemes.exemplarVowel("father", gold: .shared) == "ɑ")
         }
     }
 

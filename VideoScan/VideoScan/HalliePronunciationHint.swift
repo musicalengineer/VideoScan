@@ -297,7 +297,11 @@ enum HalliePronunciationRespelling {
 
     /// Nil when the hint cannot be mapped safely (rhymes-with, an unknown
     /// exemplar, a syllable Rick named that the name does not contain).
-    static func respelling(for name: String, hint: HalliePronunciationHint) -> String? {
+    static func respelling(
+        for name: String,
+        hint: HalliePronunciationHint,
+        gold: MisakiGoldLexicon = .empty
+    ) -> String? {
         var parts = syllables(name)
         guard !parts.isEmpty else { return nil }
         // After a "tt" split the second syllable would re-say the t: drop it.
@@ -351,11 +355,15 @@ enum HalliePronunciationRespelling {
             parts[at] = target
         case .vowelLike(let letter, let exemplar):
             guard let at = syllableIndex(parts, named: nil, vowel: letter),
-                  let sound = exemplarSound(exemplar, letter: letter) else { return nil }
+                  let sound = exemplarSound(exemplar, letter: letter, gold: gold) else { return nil }
             stressed = at
             switch sound {
-            case .short: return respelling(for: name, hint: .vowel(letter: letter, length: .short, syllable: nil))
-            case .long: return respelling(for: name, hint: .vowel(letter: letter, length: .long, syllable: nil))
+            case .short:
+                return respelling(
+                    for: name, hint: .vowel(letter: letter, length: .short, syllable: nil), gold: gold)
+            case .long:
+                return respelling(
+                    for: name, hint: .vowel(letter: letter, length: .long, syllable: nil), gold: gold)
             case .spelled(let text):
                 var target = parts[at]
                 guard let vowelAt = target.firstIndex(of: letter) else { return nil }
@@ -379,7 +387,11 @@ enum HalliePronunciationRespelling {
     private enum ExemplarSound { case short, long, spelled(String) }
 
     /// The vowel sound of a well-known example word.
-    private static func exemplarSound(_ exemplar: String, letter: Character) -> ExemplarSound? {
+    private static func exemplarSound(
+        _ exemplar: String,
+        letter: Character,
+        gold: MisakiGoldLexicon
+    ) -> ExemplarSound? {
         let word = exemplar.lowercased()
         let ah: Set<String> = ["father", "palm", "calm", "spa", "ah", "car", "far", "bra"]
         let shortWords: Set<String> = ["cat", "hat", "bat", "lag", "bag", "bad", "apple", "man", "pat", "bed", "pet", "bit", "sit", "hit", "hot", "cot", "pot", "but", "cup", "cut"]
@@ -388,7 +400,7 @@ enum HalliePronunciationRespelling {
         if shortWords.contains(word) { return .short }
         if longWords.contains(word) { return .long }
         // Beyond the table: misaki's gold lexicon when the helper is installed.
-        guard let vowel = HalliePronunciationFreeform.exemplarVowel(word),
+        guard let vowel = HalliePronunciationFreeform.exemplarVowel(word, gold: gold),
               let hint = HalliePronunciationFreeform.vowelSpelling(vowel, letter: letter) else { return nil }
         switch hint {
         case .vowel(_, .short, _): return .short

@@ -35,7 +35,10 @@ extension HallieAppTurnCoordinator {
         typealias Mode = HalliePronunciationDrillMode
         if var session = drill {
             var store = dependencies.loadDrillStore()
-            switch Mode.classify(question, session: session, isKnownName: { isKnownName($0, dependencies: dependencies) }) {
+            switch Mode.classify(
+                question, session: session,
+                isKnownName: { isKnownName($0, dependencies: dependencies) },
+                gold: dependencies.loadPronunciationGold()) {
             case .leave:
                 logSession(session)
                 return nil
@@ -83,7 +86,9 @@ extension HallieAppTurnCoordinator {
                         || isKnownName(hinted.word, dependencies: dependencies) else {
                     return response(Mode.unrecognizedReply(session), drill: session, telling: telling, referent: referent)
                 }
-                guard let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) else {
+                guard let respelling = HalliePronunciationRespelling.respelling(
+                    for: hinted.word, hint: hinted.hint,
+                    gold: dependencies.loadPronunciationGold()) else {
                     // Not mappable: keep the hint on the record and offer a
                     // few ways to say it, built from the hint (the picker).
                     if let item = session.list.items.first(where: { $0.key == key }) {
@@ -153,7 +158,9 @@ extension HallieAppTurnCoordinator {
             let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
             let key = FamilyIdentityText.normalized(word)
             let origin: PronunciationDrillStore.Origin = hint == nil ? .taught : .derived
-            let phonemes = derivePhonemes(alternatives: correction.alternatives, hint: hint)
+            let phonemes = derivePhonemes(
+                alternatives: correction.alternatives, hint: hint,
+                gold: dependencies.loadPronunciationGold())
             if let item = session.list.items.first(where: { $0.key == key }) {
                 store.set(item, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
             } else {
@@ -219,7 +226,9 @@ extension HallieAppTurnCoordinator {
         let saidAs = HalliePronunciationLexicon.joinedAlternatives(alternatives)
         let target = resolvePronunciationTarget(
             word: word, cyberBrain: dependencies.loadCyberBrain(), graph: dependencies.loadGraph())
-        let phonemes = explicit ?? derivePhonemes(alternatives: alternatives, hint: hint)
+        let phonemes = explicit ?? derivePhonemes(
+            alternatives: alternatives, hint: hint,
+            gold: dependencies.loadPronunciationGold())
         do {
             try dependencies.recordPronunciation(PronunciationWrite(word: word, saidAs: saidAs, phonemes: phonemes,
                                                                     target: target, origin: origin))

@@ -58,7 +58,11 @@ extension HallieShellCLI {
         guard let word = state.drill?.list.items.first(where: { $0.key == key })?.name
                 ?? knownSpelling(typed, state: state, dependencies: dependencies) else { return nil }
         let fromDrill = state.drill?.list.items.contains { $0.key == key } ?? false
-        return await offerInShell(word: word, hint: nil, respellings: [], round: 0, fromDrill: fromDrill,
+        let respellings = state.transientPronunciations.first {
+            FamilyIdentityText.normalized($0.written) == key
+        }.map { HalliePronunciationLexicon.alternatives($0.spoken) } ?? []
+        return await offerInShell(word: word, hint: nil, respellings: respellings,
+                                  round: 0, fromDrill: fromDrill,
                                   state: &state, output: output, dependencies: dependencies)
     }
 
@@ -76,7 +80,10 @@ extension HallieShellCLI {
         prefix: String = ""
     ) async -> AnswerOutcome {
         typealias Picker = HalliePronunciationPicker
-        guard let offer = Picker.makeOffer(word: word, hint: hint, respellings: respellings, round: round, fromDrill: fromDrill) else {
+        guard let offer = Picker.makeOffer(
+            word: word, hint: hint, respellings: respellings,
+            round: round, fromDrill: fromDrill,
+            gold: dependencies.loadPronunciationGold()) else {
             state.picker = nil
             var prose = prefix + (round == 0 ? Picker.cannotOfferReply(word: word) : Picker.exhaustedReply(word: word))
             if let item = state.drill?.current { prose += " Still on: \(item.name)." }
@@ -121,6 +128,11 @@ extension HallieShellCLI {
                                         state: &state, output: output, dependencies: dependencies)
             }
         } else {
+            state.rememberPronunciation(
+                word: word,
+                spoken: candidate.respelling,
+                phonemes: candidate.phonemes,
+                origin: "picked")
             prose += " (Kept for this session only — run with --remember to save it.)"
         }
         var store = dependencies.loadDrillStore()
@@ -148,7 +160,9 @@ extension HallieShellCLI {
         }
         if options.remember {
             let manifest = PronunciationDrillManifest.build(
-                list: state.drill?.list ?? PronunciationDrillList(items: []), lexicon: dependencies.loadLexicon(), store: store)
+                list: state.drill?.list ?? PronunciationDrillList(items: []),
+                lexicon: state.pronunciationLexicon(base: dependencies.loadLexicon()),
+                store: store)
             do {
                 try dependencies.saveDrillStore(store, manifest)
             } catch {

@@ -61,7 +61,7 @@ enum HalliePronunciationPicker {
     /// empty (nothing left to offer).
     static func makeOffer(
         word: String, hint: HalliePronunciationHint? = nil, respellings: [String] = [],
-        round: Int = 0, fromDrill: Bool = false, gold: MisakiGoldLexicon = .shared
+        round: Int = 0, fromDrill: Bool = false, gold: MisakiGoldLexicon = .empty
     ) -> Offer? {
         let all = PronunciationVariations.allCandidates(for: word, hint: hint, respellings: respellings, gold: gold)
         let start = round * Offer.pageSize

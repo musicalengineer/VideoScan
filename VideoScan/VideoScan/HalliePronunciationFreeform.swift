@@ -174,10 +174,13 @@ enum HalliePronunciationFreeform {
     ]
 
     /// The stressed vowel of an exemplar word (table, then the gold lexicon).
-    static func exemplarVowel(_ word: String) -> String? {
+    static func exemplarVowel(
+        _ word: String,
+        gold: MisakiGoldLexicon = .empty
+    ) -> String? {
         let key = word.lowercased().filter(\.isLetter)
         if let known = exemplarVowels[key] { return known }
-        return HalliePhonemes.exemplarVowel(key)
+        return HalliePhonemes.exemplarVowel(key, gold: gold)
     }
 
     /// A respelling spelling for a misaki vowel, used when a respelling is
@@ -197,7 +200,11 @@ enum HalliePronunciationFreeform {
     /// no pronounce-word, no name `isKnownName` accepts, or is a plain
     /// respelling/hint the strict detectors already handle (callers run
     /// those first). `isKnownName` decides which token is the subject.
-    static func detect(_ text: String, isKnownName: (String) -> Bool) -> HallieFreeformPronunciation? {
+    static func detect(
+        _ text: String,
+        isKnownName: (String) -> Bool,
+        gold: MisakiGoldLexicon = .empty
+    ) -> HallieFreeformPronunciation? {
         let cleaned = HalliePronounceWords.normalize(
             text.replacingOccurrences(of: "’", with: "'")
                 .replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
@@ -227,18 +234,22 @@ enum HalliePronunciationFreeform {
         for (at, token) in tokens.enumerated() where at != nameAt && !HalliePronounceWords.isPronounceWord(token) && !token.isEmpty {
             rest.append(token)
         }
-        var scanner = CueScanner(rest: rest, word: word, nameKey: nameKey)
+        var scanner = CueScanner(rest: rest, word: word, nameKey: nameKey, gold: gold)
         scanner.scan()
         let cues = scanner.cues
         let respellings = scanner.respellings
 
-        return resolve(word: word, nameKey: nameKey, rest: rest, cues: cues, respellings: respellings, isQuestion: isQuestion)
+        return resolve(
+            word: word, nameKey: nameKey, rest: rest, cues: cues,
+            respellings: respellings, isQuestion: isQuestion, gold: gold)
     }
 
     /// Question shape → query; typed respellings → teach (ranked); cues
     /// alone → a derived respelling, else a kept hint.
-    private static func resolve(word: String, nameKey: String, rest: [String], cues: [Cue],
-                                respellings: [String], isQuestion: Bool) -> HallieFreeformPronunciation {
+    private static func resolve(
+        word: String, nameKey: String, rest: [String], cues: [Cue],
+        respellings: [String], isQuestion: Bool, gold: MisakiGoldLexicon
+    ) -> HallieFreeformPronunciation {
         let rawHint = rest.joined(separator: " ")
         if isQuestion, respellings.isEmpty {
             return HallieFreeformPronunciation(word: word, kind: .query, alternatives: [], rawHint: rawHint,
@@ -256,14 +267,16 @@ enum HalliePronunciationFreeform {
         let summary = cueSummary(cues)
         if !explicit.isEmpty {
             let canonical = cues.isEmpty ? explicit : explicit.map { canonicalRespelling($0, cues: cues) }
-            let ranked = rank(canonical, cues: cues, nameKey: nameKey)
+            let ranked = rank(canonical, cues: cues, nameKey: nameKey, gold: gold)
             let uncertain = canonical.count > 1 && !cues.isEmpty
-                || (ranked.first.map { support($0, cues: cues) < cueCount(cues) } ?? false)
+                || (ranked.first.map {
+                    support($0, cues: cues, gold: gold) < cueCount(cues, gold: gold)
+                } ?? false)
             return HallieFreeformPronunciation(word: word, kind: .teach, alternatives: ranked, rawHint: rawHint,
                                                cueSummary: summary, uncertain: uncertain, explicit: true)
         }
         // No respelling typed: derive one from the cues where that is safe.
-        if let derived = deriveRespelling(for: word, cues: cues) {
+        if let derived = deriveRespelling(for: word, cues: cues, gold: gold) {
             return HallieFreeformPronunciation(word: word, kind: .teach, alternatives: [derived], rawHint: rawHint,
                                                cueSummary: summary, uncertain: false, explicit: false)
         }
@@ -277,6 +290,7 @@ enum HalliePronunciationFreeform {
         let rest: [String]
         let word: String
         let nameKey: String
+        let gold: MisakiGoldLexicon
         var cues: [Cue] = []
         var respellings: [String] = []
         var at = 0
@@ -284,10 +298,16 @@ enum HalliePronunciationFreeform {
         /// folds into one respelling.
         var respellingsEndAt = -1
 
-        init(rest: [String], word: String, nameKey: String) {
+        init(
+            rest: [String],
+            word: String,
+            nameKey: String,
+            gold: MisakiGoldLexicon
+        ) {
             self.rest = rest
             self.word = word
             self.nameKey = nameKey
+            self.gold = gold
         }
 
         func lower(_ i: Int) -> String? { i < rest.count ? rest[i].lowercased() : nil }
@@ -316,7 +336,8 @@ enum HalliePronunciationFreeform {
             }
             let candidateLow = candidate.lowercased()
             if looksLikeExplicitRespelling(candidate)
-                || (isRespellingCandidate(candidate, nameKey: nameKey) && exemplarVowel(candidate) == nil) {
+                || (isRespellingCandidate(candidate, nameKey: nameKey)
+                    && exemplarVowel(candidate, gold: gold) == nil) {
                 respellings.append(candidate)
             } else if low != "unlike", !stopWords.contains(candidateLow), candidate.first?.isLetter == true,
                       !cues.contains(.exemplar(candidateLow)) {
@@ -452,8 +473,16 @@ enum HalliePronunciationFreeform {
         return parts.enumerated().map { $0.offset == at ? $0.element.uppercased() : $0.element }.joined(separator: "-")
     }
 
-    private static func cueCount(_ cues: [Cue]) -> Int {
-        cues.filter { if case .exemplar = $0 { return exemplarVowel(exemplarWord($0)!) != nil }; return true }.count
+    private static func cueCount(
+        _ cues: [Cue],
+        gold: MisakiGoldLexicon
+    ) -> Int {
+        cues.filter {
+            if case .exemplar = $0 {
+                return exemplarVowel(exemplarWord($0)!, gold: gold) != nil
+            }
+            return true
+        }.count
     }
 
     private static func exemplarWord(_ cue: Cue) -> String? {
@@ -462,7 +491,11 @@ enum HalliePronunciationFreeform {
     }
 
     /// How many cues a respelling satisfies.
-    static func support(_ respelling: String, cues: [Cue]) -> Int {
+    static func support(
+        _ respelling: String,
+        cues: [Cue],
+        gold: MisakiGoldLexicon = .empty
+    ) -> Int {
         let syllables = respelling.split(whereSeparator: { $0 == "-" || $0 == " " }).map { $0.lowercased() }
         guard !syllables.isEmpty else { return 0 }
         var score = 0
@@ -483,7 +516,8 @@ enum HalliePronunciationFreeform {
                 let stressed = syllables.firstIndex { $0.uppercased() == $0 && $0.count >= 2 }
                 if stressed == nil ? at == 0 : stressed == at { score += 1 }
             case .exemplar(let word):
-                guard let vowel = exemplarVowel(word), let phones = HalliePhonemes.derive(respelling: respelling),
+                guard let vowel = exemplarVowel(word, gold: gold),
+                      let phones = HalliePhonemes.derive(respelling: respelling),
                       let first = HalliePhonemes.stressedVowel(in: phones) else { continue }
                 if first == vowel { score += 1 }
             }
@@ -494,10 +528,16 @@ enum HalliePronunciationFreeform {
     /// With cues: best-supported first, then nearest the written name,
     /// then as typed. Without cues: as typed — the first one is spoken,
     /// the rule every other teach follows ("MahGill or MicGill").
-    static func rank(_ respellings: [String], cues: [Cue], nameKey: String) -> [String] {
+    static func rank(
+        _ respellings: [String],
+        cues: [Cue],
+        nameKey: String,
+        gold: MisakiGoldLexicon = .empty
+    ) -> [String] {
         guard !cues.isEmpty else { return respellings }
         return respellings.enumerated().sorted { a, b in
-            let sa = support(a.element, cues: cues), sb = support(b.element, cues: cues)
+            let sa = support(a.element, cues: cues, gold: gold)
+            let sb = support(b.element, cues: cues, gold: gold)
             if sa != sb { return sa > sb }
             let da = HalliePronounceWords.editDistance(a.element.lowercased().filter(\.isLetter), nameKey)
             let db = HalliePronounceWords.editDistance(b.element.lowercased().filter(\.isLetter), nameKey)
@@ -508,7 +548,11 @@ enum HalliePronunciationFreeform {
 
     /// From cues alone: one vowel/stress cue or one exemplar maps through
     /// the existing hint path; anything else is left for Rick to spell.
-    static func deriveRespelling(for name: String, cues: [Cue]) -> String? {
+    static func deriveRespelling(
+        for name: String,
+        cues: [Cue],
+        gold: MisakiGoldLexicon = .empty
+    ) -> String? {
         let hints: [HalliePronunciationHint] = cues.compactMap { cue in
             switch cue {
             case .vowel(let letter, let length, let position):
@@ -518,7 +562,7 @@ enum HalliePronunciationFreeform {
             case .stress(let at):
                 return .stress(at == 0 ? .first : at == 1 ? .second : .third)
             case .exemplar(let word):
-                guard let vowel = exemplarVowel(word),
+                guard let vowel = exemplarVowel(word, gold: gold),
                       let letter = name.lowercased().first(where: { "aeiou".contains($0) }) else { return nil }
                 return vowelSpelling(vowel, letter: letter)
             case .sound:
@@ -529,7 +573,8 @@ enum HalliePronunciationFreeform {
         let preferred = hints.first { if case .vowel = $0 { return true }; if case .stress = $0 { return true }; return false }
             ?? hints.first
         guard let hint = preferred,
-              var respelling = HalliePronunciationRespelling.respelling(for: name, hint: hint) else { return nil }
+              var respelling = HalliePronunciationRespelling.respelling(
+                for: name, hint: hint, gold: gold) else { return nil }
         // "ah second": a positioned sound rewrites that syllable's vowel.
         for cue in cues {
             guard case .sound(let sound, let position?) = cue else { continue }

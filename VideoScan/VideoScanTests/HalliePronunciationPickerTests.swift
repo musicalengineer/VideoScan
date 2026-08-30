@@ -337,6 +337,17 @@ struct HalliePronunciationPickerTests {
         #expect(withGold.picker?.candidates.first?.respelling == "LAY-duh")
     }
 
+    @Test func replacingWebSpeakersPreservesTheInjectedGoldSource() throws {
+        let recorder = Recorder()
+        let (gold, goldURL) = try goldFixture(["data": "dˈAɾə"])
+        defer { try? FileManager.default.removeItem(at: goldURL) }
+        recorder.gold = gold
+        let replaced = dependencies(recorder).replacingSpeakers(
+            .init(ownerName: "Donna Breen", archivistName: "Hallie Mae"))
+        #expect(replaced.loadPronunciationGold().phonemes(for: "data") == "dˈAɾə")
+        #expect(replaced.loadSpeakers().ownerName == "Donna Breen")
+    }
+
     // MARK: - 4. Shell parity
 
     @Test func shellOffersANumberedListAndTakesTheNumber() async {
@@ -406,6 +417,129 @@ struct HalliePronunciationPickerTests {
         #expect(text.contains("OK, noted — Latta. I'll say Latta as LAT-uh (number 1) from now on."))
         #expect(text.contains("run with --remember to save it"))
         #expect(!harness.wrote && !harness.saved)
+    }
+
+    @Test func shellNoRememberPronunciationsLiveUntilResetAndNeverWrite() async {
+        final class Harness: @unchecked Sendable {
+            var inputs: [String]
+            var output: [String] = []
+            var recorded = 0
+            var saved = 0
+            init(_ inputs: [String]) { self.inputs = inputs }
+            func next() -> String? { inputs.isEmpty ? nil : inputs.removeFirst() }
+        }
+        func dependencies(_ harness: Harness) -> HallieShellCLI.Dependencies {
+            HallieShellCLI.Dependencies(
+                loadCatalog: { _ in [] },
+                loadProfiles: { .loaded([]) },
+                loadGraph: { _ in nil },
+                translateAST: { _, _ in throw NLTranslatorError.unreachable("fixture") },
+                executeTurn: { _, _ in throw NLTranslatorError.unreachable("fixture") },
+                performMediaAction: { _ in },
+                recordPronunciation: { _ in harness.recorded += 1 },
+                saveDrillStore: { _, _ in harness.saved += 1 },
+                loadLexicon: { Self.lexicon })
+        }
+
+        let harness = Harness([
+            "pronounce Latta like LAH-tah or LAY-tuh",
+            "how do you say Latta?",
+            "what pronunciations do you have?",
+            "say Latta a few ways",
+            ":reset",
+            "how do you say Latta?",
+        ])
+        _ = await HallieShellCLI.run(
+            options: HallieShellCLI.Options(), input: harness.next,
+            output: { harness.output.append($0) }, dependencies: dependencies(harness))
+        let text = harness.output.joined(separator: "\n")
+        #expect(text.contains("I say Latta as LAH-tah (or LAY-tuh)"))
+        #expect(text.contains("Latta as LAH-tah"))
+        #expect(text.contains("1. LAH-tah /lˈɑtɑ/ — as you spelled it"))
+        #expect(text.contains("reset: conversation forgotten"))
+        #expect(text.contains("I say Latta as LAT-uh — that's in the pronunciation list."))
+        #expect(harness.recorded == 0)
+        #expect(harness.saved == 0)
+
+        let fresh = Harness(["how do you say Latta?"])
+        _ = await HallieShellCLI.run(
+            options: HallieShellCLI.Options(), input: fresh.next,
+            output: { fresh.output.append($0) }, dependencies: dependencies(fresh))
+        let freshText = fresh.output.joined(separator: "\n")
+        #expect(freshText.contains("I say Latta as LAT-uh"))
+        #expect(!freshText.contains("LAH-tah"))
+        #expect(fresh.recorded == 0 && fresh.saved == 0)
+    }
+
+    @Test func shellCapturesInjectedSpeakersInsteadOfReadingProcessDefaults() async {
+        final class Harness: @unchecked Sendable {
+            var inputs = ["who is in the archive?"]
+            var output: [String] = []
+            var captured: HallieTurnExecutor.Speakers?
+            func next() -> String? { inputs.isEmpty ? nil : inputs.removeFirst() }
+        }
+        let harness = Harness()
+        let injected = HallieTurnExecutor.Speakers(
+            ownerName: "Injected Owner \(UUID().uuidString)",
+            archivistName: "Injected Archivist")
+        let dependencies = HallieShellCLI.Dependencies(
+            loadCatalog: { _ in [] },
+            loadProfiles: { .loaded([]) },
+            loadGraph: { _ in nil },
+            translateAST: { _, _ in
+                .init(ast: .presence(.init(people: ["Donna"])), responderHost: "fixture")
+            },
+            executeTurn: { _, context in
+                harness.captured = context.speakers
+                return .init(
+                    route: .presence, outcome: .answered,
+                    prose: "captured \(context.speakers.ownerName ?? "none")",
+                    basisLine: "Basis: fixture", queryDescription: "fixture",
+                    citations: [], catalogPersonName: nil)
+            },
+            performMediaAction: { _ in },
+            speakers: { injected })
+        _ = await HallieShellCLI.run(
+            options: HallieShellCLI.Options(), input: harness.next,
+            output: { harness.output.append($0) }, dependencies: dependencies)
+        #expect(harness.captured == injected)
+        #expect(harness.output.contains("captured \(injected.ownerName ?? "none")"))
+    }
+
+    @Test func shellPickerUsesOnlyItsInjectedGoldSource() async throws {
+        final class Harness: @unchecked Sendable {
+            var inputs = ["Latta rhymes with data"]
+            var output: [String] = []
+            func next() -> String? { inputs.isEmpty ? nil : inputs.removeFirst() }
+        }
+        func run(gold: MisakiGoldLexicon) async -> String {
+            let harness = Harness()
+            let dependencies = HallieShellCLI.Dependencies(
+                loadCatalog: { _ in [] },
+                loadProfiles: { .loaded([]) },
+                loadGraph: { _ in nil },
+                translateAST: { _, _ in throw NLTranslatorError.unreachable("fixture") },
+                executeTurn: { _, _ in throw NLTranslatorError.unreachable("fixture") },
+                performMediaAction: { _ in },
+                loadLexicon: { Self.lexicon },
+                loadPronunciationGold: { gold })
+            _ = await HallieShellCLI.run(
+                options: HallieShellCLI.Options(), input: harness.next,
+                output: { harness.output.append($0) }, dependencies: dependencies)
+            return harness.output.joined(separator: "\n")
+        }
+
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-shell-gold-\(UUID().uuidString).json")
+        let withoutGold = await run(gold: MisakiGoldLexicon(url: missing))
+        #expect(withoutGold.contains("1. LAT-uh /lˈætə/"))
+        #expect(!withoutGold.contains("1. LAY-duh /lˈAɾə/"))
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+
+        let (fixture, fixtureURL) = try goldFixture(["data": "dˈAɾə"])
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        let withGold = await run(gold: fixture)
+        #expect(withGold.contains("1. LAY-duh /lˈAɾə/"))
     }
 
     // MARK: - 5. Persistence and isolation

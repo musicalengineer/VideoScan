@@ -157,7 +157,7 @@ enum HalliePhonemes {
 
     /// The stressed vowel of a word in misaki's gold lexicon ("lag" → "æ"),
     /// nil when the bundle is absent or the word is not there.
-    static func exemplarVowel(_ word: String, gold: MisakiGoldLexicon = .shared) -> String? {
+    static func exemplarVowel(_ word: String, gold: MisakiGoldLexicon = .empty) -> String? {
         guard let phones = gold.phonemes(for: word) else { return nil }
         return stressedVowel(in: phones)
     }
@@ -187,6 +187,9 @@ enum HalliePhonemes {
 /// `NSLock` ≈ std::mutex around the lazy load.
 final class MisakiGoldLexicon: @unchecked Sendable {
     static let shared = MisakiGoldLexicon()
+    /// Deterministic no-bundle source for tests and headless/default seams.
+    /// Production dependencies opt into `shared` explicitly.
+    static let empty = MisakiGoldLexicon(url: nil)
 
     private let lock = NSLock()
     private var table: [String: String]?

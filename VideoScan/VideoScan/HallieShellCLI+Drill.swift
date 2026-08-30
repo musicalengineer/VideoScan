@@ -24,7 +24,10 @@ extension HallieShellCLI {
         typealias Mode = HalliePronunciationDrillMode
         if var session = state.drill {
             var store = dependencies.loadDrillStore()
-            switch Mode.classify(text, session: session, isKnownName: { knownSpelling($0, state: state, dependencies: dependencies) != nil }) {
+            switch Mode.classify(
+                text, session: session,
+                isKnownName: { knownSpelling($0, state: state, dependencies: dependencies) != nil },
+                gold: dependencies.loadPronunciationGold()) {
             case .leave:
                 HallieAppTurnCoordinator.logSession(session)
                 state.drill = nil
@@ -36,7 +39,11 @@ extension HallieShellCLI {
                 // A bare "no" with no respelling: offer a few ways to say
                 // the name (the picker) instead of asking for a spelling.
                 if let item = session.current, HalliePronunciationPicker.isBareNo(text) {
-                    return await offerInShell(word: item.name, hint: nil, respellings: [], round: 0, fromDrill: true,
+                    let alternatives = state.transientPronunciations.first {
+                        FamilyIdentityText.normalized($0.written) == item.key
+                    }.map { HalliePronunciationLexicon.alternatives($0.spoken) } ?? []
+                    return await offerInShell(word: item.name, hint: nil,
+                                              respellings: alternatives, round: 0, fromDrill: true,
                                               state: &state, output: output, dependencies: dependencies)
                 }
                 return await emit(Mode.unrecognizedReply(session), state: &state, output: output, dependencies: dependencies)
@@ -64,11 +71,16 @@ extension HallieShellCLI {
                 return await step(Mode.nextReply(session), session: session, state: &state, output: output, dependencies: dependencies)
             case .hint(let hinted):
                 let key = FamilyIdentityText.normalized(hinted.word)
+                let lexicon = state.pronunciationLexicon(base: dependencies.loadLexicon())
                 guard session.current?.key == key || session.list.items.contains(where: { $0.key == key })
-                        || dependencies.loadLexicon().entries.contains(where: { FamilyIdentityText.normalized($0.written) == key }) else {
+                        || lexicon.entries.contains(where: {
+                            FamilyIdentityText.normalized($0.written) == key
+                        }) else {
                     return await emit(Mode.unrecognizedReply(session), state: &state, output: output, dependencies: dependencies)
                 }
-                guard let respelling = HalliePronunciationRespelling.respelling(for: hinted.word, hint: hinted.hint) else {
+                guard let respelling = HalliePronunciationRespelling.respelling(
+                    for: hinted.word, hint: hinted.hint,
+                    gold: dependencies.loadPronunciationGold()) else {
                     if let item = session.list.items.first(where: { $0.key == key }) {
                         store.set(item, status: store.status(for: key), hint: hinted.hint.description)
                     } else {
@@ -108,40 +120,57 @@ extension HallieShellCLI {
         var session = session
         var store = store
         let origin: PronunciationDrillStore.Origin = hint == nil ? .taught : .derived
-                guard let word = correction.word ?? session.current?.name else {
-                    return await end(session, state: &state, output: output, dependencies: dependencies)
-                }
-                let saidAs = HalliePronunciationLexicon.joinedAlternatives(correction.alternatives)
-                let phonemes = HallieAppTurnCoordinator.derivePhonemes(alternatives: correction.alternatives, hint: hint)
-                var note = ""
-                if options.remember {
-                    let target = HallieAppTurnCoordinator.resolvePronunciationTarget(
-                        word: word, cyberBrain: state.cyberBrain, graph: state.graph)
-                    do {
-                        try dependencies.recordPronunciation(.init(word: word, saidAs: saidAs, phonemes: phonemes, target: target))
-                        HallieAppTurnCoordinator.logTaught(word: word, saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
-                    } catch {
-                        return await emit(
-                            Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
-                            state: &state, output: output, dependencies: dependencies)
-                    }
-                } else {
-                    note = " (Kept for this session only — run with --remember to save it.)"
-                }
-                let status: PronunciationDrillStatus = correction.alternatives.count > 1 ? .alternativesPending : .taught
-                let key = FamilyIdentityText.normalized(word)
-                if let item = session.list.items.first(where: { $0.key == key }) {
-                    store.set(item, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
-                } else {
-                    store.set(name: word, status: status, alternatives: correction.alternatives, phonemes: phonemes, origin: origin, hint: hint?.description)
-                }
-                session.taught += 1
-                let movedOn = session.current?.key == key
-                if movedOn { advance(&session, store: store) }
-                note += save(store, session: session, options: options, dependencies: dependencies)
-                return await step(
-                    Mode.taughtReply(word: word, alternatives: correction.alternatives, hint: hint, session: session, movedOn: movedOn) + note,
-                    session: session, state: &state, output: output, dependencies: dependencies)
+        guard let word = correction.word ?? session.current?.name else {
+            return await end(session, state: &state, output: output, dependencies: dependencies)
+        }
+        let saidAs = HalliePronunciationLexicon.joinedAlternatives(correction.alternatives)
+        let phonemes = HallieAppTurnCoordinator.derivePhonemes(
+            alternatives: correction.alternatives, hint: hint,
+            gold: dependencies.loadPronunciationGold())
+        var note = ""
+        if options.remember {
+            let target = HallieAppTurnCoordinator.resolvePronunciationTarget(
+                word: word, cyberBrain: state.cyberBrain, graph: state.graph)
+            do {
+                try dependencies.recordPronunciation(.init(
+                    word: word, saidAs: saidAs, phonemes: phonemes, target: target))
+                HallieAppTurnCoordinator.logTaught(
+                    word: word,
+                    saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
+            } catch {
+                return await emit(
+                    Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),
+                    state: &state, output: output, dependencies: dependencies)
+            }
+        } else {
+            state.rememberPronunciation(
+                word: word,
+                spoken: saidAs,
+                phonemes: phonemes,
+                origin: origin.rawValue)
+            note = " (Kept for this session only — run with --remember to save it.)"
+        }
+        let status: PronunciationDrillStatus = correction.alternatives.count > 1
+            ? .alternativesPending : .taught
+        let key = FamilyIdentityText.normalized(word)
+        if let item = session.list.items.first(where: { $0.key == key }) {
+            store.set(
+                item, status: status, alternatives: correction.alternatives,
+                phonemes: phonemes, origin: origin, hint: hint?.description)
+        } else {
+            store.set(
+                name: word, status: status, alternatives: correction.alternatives,
+                phonemes: phonemes, origin: origin, hint: hint?.description)
+        }
+        session.taught += 1
+        let movedOn = session.current?.key == key
+        if movedOn { advance(&session, store: store) }
+        note += save(store, session: session, options: options, dependencies: dependencies)
+        return await step(
+            Mode.taughtReply(
+                word: word, alternatives: correction.alternatives,
+                hint: hint, session: session, movedOn: movedOn) + note,
+            session: session, state: &state, output: output, dependencies: dependencies)
     }
 
     /// Build the sheet and put the first pending name.
@@ -157,8 +186,8 @@ extension HallieShellCLI {
         let list = PronunciationDrillList.build(
             graph: state.graph,
             profiles: state.identityContext.profiles ?? [],
-            speakers: dependencies.speakers(),
-            lexicon: dependencies.loadLexicon(),
+            speakers: state.speakers,
+            lexicon: state.pronunciationLexicon(base: dependencies.loadLexicon()),
             store: store)
         var session = Mode.Session(list: list, index: nil)
         session.index = list.nextPending(from: 0, store: store)

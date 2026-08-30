@@ -202,7 +202,7 @@ enum HallieAppTurnCoordinator {
             loadDrillStore: @escaping @Sendable () -> PronunciationDrillStore = { PronunciationDrillStore() },
             saveDrillStore: @escaping @Sendable (PronunciationDrillStore, PronunciationDrillManifest) throws -> Void = { _, _ in },
             loadLexicon: @escaping @Sendable () -> HalliePronunciationLexicon = { .shipped },
-            loadPronunciationGold: @escaping @Sendable () -> MisakiGoldLexicon = { .shared },
+            loadPronunciationGold: @escaping @Sendable () -> MisakiGoldLexicon = { .empty },
             excludePhoto: @escaping @Sendable (URL, String, String?, String?) throws -> Void = { _, _, _, _ in },
             loadSpeakers: @escaping @Sendable () -> HallieTurnExecutor.Speakers = {
                 HallieTurnExecutor.Speakers.fromDefaults()
@@ -384,6 +384,7 @@ enum HallieAppTurnCoordinator {
                 try store.save(manifest: manifest)
             },
             loadLexicon: { HalliePronunciationLexicon.resolved() },
+            loadPronunciationGold: { .shared },
             excludePhoto: { photo, gedcomID, notedBy, caption in
                 let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
                 let sidecar = try store.excludePhoto(
