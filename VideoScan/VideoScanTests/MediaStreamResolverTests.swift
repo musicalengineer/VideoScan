@@ -28,9 +28,34 @@ private func viewerResolver(mapped: [String: String] = [:], reachable: Bool,
                         volumeIdentityMatches: { _, _ in identityOK })
 }
 
-private let id = UUID(uuidString: "6F0E1E2C-2B0A-4C6B-9B0E-1A2B3C4D5E6F")!
+private let id: UUID = {
+    guard let value = UUID(uuidString: "6F0E1E2C-2B0A-4C6B-9B0E-1A2B3C4D5E6F") else {
+        preconditionFailure("invalid fixed media resolver UUID")
+    }
+    return value
+}()
 private let archivePath = "/Volumes/FamilyArchive/Breen_Family_Archive/1990s/1994/capecod.mxf"
 private let mp4Path = "/Volumes/FamilyArchive/Breen_Family_Archive/2000s/2004/beach.mp4"
+
+private func testURL(_ value: String) -> URL {
+    guard let url = URL(string: value) else { preconditionFailure("invalid test URL: \(value)") }
+    return url
+}
+
+private func testDefaults(_ suite: String) -> UserDefaults {
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        preconditionFailure("could not create test defaults suite: \(suite)")
+    }
+    return defaults
+}
+
+private final class RequestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
 
 struct MediaStreamResolverMatrixTests {
 
@@ -117,9 +142,128 @@ struct MediaStreamResolverMatrixTests {
         #expect(MediaStreamResolver.mappedPath("/Volumes/A/x/y.mov", volumeName: "A", mountPath: "/Volumes/A-1/") == "/Volumes/A-1/x/y.mov")
     }
 
+    @Test func numericAddressesAndNumericBonjourLabelsKeepExactURLShapes() {
+        let plain = MediaStreamResolver.Configuration(masterHostname: "2001:DB8::1", port: 8765, passphrase: "")
+        let bracketed = MediaStreamResolver.Configuration(masterHostname: "[2001:db8::1]", port: 8765, passphrase: "")
+        let scoped = MediaStreamResolver.Configuration(masterHostname: "FE80::A%Bridge0", port: 8765, passphrase: "")
+        let ipv4 = MediaStreamResolver.Configuration(
+            masterHostname: "192.168.1.10",
+            port: 8765,
+            passphrase: "porch pass"
+        )
+        let numericBonjour = MediaStreamResolver.Configuration(masterHostname: "123", port: 8765, passphrase: "")
+
+        #expect(plain.hasValidEndpoint)
+        #expect(plain.baseURL.absoluteString == "http://[2001:db8::1]:8765")
+        #expect(bracketed.baseURL == plain.baseURL)
+        #expect(scoped.baseURL.absoluteString == "http://[fe80::a%25Bridge0]:8765")
+        #expect(ipv4.baseURL.absoluteString == "http://192.168.1.10:8765")
+        #expect(numericBonjour.baseURL.absoluteString == "http://123.local:8765")
+
+        let resolver = MediaStreamResolver(
+            role: .viewer(masterHostname: "192.168.1.10"),
+            configuration: ipv4,
+            masterReachable: true
+        )
+        #expect(resolver.streamURL(recordID: id).absoluteString
+                == "http://192.168.1.10:8765/api/media/\(id.uuidString)?key=porch%20pass")
+    }
+
+    @Test func malformedOrEmptyHostsFailClosedEvenWithStaleReachability() async {
+        let poisonedHosts = [
+            "", "   ", "http://router", "rick/path", "bad host", "[::1", "foo..bar",
+            "999.168.1.10", "192.168.1.999",
+        ]
+        let requests = RequestCounter()
+        let probe = MasterReachabilityProbe(transport: { _ in
+            requests.increment()
+            return (200, Data("{\"ok\":true}".utf8))
+        })
+
+        for hostname in poisonedHosts {
+            let bad = MediaStreamResolver.Configuration(masterHostname: hostname, port: 8765, passphrase: "secret")
+            #expect(!bad.hasValidEndpoint)
+            #expect(bad.baseURL.isFileURL, "an invalid setting must not name any network host")
+
+            let resolver = MediaStreamResolver(
+                role: .viewer(masterHostname: hostname),
+                configuration: bad,
+                masterReachable: true
+            )
+            guard case .masterOffline = resolver.resolve(
+                recordID: id,
+                fullPath: archivePath,
+                videoCodec: "dvvideo"
+            ) else {
+                Issue.record("invalid hostname must resolve offline: \(hostname)")
+                continue
+            }
+            #expect(await probe.isReachable(bad) == false)
+        }
+        #expect(requests.value == 0, "invalid settings must fail before transport")
+    }
+
+    @Test func invalidPortsFailClosedBeforeTransport() async {
+        let requests = RequestCounter()
+        let probe = MasterReachabilityProbe(transport: { _ in
+            requests.increment()
+            return (200, Data("{\"ok\":true}".utf8))
+        })
+
+        for port in [0, 65536] {
+            let bad = MediaStreamResolver.Configuration(
+                masterHostname: "RicksM4",
+                port: port,
+                passphrase: "secret"
+            )
+            #expect(bad.endpointError == .invalidPort)
+            #expect(bad.baseURL.isFileURL)
+
+            let resolver = MediaStreamResolver(
+                role: .viewer(masterHostname: "RicksM4"),
+                configuration: bad,
+                masterReachable: true
+            )
+            guard case .masterOffline = resolver.resolve(
+                recordID: id,
+                fullPath: archivePath,
+                videoCodec: "dvvideo"
+            ) else {
+                Issue.record("invalid port must resolve offline: \(port)")
+                continue
+            }
+            #expect(await probe.isReachable(bad) == false)
+        }
+        #expect(requests.value == 0, "invalid ports must fail before transport")
+    }
+
+    @Test func passphraseIsOneEncodedQueryValueNotURLSyntax() {
+        let special = "porch pass&next=?/# ü"
+        let configuration = MediaStreamResolver.Configuration(
+            masterHostname: "RicksM4",
+            port: 8765,
+            passphrase: special
+        )
+        let resolver = MediaStreamResolver(
+            role: .viewer(masterHostname: "RicksM4"),
+            configuration: configuration,
+            masterReachable: true
+        )
+        let stream = resolver.streamURL(recordID: id)
+        let status = resolver.statusURL(recordID: id)
+
+        #expect(URLComponents(url: stream, resolvingAgainstBaseURL: false)?.queryItems
+                == [URLQueryItem(name: "key", value: special)])
+        #expect(URLComponents(url: status, resolvingAgainstBaseURL: false)?.queryItems
+                == [URLQueryItem(name: "key", value: special)])
+        #expect(stream.host == "ricksm4.local")
+        #expect(stream.path == "/api/media/\(id.uuidString)")
+        #expect(status.path == "/api/media/\(id.uuidString)/status")
+    }
+
     @Test func configurationReadsTheHallieWebKeysAndSanitisesThePort() {
         let suite = "MediaStreamResolverTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = testDefaults(suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("secret", forKey: HallieWebAccess.passphraseKey)
         defaults.set(70000, forKey: HallieWebAccess.portKey)
@@ -132,7 +276,7 @@ struct MediaStreamResolverMatrixTests {
     /// byte-identical, and a throwaway App Support root stays empty.
     @Test func resolvingWritesNothing() throws {
         let suite = "MediaStreamResolverTests.nowrite.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = testDefaults(suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["FamilyArchive": "/Volumes/Nope"], forKey: ViewerMediaSettings.mountedVolumesKey)
         defaults.set("garbage", forKey: HallieWebAccess.portKey)
@@ -170,49 +314,57 @@ struct MediaStreamClientTests {
 
     @Test func nativeBytesAreReadyAtOnce() async {
         let client = MediaStreamClient(transport: Self.transport { _ in (206, "") }, sleep: { _ in })
-        let r = await client.prepare(streamURL: URL(string: "http://m/api/media/x")!, statusURL: URL(string: "http://m/api/media/x/status")!)
+        let r = await client.prepare(
+            streamURL: testURL("http://m/api/media/x"),
+            statusURL: testURL("http://m/api/media/x/status")
+        )
         #expect(r == .ready)
     }
 
     @Test func proxyHandshakePollsStatusUntilReady() async {
         let counter = Counter()
         let client = MediaStreamClient(transport: Self.transport { request in
-            if request.url!.path.hasSuffix("/status") {
+            if request.url?.path.hasSuffix("/status") == true {
                 let n = counter.next()
                 return n < 3 ? (200, "{\"state\":\"preparing\",\"seconds\":\(n * 2)}") : (200, "{\"state\":\"ready\",\"native\":false}")
             }
             return (202, "{\"state\":\"preparing\",\"seconds\":0}")
         }, sleep: { _ in }, pollInterval: .milliseconds(1), maximumPolls: 10)
         let seen = Counter()
-        let r = await client.prepare(streamURL: URL(string: "http://m/api/media/x")!,
-                                     statusURL: URL(string: "http://m/api/media/x/status")!,
+        let r = await client.prepare(streamURL: testURL("http://m/api/media/x"),
+                                     statusURL: testURL("http://m/api/media/x/status"),
                                      onProgress: { _ in _ = seen.next() })
         #expect(r == .ready)
         #expect(seen.value == 2, "two 'preparing' ticks were reported")
     }
 
     @Test func failuresAreNamedNotSwallowed() async {
-        let statusURL = URL(string: "http://m/api/media/x/status")!
+        let statusURL = testURL("http://m/api/media/x/status")
         let failed = MediaStreamClient(transport: Self.transport { request in
-            request.url!.path.hasSuffix("/status") ? (200, "{\"state\":\"failed\",\"reason\":\"ffmpeg exit 1\"}") : (202, "{}")
+            request.url?.path.hasSuffix("/status") == true
+                ? (200, "{\"state\":\"failed\",\"reason\":\"ffmpeg exit 1\"}")
+                : (202, "{}")
         }, sleep: { _ in }, pollInterval: .milliseconds(1))
-        #expect(await failed.prepare(streamURL: URL(string: "http://m/api/media/x")!, statusURL: statusURL) == .failed(reason: "ffmpeg exit 1"))
+        #expect(await failed.prepare(streamURL: testURL("http://m/api/media/x"), statusURL: statusURL)
+                == .failed(reason: "ffmpeg exit 1"))
 
         let refused = MediaStreamClient(transport: Self.transport { _ in (401, "passphrase") }, sleep: { _ in })
-        guard case .failed(let why) = await refused.prepare(streamURL: URL(string: "http://m/x")!, statusURL: statusURL) else {
+        guard case .failed(let why) = await refused.prepare(streamURL: testURL("http://m/x"), statusURL: statusURL) else {
             Issue.record("expected failure"); return
         }
         #expect(why.contains("passphrase"))
 
         let macOnly = MediaStreamClient(transport: Self.transport { _ in (415, "this one plays on the Mac only") }, sleep: { _ in })
-        #expect(await macOnly.prepare(streamURL: URL(string: "http://m/x")!, statusURL: statusURL) == .failed(reason: "this one plays on the Mac only"))
+        #expect(await macOnly.prepare(streamURL: testURL("http://m/x"), statusURL: statusURL)
+                == .failed(reason: "this one plays on the Mac only"))
 
         let dead = MediaStreamClient(transport: { _ in throw URLError(.cannotConnectToHost) }, sleep: { _ in })
-        #expect(await dead.prepare(streamURL: URL(string: "http://m/x")!, statusURL: statusURL) == .failed(reason: "the master did not answer"))
+        #expect(await dead.prepare(streamURL: testURL("http://m/x"), statusURL: statusURL)
+                == .failed(reason: "the master did not answer"))
 
         let stuck = MediaStreamClient(transport: Self.transport { _ in (202, "{\"state\":\"preparing\"}") },
                                       sleep: { _ in }, pollInterval: .milliseconds(1), maximumPolls: 3)
-        #expect(await stuck.prepare(streamURL: URL(string: "http://m/x")!, statusURL: statusURL) == .timedOut)
+        #expect(await stuck.prepare(streamURL: testURL("http://m/x"), statusURL: statusURL) == .timedOut)
     }
 
     @Test func pingProbeIsHonest() async {
