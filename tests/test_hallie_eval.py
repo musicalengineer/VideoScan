@@ -42,7 +42,7 @@ class HallieEvalTests(unittest.TestCase):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_live_misses_corpus.json"
         )
-        self.assertGreaterEqual(len(turns), 22)
+        self.assertGreaterEqual(len(turns), 23)
         self.assertEqual(len({turn["id"] for turn in turns}), len(turns))
         live = [t for t in turns if "Hudson line" in t["text"]]
         self.assertEqual(len(live), 1)
@@ -54,7 +54,6 @@ class HallieEvalTests(unittest.TestCase):
             "miss-02-owner-binding",
             "miss-06-center-spelling-recovery",
             "miss-07-complete-biography-card",
-            "miss-09-our-common-ancestor",
             "miss-10-fragment-guard",
             "miss-11-surname-roster",
             "miss-12-relationships-overview",
@@ -68,8 +67,34 @@ class HallieEvalTests(unittest.TestCase):
             "which_one_and_repair_2026_08_29-miss-03-year-selection-t2",
             "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t1",
             "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2",
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t1",
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t2",
         }
         self.assertTrue(required_august_29_sensors.issubset(by_id))
+
+        self.assertIn(
+            "recorded children",
+            by_id["miss-07-complete-biography-card"]["mustContain"],
+        )
+        self.assertEqual(
+            by_id["miss-11-surname-roster"]["mustNotContain"],
+            ["try a fuller name"],
+        )
+        self.assertEqual(
+            by_id["miss-12-relationships-overview"]["mustNotContain"],
+            ["I know "],
+        )
+        self.assertIn(
+            "In the People tab: Tim — brother.",
+            by_id["miss-16-cross-world-card"]["mustContain"],
+        )
+
+        focus = by_id[
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t2"
+        ]
+        self.assertTrue(focus["followsPrevious"])
+        self.assertEqual(focus["mustContain"], ["Martha Lamson"])
+        self.assertEqual(focus["mustNotContain"], ["Donna Hudson"])
 
         repair = by_id[
             "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2"
@@ -83,7 +108,7 @@ class HallieEvalTests(unittest.TestCase):
         complaint_index = batch.index(complaint)
         self.assertEqual(
             batch[complaint_index - 1],
-            "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+            "tell me about Nathaniel Parker",
         )
 
     def test_batch_input_resets_between_scenarios_but_not_followup_turns(self):
@@ -183,24 +208,47 @@ class HallieEvalTests(unittest.TestCase):
         })
         self.assertNotIn("fragment", flags)
 
-    def test_repaired_outcome_is_informational_and_counts_clean(self):
-        record = {
-            "id": "repair-001",
+    def test_repaired_outcome_needs_substantive_content_to_count_clean(self):
+        generic = {
+            "id": "repair-generic",
             "category": "repair",
-            "question": "that's wrong",
+            "question": "you presented me a list of people born hundreds or years ago",
             "answer": "Sorry about that. Tell me what was off, and I'll look again.",
             "route": "follow-up",
             "outcome": "repaired",
             "expectedRoutes": ["follow-up"],
             "expectedOutcome": "repaired",
+            "mustContain": [
+                "You asked “tell me about Nathaniel Parker”",
+                "Everyone I offered was born centuries ago",
+                "Give me the full name, or a birth year",
+            ],
+            "mustNotContain": ["catalog items matching"],
         }
-        self.assertEqual(hallie_eval.grade_record(record), ["~repaired"])
+        self.assertEqual(
+            hallie_eval.grade_record(generic),
+            ["~repaired", "missing_required_text"],
+        )
+
+        substantive = dict(generic)
+        substantive.update({
+            "id": "repair-substantive",
+            "answer": (
+                "Sorry — that list was no help. "
+                "You asked “tell me about Nathaniel Parker”. "
+                "Everyone I offered was born centuries ago, and I have no recent "
+                "person by that name. Give me the full name, or a birth year, "
+                "and I'll try again."
+            ),
+        })
+        self.assertEqual(hallie_eval.grade_record(substantive), ["~repaired"])
 
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory) / "repair.jsonl"
             run.write_text(
                 json.dumps({"meta": {"elapsed_s": 1, "git": "test", "binary_built": "test"}})
-                + "\n" + json.dumps(record) + "\n",
+                + "\n" + json.dumps(generic)
+                + "\n" + json.dumps(substantive) + "\n",
                 encoding="utf-8",
             )
             output = io.StringIO()
@@ -209,12 +257,16 @@ class HallieEvalTests(unittest.TestCase):
                     run=str(run), compare=None, show=0))
 
             self.assertEqual(result, 0)
-            self.assertIn("turns: 1   clean: 1 (100%)", output.getvalue())
+            self.assertIn("turns: 2   clean: 1 (50%)", output.getvalue())
             graded = [
                 json.loads(line)
                 for line in run.with_suffix(".graded.jsonl").read_text().splitlines()
             ]
-            self.assertEqual(graded[0]["flags"], ["~repaired"])
+            self.assertEqual(
+                graded[0]["flags"],
+                ["~repaired", "missing_required_text"],
+            )
+            self.assertEqual(graded[1]["flags"], ["~repaired"])
 
 
 if __name__ == "__main__":

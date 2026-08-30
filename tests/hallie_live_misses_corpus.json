@@ -71,12 +71,12 @@
           "id": "miss-07-complete-biography-card",
           "text": "tell me about Matthew Rice",
           "expectedOutcome": "answered",
+          "mustContain": [
+            "Martha Lamson",
+            "recorded children",
+            "recorded ancestors"
+          ],
           "note": "Miss #7: biography and family-tree asks share the complete fact card rather than dropping places, marriage, children, or depth."
-        },
-        {
-          "id": "miss-09-our-common-ancestor",
-          "text": "find our nearest common ancestor",
-          "note": "Miss #9: our means owner plus conversation focus, falling back to the owner's spouse; the result remains data-dependent."
         },
         {
           "id": "miss-10-fragment-guard",
@@ -90,12 +90,24 @@
         {
           "id": "miss-11-surname-roster",
           "text": "tell me about pa oc'connor",
+          "mustContain": [
+            "O'Connor"
+          ],
+          "mustNotContain": [
+            "try a fuller name"
+          ],
           "note": "Miss #11: recover O'Connor and offer its roster, or resolve a real Pa alias; never reinterpret it as a catalog term."
         },
         {
           "id": "miss-16-cross-world-card",
           "text": "tell me about rick's family tree, his brothers, sisters, parents, and grandparents",
           "expectedOutcome": "answered",
+          "mustContain": [
+            "In the People tab: Tim — brother.",
+            "probably a duplicate on FamilySearch worth merging",
+            "G89Q-34N",
+            "GNZ5-428"
+          ],
           "note": "Miss #16: one cross-world card includes People-tab kin and flags the duplicate-parent condition with tree IDs."
         },
         {
@@ -117,20 +129,27 @@
           "id": "miss-03-year-selection",
           "turns": [
             {
-              "text": "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+              "text": "tell me about Nathaniel Parker",
               "expectedRoutes": [
                 "graph"
               ],
               "expectedOutcome": "needsClarification",
-              "note": "Establish the real Donna namesake clarification."
+              "mustContain": [
+                "Nathaniel Parker Sr",
+                "Nathaniel Caleb Parker"
+              ],
+              "note": "Establish the stable Nathaniel Parker namesake clarification; it does not disappear when a contemporary profile gains a GEDCOM pin."
             },
             {
-              "text": "the one born in 1959",
+              "text": "the one born in 1651",
               "expectedRoutes": [
                 "follow-up"
               ],
               "expectedOutcome": "answered",
-              "note": "Miss #3: select the unique birth-year candidate and resume the original common-ancestor ask."
+              "mustContain": [
+                "Nathaniel Parker Sr"
+              ],
+              "note": "Miss #3: select the unique birth-year candidate and resume the original biography ask."
             }
           ]
         },
@@ -138,12 +157,16 @@
           "id": "miss-04-conversation-repair",
           "turns": [
             {
-              "text": "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+              "text": "tell me about Nathaniel Parker",
               "expectedRoutes": [
                 "graph"
               ],
               "expectedOutcome": "needsClarification",
-              "note": "Establish a pending which-one list."
+              "mustContain": [
+                "Nathaniel Parker Sr",
+                "Nathaniel Caleb Parker"
+              ],
+              "note": "Establish a deterministic pending which-one list."
             },
             {
               "text": "you presented me a list of people born hundreds or years ago",
@@ -151,7 +174,55 @@
                 "follow-up"
               ],
               "expectedOutcome": "repaired",
+              "mustContain": [
+                "You asked “tell me about Nathaniel Parker”",
+                "Everyone I offered was born centuries ago",
+                "Give me the full name, or a birth year"
+              ],
+              "mustNotContain": [
+                "catalog items matching"
+              ],
               "note": "Miss #4: acknowledge and repair the pending ask; never run a catalog search for the complaint."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_focus_2026_08_29",
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "sessions": [
+        {
+          "id": "miss-09-our-common-ancestor",
+          "turns": [
+            {
+              "text": "tell me about Martha Lamson",
+              "expectedRoutes": [
+                "graph"
+              ],
+              "expectedOutcome": "answered",
+              "mustContain": [
+                "Martha Lamson"
+              ],
+              "note": "Establish Martha Lamson as the explicit conversation focus."
+            },
+            {
+              "text": "find our nearest common ancestor",
+              "expectedRoutes": [
+                "graph"
+              ],
+              "expectedOutcomes": [
+                "answered",
+                "declined"
+              ],
+              "mustContain": [
+                "Martha Lamson"
+              ],
+              "mustNotContain": [
+                "Donna Hudson"
+              ],
+              "note": "Miss #9: our means owner plus the explicit conversation focus; Martha must win over the owner's spouse regardless of whether the tree finds a shared ancestor."
             }
           ]
         }
@@ -169,6 +240,13 @@
         {
           "id": "miss-12-relationships-overview",
           "text": "tell me how rick is related to the people in the people tab who currently living or recently deceased",
+          "mustContain": [
+            "related to",
+            "Nearest first:"
+          ],
+          "mustNotContain": [
+            "I know "
+          ],
           "note": "Miss #12: answer the relationships overview from the kinship engine ahead of the ordinary People-tab roster."
         }
       ]
