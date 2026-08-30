@@ -94,6 +94,43 @@ class HallieEvalTests(unittest.TestCase):
             by_id["miss-16-cross-world-card"]["mustMatch"][1],
         )
 
+        # These were once route-only corpus rows: any generic answer passed.
+        # Keep the live contracts tied to the concrete facts their Swift
+        # regression fixtures prove, without freezing whole model sentences.
+        owner = by_id["miss-02-owner-binding"]
+        self.assertEqual(owner["expectedRoutes"], ["graph"])
+        self.assertEqual(
+            owner["mustContain"],
+            ["Richard Harding Breen Jr", "Donna Hudson"],
+        )
+        self.assertIn("Which Rick", owner["mustNotContain"])
+        self.assertIn("have no common ancestor", owner["mustNotContain"])
+
+        center = by_id["miss-06-center-spelling-recovery"]
+        self.assertEqual(center["mustContain"], ["Marhta Lamson", "Martha Lamson"])
+        self.assertEqual(len(center["mustMatch"]), 2)
+        self.assertIn("I cannot center", center["mustNotContain"])
+
+        fragment = by_id["miss-10-fragment-guard"]
+        self.assertIn("Edith Lucy Parker", fragment["mustContain"])
+        self.assertIn("George Breen", fragment["mustContain"])
+        self.assertEqual(
+            fragment["mustNotContain"],
+            [". ,", "Muriel was not married"],
+        )
+
+        for turn_id in (
+            "miss-14-pronunciation-hint",
+            "miss-15-pronunciation-query",
+            "miss-17-freeform-pronunciation",
+            "miss-18-pronunciation-precedence",
+        ):
+            turn = by_id[turn_id]
+            self.assertEqual(turn["expectedRoutes"], ["telling"])
+            self.assertIn("Latta", turn["mustContain"])
+            self.assertTrue(turn["mustMatch"])
+            self.assertIn("catalog items matching", turn["mustNotContain"])
+
         focus = by_id[
             "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t2"
         ]
@@ -246,6 +283,156 @@ class HallieEvalTests(unittest.TestCase):
                 msg=turn_id,
             )
 
+    def test_live_miss_textual_fact_contracts_reject_generic_answers(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        clean_examples = {
+            "miss-02-owner-binding": (
+                "graph",
+                "Richard Harding Breen Jr and Donna Hudson share 1 recorded "
+                "ancestor; the nearest is Z Common.",
+            ),
+            "miss-06-center-spelling-recovery": (
+                "graph",
+                "I took Marhta Lamson to mean Martha Lamson. Centering the "
+                "Family Tree on Martha Lamson.",
+            ),
+            "miss-10-fragment-guard": (
+                "graph",
+                "Muriel Lamb was the child of Edith Lucy Parker and Frederick "
+                "Burton Lamb; her recorded grandparents included Clarissa "
+                "Horton Schoolcraft. She married George Breen and had Richard "
+                "Harding Breen Sr.",
+            ),
+            "miss-14-pronunciation-hint": (
+                "telling",
+                "OK, noted — Latta. I'll say Latta as LAT-uh (short a).",
+            ),
+            "miss-15-pronunciation-query": (
+                "telling",
+                "I say Latta as LAT-uh — you taught me that pronunciation.",
+            ),
+            "miss-17-freeform-pronunciation": (
+                "telling",
+                "OK, noted — Latta. I'll say LAT-tah (short a, then ah) and "
+                "keep LAD-dah too.",
+            ),
+            "miss-18-pronunciation-precedence": (
+                "telling",
+                "OK, noted — Latta. I'll say Latta as LAT-uh (short a).",
+            ),
+        }
+
+        for turn_id, (route, answer) in clean_examples.items():
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                [],
+                msg=f"substantive answer rejected for {turn_id}",
+            )
+
+            generic = dict(by_id[turn_id])
+            generic.update(
+                answer="I found an answer for that request in the archive.",
+                route=route,
+                outcome="answered",
+            )
+            flags = hallie_eval.grade_record(generic)
+            self.assertTrue(
+                {"missing_required_text", "missing_required_match"} & set(flags),
+                msg=f"generic answer passed {turn_id}: {flags}",
+            )
+
+    def test_live_miss_exact_known_bad_phrases_are_rejected(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        reversed_examples = {
+            "miss-02-owner-binding": (
+                "graph",
+                "Richard Harding Breen Jr and Donna Hudson have no common "
+                "ancestor; there is no nearest shared ancestor.",
+            ),
+            "miss-06-center-spelling-recovery": (
+                "graph",
+                "I took Marhta Lamson to mean Martha Lamson, but I cannot "
+                "center the Family Tree on Martha Lamson.",
+            ),
+            "miss-10-fragment-guard": (
+                "graph",
+                "Muriel Lamb was the child of Edith Lucy Parker and Frederick "
+                "Burton Lamb; her recorded grandparents included Clarissa "
+                "Horton Schoolcraft. Muriel was not married to George Breen; "
+                "Richard Harding Breen Sr is recorded.",
+            ),
+            "miss-14-pronunciation-hint": (
+                "telling",
+                "OK, noted — Latta. I did not keep LAT-uh (short a), and I "
+                "won't say that pronunciation.",
+            ),
+            "miss-15-pronunciation-query": (
+                "telling",
+                "For Latta, I did not keep LAT-uh, and I do not pronounce it "
+                "that way.",
+            ),
+            "miss-17-freeform-pronunciation": (
+                "telling",
+                "For Latta, I did not keep LAT-tah (short a, then ah) or the "
+                "LAD-dah alternative.",
+            ),
+            "miss-18-pronunciation-precedence": (
+                "telling",
+                "OK, noted — Latta. I did not keep LAT-uh (short a), and I "
+                "won't pronounce it that way.",
+            ),
+        }
+
+        for turn_id, (route, answer) in reversed_examples.items():
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                ["forbidden_text"],
+                msg=f"known bad phrase was not isolated for {turn_id}",
+            )
+
+    def test_live_miss_phrase_guards_do_not_claim_general_polarity(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        valid_examples = {
+            "miss-02-owner-binding": (
+                "graph",
+                "There is no doubt Richard Harding Breen Jr and Donna Hudson "
+                "share 1 recorded ancestor; the nearest is Z Common.",
+            ),
+            "miss-10-fragment-guard": (
+                "graph",
+                "Muriel Lamb was not only married to George Breen; she was "
+                "the child of Edith Lucy Parker and Frederick Burton Lamb, "
+                "with Clarissa Horton Schoolcraft among her grandparents, "
+                "and had Richard Harding Breen Sr.",
+            ),
+            "miss-17-freeform-pronunciation": (
+                "telling",
+                "For Latta, I did not keep the old pronunciation; I kept "
+                "LAT-tah (short a, then ah) and the LAD-dah alternative.",
+            ),
+        }
+        for turn_id, (route, answer) in valid_examples.items():
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                [],
+                msg=f"valid wording was rejected for {turn_id}",
+            )
+
     def test_must_match_reports_missing_and_invalid_patterns_without_crashing(self):
         base = {
             "answer": "This answer has enough ordinary words.",
@@ -274,7 +461,10 @@ class HallieEvalTests(unittest.TestCase):
                 "mustMatch": ["family"],
                 "prompts": [
                     {"text": "inherited"},
-                    {"text": "overridden", "mustMatch": ["tree"]},
+                    {
+                        "text": "overridden",
+                        "mustMatch": ["tree"],
+                    },
                 ],
             }],
         }

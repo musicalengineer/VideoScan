@@ -382,10 +382,10 @@ def grade_record(r):
         if required.lower() not in lowered:
             flags.append("missing_required_text")
             break
-    # Semantic answer contracts can tolerate model wording changes while
-    # still pinning the required concepts. Patterns are corpus-authored,
-    # case-insensitive, and may span lines. A malformed expectation is a
-    # grading defect, never a reason for the evaluator itself to crash.
+    # Required textual-concept guards can tolerate some wording changes.
+    # They are lexical checks, not a semantic truth grader. Patterns are
+    # corpus-authored, case-insensitive, and may span lines. A malformed
+    # expectation is a grading defect, never a reason to crash the evaluator.
     raw_required_patterns = r.get("mustMatch")
     if raw_required_patterns is None:
         required_patterns = []
