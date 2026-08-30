@@ -381,10 +381,12 @@ struct HallieQueryBench {
             speakers: Self.speakers(f), ledger: ledger)
         print("[hallie-bench] tree: \(f.graph.people.count) people, \(f.graph.familyCount) families")
         var deterministic = 0
+        var answered = 0
         for question in Self.questions(f) {
             ledger.reset()
             let outcome = await Self.runTurn(question, dependencies: deps)
             if !outcome.modelRequired { deterministic += 1 }
+            if outcome.outcome == "answered" { answered += 1 }
             let calls = ledger.snapshot.calls
             let callSummary = calls.keys.sorted()
                 .map { "\($0)×\(calls[$0] ?? 0)" }.joined(separator: " ")
@@ -395,8 +397,13 @@ struct HallieQueryBench {
                          outcome.outcome as NSString,
                          callSummary as NSString))
         }
-        #expect(deterministic >= 6,
-                Comment(rawValue: "only \(deterministic) of \(Self.questions(f).count) questions answered without a model — the bench would be measuring stubs"))
+        // ANSWERED, not merely "did not reach the model". The first version
+        // of this counted non-model turns, and a negative control (a bench
+        // wired to a nil tree) still passed it: with no graph every shape
+        // DECLINES locally, which is model-free and worthless to measure.
+        // The bench is only meaningful if real tree work is being done.
+        #expect(answered >= 6,
+                Comment(rawValue: "only \(answered) of \(Self.questions(f).count) questions were ANSWERED (\(deterministic) avoided the model) — the bench would be timing declines, not work"))
     }
 
     // MARK: 2. Single user
@@ -527,21 +534,35 @@ struct HallieQueryBench {
         }
         #expect(deterministic.count >= 6)
 
-        var points: [ConcurrencyPoint] = []
-        for k in [1, 2, 5, 10] {
-            let point = await Self.measureConcurrency(
-                k: k, turnsPerSession: 12, dependencies: deps, questions: deterministic)
-            points.append(point)
-            print(String(format: "[hallie-bench] MULTI K=%-3d p50 %8@ ms  p95 %8@ ms  max %8@ ms  %7.1f turns/s   main-actor hop p50 %7@ ms p95 %7@ ms max %7@ ms",
-                         point.k,
-                         HallieBenchStats.ms(point.p50) as NSString,
-                         HallieBenchStats.ms(point.p95) as NSString,
-                         HallieBenchStats.ms(point.max) as NSString,
-                         point.throughput,
-                         HallieBenchStats.ms(point.hopP50) as NSString,
-                         HallieBenchStats.ms(point.hopP95) as NSString,
-                         HallieBenchStats.ms(point.hopMax) as NSString))
+        func sweep(_ label: String, _ set: [Question]) async -> [ConcurrencyPoint] {
+            var points: [ConcurrencyPoint] = []
+            for k in [1, 2, 5, 10] {
+                let point = await Self.measureConcurrency(
+                    k: k, turnsPerSession: 12, dependencies: deps, questions: set)
+                points.append(point)
+                print(String(format: "[hallie-bench] %@ K=%-3d p50 %8@ ms  p95 %8@ ms  max %8@ ms  %7.1f turns/s   main-actor hop p50 %7@ ms p95 %7@ ms max %7@ ms",
+                             label as NSString, point.k,
+                             HallieBenchStats.ms(point.p50) as NSString,
+                             HallieBenchStats.ms(point.p95) as NSString,
+                             HallieBenchStats.ms(point.max) as NSString,
+                             point.throughput,
+                             HallieBenchStats.ms(point.hopP50) as NSString,
+                             HallieBenchStats.ms(point.hopP95) as NSString,
+                             HallieBenchStats.ms(point.hopMax) as NSString))
+            }
+            return points
         }
+
+        let points = await sweep("MULTI     ", deterministic)
+
+        // The controlled experiment behind the whole main-actor question.
+        // Exactly ONE shape in the set — catalog-stats — does O(records)
+        // work synchronously on the main actor; every other phase of a turn
+        // is handed to a detached worker. Run the identical sweep without
+        // that shape and the difference in how the curve bends IS the
+        // main actor's contribution, measured rather than argued.
+        let withoutMainActorWork = deterministic.filter { $0.label != "catalog-stats" }
+        let control = await sweep("MULTI-NOMA", withoutMainActorWork)
 
         guard let one = points.first, let ten = points.last else {
             Issue.record("no concurrency points measured")
@@ -550,12 +571,91 @@ struct HallieQueryBench {
         let scaling = ten.throughput / max(one.throughput, 1e-9)
         print(String(format: "[hallie-bench] scaling K=1 → K=10: throughput ×%.2f (perfect = ×10), p95 ×%.1f",
                      scaling, ten.p95 / max(one.p95, 1e-9)))
+        if let c1 = control.first, let c10 = control.last {
+            let controlScaling = c10.throughput / max(c1.throughput, 1e-9)
+            print(String(format: "[hallie-bench] scaling without the main-actor-resident shape: ×%.2f (vs ×%.2f with it)",
+                         controlScaling, scaling))
+        }
         // Structural, not a budget: more sessions must never make the
         // system do LESS total work. If this fires, concurrency is actively
         // harmful and the architecture question is no longer theoretical.
         #expect(ten.throughput >= one.throughput * 0.75,
                 Comment(rawValue: String(format: "throughput collapsed from %.1f to %.1f turns/s at K=10",
                                          one.throughput, ten.throughput)))
+    }
+
+    // MARK: 3b. What the turn makes the MAIN ACTOR do
+
+    /// The scaling question with the fog cleared off it.
+    ///
+    /// `HallieWebBridge` and `HallieAppTurnCoordinator.execute` are both
+    /// `@MainActor`, which sounds like it should serialise every web turn
+    /// behind the Mac's UI. The K sweeps say otherwise, because nearly
+    /// every phase of a turn is handed to a `Task.detached` worker and each
+    /// `await` releases the actor. What DOES stay on the main actor is
+    /// this: one synchronous O(records) pass for the catalog-stats shapes
+    /// ("how many videos are archived"), and one deliberately chunked pass
+    /// for presence shapes that yields between batches.
+    ///
+    /// So this measures both directly, at three catalog sizes, and watches
+    /// main-actor hop latency while each runs. The chunked one is the
+    /// control: it proves the probe can see a stall when there is one, and
+    /// that the difference is the chunking and not the measurement.
+    @Test("main-actor residency: the one O(records) step that does not yield")
+    func mainActorResidentWork() async {
+        for count in [5_000, 25_000, 100_000] {
+            let records = Self.makeRecords(count)
+
+            let probe = MainActorHopProbe()
+            probe.start(intervalMilliseconds: 1)
+            var blocking: [Double] = []
+            for _ in 0..<3 {
+                let start = ContinuousClock.now
+                _ = await MainActor.run { HallieCatalogStats.compute(records: records) }
+                blocking.append(HallieBenchClock.seconds(since: start))
+            }
+            let blockingHops = probe.stop()
+
+            let probe2 = MainActorHopProbe()
+            probe2.start(intervalMilliseconds: 1)
+            var chunked: [Double] = []
+            for _ in 0..<3 {
+                let start = ContinuousClock.now
+                _ = await ArchivistPresenceRecordSnapshot.capture(records)
+                chunked.append(HallieBenchClock.seconds(since: start))
+            }
+            let chunkedHops = probe2.stop()
+
+            print(String(format: "[hallie-bench] main-actor @ %6d records: catalog-stats %8@ ms (hop p95 %7@ ms, max %7@ ms) | presence capture %8@ ms (hop p95 %7@ ms, max %7@ ms)",
+                         count,
+                         HallieBenchStats.ms(blocking.min() ?? 0) as NSString,
+                         HallieBenchStats.ms(HallieBenchStats.percentile(blockingHops, 95)) as NSString,
+                         HallieBenchStats.ms(blockingHops.max() ?? 0) as NSString,
+                         HallieBenchStats.ms(chunked.min() ?? 0) as NSString,
+                         HallieBenchStats.ms(HallieBenchStats.percentile(chunkedHops, 95)) as NSString,
+                         HallieBenchStats.ms(chunkedHops.max() ?? 0) as NSString))
+
+            if count == 100_000 {
+                // Structural claim, no wall-clock budget, and stated as a
+                // RATIO against each pass's own duration. Comparing the two
+                // absolute stalls (the first version of this) could not
+                // fail: catalog-stats is ~10x the work, so it blocked
+                // longer even after a negative control deleted the yield
+                // from the chunked pass. Against its own duration the
+                // difference is unmistakable — a pass that yields cannot
+                // hold the actor for most of its own runtime.
+                let blockingWorst = blockingHops.max() ?? 0
+                let chunkedWorst = chunkedHops.max() ?? 0
+                let blockingRun = blocking.min() ?? 0
+                let chunkedRun = chunked.min() ?? 0
+                #expect(blockingWorst > blockingRun * 0.5,
+                        Comment(rawValue: String(format: "the synchronous pass ran %.0f ms but the worst main-actor hop was only %.1f ms — the probe is not seeing the stall",
+                                                 blockingRun * 1000, blockingWorst * 1000)))
+                #expect(chunkedWorst < chunkedRun * 0.5,
+                        Comment(rawValue: String(format: "the chunked pass ran %.0f ms and held the main actor for %.1f ms of it — it has stopped yielding",
+                                                 chunkedRun * 1000, chunkedWorst * 1000)))
+            }
+        }
     }
 
     // MARK: 4. Multi user through the web bridge
