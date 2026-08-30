@@ -357,6 +357,7 @@ enum HallieAppTurnCoordinator {
                 }
             },
             recordTestimony: { testimony in
+                try ViewerWriteGuard.check("HallieAppTurnCoordinator.recordTestimony")
                 guard let root = FileManager.default.urls(
                     for: .applicationSupportDirectory,
                     in: .userDomainMask).first?.appendingPathComponent(
@@ -367,6 +368,7 @@ enum HallieAppTurnCoordinator {
                 appLog.write("Hallie: kept testimony \(receipt.itemID) about \(receipt.canonicalName) (told by \(testimony.speakerName))")
             },
             recordPhotoCaption: { caption in
+                try ViewerWriteGuard.check("HallieAppTurnCoordinator.recordPhotoCaption")
                 guard let root = FileManager.default.urls(
                     for: .applicationSupportDirectory,
                     in: .userDomainMask).first?.appendingPathComponent(
@@ -381,11 +383,13 @@ enum HallieAppTurnCoordinator {
             },
             loadDrillStore: { PronunciationDrillStore.load() },
             saveDrillStore: { store, manifest in
+                try ViewerWriteGuard.check("HallieAppTurnCoordinator.saveDrillStore")
                 try store.save(manifest: manifest)
             },
             loadLexicon: { HalliePronunciationLexicon.resolved() },
             loadPronunciationGold: { .shared },
             excludePhoto: { photo, gedcomID, notedBy, caption in
+                try ViewerWriteGuard.check("HallieAppTurnCoordinator.excludePhoto")
                 let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
                 let sidecar = try store.excludePhoto(
                     photo, from: gedcomID, notedBy: notedBy, caption: caption)

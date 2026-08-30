@@ -5,7 +5,8 @@
 // Every write path a viewer could reach is enumerated here and asserted
 // to REFUSE in viewer mode with a log line naming it:
 //   CatalogStore.saveNow / scheduleSave, POIProfile.save,
-//   FamilyTreeLiveModel.addNote (CyberBrain), Pronunciation.record,
+//   FamilyTreeLiveModel CyberBrain writers, ResearchStore persistence,
+//   Hallie's live testimony/photo/drill/exclusion writers, Pronunciation.record,
 //   FamilyGraphCompiledStore ingest/rollback (the app store),
 //   FamilyTreeLiveModel.recompile, MediaFileOperationsCenter.add (every
 //   MFO kind funnels through it), FamilySearchPull launch/install.
@@ -46,6 +47,12 @@ struct RemoteViewerReadOnlySensorTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let hint = "on the master (RicksM4)"
+        let ged = root.appendingPathComponent("originals/family.ged")
+        try FileManager.default.createDirectory(
+            at: ged.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try GedcomSyntheticPedigree.gedcom(people: 20, generations: 3)
+            .write(to: ged, atomically: true, encoding: .utf8)
+        let graph = try #require(GedcomFamilyGraph(fileURL: ged))
 
         // 1. CatalogStore — the data layer, with the viewer flag the sync engine sets.
         let store = CatalogStore(directory: root.appendingPathComponent("catalog"))
@@ -61,31 +68,24 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(throws: ViewerWriteGuard.RefusedError.self) { try profile.save() }
         #expect(sink.has("\(ViewerWriteGuard.logPrefix) POIProfile.save — \(hint)"))
 
-        // 3. Archivist notes → CyberBrain.
-        let tree = FamilyTreeLiveModel(originalsDirectory: root.appendingPathComponent("originals"),
-                                       cyberBrainRootURL: root.appendingPathComponent("cyberbrain"))
-        #expect(throws: ViewerWriteGuard.RefusedError.self) { try tree.addNote("Dad was a Marine.") }
-        #expect(sink.has("\(ViewerWriteGuard.logPrefix) FamilyTreeLiveModel.addNote — \(hint)"))
-        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("cyberbrain/cyberbrain.json").path))
+        assertFamilyTreeWritersRefuse(root: root, sink: sink, hint: hint)
+        try assertResearchWritersRefuse(root: root, graph: graph, sink: sink, hint: hint)
+        assertHallieWritersRefuse(root: root, sink: sink, hint: hint)
 
-        // 4. Pronunciations.
+        // 6. Pronunciations.
         #expect(throws: ViewerWriteGuard.RefusedError.self) {
             try HallieAppTurnCoordinator.recordPronunciationLive(
                 .init(word: "McGill", saidAs: "muh-GILL", target: .cyberBrainPerson(id: "x", name: "McGill")))
         }
         #expect(sink.has("\(ViewerWriteGuard.logPrefix) Pronunciation.record — \(hint)"))
 
-        // 5. Compiled store (the app's store carries the viewer flags) + recompile.
+        // 7. Compiled store (the app's store carries the viewer flags) + recompile.
         let appStore = FamilyGraphCompiledStore.app
         #expect(appStore.refusesWrites && appStore.trustsManifestSources)
         var isolated = FamilyGraphCompiledStore(root: root.appendingPathComponent("compiled"))
         let storeLog = Sink()
         isolated.log = { storeLog.append($0) }
         isolated.refusesWrites = true
-        let ged = root.appendingPathComponent("originals/family.ged")
-        try FileManager.default.createDirectory(at: ged.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try GedcomSyntheticPedigree.gedcom(people: 20, generations: 3).write(to: ged, atomically: true, encoding: .utf8)
-        let graph = try #require(GedcomFamilyGraph(fileURL: ged))
         #expect(isolated.ingest(graph: graph, sources: [ged]) == nil)
         #expect(isolated.readPointer() == nil, "no generation was written")
         #expect(storeLog.has("\(FamilyGraphCompiledStore.refusedWritePrefix) ingest"))
@@ -97,7 +97,7 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(loader.recompile(sources: [ged]) == nil)
         #expect(storeLog.has("\(FamilyGraphCompiledStore.refusedWritePrefix) recompile"))
 
-        // 6. Media file operations — every kind funnels through add().
+        // 8. Media file operations — every kind funnels through add().
         let center = MediaFileOperationsCenter()
         let a = VideoRecord(), b = VideoRecord()
         a.fullPath = "/Volumes/X/a.mov"; a.filename = "a.mov"
@@ -107,7 +107,7 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(!center.jobs.contains { $0.id == job.id })
         #expect(sink.has("\(ViewerWriteGuard.logPrefix) MediaFileOperationsCenter.add(PairCompareJob) — \(hint)"))
 
-        // 7. FamilySearch pull.
+        // 9. FamilySearch pull.
         let pull = FamilySearchPullCoordinator(gedcomDirectory: root.appendingPathComponent("gedcom"))
         pull.launch()
         pull.install()
@@ -118,9 +118,78 @@ struct RemoteViewerReadOnlySensorTests {
         }
 
         // The center captured the same lines the log sink saw.
-        #expect(ViewerModeCenter.shared.refusals.count >= 9)
+        #expect(ViewerModeCenter.shared.refusals.count >= 17)
         #expect(ViewerModeCenter.shared.refusals.allSatisfy { $0.hasPrefix(ViewerWriteGuard.logPrefix) })
     }
+
+    private func assertFamilyTreeWritersRefuse(root: URL, sink: Sink, hint: String) {
+        let tree = FamilyTreeLiveModel(
+            originalsDirectory: root.appendingPathComponent("originals"),
+            cyberBrainRootURL: root.appendingPathComponent("cyberbrain"))
+        #expect(throws: ViewerWriteGuard.RefusedError.self) { try tree.addNote("Dad was a Marine.") }
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try tree.recordTestimony(Self.testimony)
+        }
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try tree.setPronunciation(word: "McGill", saidAs: "muh-GILL")
+        }
+        for path in ["FamilyTreeLiveModel.addNote",
+                     "FamilyTreeLiveModel.recordTestimony",
+                     "FamilyTreeLiveModel.setPronunciation"] {
+            #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("cyberbrain/cyberbrain.json").path))
+    }
+
+    private func assertResearchWritersRefuse(
+        root: URL, graph: GedcomFamilyGraph, sink: Sink, hint: String
+    ) throws {
+        let research = ResearchStore(peopleRoot: root.appendingPathComponent("people"))
+        let subject = ResearchSubject(person: try #require(graph.people.values.first))
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try research.saveDossier(ResearchDossier(subject: subject))
+        }
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try research.cache(.init(url: "https://example.test/dad", retrievedAt: Date(),
+                                     statusCode: 200, body: Data("page".utf8)), key: subject.key)
+        }
+        for path in ["ResearchStore.saveDossier", "ResearchStore.cache"] {
+            #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("people/\(subject.key)/research").path))
+    }
+
+    private func assertHallieWritersRefuse(root: URL, sink: Sink, hint: String) {
+        let live = HallieAppTurnCoordinator.Dependencies.live
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try live.recordTestimony(Self.testimony)
+        }
+        let caption = CyberBrainWriter.PhotoCaption(
+            subjects: [.init(name: "Dad")], speakerName: "Rick",
+            text: "Dad at home", photoPath: "/tmp/dad.jpg", date: Date())
+        #expect(throws: ViewerWriteGuard.RefusedError.self) { try live.recordPhotoCaption(caption) }
+        let manifest = PronunciationDrillManifest(
+            version: PronunciationDrillStore.currentVersion,
+            generatedAt: Date(), entries: [])
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try live.saveDrillStore(PronunciationDrillStore(), manifest)
+        }
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try live.excludePhoto(root.appendingPathComponent("dad.jpg"), "K1", "Rick", "not Dad")
+        }
+        for path in ["HallieAppTurnCoordinator.recordTestimony",
+                     "HallieAppTurnCoordinator.recordPhotoCaption",
+                     "HallieAppTurnCoordinator.saveDrillStore",
+                     "HallieAppTurnCoordinator.excludePhoto"] {
+            #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
+        }
+    }
+
+    private static let testimony = CyberBrainWriter.Testimony(
+        subjectName: "Dad", speakerName: "Rick", text: "Dad was a Marine.",
+        kind: .note, date: Date())
 
     /// Master sensor: with the default role, none of the guards fires and
     /// nothing is logged — the master's write paths are untouched.

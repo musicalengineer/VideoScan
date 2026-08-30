@@ -99,6 +99,7 @@ struct ResearchStore: Sendable {
     }
 
     func saveDossier(_ dossier: ResearchDossier) throws {
+        try ViewerWriteGuard.check("ResearchStore.saveDossier")
         let url = try dossierURL(key: dossier.subject.key)
         do {
             let data = try Self.encoder.encode(dossier)
@@ -122,6 +123,7 @@ struct ResearchStore: Sendable {
     /// Bodies over the cap are truncated before caching — the parsers only
     /// need the first couple of megabytes of any search page.
     func cache(_ page: CachedPage, key: String) throws {
+        try ViewerWriteGuard.check("ResearchStore.cache")
         let capped = page.body.count > Self.maxCachedBodyBytes
             ? CachedPage(url: page.url, retrievedAt: page.retrievedAt,
                          statusCode: page.statusCode,

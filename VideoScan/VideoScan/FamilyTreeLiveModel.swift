@@ -1183,6 +1183,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// refresh the notes pane, exactly as `addNote` does.
     @discardableResult
     func recordTestimony(_ testimony: CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt {
+        try ViewerWriteGuard.check("FamilyTreeLiveModel.recordTestimony")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
@@ -1247,6 +1248,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// atomic writer as notes; the voice cache is dropped so the next
     /// utterance uses it.
     func setPronunciation(word: String, saidAs: String?) throws {
+        try ViewerWriteGuard.check("FamilyTreeLiveModel.setPronunciation")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
