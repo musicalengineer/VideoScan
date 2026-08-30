@@ -15,8 +15,11 @@ jobs:
   # ── Preflight ───────────────────────────────────────────────────────
   # Pure-python checks: no Xcode, no macOS. Split out of the macOS job so
   # a Swift compile failure can no longer mask a lint or contract-test
-  # failure (and vice versa), and so these run on cheap Linux minutes in
-  # parallel with the build instead of serially in front of it.
+  # failure (and vice versa), and so they run on cheap Linux minutes
+  # instead of occupying the macOS runner.
+  #
+  # These still GATE the build rather than running alongside it — the
+  # `test` job below declares `needs: preflight`. See the comment there.
   # See project_bug_prevention_strategy memory for the linter framework.
   preflight:
     name: Preflight (lint + contract tests)
