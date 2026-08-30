@@ -408,6 +408,7 @@ final class FamilyTreeLiveModel: ObservableObject {
          cyberBrainRootURL: URL? = nil,
          noteAuthor: String? = nil,
          pronunciationFallback: (() -> HalliePronunciationLexicon)? = nil,
+         pronunciationFileURL: URL? = nil,
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          focusDefaults: UserDefaults? = nil,
@@ -426,7 +427,18 @@ final class FamilyTreeLiveModel: ObservableObject {
             ?? HallieTurnExecutor.Speakers.defaultOwnerName
         self.pronunciationFallback = pronunciationFallback
             ?? (originalsDirectory == nil
-                ? { HalliePronunciationLexicon.merged([.load(), .shipped]) }
+                ? {
+                    // The selected person's CyberBrain layer is supplied to
+                    // `FamilyTreePronunciationChips.make` by the notes
+                    // resolver. Resolve only the file + shipped fallback here
+                    // so another person's same-named entry cannot leak into
+                    // the inspector, and never create defaults for a viewer.
+                    HalliePronunciationLexicon.resolved(
+                        fileURL: pronunciationFileURL
+                            ?? HalliePronunciationLexicon.defaultFileURL,
+                        cyberBrainRootURL: nil,
+                        allowDefaultWrite: !ViewerModeCenter.shared.isViewer)
+                }
                 : { .shipped })
         self.originalsDirectory = originalsDirectory
             ?? production.gedcomDirectory()

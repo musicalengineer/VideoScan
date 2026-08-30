@@ -244,11 +244,69 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(sink.has("\(ViewerWriteGuard.logPrefix) HalliePronunciationLexicon.writeDefault"))
     }
 
+    @Test func viewerFamilyTreeRefreshKeepsPersonAndShippedLayersWithoutCreatingAFile() throws {
+        let root = tmp("tree-lexicon")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let brainRoot = root.appendingPathComponent("brain", isDirectory: true)
+        _ = try CyberBrainWriter.setPronunciation(
+            subjectName: "Nathaniel Edith", gedcomPersonID: "@I7@",
+            token: "Nathaniel", saidAs: "nah-THAN-yel", rootURL: brainRoot)
+        PersonPronunciationCache.shared.invalidate()
+
+        let lexiconFile = root.appendingPathComponent(
+            "isolated/Hallie/pronunciations.json")
+        let defaultsName = "RemoteViewerReadOnlySensorTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        1 SOUR RemoteViewerReadOnlySensorTests
+        0 @I7@ INDI
+        1 NAME Nathaniel /Edith/
+        1 SEX M
+        0 TRLR
+        """)
+        let sink = Sink()
+        ViewerModeCenter.shared.reset(sink: { sink.append($0) })
+        ViewerModeCenter.shared.install(.viewer(masterHostname: "RicksM4.local"))
+        defer { ViewerModeCenter.shared.reset() }
+
+        // `originalsDirectory == nil` deliberately selects the production
+        // fallback branch. All writable roots remain isolated test seams.
+        let model = FamilyTreeLiveModel(
+            compiledStore: FamilyGraphCompiledStore(
+                root: root.appendingPathComponent("compiled", isDirectory: true)),
+            cyberBrainRootURL: brainRoot,
+            pronunciationFileURL: lexiconFile,
+            focusDefaults: defaults,
+            profilesProvider: { [] })
+        model.install(graph: graph)
+        model.loadCyberBrainNow()
+
+        let nathaniel = try #require(
+            model.selectedPronunciations.first { $0.word == "Nathaniel" })
+        let edith = try #require(
+            model.selectedPronunciations.first { $0.word == "Edith" })
+        #expect(nathaniel.saidAs == "nah-THAN-yel", "CyberBrain person layer survives")
+        #expect(nathaniel.effective == "nah-THAN-yel")
+        #expect(edith.saidAs == nil)
+        #expect(edith.inherited == "EE-dith", "shipped fallback survives")
+        #expect(!FileManager.default.fileExists(atPath: lexiconFile.path))
+        #expect(!FileManager.default.fileExists(
+            atPath: lexiconFile.deletingLastPathComponent().path))
+        #expect(sink.has(
+            "\(ViewerWriteGuard.logPrefix) HalliePronunciationLexicon.writeDefault"))
+    }
+
     @Test func viewerReturnCannotSubmitPronunciationButPreviewRemainsAvailable() {
         #expect(FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: false))
         #expect(!FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: true))
-        // The UI's Say-it button has no viewer-only modifier; this sensor
-        // pins the only keyboard mutation affordance separately.
+        #expect(FamilyTreeDemoView.allowsPronunciationPreview(viewerMode: false))
+        #expect(FamilyTreeDemoView.allowsPronunciationPreview(viewerMode: true))
+        #expect(FamilyTreeDemoView.pronunciationPreviewText(
+            word: "Latta", draft: "  LAH-tuh  ") == "LAH-tuh")
+        #expect(FamilyTreeDemoView.pronunciationPreviewText(
+            word: "Latta", draft: "   ") == "Latta")
     }
 
     /// Master sensor: with the default role, none of the guards fires and
