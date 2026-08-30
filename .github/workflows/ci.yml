@@ -12,37 +12,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Build & Test
-    runs-on: macos-15
-    timeout-minutes: 30
-    permissions:
-      contents: write
+  # ── Preflight ───────────────────────────────────────────────────────
+  # Pure-python checks: no Xcode, no macOS. Split out of the macOS job so
+  # a Swift compile failure can no longer mask a lint or contract-test
+  # failure (and vice versa), and so they run on cheap Linux minutes
+  # instead of occupying the macOS runner.
+  #
+  # These still GATE the build rather than running alongside it — the
+  # `test` job below declares `needs: preflight`. See the comment there.
+  # See project_bug_prevention_strategy memory for the linter framework.
+  preflight:
+    name: Preflight (lint + contract tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
-
-      - name: Show environment
-        run: |
-          xcodebuild -version
-          swift --version
-          system_profiler SPHardwareDataType | grep "Chip\|Memory"
-
-      - name: Install FFmpeg
-        run: |
-          brew install ffmpeg || true
-          ffmpeg -version | head -1
-          ffprobe -version | head -1
-
-      # Antipattern linters — fast (<1s), blocking. Runs BEFORE the build
-      # so a structural mistake doesn't burn 5-10 minutes of compile.
-      # See project_bug_prevention_strategy memory for the framework.
       - name: Lint — @EnvironmentObject usage
         run: |
           python3 scripts/lint_environment_objects.py --selftest
@@ -53,6 +40,54 @@ jobs:
           python3 -m unittest \
             tests/test_person_eval_metrics.py \
             tests/test_person_metrics_integration.py
+
+      # The Xcode selector's own regression suite. Runs here rather than on
+      # the macOS job because it works entirely on fixtures — it needs no
+      # Xcode, and putting it behind a 40-minute Swift build would mean a
+      # broken selector is discovered by the build it broke.
+      - name: Selftest — Xcode selector
+        run: scripts/ci_select_xcode.sh --selftest
+
+  test:
+    name: Build & Test
+    # Gated on preflight, not parallel with it: the linters were put ahead
+    # of the build deliberately, "so a structural mistake doesn't burn
+    # 5-10 minutes of compile", and macOS minutes bill at 10x Linux. The
+    # ~30s preflight costs far less than one wasted macOS build.
+    needs: preflight
+    runs-on: macos-15
+    # 60, not 30. Xcode 26.x carries a documented compile-time regression
+    # on hosted runners (actions/runner-images#13096). The build has no
+    # choice but to use 26.x — see Select Xcode — so the budget has to
+    # absorb it. Revisit once a real run gives us the actual number.
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      # Xcode 26.x is REQUIRED, not preferred. Full history is in the
+      # header of scripts/ci_select_xcode.sh; short version: the app uses
+      # Swift 6.2 isolated conformances, Xcode 16.4's Swift 6.1 cannot
+      # parse them, and the old hard-coded 16.4 pin is why every CI run
+      # from mid-June to 2026-08-30 failed in SwiftCompile without
+      # reaching a test. The script resolves the newest installed 26.x and
+      # hard-fails if the selected compiler is older than Swift 6.2.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
+
+      - name: Show environment
+        run: system_profiler SPHardwareDataType | grep "Chip\|Memory"
+
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg || true
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
 
       # Build ONCE — app + test targets. Shared DerivedData for all later steps.
       - name: Build (app + tests)
