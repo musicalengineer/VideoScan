@@ -235,6 +235,7 @@ def run(args):
                 "expectedOutcomes": q.get("expectedOutcomes"),
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
+                "mustMatch": q.get("mustMatch", []),
                 "noFabricatedPersonalMemory": bool(
                     q.get("noFabricatedPersonalMemory")),
                 "currentEvidenceOnly": bool(q.get("currentEvidenceOnly")),
@@ -385,9 +386,16 @@ def grade_record(r):
     # still pinning the required concepts. Patterns are corpus-authored,
     # case-insensitive, and may span lines. A malformed expectation is a
     # grading defect, never a reason for the evaluator itself to crash.
-    required_patterns = r.get("mustMatch") or []
-    if isinstance(required_patterns, str):
-        required_patterns = [required_patterns]
+    raw_required_patterns = r.get("mustMatch")
+    if raw_required_patterns is None:
+        required_patterns = []
+    elif isinstance(raw_required_patterns, str):
+        required_patterns = [raw_required_patterns]
+    elif isinstance(raw_required_patterns, list):
+        required_patterns = raw_required_patterns
+    else:
+        flags.append("invalid_expected_regex")
+        required_patterns = []
     for pattern in required_patterns:
         try:
             matches = re.search(pattern, a, re.I | re.S)

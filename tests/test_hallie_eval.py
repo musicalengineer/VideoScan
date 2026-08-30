@@ -7,6 +7,7 @@ from collections import Counter
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,6 +260,12 @@ class HallieEvalTests(unittest.TestCase):
             hallie_eval.grade_record(base | {"mustMatch": ["("]}),
             ["invalid_expected_regex"],
         )
+        for malformed in (42, True, {"pattern": "family"}, [42]):
+            self.assertEqual(
+                hallie_eval.grade_record(base | {"mustMatch": malformed}),
+                ["invalid_expected_regex"],
+                msg=repr(malformed),
+            )
 
     def test_must_match_is_inherited_and_can_be_overridden_per_turn(self):
         corpus = {
@@ -277,6 +284,67 @@ class HallieEvalTests(unittest.TestCase):
             turns = hallie_eval.load_corpus(path)
         self.assertEqual(turns[0]["mustMatch"], ["family"])
         self.assertEqual(turns[1]["mustMatch"], ["tree"])
+
+    def test_run_carries_must_match_from_corpus_into_emitted_record(self):
+        question = "tell me about the family"
+        semantic_contract = [r"\b(?:child(?:ren)?|sons?|daughters?)\b"]
+        corpus = {
+            "categories": [{
+                "id": "semantic",
+                "mustMatch": semantic_contract,
+                "prompts": [{"id": "semantic-001", "text": question}],
+            }],
+        }
+        logged_turns = [
+            {"kind": "user", "text": question},
+            {
+                "kind": "assistant",
+                "text": "This answer lists no descendants at all.",
+                "route": "graph",
+                "outcome": "answered",
+            },
+        ]
+        shell_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        git_result = SimpleNamespace(returncode=0, stdout="abc123\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus_path = root / "corpus.json"
+            output_path = root / "run.jsonl"
+            binary_path = root / "VideoScan"
+            corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+            binary_path.touch()
+            args = SimpleNamespace(
+                corpus=str(corpus_path),
+                limit=None,
+                no_compose=True,
+                host=None,
+                model=None,
+                bin=str(binary_path),
+                timeout=1,
+                out=str(output_path),
+            )
+            with redirect_stdout(io.StringIO()):
+                with patch.object(
+                    hallie_eval.subprocess,
+                    "run",
+                    side_effect=[shell_result, git_result],
+                ), patch.object(
+                    hallie_eval,
+                    "read_run_turns",
+                    return_value=logged_turns,
+                ):
+                    self.assertEqual(hallie_eval.run(args), 0)
+
+            lines = output_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            emitted = json.loads(lines[1])
+
+        self.assertEqual(emitted["mustMatch"], semantic_contract)
+        self.assertIn(
+            "missing_required_match",
+            hallie_eval.grade_record(emitted),
+        )
 
     def test_repaired_outcome_needs_substantive_content_to_count_clean(self):
         generic = {
