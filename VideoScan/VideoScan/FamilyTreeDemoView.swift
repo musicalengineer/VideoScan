@@ -1142,7 +1142,6 @@ struct FamilyTreeDemoView: View {
                         .background((chip.isSet ? Color.cyan : Color.white).opacity(0.12))
                         .clipShape(Capsule())
                     }
-                    .masterOnly()
                     .buttonStyle(.plain)
                     .help(chip.isSet
                           ? "Hallie says \(chip.word) as \(chip.saidAs ?? "") — click to change"

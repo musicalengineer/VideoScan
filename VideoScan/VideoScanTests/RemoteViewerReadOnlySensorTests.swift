@@ -72,14 +72,7 @@ struct RemoteViewerReadOnlySensorTests {
         try assertResearchWritersRefuse(root: root, graph: graph, sink: sink, hint: hint)
         assertHallieWritersRefuse(root: root, sink: sink, hint: hint)
 
-        // 6. Pronunciations.
-        #expect(throws: ViewerWriteGuard.RefusedError.self) {
-            try HallieAppTurnCoordinator.recordPronunciationLive(
-                .init(word: "McGill", saidAs: "muh-GILL", target: .cyberBrainPerson(id: "x", name: "McGill")))
-        }
-        #expect(sink.has("\(ViewerWriteGuard.logPrefix) Pronunciation.record — \(hint)"))
-
-        // 7. Compiled store (the app's store carries the viewer flags) + recompile.
+        // 6. Compiled store (the app's store carries the viewer flags) + recompile.
         let appStore = FamilyGraphCompiledStore.app
         #expect(appStore.refusesWrites && appStore.trustsManifestSources)
         var isolated = FamilyGraphCompiledStore(root: root.appendingPathComponent("compiled"))
@@ -97,7 +90,7 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(loader.recompile(sources: [ged]) == nil)
         #expect(storeLog.has("\(FamilyGraphCompiledStore.refusedWritePrefix) recompile"))
 
-        // 8. Media file operations — every kind funnels through add().
+        // 7. Media file operations — every kind funnels through add().
         let center = MediaFileOperationsCenter()
         let a = VideoRecord(), b = VideoRecord()
         a.fullPath = "/Volumes/X/a.mov"; a.filename = "a.mov"
@@ -107,7 +100,7 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(!center.jobs.contains { $0.id == job.id })
         #expect(sink.has("\(ViewerWriteGuard.logPrefix) MediaFileOperationsCenter.add(PairCompareJob) — \(hint)"))
 
-        // 9. FamilySearch pull.
+        // 8. FamilySearch pull.
         let pull = FamilySearchPullCoordinator(gedcomDirectory: root.appendingPathComponent("gedcom"))
         pull.launch()
         pull.install()
@@ -118,7 +111,7 @@ struct RemoteViewerReadOnlySensorTests {
         }
 
         // The center captured the same lines the log sink saw.
-        #expect(ViewerModeCenter.shared.refusals.count >= 17)
+        #expect(ViewerModeCenter.shared.refusals.count >= 18)
         #expect(ViewerModeCenter.shared.refusals.allSatisfy { $0.hasPrefix(ViewerWriteGuard.logPrefix) })
     }
 
@@ -140,6 +133,9 @@ struct RemoteViewerReadOnlySensorTests {
         }
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent("cyberbrain/cyberbrain.json").path))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("cyberbrain").path),
+            "a refused CyberBrain write must not create its parent directory")
     }
 
     private func assertResearchWritersRefuse(
@@ -159,10 +155,23 @@ struct RemoteViewerReadOnlySensorTests {
         }
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent("people/\(subject.key)/research").path))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("people").path),
+            "a refused research write must not create any parent path")
     }
 
     private func assertHallieWritersRefuse(root: URL, sink: Sink, hint: String) {
-        let live = HallieAppTurnCoordinator.Dependencies.live
+        let supportRoot = root.appendingPathComponent("isolated-support", isDirectory: true)
+        let assetRoot = root.appendingPathComponent("isolated-assets", isDirectory: true)
+        let assetStoreCreations = Sink()
+        let live = HallieAppTurnCoordinator.Dependencies.makeLive(
+            supportRoot,
+            HallieLiveAssetStoreFactory {
+                assetStoreCreations.append("created")
+                return FamilyAssetStore(
+                    root: assetRoot,
+                    cacheRoot: root.appendingPathComponent("isolated-cache", isDirectory: true))
+            })
         #expect(throws: ViewerWriteGuard.RefusedError.self) {
             try live.recordTestimony(Self.testimony)
         }
@@ -177,14 +186,25 @@ struct RemoteViewerReadOnlySensorTests {
             try live.saveDrillStore(PronunciationDrillStore(), manifest)
         }
         #expect(throws: ViewerWriteGuard.RefusedError.self) {
+            try live.recordPronunciation(.init(
+                word: "McGill", saidAs: "muh-GILL",
+                target: .cyberBrainPerson(id: "x", name: "McGill")))
+        }
+        _ = live.loadLexicon()
+        #expect(throws: ViewerWriteGuard.RefusedError.self) {
             try live.excludePhoto(root.appendingPathComponent("dad.jpg"), "K1", "Rick", "not Dad")
         }
         for path in ["HallieAppTurnCoordinator.recordTestimony",
                      "HallieAppTurnCoordinator.recordPhotoCaption",
                      "HallieAppTurnCoordinator.saveDrillStore",
+                     "Pronunciation.record",
+                     "HallieAppTurnCoordinator.loadLexiconDefault",
                      "HallieAppTurnCoordinator.excludePhoto"] {
             #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
         }
+        #expect(assetStoreCreations.all.isEmpty, "the guard runs before asset-store construction")
+        #expect(!FileManager.default.fileExists(atPath: supportRoot.path))
+        #expect(!FileManager.default.fileExists(atPath: assetRoot.path))
     }
 
     private static let testimony = CyberBrainWriter.Testimony(

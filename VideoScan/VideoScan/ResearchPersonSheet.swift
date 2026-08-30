@@ -379,12 +379,13 @@ private struct ResearchFindingRow: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 320)
-                .disabled(finding.toldItemID != nil || ViewerModeCenter.shared.isViewer)
+                .masterOnly()
+                .disabled(finding.toldItemID != nil)
                 TextField("Lore (what the family knows about this)", text: $lore)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
                     .onSubmit(onCommitLore)
-                    .disabled(ViewerModeCenter.shared.isViewer)
+                    .masterOnly()
             }
         }
         .padding(.vertical, 4)

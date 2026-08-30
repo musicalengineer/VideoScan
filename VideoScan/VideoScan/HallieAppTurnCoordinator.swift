@@ -259,7 +259,22 @@ enum HallieAppTurnCoordinator {
             self.composeAnswer = composeAnswer
         }
 
-        static let live = Dependencies(
+        private static let productionApplicationSupportRoot = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first
+
+        static let live = makeLive(
+            productionApplicationSupportRoot,
+            HallieLiveAssetStoreFactory {
+                FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+            })
+
+        /// Production dependencies with injectable write roots for the
+        /// viewer sensor. The app's singleton uses the same roots/stores as
+        /// before; tests supply temporary ones and never name real support.
+        static let makeLive: @Sendable (URL?, HallieLiveAssetStoreFactory) -> Dependencies = { applicationSupportRoot, makeAssetStore in
+            let roots = HallieLiveDependencyRoots(
+                applicationSupportRoot: applicationSupportRoot)
+            return Dependencies(
             startLocalBrain: { hosts in
                 _ = try await OllamaLocalServerBootstrap.shared
                     .ensureRunning(for: hosts)
@@ -267,7 +282,7 @@ enum HallieAppTurnCoordinator {
                     .routeLocalEndpointsToLoopback(hosts)
             },
             translateAST: { question, hosts, modelName in
-                let responder = ResponderBox()
+                let responder = HallieLiveResponderBox()
                 var template = OllamaQueryTranslator()
                 template.model = modelName
                 let translator = OllamaFailoverTranslator(
@@ -280,7 +295,7 @@ enum HallieAppTurnCoordinator {
                     responderHost: responder.value ?? "unknown")
             },
             interpretTurn: { question, hosts, modelName in
-                let responder = ResponderBox()
+                let responder = HallieLiveResponderBox()
                 var template = OllamaQueryTranslator()
                 template.model = modelName
                 let translator = OllamaFailoverTranslator(
@@ -293,7 +308,7 @@ enum HallieAppTurnCoordinator {
                     responderHost: responder.value ?? "unknown")
             },
             composeConversation: { kind, question, history, hosts, modelName in
-                let responder = ResponderBox()
+                let responder = HallieLiveResponderBox()
                 var template = OllamaQueryTranslator()
                 template.model = modelName
                 let fleet = OllamaFailoverTranslator(
@@ -340,12 +355,7 @@ enum HallieAppTurnCoordinator {
                     store: .app)
             },
             loadCyberBrain: {
-                guard let root = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask).first?.appendingPathComponent(
-                        "VideoScan/cyberbrain", isDirectory: true) else {
-                    return nil
-                }
+                guard let root = roots.cyberBrain else { return nil }
                 do {
                     return try CyberBrainIndex(
                         archive: CyberBrainLoader(rootURL: root).load())
@@ -358,10 +368,7 @@ enum HallieAppTurnCoordinator {
             },
             recordTestimony: { testimony in
                 try ViewerWriteGuard.check("HallieAppTurnCoordinator.recordTestimony")
-                guard let root = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask).first?.appendingPathComponent(
-                        "VideoScan/cyberbrain", isDirectory: true) else {
+                guard let root = roots.cyberBrain else {
                     throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
                 }
                 let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
@@ -369,28 +376,43 @@ enum HallieAppTurnCoordinator {
             },
             recordPhotoCaption: { caption in
                 try ViewerWriteGuard.check("HallieAppTurnCoordinator.recordPhotoCaption")
-                guard let root = FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask).first?.appendingPathComponent(
-                        "VideoScan/cyberbrain", isDirectory: true) else {
+                guard let root = roots.cyberBrain else {
                     throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
                 }
                 let receipt = try CyberBrainWriter.record(caption: caption, rootURL: root)
                 appLog.write("Hallie: kept photo caption \(receipt.itemID) for \(caption.subjects.count) people (\(caption.photoPath))")
             },
             recordPronunciation: { write in
-                try recordPronunciationLive(write)
+                try recordPronunciationLive(
+                    write, cyberBrainRootURL: roots.cyberBrain,
+                    fileURL: roots.pronunciationFile)
             },
-            loadDrillStore: { PronunciationDrillStore.load() },
+            loadDrillStore: {
+                roots.drillFile.map { PronunciationDrillStore.load(from: $0) }
+                    ?? PronunciationDrillStore()
+            },
             saveDrillStore: { store, manifest in
                 try ViewerWriteGuard.check("HallieAppTurnCoordinator.saveDrillStore")
-                try store.save(manifest: manifest)
+                guard let drillFile = roots.drillFile else {
+                    throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
+                }
+                try store.save(to: drillFile, manifest: manifest)
             },
-            loadLexicon: { HalliePronunciationLexicon.resolved() },
+            loadLexicon: {
+                guard let pronunciationFile = roots.pronunciationFile else { return .shipped }
+                if ViewerModeCenter.shared.isViewer,
+                   !FileManager.default.fileExists(atPath: pronunciationFile.path) {
+                    ViewerWriteGuard.refuse("HallieAppTurnCoordinator.loadLexiconDefault")
+                    return .shipped
+                }
+                return HalliePronunciationLexicon.resolved(
+                    fileURL: pronunciationFile,
+                    cyberBrainRootURL: roots.cyberBrain)
+            },
             loadPronunciationGold: { .shared },
             excludePhoto: { photo, gedcomID, notedBy, caption in
                 try ViewerWriteGuard.check("HallieAppTurnCoordinator.excludePhoto")
-                let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+                let store = makeAssetStore()
                 let sidecar = try store.excludePhoto(
                     photo, from: gedcomID, notedBy: notedBy, caption: caption)
                 appLog.write("Hallie: photo marked not-of \(gedcomID) → \(sidecar.path)")
@@ -428,20 +450,6 @@ enum HallieAppTurnCoordinator {
                     })
                 return await composer.compose(plan: plan, history: history)
             })
-    }
-
-    /// `NSLock` here is the C++ equivalent of a tiny mutex-protected string.
-    /// Ollama failover may report its responder from a non-main callback.
-    private final class ResponderBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var storage: String?
-
-        func set(_ value: String) {
-            lock.withLock { storage = value }
-        }
-
-        var value: String? {
-            lock.withLock { storage }
         }
     }
 
