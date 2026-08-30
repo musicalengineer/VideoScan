@@ -79,47 +79,173 @@ struct PersonPhotoResolution: Equatable, Sendable {
 /// reaches the same one. Never a bare surname.
 enum PersonPhotoBridge {
 
+    /// One fail-closed identity pass for a complete People snapshot.
+    ///
+    /// The old per-profile bridge filtered `profiles` once to find every
+    /// claimant, and each filtered candidate built another full-profile
+    /// `FamilyTreeIdentityResolver`. Asking for all cards therefore grew at
+    /// least quadratically. This snapshot builds the spelling index once,
+    /// resolves each profile once, counts claims once, then retains only
+    /// collision-free pairs. Build work is O(profiles + identity lookups).
+    struct Snapshot {
+        private enum CanonicalClaim {
+            case one(String)
+            case ambiguous
+        }
+
+        private let personByProfileID: [String: GedcomFamilyGraph.Person]
+        private let profileByPersonID: [String: POIProfile]
+        /// Regression sensor: exactly one candidate evaluation per profile.
+        let candidateEvaluationCount: Int
+
+        init(profiles: [POIProfile], graph: GedcomFamilyGraph,
+             fingerprint: () -> String? = { nil }) {
+            var canonicalBySpelling: [String: CanonicalClaim] = [:]
+            var aliasesByCanonicalName: [String: [String]] = [:]
+            var profileIDCounts: [String: Int] = [:]
+            canonicalBySpelling.reserveCapacity(profiles.count)
+            profileIDCounts.reserveCapacity(profiles.count)
+            for profile in profiles {
+                Self.recordCanonicalClaim(
+                    spelling: profile.name, canonicalName: profile.name,
+                    in: &canonicalBySpelling)
+                for alias in profile.aliases {
+                    Self.recordCanonicalClaim(
+                        spelling: alias, canonicalName: profile.name,
+                        in: &canonicalBySpelling)
+                }
+                if !profile.aliases.isEmpty {
+                    aliasesByCanonicalName[PersonResolver.normalize(profile.name), default: []]
+                        .append(contentsOf: profile.aliases)
+                }
+                profileIDCounts[profile.id, default: 0] += 1
+            }
+
+            var candidates: [(profileIndex: Int, person: GedcomFamilyGraph.Person)] = []
+            var claimCounts: [String: Int] = [:]
+            candidates.reserveCapacity(profiles.count)
+            for (profileIndex, profile) in profiles.enumerated() {
+                guard let person = Self.candidate(
+                    for: profile, graph: graph,
+                    canonicalBySpelling: canonicalBySpelling,
+                    aliasesByCanonicalName: aliasesByCanonicalName,
+                    fingerprint: fingerprint)
+                else { continue }
+                candidates.append((profileIndex, person))
+                claimCounts[person.id, default: 0] += 1
+            }
+
+            var byProfile: [String: GedcomFamilyGraph.Person] = [:]
+            var byPerson: [String: POIProfile] = [:]
+            for pair in candidates {
+                let profile = profiles[pair.profileIndex]
+                guard claimCounts[pair.person.id] == 1,
+                      profileIDCounts[profile.id] == 1 else { continue }
+                byProfile[profile.id] = pair.person
+                byPerson[pair.person.id] = profile
+            }
+            personByProfileID = byProfile
+            profileByPersonID = byPerson
+            candidateEvaluationCount = profiles.count
+        }
+
+        func treePerson(for profile: POIProfile) -> GedcomFamilyGraph.Person? {
+            personByProfileID[profile.id]
+        }
+
+        func profile(for person: GedcomFamilyGraph.Person) -> POIProfile? {
+            profileByPersonID[person.id]
+        }
+
+        private static func recordCanonicalClaim(
+            spelling: String,
+            canonicalName: String,
+            in claims: inout [String: CanonicalClaim]
+        ) {
+            let key = PersonResolver.normalize(spelling)
+            guard !key.isEmpty else { return }
+            switch claims[key] {
+            case .none:
+                claims[key] = .one(canonicalName)
+            case .some(.one(let existing)) where existing != canonicalName:
+                claims[key] = .ambiguous
+            case .some(.one(_)), .some(.ambiguous):
+                break
+            }
+        }
+
+        private static func candidate(
+            for profile: POIProfile,
+            graph: GedcomFamilyGraph,
+            canonicalBySpelling: [String: CanonicalClaim],
+            aliasesByCanonicalName: [String: [String]],
+            fingerprint: () -> String?
+        ) -> GedcomFamilyGraph.Person? {
+            if let pin = profile.treeIdentity {
+                switch pin {
+                case .familySearchID(let fsid):
+                    return graph.person(familySearchID: fsid)
+                case .pointer(let pointer, let sourceFingerprint):
+                    guard fingerprint() == sourceFingerprint else { return nil }
+                    return graph.people[pointer]
+                }
+            }
+            guard profile.treeIdentityQuarantined == nil,
+                  !profile.notInFamilyTree else { return nil }
+
+            // A profile always has an exact PersonResolver entry unless its
+            // name is empty. Avoid fuzzy recovery for that invalid case: it
+            // cannot establish identity and would scan the whole profile set.
+            guard !PersonResolver.normalize(profile.name).isEmpty else { return nil }
+            let normalizedName = PersonResolver.normalize(profile.name)
+            let canonicalName: String
+            switch canonicalBySpelling[normalizedName] {
+            case .some(.one(let resolved)):
+                canonicalName = resolved
+            case .some(.ambiguous), .none:
+                return nil
+            }
+
+            let normalizedCanonical = PersonResolver.normalize(canonicalName)
+            let terms = [canonicalName]
+                + (aliasesByCanonicalName[normalizedCanonical] ?? [])
+                + [profile.name]
+            var seen = Set<String>()
+            let ordered = terms.filter {
+                seen.insert(PersonResolver.normalize($0)).inserted
+            }
+            .enumerated()
+            .sorted { lhs, rhs in
+                let lhsWords = lhs.element.split(whereSeparator: \Character.isWhitespace).count
+                let rhsWords = rhs.element.split(whereSeparator: \Character.isWhitespace).count
+                if lhsWords != rhsWords { return lhsWords > rhsWords }
+                if lhs.element.count != rhs.element.count {
+                    return lhs.element.count > rhs.element.count
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+            for term in ordered {
+                let matches = graph.people(matching: term)
+                if matches.count == 1 { return matches[0] }
+                if !matches.isEmpty { return nil }
+            }
+            return nil
+        }
+    }
+
     static func treePerson(for profile: POIProfile, profiles: [POIProfile],
                            graph: GedcomFamilyGraph,
                            fingerprint: () -> String? = { nil }) -> GedcomFamilyGraph.Person? {
-        guard let claimed = candidate(for: profile, profiles: profiles, graph: graph, fingerprint: fingerprint)
-        else { return nil }
-        let claimants = profiles.filter {
-            candidate(for: $0, profiles: profiles, graph: graph, fingerprint: fingerprint)?.id == claimed.id
-        }
-        return claimants.count == 1 ? claimed : nil
+        Snapshot(profiles: profiles, graph: graph, fingerprint: fingerprint)
+            .treePerson(for: profile)
     }
 
     static func profile(for person: GedcomFamilyGraph.Person, profiles: [POIProfile],
                         graph: GedcomFamilyGraph,
                         fingerprint: () -> String? = { nil }) -> POIProfile? {
-        let claimants = profiles.filter {
-            candidate(for: $0, profiles: profiles, graph: graph, fingerprint: fingerprint)?.id == person.id
-        }
-        return claimants.count == 1 ? claimants[0] : nil
-    }
-
-    /// The profile's own claim, before the uniqueness check.
-    private static func candidate(for profile: POIProfile, profiles: [POIProfile],
-                                  graph: GedcomFamilyGraph,
-                                  fingerprint: () -> String?) -> GedcomFamilyGraph.Person? {
-        if let pin = profile.treeIdentity {
-            switch pin {
-            case .familySearchID(let fsid):
-                return graph.person(familySearchID: fsid)
-            case .pointer(let pointer, let sourceFingerprint):
-                guard let live = fingerprint(), live == sourceFingerprint else { return nil }
-                return graph.people[pointer]
-            }
-        }
-        if profile.treeIdentityQuarantined != nil { return nil }   // unreadable pin: fail closed
-        if profile.notInFamilyTree { return nil }                   // Rick said: not on the tree
-        switch FamilyTreeIdentityResolver(graph: graph, profiles: profiles).resolve(profile.name) {
-        case .people(let people) where people.count == 1:
-            return people[0]
-        default:
-            return nil
-        }
+        Snapshot(profiles: profiles, graph: graph, fingerprint: fingerprint)
+            .profile(for: person)
     }
 }
 
@@ -181,6 +307,40 @@ struct PersonPhotoResolver {
 // MARK: - People-tab write (cover → canonical asset)
 
 enum PersonPhotoSync {
+    /// File-size preflight plus a bounded read. The second size guard closes
+    /// the grow-between-stat-and-read race without ever allocating more than
+    /// `maxImportBytes + 1` bytes.
+    static func boundedCoverData(
+        at url: URL,
+        maxBytes: Int = FamilyAssetStore.maxImportBytes
+    ) throws -> Data {
+        let values = try url.resourceValues(forKeys: [
+            .fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey
+        ])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw FamilyAssetStore.StoreError.sourceIsNotARegularImage(url)
+        }
+        let advertisedSize = values.fileSize ?? (maxBytes + 1)
+        guard advertisedSize <= maxBytes else {
+            throw FamilyAssetStore.StoreError.imageTooLarge(bytes: advertisedSize)
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var data = Data()
+        data.reserveCapacity(advertisedSize)
+        while data.count <= maxBytes {
+            let remaining = maxBytes + 1 - data.count
+            let chunkSize = min(1 << 20, remaining)
+            guard let chunk = try handle.read(upToCount: chunkSize),
+                  !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        guard data.count <= maxBytes else {
+            throw FamilyAssetStore.StoreError.imageTooLarge(bytes: data.count)
+        }
+        return data
+    }
+
     /// A People-tab cover edit is an explicit choice: stamp the profile and,
     /// when the profile is bridged to a tree person, copy the cover into
     /// that person's choice folder so the Family Tree shows the same photo.
@@ -203,7 +363,7 @@ enum PersonPhotoSync {
                                                         graph: graph, fingerprint: fingerprint)
         else { return nil }
         do {
-            let data = try Data(contentsOf: cover)
+            let data = try boundedCoverData(at: cover)
             return try store.choosePhoto(data, fileExtension: cover.pathExtension,
                                          for: FamilyAssetPerson(person),
                                          source: PersonPhotoChoiceSource.peopleCover, chosenAt: now)
@@ -228,30 +388,66 @@ final class PersonPhotoCenter: ObservableObject {
     private var cachedProfiles: [POIProfile] = []
     private var cachedGeneration = -1
     private var cachedRevision = -1
-    private var cache: [String: PersonPhotoResolution] = [:]
+    private enum CacheEntry {
+        case photo(PersonPhotoResolution)
+        case missing
+    }
 
-    init() {}
+    private let storeProvider: () -> FamilyAssetStore
+    private var cache: [String: CacheEntry] = [:]
+    private var resolvedPhotos: [String: PersonPhotoResolution] = [:]
+    /// Sensors pin one whole-profile build per revision, including misses.
+    private(set) var resolutionBuildCount = 0
+    var cachedEntryCount: Int { cache.count }
+
+    init(storeProvider: @escaping () -> FamilyAssetStore = {
+        FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+    }) {
+        self.storeProvider = storeProvider
+    }
 
     func invalidate() { revision &+= 1 }
 
-    func peoplePhoto(for profile: POIProfile, among profiles: [POIProfile],
-                     kinshipCenter: KinshipDisplayCenter = .shared) -> PersonPhotoResolution? {
+    /// Complete portrait map for one gallery evaluation. Call this once
+    /// before `ForEach`; every card then performs one dictionary lookup.
+    /// Missing resolutions are retained in `cache` just like hits, so a
+    /// subsequent render does not repeat bridge or filesystem work.
+    func peoplePhotos(for profiles: [POIProfile],
+                      kinshipCenter: KinshipDisplayCenter = .shared)
+        -> [String: PersonPhotoResolution] {
         let generation = kinshipCenter.graphGeneration
         if cachedProfiles != profiles || cachedGeneration != generation || cachedRevision != revision {
             cache.removeAll()
+            resolvedPhotos.removeAll()
             cachedProfiles = profiles
             cachedGeneration = generation
             cachedRevision = revision
+            cache.reserveCapacity(profiles.count)
+            let bridge = kinshipCenter.graph.map {
+                PersonPhotoBridge.Snapshot(
+                    profiles: profiles, graph: $0,
+                    fingerprint: { kinshipCenter.graphFingerprint })
+            }
+            let resolver = PersonPhotoResolver(store: storeProvider())
+            for profile in profiles {
+                let person = bridge?.treePerson(for: profile).map(FamilyAssetPerson.init)
+                if let photo = resolver.peoplePhoto(for: profile, treePerson: person) {
+                    cache[profile.id] = .photo(photo)
+                    resolvedPhotos[profile.id] = photo
+                } else {
+                    cache[profile.id] = .missing
+                }
+            }
+            resolutionBuildCount += 1
         }
-        if let hit = cache[profile.id] { return hit }
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
-        let person = kinshipCenter.graph.flatMap { graph in
-            PersonPhotoBridge.treePerson(for: profile, profiles: profiles, graph: graph,
-                                         fingerprint: { kinshipCenter.graphFingerprint })
-        }
-        let resolved = PersonPhotoResolver(store: store)
-            .peoplePhoto(for: profile, treePerson: person.map(FamilyAssetPerson.init))
-        if let resolved { cache[profile.id] = resolved }
-        return resolved
+        return resolvedPhotos
+    }
+
+    /// Compatibility for non-gallery callers. The gallery itself must use
+    /// `peoplePhotos` once, or the O(profiles) revision comparison would be
+    /// repeated by every card.
+    func peoplePhoto(for profile: POIProfile, among profiles: [POIProfile],
+                     kinshipCenter: KinshipDisplayCenter = .shared) -> PersonPhotoResolution? {
+        peoplePhotos(for: profiles, kinshipCenter: kinshipCenter)[profile.id]
     }
 }

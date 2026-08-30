@@ -145,6 +145,10 @@ extension PersonFinderView {
         let displayedProfiles = showMissingGEDCOM
             ? model.savedProfiles.filter { !TreeLinkBadge.hasGEDCOMID(treeLinks[$0.id]) }
             : model.savedProfiles
+        // One revision-keyed portrait pass outside the card loop. Missing
+        // photos are memoised too; cards perform only a dictionary lookup.
+        let portraits = photoCenter.peoplePhotos(
+            for: model.savedProfiles, kinshipCenter: kinshipCenter)
 
         return VStack(alignment: .leading, spacing: 6) {
             // Inline undo banner — armed by deletePOI, dismissed by undo /
@@ -270,9 +274,7 @@ extension PersonFinderView {
                                            for: profile, among: model.savedProfiles),
                                        aliasWarning: kinshipCenter.aliasWarning(
                                            for: profile, among: model.savedProfiles),
-                                       portrait: photoCenter.peoplePhoto(
-                                           for: profile, among: model.savedProfiles,
-                                           kinshipCenter: kinshipCenter))
+                                       portrait: portraits[profile.id])
                                 // Holdout Review badge — top-trailing over
                                 // the portrait. The Button in the overlay
                                 // wins the click over the card's
