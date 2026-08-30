@@ -10,14 +10,22 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# On 2026-08-29 the tracked Python suite held 400 tests, of which CI ran two
-# modules and the nightly ran none. (A working-tree run reported 416; the
-# extra 21 come from an untracked module that belongs to a person, not to
-# CI — which is why the list below comes from git ls-files.) Worse than the
-# gap itself was that neither runner FAILS when tests go missing: pytest and
-# unittest both exit 0 when a module drops out of collection. A missing
-# dependency silently took a local count from 416 to 359 while the output
-# still looked healthy.
+# On 2026-08-29 the Python suite was largely unrun: CI executed two modules
+# and the nightly none. The counts, since three different ones appear in
+# this file's history and they are easy to conflate:
+#
+#     416   a `pytest tests/` sweep of the working tree
+#   - 21    tests/test_post_nightly_updates.py, UNTRACKED and belonging to a
+#           person rather than to CI — hence git ls-files below
+#   = 395   tracked, under tests/ only
+#   +  5    tools/poi-c02/test_tools.py, tracked but outside tests/ and so
+#           missed until discovery was widened repo-wide
+#   = 400   tracked today, and the floor this script asserts
+#
+# Worse than the gap itself was that neither runner FAILS when tests go
+# missing: pytest and unittest both exit 0 when a module drops out of
+# collection. A missing dependency silently took that 416 sweep down to 359
+# while the output still looked healthy.
 #
 # So this script does three things, and the third is the point:
 #   1. runs the suite against an explicit TRACKED file list, not a
