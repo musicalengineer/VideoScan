@@ -605,6 +605,27 @@ final class CatalogStore {
     /// window the race lives in. Always nil in production.
     internal var testBetweenProbeAndDecode: (() -> Void)?
 
+    /// Test seam (codex #934): runs after the atomic write and fsync but
+    /// BEFORE the read-back verification, so a test can corrupt the file in
+    /// exactly the window `verificationFailed` exists to catch. There is no
+    /// other way to induce that path deterministically — the atomic write is
+    /// temp-file + rename(2), so anything pre-planted at the destination is
+    /// replaced before the verify reads it.
+    ///
+    /// The real safety is that it defaults to nil and production never
+    /// assigns it. The TestEnvironment.isTestHost gate at the call site is a
+    /// second layer, NOT an absolute boundary (codex QA): that predicate
+    /// trusts launch markers — VS_UI_TEST=1 among them — so a shipped app
+    /// launched with one set would satisfy it. The gate narrows the window;
+    /// the nil default is what closes it.
+    ///
+    /// Passed EXPLICITLY into `encodeAndWrite` rather than read from a
+    /// static: encodeAndWrite is nonisolated static, and a static mutable
+    /// hook would be both a Swift 6 concurrency hazard and shared state that
+    /// leaks between tests. `@Sendable` because it is invoked on the write
+    /// queue.
+    internal var testAfterWriteBeforeVerify: (@Sendable (URL) -> Void)?
+
     /// Probe value that accompanied the decode `load()` accepted (the
     /// post-decode probe of the final attempt). nil when the probe found no
     /// stamp. Diagnostic only — never an OCC input.
@@ -834,9 +855,12 @@ final class CatalogStore {
         let payload = Self.makePayload(records: records, generation: nextGeneration,
                                        masterArchive: masterArchive)
         var writeError: CatalogWriteError?
+        // Captured on the main actor; the closure crosses to writeQueue.
+        let seam = testAfterWriteBeforeVerify
         writeQueue.sync {
             writeError = Self.encodeAndWrite(payload: payload, to: fileURL,
-                                             purpose: .liveCatalog)
+                                             purpose: .liveCatalog,
+                                             afterWriteBeforeVerify: seam)
         }
         let ok = writeError == nil
         // Releases the per-write lock in both outcomes. The error is carried
@@ -910,10 +934,12 @@ final class CatalogStore {
 
         let dest = fileURL
         let delay = testWriteDelay
+        let seam = testAfterWriteBeforeVerify
         writeQueue.async {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             let writeError = Self.encodeAndWrite(payload: payload, to: dest,
-                                                 purpose: .liveCatalog)
+                                                 purpose: .liveCatalog,
+                                                 afterWriteBeforeVerify: seam)
             Task { @MainActor [weak self] in
                 self?.asyncSaveDidFinish(success: writeError == nil,
                                          wroteGeneration: nextGeneration,
@@ -969,7 +995,8 @@ final class CatalogStore {
                                                              generation: currentGeneration,
                                                              masterArchive: masterArchive),
                                    to: URL(fileURLWithPath: path),
-                                   purpose: .snapshot) == nil
+                                   purpose: .snapshot,
+                                   afterWriteBeforeVerify: testAfterWriteBeforeVerify) == nil
     }
 
     /// Same contract as `writeSnapshot`, but only the DTO map (the ONE
@@ -985,8 +1012,10 @@ final class CatalogStore {
         let payload = Self.makePayload(records: records, generation: currentGeneration,
                                        masterArchive: masterArchive)
         let url = URL(fileURLWithPath: path)
+        let seam = testAfterWriteBeforeVerify
         return await Task.detached(priority: .userInitiated) {
-            Self.encodeAndWrite(payload: payload, to: url, purpose: .snapshot) == nil
+            Self.encodeAndWrite(payload: payload, to: url, purpose: .snapshot,
+                                afterWriteBeforeVerify: seam) == nil
         }.value
     }
 
@@ -1109,7 +1138,8 @@ final class CatalogStore {
     /// the log only, and the UI got a fixed "encode or atomic write failed".
     nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO,
                                                    to fileURL: URL,
-                                                   purpose: WritePurpose) -> CatalogWriteError? {
+                                                   purpose: WritePurpose,
+                                                   afterWriteBeforeVerify: (@Sendable (URL) -> Void)? = nil) -> CatalogWriteError? {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
@@ -1143,6 +1173,13 @@ final class CatalogStore {
             // second Data: at the pre-reduction size the old whole-file
             // re-read doubled peak memory per save (#161 suspect 3).
             let expected = Self.sha256Hex(data)
+            // The verification window. The isTestHost gate is defence in
+            // depth, not a guarantee — see the property's documentation:
+            // the predicate trusts launch markers. Nothing assigns the
+            // property in production, which is the actual protection.
+            if TestEnvironment.isTestHost, let corrupt = afterWriteBeforeVerify {
+                corrupt(fileURL)
+            }
             let actual = try Self.sha256HexStreaming(fileURL: fileURL)
             guard expected == actual else {
                 let err = CatalogWriteError.verificationFailed(
