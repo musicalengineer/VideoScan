@@ -453,6 +453,130 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 11: process-group watchdog expires deterministically, without Xcode
+# or a wall-clock timeout. The injected deadline waits only for the fixture's
+# parent to spawn a TERM-ignoring child, then fires immediately. KILL must
+# remove both members of the private process group and return 124.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 11: deterministic process-group watchdog timeout =="
+WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
+awk '/^nightly_watchdog_deadline_wait\(\)/,/^# Run developer-tool maintenance/' \
+    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' > "$WATCHDOG_LIB"
+WATCHDOG_FIXTURE="$SANDBOX/watchdog-fixture.sh"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'trap "" TERM' \
+    '( trap "" TERM; while :; do sleep 1; done ) &' \
+    'printf "%s\n" "$!" > "$WATCHDOG_CHILD_PID_FILE"' \
+    ': > "$WATCHDOG_FIXTURE_READY"' \
+    'while :; do sleep 1; done' \
+    > "$WATCHDOG_FIXTURE"
+chmod +x "$WATCHDOG_FIXTURE"
+
+run_watchdog_fixture() {
+    local force_contamination="$1"
+    local output_file="$2"
+    (
+        # shellcheck disable=SC1090
+        source "$WATCHDOG_LIB"
+        log() { echo "[watchdog-test] $*"; }
+        nightly_watchdog_deadline_wait() {
+            local attempts=0
+            while [ ! -e "$WATCHDOG_FIXTURE_READY" ] && [ "$attempts" -lt 100 ]; do
+                sleep 0.01
+                attempts=$((attempts + 1))
+            done
+        }
+        nightly_watchdog_grace_wait() { :; }
+        if [ "$force_contamination" = "true" ]; then
+            # Deterministically exercise the fail-open publication path for a
+            # kernel-blocked, unreapable leader without creating one for real.
+            ps() { echo "U"; }
+        fi
+        run_with_process_group_watchdog \
+            999 999 "$SANDBOX/watchdog-command.log" "$WATCHDOG_FIXTURE"
+    ) > "$output_file" 2>&1
+}
+
+if [ ! -s "$WATCHDOG_LIB" ]; then
+    fail "watchdog helpers could not be extracted from nightly_local_tests.sh"
+else
+    NORMAL_OUTPUT="$SANDBOX/watchdog-normal-command.log"
+    (
+        # shellcheck disable=SC1090
+        source "$WATCHDOG_LIB"
+        log() { echo "[watchdog-test] $*"; }
+        run_with_process_group_watchdog \
+            5 0 "$NORMAL_OUTPUT" /bin/sh -c 'printf normal-output; exit 7'
+    ) > "$SANDBOX/watchdog-normal-wrapper.log" 2>&1
+    NORMAL_RC=$?
+    if [ "$NORMAL_RC" -eq 7 ] && [ "$(cat "$NORMAL_OUTPUT")" = "normal-output" ]; then
+        pass "watchdog preserves a prompt command's exit status and output"
+    else
+        fail "watchdog normal path broke (rc=$NORMAL_RC output=$(cat "$NORMAL_OUTPUT" 2>/dev/null))"
+    fi
+
+    export WATCHDOG_FIXTURE_READY="$SANDBOX/watchdog-fixture-ready"
+    export WATCHDOG_CHILD_PID_FILE="$SANDBOX/watchdog-child.pid"
+    rm -f "$WATCHDOG_FIXTURE_READY" "$WATCHDOG_CHILD_PID_FILE"
+    WATCHDOG_OUTPUT="$SANDBOX/watchdog-output.log"
+    run_watchdog_fixture false "$WATCHDOG_OUTPUT"
+    WATCHDOG_RC=$?
+    CHILD_PID=$(cat "$WATCHDOG_CHILD_PID_FILE" 2>/dev/null || echo 0)
+    attempts=0
+    while kill -0 "$CHILD_PID" 2>/dev/null && [ "$attempts" -lt 100 ]; do
+        sleep 0.01
+        attempts=$((attempts + 1))
+    done
+    if [ "$WATCHDOG_RC" -eq 124 ] && ! kill -0 "$CHILD_PID" 2>/dev/null; then
+        pass "watchdog returned 124 and killed the TERM-ignoring process group"
+    else
+        fail "watchdog contract broke (rc=$WATCHDOG_RC child=$CHILD_PID still_alive=$(kill -0 "$CHILD_PID" 2>/dev/null && echo yes || echo no))"
+    fi
+
+    rm -f "$WATCHDOG_FIXTURE_READY" "$WATCHDOG_CHILD_PID_FILE"
+    CONTAMINATION_OUTPUT="$SANDBOX/watchdog-contamination.log"
+    run_watchdog_fixture true "$CONTAMINATION_OUTPUT"
+    CONTAMINATION_RC=$?
+    if [ "$CONTAMINATION_RC" -eq 124 ] &&
+       grep -q 'CONTAMINATION: watchdog could not reap PID/PGID' "$CONTAMINATION_OUTPUT"; then
+        pass "unreaped PID/PGID is logged as contamination without blocking timeout return"
+    else
+        fail "contamination path broke (rc=$CONTAMINATION_RC output=$(tr '\n' ' ' < "$CONTAMINATION_OUTPUT"))"
+    fi
+fi
+
+# ───────────────────────────────────────────────────────────────────
+# Test 12: timeout classification has precedence over zero tests, failures,
+# and an ordinary xcodebuild rc. This is the row reason the dashboard sees.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 12: timeout reason and classification precedence =="
+(
+    # shellcheck disable=SC1090
+    source "$WATCHDOG_LIB"
+    classify_nightly_test_result true 7 0 0 false 70
+    printf '%s|%s\n' "$STATUS" "$REASON"
+) > "$SANDBOX/classify-timeout-zero.txt"
+(
+    # shellcheck disable=SC1090
+    source "$WATCHDOG_LIB"
+    classify_nightly_test_result true 7 9 2 true 65
+    printf '%s|%s\n' "$STATUS" "$REASON"
+) > "$SANDBOX/classify-timeout-failures.txt"
+TIMEOUT_ZERO=$(cat "$SANDBOX/classify-timeout-zero.txt")
+TIMEOUT_FAILURES=$(cat "$SANDBOX/classify-timeout-failures.txt")
+BUILD_REASON=$(bash -c "source '$WATCHDOG_LIB'; nightly_timeout_reason build 11")
+if [ "$TIMEOUT_ZERO" = "failed|test-timeout:7s" ] &&
+   [ "$TIMEOUT_FAILURES" = "failed|test-timeout:7s" ] &&
+   [ "$BUILD_REASON" = "build-timeout:11s" ]; then
+    pass "build/test timeout reasons are explicit and timeout outranks zero/failure rc"
+else
+    fail "timeout classification broke (zero=$TIMEOUT_ZERO failures=$TIMEOUT_FAILURES build=$BUILD_REASON)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo

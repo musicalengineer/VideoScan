@@ -3,30 +3,65 @@ import XCTest
 import VideoScanCore
 
 /// Scale sensors for the family tree (2026-08-26 parse/install; 2026-08-28
-/// compiled index + artifact). Budgets are Release numbers ×3 for Debug,
-/// per the feature-test checklist. The real 20-generation FamilySearch
-/// export (16,383 people, 1.4M lines, 70 MB) is used when the archive is
-/// mounted; the 100k synthetic pedigree always runs.
+/// compiled index + artifact). The 100k synthetic pedigree always runs for
+/// deterministic correctness coverage. Production performance budgets and
+/// real host artifacts run only in the explicit Release/no-coverage lane:
+///
+///     TEST_RUNNER_VIDEOSCAN_GEDCOM_PERF=1 xcodebuild test \
+///       -configuration Release -enableCodeCoverage NO \
+///       -only-testing:VideoScanTests/GedcomScaleSensorTests
+///
+/// Coverage-off is verified by the absence of LLVM_PROFILE_FILE in the test
+/// runner environment; merely mounting the archive never opts a normal suite
+/// into real removable-volume reads.
 final class GedcomScaleSensorTests: XCTestCase {
     static let bigTree = URL(fileURLWithPath:
         "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
+    static let performanceOptIn = "VIDEOSCAN_GEDCOM_PERF"
+
     #if DEBUG
-    static let slack = 3.0
-    /// The sub-millisecond lookups run ~9× slower unoptimized (generic
-    /// Array/String specialization is off in Debug), measured 2026-08-28:
-    /// token 0.8 ms Release vs 7.7 ms Debug on the M4 Max. ×3 would fail
-    /// on the ratio alone; ×10 passed on the M4 but the M1 Max measured
-    /// 10.9 ms for the token lookup (2026-08-28, codex nightly), so the
-    /// Debug budget is 25 ms. Release stays at the true budget; a real
-    /// regression (an O(n) scan is ~100+ ms) still trips it.
-    static let microSlack = 25.0
-    static let config = "Debug"
+    static let isDebugBuild = true
+    static let config = "Debug correctness"
     #else
-    static let slack = 1.0
-    static let microSlack = 1.0
+    static let isDebugBuild = false
     static let config = "Release"
     #endif
+
+    static func isAuthoritativePerformanceLane(
+        debugBuild: Bool,
+        environment: [String: String]
+    ) -> Bool {
+        !debugBuild
+            && environment[performanceOptIn] == "1"
+            && environment["LLVM_PROFILE_FILE"] == nil
+    }
+
+    static var authoritativePerformanceLane: Bool {
+        isAuthoritativePerformanceLane(
+            debugBuild: isDebugBuild,
+            environment: ProcessInfo.processInfo.environment)
+    }
+
+    func requireRealArtifactPerformanceLane() throws {
+        try XCTSkipUnless(
+            Self.authoritativePerformanceLane,
+            "real GEDCOM sensors require Release, \(Self.performanceOptIn)=1, and coverage off")
+    }
+
+    func assertProductionBudget(
+        _ actual: Double,
+        lessThan budget: Double,
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard Self.authoritativePerformanceLane else {
+            print("SCALE[\(Self.config)] observed \(actual) ms; Release budget \(budget) ms not asserted")
+            return
+        }
+        XCTAssertLessThan(actual, budget, message, file: file, line: line)
+    }
 
     func ms(_ body: () -> Void) -> Double {
         let t0 = DispatchTime.now().uptimeNanoseconds
@@ -52,18 +87,34 @@ final class GedcomScaleSensorTests: XCTestCase {
 
     // MARK: Real export
 
+    func testAuthoritativePerformanceLaneRequiresReleaseOptInAndCoverageOff() {
+        let optIn = [Self.performanceOptIn: "1"]
+        XCTAssertFalse(Self.isAuthoritativePerformanceLane(
+            debugBuild: true, environment: optIn))
+        XCTAssertFalse(Self.isAuthoritativePerformanceLane(
+            debugBuild: false, environment: [:]))
+        XCTAssertFalse(Self.isAuthoritativePerformanceLane(
+            debugBuild: false,
+            environment: [Self.performanceOptIn: "1", "LLVM_PROFILE_FILE": "/tmp/default.profraw"]))
+        XCTAssertTrue(Self.isAuthoritativePerformanceLane(
+            debugBuild: false, environment: optIn))
+    }
+
     func testSeventyMegabyteGedcomParsesWithinBudget() throws {
+        try requireRealArtifactPerformanceLane()
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
         let t0 = Date()
         let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
         let parse = Date().timeIntervalSince(t0)
         print("SCALE[\(Self.config)] parse: \(String(format: "%.2f", parse))s people=\(graph.people.count)")
         XCTAssertEqual(graph.people.count, 16383)
-        XCTAssertLessThan(parse, 10, "parse budget (measured 2.2 s Release, 2026-08-28)")
+        assertProductionBudget(parse * 1_000, lessThan: 10_000,
+                               "parse budget (measured 2.2 s Release, 2026-08-28)")
     }
 
     @MainActor
     func testSeventyMegabyteGedcomInstallsWithinBudget() throws {
+        try requireRealArtifactPerformanceLane()
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
         let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
         let index = ms { _ = graph.index }
@@ -72,19 +123,20 @@ final class GedcomScaleSensorTests: XCTestCase {
         let model = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
         let install = ms { model.install(graph: graph, bundle: bundle) }
         print("SCALE[\(Self.config)] real index build: \(index) ms; launch bundle (background): \(offMain) ms; install (main actor): \(install) ms filtered=\(model.filteredPeople.count) cards=\(model.scene.cards.count)")
-        XCTAssertLessThan(install, 100 * Self.slack, "main-actor install budget (2026-08-28)")
+        assertProductionBudget(install, lessThan: 100, "main-actor install budget (2026-08-28)")
         let search = medianMS { model.searchText = "Breen"; model.searchText = "" }
         print("SCALE[\(Self.config)] real search keystroke pair: \(search) ms → \(model.filteredPeople.count)")
-        XCTAssertLessThan(search, 10 * Self.slack)
+        assertProductionBudget(search, lessThan: 10, "real search keystroke-pair budget")
     }
 
     func testRealExportCompiledArtifactLoadsFast() throws {
+        try requireRealArtifactPerformanceLane()
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
         let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
         let data = GedcomCompiledTree.encode(graph)
         let decode = medianMS(5) { _ = try? GedcomCompiledTree.decode(data) }
         print("SCALE[\(Self.config)] real artifact: \(data.count / 1024) KB, decode \(decode) ms")
-        XCTAssertLessThan(decode, 100 * Self.slack, "decode budget (measured 9 ms Release)")
+        assertProductionBudget(decode, lessThan: 100, "decode budget (measured 9 ms Release)")
     }
 
     // MARK: Real promoted artifact (39k merged tree, 2026-08-29)
@@ -129,9 +181,10 @@ final class GedcomScaleSensorTests: XCTestCase {
 
     /// The whole launch path on the REAL promoted artifact: decode → rows
     /// + identity (background) → install (main actor), each step printed
-    /// cold / p50 / p95 over 10 runs. Budgets are Release; ×slack in Debug.
+    /// cold / p50 / p95 over 10 runs in the authoritative Release lane.
     @MainActor
     func testRealCompiledArtifactLaunchPathWithinBudget() throws {
+        try requireRealArtifactPerformanceLane()
         guard let url = Self.realArtifactURL() else { throw XCTSkip("no promoted artifact") }
         let data = try Data(contentsOf: url)
         // An older-codec generation is a skip until the app recompiles it.
@@ -159,10 +212,13 @@ final class GedcomScaleSensorTests: XCTestCase {
               + "install cold \(install.cold) p50 \(install.p50) p95 \(install.p95) ms; "
               + "common-ancestor (roots) p50 \(hallieWarm.p50) p95 \(hallieWarm.p95) ms")
         for line in sink.lines where line.contains("[family-tree]") { print("LAUNCH[\(Self.config)] log: \(line)") }
-        XCTAssertLessThan(decode.p95, 60 * Self.slack, "decode p95 budget (measured 25 ms Release M4 Max, 2026-08-29)")
-        XCTAssertLessThan(bundleT.p95, 60 * Self.slack, "launch bundle p95 budget")
-        XCTAssertLessThan(install.p95, 20 * Self.slack, "main-actor install p95 budget (no O(people) work)")
-        XCTAssertLessThan(hallieWarm.p95, 20 * Self.slack, "Hallie warm common-ancestor budget")
+        assertProductionBudget(decode.p95, lessThan: 60,
+                               "decode p95 budget (measured 25 ms Release M4 Max, 2026-08-29)")
+        assertProductionBudget(bundleT.p95, lessThan: 60, "launch bundle p95 budget")
+        assertProductionBudget(install.p95, lessThan: 20,
+                               "main-actor install p95 budget (no O(people) work)")
+        assertProductionBudget(hallieWarm.p95, lessThan: 20,
+                               "Hallie warm common-ancestor budget")
     }
 
     // MARK: 100k synthetic
@@ -170,45 +226,63 @@ final class GedcomScaleSensorTests: XCTestCase {
     func testHundredThousandPersonTreeMeetsQueryBudgets() throws {
         let before = Self.residentMB()
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
+        XCTAssertEqual(graph.people.count, 100_000)
         let build = ms { _ = graph.index }
         let after = Self.residentMB()
         print("SCALE[\(Self.config)] 100k index build: \(build) ms; resident graph+index ≈ \(after - before) MB (task \(after) MB)")
-        XCTAssertLessThan(after - before, 500, "graph + index must stay under 500 MB resident")
+        if Self.authoritativePerformanceLane {
+            XCTAssertLessThan(after - before, 500, "graph + index must stay under 500 MB resident")
+        }
 
-        let token = medianMS { _ = graph.people(matching: "Elizabeth") }
-        let surname = medianMS { _ = graph.people(withSurname: "Breens") }
-        let like = medianMS { _ = graph.people(namedLike: "Rick Breen") }
-        let given = medianMS { _ = graph.people(withGivenName: "John") }
-        let sidebar = medianMS { _ = graph.index.sidebarRows(containing: "bre") }
+        var tokenCount = 0
+        var surnameCount = 0
+        var namedLikeCount = 0
+        var givenCount = 0
+        var sidebarCount = 0
+        let token = medianMS { tokenCount = graph.people(matching: "Elizabeth").count }
+        let surname = medianMS { surnameCount = graph.people(withSurname: "Breens").count }
+        let like = medianMS { namedLikeCount = graph.people(namedLike: "Rick Breen").count }
+        let given = medianMS { givenCount = graph.people(withGivenName: "John").count }
+        let sidebar = medianMS { sidebarCount = graph.index.sidebarRows(containing: "bre").count }
         print("SCALE[\(Self.config)] 100k token \(token) ms, surname \(surname) ms, namedLike \(like) ms, given \(given) ms, sidebar 'bre' \(sidebar) ms")
-        XCTAssertLessThan(token, 1 * Self.microSlack, "token lookup budget")
-        XCTAssertLessThan(surname, 1 * Self.microSlack, "surname lookup budget")
-        XCTAssertLessThan(like, 1 * Self.microSlack, "namedLike budget")
-        XCTAssertLessThan(given, 1 * Self.microSlack, "given-name budget")
-        XCTAssertLessThan(sidebar, 5 * Self.slack, "sidebar keystroke budget")
+        XCTAssertGreaterThan(tokenCount, 0)
+        XCTAssertGreaterThan(surnameCount, 0)
+        XCTAssertGreaterThan(namedLikeCount, 0)
+        XCTAssertGreaterThan(givenCount, 0)
+        XCTAssertGreaterThan(sidebarCount, 0)
+        assertProductionBudget(token, lessThan: 1, "token lookup budget")
+        assertProductionBudget(surname, lessThan: 1, "surname lookup budget")
+        assertProductionBudget(like, lessThan: 1, "namedLike budget")
+        assertProductionBudget(given, lessThan: 1, "given-name budget")
+        assertProductionBudget(sidebar, lessThan: 5, "sidebar keystroke budget")
 
         let root = try XCTUnwrap(graph.rootPersonID)
-        let far = graph.people.keys.sorted().last!
+        let far = try XCTUnwrap(graph.people.keys.max())
+        let rootPerson = try XCTUnwrap(graph.people[root])
+        let farPerson = try XCTUnwrap(graph.people[far])
         let ancestors = medianMS { _ = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: root) }
         let common = medianMS {
             let a = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: root)
             let b = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: far)
             _ = (a, b)
         }
-        let path = medianMS { _ = graph.relationshipPath(from: graph.people[root]!, to: graph.people[far]!) }
-        let line = medianMS { _ = graph.ancestorLine(of: graph.people[root]!, line: .both, generations: 30) }
+        let path = medianMS { _ = graph.relationshipPath(from: rootPerson, to: farPerson) }
+        let line = medianMS { _ = graph.ancestorLine(of: rootPerson, line: .both, generations: 30) }
         print("SCALE[\(Self.config)] 100k AncestorIndex \(ancestors) ms, two-index common-ancestor build \(common) ms, relationshipPath \(path) ms, ancestorLine \(line) ms")
-        XCTAssertLessThan(common, 20 * Self.slack, "commonAncestors budget")
-        XCTAssertLessThan(path, 20 * Self.slack, "relationshipPath budget")
+        assertProductionBudget(common, lessThan: 20, "commonAncestors budget")
+        assertProductionBudget(path, lessThan: 20, "relationshipPath budget")
     }
 
     func testHundredThousandPersonArtifactDecodesWithinBudget() throws {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         let encode = ms { _ = GedcomCompiledTree.encode(graph) }
         let data = GedcomCompiledTree.encode(graph)
-        let decode = medianMS(5) { _ = try? GedcomCompiledTree.decode(data) }
+        var decoded: GedcomFamilyGraph?
+        let decode = medianMS(5) { decoded = try? GedcomCompiledTree.decode(data) }
         print("SCALE[\(Self.config)] 100k artifact: \(data.count / 1024) KB, encode \(encode) ms, decode \(decode) ms")
-        XCTAssertLessThan(decode, 150 * Self.slack, "snapshot load budget (measured 72 → 54 ms Release M4 Max, 2026-08-29)")
+        XCTAssertEqual(decoded?.people.count, 100_000)
+        assertProductionBudget(decode, lessThan: 150,
+                               "snapshot load budget (measured 72 → 54 ms Release M4 Max, 2026-08-29)")
     }
 
     func testHallieNameRoutesOnHundredThousandPersonTree() async throws {
@@ -260,8 +334,10 @@ final class GedcomScaleSensorTests: XCTestCase {
         let ownerMedian = ownerSamples.sorted()[ownerSamples.count / 2]
         let surnameMedian = surnameSamples.sorted()[surnameSamples.count / 2]
         print("SCALE[\(Self.config)] Hallie 100k owner p50 \(ownerMedian) ms; surname p50 \(surnameMedian) ms")
-        XCTAssertLessThan(ownerMedian, 50 * Self.slack, "100k bare-name owner binding budget")
-        XCTAssertLessThan(surnameMedian, 250 * Self.slack, "100k surname-roster budget")
+        assertProductionBudget(ownerMedian, lessThan: 50,
+                               "100k bare-name owner binding budget")
+        assertProductionBudget(surnameMedian, lessThan: 250,
+                               "100k surname-roster budget")
     }
 
     func testHundredThousandPersonPointerPinsHashTreeOnlyOnce() throws {
@@ -303,8 +379,8 @@ final class GedcomScaleSensorTests: XCTestCase {
                 "pointer-pin provenance must retain the export fingerprint")
         }
         print("SCALE[\(Self.config)] Hallie 100k x 32 pointer-pin overlay p50 \(median) ms")
-        XCTAssertLessThan(median, 500 * Self.slack,
-                          "pointer pins must reuse one tree fingerprint")
+        assertProductionBudget(median, lessThan: 500,
+                               "pointer pins must reuse one tree fingerprint")
     }
 
     @MainActor
@@ -317,7 +393,9 @@ final class GedcomScaleSensorTests: XCTestCase {
         let narrow = medianMS { model.searchText = "breen"; model.searchText = "bree" }
         let broad = medianMS { model.searchText = "a"; model.searchText = "" }
         print("SCALE[\(Self.config)] 100k install \(install) ms; keystroke narrow \(narrow / 2) ms, broad \(broad / 2) ms")
-        XCTAssertLessThan(narrow / 2, 5 * Self.slack, "sidebar keystroke budget")
-        XCTAssertLessThan(install, 50 * Self.slack, "main-actor install budget at 100k (no O(people) work; measured 25 ms Release before, 2026-08-29)")
+        XCTAssertEqual(model.filteredPeople.count, 100_000)
+        assertProductionBudget(narrow / 2, lessThan: 5, "sidebar keystroke budget")
+        assertProductionBudget(install, lessThan: 50,
+                               "main-actor install budget at 100k (no O(people) work)")
     }
 }
