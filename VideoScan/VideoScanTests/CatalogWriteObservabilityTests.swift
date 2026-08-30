@@ -2,6 +2,15 @@ import Testing
 import Foundation
 @testable import VideoScan
 
+@MainActor
+private final class CatalogWriteCountingObserver: CatalogStoreObserver {
+    private(set) var writeCount = 0
+
+    func catalogStoreDidWrite(_ store: CatalogStore) {
+        writeCount += 1
+    }
+}
+
 // MARK: - CatalogWriteObservabilityTests
 //
 // Pins how a FAILED catalog write reports itself. Triaged 2026-08-29 while
@@ -156,6 +165,29 @@ struct CatalogWriteObservabilityTests {
         return cond()
     }
 
+    /// A journal entry is emitted on the writer queue before the main-actor
+    /// completion releases CatalogStore's lock. Probe the external contract
+    /// so teardown cannot remove the scratch directory under that completion.
+    private func waitForCatalogLockRelease(
+        at catalogURL: URL,
+        timeout: TimeInterval = 5
+    ) async throws -> Bool {
+        let probe = CatalogLock(besideCatalogAt: catalogURL)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            switch probe.acquire() {
+            case .acquired:
+                probe.release()
+                return true
+            case .heldByAnother:
+                try await Task.sleep(nanoseconds: 10_000_000)
+            case .unavailable:
+                return false
+            }
+        }
+        return false
+    }
+
     /// SENSOR for the precedence rule: when the lock cannot be created AND
     /// the write then fails, the reported error must be the write failure.
     ///
@@ -225,17 +257,32 @@ struct CatalogWriteObservabilityTests {
         try FileManager.default.createDirectory(at: catalogURL, withIntermediateDirectories: true)
 
         let store = CatalogStore(directory: dir)
+        let observer = CatalogWriteCountingObserver()
+        store.observer = observer
         store.testWriteDelay = 0.2   // hold the first write open long enough to coalesce behind it
 
         store.saveAsync(records: [makeRecord(name: "first.mov")])
         store.saveAsync(records: [makeRecord(name: "second.mov")])   // coalesces
 
-        let both = await waitUntil(10) {
+        let bothWereJournalled = await waitUntil(10) {
             CatalogWriteJournal.recent(50, catalogURL: catalogURL)
                 .filter { $0.kind == "writeFailed" }.count >= 2
         }
-        #expect(both,
-                "the coalesced follow-up save must run and report; saw \(CatalogWriteJournal.recent(50, catalogURL: catalogURL).filter { $0.kind == "writeFailed" }.count) journal entries")
+        #expect(bothWereJournalled, "the coalesced follow-up save must run and report")
+
+        let completionReleasedLock = try await waitForCatalogLockRelease(
+            at: catalogURL,
+            timeout: 5
+        )
+        #expect(completionReleasedLock,
+                "async-save completion did not release the catalog lock")
+
+        let failures = CatalogWriteJournal.recent(50, catalogURL: catalogURL)
+            .filter { $0.kind == "writeFailed" }
+        #expect(failures.count == 2,
+                "exactly the initial and one coalesced follow-up failure must be journalled; saw \(failures.count)")
+        #expect(observer.writeCount == 0,
+                "failed async writes must not notify an attached success observer")
     }
 
     /// writeSnapshotAsync must match writeSnapshot: no journal, and
