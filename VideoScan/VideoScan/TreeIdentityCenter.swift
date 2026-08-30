@@ -76,6 +76,25 @@ final class TreeIdentityCenter: ObservableObject {
     var store: (POIProfile) throws -> Void = { try $0.save() }
     var defaults: UserDefaults? = .standard
     var speakers: () -> HallieTurnExecutor.Speakers = { .fromDefaults() }
+    /// Narrow synchronous seams: production reads the display center's
+    /// generation-cached SHA and derives once only on a cold/mismatched
+    /// memo. Tests count these operations without timing assertions.
+    var graphFingerprint: () -> String?
+    var synchronousDerivation: (
+        GedcomFamilyGraph,
+        [TreeIdentitySubject],
+        HallieTurnExecutor.Speakers,
+        String?,
+        TreeIdentitySubject
+    ) -> TreeIdentityDerivation = { graph, subjects, speakers, fingerprint, subject in
+        TreeIdentityDeriver(
+            graph: graph,
+            subjects: subjects,
+            ownerName: speakers.ownerName,
+            ownerFamilySearchID: speakers.ownerFamilySearchID,
+            currentGraphFingerprint: fingerprint
+        ).derive(subject)
+    }
     /// Auto-accepting owner/root verdicts can be switched off (tests that
     /// only want the proposals).
     var autoAcceptsTrustedSources = true
@@ -121,6 +140,7 @@ final class TreeIdentityCenter: ObservableObject {
 
     init(kinshipCenter: KinshipDisplayCenter) {
         self.kinshipCenter = kinshipCenter
+        graphFingerprint = { kinshipCenter.graphFingerprint }
     }
 
     // MARK: Derivation pass
@@ -298,7 +318,11 @@ final class TreeIdentityCenter: ObservableObject {
             badgeComputeCount += 1
             return [:]
         }
-        let fingerprint = kinshipCenter.graphFingerprint
+        let needsPointerFingerprint = profiles.contains {
+            if case .pointer? = $0.treeIdentity { return true }
+            return false
+        }
+        let fingerprint = needsPointerFingerprint ? graphFingerprint() : nil
         let currentDerivations = memoKey == input.key ? derivations : [:]
         var map: [String: TreeLinkBadge] = [:]
         map.reserveCapacity(profiles.count)
@@ -351,25 +375,44 @@ final class TreeIdentityCenter: ObservableObject {
             return .refused("The family tree changed. Reopen this person and choose again.")
         }
         // A derived suggestion is an action token, not a durable picker
-        // choice. Re-derive it from the exact current inputs before writing
-        // so a profile/speaker/tree change between display and click fails
-        // closed even when the old record still exists in the new tree.
+        // choice. Reuse only the exact accepted memo; otherwise re-derive
+        // from the exact current inputs before writing so a profile/speaker/
+        // tree change between display and click fails closed even when the
+        // old record still exists in the new tree.
+        var currentFingerprint: String?
         if attestation.hasPrefix("derived:") {
             let input = derivationInput(for: profiles)
-            let currentVerdict = TreeIdentityDeriver(
-                graph: graph,
-                subjects: input.subjects,
-                ownerName: input.speakers.ownerName,
-                ownerFamilySearchID: input.speakers.ownerFamilySearchID
-            ).derive(TreeIdentitySubject(currentProfile))
+            let currentVerdict: TreeIdentityDerivation?
+            if memoKey == input.key {
+                currentVerdict = derivations[currentProfile.id]
+            } else {
+                let needsPointerFingerprint = input.subjects.contains {
+                    if case .pointer? = $0.treeIdentity { return true }
+                    return false
+                }
+                currentFingerprint = needsPointerFingerprint ? graphFingerprint() : nil
+                currentVerdict = synchronousDerivation(
+                    graph,
+                    input.subjects,
+                    input.speakers,
+                    currentFingerprint,
+                    TreeIdentitySubject(currentProfile)
+                )
+            }
             guard case .certain(let currentCandidate, _) = currentVerdict,
                   currentCandidate == candidate else {
                 return .refused("The identity suggestion changed. Reopen this person and try again.")
             }
         }
+        if candidate.familySearchID == nil, currentFingerprint == nil {
+            currentFingerprint = graphFingerprint()
+        }
+        guard candidate.familySearchID != nil || currentFingerprint != nil else {
+            return .refused("The family tree changed. Reopen this person and choose again.")
+        }
         let outcome = TreeIdentityPinning.pin(
             candidate, on: currentProfile, among: profiles,
-            fingerprint: candidate.familySearchID == nil ? kinshipCenter.graphFingerprint : nil,
+            fingerprint: candidate.familySearchID == nil ? currentFingerprint : nil,
             attestation: attestation, ownerName: speakers().ownerName,
             store: store, defaults: defaults)
         if case .saved = outcome {
