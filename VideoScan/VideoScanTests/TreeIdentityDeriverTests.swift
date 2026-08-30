@@ -122,6 +122,13 @@ enum TreeIdentityFixture {
         if case .certain(_, let r) = d { return r }
         return nil
     }
+
+    static func candidate(_ id: String) -> TreeIdentityCandidate {
+        guard let person = graph.people[id] else {
+            preconditionFailure("TreeIdentityFixture is missing \(id)")
+        }
+        return TreeIdentityCandidate(person)
+    }
 }
 
 // MARK: - Deriver
@@ -242,7 +249,8 @@ struct TreeIdentityDeriverTests {
         // Without the row the same one-word match is offered, not assumed.
         let plain = F.profile("Eileen", sex: .female)
         let w = F.deriver([rickPinned, plain]).derive(TreeIdentitySubject(plain))
-        #expect(w == .ambiguous([TreeIdentityCandidate(F.graph.people["@I4@"]!)]))
+        let expected = [F.candidate("@I4@")]
+        #expect(w == .ambiguous(expected))
     }
 
     @Test func uniqueFullNameWithoutBirthIsCertain() {
@@ -342,7 +350,7 @@ struct TreeIdentityHallieAssumptionTests {
 @Suite("ShowInTreeReducer — state machine")
 struct ShowInTreeReducerTests {
     typealias F = TreeIdentityFixture
-    let jr = TreeIdentityCandidate(F.graph.people["@I1@"]!)
+    let jr = F.candidate("@I1@")
 
     @Test func noTree() {
         #expect(ShowInTreeReducer.state(profile: F.rick, profiles: [F.rick], graph: nil,
@@ -426,14 +434,17 @@ struct ShowInTreeReducerTests {
 @Suite("TreeIdentityPinning — injected store and owner mirror")
 struct TreeIdentityPinningTests {
     typealias F = TreeIdentityFixture
-    let jr = TreeIdentityCandidate(F.graph.people["@I1@"]!)
-    let donna = TreeIdentityCandidate(F.graph.people["@I3@"]!)
+    let jr = F.candidate("@I1@")
+    let donna = F.candidate("@I3@")
 
     /// A throwaway suite; removed after each test so nothing leaks between
     /// tests or into the real prefs domain.
     private func withSuite(_ body: (UserDefaults) -> Void) {
         let name = "TreeIdentityPinningTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
+        guard let defaults = UserDefaults(suiteName: name) else {
+            Issue.record("could not create isolated defaults suite")
+            return
+        }
         defer { defaults.removePersistentDomain(forName: name) }
         body(defaults)
     }
@@ -526,6 +537,36 @@ struct TreeIdentityPinningTests {
 
 // MARK: - Center (memo + auto-accept), isolated
 
+private actor TreeIdentityDerivationGate {
+    private var firstPass = true
+    private var started = false
+    private var released = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func holdFirstPass() async {
+        guard firstPass else { return }
+        firstPass = false
+        started = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
 @Suite("TreeIdentityCenter — memo and auto-accept")
 @MainActor
 struct TreeIdentityCenterTests {
@@ -590,12 +631,12 @@ struct TreeIdentityCenterTests {
         #expect(center.showInTreeState(for: F.profile("Tim", notInTree: true), among: []) == .notInTree)
     }
 
-    @Test func pinUnpinAndBannerLifecycle() {
+    @Test func pinUnpinAndBannerLifecycle() throws {
         let (center, kinship) = makeCenter()
         kinship.install(graph: F.graph)
         var saved: [POIProfile] = []
         center.store = { saved.append($0) }
-        let jr = TreeIdentityCandidate(F.graph.people["@I1@"]!)
+        let jr = F.candidate("@I1@")
         let outcome = center.pin(jr, on: F.rick, among: [F.rick], attestation: "picked: test")
         #expect(outcome.profile?.treeIdentity == .familySearchID("GVQV-NW3"))
         #expect(center.pinsRevision == 1)
@@ -605,10 +646,12 @@ struct TreeIdentityCenterTests {
         #expect(center.banner?.line == "Rick is Richard Harding Breen Jr · GVQV-NW3")
         center.dismissBanner()
         #expect(center.banner == nil)
-        _ = center.unpin(saved[0])
+        let pinned = try #require(saved.first)
+        _ = center.unpin(pinned)
         #expect(saved.last?.treeIdentity == nil)
         #expect(center.pinsRevision == 2)
-        _ = center.markNotInTree(saved.last!)
+        let unpinned = try #require(saved.last)
+        _ = center.markNotInTree(unpinned)
         #expect(saved.last?.notInFamilyTree == true)
         #expect(center.pinsRevision == 3)
     }
@@ -622,6 +665,45 @@ struct TreeIdentityCenterTests {
         await center.refresh(profiles: [F.rick, F.donna])
         #expect(writes == 0)
         #expect(center.derivations["rick"]?.isAutoAcceptable == true)
+    }
+
+    /// SENSOR: detached work from a cleared tree must never publish its
+    /// verdicts or persist trusted-source pins after the app has moved on.
+    @Test func clearedGraphRejectsStalePassAndFreshGenerationSucceeds() async {
+        let (center, kinship) = makeCenter()
+        let gate = TreeIdentityDerivationGate()
+        var saved: [POIProfile] = []
+        center.store = { saved.append($0) }
+        center.derivationPass = { graph, subjects, speakers in
+            await gate.holdFirstPass()
+            return TreeIdentityDeriver(
+                graph: graph,
+                subjects: subjects,
+                ownerName: speakers.ownerName,
+                ownerFamilySearchID: speakers.ownerFamilySearchID
+            ).deriveAll()
+        }
+        let profiles = [F.rick, F.donna]
+
+        kinship.install(graph: F.graph)
+        let stalePass = Task { await center.refresh(profiles: profiles) }
+        await gate.waitUntilStarted()
+
+        kinship.install(graph: nil)
+        await center.refresh(profiles: profiles)
+        await gate.release()
+        await stalePass.value
+
+        #expect(center.derivations.isEmpty)
+        #expect(center.derivationRunCount == 0)
+        #expect(center.pinsRevision == 0)
+        #expect(saved.isEmpty, "stale trusted-source verdicts must not auto-save")
+
+        kinship.install(graph: F.graph)
+        await center.refresh(profiles: profiles)
+        #expect(center.derivationRunCount == 1)
+        #expect(center.pinsRevision == 1)
+        #expect(saved.map(\.name).sorted() == ["Donna", "Rick"])
     }
 }
 

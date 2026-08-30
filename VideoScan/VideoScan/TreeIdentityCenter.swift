@@ -79,9 +79,23 @@ final class TreeIdentityCenter: ObservableObject {
     /// Auto-accepting owner/root verdicts can be switched off (tests that
     /// only want the proposals).
     var autoAcceptsTrustedSources = true
+    /// Injectable async boundary for deterministic stale-pass tests. The
+    /// production closure keeps the CPU work off the main actor.
+    var derivationPass: (GedcomFamilyGraph, [TreeIdentitySubject], HallieTurnExecutor.Speakers) async
+        -> [String: TreeIdentityDerivation] = { graph, subjects, speakers in
+            await Task.detached(priority: .utility) {
+                TreeIdentityDeriver(graph: graph, subjects: subjects,
+                                    ownerName: speakers.ownerName,
+                                    ownerFamilySearchID: speakers.ownerFamilySearchID).deriveAll()
+            }.value
+        }
 
     private var memoKey: MemoKey?
     private var inFlightKey: MemoKey?
+    /// Logical generation of the accepted refresh. Unlike cancelling a
+    /// Task, advancing this token also invalidates detached work that has
+    /// already begun executing.
+    private var refreshEpoch = 0
     /// Count of derivation passes actually run — tests pin the memo.
     private(set) var derivationRunCount = 0
 
@@ -127,22 +141,29 @@ final class TreeIdentityCenter: ObservableObject {
     /// a no-op.
     func refresh(profiles: [POIProfile]) async {
         guard let graph = kinshipCenter.graph else {
+            refreshEpoch &+= 1
+            inFlightKey = nil
             derivations = [:]
             memoKey = nil
             return
         }
         let key = refreshKey(for: profiles)
         guard key != memoKey, key != inFlightKey else { return }
+        refreshEpoch &+= 1
+        let epoch = refreshEpoch
         inFlightKey = key
         let speakers = speakers()
         let subjects = profiles.map(TreeIdentitySubject.init)
-        let verdicts = await Task.detached(priority: .utility) { () -> [String: TreeIdentityDerivation] in
-            TreeIdentityDeriver(graph: graph, subjects: subjects,
-                                ownerName: speakers.ownerName,
-                                ownerFamilySearchID: speakers.ownerFamilySearchID).deriveAll()
-        }.value
-        // A newer pass superseded this one while we were off the actor.
-        guard inFlightKey == key else { return }
+        let verdicts = await derivationPass(graph, subjects, speakers)
+        // A graph clear/replacement or newer profile pass supersedes this
+        // one while it is off actor. Detached work ignores parent Task
+        // cancellation, so acceptance must be guarded explicitly.
+        guard refreshEpoch == epoch,
+              inFlightKey == key,
+              kinshipCenter.graphGeneration == key.generation else {
+            if inFlightKey == key { inFlightKey = nil }
+            return
+        }
         inFlightKey = nil
         derivationRunCount += 1
         derivations = verdicts
