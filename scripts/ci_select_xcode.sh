@@ -47,19 +47,50 @@ MIN_SWIFT_MINOR=2
 # basename only when everything between "Xcode_" and ".app" is digits and
 # dots — Xcode_26.app, Xcode_26.3.app, Xcode_26.1.1.app — then version-sort
 # the survivors and take the newest.
+# Accept a candidate only when BOTH the name we found it under and the
+# bundle it actually resolves to are stable numeric forms.
+#
+# The name check alone is not enough (codex review, #913): GitHub's runner
+# images publish NUMERIC ALIASES to beta bundles —
+#   Xcode_27.0.0.app -> Xcode_27_beta_3.app
+# The alias passes a digits-and-dots basename test, and `[ -d ]` and `-x`
+# both follow the symlink, so a beta would be selected by a filter written
+# to exclude betas. Canonicalising with `cd`+`pwd -P` (no readlink -f
+# needed) and re-testing the REAL basename closes that.
+is_stable_version_name() {
+  _ver=${1#Xcode_}
+  _ver=${_ver%.app}
+  case "$_ver" in
+    ""|*[!0-9.]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 CANDIDATES=""
 for app in "/Applications/Xcode_${MAJOR_WANTED}"*.app; do
   [ -d "$app" ] || continue          # unmatched glob stays literal; skip it
-  base=${app##*/}
-  ver=${base#Xcode_}
-  ver=${ver%.app}
-  case "$ver" in
-    ""|*[!0-9.]*) continue ;;        # beta, RC, or any non-numeric decoration
+  is_stable_version_name "${app##*/}" || continue
+
+  real=$(cd "$app" 2>/dev/null && pwd -P) || continue
+  realbase=${real##*/}
+  if [ "$realbase" != "${app##*/}" ]; then
+    echo "note: ${app##*/} resolves to $realbase"
+  fi
+  is_stable_version_name "$realbase" || continue
+
+  # Also require the resolved bundle to still be the major we asked for, so
+  # an alias cannot smuggle in a different release train.
+  case "$realbase" in
+    "Xcode_${MAJOR_WANTED}.app"|"Xcode_${MAJOR_WANTED}."*) ;;
+    *) continue ;;
   esac
-  [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] || continue
-  CANDIDATES="${CANDIDATES}${app}
+
+  [ -x "$real/Contents/Developer/usr/bin/xcodebuild" ] || continue
+  CANDIDATES="${CANDIDATES}${real}
 "
 done
+# Aliases can resolve to the same bundle twice; keep one of each.
+CANDIDATES=$(printf '%s' "$CANDIDATES" | grep -v '^$' | sort -u || true)
 
 DEV=""
 NEWEST=$(printf '%s' "$CANDIDATES" | grep -v '^$' | sort -Vr | head -1 || true)
