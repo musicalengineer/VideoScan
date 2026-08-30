@@ -29,7 +29,7 @@ struct FamilyTreeBookmarkTests {
         #expect(marks.count == 1)
         #expect(marks.toggle("@I1@") == false)
         #expect(marks.contains("@I1@") == false)
-        #expect(marks.count == 0)
+        #expect(marks.entries.isEmpty)
     }
 
     @Test func bookmarksSurviveASaveAndReload() throws {
@@ -78,11 +78,11 @@ struct FamilyTreeBookmarkTests {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        #expect(FamilyTreeBookmarks.load(from: dir).count == 0, "missing file")
+        #expect(FamilyTreeBookmarks.load(from: dir).entries.isEmpty, "missing file")
 
         try "not json at all {{{".write(to: FamilyTreeBookmarks.fileURL(in: dir),
                                         atomically: true, encoding: .utf8)
-        #expect(FamilyTreeBookmarks.load(from: dir).count == 0, "corrupt file")
+        #expect(FamilyTreeBookmarks.load(from: dir).entries.isEmpty, "corrupt file")
     }
 
     @Test func mostRecentFirstOrdersForATakeMeBackList() {
@@ -106,7 +106,7 @@ struct FamilyTreeBookmarkTests {
 
         let model = FamilyTreeLiveModel(
             originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
-        #expect(model.bookmarks.count == 0)
+        #expect(model.bookmarks.entries.isEmpty)
         // Toggling must not throw and must not create a file anywhere.
         #expect(model.toggleBookmark("@I1@") == true)
         #expect(model.isBookmarked("@I1@"))
