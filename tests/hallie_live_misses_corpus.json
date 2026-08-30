@@ -66,6 +66,9 @@
           "mustMatch": [
             "\\b(?:common ancestor|nearest|share(?:s|d)?\\s+\\d+\\s+recorded ancestors?)\\b"
           ],
+          "mustNotMatch": [
+            "\\b(?:no|not|never|can't|cannot|couldn't|don't|do not|didn't|did not)\\b[^.!?]{0,80}\\b(?:common ancestor|share|related)\\b"
+          ],
           "mustNotContain": [
             "Which Rick",
             "Catherine Auker",
@@ -85,6 +88,9 @@
           "mustMatch": [
             "\\b(?:center|centering)\\b",
             "\\b(?:took|taking)\\b[^.!?]{0,80}\\bmean\\b"
+          ],
+          "mustNotMatch": [
+            "\\b(?:cannot|can't|couldn't|won't|will not|not able|unable)\\b[^.!?]{0,80}\\b(?:center|focus|open)\\b"
           ],
           "mustNotContain": [
             "catalog items matching"
@@ -118,6 +124,9 @@
           "mustMatch": [
             "\\b(?:child|daughter)\\b[^.!?]{0,240}\\b(?:grandparents?|Clarissa Horton Schoolcraft)\\b",
             "\\b(?:married|husband|spouse)\\b[^.!?]{0,120}\\bGeorge Breen\\b|\\bGeorge Breen\\b[^.!?]{0,120}\\b(?:married|husband|spouse)\\b"
+          ],
+          "mustNotMatch": [
+            "\\b(?:not|never|wasn't|was not|didn't|did not)\\b[^.!?]{0,60}\\b(?:married|marry|spouse|wife|husband)\\b"
           ],
           "mustNotContain": [
             ". ,"
@@ -308,6 +317,9 @@
           "mustMatch": [
             "\\b(?:noted|say|pronounce)\\b"
           ],
+          "mustNotMatch": [
+            "\\b(?:(?:did|do|will) not|didn't|don't|won't|cannot|can't)\\s+(?:keep|say|pronounce)\\b"
+          ],
           "mustNotContain": [
             "catalog items matching"
           ],
@@ -321,6 +333,9 @@
           ],
           "mustMatch": [
             "\\bI say Latta as\\b|\\bLatta\\b[^.!?]{0,100}\\bpronounc(?:e|ed|iation)\\b"
+          ],
+          "mustNotMatch": [
+            "\\b(?:(?:did|do|will) not|didn't|don't|won't|cannot|can't)\\s+(?:keep|say|pronounce)\\b"
           ],
           "mustNotContain": [
             "catalog items matching"
@@ -339,6 +354,9 @@
           "mustMatch": [
             "\\b(?:keep|kept|alternative)\\b"
           ],
+          "mustNotMatch": [
+            "\\b(?:(?:did|do|will) not|didn't|don't|won't|cannot|can't)\\s+(?:keep|say|pronounce)\\b"
+          ],
           "mustNotContain": [
             "catalog items matching"
           ],
@@ -354,6 +372,9 @@
           ],
           "mustMatch": [
             "\\b(?:noted|say|pronounce)\\b"
+          ],
+          "mustNotMatch": [
+            "\\b(?:(?:did|do|will) not|didn't|don't|won't|cannot|can't)\\s+(?:keep|say|pronounce)\\b"
           ],
           "mustNotContain": [
             "surname origin",

@@ -236,6 +236,7 @@ def run(args):
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
                 "mustMatch": q.get("mustMatch", []),
+                "mustNotMatch": q.get("mustNotMatch", []),
                 "noFabricatedPersonalMemory": bool(
                     q.get("noFabricatedPersonalMemory")),
                 "currentEvidenceOnly": bool(q.get("currentEvidenceOnly")),
@@ -404,6 +405,28 @@ def grade_record(r):
             continue
         if not matches:
             flags.append("missing_required_match")
+            break
+    # Negative semantic contracts reject polarity reversals that retain all
+    # of the expected names and nouns ("Muriel was not married to George").
+    # Substring bans cannot express that without becoming wording-fragile.
+    raw_forbidden_patterns = r.get("mustNotMatch")
+    if raw_forbidden_patterns is None:
+        forbidden_patterns = []
+    elif isinstance(raw_forbidden_patterns, str):
+        forbidden_patterns = [raw_forbidden_patterns]
+    elif isinstance(raw_forbidden_patterns, list):
+        forbidden_patterns = raw_forbidden_patterns
+    else:
+        flags.append("invalid_expected_regex")
+        forbidden_patterns = []
+    for pattern in forbidden_patterns:
+        try:
+            matches = re.search(pattern, a, re.I | re.S)
+        except (re.error, TypeError):
+            flags.append("invalid_expected_regex")
+            continue
+        if matches:
+            flags.append("forbidden_match")
             break
     if r.get("noFabricatedPersonalMemory") and PERSONAL_MEMORY_PAT.search(a):
         flags.append("fabricated_personal_memory")
