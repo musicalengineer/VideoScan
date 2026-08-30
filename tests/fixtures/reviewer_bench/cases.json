@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "description": "Adversarial code-review bakeoff. Every case is a REAL defect found in this repository on 2026-08-29/30 by an independent reviewer, after the author had already tested the code and believed it correct. Each has one specific root cause that a competent reviewer should name unprompted.",
+  "cases": [
+    {
+      "id": "lock-reentrancy",
+      "language": "swift",
+      "why_it_matters": "The test was written to prove a lock is released. It proves nothing, and passed either way.",
+      "code": "// Production:\nfunc acquire() -> CatalogLockResult {\n    queue.sync {\n        if fd >= 0 { return .acquired }   // re-entrant for the same process\n        let opened = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)\n        guard opened >= 0 else { return .unavailable(reason: \"open failed\") }\n        if flock(opened, LOCK_EX | LOCK_NB) != 0 { close(opened); return .heldByAnother(owner: nil) }\n        fd = opened\n        return .acquired\n    }\n}\n\n// Test that is supposed to prove finishWrite() released the lock:\n@Test func failedSaveReleasesTheLock() {\n    let store = CatalogStore(directory: tmp)\n    store.testAfterWriteBeforeVerify = corrupt\n    #expect(store.saveNow(records: [rec]) == false)\n\n    // \"the lock must have been released, so a clean save succeeds\"\n    store.testAfterWriteBeforeVerify = nil\n    #expect(store.saveNow(records: [rec2]) == true)\n}",
+      "expected_finding": "The second saveNow runs on the SAME CatalogStore, so if the lock leaked, acquire() returns .acquired via the fd >= 0 re-entrancy shortcut. The assertion passes whether or not the lock was released. A separate CatalogLock instance must probe it.",
+      "required_concepts": ["re-entran", "same process", "same store", "fd >= 0", "separate", "external"]
+    },
+    {
+      "id": "trap-resumes",
+      "language": "bash",
+      "why_it_matters": "Author verified no temp dirs leaked after SIGTERM and concluded the trap worked.",
+      "code": "_FIXTURES=\"\"\n_cleanup() { for _d in $_FIXTURES; do rm -rf \"$_d\"; done; }\ntrap _cleanup EXIT INT TERM\n\nfor case in a b c d e f g; do\n    _t=$(mktemp -d); _FIXTURES=\"$_FIXTURES $_t\"\n    run_one_fixture \"$_t\"\ndone\necho \"all checks passed\"",
+      "expected_finding": "On INT/TERM bash runs the handler and then RESUMES the script rather than terminating. A cancelled run keeps creating fixtures and only stops at SIGKILL. INT/TERM need handlers that clean and then exit 128+signal, with trap - EXIT to avoid double cleanup.",
+      "required_concepts": ["resume", "continue", "does not exit", "128", "exit status", "cancel"]
+    },
+    {
+      "id": "symlink-alias",
+      "language": "bash",
+      "why_it_matters": "A filter written specifically to exclude beta toolchains would have PREFERRED one.",
+      "code": "# Accept only stable numeric Xcode bundles, newest first.\nCANDIDATES=\"\"\nfor app in /Applications/Xcode_26*.app; do\n  [ -d \"$app\" ] || continue\n  base=${app##*/}\n  ver=${base#Xcode_}; ver=${ver%.app}\n  case \"$ver\" in *[!0-9.]*) continue ;; esac   # reject 26.4_beta etc\n  [ -x \"$app/Contents/Developer/usr/bin/xcodebuild\" ] || continue\n  CANDIDATES=\"${CANDIDATES}${app}\\n\"\ndone\nDEV=$(printf '%s' \"$CANDIDATES\" | sort -Vr | head -1)/Contents/Developer",
+      "expected_finding": "The basename check validates the name the candidate was FOUND under, while [ -d ] and -x follow symlinks. Runner images publish numeric aliases to betas, e.g. Xcode_27.0.0.app -> Xcode_27_beta_3.app. Such an alias passes the digits-and-dots test AND sorts higher than any real release, so a beta would be selected. Canonicalise and re-test the real basename.",
+      "required_concepts": ["symlink", "alias", "resolve", "canonical", "follows", "real name", "target"]
+    },
+    {
+      "id": "dead-assertion",
+      "language": "python",
+      "why_it_matters": "One of the two assertions can never run. The test looks like it covers both cases.",
+      "code": "def test_script_version_is_present_and_nonempty(self):\n    script = (ROOT / \"scripts/nightly_local_tests.sh\").read_text()\n    version = re.search(r'NIGHTLY_SCRIPT_VERSION=\"([^\"]+)\"', script)\n    self.assertIsNotNone(version, \"NIGHTLY_SCRIPT_VERSION is not defined\")\n    self.assertTrue(version.group(1).strip(), \"NIGHTLY_SCRIPT_VERSION is empty\")",
+      "expected_finding": "The regex requires one or more characters, so NIGHTLY_SCRIPT_VERSION=\"\" does not match at all and reports 'is not defined'. The emptiness assertion below is unreachable. Use [^\"]* so an empty value matches and the second check can actually fire.",
+      "required_concepts": ["unreachable", "never", "empty", "[^\"]*", "plus", "cannot fail", "dead"]
+    }
+  ]
+}
