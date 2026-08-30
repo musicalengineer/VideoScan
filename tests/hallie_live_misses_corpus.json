@@ -59,12 +59,36 @@
           "id": "miss-02-owner-binding",
           "text": "Can you find the closest common ancestor between me (Rick) and Donna?",
           "expectedOutcome": "answered",
+          "mustContain": [
+            "Richard Harding Breen Jr",
+            "Donna Hudson"
+          ],
+          "mustMatch": [
+            "\\b(?:common ancestor|nearest|share(?:s|d)?\\s+\\d+\\s+recorded ancestors?)\\b"
+          ],
+          "mustNotContain": [
+            "Which Rick",
+            "Catherine Auker",
+            "Robert de Cralle",
+            "catalog items matching"
+          ],
           "note": "Miss #2: bind me (Rick) to the configured owner before any bare-name search; never offer medieval non-Richards."
         },
         {
           "id": "miss-06-center-spelling-recovery",
           "text": "can you center on marhta lamson",
           "expectedOutcome": "answered",
+          "mustContain": [
+            "Marhta Lamson",
+            "Martha Lamson"
+          ],
+          "mustMatch": [
+            "\\b(?:center|centering)\\b",
+            "\\b(?:took|taking)\\b[^.!?]{0,80}\\bmean\\b"
+          ],
+          "mustNotContain": [
+            "catalog items matching"
+          ],
           "note": "Miss #6: deterministic Family Tree navigation with stated spelling recovery, never a catalog search."
         },
         {
@@ -84,6 +108,17 @@
           "id": "miss-10-fragment-guard",
           "text": "tell me about Muriel Lamb",
           "expectedOutcome": "answered",
+          "mustContain": [
+            "Muriel Lamb",
+            "Edith Lucy Parker",
+            "Frederick Burton Lamb",
+            "George Breen",
+            "Richard Harding Breen Sr"
+          ],
+          "mustMatch": [
+            "\\b(?:child|daughter)\\b[^.!?]{0,240}\\b(?:grandparents?|Clarissa Horton Schoolcraft)\\b",
+            "\\b(?:married|husband|spouse)\\b[^.!?]{0,120}\\bGeorge Breen\\b|\\bGeorge Breen\\b[^.!?]{0,120}\\b(?:married|husband|spouse)\\b"
+          ],
           "mustNotContain": [
             ". ,"
           ],
@@ -265,21 +300,65 @@
         {
           "id": "miss-14-pronunciation-hint",
           "text": "Latta should be pronounced with a short a on the La",
+          "mustContain": [
+            "Latta",
+            "LAT-uh",
+            "short a"
+          ],
+          "mustMatch": [
+            "\\b(?:noted|say|pronounce)\\b"
+          ],
+          "mustNotContain": [
+            "catalog items matching"
+          ],
           "note": "Miss #14: a descriptive pronunciation hint is handled locally and never searched. The eval shell keeps it for this session only."
         },
         {
           "id": "miss-15-pronunciation-query",
           "text": "tell me latta pronounciations",
+          "mustContain": [
+            "Latta"
+          ],
+          "mustMatch": [
+            "\\bI say Latta as\\b|\\bLatta\\b[^.!?]{0,100}\\bpronounc(?:e|ed|iation)\\b"
+          ],
+          "mustNotContain": [
+            "catalog items matching"
+          ],
           "note": "Miss #15: typo-tolerant pronunciation query, answered from the voice lexicon and drill sheet."
         },
         {
           "id": "miss-17-freeform-pronunciation",
           "text": "Latta is prounounced like Ladder but with Laddah or Lattah short a first ah second, like ladder but latt ah",
+          "mustContain": [
+            "Latta",
+            "LAT-tah",
+            "LAD-dah",
+            "short a, then ah"
+          ],
+          "mustMatch": [
+            "\\b(?:keep|kept|alternative)\\b"
+          ],
+          "mustNotContain": [
+            "catalog items matching"
+          ],
           "note": "Miss #17: typo-tolerant free-form teach with alternatives; uncertain detail is retained rather than declined or searched."
         },
         {
           "id": "miss-18-pronunciation-precedence",
           "text": "the family name \"Latta\" should be pronounced with a short a, like in Ladder, but it would be \"Latt uh\"",
+          "mustContain": [
+            "Latta",
+            "LAT-uh",
+            "short a"
+          ],
+          "mustMatch": [
+            "\\b(?:noted|say|pronounce)\\b"
+          ],
+          "mustNotContain": [
+            "surname origin",
+            "catalog items matching"
+          ],
           "note": "Miss #18: pronunciation teaching precedes the surname-origin shape for a quoted family name."
         }
       ]
