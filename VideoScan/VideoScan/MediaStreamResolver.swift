@@ -27,6 +27,7 @@
 
 import Foundation
 import Combine
+import Darwin
 
 /// The per-volume SMB opt-in, persisted in the viewer's own defaults.
 /// Key: `viewer.smbMountedVolumes` → `[volumeName: mountPath]`. The mount
@@ -79,9 +80,53 @@ enum MediaPlaybackSource: Equatable, Sendable {
 /// world (role, settings, reachability) and ask it about records.
 struct MediaStreamResolver: Sendable {
     struct Configuration: Equatable, Sendable {
+        enum EndpointError: Equatable, Sendable {
+            case emptyHostname
+            case invalidHostname
+            case invalidPort
+        }
+
         let masterHostname: String
         let port: Int
         let passphrase: String
+        let baseURL: URL
+        let endpointError: EndpointError?
+
+        var hasValidEndpoint: Bool { endpointError == nil }
+
+        init(masterHostname: String, port: Int, passphrase: String) {
+            self.masterHostname = masterHostname
+            self.port = port
+            self.passphrase = passphrase
+
+            guard (1...65535).contains(port) else {
+                baseURL = Self.unavailableBaseURL
+                endpointError = .invalidPort
+                return
+            }
+            guard !masterHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                baseURL = Self.unavailableBaseURL
+                endpointError = .emptyHostname
+                return
+            }
+            guard let host = Self.normalizedEndpointHost(masterHostname) else {
+                baseURL = Self.unavailableBaseURL
+                endpointError = .invalidHostname
+                return
+            }
+
+            var components = URLComponents()
+            components.scheme = "http"
+            components.host = host
+            components.port = port
+            guard let url = components.url, url.host?.isEmpty == false else {
+                baseURL = Self.unavailableBaseURL
+                endpointError = .invalidHostname
+                return
+            }
+            baseURL = url
+            endpointError = nil
+        }
 
         /// The master's web server settings live in the SAME defaults keys
         /// the Hallie settings sheet edits (`archivist.webPort` /
@@ -94,11 +139,85 @@ struct MediaStreamResolver: Sendable {
                                  passphrase: defaults.string(forKey: HallieWebAccess.passphraseKey) ?? "")
         }
 
-        /// `http://ricksm4.local:8765`
-        var baseURL: URL {
-            var host = masterHostname.lowercased()
+        /// Build one endpoint without ever interpreting settings text as
+        /// URL syntax. Invalid configuration returns a local, non-network
+        /// sentinel; callers use `hasValidEndpoint` to report offline.
+        func endpointURL(path: String, includePassphrase: Bool = false) -> URL {
+            guard hasValidEndpoint else { return Self.unavailableBaseURL }
+            let endpoint = baseURL.appendingPathComponent(path)
+            guard includePassphrase, !passphrase.isEmpty else { return endpoint }
+            guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+                return Self.unavailableBaseURL
+            }
+            components.queryItems = [URLQueryItem(name: "key", value: passphrase)]
+            return components.url ?? Self.unavailableBaseURL
+        }
+
+        private static let unavailableBaseURL = URL(
+            fileURLWithPath: "/videoscan-invalid-remote-endpoint",
+            isDirectory: false
+        )
+
+        private static func normalizedEndpointHost(_ value: String) -> String? {
+            var host = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if host.hasSuffix(".") { host.removeLast() }
+
+            if host.hasPrefix("[") || host.hasSuffix("]") {
+                guard host.hasPrefix("["), host.hasSuffix("]"), host.count > 2 else { return nil }
+                host.removeFirst()
+                host.removeLast()
+            }
+
+            if host.contains(":") {
+                let pieces = host.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+                guard let address = pieces.first else { return nil }
+                let normalizedAddress = address.lowercased()
+                let normalizedHost = pieces.count == 2 ? "\(normalizedAddress)%\(pieces[1])" : normalizedAddress
+                guard isIPv6Address(normalizedHost) else { return nil }
+                return "[\(normalizedHost)]"
+            }
+            host = host.lowercased()
+            if isIPv4Address(host) { return host }
+            guard isValidDNSOrIPv4Host(host) else { return nil }
             if !host.hasSuffix(".local") { host += ".local" }
-            return URL(string: "http://\(host):\(port)")!
+            return host
+        }
+
+        private static func isIPv6Address(_ host: String) -> Bool {
+            let pieces = host.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let address = pieces.first, !address.isEmpty else { return false }
+            if pieces.count == 2 {
+                let scope = pieces[1]
+                let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+                guard !scope.isEmpty, scope.unicodeScalars.allSatisfy(allowed.contains) else { return false }
+            }
+            var parsed = in6_addr()
+            return address.withCString { inet_pton(AF_INET6, $0, &parsed) } == 1
+        }
+
+        private static func isIPv4Address(_ host: String) -> Bool {
+            var parsed = in_addr()
+            return host.withCString { inet_pton(AF_INET, $0, &parsed) } == 1
+        }
+
+        private static func isValidDNSOrIPv4Host(_ host: String) -> Bool {
+            guard !host.isEmpty, host.utf8.count <= 253 else { return false }
+            let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+            guard !labels.isEmpty, labels.allSatisfy(isValidDNSLabel) else { return false }
+
+            if labels.count == 4, labels.allSatisfy({ $0.allSatisfy(\.isNumber) }) {
+                var parsed = in_addr()
+                return host.withCString { inet_pton(AF_INET, $0, &parsed) } == 1
+            }
+            return true
+        }
+
+        private static func isValidDNSLabel(_ label: Substring) -> Bool {
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  label.first != "-", label.last != "-" else { return false }
+            return label.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || $0 == "-"
+            }
         }
     }
 
@@ -150,26 +269,16 @@ struct MediaStreamResolver: Sendable {
     /// accepts the passphrase as a query item because AVPlayer sends no
     /// custom headers.
     func streamURL(recordID: UUID) -> URL {
-        var components = URLComponents(url: configuration.baseURL.appendingPathComponent("api/media/\(recordID.uuidString)"),
-                                       resolvingAgainstBaseURL: false)!
-        if !configuration.passphrase.isEmpty {
-            components.queryItems = [URLQueryItem(name: "key", value: configuration.passphrase)]
-        }
-        return components.url!
+        configuration.endpointURL(path: "api/media/\(recordID.uuidString)", includePassphrase: true)
     }
 
     /// `…/api/media/<uuid>/status?key=…`
     func statusURL(recordID: UUID) -> URL {
-        var components = URLComponents(url: configuration.baseURL.appendingPathComponent("api/media/\(recordID.uuidString)/status"),
-                                       resolvingAgainstBaseURL: false)!
-        if !configuration.passphrase.isEmpty {
-            components.queryItems = [URLQueryItem(name: "key", value: configuration.passphrase)]
-        }
-        return components.url!
+        configuration.endpointURL(path: "api/media/\(recordID.uuidString)/status", includePassphrase: true)
     }
 
     /// `…/api/ping` — no passphrase needed.
-    var pingURL: URL { configuration.baseURL.appendingPathComponent("api/ping") }
+    var pingURL: URL { configuration.endpointURL(path: "api/ping") }
 
     /// The bridge's own rule for "AVPlayer plays these bytes as-is"; a
     /// viewer holds the same record, so it can predict the handshake and
@@ -192,7 +301,7 @@ struct MediaStreamResolver: Sendable {
             return .local(URL(fileURLWithPath: Self.mappedPath(fullPath, volumeName: volume, mountPath: mount)))
         }
         // 2. Stream from the master.
-        if masterReachable {
+        if masterReachable, configuration.hasValidEndpoint {
             return .stream(streamURL(recordID: recordID),
                            native: Self.isNativelyPlayable(fullPath: fullPath, videoCodec: videoCodec))
         }
@@ -231,7 +340,8 @@ struct MasterReachabilityProbe: Sendable {
     init(transport: @escaping MediaHTTPTransport = MediaHTTP.urlSession) { self.transport = transport }
 
     func isReachable(_ configuration: MediaStreamResolver.Configuration) async -> Bool {
-        var request = URLRequest(url: configuration.baseURL.appendingPathComponent("api/ping"))
+        guard configuration.hasValidEndpoint else { return false }
+        var request = URLRequest(url: configuration.endpointURL(path: "api/ping"))
         request.timeoutInterval = 4
         guard let (status, body) = try? await transport(request), status == 200 else { return false }
         guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return false }
