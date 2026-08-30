@@ -129,12 +129,14 @@ struct HallieRemoteClient: Sendable {
     static let sessionKey = "viewer.hallieSession"
 
     enum Failure: LocalizedError, Equatable {
+        case invalidConfiguration
         case unreachable
         case refused(String)
         case badAnswer(Int)
 
         var errorDescription: String? {
             switch self {
+            case .invalidConfiguration: return "the master address in settings is invalid"
             case .unreachable: return "the master did not answer"
             case .refused(let why): return why
             case .badAnswer(let status): return "the master answered HTTP \(status) without a Hallie reply"
@@ -162,7 +164,7 @@ struct HallieRemoteClient: Sendable {
         return fresh
     }
 
-    var askURL: URL { configuration.baseURL.appendingPathComponent("api/ask") }
+    var askURL: URL { configuration.endpointURL(path: "api/ask") }
 
     /// Exactly the JSON the iPad page posts. `who` is the family member
     /// talking (the archivist's owner name on this Mac), so the master
@@ -185,6 +187,7 @@ struct HallieRemoteClient: Sendable {
     }
 
     private func post(_ body: Data) async throws -> HallieRemoteAnswer {
+        guard configuration.hasValidEndpoint else { throw Failure.invalidConfiguration }
         var request = URLRequest(url: askURL)
         request.httpMethod = "POST"
         request.httpBody = body

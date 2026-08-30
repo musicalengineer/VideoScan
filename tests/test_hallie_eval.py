@@ -1,7 +1,13 @@
 import importlib.util
+import io
+import json
+import tempfile
 import unittest
 from collections import Counter
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,12 +43,78 @@ class HallieEvalTests(unittest.TestCase):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_live_misses_corpus.json"
         )
-        self.assertGreaterEqual(len(turns), 1)
+        self.assertGreaterEqual(len(turns), 23)
         self.assertEqual(len({turn["id"] for turn in turns}), len(turns))
         live = [t for t in turns if "Hudson line" in t["text"]]
         self.assertEqual(len(live), 1)
         self.assertEqual(live[0]["expectedRoutes"], ["graph", "follow-up"])
         self.assertIn("family_tree_live", live[0]["id"])
+
+        by_id = {turn["id"]: turn for turn in turns}
+        required_august_29_sensors = {
+            "miss-02-owner-binding",
+            "miss-06-center-spelling-recovery",
+            "miss-07-complete-biography-card",
+            "miss-10-fragment-guard",
+            "miss-11-surname-roster",
+            "miss-12-relationships-overview",
+            "miss-14-pronunciation-hint",
+            "miss-15-pronunciation-query",
+            "miss-16-cross-world-card",
+            "miss-17-freeform-pronunciation",
+            "miss-18-pronunciation-precedence",
+            "miss-19-kinship-word-property",
+            "which_one_and_repair_2026_08_29-miss-03-year-selection-t1",
+            "which_one_and_repair_2026_08_29-miss-03-year-selection-t2",
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t1",
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2",
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t1",
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t2",
+        }
+        self.assertTrue(required_august_29_sensors.issubset(by_id))
+
+        self.assertIn(
+            "child(?:ren)?",
+            by_id["miss-07-complete-biography-card"]["mustMatch"][0],
+        )
+        self.assertEqual(
+            by_id["miss-11-surname-roster"]["mustNotContain"],
+            ["try a fuller name"],
+        )
+        self.assertIn(
+            "kinship",
+            by_id["miss-12-relationships-overview"]["mustMatch"][0],
+        )
+        self.assertEqual(
+            by_id["miss-16-cross-world-card"]["mustContain"],
+            ["G89Q-34N", "GNZ5-428"],
+        )
+        self.assertIn(
+            "sibling",
+            by_id["miss-16-cross-world-card"]["mustMatch"][1],
+        )
+
+        focus = by_id[
+            "conversation_focus_2026_08_29-miss-09-our-common-ancestor-t2"
+        ]
+        self.assertTrue(focus["followsPrevious"])
+        self.assertEqual(focus["mustContain"], ["Martha Lamson"])
+        self.assertEqual(focus["mustNotContain"], ["Donna Hudson"])
+
+        repair = by_id[
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2"
+        ]
+        self.assertTrue(repair["followsPrevious"])
+        self.assertEqual(repair["expectedRoutes"], ["follow-up"])
+        self.assertEqual(repair["expectedOutcome"], "repaired")
+
+        batch = hallie_eval.build_stdin(turns).splitlines()
+        complaint = "you presented me a list of people born hundreds or years ago"
+        complaint_index = batch.index(complaint)
+        self.assertEqual(
+            batch[complaint_index - 1],
+            "tell me about Nathaniel Parker",
+        )
 
     def test_batch_input_resets_between_scenarios_but_not_followup_turns(self):
         turns = hallie_eval.load_corpus(
@@ -140,6 +212,199 @@ class HallieEvalTests(unittest.TestCase):
             "outcome": "answered",
         })
         self.assertNotIn("fragment", flags)
+
+    def test_must_match_accepts_semantic_alternatives_case_insensitively(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        examples = [
+            (
+                "miss-07-complete-biography-card",
+                "graph",
+                "Matthew Rice married Martha Lamson. His SONS were Isaac Rice "
+                "and Patience Rice. His GRANDPARENTS are recorded in the tree.",
+            ),
+            (
+                "miss-12-relationships-overview",
+                "capability",
+                "Rick's closest KINSHIP relationships begin with his parents.",
+            ),
+            (
+                "miss-16-cross-world-card",
+                "graph",
+                "The People-tab lists Tim as Rick's sibling. G89Q-34N and "
+                "GNZ5-428 may be the same person and should be reviewed.",
+            ),
+        ]
+        for turn_id, route, answer in examples:
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                [],
+                msg=turn_id,
+            )
+
+    def test_must_match_reports_missing_and_invalid_patterns_without_crashing(self):
+        base = {
+            "answer": "This answer has enough ordinary words.",
+            "route": "graph",
+            "outcome": "answered",
+        }
+        self.assertEqual(
+            hallie_eval.grade_record(base | {"mustMatch": [r"\bchildren?\b"]}),
+            ["missing_required_match"],
+        )
+        self.assertEqual(
+            hallie_eval.grade_record(base | {"mustMatch": ["("]}),
+            ["invalid_expected_regex"],
+        )
+        for malformed in (42, True, {"pattern": "family"}, [42]):
+            self.assertEqual(
+                hallie_eval.grade_record(base | {"mustMatch": malformed}),
+                ["invalid_expected_regex"],
+                msg=repr(malformed),
+            )
+
+    def test_must_match_is_inherited_and_can_be_overridden_per_turn(self):
+        corpus = {
+            "categories": [{
+                "id": "semantic",
+                "mustMatch": ["family"],
+                "prompts": [
+                    {"text": "inherited"},
+                    {"text": "overridden", "mustMatch": ["tree"]},
+                ],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "semantic.json"
+            path.write_text(json.dumps(corpus), encoding="utf-8")
+            turns = hallie_eval.load_corpus(path)
+        self.assertEqual(turns[0]["mustMatch"], ["family"])
+        self.assertEqual(turns[1]["mustMatch"], ["tree"])
+
+    def test_run_carries_must_match_from_corpus_into_emitted_record(self):
+        question = "tell me about the family"
+        semantic_contract = [r"\b(?:child(?:ren)?|sons?|daughters?)\b"]
+        corpus = {
+            "categories": [{
+                "id": "semantic",
+                "mustMatch": semantic_contract,
+                "prompts": [{"id": "semantic-001", "text": question}],
+            }],
+        }
+        logged_turns = [
+            {"kind": "user", "text": question},
+            {
+                "kind": "assistant",
+                "text": "This answer lists no descendants at all.",
+                "route": "graph",
+                "outcome": "answered",
+            },
+        ]
+        shell_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        git_result = SimpleNamespace(returncode=0, stdout="abc123\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus_path = root / "corpus.json"
+            output_path = root / "run.jsonl"
+            binary_path = root / "VideoScan"
+            corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+            binary_path.touch()
+            args = SimpleNamespace(
+                corpus=str(corpus_path),
+                limit=None,
+                no_compose=True,
+                host=None,
+                model=None,
+                bin=str(binary_path),
+                timeout=1,
+                out=str(output_path),
+            )
+            with redirect_stdout(io.StringIO()):
+                with patch.object(
+                    hallie_eval.subprocess,
+                    "run",
+                    side_effect=[shell_result, git_result],
+                ), patch.object(
+                    hallie_eval,
+                    "read_run_turns",
+                    return_value=logged_turns,
+                ):
+                    self.assertEqual(hallie_eval.run(args), 0)
+
+            lines = output_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            emitted = json.loads(lines[1])
+
+        self.assertEqual(emitted["mustMatch"], semantic_contract)
+        self.assertIn(
+            "missing_required_match",
+            hallie_eval.grade_record(emitted),
+        )
+
+    def test_repaired_outcome_needs_substantive_content_to_count_clean(self):
+        generic = {
+            "id": "repair-generic",
+            "category": "repair",
+            "question": "you presented me a list of people born hundreds or years ago",
+            "answer": "Sorry about that. Tell me what was off, and I'll look again.",
+            "route": "follow-up",
+            "outcome": "repaired",
+            "expectedRoutes": ["follow-up"],
+            "expectedOutcome": "repaired",
+            "mustContain": [
+                "You asked “tell me about Nathaniel Parker”",
+                "Everyone I offered was born centuries ago",
+                "Give me the full name, or a birth year",
+            ],
+            "mustNotContain": ["catalog items matching"],
+        }
+        self.assertEqual(
+            hallie_eval.grade_record(generic),
+            ["~repaired", "missing_required_text"],
+        )
+
+        substantive = dict(generic)
+        substantive.update({
+            "id": "repair-substantive",
+            "answer": (
+                "Sorry — that list was no help. "
+                "You asked “tell me about Nathaniel Parker”. "
+                "Everyone I offered was born centuries ago, and I have no recent "
+                "person by that name. Give me the full name, or a birth year, "
+                "and I'll try again."
+            ),
+        })
+        self.assertEqual(hallie_eval.grade_record(substantive), ["~repaired"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "repair.jsonl"
+            run.write_text(
+                json.dumps({"meta": {"elapsed_s": 1, "git": "test", "binary_built": "test"}})
+                + "\n" + json.dumps(generic)
+                + "\n" + json.dumps(substantive) + "\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = hallie_eval.grade(SimpleNamespace(
+                    run=str(run), compare=None, show=0))
+
+            self.assertEqual(result, 0)
+            self.assertIn("turns: 2   clean: 1 (50%)", output.getvalue())
+            graded = [
+                json.loads(line)
+                for line in run.with_suffix(".graded.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                graded[0]["flags"],
+                ["~repaired", "missing_required_text"],
+            )
+            self.assertEqual(graded[1]["flags"], ["~repaired"])
 
 
 if __name__ == "__main__":

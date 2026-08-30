@@ -235,6 +235,7 @@ def run(args):
                 "expectedOutcomes": q.get("expectedOutcomes"),
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
+                "mustMatch": q.get("mustMatch", []),
                 "noFabricatedPersonalMemory": bool(
                     q.get("noFabricatedPersonalMemory")),
                 "currentEvidenceOnly": bool(q.get("currentEvidenceOnly")),
@@ -380,6 +381,29 @@ def grade_record(r):
     for required in r.get("mustContain") or []:
         if required.lower() not in lowered:
             flags.append("missing_required_text")
+            break
+    # Semantic answer contracts can tolerate model wording changes while
+    # still pinning the required concepts. Patterns are corpus-authored,
+    # case-insensitive, and may span lines. A malformed expectation is a
+    # grading defect, never a reason for the evaluator itself to crash.
+    raw_required_patterns = r.get("mustMatch")
+    if raw_required_patterns is None:
+        required_patterns = []
+    elif isinstance(raw_required_patterns, str):
+        required_patterns = [raw_required_patterns]
+    elif isinstance(raw_required_patterns, list):
+        required_patterns = raw_required_patterns
+    else:
+        flags.append("invalid_expected_regex")
+        required_patterns = []
+    for pattern in required_patterns:
+        try:
+            matches = re.search(pattern, a, re.I | re.S)
+        except (re.error, TypeError):
+            flags.append("invalid_expected_regex")
+            continue
+        if not matches:
+            flags.append("missing_required_match")
             break
     if r.get("noFabricatedPersonalMemory") and PERSONAL_MEMORY_PAT.search(a):
         flags.append("fabricated_personal_memory")

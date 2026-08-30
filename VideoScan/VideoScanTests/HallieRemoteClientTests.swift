@@ -14,6 +14,21 @@ import Foundation
 @testable import VideoScan
 import VideoScanCore
 
+private func remoteClientTestDefaults(_ suite: String) -> UserDefaults {
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        preconditionFailure("could not create test defaults suite: \(suite)")
+    }
+    return defaults
+}
+
+private final class RemoteTransportCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
 /// A bridge stand-in: answers /api/ping and /api/ask the way HallieWebBridge
 /// does (passphrase gate, session required, select continues a pending
 /// which-one), and records the transcript it produced.
@@ -89,10 +104,15 @@ struct HallieRemoteClientParityTests {
         defer { server.stop() }
         let configuration = MediaStreamResolver.Configuration(masterHostname: "localhost", port: Int(server.port), passphrase: "porch")
         // "localhost.local" does not resolve; point the base at loopback.
-        let base = URL(string: "http://127.0.0.1:\(server.port)")!
+        let base = try #require(URL(string: "http://127.0.0.1:\(server.port)"))
         let transport: MediaHTTPTransport = { request in
+            guard let requestURL = request.url else { throw URLError(.badURL) }
             var rewritten = request
-            rewritten.url = URL(string: request.url!.path + (request.url!.query.map { "?" + $0 } ?? ""), relativeTo: base)!.absoluteURL
+            let relative = requestURL.path + (requestURL.query.map { "?" + $0 } ?? "")
+            guard let rewrittenURL = URL(string: relative, relativeTo: base)?.absoluteURL else {
+                throw URLError(.badURL)
+            }
+            rewritten.url = rewrittenURL
             return try await MediaHTTP.urlSession(rewritten)
         }
         let session = "viewer-test-session"
@@ -140,7 +160,8 @@ struct HallieRemoteClientParityTests {
         let so = try #require(JSONSerialization.jsonObject(with: select) as? [String: Any])
         #expect(so["text"] == nil && so["who"] == nil)
         #expect((so["select"] as? [String: String]) == HallieWebBridge.selectJSON(.profileStableID("abc")))
-        #expect(HallieWebBridge.candidateID(from: so["select"] as! [String: Any]) == .profileStableID("abc"))
+        let selectObject = try #require(so["select"] as? [String: Any])
+        #expect(HallieWebBridge.candidateID(from: selectObject) == .profileStableID("abc"))
         // The client's copy of the wire shape equals the bridge's, both ways.
         for id in [HallieTurnExecutor.CandidateID.profileStableID("p"), .gedcomPersonID("@I9@"), .cyberBrainPersonID("c")] {
             #expect(HallieRemoteSelect.json(id) == HallieWebBridge.selectJSON(id))
@@ -169,9 +190,32 @@ struct HallieRemoteClientParityTests {
         #expect(seen.value == "x")
     }
 
+    @Test func invalidEndpointRejectsAskAndSelectionWithoutTransport() async {
+        let calls = RemoteTransportCounter()
+        let transport: MediaHTTPTransport = { _ in
+            calls.increment()
+            return (200, Data("{\"prose\":\"must not arrive\"}".utf8))
+        }
+
+        for configuration in [
+            MediaStreamResolver.Configuration(masterHostname: "http://router", port: 8765, passphrase: "x"),
+            MediaStreamResolver.Configuration(masterHostname: "RicksM4", port: 0, passphrase: "x"),
+        ] {
+            let client = HallieRemoteClient(configuration: configuration, sessionID: "stale", transport: transport)
+            #expect(client.askURL.isFileURL)
+            await #expect(throws: HallieRemoteClient.Failure.invalidConfiguration) {
+                _ = try await client.ask("where is donna", who: "Rick")
+            }
+            await #expect(throws: HallieRemoteClient.Failure.invalidConfiguration) {
+                _ = try await client.select(.gedcomPersonID("@I1@"), who: "Rick")
+            }
+        }
+        #expect(calls.value == 0, "neither a fresh ask nor a stale clarification may reach transport")
+    }
+
     @Test func sessionIDPersistsInTheViewersOwnDefaults() {
         let suite = "HallieRemoteClientTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = remoteClientTestDefaults(suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let first = HallieRemoteClient.sessionID(defaults)
         #expect(first.hasPrefix("viewer-"))

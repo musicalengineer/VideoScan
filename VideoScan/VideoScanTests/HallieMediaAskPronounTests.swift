@@ -94,8 +94,11 @@ struct HallieMediaAskPronounTests {
         #expect(asked.outcome == .needsClarification)
         let pending = try #require(asked.clarification)
         let labels = pending.candidates.map(\.label)
-        #expect(labels == ["Nathaniel Caleb Parker (b. 14 JUL 1760, d. 4 MAR 1826)",
-                           "Nathaniel Parker Sr (b. 16 MAY 1651, d. 7 DEC 1737)"], Comment(rawValue: labels.joined(separator: " | ")))
+        // HallieWhichOne's shared policy is anchors first. Sr is the tree
+        // anchor, so the order is intentional and must stay consistent with
+        // every other namesake sheet rather than this older test fixture.
+        #expect(labels == ["Nathaniel Parker Sr (b. 16 MAY 1651, d. 7 DEC 1737)",
+                           "Nathaniel Caleb Parker (b. 14 JUL 1760, d. 4 MAR 1826)"], Comment(rawValue: labels.joined(separator: " | ")))
         var memory = Exec.ConversationMemory()
         memory.record(intent: intent, result: asked)
         #expect(memory.lastSubject == "nathaniel parker", "before the chip, the typed name is the best we have")
