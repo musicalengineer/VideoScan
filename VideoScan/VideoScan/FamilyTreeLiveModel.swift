@@ -239,6 +239,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// The directory the loader reads. Production = App Support; tests
     /// inject a temp directory and nothing outside it is ever consulted.
     private(set) var originalsDirectory: URL
+    /// Where family-tree-bookmarks.json lives. nil in tests that inject an
+    /// originals directory, which is what keeps them off the real archive.
+    private let bookmarksDirectory: URL?
+    /// People the reader marked to come back to (Rick, 2026-08-30).
+    @Published private(set) var bookmarks: FamilyTreeBookmarks
     private var sourceAccess: FamilyAssetStore.Access
     /// Where cyberbrain.json lives. Production = App Support/VideoScan/
     /// cyberbrain (the directory Hallie reads and telling mode writes);
@@ -412,6 +417,7 @@ final class FamilyTreeLiveModel: ObservableObject {
          ancestorGenerations: Int = 3,
          descendantGenerations: Int = 2,
          focusDefaults: UserDefaults? = nil,
+         bookmarksDirectory: URL? = nil,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil },
          profilesProvider: (() -> [POIProfile])? = nil) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
@@ -422,6 +428,17 @@ final class FamilyTreeLiveModel: ObservableObject {
         // brain, never the real one (isolation rule).
         self.cyberBrainRootURL = cyberBrainRootURL
             ?? (originalsDirectory == nil ? FamilyTreeNotesStorage.productionRootURL : nil)
+        // Bookmarks live beside the GEDCOM, ON THE ARCHIVE — not in
+        // Application Support like the brain, and not in UserDefaults.
+        // Both of those are per-machine, and the point of a bookmark is
+        // that Donna can make one on the iPad and Rick sees it here.
+        // Same isolation rule as the brain above: a test that injects an
+        // originals directory but no bookmarks directory gets NO
+        // bookmarks, never the real archive's.
+        self.bookmarksDirectory = bookmarksDirectory
+            ?? (originalsDirectory == nil ? production.gedcomDirectory() : nil)
+        self.bookmarks = self.bookmarksDirectory
+            .map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks()
         self.noteAuthor = noteAuthor
             ?? HallieTurnExecutor.Speakers.fromDefaults().ownerName
             ?? HallieTurnExecutor.Speakers.defaultOwnerName
@@ -1296,6 +1313,28 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     // MARK: Photos
+
+    /// Mark or unmark a person. Returns the state AFTER the toggle so a
+    /// caller can report it without asking again.
+    ///
+    /// Saving is best-effort: a bookmark is a convenience, and an
+    /// unwritable archive (a viewer Mac, an unplugged drive) must not
+    /// throw in the reader's face. The in-memory set still updates so the
+    /// icon responds; it simply will not survive a relaunch.
+    @discardableResult
+    func toggleBookmark(_ personID: String) -> Bool {
+        let nowMarked = bookmarks.toggle(personID)
+        if let bookmarksDirectory {
+            do {
+                try bookmarks.save(to: bookmarksDirectory)
+            } catch {
+                appLog.write("Family Tree: could not save bookmarks — \(error.localizedDescription)")
+            }
+        }
+        return nowMarked
+    }
+
+    func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
     func setPhotoOverride(_ image: NSImage, for personID: String) {
         photoOverrides[personID] = image

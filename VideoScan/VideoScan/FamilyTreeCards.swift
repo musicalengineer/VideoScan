@@ -54,6 +54,10 @@ struct FamilyTreePersonCard: View {
     /// revision, so a fresh choice re-reads the store at once.
     let portraitProfile: POIProfile?
     let photoRevision: Int
+    /// Marked to come back to (Rick, 2026-08-30). A bookmark, deliberately
+    /// not a heart: in a family archive a favourites list ranks relatives.
+    let isBookmarked: Bool
+    let onToggleBookmark: () -> Void
     /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
@@ -129,6 +133,26 @@ struct FamilyTreePersonCard: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(isSelected ? Color.cyan : accent.opacity(0.7), lineWidth: isSelected ? 2.5 : 1.5)
         )
+        .overlay(alignment: .bottomTrailing) {
+            // Lower-right per Rick's steer, so it never crowds the
+            // portrait. Amber reads against both palettes; the tree's own
+            // accents are per-sex and cyan means "selected", so neither
+            // was free. Only drawn when marked — an always-visible hollow
+            // outline on 39,250 cards is visual noise, and the context
+            // menu is the discoverable way in.
+            if isBookmarked {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.98, green: 0.72, blue: 0.20))
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .padding(8)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onToggleBookmark() }
+                    .help("Bookmarked — click to remove")
+                    .accessibilityLabel("Bookmarked")
+                    .accessibilityAddTraits(.isButton)
+            }
+        }
         .shadow(color: .black.opacity(0.35), radius: 10, y: 6)
         .contentShape(Rectangle())
         // Order matters: SwiftUI gives the earlier `count: 2` recognizer
@@ -147,6 +171,10 @@ struct FamilyTreePersonCard: View {
             }
             Button("Research \(person.name)…") {
                 onResearch()
+            }
+            Button(isBookmarked ? "Remove bookmark" : "Bookmark \(person.name)",
+                   systemImage: isBookmarked ? "bookmark.slash" : "bookmark") {
+                onToggleBookmark()
             }
             Divider()
             Button("Center on \(person.name)") {

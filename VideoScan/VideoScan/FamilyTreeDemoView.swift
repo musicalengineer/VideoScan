@@ -879,6 +879,8 @@ struct FamilyTreeDemoView: View {
                                 canAdjustPhoto: model.isLive,
                                 portraitProfile: model.bridgedProfile(for: card.person.id),
                                 photoRevision: model.photoRevision,
+                                isBookmarked: model.isBookmarked(card.person.id),
+                                onToggleBookmark: { model.toggleBookmark(card.person.id) },
                                 onAskHallie: { name in
                                     catalogModel.archivistAskRequest = "tell me about \(name)"
                                     openWindow(id: "archivist")
