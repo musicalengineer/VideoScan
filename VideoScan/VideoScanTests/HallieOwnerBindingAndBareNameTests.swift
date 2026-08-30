@@ -137,11 +137,14 @@ private let rickSentence = "Can you find the closest common ancestor between me 
 /// The merged fixture's answer for Rick & Donna (their fathers' grandfather).
 private func expectMarthaStyleAnswer(_ r: HallieTurnExecutor.Result?, sourceLocation: SourceLocation = #_sourceLocation) {
     guard let r else { Issue.record("no answer", sourceLocation: sourceLocation); return }
+    #expect(r.route == .graph, sourceLocation: sourceLocation)
     #expect(r.outcome == .answered, "got: \(r.prose)", sourceLocation: sourceLocation)
     // Either side order ("donna and me (rick)" leads with Donna).
     #expect(r.prose.contains("share 1 recorded ancestor; the nearest is Z Common"), "got: \(r.prose)", sourceLocation: sourceLocation)
     #expect(r.prose.contains("Richard Harding Breen Jr") && r.prose.contains("Donna Hudson"), "got: \(r.prose)", sourceLocation: sourceLocation)
     #expect(!r.prose.lowercased().hasPrefix("which"), sourceLocation: sourceLocation)
+    #expect(!r.prose.localizedCaseInsensitiveContains("have no common ancestor"), sourceLocation: sourceLocation)
+    #expect(!r.prose.localizedCaseInsensitiveContains("catalog items matching"), sourceLocation: sourceLocation)
 }
 
 // MARK: - (a) Owner binding — detector
@@ -178,9 +181,20 @@ struct HallieOwnerBindingDetectTests {
 struct HallieOwnerBindingAnswerTests {
     let graph = mergedGraph()
 
-    @Test func ricksExactSentenceIsAnswered() throws {
-        let q = try #require(HallieLineageQuestion.detect(rickSentence))
-        expectMarthaStyleAnswer(HallieLineageAnswer.answer(q, context: context(graph)))
+    @Test func ricksExactSentenceIsAnsweredAtTheLocalProductionBoundary() throws {
+        let turn = HallieTurnExecutor.preTranslation(
+            question: rickSentence,
+            playAfterAnswer: false,
+            memory: .init(),
+            isKnownPerson: { _ in false },
+            lineageAnswer: { HallieLineageAnswer.answer($0, context: context(graph)) }
+        )
+        guard case .answer(let result) = turn else {
+            Issue.record("exact owner/common-ancestor prompt escaped the local graph route")
+            return
+        }
+        expectMarthaStyleAnswer(result)
+        #expect(result.queryDescription?.contains("common ancestor") == true)
     }
 
     @Test func glossFormsResolveToTheOwner() throws {

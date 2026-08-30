@@ -104,18 +104,20 @@ class HallieEvalTests(unittest.TestCase):
             ["Richard Harding Breen Jr", "Donna Hudson"],
         )
         self.assertIn("Which Rick", owner["mustNotContain"])
-        self.assertTrue(owner["mustNotMatch"])
+        self.assertIn("have no common ancestor", owner["mustNotContain"])
 
         center = by_id["miss-06-center-spelling-recovery"]
         self.assertEqual(center["mustContain"], ["Marhta Lamson", "Martha Lamson"])
         self.assertEqual(len(center["mustMatch"]), 2)
-        self.assertTrue(center["mustNotMatch"])
+        self.assertIn("I cannot center", center["mustNotContain"])
 
         fragment = by_id["miss-10-fragment-guard"]
         self.assertIn("Edith Lucy Parker", fragment["mustContain"])
         self.assertIn("George Breen", fragment["mustContain"])
-        self.assertEqual(fragment["mustNotContain"], [". ,"])
-        self.assertTrue(fragment["mustNotMatch"])
+        self.assertEqual(
+            fragment["mustNotContain"],
+            [". ,", "Muriel was not married"],
+        )
 
         for turn_id in (
             "miss-14-pronunciation-hint",
@@ -127,7 +129,6 @@ class HallieEvalTests(unittest.TestCase):
             self.assertEqual(turn["expectedRoutes"], ["telling"])
             self.assertIn("Latta", turn["mustContain"])
             self.assertTrue(turn["mustMatch"])
-            self.assertTrue(turn["mustNotMatch"])
             self.assertIn("catalog items matching", turn["mustNotContain"])
 
         focus = by_id[
@@ -282,7 +283,7 @@ class HallieEvalTests(unittest.TestCase):
                 msg=turn_id,
             )
 
-    def test_live_miss_semantic_contracts_reject_generic_answers(self):
+    def test_live_miss_textual_fact_contracts_reject_generic_answers(self):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_live_misses_corpus.json"
         )
@@ -345,7 +346,7 @@ class HallieEvalTests(unittest.TestCase):
                 msg=f"generic answer passed {turn_id}: {flags}",
             )
 
-    def test_live_miss_polarity_reversals_are_rejected_semantically(self):
+    def test_live_miss_exact_known_bad_phrases_are_rejected(self):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_live_misses_corpus.json"
         )
@@ -365,7 +366,7 @@ class HallieEvalTests(unittest.TestCase):
                 "graph",
                 "Muriel Lamb was the child of Edith Lucy Parker and Frederick "
                 "Burton Lamb; her recorded grandparents included Clarissa "
-                "Horton Schoolcraft. She was not married to George Breen; "
+                "Horton Schoolcraft. Muriel was not married to George Breen; "
                 "Richard Harding Breen Sr is recorded.",
             ),
             "miss-14-pronunciation-hint": (
@@ -395,8 +396,41 @@ class HallieEvalTests(unittest.TestCase):
             record.update(answer=answer, route=route, outcome="answered")
             self.assertEqual(
                 hallie_eval.grade_record(record),
-                ["forbidden_match"],
-                msg=f"polarity reversal was not isolated for {turn_id}",
+                ["forbidden_text"],
+                msg=f"known bad phrase was not isolated for {turn_id}",
+            )
+
+    def test_live_miss_phrase_guards_do_not_claim_general_polarity(self):
+        turns = hallie_eval.load_corpus(
+            ROOT / "tests" / "hallie_live_misses_corpus.json"
+        )
+        by_id = {turn["id"]: turn for turn in turns}
+        valid_examples = {
+            "miss-02-owner-binding": (
+                "graph",
+                "There is no doubt Richard Harding Breen Jr and Donna Hudson "
+                "share 1 recorded ancestor; the nearest is Z Common.",
+            ),
+            "miss-10-fragment-guard": (
+                "graph",
+                "Muriel Lamb was not only married to George Breen; she was "
+                "the child of Edith Lucy Parker and Frederick Burton Lamb, "
+                "with Clarissa Horton Schoolcraft among her grandparents, "
+                "and had Richard Harding Breen Sr.",
+            ),
+            "miss-17-freeform-pronunciation": (
+                "telling",
+                "For Latta, I did not keep the old pronunciation; I kept "
+                "LAT-tah (short a, then ah) and the LAD-dah alternative.",
+            ),
+        }
+        for turn_id, (route, answer) in valid_examples.items():
+            record = dict(by_id[turn_id])
+            record.update(answer=answer, route=route, outcome="answered")
+            self.assertEqual(
+                hallie_eval.grade_record(record),
+                [],
+                msg=f"valid wording was rejected for {turn_id}",
             )
 
     def test_must_match_reports_missing_and_invalid_patterns_without_crashing(self):
@@ -420,33 +454,16 @@ class HallieEvalTests(unittest.TestCase):
                 msg=repr(malformed),
             )
 
-        self.assertEqual(
-            hallie_eval.grade_record(base | {"mustNotMatch": [r"ordinary words"]}),
-            ["forbidden_match"],
-        )
-        self.assertEqual(
-            hallie_eval.grade_record(base | {"mustNotMatch": ["("]}),
-            ["invalid_expected_regex"],
-        )
-        for malformed in (42, True, {"pattern": "family"}, [42]):
-            self.assertEqual(
-                hallie_eval.grade_record(base | {"mustNotMatch": malformed}),
-                ["invalid_expected_regex"],
-                msg=repr(malformed),
-            )
-
     def test_must_match_is_inherited_and_can_be_overridden_per_turn(self):
         corpus = {
             "categories": [{
                 "id": "semantic",
                 "mustMatch": ["family"],
-                "mustNotMatch": ["not family"],
                 "prompts": [
                     {"text": "inherited"},
                     {
                         "text": "overridden",
                         "mustMatch": ["tree"],
-                        "mustNotMatch": ["not tree"],
                     },
                 ],
             }],
@@ -457,18 +474,14 @@ class HallieEvalTests(unittest.TestCase):
             turns = hallie_eval.load_corpus(path)
         self.assertEqual(turns[0]["mustMatch"], ["family"])
         self.assertEqual(turns[1]["mustMatch"], ["tree"])
-        self.assertEqual(turns[0]["mustNotMatch"], ["not family"])
-        self.assertEqual(turns[1]["mustNotMatch"], ["not tree"])
 
     def test_run_carries_must_match_from_corpus_into_emitted_record(self):
         question = "tell me about the family"
         semantic_contract = [r"\b(?:child(?:ren)?|sons?|daughters?)\b"]
-        negative_contract = [r"\bno descendants\b"]
         corpus = {
             "categories": [{
                 "id": "semantic",
                 "mustMatch": semantic_contract,
-                "mustNotMatch": negative_contract,
                 "prompts": [{"id": "semantic-001", "text": question}],
             }],
         }
@@ -518,12 +531,10 @@ class HallieEvalTests(unittest.TestCase):
             emitted = json.loads(lines[1])
 
         self.assertEqual(emitted["mustMatch"], semantic_contract)
-        self.assertEqual(emitted["mustNotMatch"], negative_contract)
         self.assertIn(
             "missing_required_match",
             hallie_eval.grade_record(emitted),
         )
-        self.assertIn("forbidden_match", hallie_eval.grade_record(emitted))
 
     def test_repaired_outcome_needs_substantive_content_to_count_clean(self):
         generic = {

@@ -24,6 +24,58 @@ import Testing
 
 struct HallieFragmentGuardTests {
 
+    private static let murielTreeText = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Muriel /Lamb/
+    1 SEX F
+    1 BIRT
+    2 DATE APR 1902
+    2 PLAC Quebec, Canada
+    1 FAMC @F1@
+    1 FAMS @F2@
+    0 @I2@ INDI
+    1 NAME Edith Lucy /Parker/
+    1 SEX F
+    1 FAMC @F3@
+    1 FAMS @F1@
+    0 @I3@ INDI
+    1 NAME Frederick Burton /Lamb/
+    1 SEX M
+    1 FAMS @F1@
+    0 @I4@ INDI
+    1 NAME George /Breen/
+    1 SEX M
+    1 FAMS @F2@
+    0 @I5@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 SEX M
+    1 FAMC @F2@
+    0 @I6@ INDI
+    1 NAME Clarissa Horton /Schoolcraft/
+    1 SEX F
+    1 FAMS @F3@
+    0 @I7@ INDI
+    1 NAME Judson L. /Parker/
+    1 SEX M
+    1 FAMS @F3@
+    0 @F1@ FAM
+    1 HUSB @I3@
+    1 WIFE @I2@
+    1 CHIL @I1@
+    0 @F2@ FAM
+    1 HUSB @I4@
+    1 WIFE @I1@
+    1 MARR
+    2 DATE 17 OCT 1925
+    1 CHIL @I5@
+    0 @F3@ FAM
+    1 HUSB @I7@
+    1 WIFE @I6@
+    1 CHIL @I2@
+    0 TRLR
+    """
+
     // MARK: - The Muriel Lamb plan, as HallieBiographyCard states it
 
     private static let claimTexts = [
@@ -52,6 +104,40 @@ struct HallieFragmentGuardTests {
     private func compose(_ reply: String) async -> HallieGroundedComposer.Outcome {
         await HallieGroundedComposer(personaName: "Hallie Mae") { _, _ in reply }
             .compose(plan: plan(), history: [])
+    }
+
+    /// The translator is intentionally outside this deterministic fixture;
+    /// it is model-backed. Inject its typed biography AST at the production
+    /// executor boundary and pin the exact live prompt, graph route, and
+    /// decisive facts. The corpus remains the manual end-to-end route check.
+    @Test func murielLivePromptTypedBoundaryReturnsTheFullPositiveFactCard() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: Self.murielTreeText)
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "tell me about Muriel Lamb",
+            ast: .graph(.init(people: ["Muriel Lamb"], operation: .biography))
+        )
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: intent),
+            context: .init(profiles: [], graph: graph)
+        )
+
+        #expect(result.route == .graph)
+        #expect(result.outcome == .answered)
+        #expect(result.catalogPersonName == "Muriel Lamb")
+        for fact in [
+            "Muriel Lamb was born April 1902 in Quebec, Canada",
+            "Edith Lucy Parker",
+            "Frederick Burton Lamb",
+            "Clarissa Horton Schoolcraft",
+            "Judson L. Parker",
+            "married to George Breen",
+            "Richard Harding Breen Sr",
+        ] {
+            #expect(result.prose.contains(fact), Comment(rawValue: "missing \(fact): \(result.prose)"))
+        }
+        #expect(!result.prose.contains(". ,"))
+        #expect(!result.prose.localizedCaseInsensitiveContains("Muriel was not married"))
+        #expect(!result.prose.localizedCaseInsensitiveContains("catalog items matching"))
     }
 
     /// The whole live turn: every claim reaches the reader, nothing is

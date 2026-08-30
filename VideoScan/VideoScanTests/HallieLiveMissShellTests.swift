@@ -86,6 +86,52 @@ struct HallieLiveMissShellTests {
         }
     }
 
+    private struct PronunciationCase {
+        let prompt: String
+        let description: String
+        let required: [String]
+        let forbidden: [String]
+    }
+
+    private func assertPronunciationCase(_ testCase: PronunciationCase) async throws {
+        let harness = Harness()
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", testCase.prompt,
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies()
+        )
+
+        let answer = try #require(
+            harness.transcriptEvents.last { $0.kind == .assistant },
+            Comment(rawValue: testCase.prompt)
+        )
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(answer.route == "telling", Comment(rawValue: testCase.prompt))
+        #expect(answer.outcome == "answered", Comment(rawValue: testCase.prompt))
+        #expect(answer.queryDescription == testCase.description)
+        for required in testCase.required {
+            #expect(
+                answer.text.localizedCaseInsensitiveContains(required),
+                Comment(rawValue: "\(testCase.prompt) missing \(required): \(answer.text)")
+            )
+        }
+        for forbidden in testCase.forbidden {
+            #expect(
+                !answer.text.localizedCaseInsensitiveContains(forbidden),
+                Comment(rawValue: "\(testCase.prompt) contained \(forbidden): \(answer.text)")
+            )
+        }
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.mediaActions.isEmpty)
+        #expect(answer.mediaEvidence.isEmpty)
+        #expect(harness.pronunciationWrites.isEmpty)
+        #expect(harness.drillSaveCount == 0)
+    }
+
     private struct DefaultsPoison {
         private let defaults: UserDefaults
         private let saved: [(String, Any?)]
@@ -120,77 +166,41 @@ struct HallieLiveMissShellTests {
     /// catalog routing. Eval mode omits `--remember`, so even the injected
     /// write seams must remain silent.
     @Test func exactPronunciationPromptsStayLocalAndReturnReadBacks() async throws {
-        let cases: [(prompt: String, description: String, required: [String])] = [
-            (
-                "Latta should be pronounced with a short a on the La",
-                "pronunciation hint",
-                ["Latta", "LAT-uh", "short a"]
+        let cases: [PronunciationCase] = [
+            .init(
+                prompt: "Latta should be pronounced with a short a on the La",
+                description: "pronunciation hint",
+                required: ["Latta", "LAT-uh", "short a"],
+                forbidden: ["catalog items matching", "I did not keep LAT-uh (short a)"]
             ),
-            (
-                "tell me latta pronounciations",
-                "pronunciation question",
-                ["Latta", "LAT-uh"]
+            .init(
+                prompt: "tell me latta pronounciations",
+                description: "pronunciation question",
+                required: ["Latta", "LAT-uh"],
+                forbidden: ["catalog items matching", "I did not keep LAT-uh"]
             ),
-            (
-                "Latta is prounounced like Ladder but with Laddah or Lattah "
+            .init(
+                prompt: "Latta is prounounced like Ladder but with Laddah or Lattah "
                     + "short a first ah second, like ladder but latt ah",
-                "pronunciation",
-                ["Latta", "LAT-tah", "LAD-dah", "short a, then ah"]
+                description: "pronunciation",
+                required: ["Latta", "LAT-tah", "LAD-dah", "short a, then ah"],
+                forbidden: ["catalog items matching", "I did not keep LAT-tah"]
             ),
-            (
-                "the family name \"Latta\" should be pronounced with a short a, "
+            .init(
+                prompt: "the family name \"Latta\" should be pronounced with a short a, "
                     + "like in Ladder, but it would be \"Latt uh\"",
-                "pronunciation",
-                ["Latta", "LAT-uh", "short a"]
+                description: "pronunciation",
+                required: ["Latta", "LAT-uh", "short a"],
+                forbidden: [
+                    "catalog items matching",
+                    "surname origin",
+                    "I did not keep LAT-uh (short a)",
+                ]
             ),
         ]
 
         for testCase in cases {
-            let harness = Harness()
-            let options = try HallieShellCLI.parse(arguments: [
-                "--hallie", "--once", testCase.prompt,
-            ])
-
-            let code = await HallieShellCLI.run(
-                options: options,
-                output: { harness.output.append($0) },
-                dependencies: harness.dependencies()
-            )
-
-            let answer = try #require(
-                harness.transcriptEvents.last { $0.kind == .assistant },
-                Comment(rawValue: testCase.prompt)
-            )
-            #expect(
-                code == HallieShellCLI.ExitCode.success.rawValue,
-                Comment(rawValue: testCase.prompt)
-            )
-            #expect(answer.route == "telling", Comment(rawValue: testCase.prompt))
-            #expect(answer.outcome == "answered", Comment(rawValue: testCase.prompt))
-            #expect(
-                answer.queryDescription == testCase.description,
-                Comment(rawValue: testCase.prompt)
-            )
-            for required in testCase.required {
-                #expect(
-                    answer.text.localizedCaseInsensitiveContains(required),
-                    Comment(rawValue: "\(testCase.prompt) missing \(required): \(answer.text)")
-                )
-            }
-            #expect(
-                harness.translatedQuestions.isEmpty,
-                Comment(rawValue: "pronunciation escaped to translation: \(testCase.prompt)")
-            )
-            #expect(harness.mediaActions.isEmpty)
-            #expect(answer.mediaEvidence.isEmpty)
-            #expect(
-                harness.pronunciationWrites.isEmpty,
-                Comment(rawValue: "eval-mode prompt wrote pronunciation state: \(testCase.prompt)")
-            )
-            #expect(
-                harness.drillSaveCount == 0,
-                Comment(rawValue: "eval-mode prompt wrote drill state: \(testCase.prompt)")
-            )
+            try await assertPronunciationCase(testCase)
         }
     }
 
@@ -293,7 +303,8 @@ struct HallieLiveMissShellTests {
         #expect(beforeReset.contains("Latta as LAT-tah"))
 
         // The active drill's bare "no" opens a picker seeded from the same
-        // transient alternatives. :reset must pre-empt and clear both modes.
+        // transient alternatives. The direct reset-state sensor below pins
+        // modal clearing; this end-to-end path pins overlay clearing.
         #expect(beforeReset.contains("1 name to go"))
         #expect(beforeReset.contains("Next name: Latta"))
         #expect(beforeReset.contains("Here are a few ways to say Latta"))
@@ -329,5 +340,40 @@ struct HallieLiveMissShellTests {
         #expect(fresh.drillSaveCount == 0)
         #expect(harness.mediaActions.isEmpty)
         #expect(fresh.mediaActions.isEmpty)
+    }
+
+    /// Directly inspect the state immediately after the same production
+    /// reset function used by `:reset`. A later ordinary prompt can make a
+    /// stale picker/drill leave on its own, so post-prompt output is not a
+    /// discriminating modal-reset sensor.
+    @Test func resetImmediatelyClearsDrillPickerAndTransientOverlay() throws {
+        var state = HallieShellCLI.Session(
+            records: [],
+            profiles: nil,
+            graph: nil,
+            speakers: HallieTurnExecutor.Speakers(
+                ownerName: "Injected Owner",
+                archivistName: "Injected Hallie"
+            ),
+            model: "fixture"
+        )
+        state.drill = .init(
+            list: PronunciationDrillList(items: []),
+            index: nil
+        )
+        state.picker = try #require(
+            HalliePronunciationPicker.makeOffer(word: "Latta")
+        )
+        state.transientPronunciations = [
+            .init(written: "Latta", spoken: "LAT-tah"),
+        ]
+
+        let event = HallieShellCLI.resetSession(&state)
+
+        #expect(state.drill == nil)
+        #expect(state.picker == nil)
+        #expect(state.transientPronunciations.isEmpty)
+        #expect(event.kind == .system)
+        #expect(event.text == ":reset")
     }
 }

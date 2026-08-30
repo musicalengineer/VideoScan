@@ -140,13 +140,26 @@ struct HallieCenterTreeAnswerTests {
         #expect(HallieAnswerPlan.derive(from: r).isComposable == false)
     }
 
-    @Test func ricksTypoIsRecoveredAndSaid() throws {
-        let r = try #require(HallieLineageAnswer.answer(.centerTree(person: "Marhta Lamson"), context: context(tree)))
+    @Test func ricksTypoIsRecoveredAtTheLocalProductionBoundary() throws {
+        let turn = HallieTurnExecutor.preTranslation(
+            question: "can you center on marhta lamson",
+            playAfterAnswer: false,
+            memory: .init(),
+            isKnownPerson: { _ in false },
+            lineageAnswer: { HallieLineageAnswer.answer($0, context: context(tree)) }
+        )
+        guard case .answer(let r) = turn else {
+            Issue.record("exact typo-center prompt escaped the local graph route")
+            return
+        }
+        #expect(r.route == .graph)
         #expect(r.outcome == .answered)
         #expect(r.prose == "I took “Marhta Lamson” to mean Martha Lamson. Centering the Family Tree on Martha Lamson (b. before 1633, Ridgewell, Essex, England).")
         #expect(r.offeredActions == [.openFamilyTreePerson(personID: "@I2@", personName: "Martha Lamson")])
         #expect(r.performsFirstOfferedAction)
         #expect(r.basisLine.contains("“Marhta Lamson” taken as Martha Lamson"))
+        #expect(!r.prose.localizedCaseInsensitiveContains("I cannot center"))
+        #expect(!r.prose.localizedCaseInsensitiveContains("catalog items matching"))
     }
 
     @Test func ownerCentersOnTheRoot() throws {
