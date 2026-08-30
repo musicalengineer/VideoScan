@@ -16,8 +16,11 @@ import Foundation
 // rather than a deterministic test. CatalogStore therefore exposes
 // `testAfterWriteBeforeVerify`, an internal per-instance @Sendable closure
 // run between the fsync and the read-back — the same shape as the existing
-// `testBetweenProbeAndDecode` seam, and gated on TestEnvironment.isTestHost
-// so it is unreachable in a shipped app.
+// `testBetweenProbeAndDecode` seam. It is additionally gated on
+// TestEnvironment.isTestHost, but that is defence in depth rather than a
+// boundary: TestEnvironment.detect trusts launch markers, VS_UI_TEST=1
+// among them, so a shipped app launched with one would satisfy it. The nil
+// default and the absence of any production assignment are the protection.
 //
 // Isolation: every case injects CatalogStore(directory:), never
 // CatalogStore.shared, so nothing here can touch Application Support.
@@ -246,11 +249,14 @@ struct CatalogVerificationFailureTests {
         #expect(store.lastWriteError?.kind == "verificationFailed",
                 "verification must supersede the advisory lockUnavailable, got \(String(describing: store.lastWriteError))")
 
+        // Exact contents, newest first — not `contains`. The ORDER is the
+        // evidence: the advisory refusal is recorded first and the
+        // verification failure after it, within one save. A containment
+        // check would also pass if the two arrived the other way round, or
+        // if either were duplicated.
         let kinds = CatalogWriteJournal.recent(50, catalogURL: catalogURL).map(\.kind)
-        #expect(kinds.contains("lockUnavailable"),
-                "the fail-open lock refusal must still be journalled — without it this proves nothing; saw \(kinds)")
-        #expect(kinds.filter { $0 == "verificationFailed" }.count == 1,
-                "exactly one verification entry; saw \(kinds)")
+        #expect(kinds == ["verificationFailed", "lockUnavailable"],
+                "journal must be exactly [verificationFailed, lockUnavailable] newest-first; saw \(kinds)")
     }
 
     /// Negative control for the case above: same unopenable lock, no seam.
@@ -284,11 +290,15 @@ struct CatalogVerificationFailureTests {
         let snapPath = snapDir.appendingPathComponent("catalog.pre-test.async.json")
 
         let store = CatalogStore(directory: dir)
+        let counter = WriteCounter()
+        store.observer = counter
         store.testAfterWriteBeforeVerify = Self.corrupt
 
         let ok = await store.writeSnapshotAsync(records: [makeRecord(name: "d.mov")],
                                                 toPath: snapPath.path)
         #expect(ok == false, "a corrupted async snapshot must fail verification")
+        #expect(counter.writes == 0,
+                "a snapshot never notifies the observer — that callback belongs to catalog.json writes")
         #expect(store.lastWriteError == nil,
                 "an async snapshot failure must not touch the live catalog error")
         #expect(verificationEntries(snapPath).count == 1,
