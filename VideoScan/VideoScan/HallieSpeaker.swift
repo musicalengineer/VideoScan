@@ -205,6 +205,22 @@ final class HallieSpeaker: NSObject, ObservableObject {
 
     // MARK: - Speaking
 
+    /// One resolution seam shared by production speech and the isolation
+    /// sensor. Supplying explicit roots is the test equivalent of poisoning
+    /// the user's global Application Support: neither global path is read.
+    nonisolated static func resolvedLexicon(
+        subject: String? = nil,
+        fileURL: URL = HalliePronunciationLexicon.defaultFileURL,
+        cyberBrainRootURL: URL? = HalliePronunciationLexicon.defaultCyberBrainRootURL,
+        viewerMode: Bool = ViewerModeCenter.shared.isViewer
+    ) -> HalliePronunciationLexicon {
+        HalliePronunciationLexicon.resolved(
+            fileURL: fileURL,
+            cyberBrainRootURL: cyberBrainRootURL,
+            subject: subject,
+            allowDefaultWrite: !viewerMode)
+    }
+
     /// `subject` is who the text is about (a CyberBrain id or name), so a
     /// name two records respell differently is said the way THAT person's
     /// record says (HalliePronunciationLexicon.personLayer).
@@ -213,7 +229,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         // Re-read per utterance: the file is tiny, the CyberBrain records are
         // mtime-cached, and an edit should be heard on the very next answer,
         // no restart. Layers: CyberBrain people → pronunciations.json → shipped.
-        let lexicon = HalliePronunciationLexicon.resolved(subject: subject)
+        let lexicon = Self.resolvedLexicon(subject: subject)
         let sentences = Self.sentences(text, lexicon: lexicon)
         guard !sentences.isEmpty else { return }
         let fired = lexicon.apply(to: Self.spokenText(text, lexicon: HalliePronunciationLexicon(entries: []))).fired
@@ -473,4 +489,3 @@ extension HallieSpeaker: AVSpeechSynthesizerDelegate {
         Task { @MainActor in self.setSpeaking(false) }
     }
 }
-

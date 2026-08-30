@@ -261,8 +261,10 @@ struct ResearchPersonSheet: View {
                     Button("Cancel") { model.cancel() }
                 } else {
                     Button("Run") { model.run() }
+                        .masterOnly()
                         .keyboardShortcut(.defaultAction)
                     Button("Run (fresh)") { model.run(refresh: true) }
+                        .masterOnly()
                         .help("Ignore cached pages and fetch again")
                 }
             }
@@ -330,6 +332,7 @@ struct ResearchPersonSheet: View {
             Button("Tell Hallie (\(model.confirmedUntoldCount) confirmed)") {
                 model.tellHallie()
             }
+            .masterOnly()
             .disabled(model.confirmedUntoldCount == 0)
             .help("Write the confirmed findings, with their citations, into the family knowledge file Hallie answers from")
         }
@@ -376,11 +379,13 @@ private struct ResearchFindingRow: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 320)
+                .masterOnly()
                 .disabled(finding.toldItemID != nil)
                 TextField("Lore (what the family knows about this)", text: $lore)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
                     .onSubmit(onCommitLore)
+                    .masterOnly()
             }
         }
         .padding(.vertical, 4)

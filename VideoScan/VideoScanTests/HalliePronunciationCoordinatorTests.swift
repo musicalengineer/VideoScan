@@ -13,6 +13,7 @@ struct HalliePronunciationCoordinatorTests {
         private let lock = NSLock()
         private var storage: [HallieAppTurnCoordinator.PronunciationWrite] = []
         var failWith: String?
+        var drillSaveFailWith: String?
         func append(_ value: HallieAppTurnCoordinator.PronunciationWrite) { lock.withLock { storage.append(value) } }
         var writes: [HallieAppTurnCoordinator.PronunciationWrite] { lock.withLock { storage } }
     }
@@ -51,6 +52,11 @@ struct HalliePronunciationCoordinatorTests {
             recordPronunciation: { write in
                 if let failWith = recorder.failWith { throw CyberBrainWriter.WriteError.ioFailure(failWith) }
                 recorder.append(write)
+            },
+            saveDrillStore: { _, _ in
+                if let failWith = recorder.drillSaveFailWith {
+                    throw CyberBrainWriter.WriteError.ioFailure(failWith)
+                }
             },
             executeRequest: { _, _ in
                 Issue.record("no catalog query for a pronunciation")
@@ -115,6 +121,25 @@ struct HalliePronunciationCoordinatorTests {
         #expect(response.result.basisLine.contains("NOT kept"))
         #expect(!response.result.basisLine.contains("pronunciation kept"))
         #expect(response.telling == session)
+    }
+
+    @Test func failedHintSavesNeverClaimNotedOrKept() async throws {
+        let recorder = Recorder()
+        recorder.drillSaveFailWith = "read-only viewer"
+        let unmappable = try await run(
+            "Latta rhymes with data", recorder: recorder, brain: nil)
+        let freeform = try await run(
+            "Latta is prounounced the Scottish way", recorder: recorder, brain: nil)
+
+        for response in [unmappable, freeform] {
+            #expect(response.result.outcome == .failed)
+            #expect(response.result.prose.contains("read-only viewer"))
+            #expect(response.result.prose.contains("won't stick"))
+            #expect(!response.result.prose.localizedCaseInsensitiveContains("noted"))
+            #expect(!response.result.prose.localizedCaseInsensitiveContains("kept"))
+            #expect(response.result.basisLine.contains("NOT kept"))
+            #expect(response.picker == nil)
+        }
     }
 
     @Test func targetResolutionPrefersOneBrainCarrierThenOneTreeCarrierThenTheFile() throws {

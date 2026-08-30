@@ -1168,16 +1168,24 @@ struct FamilyTreeDemoView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .frame(maxWidth: 170)
-                    .onSubmit { savePronunciation(word) }
+                    .onSubmit {
+                        guard Self.allowsPronunciationSubmit() else {
+                            ViewerWriteGuard.refuse("FamilyTreeDemoView.submitPronunciation")
+                            return
+                        }
+                        savePronunciation(word)
+                    }
                 Button {
                     // Preview through the same voice Hallie answers with
                     // (Bella when installed): the draft respelling itself, or
                     // the word as she currently says it.
-                    HallieSpeaker.shared.speak(draft.isEmpty ? word : draft)
+                    HallieSpeaker.shared.speak(
+                        Self.pronunciationPreviewText(word: word, draft: draft))
                 } label: {
                     Label("Say it", systemImage: "play.fill")
                 }
                 .controlSize(.small)
+                .disabled(!Self.allowsPronunciationPreview())
                 .help("Hear it")
                 Button("Save") { savePronunciation(word) }
                     .masterOnly()
@@ -1186,6 +1194,7 @@ struct FamilyTreeDemoView: View {
                     .disabled(draft.isEmpty)
                 if chip?.isSet == true {
                     Button("Remove") { removePronunciation(word) }
+                        .masterOnly()
                         .controlSize(.small)
                 }
                 Button("Cancel") {
@@ -1204,6 +1213,27 @@ struct FamilyTreeDemoView: View {
         .padding(8)
         .background(Color.white.opacity(0.045))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    static func allowsPronunciationSubmit(
+        viewerMode: Bool = ViewerModeCenter.shared.isViewer
+    ) -> Bool {
+        !viewerMode
+    }
+
+    /// Preview is deliberately read-only and remains available to a viewer.
+    /// Keeping this policy on the button gives the sensor a production seam;
+    /// Save and Return use the separate submit policy above.
+    static func allowsPronunciationPreview(
+        viewerMode: Bool = ViewerModeCenter.shared.isViewer
+    ) -> Bool {
+        _ = viewerMode
+        return true
+    }
+
+    static func pronunciationPreviewText(word: String, draft: String) -> String {
+        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? word : trimmed
     }
 
     private func beginEditingPronunciation(_ chip: FamilyTreePronunciationChip) {

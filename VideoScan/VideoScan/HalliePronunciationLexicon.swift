@@ -329,43 +329,80 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     /// Cheap enough to call per utterance: the file is tiny and the
     /// CyberBrain records are cached by (path, mtime, size). `subject` is
     /// the person the utterance is about (id or name), used only to break
-    /// ties between records that claim the same word.
+    /// ties between records that claim the same word. A viewer passes
+    /// `allowDefaultWrite: false`; a missing file then contributes shipped
+    /// defaults without creating the file or any parent directory.
     static func resolved(
         fileURL: URL = defaultFileURL,
         cyberBrainRootURL: URL? = defaultCyberBrainRootURL,
         subject: String? = nil,
+        allowDefaultWrite: Bool = true,
         log: LogSink? = appLog
     ) -> HalliePronunciationLexicon {
         var layers: [HalliePronunciationLexicon] = []
         if let root = cyberBrainRootURL {
             layers.append(PersonPronunciationCache.shared.layer(rootURL: root, subject: subject, log: log))
         }
-        layers.append(load(from: fileURL, log: log))
+        layers.append(load(from: fileURL, allowDefaultWrite: allowDefaultWrite, log: log))
         layers.append(shipped)
         return merged(layers)
     }
 
     /// The user's table, or the shipped default when the file does not exist
-    /// (in which case the default is written there so it can be edited) or
-    /// cannot be parsed (logged; the file is left alone for the user to fix).
-    static func load(from url: URL = defaultFileURL, log: LogSink? = appLog) -> HalliePronunciationLexicon {
-        guard FileManager.default.fileExists(atPath: url.path) else {
+    /// or cannot be parsed. First-use creation is an atomic staged move when
+    /// allowed; read-only callers neither create the file nor its directory.
+    static func load(
+        from url: URL = defaultFileURL,
+        allowDefaultWrite: Bool = true,
+        log: LogSink? = appLog
+    ) -> HalliePronunciationLexicon {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch where isMissingFile(error) {
+            guard allowDefaultWrite else {
+                if ViewerModeCenter.shared.isViewer {
+                    ViewerWriteGuard.refuse("HalliePronunciationLexicon.writeDefault")
+                }
+                return shipped
+            }
             do {
+                let directory = url.deletingLastPathComponent()
                 try FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try shipped.jsonData.write(to: url, options: .atomic)
+                    at: directory, withIntermediateDirectories: true)
+                let staged = directory.appendingPathComponent(
+                    ".\(fileName).\(UUID().uuidString).tmp")
+                defer { try? FileManager.default.removeItem(at: staged) }
+                try shipped.jsonData.write(to: staged, options: .atomic)
+                try FileManager.default.moveItem(at: staged, to: url)
                 log?.write("[hallie-voice] wrote default pronunciations to \(url.path)")
             } catch {
+                // Another reader may have won the first-use race. Prefer its
+                // complete atomic file over reporting a spurious failure.
+                if let concurrentData = try? Data(contentsOf: url),
+                   let concurrent = try? HalliePronunciationLexicon(jsonData: concurrentData) {
+                    return concurrent
+                }
                 log?.write("[hallie-voice] could not write default pronunciations to \(url.path): \(error.localizedDescription)")
             }
             return shipped
-        }
-        do {
-            return try HalliePronunciationLexicon(jsonData: Data(contentsOf: url))
         } catch {
             log?.write("[hallie-voice] pronunciations.json unreadable (\(error.localizedDescription)); using shipped defaults")
             return shipped
         }
+        do {
+            return try HalliePronunciationLexicon(jsonData: data)
+        } catch {
+            log?.write("[hallie-voice] pronunciations.json unreadable (\(error.localizedDescription)); using shipped defaults")
+            return shipped
+        }
+    }
+
+    private static func isMissingFile(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSCocoaErrorDomain else { return false }
+        return nsError.code == CocoaError.Code.fileNoSuchFile.rawValue
+            || nsError.code == CocoaError.Code.fileReadNoSuchFile.rawValue
     }
 
     /// Why a file-level write was refused.

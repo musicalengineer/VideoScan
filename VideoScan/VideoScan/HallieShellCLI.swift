@@ -428,7 +428,10 @@ enum HallieShellCLI {
                 },
                 loadDrillStore: { PronunciationDrillStore.load() },
                 saveDrillStore: { store, manifest in try store.save(manifest: manifest) },
-                loadLexicon: { HalliePronunciationLexicon.resolved() },
+                loadLexicon: {
+                    HalliePronunciationLexicon.resolved(
+                        allowDefaultWrite: !ViewerModeCenter.shared.isViewer)
+                },
                 loadPronunciationGold: { .shared })
         }
     }
