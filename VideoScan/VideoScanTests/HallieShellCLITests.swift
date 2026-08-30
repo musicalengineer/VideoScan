@@ -212,6 +212,7 @@ struct HallieShellCLITests {
     ) -> HallieShellCLI.Session {
         var state = HallieShellCLI.Session(
             records: [], profiles: [], graph: nil, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
             model: "fixture-model", runID: "reset-run")
         state.transcriptSequence = 41
         let prior = citedAnswer(path: "/isolated/Donna/Cape.mov")
@@ -477,6 +478,7 @@ struct HallieShellCLITests {
     @Test func resetSessionClearsEveryActiveConversationMode() {
         var state = HallieShellCLI.Session(
             records: [], profiles: [], graph: nil, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
             model: "fixture-model", runID: "reset-run")
         let previousSessionID = state.transcriptSessionID
         state.transcriptSequence = 41

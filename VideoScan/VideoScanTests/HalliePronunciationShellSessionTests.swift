@@ -23,9 +23,6 @@ struct HalliePronunciationShellSessionTests {
     private func dependencies(_ harness: Harness) -> HallieShellCLI.Dependencies {
         HallieShellCLI.Dependencies(
             loadCatalog: { _ in [] },
-            speakers: {
-                .init(ownerName: "Rick Breen", archivistName: "Hallie Mae")
-            },
             loadProfiles: {
                 .loaded([POIProfile(name: "Rick Breen", referencePath: "/fixture")])
             },
@@ -36,6 +33,9 @@ struct HalliePronunciationShellSessionTests {
                 throw NLTranslatorError.unreachable("fixture")
             },
             performMediaAction: { _ in },
+            speakers: {
+                .init(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+            },
             recordPronunciation: { _ in harness.recorded += 1 },
             saveDrillStore: { _, _ in harness.saved += 1 },
             loadLexicon: { Self.lexicon })
