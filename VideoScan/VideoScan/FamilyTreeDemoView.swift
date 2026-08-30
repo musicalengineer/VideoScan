@@ -807,6 +807,46 @@ struct FamilyTreeDemoView: View {
         }
     }
 
+    /// The person card, built in its own function.
+    ///
+    /// Not style: this initialiser takes seventeen arguments, and inside
+    /// the canvas's ForEach the whole thing is one ViewBuilder expression
+    /// the type-checker could not solve in reasonable time once two more
+    /// were added (2026-08-30). Same cliff that took out
+    /// VolumeTableTotalsFooter this morning. Keep it out of line.
+    @ViewBuilder
+    private func personCard(_ card: FamilyTreeCard) -> some View {
+        FamilyTreePersonCard(
+                card: card,
+                isSelected: card.person.id == model.selectedID,
+                onSelect: { model.select(card.person.id) },
+                onPickPhoto: { pickPhotoFile(for: card.person.id) },
+                onApplePhoto: {
+                    model.select(card.person.id)
+                    showApplePhotosPicker = true
+                },
+                onAdjustPhoto: {
+                    model.select(card.person.id)
+                    presentAdjustPhoto(for: card.person)
+                },
+                canAdjustPhoto: model.isLive,
+                portraitProfile: model.bridgedProfile(for: card.person.id),
+                photoRevision: model.photoRevision,
+                isBookmarked: model.isBookmarked(card.person.id),
+                onToggleBookmark: { model.toggleBookmark(card.person.id) },
+                childrenOf: { model.children(of: card.person.id) },
+                onSelectPerson: { model.select($0) },
+                onAskHallie: { name in
+                    catalogModel.archivistAskRequest = "tell me about \(name)"
+                    openWindow(id: "archivist")
+                },
+                onShowInPeople: { name in
+                    showInPeopleTab(named: name)
+                },
+                onResearch: { presentResearch(for: card.person.id) }
+            )
+    }
+
     private func exportSpec(_ chain: FamilyTreeLineChain) -> FamilyTreeLineExportSpec {
         FamilyTreeLineExportSpec(
             chain: chain,
@@ -863,33 +903,7 @@ struct FamilyTreeDemoView: View {
                     ZStack {
                         treeLines
                         ForEach(model.scene.cards) { card in
-                            FamilyTreePersonCard(
-                                card: card,
-                                isSelected: card.person.id == model.selectedID,
-                                onSelect: { model.select(card.person.id) },
-                                onPickPhoto: { pickPhotoFile(for: card.person.id) },
-                                onApplePhoto: {
-                                    model.select(card.person.id)
-                                    showApplePhotosPicker = true
-                                },
-                                onAdjustPhoto: {
-                                    model.select(card.person.id)
-                                    presentAdjustPhoto(for: card.person)
-                                },
-                                canAdjustPhoto: model.isLive,
-                                portraitProfile: model.bridgedProfile(for: card.person.id),
-                                photoRevision: model.photoRevision,
-                                isBookmarked: model.isBookmarked(card.person.id),
-                                onToggleBookmark: { model.toggleBookmark(card.person.id) },
-                                onAskHallie: { name in
-                                    catalogModel.archivistAskRequest = "tell me about \(name)"
-                                    openWindow(id: "archivist")
-                                },
-                                onShowInPeople: { name in
-                                    showInPeopleTab(named: name)
-                                },
-                                onResearch: { presentResearch(for: card.person.id) }
-                            )
+                            personCard(card)
                             .position(card.position)
                         }
                         if model.scene.cards.isEmpty, case .loaded = model.loadState {

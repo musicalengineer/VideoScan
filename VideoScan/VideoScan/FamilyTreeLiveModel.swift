@@ -1336,6 +1336,30 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
+    /// Children of a person, in the biography policy's order so the list
+    /// reads the same here as in Hallie's prose.
+    ///
+    /// Rick, 2026-08-30: "right click Fred Lamb -> Show All Children. I'd
+    /// like to see the names of all my grandma['s siblings]". Deliberately
+    /// NOT via Hallie — a deterministic graph lookup should not require
+    /// getting a sentence right.
+    func children(of personID: String) -> [(id: String, name: String)] {
+        guard let graph, let person = graph.people[personID] else { return [] }
+        return ArchivistBiographyPolicy
+            .orderedPeople(graph.relatives(.children, of: person))
+            .map { (id: $0.id, name: $0.name) }
+    }
+
+    /// Every ancestor two people share, nearest first, with the kinship
+    /// term. The computation already existed in
+    /// GedcomFamilyGraph+CommonAncestors and was reachable only by phrasing
+    /// a question to Hallie one of seven specific ways.
+    func sharedAncestors(of a: String, and b: String,
+                         limit: Int = 12) -> [GedcomFamilyGraph.CommonAncestor] {
+        guard let graph else { return [] }
+        return graph.commonAncestors(of: a, and: b, limit: limit)
+    }
+
     func setPhotoOverride(_ image: NSImage, for personID: String) {
         photoOverrides[personID] = image
         photoOverrideSources[personID] = nil

@@ -58,6 +58,10 @@ struct FamilyTreePersonCard: View {
     /// not a heart: in a family archive a favourites list ranks relatives.
     let isBookmarked: Bool
     let onToggleBookmark: () -> Void
+    /// Evaluated lazily when the context menu opens, so listing children
+    /// costs nothing per card on a 39,250-person canvas.
+    let childrenOf: () -> [(id: String, name: String)]
+    let onSelectPerson: (String) -> Void
     /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
@@ -68,6 +72,25 @@ struct FamilyTreePersonCard: View {
 
     private var person: FamilyTreePersonSummary { card.person }
     private var accent: Color { person.sex.accent }
+
+    /// "Children of X" as a submenu of names, each one a jump. A submenu
+    /// rather than a sheet: the answer is usually three to eight names and
+    /// the point is to click one, not read a report. Rick, 2026-08-30 —
+    /// deliberately NOT via Hallie, because a deterministic graph lookup
+    /// should not require phrasing a sentence correctly.
+    @ViewBuilder private var childrenMenu: some View {
+        let kids = childrenOf()
+        if kids.isEmpty {
+            Button("No children recorded for \(person.name)") { }
+                .disabled(true)
+        } else {
+            Menu("Children of \(person.name) (\(kids.count))") {
+                ForEach(kids, id: \.id) { child in
+                    Button(child.name) { onSelectPerson(child.id) }
+                }
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
