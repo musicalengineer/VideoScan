@@ -612,9 +612,12 @@ final class CatalogStore {
     /// temp-file + rename(2), so anything pre-planted at the destination is
     /// replaced before the verify reads it.
     ///
-    /// Always nil in production, and additionally gated on
-    /// TestEnvironment.isTestHost at the call site, so it cannot fire in a
-    /// shipped app even if something assigned it.
+    /// The real safety is that it defaults to nil and production never
+    /// assigns it. The TestEnvironment.isTestHost gate at the call site is a
+    /// second layer, NOT an absolute boundary (codex QA): that predicate
+    /// trusts launch markers — VS_UI_TEST=1 among them — so a shipped app
+    /// launched with one set would satisfy it. The gate narrows the window;
+    /// the nil default is what closes it.
     ///
     /// Passed EXPLICITLY into `encodeAndWrite` rather than read from a
     /// static: encodeAndWrite is nonisolated static, and a static mutable
@@ -1170,8 +1173,10 @@ final class CatalogStore {
             // second Data: at the pre-reduction size the old whole-file
             // re-read doubled peak memory per save (#161 suspect 3).
             let expected = Self.sha256Hex(data)
-            // The verification window. Gated on the test host so this is
-            // unreachable in a shipped app regardless of the property.
+            // The verification window. The isTestHost gate is defence in
+            // depth, not a guarantee — see the property's documentation:
+            // the predicate trusts launch markers. Nothing assigns the
+            // property in production, which is the actual protection.
             if TestEnvironment.isTestHost, let corrupt = afterWriteBeforeVerify {
                 corrupt(fileURL)
             }

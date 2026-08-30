@@ -111,14 +111,20 @@ struct CatalogVerificationFailureTests {
         #expect(entries.count == 1,
                 "exactly one journal entry — encodeAndWrite journals, finishWrite must not double it; saw \(entries.count)")
 
-        // Lock release: the store must be usable again afterwards. This is
-        // the observable form of "finishWrite released in both outcomes".
+        // Lock release, probed EXTERNALLY and BEFORE any further save on this
+        // store (codex QA of 8b7d446f). CatalogLock is re-entrant for the same
+        // process — `if fd >= 0 { return .acquired }` — so a second save on the
+        // SAME store sails through a leaked lock and then releases it, making a
+        // "next save succeeds" check pass whether or not finishWrite released
+        // anything. A separate CatalogLock has its own fd and must win the flock.
+        #expect(try await waitForCatalogLockRelease(at: catalogURL),
+                "the failed save must release the lock — probed from outside, before any same-store save")
+
+        // Only now the weaker, caller-visible consequence: the store still works.
         store.testAfterWriteBeforeVerify = nil
-        #expect(store.saveNow(records: [makeRecord(name: "b.mov")]) == true,
-                "the lock must have been released, so a clean save succeeds")
+        #expect(store.saveNow(records: [makeRecord(name: "b.mov")]) == true)
         #expect(store.lastWriteError == nil, "a successful save clears the error")
         #expect(counter.writes == 1, "the successful save notifies exactly once")
-        #expect(try await waitForCatalogLockRelease(at: catalogURL))
     }
 
     // MARK: 2. Asynchronous live write
@@ -150,10 +156,10 @@ struct CatalogVerificationFailureTests {
     // MARK: 3. Precedence
 
     /// A later attempted-and-failed write must REPLACE an earlier one.
-    /// Note this deliberately does not use lockUnavailable: that needs an
-    /// unwritable directory, which stops the write before verification is
-    /// ever reached, so it cannot produce a verification failure to compete
-    /// with.
+    /// This is the ACROSS-attempts form; the same-attempt form is the case
+    /// below. An earlier revision claimed that one was impossible because
+    /// lockUnavailable needs an unwritable directory — that was wrong, and
+    /// the correction is documented there.
     @Test func aLaterWriteFailureReplacesAnEarlierVerificationFailure() throws {
         let dir = scratchDir()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -206,6 +212,91 @@ struct CatalogVerificationFailureTests {
             besideCatalogAt: dir.appendingPathComponent("catalog.json"))
         #expect(FileManager.default.fileExists(atPath: catalogJournal.path) == false,
                 "nothing may be journalled beside the live catalog for a snapshot failure")
+    }
+
+    // MARK: 3b. Same-attempt precedence
+
+    /// The precedence case that actually matters: an advisory
+    /// lockUnavailable recorded by writePrecondition, then superseded by a
+    /// verification failure inside the SAME save.
+    ///
+    /// Make only the LOCK path unopenable — catalog.lock as a DIRECTORY
+    /// fails open(2) with EISDIR while the parent stays writable — so the
+    /// lock fails open, the catalog write itself succeeds, and the seam then
+    /// corrupts the file. An earlier revision of this file claimed this was
+    /// impossible because lockUnavailable required an unwritable directory.
+    /// That was wrong: only the lock file has to be unopenable.
+    ///
+    /// The journal keeps it non-vacuous — both errors must appear, proving
+    /// lockUnavailable really was recorded before verificationFailed
+    /// replaced it in lastWriteError.
+    @Test func verificationFailureSupersedesAdvisoryLockUnavailableInTheSameSave() throws {
+        let dir = scratchDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let catalogURL = dir.appendingPathComponent("catalog.json")
+
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("catalog.lock"),
+                                                withIntermediateDirectories: true)
+
+        let store = CatalogStore(directory: dir)
+        store.testAfterWriteBeforeVerify = Self.corrupt
+
+        #expect(store.saveNow(records: [makeRecord(name: "a.mov")]) == false)
+        #expect(store.lastWriteError?.kind == "verificationFailed",
+                "verification must supersede the advisory lockUnavailable, got \(String(describing: store.lastWriteError))")
+
+        let kinds = CatalogWriteJournal.recent(50, catalogURL: catalogURL).map(\.kind)
+        #expect(kinds.contains("lockUnavailable"),
+                "the fail-open lock refusal must still be journalled — without it this proves nothing; saw \(kinds)")
+        #expect(kinds.filter { $0 == "verificationFailed" }.count == 1,
+                "exactly one verification entry; saw \(kinds)")
+    }
+
+    /// Negative control for the case above: same unopenable lock, no seam.
+    /// lockUnavailable is deliberately FAIL-OPEN, so the save must succeed.
+    @Test func anUnopenableLockAloneStillLetsTheSaveSucceed() throws {
+        let dir = scratchDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("catalog.lock"),
+                                                withIntermediateDirectories: true)
+        let store = CatalogStore(directory: dir)
+
+        #expect(store.saveNow(records: [makeRecord(name: "a.mov")]) == true,
+                "lockUnavailable is fail-open — the save must still land")
+        #expect(store.lastWriteError == nil, "a successful save clears the advisory error")
+    }
+
+    // MARK: 4b. Asynchronous snapshot
+
+    /// writeSnapshotAsync must carry the seam and behave like writeSnapshot.
+    /// codex QA: deleting the seam propagation at the Task.detached call site
+    /// left every other case green, so this path had no sensor at all.
+    @Test func asyncSnapshotVerificationFailureJournalsBesideTheSnapshotOnly() async throws {
+        let dir = scratchDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let snapDir = dir.appendingPathComponent("snaps", isDirectory: true)
+        try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
+        let snapPath = snapDir.appendingPathComponent("catalog.pre-test.async.json")
+
+        let store = CatalogStore(directory: dir)
+        store.testAfterWriteBeforeVerify = Self.corrupt
+
+        let ok = await store.writeSnapshotAsync(records: [makeRecord(name: "d.mov")],
+                                                toPath: snapPath.path)
+        #expect(ok == false, "a corrupted async snapshot must fail verification")
+        #expect(store.lastWriteError == nil,
+                "an async snapshot failure must not touch the live catalog error")
+        #expect(verificationEntries(snapPath).count == 1,
+                "one verification entry beside the snapshot")
+        let catalogJournal = CatalogWriteJournal.journalURL(
+            besideCatalogAt: dir.appendingPathComponent("catalog.json"))
+        #expect(FileManager.default.fileExists(atPath: catalogJournal.path) == false,
+                "nothing beside the live catalog")
     }
 
     // MARK: 5. Negative control for the seam itself
