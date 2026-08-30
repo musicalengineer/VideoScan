@@ -420,7 +420,8 @@ final class CatalogStore {
     /// Balances a successful writePrecondition(). Releases the per-write
     /// lock and, on success, advances the session generation to what the
     /// write stamped on disk.
-    private func finishWrite(success: Bool, wroteGeneration: Int) {
+    private func finishWrite(success: Bool, wroteGeneration: Int,
+                             error: CatalogWriteError? = nil) {
         if success {
             // max(): completions can arrive out of order (an async save's
             // main-actor completion may land AFTER a later saveNow already
@@ -434,6 +435,21 @@ final class CatalogStore {
                 generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
                                                                      besideCatalogAt: fileURL)
             }
+        } else if let error {
+            // An attempted write that FAILED is the current truth, so it
+            // outranks whatever was in lastWriteError. The case that makes
+            // this matter (codex QA of 4fc11741): `lockUnavailable` is
+            // deliberately FAIL-OPEN — writePrecondition records it and then
+            // proceeds with the write anyway. On an unwritable directory both
+            // steps fail, and the old "only fill if empty" guard meant the
+            // user was told "Could not obtain the catalog lock" while the
+            // real, worse fact — the catalog did not persist — was dropped.
+            // A prior error may also simply be stale from an earlier attempt.
+            //
+            // Refusals are unaffected: when writePrecondition refuses,
+            // encodeAndWrite never runs, so `error` is nil and the refusal
+            // below is preserved.
+            lastWriteError = error
         } else if lastWriteError == nil {
             lastWriteError = .writeFailed("encode or atomic write failed")
         }
@@ -817,12 +833,16 @@ final class CatalogStore {
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
                                        masterArchive: masterArchive)
-        var ok = false
+        var writeError: CatalogWriteError?
         writeQueue.sync {
-            ok = Self.encodeAndWrite(payload: payload, to: fileURL)
+            writeError = Self.encodeAndWrite(payload: payload, to: fileURL,
+                                             purpose: .liveCatalog)
         }
-        // Releases the per-write lock in both outcomes.
-        finishWrite(success: ok, wroteGeneration: nextGeneration)
+        let ok = writeError == nil
+        // Releases the per-write lock in both outcomes. The error is carried
+        // through so lastWriteError names the real cause instead of a fixed
+        // "encode or atomic write failed".
+        finishWrite(success: ok, wroteGeneration: nextGeneration, error: writeError)
         if ok {
             observer?.catalogStoreDidWrite(self)
         }
@@ -892,9 +912,12 @@ final class CatalogStore {
         let delay = testWriteDelay
         writeQueue.async {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-            let ok = Self.encodeAndWrite(payload: payload, to: dest)
+            let writeError = Self.encodeAndWrite(payload: payload, to: dest,
+                                                 purpose: .liveCatalog)
             Task { @MainActor [weak self] in
-                self?.asyncSaveDidFinish(success: ok, wroteGeneration: nextGeneration)
+                self?.asyncSaveDidFinish(success: writeError == nil,
+                                         wroteGeneration: nextGeneration,
+                                         error: writeError)
             }
         }
     }
@@ -902,9 +925,10 @@ final class CatalogStore {
     /// Back on the main actor after a background write. Releases the
     /// per-write lock, fires the observer, and, if anything went dirty
     /// while we were writing, starts the follow-up save.
-    private func asyncSaveDidFinish(success: Bool, wroteGeneration: Int) {
+    private func asyncSaveDidFinish(success: Bool, wroteGeneration: Int,
+                                    error: CatalogWriteError? = nil) {
         saveInFlight = false
-        finishWrite(success: success, wroteGeneration: wroteGeneration)
+        finishWrite(success: success, wroteGeneration: wroteGeneration, error: error)
         if success {
             // Notify the observer (CatalogSync on the master) so it can
             // refresh manifest.sha256. Skipped for the test singleton —
@@ -944,7 +968,8 @@ final class CatalogStore {
         return Self.encodeAndWrite(payload: Self.makePayload(records: records,
                                                              generation: currentGeneration,
                                                              masterArchive: masterArchive),
-                                   to: URL(fileURLWithPath: path))
+                                   to: URL(fileURLWithPath: path),
+                                   purpose: .snapshot) == nil
     }
 
     /// Same contract as `writeSnapshot`, but only the DTO map (the ONE
@@ -961,7 +986,7 @@ final class CatalogStore {
                                        masterArchive: masterArchive)
         let url = URL(fileURLWithPath: path)
         return await Task.detached(priority: .userInitiated) {
-            Self.encodeAndWrite(payload: payload, to: url)
+            Self.encodeAndWrite(payload: payload, to: url, purpose: .snapshot) == nil
         }.value
     }
 
@@ -1061,7 +1086,30 @@ final class CatalogStore {
         }
     }
 
-    nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO, to fileURL: URL) -> Bool {
+    /// What a given `encodeAndWrite` call is persisting. The two cases fail
+    /// with very different consequences, and until 2026-08-29 the log could
+    /// not tell them apart: a live catalog.json failure was reported with
+    /// the words "failed to save catalog snapshot", which reads as "a
+    /// recovery copy was skipped" rather than "the catalog did not persist".
+    /// That understatement on the app's most important file is the whole
+    /// reason this parameter exists.
+    enum WritePurpose: Sendable {
+        /// catalog.json itself. Failure means the catalog did not persist.
+        case liveCatalog
+        /// A `catalog.<prefix>.<stamp>.json` recovery copy. Failure means a
+        /// safety net is missing; callers degrade rather than destroy.
+        case snapshot
+    }
+
+    /// Encode and atomically write `payload`. Returns nil on success, or the
+    /// error that describes the failure — the caller decides what to do with
+    /// it. Returning the error rather than a bare Bool is what lets a live
+    /// failure carry its real cause (ENOSPC, EIO, EPERM) into
+    /// `lastWriteError` and the write journal; previously the cause reached
+    /// the log only, and the UI got a fixed "encode or atomic write failed".
+    nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO,
+                                                   to fileURL: URL,
+                                                   purpose: WritePurpose) -> CatalogWriteError? {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
@@ -1099,19 +1147,58 @@ final class CatalogStore {
             guard expected == actual else {
                 let err = CatalogWriteError.verificationFailed(
                     expectedSHA256: expected, actualSHA256: actual, bytes: data.count)
+                // Journalled for BOTH purposes, unlike the I/O failure below:
+                // a checksum mismatch is a corruption signal whatever file it
+                // lands on, and dropping snapshot coverage here would be a
+                // silent reduction in what the journal can see.
                 CatalogWriteJournal.record(err, catalogURL: fileURL)
                 NSLog("VideoScan: CATALOG VERIFICATION FAILED — %@", err.userFacingDescription)
                 catalogStoreLog.fault("catalog verification failed: expected \(expected, privacy: .public) got \(actual, privacy: .public)")
-                return false
+                return err
             }
 
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             catalogStoreLog.debug("catalog save: encode+write+verify of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms, sha256 \(expected.prefix(12), privacy: .public)")
-            return true
+            return nil
         } catch {
-            NSLog("VideoScan: failed to save catalog snapshot: %@", String(describing: error))
-            catalogStoreLog.error("catalog save failed: \(String(describing: error), privacy: .public)")
-            return false
+            let err = CatalogWriteError.writeFailed(String(describing: error))
+            // Name the file, not the directory: the last path component is
+            // exactly what distinguishes catalog.json from a
+            // catalog.<prefix>.<stamp>.json recovery copy.
+            //
+            // NOT a privacy guarantee, and an earlier revision of this
+            // comment wrongly implied it was (codex QA): `error` is the
+            // underlying NSError, whose description carries NSFilePath —
+            // the full path — and it is interpolated below. The short form
+            // is for readability at the front of the line, nothing more.
+            let which = fileURL.lastPathComponent
+            switch purpose {
+            case .liveCatalog:
+                // Journalled: this is the audit trail that exists because of
+                // #167, and ordinary I/O failure was the one class it could
+                // not see. Best-effort by nature — when the failure IS an
+                // unwritable directory, the journal sits in that same
+                // directory and cannot be appended either.
+                // emitLog: false — the journal's own unified-log line says
+                // "catalog write refused", which is wrong for a write that
+                // was attempted and failed, and its detail would duplicate
+                // the accurate line emitted immediately below. The journal
+                // ENTRY is still written; only the generic log line is
+                // suppressed, so the global journal format is untouched.
+                CatalogWriteJournal.record(err, catalogURL: fileURL, emitLog: false)
+                NSLog("VideoScan: FAILED TO SAVE %@ — the catalog did not persist: %@",
+                      which, String(describing: error))
+                catalogStoreLog.error("live catalog write failed for \(which, privacy: .public): \(String(describing: error), privacy: .public)")
+            case .snapshot:
+                // NOT journalled: the journal lives beside the catalog, and a
+                // snapshot may be written anywhere. Callers treat nil as
+                // "no recovery copy -> do not destroy", which is the real
+                // safety mechanism; this line is diagnosis, not audit.
+                NSLog("VideoScan: failed to write catalog snapshot %@: %@",
+                      which, String(describing: error))
+                catalogStoreLog.error("catalog snapshot write failed for \(which, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+            return err
         }
     }
 }
