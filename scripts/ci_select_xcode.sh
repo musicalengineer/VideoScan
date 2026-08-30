@@ -50,6 +50,23 @@ set -euo pipefail
 # Every diagnostic goes through this, so stdout stays the contract.
 err() { printf '%s\n' "$*" >&2; }
 
+# Internal, used only by --selftest to prove signal handling. Creates a
+# tracked fixture, announces itself, then waits long enough to be signalled.
+# The marker after the sleep must NEVER be printed once TERM arrives.
+if [ "${1:-}" = "--selftest-signal-victim" ]; then
+  _FIXTURES=""
+  _cleanup() { for _d in $_FIXTURES; do [ -n "$_d" ] && rm -rf "$_d"; done; _FIXTURES=""; }
+  _on_signal() { trap - EXIT; _cleanup; exit $((128 + $1)); }
+  trap _cleanup EXIT
+  trap '_on_signal 2' INT
+  trap '_on_signal 15' TERM
+  _v=$(mktemp -d); _FIXTURES="$_v"
+  echo "VICTIM-READY $_v"
+  sleep 10
+  echo "VICTIM-RESUMED-AFTER-SIGNAL"
+  exit 0
+fi
+
 if [ "${1:-}" = "--selftest" ]; then SELFTEST=1; shift; else SELFTEST=0; fi
 MAJOR_WANTED="${1:-26}"
 APPS_DIR="${XCODE_APPS_DIR:-/Applications}"
@@ -66,8 +83,17 @@ if [ "$SELFTEST" -eq 1 ]; then
   # not much, but a script that litters /var/folders every CI run is the
   # kind of small leak nobody attributes later.
   _FIXTURES=""
-  _cleanup() { for _d in $_FIXTURES; do [ -n "$_d" ] && rm -rf "$_d"; done; }
-  trap _cleanup EXIT INT TERM
+  _cleanup() { for _d in $_FIXTURES; do [ -n "$_d" ] && rm -rf "$_d"; done; _FIXTURES=""; }
+  # A single `trap _cleanup EXIT INT TERM` looks right and is not (codex
+  # #928): on INT/TERM bash runs the handler and then RESUMES the script,
+  # so a cancelled run carries on creating fixtures and only stops at
+  # SIGKILL. Cancellation in CI has to actually cancel. Separate handlers:
+  # EXIT cleans, INT/TERM clean and then exit with the conventional
+  # 128+signal status. `trap - EXIT` first so cleanup does not run twice.
+  _on_signal() { trap - EXIT; _cleanup; exit $((128 + $1)); }
+  trap _cleanup EXIT
+  trap '_on_signal 2' INT
+  trap '_on_signal 15' TERM
   # NOTE: sets $_t directly and is called WITHOUT command substitution.
   # `_t=$(_fixture)` would run the body in a subshell, so the append to
   # $_FIXTURES would be discarded and the trap would clean nothing — which
@@ -142,6 +168,32 @@ if [ "$SELFTEST" -eq 1 ]; then
     *"resolves to"*) echo "SELFTEST PASS: symlink note goes to stderr" ;;
     *) echo "SELFTEST FAIL: expected a resolution note on stderr, got: $_err"; _self_fail=1 ;;
   esac
+
+  # SIGTERM must STOP the run, not merely clean up and carry on. Asserts
+  # three things at once: the post-signal marker is never printed, the exit
+  # status is the conventional 143, and the fixture is gone.
+  _sigout=$(mktemp); _FIXTURES="$_FIXTURES $_sigout"
+  "$0" --selftest-signal-victim > "$_sigout" 2>&1 &
+  _vpid=$!
+  _waited=0
+  while [ "$_waited" -lt 100 ] && ! grep -q '^VICTIM-READY' "$_sigout" 2>/dev/null; do
+    sleep 0.05; _waited=$((_waited + 1))
+  done
+  _vdir=$(sed -n 's/^VICTIM-READY //p' "$_sigout" | head -1)
+  kill -TERM "$_vpid" 2>/dev/null || true
+  wait "$_vpid" 2>/dev/null && _vrc=0 || _vrc=$?
+
+  if [ "$_vrc" -ne 143 ]; then
+    echo "SELFTEST FAIL: SIGTERM must exit 143 (128+15), got $_vrc"; _self_fail=1
+  elif grep -q 'VICTIM-RESUMED-AFTER-SIGNAL' "$_sigout"; then
+    echo "SELFTEST FAIL: script RESUMED after SIGTERM — the trap cleaned up but did not cancel"; _self_fail=1
+  elif [ -n "$_vdir" ] && [ -d "$_vdir" ]; then
+    echo "SELFTEST FAIL: SIGTERM left fixture $_vdir behind"; _self_fail=1
+  elif [ -z "$_vdir" ]; then
+    echo "SELFTEST FAIL: victim never reported its fixture dir"; _self_fail=1
+  else
+    echo "SELFTEST PASS: SIGTERM stops the run (rc=143), no resume, no fixture left"
+  fi
 
   if [ "$_self_fail" -ne 0 ]; then echo "SELFTEST: FAILURES ABOVE"; exit 1; fi
   echo "SELFTEST: all resolver checks passed"
