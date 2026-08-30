@@ -105,6 +105,12 @@ struct HallieShellCLITests {
         }
     }
 
+    private enum ActiveResetMode: CaseIterable {
+        case telling
+        case drill
+        case picker
+    }
+
     private final class CancellationProbe: @unchecked Sendable {
         private let lock = NSLock()
         private var isCancelled = false
@@ -199,6 +205,50 @@ struct HallieShellCLITests {
                     playbackSeconds: nil, bases: []),
             ],
             catalogPersonName: nil)
+    }
+
+    private func conversationState(
+        with mode: ActiveResetMode
+    ) -> HallieShellCLI.Session {
+        var state = HallieShellCLI.Session(
+            records: [], profiles: [], graph: nil, cyberBrain: nil,
+            model: "fixture-model", runID: "reset-run")
+        state.transcriptSequence = 41
+        let prior = citedAnswer(path: "/isolated/Donna/Cape.mov")
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "Was Donna there?",
+            ast: .presence(.init(people: ["Donna"])))
+        state.memory.record(
+            intent: intent, result: prior, question: "Was Donna there?")
+        state.citations = prior.citations
+        state.selectedRecordID = prior.citations.first?.recordID
+        state.remember(question: "Was Donna there?", answer: prior.prose)
+        state.rememberSocial(question: "Hello", answer: "Hello, Rick.")
+        let context = state.identityContext
+        state.pendingClarification = .init(
+            value: HallieTurnExecutor.makeClarification(
+                intent: intent,
+                stage: .profileIdentity,
+                candidates: [
+                    .init(
+                        id: .profileStableID("donna"),
+                        canonicalName: "Donna", label: "Donna"),
+                ],
+                context: context),
+            context: context)
+        switch mode {
+        case .telling:
+            state.telling = HallieTellingMode.Session(opening: .init(
+                subject: "Dad Breen", relation: "Rick's dad", pronoun: .he,
+                firstStatement: nil))
+        case .drill:
+            state.drill = HalliePronunciationDrillMode.Session(
+                list: PronunciationDrillList(items: []), index: nil)
+        case .picker:
+            state.picker = HalliePronunciationPicker.Offer(
+                word: "Latta", candidates: [])
+        }
+        return state
     }
 
     private func source(named filename: String) throws -> String {
@@ -420,6 +470,75 @@ struct HallieShellCLITests {
         #expect(reset.sessionID != firstSession)
         #expect(reset.sequence == 1)
         #expect(reset.runID == "reset-run")
+        #expect(reset.basisLine
+            == "Conversation memory, citations, history, and active modes cleared.")
+    }
+
+    @Test func resetSessionClearsEveryActiveConversationMode() {
+        var state = HallieShellCLI.Session(
+            records: [], profiles: [], graph: nil, cyberBrain: nil,
+            model: "fixture-model", runID: "reset-run")
+        let previousSessionID = state.transcriptSessionID
+        state.transcriptSequence = 41
+        state.telling = HallieTellingMode.Session(opening: .init(
+            subject: "Dad Breen", relation: "Rick's dad", pronoun: .he,
+            firstStatement: nil))
+        state.drill = HalliePronunciationDrillMode.Session(
+            list: PronunciationDrillList(items: []), index: nil)
+        state.picker = HalliePronunciationPicker.Offer(
+            word: "Latta", candidates: [])
+
+        let reset = HallieShellCLI.resetSession(&state)
+
+        #expect(state.telling == nil)
+        #expect(state.drill == nil)
+        #expect(state.picker == nil)
+        #expect(state.transcriptSessionID != previousSessionID)
+        #expect(state.transcriptSequence == 1)
+        #expect(reset.sessionID == state.transcriptSessionID)
+        #expect(reset.sequence == 1)
+        #expect(reset.runID == "reset-run")
+        #expect(reset.basisLine
+            == "Conversation memory, citations, history, and active modes cleared.")
+    }
+
+    @Test func naturalResetPreemptsEveryActiveConversationMode() async {
+        for mode in ActiveResetMode.allCases {
+            let harness = Harness()
+            var state = conversationState(with: mode)
+            let sessionID = state.transcriptSessionID
+            var output: [String] = []
+
+            let outcome = await HallieShellCLI.answer(
+                "start over",
+                options: HallieShellCLI.Options(),
+                state: &state,
+                output: { output.append($0) },
+                dependencies: harness.dependencies())
+
+            #expect(outcome.exitCode == HallieShellCLI.ExitCode.success.rawValue)
+            #expect(state.telling == nil, "\(mode)")
+            #expect(state.drill == nil, "\(mode)")
+            #expect(state.picker == nil, "\(mode)")
+            #expect(state.pendingClarification == nil, "\(mode)")
+            #expect(state.citations.isEmpty, "\(mode)")
+            #expect(state.selectedRecordID == nil, "\(mode)")
+            #expect(state.memory == HallieTurnExecutor.ConversationMemory(), "\(mode)")
+            #expect(state.history.isEmpty, "\(mode)")
+            #expect(state.socialHistory.isEmpty, "\(mode)")
+            #expect(state.lastResponder == "none", "\(mode)")
+            // Natural reset stays in the logged session; only `:reset`
+            // renews the ID and restarts its sequence.
+            #expect(state.transcriptSessionID == sessionID, "\(mode)")
+            #expect(state.transcriptSequence == 43, "\(mode)")
+            #expect(harness.transcriptEvents.map(\.sequence) == [42, 43], "\(mode)")
+            #expect(harness.transcriptEvents.allSatisfy {
+                $0.sessionID == sessionID
+            }, "\(mode)")
+            #expect(harness.transcriptEvents.last?.route == "reset", "\(mode)")
+            #expect(output == [ArchivistConversationCommand.resetReply], "\(mode)")
+            #expect(harness.translatedQuestions.isEmpty, "\(mode)")
+        }
     }
 
     @Test func onceRecordsExactQuestionAndBoundedAnswerEvidence() async throws {

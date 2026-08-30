@@ -760,7 +760,7 @@ enum HallieShellCLI {
         }
     }
 
-    private static func answer(
+    static func answer(
         _ question: String,
         options: Options,
         state: inout Session,
@@ -770,6 +770,20 @@ enum HallieShellCLI {
         let userEvent = transcriptEvent(
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
+        // A reset is a control-plane turn, not modal input. Detect it before
+        // the picker / drill / telling owners: otherwise "start over" can be
+        // consumed as a drill correction or as the end of a telling session.
+        // Other finish words ("stop", "that's all") remain modal turns.
+        if ArchivistConversationCommand.detect(question) == .reset {
+            return await completeLocalAnswer(
+                HallieTurnExecutor.commandResult(.reset),
+                question: question,
+                identity: state.identityContext,
+                options: options,
+                state: &state,
+                output: output,
+                dependencies: dependencies)
+        }
         // The variations picker owns a number / "none of these" while its
         // list is up, and "say Latta a few ways" opens it (HallieShellCLI+Picker).
         if let outcome = await pickerTurn(
@@ -892,32 +906,14 @@ enum HallieShellCLI {
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):
-                state.lastResponder = "local"
-                // "start over" clears memory; other local answers leave it.
-                state.memory.record(intent: nil, result: result, question: question)
-                if options.diagnostics {
-                    output("interpreted: \(HallieTurnExecutor.label(result.route))")
-                }
-                render(result, ast: nil, context: identity, state: &state,
-                       diagnostics: options.diagnostics, output: output)
-                state.remember(question: question, answer: result.prose)
-                if result.route == .smalltalk || result.route == .conversation {
-                    state.rememberSocial(question: question, answer: result.prose)
-                }
-                if result.route == .reset { clearConversation(&state) }
-                let outcome = performMediaAction(
-                    result.mediaAction, output: output,
-                    dependencies: dependencies,
-                    allowActions: options.allowActions)
-                let event = transcriptEvent(
-                    result: result, responder: "local", state: &state)
-                await dependencies.recordTranscript([event])
-                if outcome == .mediaFailure { return .declined }
-                switch result.outcome {
-                case .answered, .repaired: return .answered
-                case .declined, .needsClarification, .failed: return .declined
-                case .unsupported: return .unsupported
-                }
+                return await completeLocalAnswer(
+                    result,
+                    question: question,
+                    identity: identity,
+                    options: options,
+                    state: &state,
+                    output: output,
+                    dependencies: dependencies)
             case .run(let local):
                 state.lastResponder = "local"
                 intent = local
@@ -1091,6 +1087,43 @@ enum HallieShellCLI {
                 state: &state)
             await dependencies.recordTranscript([event])
             return .interpretationFailed
+        }
+    }
+
+    private static func completeLocalAnswer(
+        _ result: HallieTurnExecutor.Result,
+        question: String,
+        identity: HallieTurnExecutor.Context,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        state.lastResponder = "local"
+        // "start over" clears memory; other local answers leave it.
+        state.memory.record(intent: nil, result: result, question: question)
+        if options.diagnostics {
+            output("interpreted: \(HallieTurnExecutor.label(result.route))")
+        }
+        render(result, ast: nil, context: identity, state: &state,
+               diagnostics: options.diagnostics, output: output)
+        state.remember(question: question, answer: result.prose)
+        if result.route == .smalltalk || result.route == .conversation {
+            state.rememberSocial(question: question, answer: result.prose)
+        }
+        if result.route == .reset { clearConversation(&state) }
+        let outcome = performMediaAction(
+            result.mediaAction, output: output,
+            dependencies: dependencies,
+            allowActions: options.allowActions)
+        let event = transcriptEvent(
+            result: result, responder: "local", state: &state)
+        await dependencies.recordTranscript([event])
+        if outcome == .mediaFailure { return .declined }
+        switch result.outcome {
+        case .answered, .repaired: return .answered
+        case .declined, .needsClarification, .failed: return .declined
+        case .unsupported: return .unsupported
         }
     }
 
@@ -1327,6 +1360,9 @@ enum HallieShellCLI {
         state.selectedRecordID = nil
         state.biographyPhoto = nil
         state.pendingClarification = nil
+        state.telling = nil
+        state.drill = nil
+        state.picker = nil
         state.memory.reset()
         state.history = []
         state.socialHistory = []
@@ -1340,7 +1376,7 @@ enum HallieShellCLI {
         return transcriptEvent(
             kind: .system,
             text: ":reset",
-            basisLine: "Conversation memory, citations, and history cleared.",
+            basisLine: "Conversation memory, citations, history, and active modes cleared.",
             state: &state)
     }
 
