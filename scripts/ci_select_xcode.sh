@@ -29,6 +29,12 @@
 # Usage:  scripts/ci_select_xcode.sh          # newest Xcode 26.x
 #         scripts/ci_select_xcode.sh 27       # newest Xcode 27.x
 #         RESOLVE_ONLY=1 scripts/ci_select_xcode.sh   # print path, don't switch
+#         scripts/ci_select_xcode.sh --selftest       # verify the resolver
+#
+# RESOLVE_ONLY prints EXACTLY ONE line on stdout — the developer dir — so it
+# is safe in command substitution. Every diagnostic goes to stderr.
+# XCODE_APPS_DIR overrides /Applications; it exists so --selftest can point
+# the resolver at fixtures without patching the script.
 #
 # -e matters here (codex review, #885): without it a failing
 # `sudo xcode-select -s` would fall through and the checks below would then
@@ -37,9 +43,71 @@
 # exact class of masking this script exists to prevent.
 set -euo pipefail
 
+if [ "${1:-}" = "--selftest" ]; then SELFTEST=1; shift; else SELFTEST=0; fi
 MAJOR_WANTED="${1:-26}"
+APPS_DIR="${XCODE_APPS_DIR:-/Applications}"
 MIN_SWIFT_MAJOR=6
 MIN_SWIFT_MINOR=2
+
+if [ "$SELFTEST" -eq 1 ]; then
+  # Pins the resolver's contract against fixtures. These started as
+  # throwaway probes during review; they belong in the repo, because every
+  # one of them corresponds to a hole that review actually found.
+  _self_fail=0
+  _mkapp() { mkdir -p "$1/Contents/Developer/usr/bin"
+             : > "$1/Contents/Developer/usr/bin/xcodebuild"
+             chmod +x "$1/Contents/Developer/usr/bin/xcodebuild"; }
+  _check() { # name, expected-basename-or-FAIL, apps-dir
+    _out=$(XCODE_APPS_DIR="$3" RESOLVE_ONLY=1 "$0" "${4:-26}" 2>/dev/null) && _rc=0 || _rc=$?
+    if [ "$2" = "FAIL" ]; then
+      if [ "$_rc" -eq 0 ]; then echo "SELFTEST FAIL: $1 — expected rc!=0, got a path: $_out"; _self_fail=1
+      else echo "SELFTEST PASS: $1 (rc=$_rc)"; fi
+      return
+    fi
+    _lines=$(printf '%s\n' "$_out" | grep -c . || true)
+    if [ "$_lines" != "1" ]; then
+      echo "SELFTEST FAIL: $1 — RESOLVE_ONLY stdout must be exactly 1 line, got $_lines"; _self_fail=1; return
+    fi
+    case "$_out" in
+      */"$2"/Contents/Developer) echo "SELFTEST PASS: $1 -> $2" ;;
+      *) echo "SELFTEST FAIL: $1 — expected $2, got $_out"; _self_fail=1 ;;
+    esac
+  }
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.0.1.app"; _mkapp "$_t/Xcode_26.2.app"
+  _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26.10.app"
+  _check "newest wins, 26.10 > 26.3 (version sort, not lexical)" "Xcode_26.10.app" "$_t"
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26.4_beta.app"
+  _mkapp "$_t/Xcode_26.5_Release_Candidate.app"
+  _check "beta and RC basenames rejected" "Xcode_26.3.app" "$_t"
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26_beta_9.app"
+  ln -s "$_t/Xcode_26_beta_9.app" "$_t/Xcode_26.9.9.app"
+  _check "numeric alias to a beta rejected even though it sorts higher" "Xcode_26.3.app" "$_t"
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26_beta_9.app"
+  ln -s "$_t/Xcode_26_beta_9.app" "$_t/Xcode_26.9.9.app"
+  _check "only a beta alias present" "FAIL" "$_t"
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
+  _check "legitimate alias to a stable bundle still accepted, deduped" "Xcode_26.3.app" "$_t"
+
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_16.4.app"
+  _check "no 26.x installed" "FAIL" "$_t"
+
+  # The stdout/stderr split itself: notes must not pollute the contract.
+  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
+  _err=$(XCODE_APPS_DIR="$_t" RESOLVE_ONLY=1 "$0" 26 2>&1 >/dev/null || true)
+  case "$_err" in
+    *"resolves to"*) echo "SELFTEST PASS: symlink note goes to stderr" ;;
+    *) echo "SELFTEST FAIL: expected a resolution note on stderr, got: $_err"; _self_fail=1 ;;
+  esac
+
+  if [ "$_self_fail" -ne 0 ]; then echo "SELFTEST: FAILURES ABOVE"; exit 1; fi
+  echo "SELFTEST: all resolver checks passed"
+  exit 0
+fi
 
 # Stable releases only (codex review, #903). The bare glob also matches
 # Xcode_26.4_beta.app and release candidates; a CI toolchain should not be
@@ -67,14 +135,14 @@ is_stable_version_name() {
 }
 
 CANDIDATES=""
-for app in "/Applications/Xcode_${MAJOR_WANTED}"*.app; do
+for app in "$APPS_DIR/Xcode_${MAJOR_WANTED}"*.app; do
   [ -d "$app" ] || continue          # unmatched glob stays literal; skip it
   is_stable_version_name "${app##*/}" || continue
 
   real=$(cd "$app" 2>/dev/null && pwd -P) || continue
   realbase=${real##*/}
   if [ "$realbase" != "${app##*/}" ]; then
-    echo "note: ${app##*/} resolves to $realbase"
+    echo "note: ${app##*/} resolves to $realbase" >&2
   fi
   is_stable_version_name "$realbase" || continue
 
@@ -99,7 +167,7 @@ if [ -n "$NEWEST" ]; then
 fi
 
 if [ -z "$DEV" ]; then
-  echo "::error::No Xcode ${MAJOR_WANTED}.x found — this source needs Swift ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+. Installed: $(ls -d /Applications/Xcode*.app 2>/dev/null | tr '\n' ' ')"
+  echo "::error::No Xcode ${MAJOR_WANTED}.x found — this source needs Swift ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+. Installed: $(ls -d "$APPS_DIR"/Xcode*.app 2>/dev/null | tr '\n' ' ')"
   exit 1
 fi
 

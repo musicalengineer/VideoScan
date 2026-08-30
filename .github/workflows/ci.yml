@@ -41,6 +41,13 @@ jobs:
             tests/test_person_eval_metrics.py \
             tests/test_person_metrics_integration.py
 
+      # The Xcode selector's own regression suite. Runs here rather than on
+      # the macOS job because it works entirely on fixtures — it needs no
+      # Xcode, and putting it behind a 40-minute Swift build would mean a
+      # broken selector is discovered by the build it broke.
+      - name: Selftest — Xcode selector
+        run: scripts/ci_select_xcode.sh --selftest
+
   test:
     name: Build & Test
     # Gated on preflight, not parallel with it: the linters were put ahead
