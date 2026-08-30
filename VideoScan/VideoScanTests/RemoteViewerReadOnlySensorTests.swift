@@ -17,6 +17,7 @@
 // sink and reset in `defer`; the suite is serialized.
 
 import Testing
+import AppKit
 import Foundation
 @testable import VideoScan
 import VideoScanCore
@@ -198,7 +199,7 @@ struct RemoteViewerReadOnlySensorTests {
                      "HallieAppTurnCoordinator.recordPhotoCaption",
                      "HallieAppTurnCoordinator.saveDrillStore",
                      "Pronunciation.record",
-                     "HallieAppTurnCoordinator.loadLexiconDefault",
+                     "HalliePronunciationLexicon.writeDefault",
                      "HallieAppTurnCoordinator.excludePhoto"] {
             #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
         }
@@ -211,9 +212,48 @@ struct RemoteViewerReadOnlySensorTests {
         subjectName: "Dad", speakerName: "Rick", text: "Dad was a Marine.",
         kind: .note, date: Date())
 
+    @Test func viewerSpeechResolutionKeepsPersonAndShippedLayersWithoutCreatingAFile() throws {
+        let root = tmp("speech-lexicon")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let brainRoot = root.appendingPathComponent("brain", isDirectory: true)
+        _ = try CyberBrainWriter.setPronunciation(
+            subjectName: "Nathaniel McGill", gedcomPersonID: "@I7@",
+            token: "Nathaniel", saidAs: "nah-THAN-yel", rootURL: brainRoot)
+        PersonPronunciationCache.shared.invalidate()
+
+        // A conflicting parallel file stands in for poisoned global state.
+        // The speech seam receives only the isolated missing path and must
+        // neither consult the poison nor create its own parent directory.
+        let poison = root.appendingPathComponent("poison/Hallie/pronunciations.json")
+        try FileManager.default.createDirectory(
+            at: poison.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"Nathaniel":"POISON","Edith":"POISON"}"#.utf8).write(to: poison)
+        let missingFile = root.appendingPathComponent("isolated/Hallie/pronunciations.json")
+        let sink = Sink()
+        ViewerModeCenter.shared.reset(sink: { sink.append($0) })
+        ViewerModeCenter.shared.install(.viewer(masterHostname: "RicksM4.local"))
+        defer { ViewerModeCenter.shared.reset() }
+
+        let resolved = HallieSpeaker.resolvedLexicon(
+            subject: "Nathaniel McGill", fileURL: missingFile,
+            cyberBrainRootURL: brainRoot, viewerMode: true)
+        #expect(resolved.apply(to: "Nathaniel Edith").spoken == "nah-THAN-yel EE-dith")
+        #expect(!FileManager.default.fileExists(atPath: missingFile.path))
+        #expect(!FileManager.default.fileExists(
+            atPath: missingFile.deletingLastPathComponent().path))
+        #expect(sink.has("\(ViewerWriteGuard.logPrefix) HalliePronunciationLexicon.writeDefault"))
+    }
+
+    @Test func viewerReturnCannotSubmitPronunciationButPreviewRemainsAvailable() {
+        #expect(FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: false))
+        #expect(!FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: true))
+        // The UI's Say-it button has no viewer-only modifier; this sensor
+        // pins the only keyboard mutation affordance separately.
+    }
+
     /// Master sensor: with the default role, none of the guards fires and
     /// nothing is logged — the master's write paths are untouched.
-    @Test func masterModeRefusesNothingAndLogsNothing() throws {
+    @Test func masterModeExecutesGuardedWritersAndLogsNoRefusal() throws {
         let sink = Sink()
         ViewerModeCenter.shared.reset(sink: { sink.append($0) })
         defer { ViewerModeCenter.shared.reset() }
@@ -223,6 +263,38 @@ struct RemoteViewerReadOnlySensorTests {
 
         #expect(ViewerWriteGuard.refuse("probe") == false)
         #expect(throws: Never.self) { try ViewerWriteGuard.check("probe") }
+        let originals = root.appendingPathComponent("originals", isDirectory: true)
+        try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
+        let ged = originals.appendingPathComponent("family.ged")
+        try GedcomSyntheticPedigree.gedcom(people: 20, generations: 3)
+            .write(to: ged, atomically: true, encoding: .utf8)
+        let graph = try #require(GedcomFamilyGraph(fileURL: ged))
+
+        let treeBrain = root.appendingPathComponent("tree-brain", isDirectory: true)
+        let tree = FamilyTreeLiveModel(
+            originalsDirectory: originals, cyberBrainRootURL: treeBrain)
+        tree.install(graph: graph)
+        try tree.addNote("Master note")
+        _ = try tree.recordTestimony(Self.testimony)
+        let selectedID = try #require(tree.selectedID)
+        let selected = try #require(graph.people[selectedID])
+        let selectedWord = try #require(selected.name.split(separator: " ").first.map(String.init))
+        try tree.setPronunciation(word: selectedWord, saidAs: "MASTER")
+        #expect(FileManager.default.fileExists(
+            atPath: treeBrain.appendingPathComponent("cyberbrain.json").path))
+
+        let research = ResearchStore(peopleRoot: root.appendingPathComponent("people"))
+        let subject = ResearchSubject(person: selected)
+        try research.saveDossier(ResearchDossier(subject: subject))
+        try research.cache(.init(
+            url: "https://example.test/master", retrievedAt: Date(),
+            statusCode: 200, body: Data("master page".utf8)), key: subject.key)
+        #expect(try research.loadDossier(key: subject.key) != nil)
+        #expect(research.cachedPage(
+            key: subject.key, pageURL: "https://example.test/master")?.body
+                == Data("master page".utf8))
+
+        try exerciseMasterHallieWriters(root: root)
         let center = MediaFileOperationsCenter()
         let a = VideoRecord(), b = VideoRecord()
         a.fullPath = root.appendingPathComponent("a.mov").path; a.filename = "a.mov"
@@ -235,6 +307,51 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(FamilyGraphFileLoader(originalsDirectory: root).readOnly == false)
         #expect(sink.all.isEmpty)
         #expect(ViewerModeCenter.shared.refusals.isEmpty)
+    }
+
+    private func exerciseMasterHallieWriters(root: URL) throws {
+        let supportRoot = root.appendingPathComponent("support", isDirectory: true)
+        let assetRoot = root.appendingPathComponent("assets", isDirectory: true)
+        let cacheRoot = root.appendingPathComponent("cache", isDirectory: true)
+        let live = HallieAppTurnCoordinator.Dependencies.makeLive(
+            supportRoot,
+            HallieLiveAssetStoreFactory {
+                FamilyAssetStore(root: assetRoot, cacheRoot: cacheRoot)
+            })
+        try live.recordTestimony(Self.testimony)
+        try live.recordPhotoCaption(.init(
+            subjects: [.init(name: "Dad")], speakerName: "Rick",
+            text: "Dad at home", photoPath: "/tmp/dad.jpg", date: Date()))
+        let manifest = PronunciationDrillManifest(
+            version: PronunciationDrillStore.currentVersion,
+            generatedAt: Date(), entries: [])
+        try live.saveDrillStore(PronunciationDrillStore(), manifest)
+        try live.recordPronunciation(.init(
+            word: "Sensor", saidAs: "SEN-sor",
+            target: .treePerson(name: "Master Sensor", gedcomID: "@M1@", aliases: [])))
+        #expect(live.loadLexicon().apply(to: "Edith").spoken == "EE-dith")
+
+        let group = assetRoot.appendingPathComponent(
+            "People/MasterSensorFamily", isDirectory: true)
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        let photo = group.appendingPathComponent("family.png")
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: photo)
+        try live.excludePhoto(photo, "@M1@", "Rick", "not Dad")
+
+        let hallieRoot = supportRoot.appendingPathComponent("VideoScan", isDirectory: true)
+        #expect(FileManager.default.fileExists(
+            atPath: hallieRoot.appendingPathComponent("cyberbrain/cyberbrain.json").path))
+        #expect(FileManager.default.fileExists(
+            atPath: hallieRoot.appendingPathComponent("Hallie/pronunciations.json").path))
+        #expect(FileManager.default.fileExists(
+            atPath: hallieRoot.appendingPathComponent("Hallie/pronunciation-drill.json").path))
+        #expect(FileManager.default.fileExists(
+            atPath: photo.appendingPathExtension("notof.json").path))
     }
 
     @Test func statusChipWordingAndMasterOnlyHint() {

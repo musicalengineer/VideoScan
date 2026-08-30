@@ -400,14 +400,10 @@ enum HallieAppTurnCoordinator {
             },
             loadLexicon: {
                 guard let pronunciationFile = roots.pronunciationFile else { return .shipped }
-                if ViewerModeCenter.shared.isViewer,
-                   !FileManager.default.fileExists(atPath: pronunciationFile.path) {
-                    ViewerWriteGuard.refuse("HallieAppTurnCoordinator.loadLexiconDefault")
-                    return .shipped
-                }
                 return HalliePronunciationLexicon.resolved(
                     fileURL: pronunciationFile,
-                    cyberBrainRootURL: roots.cyberBrain)
+                    cyberBrainRootURL: roots.cyberBrain,
+                    allowDefaultWrite: !ViewerModeCenter.shared.isViewer)
             },
             loadPronunciationGold: { .shared },
             excludePhoto: { photo, gedcomID, notedBy, caption in

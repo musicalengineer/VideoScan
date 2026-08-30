@@ -1168,7 +1168,13 @@ struct FamilyTreeDemoView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .frame(maxWidth: 170)
-                    .onSubmit { savePronunciation(word) }
+                    .onSubmit {
+                        guard Self.allowsPronunciationSubmit() else {
+                            ViewerWriteGuard.refuse("FamilyTreeDemoView.submitPronunciation")
+                            return
+                        }
+                        savePronunciation(word)
+                    }
                 Button {
                     // Preview through the same voice Hallie answers with
                     // (Bella when installed): the draft respelling itself, or
@@ -1205,6 +1211,12 @@ struct FamilyTreeDemoView: View {
         .padding(8)
         .background(Color.white.opacity(0.045))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    static func allowsPronunciationSubmit(
+        viewerMode: Bool = ViewerModeCenter.shared.isViewer
+    ) -> Bool {
+        !viewerMode
     }
 
     private func beginEditingPronunciation(_ chip: FamilyTreePronunciationChip) {
