@@ -64,6 +64,13 @@ enum FamilyTreeLineChainMetrics {
 
 /// The chain itself: cards stacked top → bottom joined by a vertical line.
 struct FamilyTreeLineChainView: View {
+    /// Reads the scheme the enclosing Family Tree view resolved, so the
+    /// chain matches the canvas without being told twice.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
+    }
+
     let chain: FamilyTreeLineChain
     let selectedID: String?
     var zoom: Double = 1
@@ -77,7 +84,7 @@ struct FamilyTreeLineChainView: View {
                     ForEach(chain.cards) { card in
                         if card.generation > 0 {
                             Rectangle()
-                                .fill(Color.white.opacity(0.28))
+                                .fill(palette.connector)
                                 .frame(width: 2.5, height: FamilyTreeLineChainMetrics.connectorHeight)
                         }
                         chainCard(card)
@@ -134,7 +141,7 @@ struct FamilyTreeLineChainView: View {
             .padding(10)
         }
         .frame(width: FamilyTreeLineChainMetrics.cardWidth)
-        .background(Color(red: 0.12, green: 0.13, blue: 0.145))
+        .background(palette.card)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)

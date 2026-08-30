@@ -36,6 +36,13 @@ struct FamilyTreeDemoView: View {
     /// it lasts until the search field loses focus and is never saved.
     @State private var isSidebarVisible: Bool
     @State private var sidebarRevealedForSearch = false
+    /// Canvas appearance (Donna, 2026-08-30): the tree was pinned dark, so
+    /// there was no way to read it under a lamp without burning a lot of
+    /// ink to print it either. Saved explicitly to `preferences`, like the
+    /// sidebar choice. `systemColorScheme` is consulted only when the
+    /// preference is `.system`.
+    @State private var appearance: FamilyTreeAppearance
+    @Environment(\.colorScheme) private var systemColorScheme
     /// `@FocusState` ≈ a two-way flag for "does this control have keyboard
     /// focus"; setting it true moves the focus.
     @FocusState private var searchFocused: Bool
@@ -95,6 +102,18 @@ struct FamilyTreeDemoView: View {
         // `State(initialValue:)` ≈ member initializer for @State storage;
         // it is read once when the view is first created.
         _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
+        _appearance = State(initialValue: FamilyTreeAppearancePreference.load(from: preferences))
+    }
+
+    /// Every surface in this view reads from here. Resolving once per body
+    /// pass keeps "which grey is this?" in one place instead of nine.
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: effectiveScheme)
+    }
+
+    private var effectiveScheme: FamilyTreeEffectiveScheme {
+        FamilyTreeAppearancePreference.resolve(appearance,
+                                               systemIsDark: systemColorScheme == .dark)
     }
 
     var body: some View {
@@ -207,8 +226,8 @@ struct FamilyTreeDemoView: View {
         } message: {
             Text(exportError ?? "")
         }
-        .background(Color(red: 0.06, green: 0.07, blue: 0.08))
-        .preferredColorScheme(.dark)
+        .background(palette.window)
+        .preferredColorScheme(effectiveScheme == .dark ? .dark : .light)
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
         }
@@ -574,7 +593,7 @@ struct FamilyTreeDemoView: View {
             .font(.system(size: 12))
         }
         .padding(14)
-        .background(Color(red: 0.09, green: 0.10, blue: 0.11))
+        .background(palette.panel)
     }
 
     // MARK: Canvas
@@ -676,10 +695,33 @@ struct FamilyTreeDemoView: View {
                 }
                 .buttonStyle(.bordered)
                 .help("Zoom in (⌘+)")
+
+                Divider().frame(height: 16)
+
+                // Donna, 2026-08-30. Beside zoom because it is the same
+                // kind of control: how the tree is presented, not what it
+                // contains.
+                Menu {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(FamilyTreeAppearance.allCases) { option in
+                            Label(option.label, systemImage: option.symbol).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    Image(systemName: effectiveScheme == .dark ? "moon.fill" : "sun.max.fill")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 38)
+                .help("Light or dark tree. Printing a line is always on white — see Export line.")
+                .onChange(of: appearance) { _, choice in
+                    FamilyTreeAppearancePreference.save(choice, to: preferences)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(Color(red: 0.075, green: 0.08, blue: 0.09))
+            .background(palette.controlBar)
 
             if let chain = model.lineChain {
                 // Chain mode: O(path length) cards, no tree layout at all.
@@ -692,8 +734,8 @@ struct FamilyTreeDemoView: View {
                 .background(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.055, green: 0.065, blue: 0.075),
-                            Color(red: 0.075, green: 0.08, blue: 0.095)
+                            palette.canvasTop,
+                            palette.canvasBottom
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -873,8 +915,8 @@ struct FamilyTreeDemoView: View {
                 .background(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.055, green: 0.065, blue: 0.075),
-                            Color(red: 0.075, green: 0.08, blue: 0.095)
+                            palette.canvasTop,
+                            palette.canvasBottom
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -902,7 +944,7 @@ struct FamilyTreeDemoView: View {
                 }
             }
         }
-        .stroke(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+        .stroke(palette.connector, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
     }
 
     /// Down from the parent anchor, across, down to the child's top edge.
@@ -1038,7 +1080,7 @@ struct FamilyTreeDemoView: View {
             }
             .padding(14)
         }
-        .background(Color(red: 0.085, green: 0.09, blue: 0.10))
+        .background(palette.sidebar)
     }
 
     // MARK: Archivist Notes
@@ -1084,7 +1126,7 @@ struct FamilyTreeDemoView: View {
                 .frame(minHeight: 60, maxHeight: 120)
                 .scrollContentBackground(.hidden)
                 .padding(4)
-                .background(Color.white.opacity(0.05))
+                .background(palette.overlayInk.opacity(0.05))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
 
             HStack {
@@ -1139,7 +1181,7 @@ struct FamilyTreeDemoView: View {
                         .font(.system(size: 11))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background((chip.isSet ? Color.cyan : Color.white).opacity(0.12))
+                        .background((chip.isSet ? Color.cyan : palette.overlayInk).opacity(0.12))
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -1211,7 +1253,7 @@ struct FamilyTreeDemoView: View {
             }
         }
         .padding(8)
-        .background(Color.white.opacity(0.045))
+        .background(palette.overlayInk.opacity(0.045))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
@@ -1442,13 +1484,13 @@ struct FamilyTreeDemoView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
-                .background(Color.white.opacity(0.05))
+                .background(palette.overlayInk.opacity(0.05))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
     }
 
     private var panelBackground: some ShapeStyle {
-        Color.white.opacity(0.065)
+        palette.panelOverlay
     }
 
     // MARK: Photos
@@ -1584,6 +1626,14 @@ private extension FamilyTreeSex {
 }
 
 private struct FamilyTreePersonCard: View {
+    /// Same palette as the enclosing tree. Read from the environment
+    /// rather than passed in: the parent sets `.preferredColorScheme`, so
+    /// the scheme here is already the resolved one.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
+    }
+
     let card: FamilyTreeCard
     let isSelected: Bool
     let onSelect: () -> Void
@@ -1667,7 +1717,7 @@ private struct FamilyTreePersonCard: View {
             .padding(10)
         }
         .frame(width: 150, height: 194)
-        .background(Color(red: 0.12, green: 0.13, blue: 0.145))
+        .background(palette.card)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -1775,6 +1825,14 @@ private struct FamilyAssetPortrait: View {
 
 /// One Archivist Notes row: the passage, then who/when + two small badges.
 private struct FamilyTreeNoteRow: View {
+    /// Same palette as the enclosing tree. Read from the environment
+    /// rather than passed in: the parent sets `.preferredColorScheme`, so
+    /// the scheme here is already the resolved one.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
+    }
+
     let note: FamilyTreeNote
 
     var body: some View {
@@ -1795,7 +1853,7 @@ private struct FamilyTreeNoteRow: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.045))
+        .background(palette.overlayInk.opacity(0.045))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
@@ -1820,6 +1878,14 @@ private struct FamilyTreeNoteRow: View {
 }
 
 private struct FamilyTreeSidebarRow: View {
+    /// Same palette as the enclosing tree. Read from the environment
+    /// rather than passed in: the parent sets `.preferredColorScheme`, so
+    /// the scheme here is already the resolved one.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
+    }
+
     let person: FamilyTreePersonSummary
     let isSelected: Bool
 
@@ -1843,7 +1909,7 @@ private struct FamilyTreeSidebarRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(isSelected ? Color.cyan.opacity(0.14) : Color.white.opacity(0.04))
+        .background(isSelected ? Color.cyan.opacity(0.14) : palette.overlayInk.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
@@ -1867,6 +1933,14 @@ struct FamilySearchMatch: Identifiable, Equatable {
 }
 
 private struct FamilySearchMatchCard: View {
+    /// Same palette as the enclosing tree. Read from the environment
+    /// rather than passed in: the parent sets `.preferredColorScheme`, so
+    /// the scheme here is already the resolved one.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FamilyTreePalette {
+        FamilyTreePalette.palette(for: colorScheme == .dark ? .dark : .light)
+    }
+
     let match: FamilySearchMatch
 
     var body: some View {
@@ -1895,7 +1969,7 @@ private struct FamilySearchMatchCard: View {
             }
         }
         .padding(10)
-        .background(Color.white.opacity(0.055))
+        .background(palette.overlayInk.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

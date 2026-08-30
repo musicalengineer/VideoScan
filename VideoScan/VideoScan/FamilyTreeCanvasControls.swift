@@ -28,6 +28,85 @@ enum FamilyTreeSidebarPreference {
     }
 }
 
+/// How the Family Tree canvas is painted.
+///
+/// Dark is the default because that is how the tree shipped and how Rick
+/// reads it. Light exists for two reasons Donna gave on 2026-08-30: a tree
+/// printed from a dark screen costs a fortune in black ink, and a dark
+/// canvas washes out under a room lamp when you are reading a line aloud
+/// to someone.
+///
+/// (Note that "Print line…" already renders light-on-white regardless of
+/// this setting — see FamilyTreeLineExport. This preference is about what
+/// you LOOK at, not what comes out of the printer.)
+enum FamilyTreeAppearance: String, CaseIterable, Identifiable, Sendable {
+    case dark
+    case light
+    case system
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .dark:   return "Dark"
+        case .light:  return "Light"
+        case .system: return "Match System"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .dark:   return "moon.fill"
+        case .light:  return "sun.max.fill"
+        case .system: return "circle.lefthalf.filled"
+        }
+    }
+}
+
+/// What the canvas actually paints, once "Match System" has been resolved
+/// against the current system appearance. Separate from
+/// `FamilyTreeAppearance` so the resolution is a pure function a test can
+/// drive without a view or a real system setting.
+enum FamilyTreeEffectiveScheme: Sendable {
+    case light
+    case dark
+
+    var isDark: Bool { self == .dark }
+}
+
+/// Persisted canvas appearance. Explicit load/save against an injected
+/// `UserDefaults`, matching `FamilyTreeSidebarPreference` — no @AppStorage,
+/// no didSet magic, so a test passes its own suite and never touches the
+/// real prefs.
+enum FamilyTreeAppearancePreference {
+    static let key = "ftAppearance"
+
+    /// Default is DARK: the tree has always looked this way, and a
+    /// preference that silently changes an existing user's view on upgrade
+    /// is a bug, not a feature.
+    static func load(from defaults: UserDefaults) -> FamilyTreeAppearance {
+        guard let raw = defaults.string(forKey: key),
+              let value = FamilyTreeAppearance(rawValue: raw) else { return .dark }
+        return value
+    }
+
+    static func save(_ appearance: FamilyTreeAppearance, to defaults: UserDefaults) {
+        defaults.set(appearance.rawValue, forKey: key)
+    }
+
+    /// Resolve a stored preference against the system appearance.
+    /// `systemIsDark` is whatever the environment reports; only `.system`
+    /// consults it, which is the whole point of keeping this pure.
+    static func resolve(_ appearance: FamilyTreeAppearance,
+                        systemIsDark: Bool) -> FamilyTreeEffectiveScheme {
+        switch appearance {
+        case .dark:   return .dark
+        case .light:  return .light
+        case .system: return systemIsDark ? .dark : .light
+        }
+    }
+}
+
 /// Pure zoom arithmetic for the canvas and the line chain. Everything is
 /// O(1) — the layout is never re-run to zoom; the view scales a finished
 /// scene with `scaleEffect`.
