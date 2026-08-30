@@ -31,8 +31,12 @@
 #         RESOLVE_ONLY=1 scripts/ci_select_xcode.sh   # print path, don't switch
 #         scripts/ci_select_xcode.sh --selftest       # verify the resolver
 #
-# RESOLVE_ONLY prints EXACTLY ONE line on stdout — the developer dir — so it
-# is safe in command substitution. Every diagnostic goes to stderr.
+# RESOLVE_ONLY prints EXACTLY ONE line on stdout — the developer dir — and
+# NOTHING on stdout when it fails, so it is safe in command substitution.
+# Every diagnostic, including ::error:: lines, goes to stderr. GitHub still
+# annotates workflow commands written to stderr, and even if it did not the
+# non-zero exit fails the step with the text right there in the log; a
+# polluted stdout contract is the worse trade.
 # XCODE_APPS_DIR overrides /Applications; it exists so --selftest can point
 # the resolver at fixtures without patching the script.
 #
@@ -42,6 +46,9 @@
 # happens to be 26.x that turns a failed selection into a silent pass — the
 # exact class of masking this script exists to prevent.
 set -euo pipefail
+
+# Every diagnostic goes through this, so stdout stays the contract.
+err() { printf '%s\n' "$*" >&2; }
 
 if [ "${1:-}" = "--selftest" ]; then SELFTEST=1; shift; else SELFTEST=0; fi
 MAJOR_WANTED="${1:-26}"
@@ -54,6 +61,19 @@ if [ "$SELFTEST" -eq 1 ]; then
   # throwaway probes during review; they belong in the repo, because every
   # one of them corresponds to a hole that review actually found.
   _self_fail=0
+  # Fixtures are cleaned deterministically, including on failure and on an
+  # interrupted run (codex #923) — seven mktemp -d trees per invocation is
+  # not much, but a script that litters /var/folders every CI run is the
+  # kind of small leak nobody attributes later.
+  _FIXTURES=""
+  _cleanup() { for _d in $_FIXTURES; do [ -n "$_d" ] && rm -rf "$_d"; done; }
+  trap _cleanup EXIT INT TERM
+  # NOTE: sets $_t directly and is called WITHOUT command substitution.
+  # `_t=$(_fixture)` would run the body in a subshell, so the append to
+  # $_FIXTURES would be discarded and the trap would clean nothing — which
+  # is exactly what happened on the first attempt at this cleanup.
+  _fixture() { _t=$(mktemp -d); _FIXTURES="$_FIXTURES $_t"; }
+
   _mkapp() { mkdir -p "$1/Contents/Developer/usr/bin"
              : > "$1/Contents/Developer/usr/bin/xcodebuild"
              chmod +x "$1/Contents/Developer/usr/bin/xcodebuild"; }
@@ -61,7 +81,12 @@ if [ "$SELFTEST" -eq 1 ]; then
     _out=$(XCODE_APPS_DIR="$3" RESOLVE_ONLY=1 "$0" "${4:-26}" 2>/dev/null) && _rc=0 || _rc=$?
     if [ "$2" = "FAIL" ]; then
       if [ "$_rc" -eq 0 ]; then echo "SELFTEST FAIL: $1 — expected rc!=0, got a path: $_out"; _self_fail=1
-      else echo "SELFTEST PASS: $1 (rc=$_rc)"; fi
+      elif [ -n "$_out" ]; then
+        # The contract is that a FAILED RESOLVE_ONLY writes nothing to
+        # stdout, so a caller doing DEV=$(...) gets an empty string rather
+        # than an ::error:: line it might go on to use as a path.
+        echo "SELFTEST FAIL: $1 — stdout must be EMPTY on failure, got: $_out"; _self_fail=1
+      else echo "SELFTEST PASS: $1 (rc=$_rc, stdout empty)"; fi
       return
     fi
     _lines=$(printf '%s\n' "$_out" | grep -c . || true)
@@ -74,30 +99,44 @@ if [ "$SELFTEST" -eq 1 ]; then
     esac
   }
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.0.1.app"; _mkapp "$_t/Xcode_26.2.app"
+  _fixture; _mkapp "$_t/Xcode_26.0.1.app"; _mkapp "$_t/Xcode_26.2.app"
   _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26.10.app"
   _check "newest wins, 26.10 > 26.3 (version sort, not lexical)" "Xcode_26.10.app" "$_t"
+  # Positive control for the count seam: four distinct bundles must report
+  # four candidates, so the dedup assertion above cannot pass vacuously.
+  _n=$(XCODE_APPS_DIR="$_t" RESOLVE_ONLY=1 "$0" 26 2>&1 >/dev/null | sed -n 's/^note: \([0-9][0-9]*\) candidate.*/\1/p')
+  if [ "$_n" = "4" ]; then echo "SELFTEST PASS: four distinct bundles report four candidates"
+  else echo "SELFTEST FAIL: expected 4 candidates, got '${_n:-<none>}'"; _self_fail=1; fi
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26.4_beta.app"
+  _fixture; _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26.4_beta.app"
   _mkapp "$_t/Xcode_26.5_Release_Candidate.app"
   _check "beta and RC basenames rejected" "Xcode_26.3.app" "$_t"
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26_beta_9.app"
+  _fixture; _mkapp "$_t/Xcode_26.3.app"; _mkapp "$_t/Xcode_26_beta_9.app"
   ln -s "$_t/Xcode_26_beta_9.app" "$_t/Xcode_26.9.9.app"
   _check "numeric alias to a beta rejected even though it sorts higher" "Xcode_26.3.app" "$_t"
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26_beta_9.app"
+  _fixture; _mkapp "$_t/Xcode_26_beta_9.app"
   ln -s "$_t/Xcode_26_beta_9.app" "$_t/Xcode_26.9.9.app"
   _check "only a beta alias present" "FAIL" "$_t"
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
-  _check "legitimate alias to a stable bundle still accepted, deduped" "Xcode_26.3.app" "$_t"
+  _fixture; _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
+  _check "legitimate alias to a stable bundle still accepted" "Xcode_26.3.app" "$_t"
+  # Deduplication needs an OBSERVABLE assertion (codex #924): two aliases to
+  # one bundle select the same path whether or not sort -u is there, so the
+  # selected path proves nothing. The candidate count does.
+  _dedup=$(XCODE_APPS_DIR="$_t" RESOLVE_ONLY=1 "$0" 26 2>&1 >/dev/null | sed -n 's/^note: \([0-9][0-9]*\) candidate.*/\1/p')
+  if [ "$_dedup" = "1" ]; then
+    echo "SELFTEST PASS: two aliases to one bundle dedupe to 1 candidate"
+  else
+    echo "SELFTEST FAIL: expected 1 candidate after dedup, got '${_dedup:-<none>}'"; _self_fail=1
+  fi
 
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_16.4.app"
+  _fixture; _mkapp "$_t/Xcode_16.4.app"
   _check "no 26.x installed" "FAIL" "$_t"
 
   # The stdout/stderr split itself: notes must not pollute the contract.
-  _t=$(mktemp -d); _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
+  _fixture; _mkapp "$_t/Xcode_26.3.app"; ln -s "$_t/Xcode_26.3.app" "$_t/Xcode_26.3.0.app"
   _err=$(XCODE_APPS_DIR="$_t" RESOLVE_ONLY=1 "$0" 26 2>&1 >/dev/null || true)
   case "$_err" in
     *"resolves to"*) echo "SELFTEST PASS: symlink note goes to stderr" ;;
@@ -142,7 +181,7 @@ for app in "$APPS_DIR/Xcode_${MAJOR_WANTED}"*.app; do
   real=$(cd "$app" 2>/dev/null && pwd -P) || continue
   realbase=${real##*/}
   if [ "$realbase" != "${app##*/}" ]; then
-    echo "note: ${app##*/} resolves to $realbase" >&2
+    err "note: ${app##*/} resolves to $realbase"
   fi
   is_stable_version_name "$realbase" || continue
 
@@ -157,8 +196,12 @@ for app in "$APPS_DIR/Xcode_${MAJOR_WANTED}"*.app; do
   CANDIDATES="${CANDIDATES}${real}
 "
 done
-# Aliases can resolve to the same bundle twice; keep one of each.
+# Aliases can resolve to the same bundle twice; keep one of each. The count
+# is reported so deduplication is OBSERVABLE — without it, dropping `sort -u`
+# changes nothing visible and no test can tell the difference (codex #924).
 CANDIDATES=$(printf '%s' "$CANDIDATES" | grep -v '^$' | sort -u || true)
+CANDIDATE_COUNT=$(printf '%s' "$CANDIDATES" | grep -c . || true)
+err "note: $CANDIDATE_COUNT candidate bundle(s) after dedup"
 
 DEV=""
 NEWEST=$(printf '%s' "$CANDIDATES" | grep -v '^$' | sort -Vr | head -1 || true)
@@ -167,7 +210,7 @@ if [ -n "$NEWEST" ]; then
 fi
 
 if [ -z "$DEV" ]; then
-  echo "::error::No Xcode ${MAJOR_WANTED}.x found — this source needs Swift ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+. Installed: $(ls -d "$APPS_DIR"/Xcode*.app 2>/dev/null | tr '\n' ' ')"
+  err "::error::No Xcode ${MAJOR_WANTED}.x found — this source needs Swift ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+. Installed: $(ls -d "$APPS_DIR"/Xcode*.app 2>/dev/null | tr '\n' ' ')"
   exit 1
 fi
 
@@ -177,10 +220,10 @@ if [ -n "${RESOLVE_ONLY:-}" ]; then
 fi
 
 if ! sudo xcode-select -s "$DEV"; then
-  echo "::error::xcode-select failed to switch to $DEV"
+  err "::error::xcode-select failed to switch to $DEV"
   exit 1
 fi
-echo "Selected $DEV"
+err "Selected $DEV"
 xcodebuild -version
 
 # Two corrections from codex review #903, both mine to own:
@@ -197,21 +240,21 @@ xcodebuild -version
 #    non-zero exit is fatal on its own.
 SWIFT_RC=0
 SWIFT_RAW=$(xcrun swift --version 2>&1) || SWIFT_RC=$?
-echo "$SWIFT_RAW"
+err "$SWIFT_RAW"
 if [ "$SWIFT_RC" -ne 0 ]; then
-  echo "::error::xcrun swift --version failed (rc=$SWIFT_RC) for the toolchain at $DEV — see its output above."
+  err "::error::xcrun swift --version failed (rc=$SWIFT_RC) for the toolchain at $DEV — see its output above."
   exit 1
 fi
 SWIFT_VER=$(printf '%s\n' "$SWIFT_RAW" | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1 || true)
 if [ -z "$SWIFT_VER" ]; then
-  echo "::error::Could not parse a Swift version from the selected toolchain at $DEV."
+  err "::error::Could not parse a Swift version from the selected toolchain at $DEV."
   exit 1
 fi
 SWIFT_MAJOR=${SWIFT_VER%%.*}
 SWIFT_MINOR=$(echo "${SWIFT_VER}." | cut -d. -f2)
 if [ "$SWIFT_MAJOR" -lt "$MIN_SWIFT_MAJOR" ] || \
    { [ "$SWIFT_MAJOR" -eq "$MIN_SWIFT_MAJOR" ] && [ "${SWIFT_MINOR:-0}" -lt "$MIN_SWIFT_MINOR" ]; }; then
-  echo "::error::Swift $SWIFT_VER is too old — isolated conformances need ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+ (Xcode ${MAJOR_WANTED}.x)."
+  err "::error::Swift $SWIFT_VER is too old — isolated conformances need ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+ (Xcode ${MAJOR_WANTED}.x)."
   exit 1
 fi
-echo "Swift $SWIFT_VER OK (need >= ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR})"
+err "Swift $SWIFT_VER OK (need >= ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR})"
