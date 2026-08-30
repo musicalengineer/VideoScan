@@ -529,6 +529,56 @@ else
         fail "watchdog contract broke (rc=$WATCHDOG_RC child=$CHILD_PID still_alive=$(kill -0 "$CHILD_PID" 2>/dev/null && echo yes || echo no))"
     fi
 
+    # Discriminating escalation case: the process-group leader accepts TERM
+    # and exits during grace, but its descendant ignores TERM. The retained
+    # leader must keep the PGID reserved until the descendant receives KILL.
+    MIXED_FIXTURE="$SANDBOX/watchdog-mixed-term-fixture.sh"
+    MIXED_READY="$SANDBOX/watchdog-mixed-ready"
+    MIXED_CHILD_PID_FILE="$SANDBOX/watchdog-mixed-child.pid"
+    SENTINEL_SIGNAL="$SANDBOX/watchdog-sentinel-signal"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        '( trap "" TERM; while :; do sleep 1; done ) &' \
+        'printf "%s\n" "$!" > "$WATCHDOG_MIXED_CHILD_PID_FILE"' \
+        ': > "$WATCHDOG_MIXED_READY"' \
+        'while :; do sleep 1; done' \
+        > "$MIXED_FIXTURE"
+    chmod +x "$MIXED_FIXTURE"
+    (
+        trap 'touch "$SENTINEL_SIGNAL"' TERM
+        while :; do sleep 1; done
+    ) &
+    SENTINEL_PID=$!
+    (
+        # shellcheck disable=SC1090
+        source "$WATCHDOG_LIB"
+        log() { echo "[watchdog-test] $*"; }
+        export VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY=1
+        export VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE="$MIXED_READY"
+        export WATCHDOG_MIXED_READY="$MIXED_READY"
+        export WATCHDOG_MIXED_CHILD_PID_FILE="$MIXED_CHILD_PID_FILE"
+        run_with_process_group_watchdog \
+            999 0.05 "$SANDBOX/watchdog-mixed-command.log" "$MIXED_FIXTURE"
+    ) > "$SANDBOX/watchdog-mixed-output.log" 2>&1
+    MIXED_RC=$?
+    MIXED_CHILD_PID=$(cat "$MIXED_CHILD_PID_FILE" 2>/dev/null || echo 0)
+    attempts=0
+    while kill -0 "$MIXED_CHILD_PID" 2>/dev/null && [ "$attempts" -lt 100 ]; do
+        sleep 0.01
+        attempts=$((attempts + 1))
+    done
+    if [ "$MIXED_RC" -eq 124 ] &&
+       ! kill -0 "$MIXED_CHILD_PID" 2>/dev/null &&
+       kill -0 "$SENTINEL_PID" 2>/dev/null &&
+       [ ! -e "$SENTINEL_SIGNAL" ] &&
+       ! grep -q 'CONTAMINATION:' "$SANDBOX/watchdog-mixed-output.log"; then
+        pass "leader TERM exit still escalates TERM-ignoring child; unrelated process untouched"
+    else
+        fail "mixed TERM escalation broke (rc=$MIXED_RC child_alive=$(kill -0 "$MIXED_CHILD_PID" 2>/dev/null && echo yes || echo no) sentinel_alive=$(kill -0 "$SENTINEL_PID" 2>/dev/null && echo yes || echo no) contamination=$(grep -c 'CONTAMINATION:' "$SANDBOX/watchdog-mixed-output.log" || true))"
+    fi
+    kill -KILL "$SENTINEL_PID" 2>/dev/null || true
+    wait "$SENTINEL_PID" 2>/dev/null || true
+
     rm -f "$WATCHDOG_FIXTURE_READY" "$WATCHDOG_CHILD_PID_FILE"
     CONTAMINATION_OUTPUT="$SANDBOX/watchdog-contamination.log"
     run_watchdog_fixture true "$CONTAMINATION_OUTPUT"
@@ -637,11 +687,13 @@ OPTIONAL_WORK_FILE="$SANDBOX/timeout-optional-work-ran"
     COV_LOGIC="91.2"
     PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red"}'
     PUBLISH_RC=99
+    log() { :; }
     publish_row() { printf '%s\n' "$1" > "$TIMEOUT_ROW_FILE"; return 0; }
     xcrun() { : > "$OPTIONAL_WORK_FILE"; return 99; }
     refresh_person_metrics() { : > "$OPTIONAL_WORK_FILE"; return 99; }
-    record_timed_out_test_result
-    [ "$PUBLISH_RC" -eq 0 ]
+    orchestrate_post_test_result true 7
+    ROUTE_RC=$?
+    [ "$ROUTE_RC" -eq 124 ] && [ "$PUBLISH_RC" -eq 0 ]
 )
 TIMEOUT_PUBLISH_RC=$?
 TIMEOUT_ROW_SUMMARY=$(python3 - "$TIMEOUT_ROW_FILE" <<'PY'

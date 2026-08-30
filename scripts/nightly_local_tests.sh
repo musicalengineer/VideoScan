@@ -66,7 +66,7 @@
 #       Claude, and Codex updates. Update failures remain advisory and cannot
 #       replace the already-recorded nightly verdict or its exit status.
 #
-#   2026-08-30 (xcodebuild-watchdog-r2):
+#   2026-08-30 (xcodebuild-watchdog-r3):
 #     - Build and test xcodebuild invocations run in private process groups
 #       behind hard deadlines. Timeout rows take precedence over ordinary
 #       return codes and zero-test discovery, so metrics publication remains
@@ -74,7 +74,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r2"
+NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r3"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -167,30 +167,40 @@ with open(output_path, "wb") as output:
             if os.path.exists(pre_signal_release):
                 time.sleep(0.05)
 
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except OSError as error:
-            # Darwin reports EPERM as well as ESRCH for an empty group whose
-            # unreaped leader is still reserved by this supervisor.
-            if error.errno not in (errno.ESRCH, errno.EPERM):
+        def signal_group(sig):
+            try:
+                os.killpg(child.pid, sig)
+                return True
+            except OSError as error:
+                # Darwin reports EPERM as well as ESRCH for an empty group
+                # whose unreaped leader remains reserved by this supervisor.
+                if error.errno in (errno.ESRCH, errno.EPERM):
+                    return False
                 raise
 
-        if not test_unreapable:
-            try:
-                child.wait(timeout=grace)
-                sys.exit(124)
-            except subprocess.TimeoutExpired:
-                pass
+        term_delivered = signal_group(signal.SIGTERM)
+        if term_delivered and grace > 0:
+            # Do not waitpid/poll here: even if the leader exits on TERM, it
+            # stays unreaped and reserves the numeric PID/PGID while descendants
+            # receive their full grace interval.
+            time.sleep(grace)
 
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except OSError as error:
-            if error.errno not in (errno.ESRCH, errno.EPERM):
-                raise
+        group_alive = signal_group(0)
+        if group_alive:
+            signal_group(signal.SIGKILL)
 
-        if not test_unreapable:
+        if not test_unreapable and group_alive:
+            # Retain the leader while KILL propagates, so every group probe is
+            # immune to numeric PGID reuse. Never waitpid until the group is
+            # empty; a kernel-blocked member therefore cannot wedge publication.
+            kill_deadline = time.monotonic() + 1.0
+            while signal_group(0) and time.monotonic() < kill_deadline:
+                time.sleep(0.01)
+            group_alive = signal_group(0)
+
+        if not test_unreapable and not group_alive:
             try:
-                child.wait(timeout=1.0)
+                child.wait(timeout=0.1)
                 sys.exit(124)
             except subprocess.TimeoutExpired:
                 pass
@@ -327,6 +337,61 @@ publish_current_test_result() {
 record_timed_out_test_result() {
     COV_LOGIC="null"
     publish_current_test_result
+}
+
+# Optional post-test work is kept behind orchestrate_post_test_result so the
+# actual timeout branch can be exercised without invoking xccov or the live
+# person evaluator. Neither command is part of the durable-row critical path.
+collect_optional_post_test_metrics() {
+    COV_LOGIC="null"
+    if [ -d /tmp/nightly-results.xcresult ]; then
+        log "xcresult exists, extracting coverage..."
+        xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 \
+            | head -5 | while read -r line; do log "  xccov: $line"; done
+        LOGIC_NUMS=$(xcrun xccov view --report --files-for-target VideoScan.app \
+            /tmp/nightly-results.xcresult 2>/dev/null \
+            | awk '
+                NF < 3 { next }
+                $0 ~ /^--/ { next }
+                $0 ~ /^ID/ { next }
+                $2 ~ /(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$/ { next }
+                {
+                    if (match($5, /\([0-9]+\/[0-9]+\)/)) {
+                        frag = substr($5, RSTART+1, RLENGTH-2)
+                        split(frag, a, "/")
+                        if (a[1] != "" && a[2] != "") {
+                            cov += a[1]
+                            tot += a[2]
+                        }
+                    }
+                }
+                END {
+                    if (tot > 0) printf "%.3f", (cov/tot)*100
+                    else         printf "null"
+                }')
+        COV_LOGIC="${LOGIC_NUMS:-null}"
+    fi
+    log "Logic-only coverage: ${COV_LOGIC}%"
+
+    PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+    refresh_person_metrics "$PERSON_EVAL_APP"
+}
+
+# Return 124 after recording a timeout row, 2 for the existing zero-test path,
+# or 0 after normal optional metrics. Timeout is checked first by construction.
+orchestrate_post_test_result() {
+    local timed_out="$1"
+    local total="$2"
+    if $timed_out; then
+        log "FATAL: test watchdog expired; recording partial counts before optional metrics"
+        record_timed_out_test_result
+        return 124
+    fi
+    if [ "$total" -eq 0 ]; then
+        return 2
+    fi
+    collect_optional_post_test_metrics
+    return 0
 }
 
 log "=== Nightly local test run starting (script v$NIGHTLY_SCRIPT_VERSION) ==="
@@ -735,15 +800,15 @@ classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC"
 
-if $TEST_TIMED_OUT; then
-    log "FATAL: test watchdog expired; recording partial counts before optional metrics"
-    record_timed_out_test_result
+orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
+POST_TEST_ROUTE_RC=$?
+if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then
     run_post_nightly_updates_if_recorded "$PUBLISH_RC"
     rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
     exit 1
 fi
 
-if [ "$TOTAL" -eq 0 ]; then
+if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
@@ -753,41 +818,6 @@ fi
 
 # Note on TEST_RC: non-zero is expected when any test fails. Classification
 # above is driven by the parsed result, except that a hard timeout always wins.
-
-# ── Coverage ────────────────────────────────────────────────────────
-COV_LOGIC="null"
-if [ -d /tmp/nightly-results.xcresult ]; then
-    log "xcresult exists, extracting coverage..."
-    xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 | head -5 | while read -r line; do log "  xccov: $line"; done
-    LOGIC_NUMS=$(xcrun xccov view --report --files-for-target VideoScan.app /tmp/nightly-results.xcresult 2>/dev/null \
-        | awk '
-            NF < 3 { next }
-            $0 ~ /^--/ { next }
-            $0 ~ /^ID/ { next }
-            $2 ~ /(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$/ { next }
-            {
-                if (match($5, /\([0-9]+\/[0-9]+\)/)) {
-                    frag = substr($5, RSTART+1, RLENGTH-2)
-                    split(frag, a, "/")
-                    if (a[1] != "" && a[2] != "") {
-                        cov += a[1]
-                        tot += a[2]
-                    }
-                }
-            }
-            END {
-                if (tot > 0) printf "%.3f", (cov/tot)*100
-                else         printf "null"
-            }')
-    COV_LOGIC="${LOGIC_NUMS:-null}"
-fi
-log "Logic-only coverage: ${COV_LOGIC}%"
-
-# Run the optional private benchmark only after the core test result is known.
-# It has a separate bounded budget and process-group timeout, so it cannot
-# orphan a VideoScan scanner. Missing config returns immediately.
-PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
-refresh_person_metrics "$PERSON_EVAL_APP"
 
 # ── Publish JSON row (matches TestDriver MetricsPublisher format) ───
 # "failed_names" is additive; make_current_test_result_row also includes
