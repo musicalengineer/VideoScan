@@ -1,6 +1,6 @@
 name: Python Tests
 
-# The Python suite — 395 tracked tests that neither CI nor the nightly ran
+# The Python suite — 400 tracked tests that neither CI nor the nightly ran
 # before 2026-08-29.
 #
 # Deliberately its OWN workflow rather than a job inside ci.yml. ci.yml is a
@@ -48,7 +48,8 @@ jobs:
       - name: Install minimal test dependencies
         run: python -m pip install --disable-pip-version-check numpy openpyxl pytest
 
-      # Enforces the tracked-file list and both count floors. Same script
-      # the nightly calls, so the two cannot drift.
+      # Enforces the tracked-file list and both count floors. The local
+      # nightly is intended to call this same script — that wiring is not
+      # in this branch — so that the two cannot drift once it does.
       - name: Run Python suite
         run: scripts/run_python_tests.sh

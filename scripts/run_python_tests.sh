@@ -31,10 +31,10 @@
 
 set -euo pipefail
 
-# Measured 2026-08-29 against 28 tracked modules. Raise both when tests are
+# Measured 2026-08-29 against 29 tracked modules. Raise both when tests are
 # added; never lower them to make a red run green.
-MIN_MODULES=28
-MIN_TESTS=395
+MIN_MODULES=29
+MIN_TESTS=400
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
@@ -67,10 +67,16 @@ echo "node: $(node --version)"
 # git ls-files, never a glob or a directory sweep: an untracked test file
 # in the working tree belongs to whoever put it there and must not become
 # a CI dependency, nor inflate the counts this script asserts.
+#
+# Patterns are repo-WIDE, not tests/-only (codex review, #915). Scoping to
+# tests/ silently omitted tools/poi-c02/test_tools.py — five tracked
+# materializer safety and provenance tests. Matching by name anywhere means
+# a future module in a new directory is picked up on its own, instead of
+# waiting for someone to notice it was never running.
 MODULES=()
 while IFS= read -r f; do
   [ -n "$f" ] && MODULES+=("$f")
-done < <(git ls-files 'tests/test_*.py')
+done < <(git ls-files '*test_*.py' '*_test.py' | sort -u)
 
 MODULE_COUNT=${#MODULES[@]}
 echo "tracked test modules: $MODULE_COUNT (floor $MIN_MODULES)"
