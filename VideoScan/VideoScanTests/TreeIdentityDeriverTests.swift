@@ -705,6 +705,146 @@ struct TreeIdentityCenterTests {
         #expect(center.pinsRevision == 1)
         #expect(saved.map(\.name).sorted() == ["Donna", "Rick"])
     }
+
+    /// SENSOR: A's memo hit is still an active refresh decision. It must
+    /// supersede a different B pass instead of letting B land afterward.
+    @Test func memoHitARejectsInFlightBWhenInputsReturnToA() async {
+        let (center, kinship) = makeCenter()
+        let gate = TreeIdentityDerivationGate()
+        var saved: [POIProfile] = []
+        center.store = { saved.append($0) }
+        kinship.install(graph: F.graph)
+
+        let profilesA = [F.tim]
+        await center.refresh(profiles: profilesA)
+        #expect(center.derivations["tim"] == TreeIdentityDerivation.none)
+        #expect(center.derivationRunCount == 1)
+
+        center.derivationPass = { graph, subjects, speakers in
+            await gate.holdFirstPass()
+            return TreeIdentityDeriver(
+                graph: graph,
+                subjects: subjects,
+                ownerName: speakers.ownerName,
+                ownerFamilySearchID: speakers.ownerFamilySearchID
+            ).deriveAll()
+        }
+        let staleB = Task { await center.refresh(profiles: [F.rick]) }
+        await gate.waitUntilStarted()
+
+        await center.refresh(profiles: profilesA)
+        await gate.release()
+        await staleB.value
+
+        #expect(center.derivations["tim"] == TreeIdentityDerivation.none)
+        #expect(center.derivations["rick"] == nil)
+        #expect(center.derivationRunCount == 1)
+        #expect(center.pinsRevision == 0)
+        #expect(saved.isEmpty, "superseded B must not auto-pin its owner verdict")
+    }
+
+    @Test func graphReplacementHidesAndRefusesObsoleteCandidateBeforeRefresh() async throws {
+        let (center, kinship) = makeCenter()
+        center.autoAcceptsTrustedSources = false
+        var saved: [POIProfile] = []
+        center.store = { saved.append($0) }
+        kinship.install(graph: F.graph)
+        await center.refresh(profiles: [F.rick])
+        let oldCandidate = try #require(center.derivations["rick"]?.certainCandidate)
+        #expect(center.treeLinkBadges(for: [F.rick])["rick"]?.kind == .derived)
+
+        let replacement = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @N1@ INDI
+        1 NAME Another /Person/
+        1 SEX M
+        1 _FSFTID OTHR-001
+        0 TRLR
+        """)
+        kinship.install(graph: replacement)
+
+        #expect(center.treeLinkBadges(for: [F.rick])["rick"] == nil)
+        #expect(center.showInTreeState(for: F.rick, among: [F.rick]) == ShowInTreeState.none)
+        let outcome = center.pin(oldCandidate, on: F.rick, among: [F.rick], attestation: "stale")
+        #expect(outcome.refusal?.contains("family tree changed") == true)
+        #expect(saved.isEmpty)
+        #expect(center.pinsRevision == 0)
+    }
+
+    @Test func profileRevisionHidesAndRefusesObsoleteCandidateBeforeRefresh() async throws {
+        let (center, kinship) = makeCenter()
+        center.autoAcceptsTrustedSources = false
+        var saved: [POIProfile] = []
+        center.store = { saved.append($0) }
+        kinship.install(graph: F.graph)
+        let original = F.profile("John Breen", sex: .male, born: 1940)
+        await center.refresh(profiles: [original])
+        let oldCandidate = try #require(center.derivations[original.id]?.certainCandidate)
+        #expect(oldCandidate.personID == "@I6@")
+
+        let revised = F.profile("John Breen", sex: .male, born: 1900)
+        #expect(center.treeLinkBadges(for: [revised])[revised.id] == nil)
+        guard case .derived(let currentCandidate, _) = center.showInTreeState(
+            for: revised,
+            among: [revised]
+        ) else {
+            Issue.record("revised profile should derive against current inputs")
+            return
+        }
+        #expect(currentCandidate.personID == "@I5@")
+        #expect(currentCandidate != oldCandidate)
+        #expect(center.showInTreeState(for: original, among: [revised]) == ShowInTreeState.none)
+
+        let outcome = center.pin(oldCandidate, on: original, among: [revised], attestation: "stale")
+        #expect(outcome.refusal?.contains("person changed") == true)
+        let staleDerived = center.pin(
+            oldCandidate,
+            on: revised,
+            among: [revised],
+            attestation: "derived: name + birth year (Show in Family Tree)"
+        )
+        #expect(staleDerived.refusal?.contains("suggestion changed") == true)
+        #expect(saved.isEmpty)
+        #expect(center.pinsRevision == 0)
+    }
+
+    @Test func speakerNameAndFamilySearchIDInvalidateDerivationMemo() async {
+        let (center, kinship) = makeCenter()
+        center.autoAcceptsTrustedSources = false
+        kinship.install(graph: F.graph)
+        let profile = F.profile("Rick Smith", sex: .male)
+        var currentSpeakers = HallieTurnExecutor.Speakers(
+            ownerName: "Rick Smith",
+            archivistName: "Hallie Mae",
+            ownerFamilySearchID: "RICK-SMI"
+        )
+        center.speakers = { currentSpeakers }
+
+        let ownerKey = center.refreshKey(for: [profile])
+        await center.refresh(profiles: [profile])
+        #expect(F.reason(center.derivations[profile.id] ?? .none) == .ownerSetting)
+        #expect(center.derivationRunCount == 1)
+
+        currentSpeakers = HallieTurnExecutor.Speakers(
+            ownerName: "Someone Else",
+            archivistName: "Hallie Mae",
+            ownerFamilySearchID: "RICK-SMI"
+        )
+        let renamedOwnerKey = center.refreshKey(for: [profile])
+        #expect(renamedOwnerKey != ownerKey)
+        await center.refresh(profiles: [profile])
+        #expect(F.reason(center.derivations[profile.id] ?? .none) == .uniqueFullName)
+        #expect(center.derivationRunCount == 2)
+
+        currentSpeakers = HallieTurnExecutor.Speakers(
+            ownerName: "Someone Else",
+            archivistName: "Hallie Mae",
+            ownerFamilySearchID: nil
+        )
+        #expect(center.refreshKey(for: [profile]) != renamedOwnerKey)
+        await center.refresh(profiles: [profile])
+        #expect(center.derivationRunCount == 3)
+    }
 }
 
 // MARK: - Root rule guards (added after the first M5 run)

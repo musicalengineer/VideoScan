@@ -99,9 +99,24 @@ final class TreeIdentityCenter: ObservableObject {
     /// Count of derivation passes actually run — tests pin the memo.
     private(set) var derivationRunCount = 0
 
+    /// Exact inputs read by TreeIdentityDeriver. Keeping the value slice,
+    /// rather than only a process-random hash, makes cache acceptance
+    /// collision-free and lets consumers prove a verdict is current.
+    struct DerivationSignature: Equatable {
+        let subjects: [TreeIdentitySubject]
+        let ownerName: String?
+        let ownerFamilySearchID: String?
+    }
+
     struct MemoKey: Equatable {
         let generation: Int
-        let signature: Int
+        let signature: DerivationSignature
+    }
+
+    private struct DerivationInput {
+        let key: MemoKey
+        let subjects: [TreeIdentitySubject]
+        let speakers: HallieTurnExecutor.Speakers
     }
 
     init(kinshipCenter: KinshipDisplayCenter) {
@@ -110,28 +125,24 @@ final class TreeIdentityCenter: ObservableObject {
 
     // MARK: Derivation pass
 
-    /// Hash of every field the deriver reads — and nothing else.
-    static func identitySignature(of profiles: [POIProfile]) -> Int {
-        var hasher = Hasher()
-        hasher.combine(profiles.count)
-        for p in profiles {
-            hasher.combine(p.name)
-            hasher.combine(p.uuid)
-            hasher.combine(p.aliases)
-            hasher.combine(p.sex)
-            hasher.combine(p.birthdate)
-            hasher.combine(p.deathdate)
-            hasher.combine(p.kinships)
-            hasher.combine(p.treeIdentity)
-            hasher.combine(p.treeIdentityQuarantined != nil)
-            hasher.combine(p.notInFamilyTree)
-        }
-        return hasher.finalize()
+    private func derivationInput(for profiles: [POIProfile]) -> DerivationInput {
+        let currentSpeakers = speakers()
+        let subjects = profiles.map(TreeIdentitySubject.init)
+        let signature = DerivationSignature(
+            subjects: subjects,
+            ownerName: currentSpeakers.ownerName,
+            ownerFamilySearchID: currentSpeakers.ownerFamilySearchID
+        )
+        return DerivationInput(
+            key: MemoKey(generation: kinshipCenter.graphGeneration, signature: signature),
+            subjects: subjects,
+            speakers: currentSpeakers
+        )
     }
 
     /// The memo key for the People tab's `.task(id:)`.
     func refreshKey(for profiles: [POIProfile]) -> MemoKey {
-        MemoKey(generation: kinshipCenter.graphGeneration, signature: Self.identitySignature(of: profiles))
+        derivationInput(for: profiles).key
     }
 
     /// Derive proposals for every unpinned profile (off main), then
@@ -147,20 +158,29 @@ final class TreeIdentityCenter: ObservableObject {
             memoKey = nil
             return
         }
-        let key = refreshKey(for: profiles)
-        guard key != memoKey, key != inFlightKey else { return }
+        let input = derivationInput(for: profiles)
+        let key = input.key
+        // A → B → A: returning to the accepted A memo must logically
+        // cancel a different B pass. Otherwise B can land later and
+        // overwrite A even though this refresh was a memo hit.
+        if key == memoKey {
+            if inFlightKey != nil {
+                refreshEpoch &+= 1
+                inFlightKey = nil
+            }
+            return
+        }
+        guard key != inFlightKey else { return }
         refreshEpoch &+= 1
         let epoch = refreshEpoch
         inFlightKey = key
-        let speakers = speakers()
-        let subjects = profiles.map(TreeIdentitySubject.init)
-        let verdicts = await derivationPass(graph, subjects, speakers)
+        let verdicts = await derivationPass(graph, input.subjects, input.speakers)
         // A graph clear/replacement or newer profile pass supersedes this
         // one while it is off actor. Detached work ignores parent Task
         // cancellation, so acceptance must be guarded explicitly.
         guard refreshEpoch == epoch,
               inFlightKey == key,
-              kinshipCenter.graphGeneration == key.generation else {
+              derivationInput(for: profiles).key == key else {
             if inFlightKey == key { inFlightKey = nil }
             return
         }
@@ -169,7 +189,7 @@ final class TreeIdentityCenter: ObservableObject {
         derivations = verdicts
         memoKey = key
         if autoAcceptsTrustedSources {
-            autoAccept(profiles: profiles, speakers: speakers)
+            autoAccept(profiles: profiles, speakers: input.speakers)
         }
     }
 
@@ -207,13 +227,29 @@ final class TreeIdentityCenter: ObservableObject {
     /// a handful of indexed lookups, not a tree walk.
     func showInTreeState(for profile: POIProfile, among profiles: [POIProfile]) -> ShowInTreeState {
         guard let graph = kinshipCenter.graph else { return .noTree }
-        var verdict = derivations[profile.id]
+        guard let currentProfile = profiles.first(where: { $0.id == profile.id }) else {
+            let fingerprint: String? = {
+                if case .pointer? = profile.treeIdentity { return kinshipCenter.graphFingerprint }
+                return nil
+            }()
+            return ShowInTreeReducer.state(
+                profile: profile,
+                profiles: profiles,
+                graph: graph,
+                fingerprint: fingerprint,
+                derivation: nil
+            )
+        }
+        guard TreeIdentitySubject(currentProfile) == TreeIdentitySubject(profile) else {
+            return .none
+        }
+        let input = derivationInput(for: profiles)
+        var verdict = memoKey == input.key ? derivations[profile.id] : nil
         if verdict == nil, profile.treeIdentity == nil, profile.treeIdentityQuarantined == nil,
            !profile.notInFamilyTree {
-            let speakers = speakers()
-            verdict = TreeIdentityDeriver(graph: graph, profiles: profiles,
-                                          ownerName: speakers.ownerName,
-                                          ownerFamilySearchID: speakers.ownerFamilySearchID)
+            verdict = TreeIdentityDeriver(graph: graph, subjects: input.subjects,
+                                          ownerName: input.speakers.ownerName,
+                                          ownerFamilySearchID: input.speakers.ownerFamilySearchID)
                 .derive(TreeIdentitySubject(profile))
         }
         let fingerprint: String? = {
@@ -231,8 +267,7 @@ final class TreeIdentityCenter: ObservableObject {
     /// reads. `derivationRunCount` stands in for "the derivations dict
     /// changed"; `pinsRevision` for the writes.
     struct BadgeMemoKey: Equatable {
-        let generation: Int
-        let signature: Int
+        let refreshKey: MemoKey
         let pinsRevision: Int
         let derivationRunCount: Int
     }
@@ -250,8 +285,8 @@ final class TreeIdentityCenter: ObservableObject {
     /// here, unlike `showInTreeState(for:)`).
     /// Memory: one small struct per profile — a few KB for a family.
     func treeLinkBadges(for profiles: [POIProfile]) -> [String: TreeLinkBadge] {
-        let key = BadgeMemoKey(generation: kinshipCenter.graphGeneration,
-                               signature: Self.identitySignature(of: profiles),
+        let input = derivationInput(for: profiles)
+        let key = BadgeMemoKey(refreshKey: input.key,
                                pinsRevision: pinsRevision,
                                derivationRunCount: derivationRunCount)
         if let badgeMemo, badgeMemo.key == key { return badgeMemo.map }
@@ -261,6 +296,7 @@ final class TreeIdentityCenter: ObservableObject {
             return [:]
         }
         let fingerprint = kinshipCenter.graphFingerprint
+        let currentDerivations = memoKey == input.key ? derivations : [:]
         var map: [String: TreeLinkBadge] = [:]
         map.reserveCapacity(profiles.count)
         for profile in profiles {
@@ -270,7 +306,7 @@ final class TreeIdentityCenter: ObservableObject {
             }()
             let state = ShowInTreeReducer.state(profile: profile, profiles: profiles, graph: graph,
                                                 fingerprint: pointerFingerprint,
-                                                derivation: derivations[profile.id])
+                                                derivation: currentDerivations[profile.id])
             if let badge = TreeLinkBadge.state(for: state, profile: profile) {
                 map[profile.id] = badge
             }
@@ -294,8 +330,42 @@ final class TreeIdentityCenter: ObservableObject {
     @discardableResult
     func pin(_ candidate: TreeIdentityCandidate, on profile: POIProfile, among profiles: [POIProfile],
              attestation: String) -> TreeIdentityPinning.Outcome {
+        guard let graph = kinshipCenter.graph else {
+            return .refused("The family tree changed. Reopen this person and choose again.")
+        }
+        guard let currentProfile = profiles.first(where: { $0.id == profile.id }),
+              TreeIdentitySubject(currentProfile) == TreeIdentitySubject(profile) else {
+            return .refused("This person changed. Reopen them and choose the tree record again.")
+        }
+        let installedPerson: GedcomFamilyGraph.Person? = {
+            if let familySearchID = candidate.familySearchID {
+                return graph.person(familySearchID: familySearchID)
+            }
+            return graph.people[candidate.personID]
+        }()
+        guard let installedPerson,
+              TreeIdentityCandidate(installedPerson) == candidate else {
+            return .refused("The family tree changed. Reopen this person and choose again.")
+        }
+        // A derived suggestion is an action token, not a durable picker
+        // choice. Re-derive it from the exact current inputs before writing
+        // so a profile/speaker/tree change between display and click fails
+        // closed even when the old record still exists in the new tree.
+        if attestation.hasPrefix("derived:") {
+            let input = derivationInput(for: profiles)
+            let currentVerdict = TreeIdentityDeriver(
+                graph: graph,
+                subjects: input.subjects,
+                ownerName: input.speakers.ownerName,
+                ownerFamilySearchID: input.speakers.ownerFamilySearchID
+            ).derive(TreeIdentitySubject(currentProfile))
+            guard case .certain(let currentCandidate, _) = currentVerdict,
+                  currentCandidate == candidate else {
+                return .refused("The identity suggestion changed. Reopen this person and try again.")
+            }
+        }
         let outcome = TreeIdentityPinning.pin(
-            candidate, on: profile, among: profiles,
+            candidate, on: currentProfile, among: profiles,
             fingerprint: candidate.familySearchID == nil ? kinshipCenter.graphFingerprint : nil,
             attestation: attestation, ownerName: speakers().ownerName,
             store: store, defaults: defaults)
