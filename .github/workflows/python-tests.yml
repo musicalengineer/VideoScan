@@ -1,0 +1,54 @@
+name: Python Tests
+
+# The Python suite — 395 tracked tests that neither CI nor the nightly ran
+# before 2026-08-29.
+#
+# Deliberately its OWN workflow rather than a job inside ci.yml. ci.yml is a
+# macOS/Xcode pipeline; this needs neither, runs on Linux minutes in ~15
+# seconds, and has no reason to wait behind a 40-minute Swift build or to
+# go red when that build breaks. Separate files also mean this can land
+# while the Xcode toolchain work is still being proven on a real runner.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  python:
+    name: Python suite (tracked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # tests/test_search_benchmark_metrics.py drives the dashboard contract
+      # through a Node harness. The runner script preflights this and fails
+      # loudly if it is absent, rather than skipping a whole contract.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Minimal, and measured rather than guessed: with numpy and openpyxl
+      # the full tracked suite collects and passes. requirements.txt pulls
+      # dlib and torch, which this suite does not need and which would turn
+      # a 15-second job into a multi-minute one.
+      #
+      # numpy   — tests/test_find_person.py
+      # openpyxl— scripts/VideoScan.py, imported by tests/test_videoscan_stress.py
+      # pytest  — the runner, per the project's Python test convention
+      - name: Install minimal test dependencies
+        run: python -m pip install --disable-pip-version-check numpy openpyxl pytest
+
+      # Enforces the tracked-file list and both count floors. Same script
+      # the nightly calls, so the two cannot drift.
+      - name: Run Python suite
+        run: scripts/run_python_tests.sh
