@@ -41,13 +41,31 @@ MAJOR_WANTED="${1:-26}"
 MIN_SWIFT_MAJOR=6
 MIN_SWIFT_MINOR=2
 
-DEV=""
-for app in $(ls -d "/Applications/Xcode_${MAJOR_WANTED}"*.app 2>/dev/null | sort -Vr || true); do
-  if [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ]; then
-    DEV="$app/Contents/Developer"
-    break
-  fi
+# Stable releases only (codex review, #903). The bare glob also matches
+# Xcode_26.4_beta.app and release candidates; a CI toolchain should not be
+# silently upgraded to a beta because one landed on the image. Accept a
+# basename only when everything between "Xcode_" and ".app" is digits and
+# dots — Xcode_26.app, Xcode_26.3.app, Xcode_26.1.1.app — then version-sort
+# the survivors and take the newest.
+CANDIDATES=""
+for app in "/Applications/Xcode_${MAJOR_WANTED}"*.app; do
+  [ -d "$app" ] || continue          # unmatched glob stays literal; skip it
+  base=${app##*/}
+  ver=${base#Xcode_}
+  ver=${ver%.app}
+  case "$ver" in
+    ""|*[!0-9.]*) continue ;;        # beta, RC, or any non-numeric decoration
+  esac
+  [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] || continue
+  CANDIDATES="${CANDIDATES}${app}
+"
 done
+
+DEV=""
+NEWEST=$(printf '%s' "$CANDIDATES" | grep -v '^$' | sort -Vr | head -1 || true)
+if [ -n "$NEWEST" ]; then
+  DEV="$NEWEST/Contents/Developer"
+fi
 
 if [ -z "$DEV" ]; then
   echo "::error::No Xcode ${MAJOR_WANTED}.x found — this source needs Swift ${MIN_SWIFT_MAJOR}.${MIN_SWIFT_MINOR}+. Installed: $(ls -d /Applications/Xcode*.app 2>/dev/null | tr '\n' ' ')"
@@ -66,10 +84,25 @@ fi
 echo "Selected $DEV"
 xcodebuild -version
 
-# `|| true` so an unparseable or failing toolchain reaches the explicit
-# message below instead of exiting bare under -e/pipefail.
-SWIFT_RAW=$(swift --version 2>&1 || true)
+# Two corrections from codex review #903, both mine to own:
+#
+#  - `xcrun swift`, not bare `swift`. xcrun resolves through the developer
+#    dir we just selected; a bare PATH lookup can find a different Swift
+#    entirely (a toolchain installer, a Homebrew shim) and then the gate
+#    describes something other than what will do the compiling.
+#  - Check the exit status. The previous revision used `|| true` so that a
+#    failing toolchain would still reach a readable error. That fixed one
+#    silent pass and created another: a compiler that FAILS but still
+#    prints a parseable "Apple Swift version 6.x" banner satisfied the
+#    regex and sailed through. Keep the raw output for diagnosis, but a
+#    non-zero exit is fatal on its own.
+SWIFT_RC=0
+SWIFT_RAW=$(xcrun swift --version 2>&1) || SWIFT_RC=$?
 echo "$SWIFT_RAW"
+if [ "$SWIFT_RC" -ne 0 ]; then
+  echo "::error::xcrun swift --version failed (rc=$SWIFT_RC) for the toolchain at $DEV — see its output above."
+  exit 1
+fi
 SWIFT_VER=$(printf '%s\n' "$SWIFT_RAW" | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1 || true)
 if [ -z "$SWIFT_VER" ]; then
   echo "::error::Could not parse a Swift version from the selected toolchain at $DEV."
