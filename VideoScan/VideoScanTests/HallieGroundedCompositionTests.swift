@@ -960,6 +960,26 @@ struct HallieCompositionSubjectLeadTests {
             fallbackText: "Here is what the family archive currently supports about Richard Harding Breen Sr. …")
     }
 
+    /// A plan whose claims the replies below cover completely.
+    ///
+    /// `bioPlan()` carries a third claim (the marriage). Claim RESTORATION
+    /// — added 2026-08-29 — appends any plan claim the phrasing model
+    /// omitted, so a reply citing only c1 and c2 comes back with the c3
+    /// sentence tacked on and a note of "model (claims restored: c3)".
+    /// That is correct behaviour and has its own coverage in
+    /// HallieClaimCoverageTests; it is simply not what the subject-lead
+    /// tests are measuring, and letting it fire made them assert on text
+    /// they do not control.
+    private func bioPlanFullyCovered() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .graph, shape: .biography, subject: "Richard Harding Breen Sr",
+            claims: [
+                .init(id: "c1", text: "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008.", evidenceIDs: ["cb:1"]),
+                .init(id: "c2", text: "Richard Harding Breen Sr's parents were George Breen and Muriel Lamb.", evidenceIDs: ["cb:2"]),
+            ],
+            fallbackText: "Here is what the family archive currently supports about Richard Harding Breen Sr. …")
+    }
+
     /// Kinship plan as `derive` builds it: c1 is the template's first sentence.
     private func kinPlan() -> HallieAnswerPlan {
         HallieAnswerPlan(
@@ -1009,7 +1029,7 @@ struct HallieCompositionSubjectLeadTests {
     }
 
     @Test func pronounOpeningWithDatesKeptGetsTheSubjectLeadPrepended() async {
-        let outcome = await compose(bioPlan(),
+        let outcome = await compose(bioPlanFullyCovered(),
             "He was the son of George Breen and Muriel Lamb [c2]. "
             + "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008 [c1].")
         // c1 is cited, so nothing is re-inserted as missing; the first
@@ -1080,7 +1100,7 @@ struct HallieCompositionSubjectLeadTests {
     @Test func answerThatAlreadyNamesTheSubjectIsUntouched() async {
         let reply = "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008 [c1]. "
             + "His parents were George Breen and Muriel Lamb [c2]."
-        let outcome = await compose(bioPlan(), reply)
+        let outcome = await compose(bioPlanFullyCovered(), reply)
         #expect(outcome.transcriptText == reply)
         #expect(outcome.displayText == "Richard Harding Breen Sr was born in Boston in 1929 and died in 2008. His parents were George Breen and Muriel Lamb.")
         #expect(outcome.dropped.isEmpty)

@@ -232,10 +232,23 @@ struct DescentPathTests {
 @MainActor
 struct LineToModelTests {
 
+    /// Settings with NO owner pin.
+    ///
+    /// Without this the inline bundle reads UserDefaults.standard, and a
+    /// real owner pin — Rick has one — names nobody in a synthetic fixture,
+    /// which `anchors(in:ownerFamilySearchID:)` treats as a stale pin and
+    /// answers with an empty array. The tests then fail on a machine that
+    /// has been used and pass on one that has not, which is the worst way
+    /// for a test to behave.
+    static let noOwnerPin = FamilyTreeLaunchBundle.Settings(
+        speakers: HallieTurnExecutor.Speakers(ownerName: "Rick", archivistName: "Hallie",
+                                              archivistPersonName: nil, ownerFamilySearchID: nil),
+        ownerFamilySearchID: nil)
+
     private func model() -> FamilyTreeLiveModel {
         let model = FamilyTreeLiveModel(
             originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
-        model.install(graph: graph())
+        model.install(graph: graph(), settings: Self.noOwnerPin)
         return model
     }
 

@@ -255,7 +255,14 @@ struct FamilyTreeLaunchBundleTests {
         #expect(sink.lines.contains { $0.contains("[family-tree] install total took ") })
         // Without a bundle the same install builds inline and lands on the same state.
         let plain = FamilyTreeLiveModel(originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
-        plain.install(graph: graph)
+        // Same settings the bundle above was built with. Falling back to
+        // .fromDefaults() here compared a no-owner bundle against one built
+        // with the machine's real owner pin, so this line failed on any
+        // machine where someone had pinned themselves.
+        plain.install(graph: graph, settings: FamilyTreeLaunchBundle.Settings(
+            speakers: HallieTurnExecutor.Speakers(ownerName: "Rick", archivistName: "Hallie",
+                                                  archivistPersonName: nil, ownerFamilySearchID: nil),
+            ownerFamilySearchID: nil))
         #expect(plain.filteredPeople == model.filteredPeople)
         #expect(plain.anchors == model.anchors)
         #expect(plain.selectedPerson == model.selectedPerson)

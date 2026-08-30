@@ -28,13 +28,16 @@ final class GedcomScaleSensorTests: XCTestCase {
     static let config = "Release"
     #endif
 
+    /// Delegates to the shared rule (PerformanceLane). Kept as a named
+    /// method with the same signature so this suite's four unit tests of
+    /// the rule keep exercising it.
     static func isAuthoritativePerformanceLane(
         debugBuild: Bool,
         environment: [String: String]
     ) -> Bool {
-        !debugBuild
-            && environment[performanceOptIn] == "1"
-            && environment["LLVM_PROFILE_FILE"] == nil
+        PerformanceLane.isAuthoritative(debugBuild: debugBuild,
+                                        optInKey: performanceOptIn,
+                                        environment: environment)
     }
 
     static var authoritativePerformanceLane: Bool {

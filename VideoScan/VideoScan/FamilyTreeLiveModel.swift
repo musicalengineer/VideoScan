@@ -631,14 +631,25 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// sorted person. Without a `bundle` the rows / identity / anchors
     /// are built here, synchronously (tests, loadNow); the disk loader
     /// always hands one in, built off the main actor.
-    func install(graph newGraph: GedcomFamilyGraph?, bundle: FamilyTreeLaunchBundle? = nil) {
+    /// `settings` is injectable so a test can build the inline bundle
+    /// without inheriting the machine's real preferences. That is not
+    /// hypothetical: the owner pin lives in UserDefaults, an owner pin that
+    /// names nobody in the graph makes `anchors` come back EMPTY by design,
+    /// and every synthetic test fixture is a graph the real pin is stale
+    /// against. Three tests began failing the day Rick pinned himself
+    /// (2026-08-30) with no code change behind it.
+    func install(graph newGraph: GedcomFamilyGraph?,
+                 bundle: FamilyTreeLaunchBundle? = nil,
+                 settings: FamilyTreeLaunchBundle.Settings = .fromDefaults()) {
         // Total is always logged; the steps inside only when slow.
         timed("install total", always: true) {
-            installSteps(graph: newGraph, bundle: bundle)
+            installSteps(graph: newGraph, bundle: bundle, settings: settings)
         }
     }
 
-    private func installSteps(graph newGraph: GedcomFamilyGraph?, bundle: FamilyTreeLaunchBundle?) {
+    private func installSteps(graph newGraph: GedcomFamilyGraph?,
+                              bundle: FamilyTreeLaunchBundle?,
+                              settings: FamilyTreeLaunchBundle.Settings) {
         loadWarning = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
@@ -653,7 +664,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // directory, anchors + their ancestor indexes). Built inline only
         // for a synchronous install without one.
         let ready: FamilyTreeLaunchBundle? = timed("install: launch bundle (inline)") {
-            newGraph.map { graph in bundle ?? FamilyTreeLaunchBundle.build(graph: graph, settings: .fromDefaults()) }
+            newGraph.map { graph in bundle ?? FamilyTreeLaunchBundle.build(graph: graph, settings: settings) }
         }
         // Group-photo attribution follows the tree (2026-08-26); a Hallie
         // turn later enriches it with CyberBrain / People-tab aliases.
