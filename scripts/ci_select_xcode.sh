@@ -30,7 +30,12 @@
 #         scripts/ci_select_xcode.sh 27       # newest Xcode 27.x
 #         RESOLVE_ONLY=1 scripts/ci_select_xcode.sh   # print path, don't switch
 #
-set -uo pipefail
+# -e matters here (codex review, #885): without it a failing
+# `sudo xcode-select -s` would fall through and the checks below would then
+# describe whatever toolchain was ALREADY selected. On an image whose default
+# happens to be 26.x that turns a failed selection into a silent pass — the
+# exact class of masking this script exists to prevent.
+set -euo pipefail
 
 MAJOR_WANTED="${1:-26}"
 MIN_SWIFT_MAJOR=6
@@ -54,14 +59,20 @@ if [ -n "${RESOLVE_ONLY:-}" ]; then
   exit 0
 fi
 
-sudo xcode-select -s "$DEV"
+if ! sudo xcode-select -s "$DEV"; then
+  echo "::error::xcode-select failed to switch to $DEV"
+  exit 1
+fi
 echo "Selected $DEV"
 xcodebuild -version
-swift --version
 
-SWIFT_VER=$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+# `|| true` so an unparseable or failing toolchain reaches the explicit
+# message below instead of exiting bare under -e/pipefail.
+SWIFT_RAW=$(swift --version 2>&1 || true)
+echo "$SWIFT_RAW"
+SWIFT_VER=$(printf '%s\n' "$SWIFT_RAW" | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1 || true)
 if [ -z "$SWIFT_VER" ]; then
-  echo "::error::Could not parse a Swift version from \`swift --version\`."
+  echo "::error::Could not parse a Swift version from the selected toolchain at $DEV."
   exit 1
 fi
 SWIFT_MAJOR=${SWIFT_VER%%.*}
