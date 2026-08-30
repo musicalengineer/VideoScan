@@ -38,7 +38,7 @@ jobs:
   strict-concurrency:
     name: Swift strict concurrency (max)
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       # warning_count = concurrency-class findings only. The raw grep total
       # includes -warn-long-* perf-timing lines whose embedded millisecond
@@ -51,8 +51,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      # See scripts/ci_select_xcode.sh for the history behind this.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
 
       - name: Build with strict concurrency + all upcoming features + perf warnings
         run: |
@@ -166,7 +168,7 @@ jobs:
   codeql:
     name: CodeQL (Swift, security-and-quality)
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 60
     outputs:
       finding_count: ${{ steps.count.outputs.findings }}
 
@@ -174,8 +176,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      # See scripts/ci_select_xcode.sh for the history behind this.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
 
       - name: Initialise CodeQL
         uses: github/codeql-action/init@v3
@@ -253,8 +257,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      # See scripts/ci_select_xcode.sh for the history behind this.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
 
       - name: Run unit tests under TSan
         run: |
@@ -337,7 +343,7 @@ jobs:
   lint-strict:
     name: SwiftLint --strict + Periphery aggressive
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 40
     outputs:
       swiftlint_count: ${{ steps.count.outputs.swiftlint }}
       periphery_count: ${{ steps.count.outputs.periphery }}
@@ -346,8 +352,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      # See scripts/ci_select_xcode.sh for the history behind this.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
 
       - name: Install tools
         run: |
@@ -447,15 +455,17 @@ jobs:
   lint-warn:
     name: SwiftLint + Periphery (warn-only)
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 40
     continue-on-error: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      # 26.x required — the source uses Swift 6.2 isolated conformances.
+      # See scripts/ci_select_xcode.sh for the history behind this.
+      - name: Select Xcode (26.x required)
+        run: scripts/ci_select_xcode.sh
 
       - name: Install tools
         run: |
