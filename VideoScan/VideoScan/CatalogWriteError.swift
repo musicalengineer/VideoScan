@@ -142,7 +142,15 @@ enum CatalogWriteJournal {
 
     /// Record a refusal. Never throws — a journal that can fail loudly during
     /// error handling just replaces one problem with another.
-    static func record(_ error: CatalogWriteError, catalogURL: URL) {
+    ///
+    /// `emitLog` defaults to true so every existing call site keeps its
+    /// current behavior and the global log format is unchanged. Pass false
+    /// from a site that already emits its own accurate line: the line below
+    /// is worded for REFUSALS ("catalog write refused"), which misdescribes
+    /// a write that was attempted and failed, and its detail would duplicate
+    /// the caller's message. The journal entry is written either way.
+    static func record(_ error: CatalogWriteError, catalogURL: URL,
+                       emitLog: Bool = true) {
         let entry = Entry(
             at: Date(),
             code: error.code,
@@ -153,7 +161,9 @@ enum CatalogWriteJournal {
             hostname: ProcessInfo.processInfo.hostName
         )
 
-        writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.userFacingDescription, privacy: .public)")
+        if emitLog {
+            writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.userFacingDescription, privacy: .public)")
+        }
 
         let url = journalURL(besideCatalogAt: catalogURL)
         let encoder = JSONEncoder()
