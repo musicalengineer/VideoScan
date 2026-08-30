@@ -234,8 +234,10 @@ struct HallieSuperlativeTests {
         #expect(r.route == .graph)
         #expect(r.outcome == .answered)
         #expect(r.prose.hasPrefix("2 people share the earliest birth year in the family tree (born 1860): "), Comment(rawValue: r.prose))
-        #expect(r.prose.contains("Hannah Ryan — born 1860; resting in peace since 1940; married to Patrick Breen; parent of George Breen."))
-        #expect(r.prose.contains("Patrick Breen — born 1860; resting in peace since 1930"))
+        #expect(r.prose.contains("Hannah Ryan — born 1860 in Cork, Ireland; resting in peace since 1940; married to Patrick Breen (married 1885); parent of George Breen."),
+                Comment(rawValue: r.prose))
+        #expect(r.prose.contains("Patrick Breen — born 1860 in Cork, Ireland; resting in peace since 1930"),
+                Comment(rawValue: r.prose))
         #expect(r.catalogPersonName == "Hannah Ryan")
         #expect(r.offeredActions == [.openFamilyTreePerson(personID: "@I14@", personName: "Hannah Ryan"),
                                      .openFamilyTreePerson(personID: "@I13@", personName: "Patrick Breen")])
@@ -244,7 +246,7 @@ struct HallieSuperlativeTests {
 
     @Test func eachKindPicksTheRightPerson() throws {
         #expect(try answer(.latestBorn).prose.hasPrefix("The latest birth year in the family tree is born 1985: Tim Breen"))
-        #expect(try answer(.longestLived).prose.hasPrefix("The longest recorded life in the family tree is about 95 years: Agnes McGill — born 1880; resting in peace since 1975"))
+        #expect(try answer(.longestLived).prose.hasPrefix("The longest recorded life in the family tree is about 95 years: Agnes McGill — born 1880 in Derry, Ireland; resting in peace since 1975"))
         #expect(try answer(.latestDied).prose.hasPrefix("The most recent death in the family tree is died 2010: Eileen Latta"))
         let married = try answer(.earliestMarried)
         #expect(married.prose.hasPrefix("2 people share the earliest recorded marriage in the family tree (married 1885): Hannah Ryan"))

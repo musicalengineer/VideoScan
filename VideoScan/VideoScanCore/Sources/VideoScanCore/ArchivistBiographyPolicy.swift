@@ -140,8 +140,22 @@ public enum ArchivistBiographyPolicy {
         if !parents.isEmpty {
             facts.append("child of \(parents.joined(separator: " and "))")
         }
-        let spouses = orderedPeople(
-            graph.relatives(.spouse, of: person)).map(\.name)
+        // Spouses WITH their marriage dates folded in. An earlier revision
+        // of this change appended dates as separate facts, which named the
+        // spouse twice — "married to Patrick Breen; ...; married Patrick
+        // Breen 1885". The parenthetical matches the shape
+        // HallieBiographyCard.marriageClause already uses.
+        let spouseOrder = orderedPeople(graph.relatives(.spouse, of: person))
+        var dateBySpouseID: [String: String] = [:]
+        for marriage in graph.marriages(of: person) {
+            if let id = marriage.spouse?.id, let date = marriage.date {
+                dateBySpouseID[id] = date
+            }
+        }
+        let spouses = spouseOrder.map { spouse -> String in
+            guard let date = dateBySpouseID[spouse.id] else { return spouse.name }
+            return "\(spouse.name) (married \(date))"
+        }
         if !spouses.isEmpty {
             facts.append("married to \(spouses.joined(separator: ", "))")
         }
@@ -150,13 +164,13 @@ public enum ArchivistBiographyPolicy {
         if !children.isEmpty {
             facts.append("parent of \(children.joined(separator: ", "))")
         }
-        // Marriage DATES: the spouse names above say who, never when.
-        let marriageDates = graph.marriages(of: person).compactMap { marriage -> String? in
-            guard let date = marriage.date else { return nil }
-            guard let spouse = marriage.spouse?.name else { return "married \(date)" }
-            return "married \(spouse) \(date)"
+        // A marriage the tree records with a date but NO spouse still says
+        // something worth keeping; those cannot ride along above.
+        let spouselessMarriages = graph.marriages(of: person).compactMap { marriage -> String? in
+            guard marriage.spouse == nil, let date = marriage.date else { return nil }
+            return "married \(date)"
         }
-        facts.append(contentsOf: marriageDates)
+        facts.append(contentsOf: spouselessMarriages)
 
         let hasDetails = !facts.isEmpty
         let text = hasDetails
