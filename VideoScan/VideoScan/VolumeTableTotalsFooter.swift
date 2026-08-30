@@ -95,91 +95,129 @@ struct VolumeTableTotalsFooter: View {
     /// Scanned, unique under Phase (Rick 2026-08-11). Each cell spans
     /// exactly to the next anchor, so the three figures line up with the
     /// data above them and read as a column rather than a sentence.
+    /// The row's cells live in separate properties, not inline in `body`.
+    ///
+    /// Not style: the inline version was ONE ~70-line ViewBuilder
+    /// expression with ~35 chained modifiers, and Swift's type-checker
+    /// could not solve it inside its time limit on GitHub's virtualised
+    /// M1 — "unable to type-check this expression in reasonable time",
+    /// 2026-08-30. It compiled fine on the M4 Max, so the failure was
+    /// invisible locally and only appeared when CI came back after eleven
+    /// weeks down. SwiftUI's generic composition makes inference cost grow
+    /// super-linearly with the number of chained modifiers in one
+    /// expression; splitting gives the solver several small problems
+    /// instead of one large one.
+    ///
+    /// A @ViewBuilder property used inside an HStack produces the same
+    /// TupleView the inline code did, so layout and behaviour are
+    /// unchanged. Do not re-inline these to "tidy up".
+
+    /// "TOTAL CATALOG" — trailing-aligned against the figure it
+    /// introduces. Truncates rather than overlapping when the window
+    /// narrows.
+    @ViewBuilder private var totalCatalogLabel: some View {
+        Text("TOTAL CATALOG")
+            .font(Self.labelFont)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: max(0, mediaSizeX - VolumeTableMetrics.labelGutter),
+                   alignment: .trailing)
+            .padding(.trailing, VolumeTableMetrics.labelGutter)
+    }
+
+    /// Gross — on the Media Size origin, totalling the column directly
+    /// above it. `fixedSize` + `minWidth`: a figure must never truncate,
+    /// so an unusually wide number pushes the next cell right instead of
+    /// being clipped.
+    @ViewBuilder private var grossFigure: some View {
+        Text(totals.grossDisplay)
+            .font(Self.figureFont)
+            .foregroundColor(.primary)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(minWidth: max(0, scannedX - mediaSizeX), alignment: .leading)
+    }
+
+    /// ONLINE NOW — on the Scanned origin. Shown only when it differs from
+    /// the catalog total; on a day when every drive is plugged in, a third
+    /// identical number is noise.
+    @ViewBuilder private var onlineFigure: some View {
+        if totals.onlineBytes != totals.grossBytes {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("ONLINE")
+                    .font(Self.labelFont)
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+                Text(totals.onlineDisplay)
+                    .font(Self.figureFont)
+                    .foregroundColor(.primary)
+                    .fixedSize()
+            }
+            .frame(minWidth: max(0, phaseX - scannedX), alignment: .leading)
+        }
+    }
+
+    /// UNIQUE — on the Phase origin (Rick's request).
+    @ViewBuilder private var uniqueFigure: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(totals.uniqueDisplay)
+                .font(Self.figureFont)
+                .foregroundColor(.primary)
+                .fixedSize()
+            Text("UNIQUE")
+                .font(Self.labelFont)
+                .foregroundColor(.secondary)
+                .fixedSize()
+            // The one element allowed to truncate — least load-bearing
+            // text in the row.
+            Text("(\(totals.uniqueCaption))")
+                .font(Self.captionFont)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(-1)
+            // The only signpost that a full waterfall exists — with the
+            // captions gone the tooltip is the sole disclosure of what
+            // "unique" subtracted, and an invisible tooltip is no
+            // disclosure at all. Becomes a warning when the figure is an
+            // upper bound.
+            Image(systemName: totals.uniqueIsUpperBound
+                  ? "exclamationmark.circle" : "info.circle")
+                .font(.system(size: 10))
+                .foregroundColor(totals.uniqueIsUpperBound ? .orange : .secondary)
+                .fixedSize()
+        }
+        .layoutPriority(1)
+    }
+
+    @ViewBuilder private var stalePill: some View {
+        if isStale {
+            Text("updating…")
+                .font(Self.captionFont)
+                .foregroundColor(.secondary)
+                .padding(.trailing, 12)
+        }
+    }
+
+    private var accessibilitySentence: String {
+        "Total media in catalog \(totals.grossDisplay). "
+            + "Online now \(totals.onlineDisplay). "
+            + "\(totals.uniqueDisplay) unique media, \(totals.uniqueCaption)."
+            + (totals.manuallyDeletedCaption.map { " \($0)." } ?? "")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Divider()
 
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-
-                // "TOTAL MEDIA IN CATALOG:" — trailing-aligned against
-                // the figure it introduces. Truncates rather than
-                // overlapping when the window narrows.
-                Text("TOTAL CATALOG")
-                    .font(Self.labelFont)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: max(0, mediaSizeX - VolumeTableMetrics.labelGutter),
-                           alignment: .trailing)
-                    .padding(.trailing, VolumeTableMetrics.labelGutter)
-
-                // Gross — on the Media Size origin, totalling the column
-                // directly above it. `fixedSize` + `minWidth`: a figure
-                // must never truncate, so an unusually wide number
-                // pushes the next cell right instead of being clipped.
-                Text(totals.grossDisplay)
-                    .font(Self.figureFont)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .frame(minWidth: max(0, scannedX - mediaSizeX), alignment: .leading)
-
-                // ONLINE NOW — on the Scanned origin. Shown only when it
-                // differs from the catalog total; on a day when every
-                // drive is plugged in, a third identical number is noise.
-                if totals.onlineBytes != totals.grossBytes {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text("ONLINE")
-                            .font(Self.labelFont)
-                                    .foregroundColor(.secondary)
-                            .fixedSize()
-                        Text(totals.onlineDisplay)
-                            .font(Self.figureFont)
-                            .foregroundColor(.primary)
-                            .fixedSize()
-                    }
-                    .frame(minWidth: max(0, phaseX - scannedX), alignment: .leading)
-                }
-
-                // UNIQUE — on the Phase origin (Rick's request).
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(totals.uniqueDisplay)
-                        .font(Self.figureFont)
-                        .foregroundColor(.primary)
-                        .fixedSize()
-                    Text("UNIQUE")
-                        .font(Self.labelFont)
-                            .foregroundColor(.secondary)
-                        .fixedSize()
-                    // The one element allowed to truncate — least
-                    // load-bearing text in the row.
-                    Text("(\(totals.uniqueCaption))")
-                        .font(Self.captionFont)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(-1)
-                    // The only signpost that a full waterfall exists —
-                    // with the captions gone the tooltip is the sole
-                    // disclosure of what "unique" subtracted, and an
-                    // invisible tooltip is no disclosure at all. Becomes
-                    // a warning when the figure is an upper bound.
-                    Image(systemName: totals.uniqueIsUpperBound
-                          ? "exclamationmark.circle" : "info.circle")
-                        .font(.system(size: 10))
-                        .foregroundColor(totals.uniqueIsUpperBound ? .orange : .secondary)
-                        .fixedSize()
-                }
-                .layoutPriority(1)
-
+                totalCatalogLabel
+                grossFigure
+                onlineFigure
+                uniqueFigure
                 Spacer(minLength: 8)
-
-                if isStale {
-                    Text("updating…")
-                        .font(Self.captionFont)
-                        .foregroundColor(.secondary)
-                        .padding(.trailing, 12)
-                }
+                stalePill
             }
             .padding(.top, 7)
             .padding(.bottom, totals.manuallyDeletedCaption == nil ? 7 : 2)
@@ -189,12 +227,7 @@ struct VolumeTableTotalsFooter: View {
             .help(totals.breakdownTooltip)
             .opacity(isStale ? 0.55 : 1.0)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                "Total media in catalog \(totals.grossDisplay). "
-                + "Online now \(totals.onlineDisplay). "
-                + "\(totals.uniqueDisplay) unique media, \(totals.uniqueCaption)."
-                + (totals.manuallyDeletedCaption.map { " \($0)." } ?? "")
-            )
+            .accessibilityLabel(accessibilitySentence)
             .accessibilityIdentifier("catalog.totalMediaFooter")
 
             // Honesty caption (Rick 2026-08-18): the gross figure now
