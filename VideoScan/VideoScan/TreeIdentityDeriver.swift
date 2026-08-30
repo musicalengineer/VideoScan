@@ -207,23 +207,44 @@ struct TreeIdentityDeriver: Sendable {
     /// valued by the claimant's stable id. Computed once per deriver.
     private let claimed: [String: String]
     private let fingerprint: String?
+    /// An explicit fingerprint input may be unavailable while pointer pins
+    /// are present. In that case deriving a new identity would ignore an
+    /// existing claimant, so the whole pass fails closed.
+    private let hasUnresolvedPointerPins: Bool
     private let ownerSubjectID: String?
     private let resolver: FamilyTreeIdentityResolver
 
     init(graph: GedcomFamilyGraph, subjects: [TreeIdentitySubject],
          ownerName: String?, ownerFamilySearchID: String?) {
+        let needsFingerprint = Self.needsFingerprint(subjects)
+        let currentGraphFingerprint = needsFingerprint
+            ? FamilyKinshipOverlay.fingerprint(of: graph)
+            : nil
+        self.init(
+            graph: graph,
+            subjects: subjects,
+            ownerName: ownerName,
+            ownerFamilySearchID: ownerFamilySearchID,
+            currentGraphFingerprint: currentGraphFingerprint
+        )
+    }
+
+    /// Variant for callers that already own the installed tree's cached
+    /// content fingerprint. `nil` deliberately means unavailable; it never
+    /// falls back to a generation counter or performs another tree hash.
+    init(graph: GedcomFamilyGraph, subjects: [TreeIdentitySubject],
+         ownerName: String?, ownerFamilySearchID: String?,
+         currentGraphFingerprint: String?) {
         self.graph = graph
         self.subjects = subjects
         self.ownerName = ownerName
         self.ownerFamilySearchID = ownerFamilySearchID?.trimmingCharacters(in: .whitespacesAndNewlines)
         // The content fingerprint (a SHA over every name) is only needed to
         // honour export-local pointer pins; skipped when no subject has one.
-        let needsFingerprint = subjects.contains {
-            if case .pointer? = $0.treeIdentity { return true }
-            return false
-        }
-        let fp = needsFingerprint ? FamilyKinshipOverlay.fingerprint(of: graph) : nil
+        let needsFingerprint = Self.needsFingerprint(subjects)
+        let fp = needsFingerprint ? currentGraphFingerprint : nil
         fingerprint = fp
+        hasUnresolvedPointerPins = needsFingerprint && fp == nil
         var claims: [String: String] = [:]
         for subject in subjects {
             if let person = Self.pinnedPerson(subject.treeIdentity, graph: graph, fingerprint: fp) {
@@ -263,6 +284,11 @@ struct TreeIdentityDeriver: Sendable {
     // MARK: One subject
 
     func derive(_ subject: TreeIdentitySubject) -> TreeIdentityDerivation {
+        guard !hasUnresolvedPointerPins else { return .none }
+        return deriveWithResolvedPointerPins(subject)
+    }
+
+    private func deriveWithResolvedPointerPins(_ subject: TreeIdentitySubject) -> TreeIdentityDerivation {
         let isOwner = subject.stableID == ownerSubjectID
 
         // 1. The owner's own pin (Hallie's speaker setting).
@@ -388,6 +414,13 @@ struct TreeIdentityDeriver: Sendable {
             }
         }
         return .ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init))
+    }
+
+    private static func needsFingerprint(_ subjects: [TreeIdentitySubject]) -> Bool {
+        subjects.contains {
+            if case .pointer? = $0.treeIdentity { return true }
+            return false
+        }
     }
 
     // MARK: Evidence helpers
