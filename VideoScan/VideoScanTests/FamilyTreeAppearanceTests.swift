@@ -17,7 +17,8 @@ import SwiftUI
 struct FamilyTreeAppearanceTests {
 
     private func suite(_ name: String = UUID().uuidString) -> UserDefaults {
-        UserDefaults(suiteName: name)!
+        // swiftlint:disable:next force_unwrapping
+        UserDefaults(suiteName: "FamilyTreeAppearanceTests.\(name)")!
     }
 
     /// A fresh install must look exactly as it did before this feature.

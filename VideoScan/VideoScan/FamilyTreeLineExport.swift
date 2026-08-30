@@ -17,6 +17,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import PDFKit
 
 // MARK: - What to export
 
@@ -299,26 +300,69 @@ enum FamilyTreeLineExporter {
         return CGSize(width: cgImage.width, height: cgImage.height)
     }
 
-    /// Standard print panel. The strip is scaled to the page width and
-    /// paginated vertically by AppKit (`verticalPagination = .automatic`).
-    static func printLine(_ spec: FamilyTreeLineExportSpec) {
-        let hosting = NSHostingView(rootView: FamilyTreeLineStripView(spec: spec))
-        hosting.frame = CGRect(origin: .zero, size: hosting.fittingSize)
-        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
-        info.horizontalPagination = .fit
-        info.verticalPagination = .automatic
-        info.isHorizontallyCentered = true
-        info.isVerticallyCentered = false
-        info.topMargin = FamilyTreeLinePage.margin
-        info.bottomMargin = FamilyTreeLinePage.margin
-        info.leftMargin = FamilyTreeLinePage.margin
-        info.rightMargin = FamilyTreeLinePage.margin
-        let operation = NSPrintOperation(view: hosting, printInfo: info)
-        operation.jobTitle = spec.title
+    /// Standard print panel.
+    ///
+    /// Prints the SAME PDF that "Export as PDF…" produces, rather than
+    /// printing a view. The previous implementation handed an
+    /// `NSHostingView` to `NSPrintOperation(view:)`, and every page came
+    /// out BLANK (Rick, 2026-08-30): a hosting view that is never added to
+    /// a window and never laid out has nothing to draw when AppKit asks it
+    /// to paint a page. `fittingSize` reports a sensible size, which is
+    /// what made the bug look like a pagination problem rather than an
+    /// empty view.
+    ///
+    /// Routing through `writePDF` also removes the second rendering path:
+    /// pagination, margins and the light-on-white ground are now defined
+    /// once, so paper cannot drift from what the PDF export shows.
+    static func printLine(_ spec: FamilyTreeLineExportSpec) throws {
+        let operation = try printOperation(spec)
         operation.showsPrintPanel = true
         operation.showsProgressPanel = true
-        appLog.write("Family Tree: print line — \(spec.title)")
         operation.run()
+    }
+
+    /// The print operation, built but NOT run, with no panels attached.
+    ///
+    /// Split out so a test can drive the REAL print path to a file
+    /// (`jobDisposition = .save`) and read back what would have reached the
+    /// printer. Asserting on `makePrintablePDF` alone would not have caught
+    /// the blank-page bug: the PDF export was always fine, and it was the
+    /// printing path that drew nothing.
+    static func printOperation(_ spec: FamilyTreeLineExportSpec) throws -> NSPrintOperation {
+        let url = try makePrintablePDF(spec)
+        guard let document = PDFDocument(url: url), document.pageCount > 0 else {
+            throw ExportError.pdfContext
+        }
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        // The PDF is already paginated onto US Letter with its margins
+        // baked in, so the print system must place pages 1:1 and add
+        // nothing of its own.
+        info.horizontalPagination = .clip
+        info.verticalPagination = .clip
+        info.isHorizontallyCentered = false
+        info.isVerticallyCentered = false
+        info.topMargin = 0
+        info.bottomMargin = 0
+        info.leftMargin = 0
+        info.rightMargin = 0
+        guard let operation = document.printOperation(for: info,
+                                                       scalingMode: .pageScaleNone,
+                                                       autoRotate: false) else {
+            throw ExportError.pdfContext
+        }
+        operation.jobTitle = spec.title
+        appLog.write("Family Tree: print line — \(spec.title) (\(document.pageCount) page\(document.pageCount == 1 ? "" : "s"))")
+        return operation
+    }
+
+    /// The PDF handed to the printer, written to a temporary file. Split
+    /// out so a test can inspect exactly what would be printed instead of
+    /// having to drive a print panel.
+    static func makePrintablePDF(_ spec: FamilyTreeLineExportSpec) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-line-print-\(UUID().uuidString).pdf")
+        _ = try writePDF(spec, to: url)
+        return url
     }
 
     /// Save panel (Desktop, "<from>-to-<to>-line.pdf"); the extension the

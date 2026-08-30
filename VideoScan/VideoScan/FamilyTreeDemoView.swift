@@ -637,7 +637,10 @@ struct FamilyTreeDemoView: View {
                         Button("Export as PDF…") { exportLine(format: .pdf) }
                         Button("Export as PNG (2×)…") { exportLine(format: .png) }
                         Divider()
-                        Button("Print line…") { FamilyTreeLineExporter.printLine(exportSpec(chain)) }
+                        Button("Print line…") {
+                            do { try FamilyTreeLineExporter.printLine(exportSpec(chain)) }
+                            catch { exportError = error.localizedDescription }
+                        }
                         Divider()
                         Toggle("Include photos", isOn: $exportIncludesPhotos)
                     } label: {
