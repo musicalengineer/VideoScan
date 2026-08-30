@@ -38,10 +38,21 @@ enum HallieNameSuggestion {
         let typedTokens = FamilyIdentityText.tokens(typed)
         guard !typedTokens.isEmpty, typedTokens.allSatisfy({ $0.count >= 2 }) else { return [] }
 
+        // Prepared ONCE. `suggest` runs over every person in the tree on
+        // the same turn as HallieSpellingRecovery.bestMatches, so anything
+        // done per candidate is done ~16,000 times: on Rick's export those
+        // two scans were the whole of the slowest question shape in
+        // HallieQueryBench. Same answers, pinned against a frozen copy in
+        // HallieNameSuggestionEquivalenceTests.
+        let preparedTyped = typedTokens.map(HallieSpellingRecovery.PreparedToken.init)
+        var scratch = HallieSpellingRecovery.MatrixScratch()
+
         var found: [Suggestion] = []
         if let graph {
             for person in graph.people.values {
-                guard let cost = matchCost(typedTokens, against: FamilyIdentityText.tokens(person.name)) else { continue }
+                guard let cost = matchCost(preparedTyped,
+                                           against: FamilyIdentityText.tokens(person.name),
+                                           &scratch) else { continue }
                 var label = person.name
                 if let year = person.birthYear { label += " (born \(year))" }
                 found.append(Suggestion(identity: .gedcom(id: person.id), name: person.name,
@@ -50,7 +61,9 @@ enum HallieNameSuggestion {
         }
         for profile in profiles {
             let names = [profile.name] + profile.aliases
-            let best = names.compactMap { matchCost(typedTokens, against: FamilyIdentityText.tokens($0)) }.min()
+            let best = names.compactMap {
+                matchCost(preparedTyped, against: FamilyIdentityText.tokens($0), &scratch)
+            }.min()
             if let best {
                 found.append(Suggestion(identity: .profile(stableID: profile.stableID),
                                         name: profile.name, label: "\(profile.name) (People tab)", cost: best))
@@ -94,15 +107,25 @@ enum HallieNameSuggestion {
     /// one token must be a non-trivial match (cost > 0 somewhere) — an
     /// all-exact match is not a "suggestion".
     static func matchCost(_ typed: [String], against nameTokens: [String]) -> Int? {
+        var scratch = HallieSpellingRecovery.MatrixScratch()
+        return matchCost(typed.map(HallieSpellingRecovery.PreparedToken.init),
+                         against: nameTokens, &scratch)
+    }
+
+    static func matchCost(
+        _ typed: [HallieSpellingRecovery.PreparedToken],
+        against nameTokens: [String],
+        _ scratch: inout HallieSpellingRecovery.MatrixScratch
+    ) -> Int? {
         guard !nameTokens.isEmpty else { return nil }
-        var remaining = nameTokens
+        var remaining = nameTokens.map(HallieSpellingRecovery.PreparedToken.init)
         var total = 0
         for token in typed {
             let budget = token.count <= 4 ? 1 : 2
             var bestIndex: Int?
             var bestCost = Int.max
             for (i, candidate) in remaining.enumerated() {
-                let d = editDistance(token, candidate, limit: budget)
+                let d = editDistance(token, candidate, limit: budget, &scratch)
                 if d <= budget, d < bestCost { bestCost = d; bestIndex = i }
             }
             guard let index = bestIndex else { return nil }
@@ -115,22 +138,58 @@ enum HallieNameSuggestion {
     /// Levenshtein distance, capped: returns `limit + 1` as soon as the
     /// distance is known to exceed `limit`.
     static func editDistance(_ a: String, _ b: String, limit: Int) -> Int {
-        let x = Array(a), y = Array(b)
-        if abs(x.count - y.count) > limit { return limit + 1 }
-        if x.isEmpty { return y.count }
-        if y.isEmpty { return x.count }
-        var previous = Array(0...y.count)
-        for i in 1...x.count {
-            var current = [i] + Array(repeating: 0, count: y.count)
-            var rowMin = i
-            for j in 1...y.count {
-                let cost = x[i - 1] == y[j - 1] ? 0 : 1
-                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
-                rowMin = min(rowMin, current[j])
-            }
-            if rowMin > limit { return limit + 1 }
-            previous = current
+        var scratch = HallieSpellingRecovery.MatrixScratch()
+        return editDistance(HallieSpellingRecovery.PreparedToken(a),
+                            HallieSpellingRecovery.PreparedToken(b),
+                            limit: limit, &scratch)
+    }
+
+    /// Same metric, same cap, no allocation: the tokens arrive already
+    /// converted and the rows live in a buffer the caller reuses across
+    /// every candidate in the tree. The old version built two Arrays per
+    /// call and TWO MORE per row of the matrix.
+    static func editDistance(
+        _ a: HallieSpellingRecovery.PreparedToken,
+        _ b: HallieSpellingRecovery.PreparedToken,
+        limit: Int,
+        _ scratch: inout HallieSpellingRecovery.MatrixScratch
+    ) -> Int {
+        if abs(a.count - b.count) > limit { return limit + 1 }
+        if a.characters.isEmpty { return b.count }
+        if b.characters.isEmpty { return a.count }
+        // A character in one word and not the other costs at least one
+        // edit, so this rejects most of a 16k-name tree without touching
+        // the matrix. Only a REJECTION is taken from it: the exact value
+        // still comes from the recurrence below.
+        if (a.present & ~b.present).nonzeroBitCount > limit
+            || (b.present & ~a.present).nonzeroBitCount > limit {
+            return limit + 1
         }
-        return previous[y.count]
+        let x = a.characters
+        let y = b.characters
+        let width = y.count + 1
+        scratch.reserve(columns: width)
+        return scratch.rows.withUnsafeMutableBufferPointer { rows -> Int in
+            var previous = 0
+            var current = width
+            for column in 0...y.count { rows[previous + column] = column }
+            for i in 1...x.count {
+                rows[current] = i
+                var rowMin = i
+                let xi = x[i - 1]
+                for j in 1...y.count {
+                    let cost = xi == y[j - 1] ? 0 : 1
+                    let value = Swift.min(
+                        rows[previous + j] + 1,
+                        rows[current + j - 1] + 1,
+                        rows[previous + j - 1] + cost)
+                    rows[current + j] = value
+                    if value < rowMin { rowMin = value }
+                }
+                if rowMin > limit { return limit + 1 }
+                swap(&previous, &current)
+            }
+            return rows[previous + y.count]
+        }
     }
 }

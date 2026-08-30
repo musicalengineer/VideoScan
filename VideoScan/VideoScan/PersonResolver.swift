@@ -229,6 +229,19 @@ enum HallieSpellingRecovery {
 
     /// Returns the identity or identities tied at the lowest acceptable
     /// edit score. Callers resolve a singleton and clarify a tie.
+    ///
+    /// PERFORMANCE (2026-08-30). `ArchivistGraphExecutor.resolveUnselected`
+    /// calls this with EVERY person in the tree when a typed name matches
+    /// nobody, so on Rick's 16,383-person export one such turn was 778 ms
+    /// p50 (Debug) — 96% of HallieQueryBench's whole p95. The work is the
+    /// same as it always was; what changed is that the query side is
+    /// prepared once instead of per candidate, each candidate's tokens are
+    /// prepared once instead of once per typed token, a character
+    /// histogram rejects hopeless pairs before the matrix is touched, and
+    /// the matrix itself is one scratch buffer rather than a fresh
+    /// array-of-arrays per pair. Results are identical by construction and
+    /// pinned against a frozen copy of the previous implementation in
+    /// HallieSpellingRecoveryEquivalenceTests.
     static func bestMatches(
         typed: String,
         candidates: [(identity: String, spellings: [String])]
@@ -236,12 +249,13 @@ enum HallieSpellingRecovery {
         // The query is invariant across the candidate scan. On a 100k
         // GEDCOM, tokenizing it inside `nameScore` once per person was a
         // measurable part of every failed-name Hallie turn.
-        let typedTokens = tokens(typed)
+        let typedTokens = tokens(typed).map(PreparedToken.init)
         guard !typedTokens.isEmpty, typedTokens.count <= 6 else { return [] }
         var scores: [String: Int] = [:]
+        var scratch = MatrixScratch()
         for candidate in candidates {
             for spelling in candidate.spellings {
-                guard let score = nameScore(typedTokens, spelling) else { continue }
+                guard let score = nameScore(typedTokens, spelling, &scratch) else { continue }
                 scores[candidate.identity] = min(
                     scores[candidate.identity] ?? Int.max, score)
             }
@@ -250,10 +264,18 @@ enum HallieSpellingRecovery {
         return scores.compactMap { $0.value == best ? $0.key : nil }.sorted()
     }
 
-    private static func nameScore(_ typedTokens: [String], _ candidate: String) -> Int? {
-        let candidateTokens = tokens(candidate)
-        guard candidateTokens.count <= 8,
-              typedTokens.count <= candidateTokens.count else { return nil }
+    private static func nameScore(
+        _ typedTokens: [PreparedToken],
+        _ candidate: String,
+        _ scratch: inout MatrixScratch
+    ) -> Int? {
+        let rawCandidateTokens = tokens(candidate)
+        guard rawCandidateTokens.count <= 8,
+              typedTokens.count <= rawCandidateTokens.count else { return nil }
+        // Prepared ONCE per candidate. The assignment search below asks
+        // about the same candidate token from several typed positions, and
+        // each of those used to re-tokenize and re-allocate it.
+        let candidateTokens = rawCandidateTokens.map(PreparedToken.init)
 
         func assign(
             _ index: Int, used: Set<Int>, score: Int
@@ -263,7 +285,8 @@ enum HallieSpellingRecovery {
             for candidateIndex in candidateTokens.indices
             where !used.contains(candidateIndex) {
                 guard let distance = tokenDistance(
-                    typedTokens[index], candidateTokens[candidateIndex]) else {
+                    typedTokens[index], candidateTokens[candidateIndex],
+                    &scratch) else {
                     continue
                 }
                 var nextUsed = used
@@ -285,39 +308,121 @@ enum HallieSpellingRecovery {
             .map(String.init)
     }
 
+    /// One token, with everything the distance needs computed once: its
+    /// characters as an array (String is not random access), its length,
+    /// and a presence bitmask.
+    struct PreparedToken {
+        let characters: [Character]
+        let count: Int
+        /// Bit per character class: a–z, 0–9, and one bit for everything
+        /// else. Collapsing the tail can only UNDERSTATE how different two
+        /// tokens are, so the bound it feeds stays a lower bound. A word,
+        /// not an array — this is built once per candidate token on a
+        /// 16k-name scan, and an allocation here is 16k allocations there.
+        let present: UInt64
+
+        init(_ token: String) {
+            let characters = Array(token)
+            self.characters = characters
+            self.count = characters.count
+            var mask: UInt64 = 0
+            for character in characters { mask |= 1 << UInt64(Self.bit(character)) }
+            self.present = mask
+        }
+
+        static func bit(_ character: Character) -> Int {
+            guard let ascii = character.asciiValue else { return 36 }
+            if ascii >= 97, ascii <= 122 { return Int(ascii) - 97 }
+            if ascii >= 65, ascii <= 90 { return Int(ascii) - 65 }
+            if ascii >= 48, ascii <= 57 { return 26 + Int(ascii) - 48 }
+            return 36
+        }
+    }
+
+    /// Reused row buffer for the alignment matrix. Three rows is all the
+    /// recurrence reads (the transposition term looks two back), so the
+    /// whole matrix never exists — and neither does a heap allocation per
+    /// candidate.
+    struct MatrixScratch {
+        var rows: [Int] = Array(repeating: 0, count: 3 * 64)
+
+        mutating func reserve(columns: Int) {
+            let needed = 3 * columns
+            if rows.count < needed { rows = Array(repeating: 0, count: needed) }
+        }
+    }
+
     /// Optimal-string-alignment distance, capped per token. Transposed keys
     /// (`shwo`) count as one edit. Words shorter than four characters must be
     /// exact, protecting short family names from risky guesses.
-    private static func tokenDistance(_ lhs: String, _ rhs: String) -> Int? {
-        if lhs == rhs { return 0 }
+    private static func tokenDistance(
+        _ lhs: PreparedToken, _ rhs: PreparedToken, _ scratch: inout MatrixScratch
+    ) -> Int? {
+        if lhs.count == rhs.count, lhs.characters == rhs.characters { return 0 }
         guard lhs.count >= 4, rhs.count >= 4 else { return nil }
         let limit = max(lhs.count, rhs.count) >= 8 ? 2 : 1
         guard abs(lhs.count - rhs.count) <= limit else { return nil }
-        let left = Array(lhs)
-        let right = Array(rhs)
-        var matrix = Array(
-            repeating: Array(repeating: 0, count: right.count + 1),
-            count: left.count + 1)
-        for index in 0...left.count { matrix[index][0] = index }
-        for index in 0...right.count { matrix[0][index] = index }
-        for i in 1...left.count {
-            for j in 1...right.count {
-                let substitution = matrix[i - 1][j - 1]
-                    + (left[i - 1] == right[j - 1] ? 0 : 1)
-                matrix[i][j] = min(
-                    matrix[i - 1][j] + 1,
-                    matrix[i][j - 1] + 1,
-                    substitution)
-                if i > 1, j > 1,
-                   left[i - 1] == right[j - 2],
-                   left[i - 2] == right[j - 1] {
-                    matrix[i][j] = min(
-                        matrix[i][j], matrix[i - 2][j - 2] + 1)
+        // Cheap necessary condition before the matrix. A character present
+        // in one token and absent from the other costs at least one edit,
+        // and a transposition costs nothing in this currency, so the count
+        // of one-sided character classes is a lower bound on the distance.
+        // Two AND-NOTs and two popcounts, instead of an O(n*m) matrix, for
+        // the overwhelming majority of the 16k candidates.
+        guard (lhs.present & ~rhs.present).nonzeroBitCount <= limit,
+              (rhs.present & ~lhs.present).nonzeroBitCount <= limit else { return nil }
+        return alignmentDistance(lhs.characters, rhs.characters, limit: limit, &scratch)
+    }
+
+    /// Three rolling rows over `scratch`. Bails as soon as a whole row is
+    /// already above the cap: row minima never decrease as the row index
+    /// grows, so nothing below can come back under it.
+    private static func alignmentDistance(
+        _ left: [Character], _ right: [Character], limit: Int,
+        _ scratch: inout MatrixScratch
+    ) -> Int? {
+        let n = left.count
+        let m = right.count
+        let width = m + 1
+        scratch.reserve(columns: width)
+        return scratch.rows.withUnsafeMutableBufferPointer { rows -> Int? in
+            var previousPrevious = 0
+            var previous = width
+            var current = 2 * width
+            for column in 0...m { rows[previous + column] = column }
+            for i in 1...n {
+                rows[current] = i
+                var rowMinimum = i
+                let leftCharacter = left[i - 1]
+                for j in 1...m {
+                    let substitution = rows[previous + j - 1]
+                        + (leftCharacter == right[j - 1] ? 0 : 1)
+                    var value = Swift.min(
+                        rows[previous + j] + 1,
+                        rows[current + j - 1] + 1,
+                        substitution)
+                    if i > 1, j > 1,
+                       leftCharacter == right[j - 2],
+                       left[i - 2] == right[j - 1] {
+                        value = Swift.min(value, rows[previousPrevious + j - 2] + 1)
+                    }
+                    rows[current + j] = value
+                    if value < rowMinimum { rowMinimum = value }
                 }
+                if rowMinimum > limit { return nil }
+                let recycled = previousPrevious
+                previousPrevious = previous
+                previous = current
+                current = recycled
             }
+            let distance = rows[previous + m]
+            return distance <= limit ? distance : nil
         }
-        let distance = matrix[left.count][right.count]
-        return distance <= limit ? distance : nil
+    }
+
+    /// String form, for `repairRequestOpener` and the equivalence tests.
+    static func tokenDistance(_ lhs: String, _ rhs: String) -> Int? {
+        var scratch = MatrixScratch()
+        return tokenDistance(PreparedToken(lhs), PreparedToken(rhs), &scratch)
     }
 }
 
