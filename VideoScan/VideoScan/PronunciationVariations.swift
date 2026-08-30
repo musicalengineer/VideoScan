@@ -639,7 +639,8 @@ enum PronunciationVariations {
             // A short final vowel + /l/ reads naturally with doubled l
             // (GILL); the phonemes themselves cannot retain orthography.
             let coda = readableCoda(
-                piece.coda, doublesFinalL: short.contains(piece.vowel))
+                piece.coda,
+                doublesFinalL: index == pieces.count - 1 && short.contains(piece.vowel))
             let letters = piece.onset
                 + vowelSpelling(piece.vowel, grapheme: "", isFinal: index == pieces.count - 1)
                 + coda

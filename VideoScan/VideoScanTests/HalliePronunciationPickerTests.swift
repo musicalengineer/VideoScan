@@ -28,6 +28,7 @@ struct HalliePronunciationPickerTests {
         private var manifests: [PronunciationDrillManifest] = []
         var store = PronunciationDrillStore()
         var failWith: String?
+        var gold = MisakiGoldLexicon(url: nil)
         func append(_ value: HallieAppTurnCoordinator.PronunciationWrite) { lock.withLock { storage.append(value) } }
         var writes: [HallieAppTurnCoordinator.PronunciationWrite] { lock.withLock { storage } }
         func save(_ s: PronunciationDrillStore, _ m: PronunciationDrillManifest) { lock.withLock { store = s; manifests.append(m) } }
@@ -55,6 +56,7 @@ struct HalliePronunciationPickerTests {
             loadDrillStore: { recorder.store },
             saveDrillStore: { store, manifest in recorder.save(store, manifest) },
             loadLexicon: { recorder.taughtLexicon },
+            loadPronunciationGold: { recorder.gold },
             loadSpeakers: { Self.speakers },
             executeRequest: { _, _ in
                 Issue.record("no catalog query in the picker")
@@ -76,6 +78,13 @@ struct HalliePronunciationPickerTests {
     }
 
     private static let noGold = MisakiGoldLexicon(url: nil)
+
+    private func goldFixture(_ table: [String: String]) throws -> (MisakiGoldLexicon, URL) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("picker-gold-\(UUID().uuidString).json")
+        try JSONSerialization.data(withJSONObject: table).write(to: url)
+        return (MisakiGoldLexicon(url: url), url)
+    }
 
     private static var lattaOffer: HalliePronunciationPicker.Offer {
         HalliePronunciationPicker.makeOffer(word: "Latta", gold: noGold)!
@@ -148,7 +157,7 @@ struct HalliePronunciationPickerTests {
         #expect(P.hearReply(offer, number: 2) == "Number 2 — LAD-uh.")
         #expect(P.hearSpeech(offer, number: 2) == "Number 2: [Latta](/lˈæɾə/).")
         #expect(P.pickedReply(word: "Latta", candidate: offer.candidates[1], number: 2, scope: .file)
-                == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I've kept that in the pronunciation list, since more than one person carries that name.")
+                == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I've kept that in the pronunciation list for that name.")
         // The chat window's chips: five to hear, "That's it" only once one was heard, "None of these".
         #expect(ArchivistMessage.pickerChips(for: offer).map(\.label) == ["1 LAT-uh", "2 LAD-uh", "3 LAH-tah", "4 la-TAH", "5 LAT-ah", "None of these"])
         var heard = offer
@@ -179,7 +188,7 @@ struct HalliePronunciationPickerTests {
         // "that's it" picks the one heard.
         let picked = try await turn("that's it", picker: heard.picker, recorder: recorder)
         #expect(picked.picker == nil)
-        #expect(picked.result.prose == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I've kept that in the pronunciation list, since more than one person carries that name.")
+        #expect(picked.result.prose == "OK, noted — Latta. I'll say Latta as LAD-uh (number 2) from now on. I've kept that in the pronunciation list for that name.")
         #expect(picked.pickerSpeech == nil)   // the read-back goes through the lexicon, which now has the phonemes
         #expect(recorder.writes == [.init(word: "Latta", saidAs: "LAD-uh", phonemes: "lˈæɾə", target: .file, origin: "picked")])
         let record = try #require(recorder.store.record(for: "latta"))
@@ -272,7 +281,7 @@ struct HalliePronunciationPickerTests {
         #expect(offer.candidates.map(\.respelling) == ["RICK", "REEK", "REYEK"])
         let picked = try await turn("1", picker: offer, drill: offered.drill, recorder: recorder)
         #expect(picked.picker == nil)
-        #expect(picked.result.prose == "OK, noted — Rick. I'll say Rick as RICK (number 1) from now on. I've kept that in the pronunciation list, since more than one person carries that name. Next name: Breen.")
+        #expect(picked.result.prose == "OK, noted — Rick. I'll say Rick as RICK (number 1) from now on. I've kept that in the pronunciation list for that name. Next name: Breen.")
         #expect(picked.drill?.current?.name == "Breen")
         #expect(picked.drill?.taught == 1)
         #expect(recorder.writes == [.init(word: "Rick", saidAs: "RICK", phonemes: "ɹˈɪk", target: .file, origin: "picked")])
@@ -286,6 +295,9 @@ struct HalliePronunciationPickerTests {
 
     @Test func anUnmappableHintOffersVariationsBuiltFromIt() async throws {
         let recorder = Recorder()
+        let (gold, goldURL) = try goldFixture(["data": "dˈAɾə", "brick": "bɹˈɪk"])
+        defer { try? FileManager.default.removeItem(at: goldURL) }
+        recorder.gold = gold
         // One-off: "rhymes with" is never mapped to a spelling on its own.
         let offered = try await turn("Latta rhymes with data", picker: nil, recorder: recorder)
         let offer = try #require(offered.picker)
@@ -305,6 +317,24 @@ struct HalliePronunciationPickerTests {
         #expect(inDrill.picker?.word == "Rick" && inDrill.picker?.fromDrill == true)
         #expect(inDrill.drill?.current?.name == "Rick")
         #expect(inDrill.result.prose.hasPrefix("I've noted \u{201C}rhymes with brick\u{201D} for Rick. Here are a few ways to say Rick"))
+    }
+
+    @Test func coordinatorGoldIsInjectedAndNeverFallsThroughToTheInstalledGlobal() async throws {
+        let recorder = Recorder()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-gold-\(UUID().uuidString).json")
+        recorder.gold = MisakiGoldLexicon(url: missing)
+        let withoutGold = try await turn(
+            "Latta rhymes with data", picker: nil, recorder: recorder)
+        #expect(withoutGold.picker?.candidates.first?.respelling == "LAT-uh")
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+
+        let (fixture, fixtureURL) = try goldFixture(["data": "dˈAɾə"])
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        recorder.gold = fixture
+        let withGold = try await turn(
+            "Latta rhymes with data", picker: nil, recorder: recorder)
+        #expect(withGold.picker?.candidates.first?.respelling == "LAY-duh")
     }
 
     // MARK: - 4. Shell parity

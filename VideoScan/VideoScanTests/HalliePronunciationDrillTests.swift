@@ -750,6 +750,8 @@ struct HalliePronunciationDrillTests {
         #expect(P.derive(respelling: "LA-tah") == "lˈætɑ")
         #expect(P.derive(respelling: "muh-GILL") == "məɡˈɪl")
         #expect(P.derive(respelling: "EKS-kyoo-zee") == "ˈɛkskjuzi")
+        #expect(P.derive(respelling: "YOO") == "jˈu")
+        #expect(P.derive(respelling: "KYOO") == "kjˈu")
         #expect(P.derive(respelling: "EE-dith") == "ˈidɪθ")
         #expect(P.derive(respelling: "nuh-THAN-yul") == "nəθˈænjəl")
         #expect(P.derive(respelling: "beh-THY-uh") == "bɛθˈIə")

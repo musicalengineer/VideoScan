@@ -40,7 +40,7 @@ enum HalliePhonemes {
     private static let vowels: [(String, Vowel)] = [
         // Keep before "oo": an intuitive letter-name respelling such as
         // "EKS-kyoo-zee" is /ju/, not a y-vowel followed by stray "oo".
-        ("yoo", Vowel(stressed: "ju", unstressed: "ju")),
+        ("yoo", Vowel(stressed: "u", unstressed: "u")),
         ("eye", Vowel(stressed: "I", unstressed: "I")),
         ("igh", Vowel(stressed: "I", unstressed: "I")),
         ("air", Vowel(stressed: "ɛɹ", unstressed: "ɛɹ")),
@@ -133,6 +133,9 @@ enum HalliePhonemes {
                     out += "j"; index += 1; continue
                 }
                 sawVowel = true
+                // `yoo` carries a /j/ onset; stress belongs on its /u/
+                // nucleus (YOO = jˈu, KYOO = kjˈu), as Misaki does.
+                if spelling == "yoo" { out += "j" }
                 out += (stressed ? "ˈ" : "") + (pinnedVowel ?? (stressed ? vowel.stressed : vowel.unstressed))
                 index += spelling.count
                 continue

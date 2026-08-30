@@ -164,7 +164,7 @@ extension HallieTellingMode {
         case .person:
             return lead + " I've kept that on \(telling.word)'s record."
         case .file:
-            return lead + " I've kept that in the pronunciation list, since more than one person carries that name."
+            return lead + " I've kept that in the pronunciation list for that name."
         }
     }
 

@@ -139,6 +139,7 @@ struct PronunciationVariationsTests {
         #expect(PronunciationVariations.respelling(fromPhonemes: "lˈAɾə") == "LAY-duh")
         #expect(PronunciationVariations.respelling(fromPhonemes: "lˈætɑ") == "LAT-ah")
         #expect(PronunciationVariations.respelling(fromPhonemes: "məɡˈɪl") == "muh-GILL")
+        #expect(PronunciationVariations.respelling(fromPhonemes: "ˈælən") == "AL-uhn")
         #expect(PronunciationVariations.respelling(fromPhonemes: "ˈidɪθ") == "EE-dith")
         #expect(PronunciationVariations.normalisedRespelling("Lah-Tah") == "LAH-tah")
         #expect(PronunciationVariations.normalisedRespelling("MahGill") == "MAH-gill")

@@ -54,8 +54,8 @@ extension HallieTellingModeTests {
                 == "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that with Nathaniel McGill.")
         #expect(HallieTellingMode.pronunciationReply(told, scope: .person(name: "nathaniel"))
                 == "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that on Nathaniel's record.")
-        #expect(HallieTellingMode.pronunciationReply(told, scope: .file).hasPrefix(
-            "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that in the pronunciation list"))
+        #expect(HallieTellingMode.pronunciationReply(told, scope: .file)
+            == "OK, noted — Nathaniel. I'll say Nathaniel as nuh-THAN-yul from now on. I've kept that in the pronunciation list for that name.")
         #expect(HallieTellingMode.pronunciationFailureReply(told, error: "disk full").contains("disk full"))
         #expect(HallieTellingMode.pronunciationFailureReply(told, error: "could not save: disk full")
             == "I couldn't save that — disk full. Saying Nathaniel as nuh-THAN-yul won't stick past this answer, sorry.")
