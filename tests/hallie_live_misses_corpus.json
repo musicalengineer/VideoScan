@@ -41,6 +41,168 @@
           "note": "2026-08-27 .commonAncestor shape."
         }
       ]
+    },
+    {
+      "id": "family_tree_2026_08_29",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcomes": [
+        "answered",
+        "declined",
+        "needsClarification"
+      ],
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "prompts": [
+        {
+          "id": "miss-02-owner-binding",
+          "text": "Can you find the closest common ancestor between me (Rick) and Donna?",
+          "expectedOutcome": "answered",
+          "note": "Miss #2: bind me (Rick) to the configured owner before any bare-name search; never offer medieval non-Richards."
+        },
+        {
+          "id": "miss-06-center-spelling-recovery",
+          "text": "can you center on marhta lamson",
+          "expectedOutcome": "answered",
+          "note": "Miss #6: deterministic Family Tree navigation with stated spelling recovery, never a catalog search."
+        },
+        {
+          "id": "miss-07-complete-biography-card",
+          "text": "tell me about Matthew Rice",
+          "expectedOutcome": "answered",
+          "note": "Miss #7: biography and family-tree asks share the complete fact card rather than dropping places, marriage, children, or depth."
+        },
+        {
+          "id": "miss-09-our-common-ancestor",
+          "text": "find our nearest common ancestor",
+          "note": "Miss #9: our means owner plus conversation focus, falling back to the owner's spouse; the result remains data-dependent."
+        },
+        {
+          "id": "miss-10-fragment-guard",
+          "text": "tell me about Muriel Lamb",
+          "expectedOutcome": "answered",
+          "mustNotContain": [
+            ". ,"
+          ],
+          "note": "Miss #10: a model-split claim must be dropped and restored as a complete sentence, never the observed '. ,' fragment."
+        },
+        {
+          "id": "miss-11-surname-roster",
+          "text": "tell me about pa oc'connor",
+          "note": "Miss #11: recover O'Connor and offer its roster, or resolve a real Pa alias; never reinterpret it as a catalog term."
+        },
+        {
+          "id": "miss-16-cross-world-card",
+          "text": "tell me about rick's family tree, his brothers, sisters, parents, and grandparents",
+          "expectedOutcome": "answered",
+          "note": "Miss #16: one cross-world card includes People-tab kin and flags the duplicate-parent condition with tree IDs."
+        },
+        {
+          "id": "miss-19-kinship-word-property",
+          "text": "what is Dad's name and his birthdate?",
+          "mustNotContain": [
+            "can't trace father for Dad"
+          ],
+          "note": "Miss #19: possessive Dad is a property ask about the Dad profile, not father-of-Dad. A missing pin may still require clarification."
+        }
+      ]
+    },
+    {
+      "id": "which_one_and_repair_2026_08_29",
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "sessions": [
+        {
+          "id": "miss-03-year-selection",
+          "turns": [
+            {
+              "text": "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+              "expectedRoutes": [
+                "graph"
+              ],
+              "expectedOutcome": "needsClarification",
+              "note": "Establish the real Donna namesake clarification."
+            },
+            {
+              "text": "the one born in 1959",
+              "expectedRoutes": [
+                "follow-up"
+              ],
+              "expectedOutcome": "answered",
+              "note": "Miss #3: select the unique birth-year candidate and resume the original common-ancestor ask."
+            }
+          ]
+        },
+        {
+          "id": "miss-04-conversation-repair",
+          "turns": [
+            {
+              "text": "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+              "expectedRoutes": [
+                "graph"
+              ],
+              "expectedOutcome": "needsClarification",
+              "note": "Establish a pending which-one list."
+            },
+            {
+              "text": "you presented me a list of people born hundreds or years ago",
+              "expectedRoutes": [
+                "follow-up"
+              ],
+              "expectedOutcome": "repaired",
+              "note": "Miss #4: acknowledge and repair the pending ask; never run a catalog search for the complaint."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "people_kinship_2026_08_29",
+      "expectedRoutes": [
+        "capability"
+      ],
+      "expectedOutcome": "answered",
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "prompts": [
+        {
+          "id": "miss-12-relationships-overview",
+          "text": "tell me how rick is related to the people in the people tab who currently living or recently deceased",
+          "note": "Miss #12: answer the relationships overview from the kinship engine ahead of the ordinary People-tab roster."
+        }
+      ]
+    },
+    {
+      "id": "pronunciation_2026_08_29",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "expectedOutcome": "answered",
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "prompts": [
+        {
+          "id": "miss-14-pronunciation-hint",
+          "text": "Latta should be pronounced with a short a on the La",
+          "note": "Miss #14: a descriptive pronunciation hint is handled locally and never searched. The eval shell keeps it for this session only."
+        },
+        {
+          "id": "miss-15-pronunciation-query",
+          "text": "tell me latta pronounciations",
+          "note": "Miss #15: typo-tolerant pronunciation query, answered from the voice lexicon and drill sheet."
+        },
+        {
+          "id": "miss-17-freeform-pronunciation",
+          "text": "Latta is prounounced like Ladder but with Laddah or Lattah short a first ah second, like ladder but latt ah",
+          "note": "Miss #17: typo-tolerant free-form teach with alternatives; uncertain detail is retained rather than declined or searched."
+        },
+        {
+          "id": "miss-18-pronunciation-precedence",
+          "text": "the family name \"Latta\" should be pronounced with a short a, like in Ladder, but it would be \"Latt uh\"",
+          "note": "Miss #18: pronunciation teaching precedes the surname-origin shape for a quoted family name."
+        }
+      ]
     }
   ]
 }

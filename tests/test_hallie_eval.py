@@ -1,7 +1,12 @@
 import importlib.util
+import io
+import json
+import tempfile
 import unittest
 from collections import Counter
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,12 +42,49 @@ class HallieEvalTests(unittest.TestCase):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_live_misses_corpus.json"
         )
-        self.assertGreaterEqual(len(turns), 1)
+        self.assertGreaterEqual(len(turns), 22)
         self.assertEqual(len({turn["id"] for turn in turns}), len(turns))
         live = [t for t in turns if "Hudson line" in t["text"]]
         self.assertEqual(len(live), 1)
         self.assertEqual(live[0]["expectedRoutes"], ["graph", "follow-up"])
         self.assertIn("family_tree_live", live[0]["id"])
+
+        by_id = {turn["id"]: turn for turn in turns}
+        required_august_29_sensors = {
+            "miss-02-owner-binding",
+            "miss-06-center-spelling-recovery",
+            "miss-07-complete-biography-card",
+            "miss-09-our-common-ancestor",
+            "miss-10-fragment-guard",
+            "miss-11-surname-roster",
+            "miss-12-relationships-overview",
+            "miss-14-pronunciation-hint",
+            "miss-15-pronunciation-query",
+            "miss-16-cross-world-card",
+            "miss-17-freeform-pronunciation",
+            "miss-18-pronunciation-precedence",
+            "miss-19-kinship-word-property",
+            "which_one_and_repair_2026_08_29-miss-03-year-selection-t1",
+            "which_one_and_repair_2026_08_29-miss-03-year-selection-t2",
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t1",
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2",
+        }
+        self.assertTrue(required_august_29_sensors.issubset(by_id))
+
+        repair = by_id[
+            "which_one_and_repair_2026_08_29-miss-04-conversation-repair-t2"
+        ]
+        self.assertTrue(repair["followsPrevious"])
+        self.assertEqual(repair["expectedRoutes"], ["follow-up"])
+        self.assertEqual(repair["expectedOutcome"], "repaired")
+
+        batch = hallie_eval.build_stdin(turns).splitlines()
+        complaint = "you presented me a list of people born hundreds or years ago"
+        complaint_index = batch.index(complaint)
+        self.assertEqual(
+            batch[complaint_index - 1],
+            "Find the most recent common ancestor between Richard Harding Breen Jr and donna",
+        )
 
     def test_batch_input_resets_between_scenarios_but_not_followup_turns(self):
         turns = hallie_eval.load_corpus(
@@ -140,6 +182,39 @@ class HallieEvalTests(unittest.TestCase):
             "outcome": "answered",
         })
         self.assertNotIn("fragment", flags)
+
+    def test_repaired_outcome_is_informational_and_counts_clean(self):
+        record = {
+            "id": "repair-001",
+            "category": "repair",
+            "question": "that's wrong",
+            "answer": "Sorry about that. Tell me what was off, and I'll look again.",
+            "route": "follow-up",
+            "outcome": "repaired",
+            "expectedRoutes": ["follow-up"],
+            "expectedOutcome": "repaired",
+        }
+        self.assertEqual(hallie_eval.grade_record(record), ["~repaired"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "repair.jsonl"
+            run.write_text(
+                json.dumps({"meta": {"elapsed_s": 1, "git": "test", "binary_built": "test"}})
+                + "\n" + json.dumps(record) + "\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = hallie_eval.grade(SimpleNamespace(
+                    run=str(run), compare=None, show=0))
+
+            self.assertEqual(result, 0)
+            self.assertIn("turns: 1   clean: 1 (100%)", output.getvalue())
+            graded = [
+                json.loads(line)
+                for line in run.with_suffix(".graded.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(graded[0]["flags"], ["~repaired"])
 
 
 if __name__ == "__main__":
