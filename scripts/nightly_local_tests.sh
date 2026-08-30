@@ -66,7 +66,7 @@
 #       Claude, and Codex updates. Update failures remain advisory and cannot
 #       replace the already-recorded nightly verdict or its exit status.
 #
-#   2026-08-30 (xcodebuild-watchdog-r1):
+#   2026-08-30 (xcodebuild-watchdog-r2):
 #     - Build and test xcodebuild invocations run in private process groups
 #       behind hard deadlines. Timeout rows take precedence over ordinary
 #       return codes and zero-test discovery, so metrics publication remains
@@ -74,7 +74,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r1"
+NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r2"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -93,21 +93,16 @@ exec > "$LOGFILE" 2>&1
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# Extractable seams let test_nightly_failure_modes.sh fire the deadline
-# immediately and deterministically. Production uses real wall-clock sleeps.
-nightly_watchdog_deadline_wait() { sleep "$1"; }
-nightly_watchdog_grace_wait() { sleep "$1"; }
-nightly_watchdog_poll_wait() { sleep 0.1; }
 nightly_timeout_reason() { printf '%s-timeout:%ss' "$1" "$2"; }
 
 # Run one command in a private process group with a hard deadline.
 #
-# Python's setsid creates a new session whose process-group ID is the launcher
-# PID. Sending a signal to -PID therefore reaches xcodebuild and every child it
-# spawned. The ready file closes the race where the watchdog could fire before
-# setsid. After TERM+KILL, a still-live/unreaped non-zombie is disowned instead
-# of blocking this shell in waitpid; that contamination is logged explicitly
-# and the caller promptly receives 124 so it can publish a timeout row.
+# One foreground Python supervisor owns the child from Popen through deadline
+# handling. start_new_session gives xcodebuild a private PGID, and retaining the
+# unreaped Popen child reserves that numeric PID/PGID until after TERM/KILL, so
+# no second shell actor can signal a recycled process group. A child that still
+# cannot be reaped after KILL is reported as contamination; the supervisor exits
+# 124 promptly rather than blocking metrics publication in waitpid.
 # Args: timeout_seconds term_grace_seconds output_log command [args...]
 run_with_process_group_watchdog() {
     local timeout_seconds="$1"
@@ -115,82 +110,103 @@ run_with_process_group_watchdog() {
     local output_log="$3"
     shift 3
 
-    local state_dir ready_file done_file timeout_file leader_pid watchdog_pid
-    local launcher_spins=0
-    local command_rc=0
-    local process_state=""
+    local state_dir timeout_file command_rc
     state_dir=$(mktemp -d "${TMPDIR:-/tmp}/videoscan-nightly-watchdog.XXXXXX") || return 125
-    ready_file="$state_dir/ready"
-    done_file="$state_dir/done"
     timeout_file="$state_dir/timeout"
     : > "$output_log"
     NIGHTLY_WATCHDOG_DID_TIMEOUT=false
 
     python3 -c '
+import errno
 import os
+import signal
+import subprocess
 import sys
-os.setsid()
-with open(sys.argv[1], "w", encoding="utf-8"):
-    pass
-os.execvp(sys.argv[2], sys.argv[2:])
-' "$ready_file" "$@" > "$output_log" 2>&1 &
-    leader_pid=$!
+import time
 
-    while [ ! -e "$ready_file" ] && kill -0 "$leader_pid" 2>/dev/null; do
-        nightly_watchdog_poll_wait
-        launcher_spins=$((launcher_spins + 1))
-        if [ "$launcher_spins" -ge 100 ]; then
-            log "ERROR: watchdog launcher did not establish process group for PID $leader_pid"
-            kill -KILL "$leader_pid" 2>/dev/null || true
-            wait "$leader_pid" 2>/dev/null || true
-            rm -rf "$state_dir"
-            return 125
-        fi
-    done
+timeout = float(sys.argv[1])
+grace = float(sys.argv[2])
+output_path = sys.argv[3]
+timeout_marker = sys.argv[4]
+command = sys.argv[5:]
+test_immediate = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY") == "1"
+test_ready = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE")
+test_unreapable = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_UNREAPABLE") == "1"
+pre_signal_ready = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_READY_FILE")
+pre_signal_release = os.environ.get("VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_RELEASE_FILE")
 
-    if [ ! -e "$ready_file" ]; then
-        wait "$leader_pid"
-        command_rc=$?
-        rm -rf "$state_dir"
-        return "$command_rc"
-    fi
+with open(output_path, "wb") as output:
+    child = subprocess.Popen(
+        command,
+        stdout=output,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        if test_immediate:
+            limit = time.monotonic() + 2.0
+            while test_ready and not os.path.exists(test_ready) and time.monotonic() < limit:
+                if child.poll() is not None:
+                    sys.exit(child.returncode)
+                time.sleep(0.01)
+            raise subprocess.TimeoutExpired(command, timeout)
+        sys.exit(child.wait(timeout=timeout))
+    except subprocess.TimeoutExpired:
+        with open(timeout_marker, "w", encoding="utf-8"):
+            pass
 
-    (
-        nightly_watchdog_deadline_wait "$timeout_seconds"
-        [ ! -e "$done_file" ] || exit 0
-        : > "$timeout_file"
-        kill -TERM -- "-$leader_pid" 2>/dev/null || true
-        nightly_watchdog_grace_wait "$grace_seconds"
-        kill -KILL -- "-$leader_pid" 2>/dev/null || true
-    ) &
-    watchdog_pid=$!
+        # Test-only rendezvous: let a child exit after the deadline but before
+        # signaling. It stays unreaped here, so its PID/PGID cannot be reused.
+        if pre_signal_ready:
+            with open(pre_signal_ready, "w", encoding="utf-8"):
+                pass
+        if pre_signal_release:
+            limit = time.monotonic() + 2.0
+            while not os.path.exists(pre_signal_release) and time.monotonic() < limit:
+                time.sleep(0.01)
+            if os.path.exists(pre_signal_release):
+                time.sleep(0.05)
 
-    while kill -0 "$leader_pid" 2>/dev/null && [ ! -e "$timeout_file" ]; do
-        nightly_watchdog_poll_wait
-    done
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except OSError as error:
+            # Darwin reports EPERM as well as ESRCH for an empty group whose
+            # unreaped leader is still reserved by this supervisor.
+            if error.errno not in (errno.ESRCH, errno.EPERM):
+                raise
 
+        if not test_unreapable:
+            try:
+                child.wait(timeout=grace)
+                sys.exit(124)
+            except subprocess.TimeoutExpired:
+                pass
+
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError as error:
+            if error.errno not in (errno.ESRCH, errno.EPERM):
+                raise
+
+        if not test_unreapable:
+            try:
+                child.wait(timeout=1.0)
+                sys.exit(124)
+            except subprocess.TimeoutExpired:
+                pass
+
+        print(
+            f"CONTAMINATION: watchdog could not reap PID/PGID {child.pid} "
+            "after TERM/KILL; supervisor is detaching",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(124)
+' "$timeout_seconds" "$grace_seconds" "$output_log" "$timeout_file" "$@"
+    command_rc=$?
     if [ -e "$timeout_file" ]; then
         NIGHTLY_WATCHDOG_DID_TIMEOUT=true
-        wait "$watchdog_pid" 2>/dev/null || true
-        process_state=$(ps -o state= -p "$leader_pid" 2>/dev/null | tr -d ' ' || true)
-        if [ -z "$process_state" ]; then
-            wait "$leader_pid" 2>/dev/null || true
-        elif [[ "$process_state" == Z* ]]; then
-            # A zombie is already dead, so wait cannot block.
-            wait "$leader_pid" 2>/dev/null || true
-        else
-            log "CONTAMINATION: watchdog could not reap PID/PGID $leader_pid (state=$process_state); detaching after TERM/KILL"
-            disown "$leader_pid" 2>/dev/null || true
-        fi
-        rm -rf "$state_dir"
-        return 124
     fi
-
-    wait "$leader_pid"
-    command_rc=$?
-    : > "$done_file"
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
     rm -rf "$state_dir"
     return "$command_rc"
 }
@@ -281,6 +297,36 @@ base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
 print(json.dumps(base, separators=(",", ":")))
 '
+}
+
+# Build and publish the current parsed test result. COV_LOGIC="null" omits the
+# coverage field. Keeping this path callable before any optional post-test work
+# is what lets a watchdog timeout durably record partial counts immediately.
+make_current_test_result_row() {
+    local ts cov_field=""
+    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    if [ "$COV_LOGIC" != "null" ]; then
+        cov_field=",\"coverage_logic_pct\":$COV_LOGIC"
+    fi
+    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
+        "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
+        "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
+        "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
+        "$FAILED_NAMES_JSON" "$cov_field"
+}
+
+publish_current_test_result() {
+    local row
+    row=$(with_person_metrics "$(make_current_test_result_row)")
+    publish_row "$row"
+    PUBLISH_RC=$?
+}
+
+# Timeout publication is deliberately tiny: no xcresult traversal, live person
+# evaluator, or other optional work can run before publish_row has returned.
+record_timed_out_test_result() {
+    COV_LOGIC="null"
+    publish_current_test_result
 }
 
 log "=== Nightly local test run starting (script v$NIGHTLY_SCRIPT_VERSION) ==="
@@ -689,12 +735,16 @@ classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC"
 
+if $TEST_TIMED_OUT; then
+    log "FATAL: test watchdog expired; recording partial counts before optional metrics"
+    record_timed_out_test_result
+    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
+    exit 1
+fi
+
 if [ "$TOTAL" -eq 0 ]; then
-    if $TEST_TIMED_OUT; then
-        log "FATAL: test watchdog expired before any test completed"
-    else
-        log "SKIP: no tests ran (likely build issue or test discovery fail)"
-    fi
+    log "SKIP: no tests ran (likely build issue or test discovery fail)"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
     run_post_nightly_updates_if_recorded "$PUBLISH_RC"
@@ -739,24 +789,10 @@ log "Logic-only coverage: ${COV_LOGIC}%"
 PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
 refresh_person_metrics "$PERSON_EVAL_APP"
 
-# ── Build JSON row (matches TestDriver MetricsPublisher format) ─────
-TS=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-COV_FIELD=""
-if [ "$COV_LOGIC" != "null" ]; then
-    COV_FIELD=",\"coverage_logic_pct\":$COV_LOGIC"
-fi
-
-# "failed_names" is ADDITIVE (2026-07-09-r1): [] on green runs. Do not
-# rename/remove existing fields — the dashboard reads this schema.
-ROW=$(printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
-    "$TS" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
-    "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
-    "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
-    "$FAILED_NAMES_JSON" "$COV_FIELD")
-ROW=$(with_person_metrics "$ROW")
-
-publish_row "$ROW"
-PUBLISH_RC=$?
+# ── Publish JSON row (matches TestDriver MetricsPublisher format) ───
+# "failed_names" is additive; make_current_test_result_row also includes
+# coverage only when the normal, non-timeout extraction produced it.
+publish_current_test_result
 run_post_nightly_updates_if_recorded "$PUBLISH_RC"
 
 # ── Cleanup ─────────────────────────────────────────────────────────

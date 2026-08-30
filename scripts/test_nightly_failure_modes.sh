@@ -461,7 +461,7 @@ fi
 echo
 echo "== Test 11: deterministic process-group watchdog timeout =="
 WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
-awk '/^nightly_watchdog_deadline_wait\(\)/,/^# Run developer-tool maintenance/' \
+awk '/^nightly_timeout_reason\(\)/,/^# Run developer-tool maintenance/' \
     "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' > "$WATCHDOG_LIB"
 WATCHDOG_FIXTURE="$SANDBOX/watchdog-fixture.sh"
 printf '%s\n' \
@@ -481,21 +481,15 @@ run_watchdog_fixture() {
         # shellcheck disable=SC1090
         source "$WATCHDOG_LIB"
         log() { echo "[watchdog-test] $*"; }
-        nightly_watchdog_deadline_wait() {
-            local attempts=0
-            while [ ! -e "$WATCHDOG_FIXTURE_READY" ] && [ "$attempts" -lt 100 ]; do
-                sleep 0.01
-                attempts=$((attempts + 1))
-            done
-        }
-        nightly_watchdog_grace_wait() { :; }
+        export VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY=1
+        export VIDEOSCAN_WATCHDOG_TEST_DEADLINE_READY_FILE="$WATCHDOG_FIXTURE_READY"
         if [ "$force_contamination" = "true" ]; then
             # Deterministically exercise the fail-open publication path for a
             # kernel-blocked, unreapable leader without creating one for real.
-            ps() { echo "U"; }
+            export VIDEOSCAN_WATCHDOG_TEST_UNREAPABLE=1
         fi
         run_with_process_group_watchdog \
-            999 999 "$SANDBOX/watchdog-command.log" "$WATCHDOG_FIXTURE"
+            999 0 "$SANDBOX/watchdog-command.log" "$WATCHDOG_FIXTURE"
     ) > "$output_file" 2>&1
 }
 
@@ -541,9 +535,44 @@ else
     CONTAMINATION_RC=$?
     if [ "$CONTAMINATION_RC" -eq 124 ] &&
        grep -q 'CONTAMINATION: watchdog could not reap PID/PGID' "$CONTAMINATION_OUTPUT"; then
-        pass "unreaped PID/PGID is logged as contamination without blocking timeout return"
+        pass "ps-free unreapable PID/PGID is logged without blocking timeout return"
     else
         fail "contamination path broke (rc=$CONTAMINATION_RC output=$(tr '\n' ' ' < "$CONTAMINATION_OUTPUT"))"
+    fi
+
+    # The child exits after Python has declared the deadline but before the
+    # supervisor signals its retained (unreaped) process group. No TERM trap
+    # may fire, and the deadline still owns the 124 classification.
+    RACE_READY="$SANDBOX/watchdog-race-presignal-ready"
+    RACE_RELEASE="$SANDBOX/watchdog-race-presignal-release"
+    RACE_SIGNAL="$SANDBOX/watchdog-race-signal"
+    RACE_FIXTURE="$SANDBOX/watchdog-race-fixture.sh"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'trap '\''touch "$WATCHDOG_RACE_SIGNAL"'\'' TERM' \
+        'while [ ! -e "$WATCHDOG_RACE_READY" ]; do sleep 0.01; done' \
+        ': > "$WATCHDOG_RACE_RELEASE"' \
+        'exit 0' \
+        > "$RACE_FIXTURE"
+    chmod +x "$RACE_FIXTURE"
+    (
+        # shellcheck disable=SC1090
+        source "$WATCHDOG_LIB"
+        log() { echo "[watchdog-test] $*"; }
+        export VIDEOSCAN_WATCHDOG_TEST_TIMEOUT_IMMEDIATELY=1
+        export VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_READY_FILE="$RACE_READY"
+        export VIDEOSCAN_WATCHDOG_TEST_PRE_SIGNAL_RELEASE_FILE="$RACE_RELEASE"
+        export WATCHDOG_RACE_READY="$RACE_READY"
+        export WATCHDOG_RACE_RELEASE="$RACE_RELEASE"
+        export WATCHDOG_RACE_SIGNAL="$RACE_SIGNAL"
+        run_with_process_group_watchdog \
+            999 0 "$SANDBOX/watchdog-race-command.log" "$RACE_FIXTURE"
+    ) > "$SANDBOX/watchdog-race-output.log" 2>&1
+    RACE_RC=$?
+    if [ "$RACE_RC" -eq 124 ] && [ ! -e "$RACE_SIGNAL" ]; then
+        pass "completion-at-deadline keeps PGID reserved and sends no post-completion signal"
+    else
+        fail "completion-at-deadline race broke (rc=$RACE_RC signal_seen=$([ -e "$RACE_SIGNAL" ] && echo yes || echo no) output=$(tr '\n' ' ' < "$SANDBOX/watchdog-race-output.log"))"
     fi
 fi
 
@@ -574,6 +603,65 @@ if [ "$TIMEOUT_ZERO" = "failed|test-timeout:7s" ] &&
     pass "build/test timeout reasons are explicit and timeout outranks zero/failure rc"
 else
     fail "timeout classification broke (zero=$TIMEOUT_ZERO failures=$TIMEOUT_FAILURES build=$BUILD_REASON)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
+# Test 13: a test timeout publishes its partial counts immediately with null
+# coverage and the pre-build readiness snapshot. Neither xccov nor the live
+# person evaluator may run before that durable-row path returns.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 13: timeout publishes partial row before optional metrics =="
+TIMEOUT_PUBLISH_LIB="$SANDBOX/timeout_publish_lib.sh"
+awk '/^with_person_metrics\(\)/,/^log "=== Nightly local test run starting/' \
+    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' > "$TIMEOUT_PUBLISH_LIB"
+TIMEOUT_ROW_FILE="$SANDBOX/timeout-row.json"
+OPTIONAL_WORK_FILE="$SANDBOX/timeout-optional-work-ran"
+(
+    # shellcheck disable=SC1090
+    source "$TIMEOUT_PUBLISH_LIB"
+    HOST="TestHost"
+    BRANCH="main"
+    COMMIT="abc123"
+    COMMIT_DATE="2026-08-30"
+    DIRTY=false
+    PASSED=4
+    FAILED=1
+    SKIPPED=2
+    TOTAL=7
+    ELAPSED=9
+    STATUS="failed"
+    REASON="test-timeout:7s"
+    NIGHTLY_SCRIPT_VERSION="test"
+    FAILED_NAMES_JSON='["heldSensor()"]'
+    COV_LOGIC="91.2"
+    PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red"}'
+    PUBLISH_RC=99
+    publish_row() { printf '%s\n' "$1" > "$TIMEOUT_ROW_FILE"; return 0; }
+    xcrun() { : > "$OPTIONAL_WORK_FILE"; return 99; }
+    refresh_person_metrics() { : > "$OPTIONAL_WORK_FILE"; return 99; }
+    record_timed_out_test_result
+    [ "$PUBLISH_RC" -eq 0 ]
+)
+TIMEOUT_PUBLISH_RC=$?
+TIMEOUT_ROW_SUMMARY=$(python3 - "$TIMEOUT_ROW_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    row = json.load(stream)
+print("|".join([
+    row["status"], row["reason"], str(row["passed"]), str(row["failed"]),
+    str(row["skipped"]), str(row["total"]), str(row.get("coverage_logic_pct")),
+    row["person_eval_status"], str(row["person_eval_readiness_pct"]),
+]))
+PY
+)
+if [ "$TIMEOUT_PUBLISH_RC" -eq 0 ] &&
+   [ "$TIMEOUT_ROW_SUMMARY" = "failed|test-timeout:7s|4|1|2|7|None|not-configured|0" ] &&
+   [ ! -e "$OPTIONAL_WORK_FILE" ]; then
+    pass "timeout row retains partial counts/readiness and bypasses coverage + live evaluator"
+else
+    fail "timeout publication broke (rc=$TIMEOUT_PUBLISH_RC row=$TIMEOUT_ROW_SUMMARY optional=$([ -e "$OPTIONAL_WORK_FILE" ] && echo ran || echo skipped))"
 fi
 
 # ───────────────────────────────────────────────────────────────────
