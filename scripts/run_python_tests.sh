@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 #
-# The single entry point for the Python test suite. Both CI and the local
-# nightly call this, so the two cannot drift apart.
+# The single entry point for the Python test suite.
+#
+# As of 2026-08-29 only the CI workflow (.github/workflows/python-tests.yml)
+# calls this. The local nightly does NOT yet — nightly_local_tests.sh has no
+# caller for it, and that wiring is owned elsewhere. The point of a single
+# entry point is that once the nightly does call it, the two cannot drift;
+# that is an intention, not a description of today.
 #
 # WHY THIS EXISTS
 # ---------------
-# On 2026-08-29 the Python suite had 416 tests locally, of which CI ran two
-# modules and the nightly ran none. Worse than the gap itself was that
-# neither runner FAILS when tests go missing: pytest and unittest both exit
-# 0 when a module drops out of collection. A missing dependency silently
-# took the count from 416 to 359 while the output still looked healthy.
+# On 2026-08-29 the tracked Python suite held 400 tests, of which CI ran two
+# modules and the nightly ran none. (A working-tree run reported 416; the
+# extra 21 come from an untracked module that belongs to a person, not to
+# CI — which is why the list below comes from git ls-files.) Worse than the
+# gap itself was that neither runner FAILS when tests go missing: pytest and
+# unittest both exit 0 when a module drops out of collection. A missing
+# dependency silently took a local count from 416 to 359 while the output
+# still looked healthy.
 #
 # So this script does three things, and the third is the point:
 #   1. runs the suite against an explicit TRACKED file list, not a
@@ -26,8 +34,8 @@
 # Usage:  scripts/run_python_tests.sh
 #         PYTHON=/path/to/python scripts/run_python_tests.sh
 #
-# Written for bash 3.2 — that is what /bin/bash is on macOS, and the
-# nightly runs there. No mapfile, no associative arrays.
+# Written for bash 3.2 — that is what /bin/bash is on macOS, where the
+# nightly is intended to run it. No mapfile, no associative arrays.
 
 set -euo pipefail
 
