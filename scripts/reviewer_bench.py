@@ -62,15 +62,41 @@ Language: {language}
 """
 
 
-def ask_ollama(model: str, prompt: str, timeout: int = 600) -> tuple[str, float]:
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Reasoning models emit their chain first and mark the end. Everything
+# before this is exploration, including paths they then reject.
+THINKING_END = "...done thinking."
+
+
+def ask_ollama(model: str, prompt: str, timeout: int = 900) -> tuple[str, str, float]:
+    """Returns (final answer, thinking chain, seconds).
+
+    Two things learned running this against qwen3.6 on 2026-08-30:
+
+    1. `ollama run` streams with terminal redraw escapes, which corrupt any
+       naive keyword match — the visible text contains fragments like
+       "\x1b[3D\x1b[K" mid-word. Strip ANSI before scoring.
+    2. A reasoning model's chain is most of the output (34k chars of
+       thinking for a 700-char answer) and it explores WRONG hypotheses on
+       the way. Scoring the whole transcript would credit a model for
+       considering the right cause and then rejecting it, and would count
+       every discarded idea as NOISE. Score the final answer only; keep the
+       chain for a human to read.
+    """
     started = time.time()
     proc = subprocess.run(
         ["ollama", "run", model, prompt],
         capture_output=True, text=True, timeout=timeout,
     )
+    elapsed = time.time() - started
     if proc.returncode != 0:
-        return f"<ERROR rc={proc.returncode}: {proc.stderr.strip()[:400]}>", time.time() - started
-    return proc.stdout.strip(), time.time() - started
+        return f"<ERROR rc={proc.returncode}: {proc.stderr.strip()[:400]}>", "", elapsed
+    clean = ANSI.sub("", proc.stdout)
+    if THINKING_END in clean:
+        thinking, _, answer = clean.partition(THINKING_END)
+    else:
+        thinking, answer = "", clean
+    return answer.strip(), thinking.strip(), elapsed
 
 
 def score(answer: str, concepts: list[str]) -> tuple[bool, list[str]]:
@@ -97,7 +123,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--out")
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
     spec = json.loads(CASES.read_text())
@@ -105,7 +131,7 @@ def main() -> int:
 
     print(f"model: {args.model}\ncases: {len(spec['cases'])}\n" + "-" * 62)
     for case in spec["cases"]:
-        answer, seconds = ask_ollama(
+        answer, thinking, seconds = ask_ollama(
             args.model,
             PROMPT.format(language=case["language"], code=case["code"]),
             timeout=args.timeout)
@@ -115,11 +141,12 @@ def main() -> int:
         claims = count_claims(answer)
         print(f"{'HIT ' if hit else 'MISS'}  {case['id']:<18} "
               f"{seconds:6.1f}s  concepts={len(matched)}/{len(case['required_concepts'])}  "
-              f"claims~{claims}")
+              f"claims~{claims}  think={len(thinking)}c")
         results.append({
             "id": case["id"], "hit": hit, "matched": matched,
             "seconds": round(seconds, 1), "claims": claims,
             "answer": answer, "expected": case["expected_finding"],
+            "thinkingChars": len(thinking), "thinking": thinking,
         })
 
     print("-" * 62)
