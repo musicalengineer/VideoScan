@@ -13,6 +13,19 @@
 // FamilySearch has been waiting since February 2025 precisely because he
 // thought he was not allowed to act; the link is the shortest path to
 // finding out he is.
+//
+// SIZING (Rick, 2026-08-31): the category row used to be a single
+// horizontal scroller, so the categories past the right edge were
+// invisible rather than merely off-screen — you cannot click a filter you
+// do not know exists. The chips now WRAP, so every category is visible at
+// any width, and the sheet opens wide with a flexible frame.
+//
+// ERA (Rick, same day): "anything before 1800 has little chance of being
+// fixed by me ... after 1800 or 1900, these are ones I might be able to
+// focus on." Hence the era filter. It hides only what it KNOWS is out of
+// range: an undated finding stays visible under every era, because a
+// missing date is not evidence of age, and a filter that quietly buries
+// fixable work is worse than no filter.
 
 import SwiftUI
 import VideoScanCore
@@ -23,19 +36,59 @@ struct FamilyTreeVerifyReportView: View {
     let onReveal: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var kindFilter: FamilyTreeVerification.Kind?
+    @State private var era: Era = .all
 
-    private var shown: [FamilyTreeVerification.Finding] {
-        let needing = report.findings.filter { $0.severity <= .review }
-        guard let kindFilter else { return needing }
-        return needing.filter { $0.kind == kindFilter }
+    /// How far back the reader is willing to look. Rick can act on the
+    /// recent end of the tree and not on the colonial end.
+    enum Era: Int, CaseIterable, Identifiable {
+        case all = 0
+        case since1800 = 1800
+        case since1900 = 1900
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .all:       "All years"
+            case .since1800: "1800 onward"
+            case .since1900: "1900 onward"
+            }
+        }
+
+        /// Undated findings pass every era on purpose — see the file note.
+        func admits(_ finding: FamilyTreeVerification.Finding) -> Bool {
+            guard self != .all, let year = finding.year else { return true }
+            return year >= rawValue
+        }
     }
 
-    /// Kinds present in this report, commonest first, so the filter row
-    /// reflects the tree rather than the enum.
+    /// Everything a human is being asked to look at, before any filtering.
+    private var needingReview: [FamilyTreeVerification.Finding] {
+        report.findings.filter { $0.severity <= .review }
+    }
+
+    private var inEra: [FamilyTreeVerification.Finding] {
+        needingReview.filter(era.admits)
+    }
+
+    private var shown: [FamilyTreeVerification.Finding] {
+        guard let kindFilter else { return inEra }
+        return inEra.filter { $0.kind == kindFilter }
+    }
+
+    /// Kinds present in this report FOR THE CHOSEN ERA, commonest first,
+    /// so the counts on the chips agree with the list underneath them.
     private var kindsPresent: [(FamilyTreeVerification.Kind, Int)] {
-        Dictionary(grouping: report.findings.filter { $0.severity <= .review }, by: \.kind)
+        Dictionary(grouping: inEra, by: \.kind)
             .map { ($0.key, $0.value.count) }
-            .sorted { $0.1 > $1.1 }
+            .sorted { $0.1 == $1.1 ? label($0.0) < label($1.0) : $0.1 > $1.1 }
+    }
+
+    /// How many findings carry no date at all. Worth stating plainly: it
+    /// explains why an era filter does not reduce the count as much as the
+    /// reader expects.
+    private var undatedCount: Int {
+        needingReview.filter { $0.year == nil }.count
     }
 
     var body: some View {
@@ -47,24 +100,37 @@ struct FamilyTreeVerifyReportView: View {
             if shown.isEmpty {
                 ContentUnavailableView("Nothing to review",
                                        systemImage: "checkmark.circle",
-                                       description: Text("No entries match this filter."))
-                    .frame(maxHeight: .infinity)
+                                       description: Text(emptyReason))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(shown) { finding in
                     FindingRow(finding: finding, onReveal: onReveal)
                 }
                 .listStyle(.inset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 720, minHeight: 480)
+        // Wide enough that the categories and the era control both fit on
+        // open, and flexible so the sheet can be dragged larger.
+        .frame(minWidth: 940, idealWidth: 1140, maxWidth: .infinity,
+               minHeight: 560, idealHeight: 760, maxHeight: .infinity)
+    }
+
+    private var emptyReason: String {
+        if era != .all && !needingReview.isEmpty {
+            "Nothing matches this filter. \(needingReview.count) "
+            + "\(needingReview.count == 1 ? "entry" : "entries") "
+            + "fall outside \(era.title.lowercased())."
+        } else {
+            "No entries match this filter."
+        }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Entries needing review").font(.title2.weight(.semibold))
-                Text("\(report.needingReview) of \(report.findings.count) findings "
-                     + "across \(report.peopleChecked) people")
+                Text(subtitle)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -73,16 +139,43 @@ struct FamilyTreeVerifyReportView: View {
         .padding(14)
     }
 
+    private var subtitle: String {
+        var s = "\(report.needingReview) of \(report.findings.count) findings "
+              + "across \(report.peopleChecked) people"
+        if era != .all {
+            s += " · showing \(inEra.count) from \(era.title.lowercased())"
+        }
+        if undatedCount > 0 {
+            s += " · \(undatedCount) undated (shown under every era)"
+        }
+        return s
+    }
+
     private var filters: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                chip("All", count: report.needingReview, kind: nil)
-                ForEach(kindsPresent, id: \.0) { kind, count in
-                    chip(Self.label(kind), count: count, kind: kind)
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Years", selection: $era) {
+                ForEach(Era.allCases) { option in
+                    Text("\(option.title) (\(count(for: option)))").tag(option)
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 8)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 420)
+
+            // Wraps instead of scrolling sideways: a category you cannot
+            // see is a category you never filter by.
+            ChipFlow(spacing: 6) {
+                chip("All", count: inEra.count, kind: nil)
+                ForEach(kindsPresent, id: \.0) { kind, count in
+                    chip(label(kind), count: count, kind: kind)
+                }
+            }
         }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    private func count(for option: Era) -> Int {
+        needingReview.filter(option.admits).count
     }
 
     private func chip(_ title: String, count: Int,
@@ -98,6 +191,10 @@ struct FamilyTreeVerifyReportView: View {
                                                     : Color.secondary.opacity(0.12)))
         }
         .buttonStyle(.plain)
+    }
+
+    private func label(_ kind: FamilyTreeVerification.Kind) -> String {
+        Self.label(kind)
     }
 
     static func label(_ kind: FamilyTreeVerification.Kind) -> String {
@@ -127,6 +224,17 @@ private struct FindingRow: View {
                 Text(FamilyTreeVerifyReportView.label(finding.kind))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
+                // The era at a glance, so the reader can judge "can I even
+                // act on this?" without opening FamilySearch.
+                if let year = finding.year {
+                    Text("· \(String(year))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("· undated")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
             }
             Text(finding.personNames.joined(separator: "  ·  "))

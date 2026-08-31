@@ -62,6 +62,17 @@ public enum FamilyTreeVerification {
         /// usually resolved on familysearch.org, so the report has to carry
         /// the way in.
         public let familySearchIDs: [String]
+        /// The most recent year we know about among the people involved
+        /// (birth or death), nil when nothing is dated. The review queue
+        /// filters on it — Rick, 2026-08-31: "anything before 1800 has
+        /// little chance of being fixed by me ... after 1800 or 1900,
+        /// these are ones I might be able to focus on."
+        ///
+        /// LATEST, not earliest, and deliberately nil-tolerant. A pair
+        /// spanning an 1780 parent and an 1810 child is an 1810 problem,
+        /// and an undated finding is not a proof of age. A filter here
+        /// may only hide what it KNOWS is out of range.
+        public let year: Int?
         /// Why this was flagged, in the reader's language.
         public let detail: String
 
@@ -262,6 +273,8 @@ public enum FamilyTreeVerification {
                 personIDs: people.map(\.id),
                 personNames: people.map(\.name),
                 familySearchIDs: people.compactMap(\.familySearchID),
+                year: people.flatMap { [$0.birthYear, $0.deathYear] }
+                    .compactMap { $0 }.max(),
                 detail: detail)
     }
 
