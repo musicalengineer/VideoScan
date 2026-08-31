@@ -105,7 +105,8 @@ report under `tools/search-eval/`. Never runs in CI; the default suite is LLM-fr
 - **FoundationModels audition**: on-device brain behind the same NLQueryTranslating
   seam (@Generable guided generation, macOS 26-gated), graded on the same corpus.
 - **Web reuse**: translator is a pure String→spec function — the future family web
-  interface reuses it behind HTTP.
+  interface reuses it behind HTTP. That interface now exists on the LAN; taking it
+  public is designed in [web_interface.md](web_interface.md).
 
 ## Standing asks for codex
 

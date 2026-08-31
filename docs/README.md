@@ -18,6 +18,7 @@ developer who needs to understand a non-obvious decision.
 | [compilation-bucketing.md](compilation-bucketing.md) | Person Finder → compilation output | Implemented (initial cut), under test |
 | [catalog-aided-face-detection.md](catalog-aided-face-detection.md) | Catalog metadata → face-detection priors, negative cache, junk triage | Idea / design exploration |
 | [person-recognition-evaluator.md](person-recognition-evaluator.md) | Headless production-engine accuracy benchmark, fixture labels, scoring and reports | Initial implementation |
+| [web_interface.md](web_interface.md) | Exposing Hallie chat, video and photos beyond the LAN: existing server inventory, security blockers, per-item public marking, tunnel options | Preliminary design |
 
 ## Conventions
 

@@ -294,6 +294,19 @@ DECLINE_PAT = re.compile(
     r"don'?t know|unable to",
     re.I,
 )
+# Hallie's PERSONA decline, kept separate from the evidence declines above.
+# She refuses "what was school like when you were young" by disclaiming a life
+# of her own, not by disclaiming evidence, so DECLINE_PAT never matched it and
+# 24 correct graceful_decline turns scored as answered_unknowable — as
+# invention risk — in the 2026-08-25 model A/B. It counts as a decline, but it
+# is deliberately exempt from dead_end_decline: "I have no childhood" is a
+# boundary about identity, not a search that came back empty and offered
+# nothing. Keep narrow — match the disclaimer, not any sentence with "memories".
+PERSONA_DECLINE_PAT = re.compile(
+    r"don'?t have (?:any )?(?:personal )?memories|no personal memories|"
+    r"don'?t have a childhood",
+    re.I,
+)
 # A sentence that starts mid-thought — the fragment bug class.
 FRAGMENT_PAT = re.compile(r"^\s*(?:'s|s |and |but |or )", re.I)
 HEDGE_PAT = re.compile(r"as an ai|i am an ai|language model", re.I)
@@ -331,7 +344,10 @@ def grade_record(r):
     # very behaviour the feature adds, so it counts as helpful and is
     # reported separately.
     relaxed_offer = bool(RELAXED_PAT.search(a))
-    declined = (outcome == "declined" or bool(DECLINE_PAT.search(a))) and not relaxed_offer
+    persona_decline = bool(PERSONA_DECLINE_PAT.search(a))
+    declined = (
+        outcome == "declined" or bool(DECLINE_PAT.search(a)) or persona_decline
+    ) and not relaxed_offer
     if relaxed_offer:
         flags.append("~relaxed_offer")
     # A conversation-repair turn ("that's wrong", "you gave me people from
@@ -360,7 +376,8 @@ def grade_record(r):
     if len(a.split()) <= 3 and expect != "social" and r.get("category") != "smalltalk":
         flags.append("terse")
     # Warmth proxy: a decline that offers nothing is a dead end.
-    if declined and not re.search(r"\?|would you|want|try|i do have|i can", a, re.I):
+    if (declined and not persona_decline
+            and not re.search(r"\?|would you|want|try|i do have|i can", a, re.I)):
         flags.append("dead_end_decline")
 
     expected_routes = r.get("expectedRoutes") or []
