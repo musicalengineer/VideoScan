@@ -1,0 +1,101 @@
+{
+  "schemaVersion" : 1,
+  "description" : "Human-audited genealogy-name speech oracle. A pass-through case asserts only Hallie's current final TTS input; it does not claim a phonetic pronunciation.",
+  "cases" : [
+    {
+      "id" : "case-001",
+      "displayedText" : "Lamson.",
+      "expectedTTSInput" : "Lamson.",
+      "expectedRecognition" : "Lamson",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-002",
+      "displayedText" : "Persis Stowe.",
+      "expectedTTSInput" : "Persis Stowe.",
+      "expectedRecognition" : "Persis Stowe",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-003",
+      "displayedText" : "Sewell.",
+      "expectedTTSInput" : "Sewell.",
+      "expectedRecognition" : "Sewell",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-004",
+      "displayedText" : "Lovering.",
+      "expectedTTSInput" : "Lovering.",
+      "expectedRecognition" : "Lovering",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-005",
+      "displayedText" : "O’Connor.",
+      "expectedTTSInput" : "O’Connor.",
+      "expectedRecognition" : "O Connor",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-006",
+      "displayedText" : "McGill.",
+      "expectedTTSInput" : "muh-GILL.",
+      "expectedRecognition" : "McGill",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : [
+        {
+          "written" : "McGill",
+          "spoken" : "muh-GILL",
+          "source" : "existing shipped correction audited 2026-08-26"
+        }
+      ]
+    },
+    {
+      "id" : "case-007",
+      "displayedText" : "Latta.",
+      "expectedTTSInput" : "LAT-uh.",
+      "expectedRecognition" : "Latta",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : [
+        {
+          "written" : "Latta",
+          "spoken" : "LAT-uh",
+          "source" : "existing shipped correction audited 2026-08-26"
+        }
+      ]
+    },
+    {
+      "id" : "case-008",
+      "displayedText" : "Thomasine.",
+      "expectedTTSInput" : "Thomasine.",
+      "expectedRecognition" : "Thomasine",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : []
+    },
+    {
+      "id" : "case-009",
+      "displayedText" : "Lamson, Persis Stowe, Sewell, Lovering, O’Connor, McGill, Latta, and Thomasine.",
+      "expectedTTSInput" : "Lamson, Persis Stowe, Sewell, Lovering, O’Connor, muh-GILL, LAT-uh, and Thomasine.",
+      "expectedRecognition" : "Lamson Persis Stowe Sewell Lovering O Connor McGill Latta and Thomasine",
+      "maximumWordErrorRate" : 0,
+      "auditedCorrections" : [
+        {
+          "written" : "McGill",
+          "spoken" : "muh-GILL",
+          "source" : "existing shipped correction audited 2026-08-26"
+        },
+        {
+          "written" : "Latta",
+          "spoken" : "LAT-uh",
+          "source" : "existing shipped correction audited 2026-08-26"
+        }
+      ]
+    }
+  ]
+}
