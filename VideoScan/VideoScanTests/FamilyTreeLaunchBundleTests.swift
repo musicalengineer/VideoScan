@@ -270,6 +270,25 @@ struct FamilyTreeLaunchBundleTests {
 
     // MARK: Prewarm sensor
 
+    /// How long to wait for prewarm's single terminal status line.
+    ///
+    /// Prewarm parses the REAL tree — 39,250 people on Rick's — and Swift's
+    /// unoptimized build is an order of magnitude slower at it. Measured
+    /// 2026-08-31 on the M4: Release runs this whole suite in 1.6s, while
+    /// Debug had still logged nothing after 10s. The 10s budget was
+    /// therefore a Debug-only failure, not a product regression, and the
+    /// same Debug-vs-Release gap behind the 39k-name ordering sensor.
+    ///
+    /// What the test is FOR survives in both configurations: prewarm must
+    /// actually complete, and must log exactly one terminal line. Only the
+    /// patience differs — tight where the timing means something, generous
+    /// where it does not.
+    #if DEBUG
+    static let prewarmWaitAttempts = 1_200      // 60s — correctness only
+    #else
+    static let prewarmWaitAttempts = 200        // 10s — a real budget
+    #endif
+
     @Test func prewarmCompletesWithExactlyOneBoundedStatusLine() async throws {
         // The production entry point has no configuration/cache injection
         // seam, so a safely poisoned filesystem test would have to mutate
@@ -278,7 +297,8 @@ struct FamilyTreeLaunchBundleTests {
         // callback, never an early-green test that merely launched a task.
         let lines = LogCapture()
         FamilyTreeLaunchBundle.prewarm(log: { lines.append($0) })
-        for _ in 0..<200 where lines.all.isEmpty {
+        for _ in 0..<Self.prewarmWaitAttempts {
+            if !lines.all.isEmpty { break }
             try await Task.sleep(for: .milliseconds(50))
         }
         let line = try #require(lines.all.first)
