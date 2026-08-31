@@ -437,11 +437,14 @@ struct HallieNeedsRecompileTests {
         let size = try #require((try? b.resourceValues(forKeys: [.fileSizeKey]))?.fileSize)
         try Data(repeating: 0x20, count: size).write(to: b)
         try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: b.path)
-        guard !cache.needsRecompile(for: box.configuration(), store: store).isEmpty else {
-            // The store keys on more than size/mtime here: the loader
-            // already released the rule; nothing to recompile — fine.
-            return
-        }
+        // This is fixture setup, not an optional branch. Returning here
+        // used to turn a broken setup (or a changed source-key algorithm)
+        // into a green test that exercised no recompile at all.
+        let pending = cache.needsRecompile(
+            for: box.configuration(), store: store)
+        try #require(
+            !pending.isEmpty,
+            "fixture no longer reaches the needs-recompile state after the source was poisoned")
         let outcome = await FamilyTreeRecompileCenter().recompile(
             configuration: box.configuration(), store: store, cache: cache, progress: { _ in })
         #expect(outcome == .failed)

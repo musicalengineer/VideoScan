@@ -270,16 +270,22 @@ struct FamilyTreeLaunchBundleTests {
 
     // MARK: Prewarm sensor
 
-    @Test func prewarmLogsOneLine() async throws {
-        // Isolation: the production prewarm reads the shared configuration
-        // center; here only the log shape is pinned, via a capture that
-        // accepts whatever the machine has (a tree or "no tree to load").
+    @Test func prewarmCompletesWithExactlyOneBoundedStatusLine() async throws {
+        // The production entry point has no configuration/cache injection
+        // seam, so a safely poisoned filesystem test would have to mutate
+        // process-wide state used by parallel suites. Keep this read-only,
+        // but make it a real completion sensor: exactly one bounded status
+        // callback, never an early-green test that merely launched a task.
         let lines = LogCapture()
         FamilyTreeLaunchBundle.prewarm(log: { lines.append($0) })
-        for _ in 0..<600 where lines.all.isEmpty {
+        for _ in 0..<200 where lines.all.isEmpty {
             try await Task.sleep(for: .milliseconds(50))
         }
         let line = try #require(lines.all.first)
+        // Catch an accidental second terminal callback as well as a missing
+        // one. (Equivalent to EXPECT_EQ(callbacks.size(), 1) in gtest.)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(lines.all.count == 1, "prewarm logged more than one terminal status: \(lines.all)")
         #expect(line.hasPrefix("[family-tree] prewarm: "))
         #expect(line.contains("bundle in") || line.contains("no tree to load"))
     }
