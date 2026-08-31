@@ -1336,6 +1336,19 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
+    /// Archives worth a look for this person, chosen from their places.
+    /// Derived per call — nothing stored, nothing fetched.
+    func researchLinks(for personID: String) -> [FamilyTreeResearchLinks.Link] {
+        guard let graph, let person = graph.people[personID] else { return [] }
+        return FamilyTreeResearchLinks.links(
+            name: person.name,
+            surname: person.surname,
+            birthYear: person.birthYear,
+            birthPlace: person.birthPlace,
+            deathPlace: person.deathPlace,
+            familySearchID: person.familySearchID)
+    }
+
     // MARK: - Verify Tree
 
     /// Last verification pass, nil until one is run. Rick, 2026-08-30:

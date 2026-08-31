@@ -17,6 +17,7 @@
 
 import SwiftUI
 import AppKit
+import VideoScanCore
 import PhotosUI
 
 // MARK: - Card
@@ -62,6 +63,9 @@ struct FamilyTreePersonCard: View {
     /// costs nothing per card on a 39,250-person canvas.
     let childrenOf: () -> [(id: String, name: String)]
     let onSelectPerson: (String) -> Void
+    /// Archives worth a look, derived from this person's places. Lazy, so
+    /// it costs nothing until the menu opens.
+    let researchLinksFor: () -> [FamilyTreeResearchLinks.Link]
     /// Family Tree → Hallie bridge (Rick 2026-08-24: right-click →
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
@@ -78,6 +82,27 @@ struct FamilyTreePersonCard: View {
     /// the point is to click one, not read a report. Rick, 2026-08-30 —
     /// deliberately NOT via Hallie, because a deterministic graph lookup
     /// should not require phrasing a sentence correctly.
+    /// "Research elsewhere" — the archives this person's PLACES point at.
+    /// Rick, 2026-08-31: born in Ireland means the Irish sites, and doing
+    /// that by hand for every ancestor is the tedium worth removing.
+    ///
+    /// Links only, never a fetch. The Irish state archives return 403 to
+    /// scripts while serving browsers happily — the site saying a human may
+    /// read this and a robot may not. Opening the reader's browser respects
+    /// that and cannot break when they redesign a page.
+    @ViewBuilder private var researchElsewhereMenu: some View {
+        let links = researchLinksFor()
+        if !links.isEmpty {
+            Menu("Research \(person.name) elsewhere") {
+                ForEach(links) { item in
+                    Link(destination: item.url) {
+                        Text(item.isPrefilled ? item.title : "\(item.title) (search)")
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder private var childrenMenu: some View {
         let kids = childrenOf()
         if kids.isEmpty {
@@ -195,6 +220,8 @@ struct FamilyTreePersonCard: View {
             Button("Research \(person.name)…") {
                 onResearch()
             }
+            researchElsewhereMenu
+            childrenMenu
             Button(isBookmarked ? "Remove bookmark" : "Bookmark \(person.name)",
                    systemImage: isBookmarked ? "bookmark.slash" : "bookmark") {
                 onToggleBookmark()

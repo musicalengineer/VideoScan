@@ -892,6 +892,7 @@ struct FamilyTreeDemoView: View {
                 onToggleBookmark: { model.toggleBookmark(card.person.id) },
                 childrenOf: { model.children(of: card.person.id) },
                 onSelectPerson: { model.select($0) },
+                researchLinksFor: { model.researchLinks(for: card.person.id) },
                 onAskHallie: { name in
                     catalogModel.archivistAskRequest = "tell me about \(name)"
                     openWindow(id: "archivist")
