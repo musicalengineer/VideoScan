@@ -461,3 +461,97 @@ struct PromoteJourneyStampTests {
         #expect(!UserNotesMigration.isMachineLine("Promote this one later"))
     }
 }
+
+// MARK: - Reader-supplied promote dates (2026-08-31)
+//
+// The promote sheet asks for a date when the archive could not infer one.
+// These pin the thing that actually matters — that a typed date CHANGES
+// WHERE THE FILE LANDS. A green build proves only that the field exists;
+// the field sat inert in UI state for a whole build before these existed.
+
+@Suite("Archive: dates typed on the promote sheet")
+struct ArchiveTypedPromoteDateTests {
+
+    private func undatedFacts(filename: String = "UncleTerryMovie.m4v")
+    -> ArchivePathResolver.RecordFacts {
+        ArchivePathResolver.RecordFacts(streamType: .videoAndAudio,
+                                        filename: filename, ext: "m4v",
+                                        dateHint: .unknown,
+                                        dateIsLowConfidence: true)
+    }
+
+    @Test("a typed year moves the file out of Undated and into its year")
+    func typedYearChangesDestination() throws {
+        let before = ArchivePathResolver.baseRelativePath(facts: undatedFacts())
+        let hint = try #require(ArchiveDateEntry.parse("1947")?.hint)
+        let after = ArchivePathResolver.baseRelativePath(
+            facts: undatedFacts().withDateHint(hint))
+
+        #expect(before != after, "typed date changed nothing: \(before)")
+        #expect(before.contains("Undated"), "fixture was not undated: \(before)")
+        #expect(after.contains("1940-1949/1947"), "wrong home: \(after)")
+        #expect(after.contains("/1947-xx-xx_"),
+                "year missing from filename, or precision invented: \(after)")
+        #expect(!after.contains("Undated"), "still filed as undated: \(after)")
+    }
+
+    @Test("a typed decade files at the decade root, inventing no year")
+    func typedDecadeStopsAtTheDecadeRoot() throws {
+        let hint = try #require(ArchiveDateEntry.parse("1940s")?.hint)
+        let path = ArchivePathResolver.baseRelativePath(
+            facts: undatedFacts().withDateHint(hint))
+        #expect(path.contains("1940-1949"), "not at the decade root: \(path)")
+        #expect(!path.contains("1940-1949/19"), "invented a year: \(path)")
+    }
+
+    @Test("a full typed date reaches the filename to the day",
+          arguments: ["July 15 1992", "July 15, 1992", "15 July 1992", "1992-07-15"])
+    func typedFullDateReachesTheFilename(_ typed: String) throws {
+        let hint = try #require(ArchiveDateEntry.parse(typed)?.hint,
+                                "an American typing \(typed) was refused")
+        let path = ArchivePathResolver.baseRelativePath(
+            facts: undatedFacts().withDateHint(hint))
+        #expect(path.contains("1992-07-15"), "day lost from \(typed): \(path)")
+    }
+
+    @Test("the clinical dd-mmm-yyyy form Rick types is understood",
+          arguments: ["12-mar-1900", "12-MAR-1900", "12 march 1900",
+                      "12.mar.1900", "12/mar/1900"])
+    func clinicalDateFormIsUnderstood(_ typed: String) throws {
+        let hint = try #require(ArchiveDateEntry.parse(typed)?.hint,
+                                "refused the clinical form: \(typed)")
+        #expect(hint == .day(year: 1900, month: 3, day: 12),
+                "\(typed) parsed as \(hint)")
+    }
+
+    @Test("flattening separators does not damage the ISO numeric form")
+    func isoFormSurvivesTheSeparatorRule() throws {
+        let hint = try #require(ArchiveDateEntry.parse("1947-03-12")?.hint)
+        #expect(hint == .day(year: 1947, month: 3, day: 12))
+        let decade = try #require(ArchiveDateEntry.parse("1940s")?.hint)
+        #expect(decade == .decade(startYear: 1940))
+    }
+
+    @Test("month-first order does not swallow a nonsense day")
+    func americanOrderStillValidatesTheDay() {
+        #expect(ArchiveDateEntry.parse("February 31 1992") == nil)
+        #expect(ArchiveDateEntry.parse("Jellyfish 15 1992") == nil)
+    }
+
+    @Test("a date the reader stands behind is not marked low-confidence")
+    func typedDateIsNotAGuess() throws {
+        let hint = try #require(ArchiveDateEntry.parse("1947")?.hint)
+        let facts = undatedFacts().withDateHint(hint)
+        #expect(facts.dateIsLowConfidence == false,
+                "a date the reader typed was recorded as a machine guess")
+    }
+
+    @Test("withDateHint changes the date and nothing else")
+    func withDateHintIsOtherwiseTotal() throws {
+        let base = undatedFacts(filename: "MaFliesToFlorida.m4v")
+        let moved = base.withDateHint(.year(1947))
+        #expect(moved.filename == base.filename)
+        #expect(moved.ext == base.ext)
+        #expect(moved.streamType == base.streamType)
+    }
+}

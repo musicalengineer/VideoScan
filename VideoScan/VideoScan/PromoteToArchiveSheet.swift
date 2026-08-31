@@ -26,6 +26,9 @@ struct PromoteToArchiveSheet: View {
     /// request (Assess pre-fills suggestions); editable for plain
     /// right-click Promotes too. Slugified at destination time.
     @State private var archiveTitles: [UUID: String] = [:]
+    /// What the reader typed for entries whose date the archive could not
+    /// work out. Empty means "file it under Undated/", which is permanent.
+    @State private var archiveDates: [UUID: String] = [:]
 
     private var plan: ArchivePromotePlan { request.plan }
 
@@ -116,11 +119,14 @@ struct PromoteToArchiveSheet: View {
         let inside = plan.skipped.filter { $0.reason == .insideArchiveRoot }.count
         VStack(alignment: .leading, spacing: 4) {
             if undated > 0 {
-                warnLine("\(undated) undated — will land in Undated/ (you can refile later once the date is known)",
+                // NOT "you can refile later" — there is no refile and no
+                // un-promote, and the manifest is append-only, so the date
+                // chosen here is permanent (2026-08-31).
+                warnLine("\(undated) undated — type a date below, or they land in Undated/ permanently",
                          color: .orange)
             }
             if low > 0 {
-                warnLine("\(low) with a low-confidence inferred date — treated as undated rather than filed under a guess",
+                warnLine("\(low) with a low-confidence inferred date — type a date below to override the guess",
                          color: .orange)
             }
             // Skips are named, not just counted (Rick 2026-08-16: "I
@@ -208,7 +214,42 @@ struct PromoteToArchiveSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .padding(.leading, 138)
+            dateRow(entry)
         }
+    }
+
+    /// Asked for ONLY when the archive does not already know the date.
+    /// A file with a solid date needs no question, and asking anyway is how
+    /// a reader learns to click past the sheet without reading it.
+    @ViewBuilder
+    private func dateRow(_ entry: ArchivePromotePlan.Entry) -> some View {
+        if entry.dateHint == .unknown || entry.lowConfidenceDate {
+            let typed = archiveDates[entry.recordID] ?? ""
+            let parsed = ArchiveDateEntry.parse(typed)
+            HStack(spacing: 8) {
+                Text("date")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .frame(width: 130, alignment: .trailing)
+                TextField("1947, March 1947, 1947-03-12, 1940s",
+                          text: dateBinding(entry.recordID))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .frame(maxWidth: 260)
+                    .accessibilityIdentifier("promoteSheet.archiveDate.\(entry.recordID)")
+                Text(ArchiveDateEntry.guidance(for: parsed, typed: typed))
+                    .font(.system(size: 10))
+                    .foregroundColor(parsed == nil && !typed.isEmpty ? .orange : .secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func dateBinding(_ id: UUID) -> Binding<String> {
+        Binding(get: { archiveDates[id] ?? "" },
+                set: { archiveDates[id] = $0 })
     }
 
     private func titleBinding(_ id: UUID) -> Binding<String> {
@@ -237,6 +278,12 @@ struct PromoteToArchiveSheet: View {
         var confirmed = plan
         confirmed.allowUnprobeable = overrideUnprobeable
         confirmed.archiveTitles = archiveTitles.compactMapValues { VideoScanModel.normalizedTitle($0) }
+        // Only entries the reader actually typed a valid date for. An
+        // unparseable string is NOT an override — it must not silently
+        // become Undated when they meant something.
+        confirmed.archiveDateOverrides = archiveDates.compactMapValues {
+            ArchiveDateEntry.parse($0)?.hint
+        }
         fileOpsCenter.startPromote(plan: confirmed, model: model)
         dismiss()
         openWindow(id: "combine")   // Media File Operations window (legacy id)

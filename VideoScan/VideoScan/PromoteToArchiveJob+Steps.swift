@@ -259,7 +259,12 @@ extension PromoteToArchiveJob {
                              model: VideoScanModel,
                              ctx: RunContext,
                              bytesDone: Int64) async throws -> FileResult {
-        let facts = ArchivePathResolver.facts(for: source)
+        var facts = ArchivePathResolver.facts(for: source)
+        // A date typed on the promote sheet wins over the resolver: the
+        // reader was only asked because the inference found nothing.
+        if let typed = plan.archiveDateOverrides[source.id] {
+            facts = facts.withDateHint(typed)
+        }
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
             root: ctx.root, sourcePath: source.fullPath,

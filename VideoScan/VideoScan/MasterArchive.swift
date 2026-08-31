@@ -219,10 +219,10 @@ enum ArchiveDateHint: Equatable, Sendable {
     case day(year: Int, month: Int, day: Int)
     case month(year: Int, month: Int)
     case year(Int)
-    /// Decade known (start year, e.g. 1990), year not. No current record
-    /// field yields this on its own — it exists so the resolver's
-    /// decade-root rule (spec §2) is real and tested, ready for the
-    /// later Refile phase / a future decade signal.
+    /// Decade known (start year, e.g. 1990), year not. No *record field*
+    /// yields this, but since 2026-08-31 a reader can type "1940s" into
+    /// the promote sheet, so the resolver's decade-root rule (spec §2) is
+    /// now a live path and not only a tested-in-advance one.
     case decade(startYear: Int)
     case unknown
 
@@ -279,12 +279,24 @@ enum ArchivePathResolver {
         let streamTypeRaw: String
         let filename: String
         let ext: String
-        let dateHint: ArchiveDateHint
+        var dateHint: ArchiveDateHint
         /// True when the date came from an inferred signal below the
         /// confidence floor (or none at all) — surfaced as a warning.
-        let dateIsLowConfidence: Bool
+        var dateIsLowConfidence: Bool
 
         var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
+
+        /// The same facts with a different date, for a date the reader
+        /// typed on the promote sheet. Confidence becomes HIGH: a person
+        /// who remembers the year knows more than an inference that found
+        /// nothing, and the low-confidence flag exists to mark guesses the
+        /// machine made, not ones the reader stands behind.
+        func withDateHint(_ hint: ArchiveDateHint) -> RecordFacts {
+            var copy = self
+            copy.dateHint = hint
+            copy.dateIsLowConfidence = false
+            return copy
+        }
 
         init(streamType: StreamType, filename: String, ext: String,
              dateHint: ArchiveDateHint, dateIsLowConfidence: Bool) {
