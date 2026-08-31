@@ -27,12 +27,18 @@ extension VideoScanModel {
             }
         outcome.records = fresh
 
-        for rec in fresh { records.append(rec) }
+        for rec in fresh {
+            records.append(rec)
+            // Without this the document is in the catalog but invisible
+            // to search until the next full rebuild.
+            searchIndex.update(rec)
+        }
 
         if !fresh.isEmpty {
             log("📄 Added \(fresh.count) document\(fresh.count == 1 ? "" : "s") to the catalog")
             for rec in fresh { log("    → \(rec.filename) (\(rec.size))") }
             saveCatalogDebounced()
+            indexDocumentText(for: fresh)
         }
         if !duplicates.isEmpty {
             log("📄 Skipped \(duplicates.count) already in the catalog")
@@ -41,6 +47,43 @@ extension VideoScanModel {
             log("⚠️ Skipped \(url.lastPathComponent) — it \(why.message)")
         }
         return outcome
+    }
+
+    /// Read each document's text and fold it into the search index.
+    ///
+    /// Runs after the records are already in the catalog, so the
+    /// documents are visible immediately and the text arrives when it
+    /// arrives — a scanned certificate needs optical recognition, which
+    /// takes seconds per page, and blocking the add on that would make
+    /// picking ten files feel broken.
+    @MainActor
+    func indexDocumentText(for newRecords: [VideoRecord]) {
+        Task { [weak self] in
+            for rec in newRecords {
+                let url = URL(fileURLWithPath: rec.fullPath)
+                let extraction = await DocumentTextExtractor.extract(url: url)
+                guard let self else { return }
+
+                guard !extraction.isEmpty else {
+                    // Say so rather than leaving a silent gap: a .docx or
+                    // a blank scan produces nothing, and a person
+                    // searching for it later deserves to know why it
+                    // never turns up.
+                    self.log("    · No searchable text in \(rec.filename)")
+                    continue
+                }
+                rec.ocrText = extraction.captions
+                // Per-record refresh, not a full rebuild: the index is
+                // O(n) to rebuild and a document add is a handful of
+                // rows in a catalog of tens of thousands.
+                self.searchIndex.update(rec)
+                let how = extraction.usedOCR ? "read the scan" : "read the text layer"
+                let pages = extraction.pages.filter { !$0.text.isEmpty }.count
+                let cut = extraction.truncated ? ", truncated" : ""
+                self.log("    · \(rec.filename): \(how), \(pages) page\(pages == 1 ? "" : "s") indexed\(cut)")
+            }
+            self?.saveCatalogDebounced()
+        }
     }
 
     /// Open the picker, then add whatever was chosen. Folders are allowed
