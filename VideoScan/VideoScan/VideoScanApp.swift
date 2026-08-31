@@ -537,6 +537,16 @@ struct VideoScanApp: App {
             // Close.
             CommandGroup(after: .newItem) {
                 Divider()
+                // Documents are added deliberately, never swept up by a
+                // volume scan — the scan is video-only on purpose. See
+                // DocumentIngest for why.
+                // No shortcut: ⇧⌘D is Dashboard, and adding documents is
+                // an occasional deliberate act, not a hot path.
+                Button("Add Documents…") {
+                    catalogModel.promptForDocuments()
+                }
+
+                Divider()
                 // One backup action, two entry points (2026-07): this menu
                 // item and the badge in the catalog header both run
                 // exportBundleViaPanel() — the whole-shebang bundle
