@@ -67,9 +67,15 @@ struct PersonPhotoOnePerPersonTests {
     0 TRLR
     """
     static let graph = GedcomFamilyGraph(gedcomText: tree)
-    static var donna: GedcomFamilyGraph.Person { graph.people["@I3@"]! }
-    static var rick: GedcomFamilyGraph.Person { graph.people["@I1@"]! }
-    static var richardSr: GedcomFamilyGraph.Person { graph.people["@I2@"]! }
+    static func fixturePerson(_ id: String) -> GedcomFamilyGraph.Person {
+        guard let person = graph.people[id] else {
+            preconditionFailure("one-photo fixture is missing \(id)")
+        }
+        return person
+    }
+    static var donna: GedcomFamilyGraph.Person { fixturePerson("@I3@") }
+    static var rick: GedcomFamilyGraph.Person { fixturePerson("@I1@") }
+    static var richardSr: GedcomFamilyGraph.Person { fixturePerson("@I2@") }
 
     struct Sandbox {
         let base: URL
@@ -224,6 +230,100 @@ struct PersonPhotoOnePerPersonTests {
         #expect(PersonPhotoBridge.treePerson(for: a, profiles: [a, b], graph: graph) == nil)
     }
 
+    @Test func bridgeSnapshotEvaluatesEachProfileOnceAndPreservesFailClosedPairs() throws {
+        let box = try sandbox()
+        defer { try? fileManager.removeItem(at: box.base) }
+        let snapshot = PersonPhotoBridge.Snapshot(
+            profiles: box.profiles, graph: Self.graph)
+
+        #expect(snapshot.candidateEvaluationCount == box.profiles.count)
+        #expect(snapshot.treePerson(for: box.donnaProfile)?.id == Self.donna.id)
+        #expect(snapshot.profile(for: Self.donna)?.id == box.donnaProfile.id)
+        #expect(snapshot.treePerson(for: box.profiles[1]) == nil,
+                "the ambiguous Richard alias still fails closed")
+
+        var otherDonna = POIProfile(name: "Donna B", referencePath: box.poiFolder.path)
+        otherDonna.treeIdentity = .familySearchID("G2CL-86B")
+        var pinnedDonna = box.donnaProfile
+        pinnedDonna.treeIdentity = .familySearchID("G2CL-86B")
+        let collided = PersonPhotoBridge.Snapshot(
+            profiles: [pinnedDonna, otherDonna], graph: Self.graph)
+        #expect(collided.treePerson(for: pinnedDonna) == nil)
+        #expect(collided.treePerson(for: otherDonna) == nil)
+        #expect(collided.profile(for: Self.donna) == nil)
+    }
+
+    @Test @MainActor
+    func galleryMemoCachesMissingEntriesAndInvalidatesOnEveryRevisionSource() throws {
+        let box = try sandbox()
+        defer { try? fileManager.removeItem(at: box.base) }
+        let kinship = KinshipDisplayCenter()
+        kinship.install(graph: Self.graph)
+        let center = PersonPhotoCenter(storeProvider: { box.store })
+
+        let first = center.peoplePhotos(for: box.profiles, kinshipCenter: kinship)
+        #expect(first[box.donnaProfile.id]?.url == box.cover)
+        #expect(first[box.profiles[1].id] == nil)
+        #expect(center.cachedEntryCount == box.profiles.count,
+                "nil portraits are cache entries, not repeated misses")
+        #expect(center.resolutionBuildCount == 1)
+
+        _ = center.peoplePhotos(for: box.profiles, kinshipCenter: kinship)
+        #expect(center.resolutionBuildCount == 1, "an unchanged render reuses the whole map")
+
+        center.invalidate()
+        _ = center.peoplePhotos(for: box.profiles, kinshipCenter: kinship)
+        #expect(center.resolutionBuildCount == 2, "a photo write invalidates the map")
+
+        kinship.install(graph: Self.graph)
+        _ = center.peoplePhotos(for: box.profiles, kinshipCenter: kinship)
+        #expect(center.resolutionBuildCount == 3, "a tree generation invalidates the bridge")
+
+        var editedProfiles = box.profiles
+        editedProfiles[0].coverCropScale = 1.25
+        _ = center.peoplePhotos(for: editedProfiles, kinshipCenter: kinship)
+        #expect(center.resolutionBuildCount == 4, "a profile revision invalidates the portrait")
+    }
+
+    @Test @MainActor
+    func oneHundredThousandProfilesStayLinearAndInsideReleaseBudget() {
+        let count = 100_000
+        var profiles: [POIProfile] = []
+        profiles.reserveCapacity(count)
+        for index in 0..<count {
+            var profile = POIProfile(name: "Collision \(index)", referencePath: "")
+            profile.treeIdentity = .familySearchID("G2CL-86B")
+            profiles.append(profile)
+        }
+        let kinship = KinshipDisplayCenter()
+        kinship.install(graph: Self.graph)
+        let emptyRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PersonPhotoScale-\(UUID().uuidString)")
+        let store = FamilyAssetStore(
+            root: emptyRoot.appendingPathComponent("archive"),
+            cacheRoot: emptyRoot.appendingPathComponent("cache"))
+        let center = PersonPhotoCenter(storeProvider: { store })
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let photos = center.peoplePhotos(for: profiles, kinshipCenter: kinship)
+        let firstPass = started.duration(to: clock.now)
+        let secondStarted = clock.now
+        let repeated = center.peoplePhotos(for: profiles, kinshipCenter: kinship)
+        let repeatedPass = secondStarted.duration(to: clock.now)
+        print("[perf] PersonPhotoCenter 100k: first=\(firstPass), repeated=\(repeatedPass)")
+
+        #expect(photos.isEmpty && repeated.isEmpty,
+                "100k colliding claims all fail closed")
+        #expect(center.cachedEntryCount == count,
+                "every nil is cached after one bounded pass")
+        #expect(center.resolutionBuildCount == 1)
+        #expect(firstPass < .seconds(5),
+                "Release first-pass budget is 5 seconds; measured \(firstPass)")
+        #expect(repeatedPass < .seconds(1),
+                "Release repeated-render budget is 1 second; measured \(repeatedPass)")
+    }
+
     // MARK: Cross-view
 
     @Test func profileCoverBeatsDerivedPhotosUntilATreeChoiceIsMade() throws {
@@ -272,6 +372,26 @@ struct PersonPhotoOnePerPersonTests {
         let people = try #require(resolver.peoplePhoto(for: edited, treePerson: donnaAsset))
         #expect(people.url == copiedURL)
         #expect(store.chosenPhoto(for: donnaAsset)?.choice.source == PersonPhotoChoiceSource.peopleCover)
+    }
+
+    @Test func oversizedPeopleCoverIsRejectedBySizePreflightBeforeAllocation() throws {
+        var box = try sandbox()
+        defer { try? fileManager.removeItem(at: box.base) }
+        let handle = try FileHandle(forWritingTo: box.cover)
+        try handle.truncate(atOffset: UInt64(FamilyAssetStore.maxImportBytes + 1))
+        try handle.close()
+        #expect(throws: FamilyAssetStore.StoreError.imageTooLarge(
+            bytes: FamilyAssetStore.maxImportBytes + 1)) {
+            try PersonPhotoSync.boundedCoverData(at: box.cover)
+        }
+
+        let previous = box.donnaProfile
+        var edited = previous
+        edited.coverCropScale = 1.1
+        #expect(PersonPhotoSync.applyCoverChoice(
+            to: &edited, previous: previous, profiles: box.profiles,
+            graph: Self.graph, store: box.store) == nil)
+        #expect(box.store.chosenPhoto(for: donnaAsset) == nil)
     }
 
     @Test func laterPeopleTabCoverBeatsAnOlderTreeChoiceByTimestampInBothViews() throws {
@@ -351,7 +471,8 @@ struct PersonPhotoOnePerPersonTests {
         #expect(same(resolver.treePhoto(for: rick, bridgedProfile: nil)?.url, box.groupPhoto))
         // A tree without Donna: nobody bridges, no crash.
         let other = GedcomFamilyGraph(gedcomText: "0 @X@ INDI\n1 NAME Only /One/")
-        #expect(PersonPhotoBridge.profile(for: other.people["@X@"]!, profiles: box.profiles, graph: other) == nil)
+        let only = try #require(other.people["@X@"])
+        #expect(PersonPhotoBridge.profile(for: only, profiles: box.profiles, graph: other) == nil)
     }
 
     @Test func poisonedSidecarsAreIgnoredNotFollowed() throws {
@@ -362,7 +483,7 @@ struct PersonPhotoOnePerPersonTests {
         let sidecar = folder.appendingPathComponent(FamilyAssetStore.chosenPhotoSidecarName)
         let outside = box.base.appendingPathComponent("outside.png")
         try png(outside)
-        func write(_ json: String) throws { try json.data(using: .utf8)!.write(to: sidecar) }
+        func write(_ json: String) throws { try Data(json.utf8).write(to: sidecar) }
         let stamp = "2026-08-29T20:00:00Z"
 
         // Traversal out of People/.
@@ -388,8 +509,8 @@ struct PersonPhotoOnePerPersonTests {
         // The sidecar itself is a symlink.
         try fileManager.removeItem(at: sidecar)
         let realSidecar = box.base.appendingPathComponent("real.json")
-        try #"{"file":"RickDonnaBreenFamily/SouthEastMontana1995.png","chosenAt":"\#(stamp)","source":"tree.pick"}"#
-            .data(using: .utf8)!.write(to: realSidecar)
+        try Data(#"{"file":"RickDonnaBreenFamily/SouthEastMontana1995.png","chosenAt":"\#(stamp)","source":"tree.pick"}"#.utf8)
+            .write(to: realSidecar)
         try fileManager.createSymbolicLink(at: sidecar, withDestinationURL: realSidecar)
         #expect(box.store.chosenPhoto(for: donnaAsset) == nil)
         try fileManager.removeItem(at: sidecar)
@@ -445,7 +566,7 @@ struct PersonPhotoOnePerPersonTests {
         profile.photoChosenAt = Date(timeIntervalSince1970: 1_700_000_000)
         let data = try JSONEncoder().encode(profile)
         #expect(try JSONDecoder().decode(POIProfile.self, from: data).photoChosenAt == profile.photoChosenAt)
-        let legacy = #"{"name":"Donna","referencePath":"/tmp/x"}"#.data(using: .utf8)!
+        let legacy = Data(#"{"name":"Donna","referencePath":"/tmp/x"}"#.utf8)
         #expect(try JSONDecoder().decode(POIProfile.self, from: legacy).photoChosenAt == nil)
     }
 }
