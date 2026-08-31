@@ -428,10 +428,29 @@ struct HallieNeedsRecompileTests {
 
     @Test @MainActor func aPullThatNoLongerParsesIsReportedNotHidden() async throws {
         let box = try Sandbox(); defer { box.tearDown() }
-        let (store, sources, _) = try box.promoteTwoPullsWithAnOldCodec()
+        var (store, sources, _) = try box.promoteTwoPullsWithAnOldCodec()
         let cache = FamilyGraphSharedCache(log: { box.log.append($0) })
-        // Sabotage pull b's bytes but keep its size/mtime key so the
-        // generation still looks recompilable; the recompile then fails.
+
+        // WHY trustsManifestSources (2026-08-31). codex's #require here
+        // caught that this fixture had gone stale, exactly as his message
+        // predicted — "or a changed source-key algorithm". A manifest
+        // source's key is a full-file SHA-256, not the size/mtime pair the
+        // old comment assumed, so poisoning the bytes makes usableManifest
+        // reject the generation outright and Rule 3 never fires. On the
+        // MASTER the two conditions are now mutually exclusive: a source
+        // that does not parse is a source whose hash already failed.
+        //
+        // The scenario is still real, in the one configuration that skips
+        // the re-hash: the remote VIEWER (docs/remote_use_design.md Phase
+        // 1), where the generation arrived by verified sync and its
+        // sources name master paths. There, a local source that will not
+        // parse is reachable — and a viewer must REPORT that, not hide it
+        // behind a silently empty tree. So the test now runs in viewer
+        // trust mode, which is where the behaviour it names can happen.
+        store.trustsManifestSources = true
+
+        // Sabotage pull b's bytes, keeping size and mtime so the shared
+        // cache's memo key is unchanged too.
         let b = sources[1]
         let mtime = try #require((try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)
         let size = try #require((try? b.resourceValues(forKeys: [.fileSizeKey]))?.fileSize)
@@ -449,5 +468,48 @@ struct HallieNeedsRecompileTests {
             configuration: box.configuration(), store: store, cache: cache, progress: { _ in })
         #expect(outcome == .failed)
         #expect(box.log.contains("nothing promoted"))
+    }
+
+    // MARK: - What actually protects the tree (2026-08-31)
+    //
+    // Fixing the test above turned up a claim worth pinning as its own
+    // sensor, because the fixture's stale comment had asserted the
+    // opposite: a compiled generation's sources are keyed by FULL-FILE
+    // SHA-256, not by size and mtime. That is the rule that makes an
+    // edited, restored or truncated .ged a miss rather than a silent
+    // stale tree, and nothing was testing it directly.
+
+    @Test @MainActor func onTheMasterAPoisonedSourceIsRefusedEvenWithSizeAndMtimeIntact() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let (store, sources, _) = try box.promoteTwoPullsWithAnOldCodec()
+        // Default (master) trust: sources are re-hashed. NOT the viewer.
+        #expect(store.trustsManifestSources == false)
+
+        let b = sources[1]
+        let mtime = try #require((try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)
+        let size = try #require((try? b.resourceValues(forKeys: [.fileSizeKey]))?.fileSize)
+        try Data(repeating: 0x20, count: size).write(to: b)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: b.path)
+
+        // Same name, same size, same mtime — every cheap key is unchanged.
+        let after = try #require((try? b.resourceValues(forKeys: [.fileSizeKey]))?.fileSize)
+        #expect(after == size, "the fixture must leave size identical")
+
+        // The SHA-256 rule still refuses the generation, and says so.
+        #expect(store.multiSourceGenerationNeedingRecompile() == nil,
+                "a generation whose source no longer hashes must not be offered as recompilable")
+        #expect(box.log.contains("missing or changed"),
+                "the refusal must be logged, not silent: \(box.log.all)")
+    }
+
+    /// The other half: with the sources genuinely untouched, the same
+    /// refused generation IS offered for recompile. Without this, the test
+    /// above would pass just as well if the rule refused everything.
+    @Test @MainActor func anUntouchedGenerationIsStillOfferedForRecompile() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        let (store, sources, _) = try box.promoteTwoPullsWithAnOldCodec()
+        let pending = try #require(store.multiSourceGenerationNeedingRecompile(),
+                                   "an old-codec generation with intact sources needs recompiling")
+        #expect(pending.sources.count == sources.count)
     }
 }

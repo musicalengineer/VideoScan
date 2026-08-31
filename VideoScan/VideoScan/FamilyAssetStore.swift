@@ -220,10 +220,30 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     /// the pointer change already forces one).
     func invalidate() { lock.withLock { entry = nil } }
 
-    /// "name|mtime" for every regular .ged in `directory`, sorted — the
-    /// part of the newest-file rule that can change under us.
+    /// "name|mtime|size" for every regular .ged in `directory`, sorted —
+    /// the part of the newest-file rule that can change under us.
+    ///
+    /// This is the in-process MEMO key, not an integrity check. Integrity
+    /// lives a layer down: `FamilyGraphCompiledStore.Manifest.Source.key`
+    /// is a full-file SHA-256, re-verified in `usableManifest`, so a
+    /// replaced or edited .ged is caught on the next load regardless of
+    /// what this stamp says.
+    ///
+    /// Size joined mtime here on 2026-08-31 (Rick's call). mtime alone
+    /// misses a mtime-preserving in-place replacement — a restore from
+    /// backup, since rsync -t, Time Machine and most archive tools carry
+    /// timestamps across. The consequence was never corruption, only
+    /// STALENESS: this process would keep serving its memoized graph until
+    /// the pointer changed or the app relaunched and the SHA-256 rule
+    /// caught it. Size is already in the resource-values fetch, so closing
+    /// most of that window costs nothing.
+    ///
+    /// Deliberately still not a hash. Rick, 2026-08-31: new GEDCOMs arrive
+    /// rarely and the local tree is heading toward being its own structure
+    /// with the .ged as a pristine import artifact — so paying a full read
+    /// of every .ged on every cache-key computation would buy very little.
     private static func gedcomStamps(in directory: URL) -> [String] {
-        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey]
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) else { return [] }
         return files.compactMap { url -> String? in
@@ -231,7 +251,8 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                   let values = try? url.resourceValues(forKeys: keys),
                   values.isRegularFile == true else { return nil }
             let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-            return "\(url.lastPathComponent)|\(mtime)"
+            let size = values.fileSize ?? -1
+            return "\(url.lastPathComponent)|\(mtime)|\(size)"
         }.sorted()
     }
 }
