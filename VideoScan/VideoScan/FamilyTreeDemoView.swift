@@ -56,6 +56,7 @@ struct FamilyTreeDemoView: View {
     /// inspector so its width goes to genealogy). `.photosPicker(isPresented:)`
     /// is the programmatic form of the `PhotosPicker` button.
     @State private var showApplePhotosPicker = false
+    @State private var showVerifyReport = false
     /// The Get Family Tree coordinator is owned by the app-wide center, not
     /// this view, so closing the sheet no longer kills the file watcher
     /// (2026-08-25: a 2 h pull finished into a file nobody was watching).
@@ -230,6 +231,14 @@ struct FamilyTreeDemoView: View {
         .preferredColorScheme(effectiveScheme == .dark ? .dark : .light)
         .onChange(of: selectedPhotoItem) { _, item in
             importApplePhoto(item)
+        }
+        .sheet(isPresented: $showVerifyReport) {
+            if let report = model.verification {
+                FamilyTreeVerifyReportView(report: report) { personID in
+                    model.select(personID)
+                    showVerifyReport = false
+                }
+            }
         }
         .photosPicker(isPresented: $showApplePhotosPicker,
                       selection: $selectedPhotoItem, matching: .images)
@@ -511,6 +520,51 @@ struct FamilyTreeDemoView: View {
 
     // MARK: Sidebar
 
+    /// "Verify Tree" beside Get Tree (Rick, 2026-08-30), with a red count
+    /// of entries needing review.
+    ///
+    /// Only shown for a live tree: there is nothing to verify about the
+    /// demo data, and a badge on a fake tree would be noise. The count is
+    /// findings a HUMAN must judge — errors and reviews — not the
+    /// informational ones, because a badge you cannot act on is a badge you
+    /// learn to ignore.
+    @ViewBuilder private var verifyRow: some View {
+        if model.isLive {
+            HStack(spacing: 8) {
+                Button {
+                    Task { await model.verifyTree() }
+                } label: {
+                    Label(model.isVerifying ? "Verifying…" : "Verify Tree",
+                          systemImage: "checkmark.shield")
+                }
+                .controlSize(.small)
+                .disabled(model.isVerifying)
+
+                if let report = model.verification {
+                    if report.needingReview > 0 {
+                        Button {
+                            showVerifyReport = true
+                        } label: {
+                            Text("\(report.needingReview)")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.red))
+                        }
+                        .buttonStyle(.plain)
+                        .help("\(report.needingReview) entries need review — click to read them")
+                    } else {
+                        Label("Clean", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.green)
+                    }
+                }
+                Spacer()
+            }
+        }
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -523,6 +577,8 @@ struct FamilyTreeDemoView: View {
             FamilySearchPullButtonRow(status: pullCenter.status) {
                 presentGetFamilyTree()
             }
+
+            verifyRow
 
             TextField("Search name, surname, or GEDCOM ID", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)

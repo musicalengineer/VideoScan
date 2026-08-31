@@ -1336,6 +1336,31 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
+    // MARK: - Verify Tree
+
+    /// Last verification pass, nil until one is run. Rick, 2026-08-30:
+    /// "a red circle of count of Entries Needing Review".
+    @Published private(set) var verification: FamilyTreeVerification.Report?
+    @Published private(set) var isVerifying = false
+
+    /// Run the checks over the loaded tree.
+    ///
+    /// Off the main actor: 0.23 s on Rick's 16,383-person tree, which is
+    /// fast but not free, and the main actor is already the scarce resource
+    /// here (measured 2026-08-30 — one synchronous O(records) call on it
+    /// stalls every web visitor for half a second).
+    func verifyTree() async {
+        guard let graph, !isVerifying else { return }
+        isVerifying = true
+        let report = await Task.detached(priority: .userInitiated) {
+            FamilyTreeVerification.verify(graph)
+        }.value
+        verification = report
+        isVerifying = false
+        appLog.write("Family Tree: verify — \(report.findings.count) findings, "
+                     + "\(report.needingReview) needing review, of \(report.peopleChecked) people")
+    }
+
     /// Children of a person, in the biography policy's order so the list
     /// reads the same here as in Hallie's prose.
     ///
