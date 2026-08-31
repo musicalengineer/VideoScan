@@ -59,10 +59,13 @@ struct ArchivePathResolverTests {
 
     @Test("bucket by stream type: audio→20, video/videoOnly/other→30")
     func buckets() {
-        #expect(ArchivePathResolver.bucket(for: .audioOnly) == "20_Audio")
-        #expect(ArchivePathResolver.bucket(for: .videoAndAudio) == "30_Video")
-        #expect(ArchivePathResolver.bucket(for: .videoOnly) == "30_Video")
-        #expect(ArchivePathResolver.bucket(for: .ffprobeFailed) == "30_Video")
+        func bucket(_ t: StreamType) -> String {
+            ArchivePathResolver.bucket(for: t, medium: .audioVisual)
+        }
+        #expect(bucket(.audioOnly) == "20_Audio")
+        #expect(bucket(.videoAndAudio) == "30_Video")
+        #expect(bucket(.videoOnly) == "30_Video")
+        #expect(bucket(.ffprobeFailed) == "30_Video")
     }
 
     @Test("decade folder is the full YYYY-YYYY range (1940s footage too)")
@@ -553,5 +556,85 @@ struct ArchiveTypedPromoteDateTests {
         #expect(moved.filename == base.filename)
         #expect(moved.ext == base.ext)
         #expect(moved.streamType == base.streamType)
+    }
+}
+
+
+// MARK: - Routing by medium (2026-08-31)
+//
+// 10_Photos was declared, listed in `buckets`, created on disk by
+// Initialize — and unreachable, because ffprobe reads a JPEG as a
+// one-frame video. A PDF has no streams and fell into the same arm.
+// Both landed in 30_Video. These pin the fix, and — more importantly —
+// pin that unrecognised extensions still go where they always went.
+
+@Suite("Archive: routing by medium")
+struct ArchiveMediumRoutingTests {
+
+    private func facts(_ stream: StreamType, _ filename: String)
+    -> ArchivePathResolver.RecordFacts {
+        ArchivePathResolver.RecordFacts(
+            streamType: stream, filename: filename,
+            ext: (filename as NSString).pathExtension,
+            dateHint: .unknown, dateIsLowConfidence: false)
+    }
+
+    @Test("a loose scan reaches 10_Photos, which nothing could reach before",
+          arguments: ["GrandmaScan.jpg", "letter.TIFF", "negative.dng", "x.heic"])
+    func photosReachThePhotoBucket(_ name: String) {
+        // ffprobe genuinely reports a still as a video stream — that is
+        // why the old routing was wrong, so this passes the stream shape
+        // that a real probe would have produced.
+        let path = ArchivePathResolver.baseRelativePath(facts: facts(.videoOnly, name))
+        #expect(path.hasPrefix("10_Photos/"), "still filed as video: \(path)")
+    }
+
+    @Test("a document reaches 50_Documents",
+          arguments: ["BirthCertificate.pdf", "Letter.DOCX", "census.csv", "notes.txt"])
+    func documentsReachTheDocumentBucket(_ name: String) {
+        let path = ArchivePathResolver.baseRelativePath(facts: facts(.noStreams, name))
+        #expect(path.hasPrefix("50_Documents/"), "document misfiled: \(path)")
+    }
+
+    @Test("audio-only still wins on a real A/V extension, as before")
+    func audioIsUnaffected() {
+        let path = ArchivePathResolver.baseRelativePath(facts: facts(.audioOnly, "reel.mxf"))
+        #expect(path.hasPrefix("20_Audio/"), "audio regressed: \(path)")
+    }
+
+    @Test("an unknown or missing extension keeps its old home",
+          arguments: ["mystery.qqq", "no_extension_at_all", "tape7.dv", ".hidden"])
+    func unknownExtensionsAreUntouched(_ name: String) {
+        // The safety property of this change: it can only move files it
+        // positively identifies. The archive has thousands of
+        // extensionless records (GH: extensionless media catalog gap) and
+        // none of them may shift bucket because of this.
+        let path = ArchivePathResolver.baseRelativePath(facts: facts(.videoAndAudio, name))
+        #expect(path.hasPrefix("30_Video/"), "unknown file moved: \(path)")
+    }
+
+    @Test("medium is decided by extension, not by what probing claims")
+    func mediumIgnoresStreamShape() {
+        for stream: StreamType in [.videoAndAudio, .videoOnly, .audioOnly,
+                                   .noStreams, .ffprobeFailed] {
+            let path = ArchivePathResolver.baseRelativePath(facts: facts(stream, "scan.jpg"))
+            #expect(path.hasPrefix("10_Photos/"),
+                    "a .jpg probed as \(stream) escaped the photo bucket: \(path)")
+        }
+    }
+
+    @Test("the documents bucket is one Initialize actually creates")
+    func documentsBucketIsInitialized() {
+        // Routing files somewhere Initialize never makes would produce a
+        // promote that fails on a missing directory.
+        #expect(MasterArchiveLayout.buckets.contains(MasterArchiveLayout.documentsBucket))
+        #expect(MasterArchiveLayout.buckets.contains(MasterArchiveLayout.photosBucket))
+    }
+
+    @Test("dotfiles are names, not extensions")
+    func dotfilesAreNotDocuments() {
+        #expect(ArchiveMedium.forFilename(".DS_Store") == .audioVisual)
+        #expect(ArchiveMedium.forFilename(".pdf") == .audioVisual)
+        #expect(ArchiveMedium.forFilename("real.pdf") == .document)
     }
 }

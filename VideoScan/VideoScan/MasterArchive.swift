@@ -106,20 +106,29 @@ extension ArchivePathResolver {
 
 // MARK: - Layout constants
 
-/// Spec §2 — the on-disk shape. Numbered buckets with gaps so
-/// `40_Documents` can slot in later without renumbering.
+/// Spec §2 — the on-disk shape. Numbered buckets with gaps so new kinds
+/// can slot in without renumbering. (The gap the spec reserved for
+/// documents at 40 was taken by 40_Family_Tree when the GEDCOM work
+/// landed; documents went to 50 on disk, and these constants follow the
+/// disk, which is the thing that is actually true.)
 enum MasterArchiveLayout {
     static let rootFolderName = "Breen_Family_Archive"
     static let indexFolder = "00_Index"
     static let photosBucket = "10_Photos"
     static let audioBucket = "20_Audio"
     static let videoBucket = "30_Video"
+    /// The GEDCOM, People/, and family-tree assets. Created by the family
+    /// tree work rather than by Initialize, so it is not in `buckets`.
+    static let familyTreeBucket = "40_Family_Tree"
+    /// Birth certificates, letters, deeds, records (2026-08-31).
+    static let documentsBucket = "50_Documents"
     static let undatedFolder = "Undated"
     static let manifestFilename = "Archive_Inventory_Manifest.csv"
     static let readmeFilename = "README_Naming_and_Layout.txt"
 
-    /// The three content buckets Initialize creates up front (empty).
-    static let buckets: [String] = [photosBucket, audioBucket, videoBucket]
+    /// The content buckets Initialize creates up front (empty).
+    static let buckets: [String] = [photosBucket, audioBucket,
+                                    videoBucket, documentsBucket]
 
     static func rootURL(forTargetPath targetPath: String) -> URL {
         URL(fileURLWithPath: targetPath, isDirectory: true)
@@ -286,6 +295,13 @@ enum ArchivePathResolver {
 
         var streamType: StreamType { StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed }
 
+        /// What kind of thing this is, from the same normalised extension
+        /// the filename stem uses — so the bucket and the name can never
+        /// disagree about whether something is a PDF.
+        var medium: ArchiveMedium {
+            ArchiveMedium.forExtension(normalizedExtension(ext, filename: filename))
+        }
+
         /// The same facts with a different date, for a date the reader
         /// typed on the promote sheet. Confidence becomes HIGH: a person
         /// who remembers the year knows more than an inference that found
@@ -308,24 +324,35 @@ enum ArchivePathResolver {
         }
     }
 
-    /// Which numbered bucket a stream shape belongs in.
-    static func bucket(for streamType: StreamType) -> String {
-        switch streamType {
-        case .audioOnly:
-            return MasterArchiveLayout.audioBucket
-        case .videoAndAudio, .videoOnly, .noStreams, .ffprobeFailed:
-            // No-stream / probe-failed records only reach promotion if
-            // the user insists; the video bucket is the honest default
-            // for anything that is not audio-only. Photos are Apple
-            // Photos' job (spec §2) — 10_Photos exists for loose scans
-            // handled by a later phase.
-            return MasterArchiveLayout.videoBucket
+    /// Which numbered bucket a file belongs in. Medium is asked FIRST:
+    /// a JPEG probes as a single-frame video and a PDF probes as nothing
+    /// at all, so routing on stream shape alone put both in 30_Video.
+    /// Stream shape still decides audio vs video, which is the one
+    /// question probing genuinely answers.
+    static func bucket(for streamType: StreamType,
+                       medium: ArchiveMedium) -> String {
+        switch medium {
+        case .photo:
+            return MasterArchiveLayout.photosBucket
+        case .document:
+            return MasterArchiveLayout.documentsBucket
+        case .audioVisual:
+            switch streamType {
+            case .audioOnly:
+                return MasterArchiveLayout.audioBucket
+            case .videoAndAudio, .videoOnly, .noStreams, .ffprobeFailed:
+                // No-stream / probe-failed records only reach promotion
+                // if the user insists; the video bucket stays the honest
+                // default for an A/V file we could not read.
+                return MasterArchiveLayout.videoBucket
+            }
         }
     }
 
     /// `<bucket>/<decade>[/<year>]` or `<bucket>/Undated`.
-    static func folder(for streamType: StreamType, hint: ArchiveDateHint) -> String {
-        let bucket = bucket(for: streamType)
+    static func folder(for streamType: StreamType, hint: ArchiveDateHint,
+                       medium: ArchiveMedium = .audioVisual) -> String {
+        let bucket = bucket(for: streamType, medium: medium)
         guard let decadeStart = hint.decadeStart else {
             return "\(bucket)/\(MasterArchiveLayout.undatedFolder)"
         }
@@ -373,7 +400,8 @@ enum ArchivePathResolver {
     /// Relative destination path under the archive root, WITHOUT any
     /// collision suffix: `30_Video/1990-1999/1992/1992-07-15_Slug.mov`.
     static func baseRelativePath(facts: RecordFacts, title: String? = nil) -> String {
-        let folder = folder(for: facts.streamType, hint: facts.dateHint)
+        let folder = folder(for: facts.streamType, hint: facts.dateHint,
+                            medium: facts.medium)
         let stem = "\(facts.dateHint.filenamePrefix)_\(slug(from: slugSource(title: title, filename: facts.filename)))"
         let ext = normalizedExtension(facts.ext, filename: facts.filename)
         return ext.isEmpty ? "\(folder)/\(stem)" : "\(folder)/\(stem).\(ext)"
