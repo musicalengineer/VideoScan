@@ -39,68 +39,100 @@ enum ArchiveDateEntry {
     /// Parse what a person typed. Nil when nothing usable is in there —
     /// the caller keeps the resolved hint rather than guessing.
     static func parse(_ raw: String, today: Date = Date()) -> Parsed? {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let text = normalizeSeparators(
+            raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
         guard !text.isEmpty else { return nil }
-
-        // "12-mar-1900" — the unambiguous clinical form Rick types out of
-        // habit from safety-critical medical work, and the one form no
-        // locale can misread. When a month NAME is present, hyphens, dots
-        // and slashes are just separators, so flatten them to spaces and
-        // let the named-month branches below do the work.
-        //
-        // Guarded on a letter being present: "1947-03-12" is ISO and must
-        // keep its own branch, and flattening it would break that. "1940s"
-        // has a letter but no separator, so the rewrite is a no-op there.
-        if text.contains(where: { $0.isLetter }) {
-            text = text.replacing(/[-–—._\/]+/, with: " ")
-                       .replacing(/\s+/, with: " ")
-                       .trimmingCharacters(in: .whitespaces)
-        }
 
         let thisYear = Calendar(identifier: .gregorian).component(.year, from: today)
 
-        // "1940s" / "1940's" — a decade, which the archive files at the
-        // decade root rather than inventing a year.
-        if let m = text.firstMatch(of: /^(\d{4})\s*'?s$/) {
-            guard let y = Int(m.1), plausible(y, thisYear), y % 10 == 0 else { return nil }
-            return Parsed(hint: .decade(startYear: y))
-        }
-
-        // ISO-ish: 1947, 1947-03, 1947-03-12. Slashes and dots too, because
-        // people type 1947/03/12.
-        if let m = text.firstMatch(of: /^(\d{4})(?:[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?)?$/) {
-            guard let y = Int(m.1), plausible(y, thisYear) else { return nil }
-            guard let mo = m.2.flatMap({ Int($0) }) else { return Parsed(hint: .year(y)) }
-            guard (1...12).contains(mo) else { return nil }
-            guard let d = m.3.flatMap({ Int($0) }) else { return Parsed(hint: .month(year: y, month: mo)) }
-            guard validDay(d, month: mo, year: y) else { return nil }
-            return Parsed(hint: .day(year: y, month: mo, day: d))
-        }
-
-        // "July 15 1992" / "July 15, 1992" — the American order, which is
-        // what Rick will actually type. Handled before the day-first form
-        // below because the two are unambiguous only by position: a month
-        // NAME cannot be a day number, so there is no 03/07 confusion here.
-        if let m = text.firstMatch(of: /^([a-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/) {
-            guard let y = Int(m.3), plausible(y, thisYear),
-                  let mo = monthNumber(String(m.1)),
-                  let d = Int(m.2), validDay(d, month: mo, year: y) else { return nil }
-            return Parsed(hint: .day(year: y, month: mo, day: d))
-        }
-
-        // "March 1947" / "Mar 1947" / "12 March 1947" — how people actually
-        // write a half-remembered date.
-        if let m = text.firstMatch(of: /^(?:(\d{1,2})\s+)?([a-z]{3,9})\s+(\d{4})$/) {
-            guard let y = Int(m.3), plausible(y, thisYear),
-                  let mo = monthNumber(String(m.2)) else { return nil }
-            guard let dayText = m.1, let d = Int(dayText) else {
-                return Parsed(hint: .month(year: y, month: mo))
+        // Ordered: each form is tried in turn and the FIRST that matches
+        // the whole string wins. A nil from a matching form means the
+        // shape was right but the values were not (31 February), which is
+        // a refusal, not a reason to try the next form — so each parser
+        // returns .noMatch and .invalid distinctly.
+        let parsers = [decade, isoNumeric, monthFirst, dayFirst]
+        for parse in parsers {
+            switch parse(text, thisYear) {
+            case .noMatch:            continue
+            case .invalid:            return nil
+            case .parsed(let hint):   return Parsed(hint: hint)
             }
-            guard validDay(d, month: mo, year: y) else { return nil }
-            return Parsed(hint: .day(year: y, month: mo, day: d))
         }
-
         return nil
+    }
+
+    /// What one date form made of the input.
+    private enum FormResult {
+        /// This form does not describe the input at all — try the next.
+        case noMatch
+        /// This form matched, but the values are impossible. Stop: trying
+        /// another form on "february 31 1992" can only produce nonsense.
+        case invalid
+        case parsed(ArchiveDateHint)
+    }
+
+    /// "12-mar-1900" — the unambiguous clinical form Rick types out of
+    /// habit from safety-critical medical work, and the one form no locale
+    /// can misread. When a month NAME is present, hyphens, dots and
+    /// slashes are just separators, so flatten them to spaces and let the
+    /// named-month forms do the work.
+    ///
+    /// Guarded on a letter being present: "1947-03-12" is ISO and must
+    /// keep its own branch, and flattening it would break that. "1940s"
+    /// has a letter but no separator, so this is a no-op there.
+    private static func normalizeSeparators(_ text: String) -> String {
+        guard text.contains(where: { $0.isLetter }) else { return text }
+        return text.replacing(/[-–—._\/]+/, with: " ")
+                   .replacing(/\s+/, with: " ")
+                   .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "1940s" / "1940's" — filed at the decade root rather than
+    /// inventing a year.
+    private static func decade(_ text: String, _ thisYear: Int) -> FormResult {
+        guard let m = text.firstMatch(of: /^(\d{4})\s*'?s$/) else { return .noMatch }
+        guard let y = Int(m.1), plausible(y, thisYear), y % 10 == 0 else { return .invalid }
+        return .parsed(.decade(startYear: y))
+    }
+
+    /// 1947, 1947-03, 1947-03-12. Slashes and dots too, because people
+    /// type 1947/03/12.
+    private static func isoNumeric(_ text: String, _ thisYear: Int) -> FormResult {
+        guard let m = text.firstMatch(
+            of: /^(\d{4})(?:[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?)?$/) else { return .noMatch }
+        guard let y = Int(m.1), plausible(y, thisYear) else { return .invalid }
+        guard let mo = m.2.flatMap({ Int($0) }) else { return .parsed(.year(y)) }
+        guard (1...12).contains(mo) else { return .invalid }
+        guard let d = m.3.flatMap({ Int($0) }) else { return .parsed(.month(year: y, month: mo)) }
+        guard validDay(d, month: mo, year: y) else { return .invalid }
+        return .parsed(.day(year: y, month: mo, day: d))
+    }
+
+    /// "July 15 1992" / "July 15, 1992" — the American order, which is
+    /// what Rick will actually type. Tried before the day-first form: the
+    /// two differ only by position, and a month NAME cannot be a day
+    /// number, so there is no 03/07 ambiguity to resolve.
+    private static func monthFirst(_ text: String, _ thisYear: Int) -> FormResult {
+        guard let m = text.firstMatch(
+            of: /^([a-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/) else { return .noMatch }
+        guard let y = Int(m.3), plausible(y, thisYear),
+              let mo = monthNumber(String(m.1)),
+              let d = Int(m.2), validDay(d, month: mo, year: y) else { return .invalid }
+        return .parsed(.day(year: y, month: mo, day: d))
+    }
+
+    /// "March 1947" / "Mar 1947" / "12 March 1947" — how people actually
+    /// write a half-remembered date.
+    private static func dayFirst(_ text: String, _ thisYear: Int) -> FormResult {
+        guard let m = text.firstMatch(
+            of: /^(?:(\d{1,2})\s+)?([a-z]{3,9})\s+(\d{4})$/) else { return .noMatch }
+        guard let y = Int(m.3), plausible(y, thisYear),
+              let mo = monthNumber(String(m.2)) else { return .invalid }
+        guard let dayText = m.1, let d = Int(dayText) else {
+            return .parsed(.month(year: y, month: mo))
+        }
+        guard validDay(d, month: mo, year: y) else { return .invalid }
+        return .parsed(.day(year: y, month: mo, day: d))
     }
 
     private static func plausible(_ year: Int, _ thisYear: Int) -> Bool {
