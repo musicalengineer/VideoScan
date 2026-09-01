@@ -1012,20 +1012,35 @@ public struct GedcomFamilyGraph: Sendable {
     }
 
     /// Colloquial synonyms → relations ("dad", "mom", "kids"…).
+    ///
+    /// PLURALS KEEP THEIR SEX (Rick, 2026-08-31). Hallie answered "Rick's
+    /// brothers" with "Beth, Ellen, Matt, Tim, Timmy" because every plural
+    /// gendered word was mapped to the ungendered relation — "brothers" and
+    /// "sisters" both collapsed to `.siblings`, "sons" and "daughters" both
+    /// to `.children`. The resolver was never at fault: `relatives(.brother,
+    /// of:)` already filters to sex "M" and already returns an array, so
+    /// `.brother` has always meant "all of his brothers". Only this lookup
+    /// threw the distinction away, and it did so on the way in, where no
+    /// downstream sensor could see it.
+    ///
+    /// Naming two of Rick's sisters as his brothers is the kind of wrong
+    /// answer that costs Hallie a reader's trust in everything else she
+    /// says, which is why the ungendered word now has to be asked for by
+    /// name: "siblings" or "children", never a gendered plural.
     public static func relation(fromWord word: String) -> Relation? {
         switch word.lowercased() {
         case "father", "dad", "daddy", "papa": return .father
         case "mother", "mom", "mommy", "mama": return .mother
-        case "parents": return .parents
-        case "brother": return .brother
-        case "sister": return .sister
-        case "siblings", "brothers", "sisters": return .siblings
-        case "son": return .son
-        case "daughter": return .daughter
-        case "children", "kids", "sons", "daughters": return .children
-        case "husband": return .husband
-        case "wife": return .wife
-        case "spouse": return .spouse
+        case "parent", "parents": return .parents
+        case "brother", "brothers": return .brother
+        case "sister", "sisters": return .sister
+        case "sibling", "siblings": return .siblings
+        case "son", "sons": return .son
+        case "daughter", "daughters": return .daughter
+        case "child", "children", "kids": return .children
+        case "husband", "husbands": return .husband
+        case "wife", "wives": return .wife
+        case "spouse", "spouses": return .spouse
         default: return nil
         }
     }

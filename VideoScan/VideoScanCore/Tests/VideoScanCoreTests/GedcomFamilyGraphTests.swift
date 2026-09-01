@@ -388,6 +388,132 @@ struct GedcomFamilyGraphTests {
         #expect(GedcomFamilyGraph.relation(fromWord: "cousin") == nil)
     }
 
+    // MARK: - A gendered plural keeps its sex (Rick, 2026-08-31)
+    //
+    // Hallie answered "Rick's brothers" with "Beth, Ellen, Matt, Tim,
+    // Timmy". Every plural gendered word had been mapped to the UNGENDERED
+    // relation — "brothers"/"sisters" both to .siblings, "sons"/"daughters"
+    // both to .children — so the sex filter was discarded at the door,
+    // before any resolver or composer could be blamed for it.
+
+    @Test func gendredPluralsKeepTheirSex() {
+        #expect(GedcomFamilyGraph.relation(fromWord: "brothers") == .brother)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sisters") == .sister)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sons") == .son)
+        #expect(GedcomFamilyGraph.relation(fromWord: "daughters") == .daughter)
+        // Singulars unchanged.
+        #expect(GedcomFamilyGraph.relation(fromWord: "brother") == .brother)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sister") == .sister)
+        #expect(GedcomFamilyGraph.relation(fromWord: "son") == .son)
+        #expect(GedcomFamilyGraph.relation(fromWord: "daughter") == .daughter)
+    }
+
+    @Test func theUngenderedWordMustBeAskedForByName() {
+        // The only way to get everyone is to say so. This is the assertion
+        // that would have failed before the fix.
+        #expect(GedcomFamilyGraph.relation(fromWord: "siblings") == .siblings)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sibling") == .siblings)
+        #expect(GedcomFamilyGraph.relation(fromWord: "children") == .children)
+        #expect(GedcomFamilyGraph.relation(fromWord: "kids") == .children)
+        #expect(GedcomFamilyGraph.relation(fromWord: "brothers") != .siblings)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sisters") != .siblings)
+        #expect(GedcomFamilyGraph.relation(fromWord: "sons") != .children)
+        #expect(GedcomFamilyGraph.relation(fromWord: "daughters") != .children)
+    }
+
+    /// Rick's actual shape: two sisters and three brothers. The end-to-end
+    /// assertion, not just the lookup table — this is the sentence a reader
+    /// would have seen.
+    @Test func brothersResolvesToTheBrothersOnly() {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @P1@ INDI
+        1 NAME Dad /Breen/
+        1 SEX M
+        1 FAMS @F1@
+        0 @P2@ INDI
+        1 NAME Mum /Breen/
+        1 SEX F
+        1 FAMS @F1@
+        0 @I1@ INDI
+        1 NAME Rick /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Beth /Breen/
+        1 SEX F
+        1 FAMC @F1@
+        0 @I3@ INDI
+        1 NAME Ellen /Breen/
+        1 SEX F
+        1 FAMC @F1@
+        0 @I4@ INDI
+        1 NAME Matt /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @I5@ INDI
+        1 NAME Tim /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @F1@ FAM
+        1 HUSB @P1@
+        1 WIFE @P2@
+        1 CHIL @I1@
+        1 CHIL @I2@
+        1 CHIL @I3@
+        1 CHIL @I4@
+        1 CHIL @I5@
+        0 TRLR
+        """)
+        let rick = try! #require(graph.people["@I1@"])
+
+        func names(_ word: String) -> [String] {
+            let relation = GedcomFamilyGraph.relation(fromWord: word)!
+            return graph.relatives(relation, of: rick).map(\.name).sorted()
+        }
+
+        #expect(names("brothers") == ["Matt Breen", "Tim Breen"],
+                "Beth and Ellen are not Rick's brothers")
+        #expect(names("sisters") == ["Beth Breen", "Ellen Breen"])
+        #expect(names("siblings")
+                == ["Beth Breen", "Ellen Breen", "Matt Breen", "Tim Breen"],
+                "the ungendered word still returns everyone")
+    }
+
+    /// The same bug lived on the other side of the family: "sons" and
+    /// "daughters" both mapped to .children, so asking Rick for his
+    /// daughters would have listed his four sons.
+    @Test func sonsAndDaughtersDoNotReturnEachOther() {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Parent /Breen/
+        1 SEX M
+        1 FAMS @F1@
+        0 @C1@ INDI
+        1 NAME A Son /Breen/
+        1 SEX M
+        1 FAMC @F1@
+        0 @C2@ INDI
+        1 NAME A Daughter /Breen/
+        1 SEX F
+        1 FAMC @F1@
+        0 @F1@ FAM
+        1 HUSB @I1@
+        1 CHIL @C1@
+        1 CHIL @C2@
+        0 TRLR
+        """)
+        let parent = try! #require(graph.people["@I1@"])
+        func names(_ word: String) -> [String] {
+            graph.relatives(GedcomFamilyGraph.relation(fromWord: word)!, of: parent)
+                .map(\.name).sorted()
+        }
+        #expect(names("sons") == ["A Son Breen"])
+        #expect(names("daughters") == ["A Daughter Breen"])
+        #expect(names("children") == ["A Daughter Breen", "A Son Breen"])
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func nameLookupHasExplicitHundredThousandPersonBudget() {
         var lines = ["0 HEAD"]
