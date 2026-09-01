@@ -183,6 +183,38 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         return lowered.contains("model") && lowered.contains("unavailable")
     }
 
+    /// The model tags this host has installed, from the SAME `/api/tags`
+    /// the liveness probe already calls — so the menu can only offer a
+    /// model that the machine which will actually answer really has.
+    ///
+    /// Empty on any failure, deliberately: the settings pane then shows a
+    /// free-text field instead of an empty menu, so an unreachable host is
+    /// never a dead end you cannot type your way out of.
+    func installedModels() async -> [String] {
+        let urlString = OllamaEndpoints.tagsURLString(for: host, defaultPort: port)
+        guard let url = URL(string: urlString) else { return [] }
+        var payload: Data?
+        switch transport {
+        case .urlSession:
+            var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
+            request.httpMethod = "GET"
+            payload = try? await URLSession.shared.data(for: request).0
+        case .fake(let handler):
+            payload = await handler(urlString, Data()).data
+        case .curl:
+            let result = await ProcessRunner.runProcess(
+                executable: "/usr/bin/curl",
+                arguments: ["-sS", "-m", "\(Int(probeTimeoutSeconds))", urlString],
+                stdoutLimitBytes: 1 << 20)
+            payload = result.exitCode == 0 ? (result.stdout.map { Data($0.utf8) }) : nil
+        }
+        guard let payload,
+              let root = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let models = root["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { $0["name"] as? String }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// Cheap liveness check against `/api/tags`.
     ///
     /// Returns nil when the host is serving, or the reason it is not.

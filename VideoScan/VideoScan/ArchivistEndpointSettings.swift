@@ -35,6 +35,18 @@ struct ArchivistEndpointSettings: View {
     /// "Let Hallie phrase answers in her own words (facts stay locked)".
     /// Persisted explicitly on toggle, like every other setting here.
     @State private var composeWithModel = true
+    /// The model tag Hallie asks with. Stored under the same key the chat
+    /// window and the web bridge read, so this pane and every asking path
+    /// agree by construction rather than by convention.
+    @State private var model = HallieBrain.defaultModel
+    /// Tags installed on the first REACHABLE host — the machine that will
+    /// actually answer. Empty when nothing answered, which switches the
+    /// control to a free-text field.
+    @State private var installed: [String] = []
+    @State private var loadingModels = false
+    /// Which host the menu is describing, named in the caption so the
+    /// reader knows whose model list they are looking at.
+    @State private var modelSourceHost: String?
 
     enum Liveness: Equatable {
         case unknown, online, idle(String), offline(String)
@@ -140,6 +152,62 @@ struct ArchivistEndpointSettings: View {
             Divider()
                 .padding(.vertical, 2)
 
+            // MARK: Which model
+            //
+            // Rick, 2026-09-01: "we already have settings for Archivist
+            // Brain so let's put the selector in there". Until now the tag
+            // lived in five source files and a `defaults write` — which is
+            // not a setting so much as a rumour, the same complaint that
+            // produced the host list above.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Model")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 54, alignment: .leading)
+
+                    if installed.isEmpty {
+                        // No answer from any host: never show an empty menu
+                        // you cannot escape. Type the tag.
+                        TextField("qwen3.8:27b-mlx", text: $model)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                            .onSubmit(persistModel)
+                    } else {
+                        Picker("", selection: $model) {
+                            // A tag configured but not installed still shows,
+                            // so the pane never silently reassigns the brain.
+                            if !installed.contains(model) {
+                                Text("\(model)  (not installed)").tag(model)
+                            }
+                            ForEach(installed, id: \.self) { tag in
+                                Text(tag).tag(tag)
+                            }
+                        }
+                        .labelsHidden()
+                        .font(.system(size: 12, design: .monospaced))
+                        .onChange(of: model) { _, _ in persistModel() }
+                        .accessibilityIdentifier("archivist.ollamaModel")
+                    }
+
+                    Button(loadingModels ? "…" : "Refresh") {
+                        Task { await refreshModels() }
+                    }
+                    .controlSize(.small)
+                    .disabled(loadingModels || hosts.isEmpty)
+                    .help("Re-read the installed models from the first server that answers")
+                }
+                Text(installed.isEmpty
+                     ? "No server answered, so type the tag exactly as `ollama list` shows it."
+                     : "Installed on \(modelSourceHost ?? "the first server that answered"). "
+                       + "A bigger model reasons further; a smaller one replies sooner.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+                .padding(.vertical, 2)
+
             Toggle(isOn: $composeWithModel) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Let Hallie phrase answers in her own words (facts stay locked)")
@@ -181,8 +249,10 @@ struct ArchivistEndpointSettings: View {
             if !loaded {
                 hosts = OllamaEndpoints.resolved(from: defaultsStore)
                 composeWithModel = HallieCompositionSettings.isEnabled(defaultsStore)
+                model = defaultsStore.string(forKey: Self.modelKey) ?? HallieBrain.defaultModel
                 loaded = true
             }
+            Task { await refreshModels() }
             // Lights refresh every time the pane appears — a stale green
             // is worse than no light at all.
             Task { await refreshLiveness() }
@@ -222,6 +292,42 @@ struct ArchivistEndpointSettings: View {
 
     private func persist() {
         OllamaEndpoints.save(hosts, to: defaultsStore)
+    }
+
+    /// The one key every asking path reads (ArchivistChatWindow,
+    /// ArchivistAskField, HallieWebAccess).
+    static let modelKey = "archivist.ollamaModel"
+
+    /// Explicit save, like every other setting here — @State carries no
+    /// didSet, so nothing writes itself.
+    private func persistModel() {
+        let tag = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty else { return }
+        model = tag
+        defaultsStore.set(tag, forKey: Self.modelKey)
+    }
+
+    /// Ask the first host that answers what it has installed. First
+    /// REACHABLE, not merely first: the menu must describe the machine that
+    /// will actually take the question, or it is offering models to a
+    /// server that is asleep.
+    @MainActor
+    private func refreshModels() async {
+        guard !loadingModels, !hosts.isEmpty else { return }
+        loadingModels = true
+        defer { loadingModels = false }
+        for host in hosts {
+            var probe = OllamaQueryTranslator()
+            probe.host = host
+            let tags = await probe.installedModels()
+            if !tags.isEmpty {
+                installed = tags
+                modelSourceHost = host
+                return
+            }
+        }
+        installed = []
+        modelSourceHost = nil
     }
 
     /// Probe every host concurrently. Uses the SAME `probeLiveness` the
