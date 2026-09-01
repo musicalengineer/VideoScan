@@ -18,8 +18,14 @@ set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
 HOST=${HOST:-http://localhost:11434}
 SEED=${SEED:-101}
-BASELINE=${BASELINE:-qwen3.6:35b-a3b-nvfp4}
-CANDIDATE=${CANDIDATE:-qwen3.8:27b-mlx}
+# Three models, chosen so the result is INTERPRETABLE rather than merely
+# favourable. Baseline vs 3.6-dense isolates architecture (3B active -> 27B
+# active at the same generation); 3.6-dense vs 3.8-dense isolates the
+# generation (identical shape, ten months of post-training apart). Without
+# the middle model a win is real but unattributable.
+MODELS=(${MODELS:-qwen3.6:35b-a3b-nvfp4 qwen3.6:27b-mlx qwen3.8:27b-mlx})
+BASELINE=${MODELS[1]}
+CANDIDATE=${MODELS[-1]}
 
 STAMP=$(date +%Y%m%d-%H%M)
 OUT=$HOME/Library/Logs/VideoScan/model-fitness-$STAMP
@@ -36,48 +42,40 @@ say "output    $OUT"
 
 # Only run models that are actually present; a typo'd tag must not look like
 # a model that failed the eval.
-for m in "$BASELINE" "$CANDIDATE"; do
+for m in $MODELS; do
   if ! ollama list | awk '{print $1}' | grep -qx "$m"; then
     say "FATAL: model not installed: $m   (ollama pull $m)"
     exit 2
   fi
 done
 
-say ""
-say "--- 1/4 fitness corpus: baseline ---"
-python3 "$REPO/tools/model-fitness/run_fitness.py" run \
-  --model "$BASELINE" --host "$HOST" --seed "$SEED" \
-  --out "$OUT/fitness-baseline.jsonl" >>"$LOG" 2>&1
-say "exit=$?"
+RUNS=()
+for m in $MODELS; do
+  slug=${m//[:\/]/_}
+  say ""
+  say "--- fitness corpus: $m ---"
+  python3 "$REPO/tools/model-fitness/run_fitness.py" run \
+    --model "$m" --host "$HOST" --seed "$SEED" \
+    --out "$OUT/fitness-$slug.jsonl" >>"$LOG" 2>&1
+  say "exit=$?"
+  RUNS+=("$OUT/fitness-$slug.jsonl")
+done
 
-say ""
-say "--- 2/4 fitness corpus: candidate ---"
-python3 "$REPO/tools/model-fitness/run_fitness.py" run \
-  --model "$CANDIDATE" --host "$HOST" --seed "$SEED" \
-  --out "$OUT/fitness-candidate.jsonl" >>"$LOG" 2>&1
-say "exit=$?"
-
-say ""
-say "--- 3/4 qwen-bench tool planning: baseline ---"
-python3 "$REPO/tools/qwen-bench/qwen_bench.py" run \
-  --transport native-tools --host "$HOST" --model "$BASELINE" \
-  --seed "$SEED" --samples 1 \
-  --out "$OUT/qwenbench-baseline.jsonl" >>"$LOG" 2>&1
-say "exit=$?"
-
-say ""
-say "--- 4/4 qwen-bench tool planning: candidate ---"
-python3 "$REPO/tools/qwen-bench/qwen_bench.py" run \
-  --transport native-tools --host "$HOST" --model "$CANDIDATE" \
-  --seed "$SEED" --samples 1 \
-  --out "$OUT/qwenbench-candidate.jsonl" >>"$LOG" 2>&1
-say "exit=$?"
+for m in $MODELS; do
+  slug=${m//[:\/]/_}
+  say ""
+  say "--- qwen-bench tool planning: $m ---"
+  python3 "$REPO/tools/qwen-bench/qwen_bench.py" run \
+    --transport native-tools --host "$HOST" --model "$m" \
+    --seed "$SEED" --samples 1 \
+    --out "$OUT/qwenbench-$slug.jsonl" >>"$LOG" 2>&1
+  say "exit=$?"
+done
 
 say ""
 say "=== HEAD TO HEAD ==="
 python3 "$REPO/tools/model-fitness/run_fitness.py" compare \
-  "$OUT/fitness-baseline.jsonl" "$OUT/fitness-candidate.jsonl" \
-  2>&1 | tee -a "$LOG" | tee "$OUT/summary.txt"
+  "${RUNS[@]}" 2>&1 | tee -a "$LOG" | tee "$OUT/summary.txt"
 
 say ""
 say "done. raw responses in $OUT"

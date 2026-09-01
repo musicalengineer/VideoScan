@@ -101,10 +101,41 @@ def grade(case: dict, answer: str) -> tuple[bool, list[str]]:
             reasons.append(f"missing any of {group}")
 
     for term in case["must_not_include"]:
-        if term.lower() in haystack:
+        for hit in _hits(haystack, term.lower()):
+            if _negated_before(haystack, hit):
+                continue    # "the bug is NOT limited to brothers" is a PASS
             reasons.append(f"forbidden: {term!r}")
+            break
 
     return (not reasons), reasons
+
+
+def _hits(haystack: str, needle: str):
+    start = haystack.find(needle)
+    while start != -1:
+        yield start
+        start = haystack.find(needle, start + 1)
+
+
+# Negation markers, and how far back to look. Deliberately small: a marker
+# three words earlier flips the clause, one three sentences earlier does not.
+_NEGATIONS = ("not", "n't", "never", "no longer", "isn't", "aren't",
+              "far from", "rather than", "instead of", "nor ")
+_LOOKBACK = 40
+
+
+def _negated_before(haystack: str, index: int) -> bool:
+    """True when a negation marker sits just before `index`.
+
+    Substring grading is crude and this is where it bites: on 2026-08-31 the
+    candidate model answered "The bug is **not** limited to brothers and
+    sisters" — correct, and scored as a failure because the forbidden phrase
+    "limited to brother" was sitting inside the negation. Grading the
+    negation as the claim understates every model that phrases a correct
+    answer as a contradiction of the question.
+    """
+    window = haystack[max(0, index - _LOOKBACK):index]
+    return any(marker in window for marker in _NEGATIONS)
 
 
 # ── model ─────────────────────────────────────────────────────────────────
