@@ -119,3 +119,58 @@ struct FamilyTreeResearchLinksTests {
                 "a list of bare links is a list nobody reads")
     }
 }
+
+// MARK: - The Irish link must name the IRISH place (2026-09-01)
+//
+// Found by the local reviewer (qwen3.8:27b-mlx) reading a real commit
+// overnight, not by a human and not by this suite. `regions` deliberately
+// searches BOTH places — its own comment says "someone born in Cork and
+// dying in Boston is worth looking for on both sides of the water" — but the
+// reason string took `[birthPlace, deathPlace].first`, which names the wrong
+// side whenever the Irish place is the DEATH place.
+//
+// It matters because the reason is the whole point of the link: a reader
+// deciding whether a click is worth it is told where the record supposedly
+// is. "Recorded in Boston, Massachusetts" above the Irish census is not
+// merely untidy, it is a false statement about the evidence.
+
+struct FamilyTreeResearchLinksIrishPlaceTests {
+
+    private func irishReason(birth: String?, death: String?) -> String? {
+        FamilyTreeResearchLinks.links(
+            name: "Michael Breen", surname: "Breen", birthYear: 1850,
+            birthPlace: birth, deathPlace: death, familySearchID: nil)
+            .first { $0.title.contains("Census of Ireland") }?.reason
+    }
+
+    @Test func bornInBostonDiedInCorkNamesCork() {
+        let reason = try? #require(irishReason(birth: "Boston, Massachusetts",
+                                               death: "Cork, Ireland"))
+        #expect(reason?.contains("Cork") == true,
+                "the Irish census link must name the Irish place: \(reason ?? "nil")")
+        #expect(reason?.contains("Boston") == false,
+                "naming Boston above the Irish census is a false statement about where the record is: \(reason ?? "nil")")
+    }
+
+    /// The mirror case, which always worked — kept so the fix cannot be
+    /// satisfied by simply preferring deathPlace instead.
+    @Test func bornInCorkDiedInBostonStillNamesCork() {
+        let reason = try? #require(irishReason(birth: "Cork, Ireland",
+                                               death: "Boston, Massachusetts"))
+        #expect(reason?.contains("Cork") == true, "\(reason ?? "nil")")
+        #expect(reason?.contains("Boston") == false, "\(reason ?? "nil")")
+    }
+
+    @Test func onlyAnIrishDeathPlaceStillNamesIt() {
+        let reason = try? #require(irishReason(birth: nil, death: "Galway, Ireland"))
+        #expect(reason?.contains("Galway") == true, "\(reason ?? "nil")")
+    }
+
+    /// No usable place at all falls back to the country, never to nil or to
+    /// a non-Irish town.
+    @Test func noIrishPlaceFallsBackToTheCountry() {
+        // A county name alone still matches Ireland via irishCounties.
+        let reason = try? #require(irishReason(birth: "Tipperary", death: nil))
+        #expect(reason?.contains("Tipperary") == true, "\(reason ?? "nil")")
+    }
+}

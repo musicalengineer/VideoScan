@@ -119,8 +119,14 @@ def _hits(haystack: str, needle: str):
 
 # Negation markers, and how far back to look. Deliberately small: a marker
 # three words earlier flips the clause, one three sentences earlier does not.
-_NEGATIONS = ("not", "n't", "never", "no longer", "isn't", "aren't",
-              "far from", "rather than", "instead of", "nor ")
+# Word-bounded on purpose. The local reviewer caught the first version on
+# 2026-09-01: a bare "not" matches inside "Note", "noted", "notification", so
+# an answer beginning "Note: no defect found" had its forbidden term
+# suppressed and PASSED a case it should have failed. That is the one
+# direction of grader error that flatters a model instead of understating it.
+_NEGATIONS = (r"\bnot\b", r"n't\b", r"\bnever\b", r"\bno longer\b",
+              r"\bfar from\b", r"\brather than\b", r"\binstead of\b",
+              r"\bnor\b")
 _LOOKBACK = 40
 
 
@@ -135,7 +141,7 @@ def _negated_before(haystack: str, index: int) -> bool:
     answer as a contradiction of the question.
     """
     window = haystack[max(0, index - _LOOKBACK):index]
-    return any(marker in window for marker in _NEGATIONS)
+    return any(re.search(marker, window) for marker in _NEGATIONS)
 
 
 # ── model ─────────────────────────────────────────────────────────────────

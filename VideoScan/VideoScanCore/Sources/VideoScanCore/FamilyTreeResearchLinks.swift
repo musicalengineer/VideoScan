@@ -125,7 +125,19 @@ public enum FamilyTreeResearchLinks {
         let found = regions(birthPlace: birthPlace, deathPlace: deathPlace)
 
         if found.contains(.ireland) {
-            let where_ = [birthPlace, deathPlace].compactMap { $0 }.first ?? "Ireland"
+            // The place that actually MATCHED Ireland, not merely the first
+            // one recorded (found by the local reviewer on 2026-09-01).
+            // `regions` deliberately searches both places — its own comment
+            // says "someone born in Cork and dying in Boston is worth
+            // looking for on both sides of the water" — so taking `.first`
+            // named the wrong side whenever the Irish place was the DEATH
+            // place: a man born in Boston who died in Cork was offered the
+            // Irish census under "Recorded in Boston, Massachusetts."
+            // Reuses the same matcher rather than a second copy of the rule.
+            let where_ = [birthPlace, deathPlace]
+                .compactMap { $0 }
+                .first { regions(birthPlace: $0, deathPlace: nil).contains(.ireland) }
+                ?? "Ireland"
             out.append(contentsOf: [
                 link("Census of Ireland 1901 / 1911",
                      "https://www.census.nationalarchives.ie/",
