@@ -15,6 +15,18 @@ extension ArchivistGraphExecutor {
 
     static let overlayBasisPrefix = "Basis: People tab relationship"
 
+    /// "Beth", "Beth and Ellen", "Beth, Ellen and Matt" — Hallie reads
+    /// aloud, so a bare comma list is wrong in the ear.
+    static func englishList(_ items: [String]) -> String {
+        switch items.count {
+        case 0: return ""
+        case 1: return items[0]
+        case 2: return "\(items[0]) and \(items[1])"
+        default: return items.dropLast().joined(separator: ", ")
+            + " and " + (items.last ?? "")
+        }
+    }
+
     /// Single-anchor kinship from the overlay, or nil to fall through.
     /// `selection` (a chip choice or the owner pin) contributes its tree
     /// vertex alongside the typed spelling's profile vertex — both name the
@@ -46,7 +58,46 @@ extension ArchivistGraphExecutor {
                 hits.append(hit)
             }
         }
-        guard !hits.isEmpty else { return nil }
+        // A GENDERED question with no hits is not the same as "no such
+        // relative". Since the sex filter fails closed (FamilyKinshipOverlay,
+        // 2026-08-31), a sibling whose sex was never recorded is excluded
+        // from both "brothers" and "sisters" — and falling through here made
+        // Hallie answer "the family tree doesn't record a sister", which
+        // tells Rick something false about Beth and Ellen.
+        //
+        // Say what is actually missing, and name the people, so the gap is
+        // one edit away from closed instead of invisible.
+        guard !hits.isEmpty else {
+            guard let wantedSex = wanted.sex else { return nil }
+            var unknown: [String] = []
+            var seenUnknown = Set<FamilyKinshipOverlay.Node>()
+            for anchor in anchors {
+                for hit in overlay.relatives(of: anchor, relation: wanted.relation, sex: nil)
+                where hit.member.sex == nil && seenUnknown.insert(hit.member.node).inserted {
+                    unknown.append(hit.member.displayName)
+                }
+            }
+            guard !unknown.isEmpty else { return nil }
+            _ = wantedSex
+            let anchorName = anchors.compactMap { overlay.member($0) }.first?.name ?? typed
+            // Only "your" is lowercased; a name keeps its capital.
+            let possessive = query.voices[0] == .owner
+                ? "your" : KinshipDisplay.possessive(anchorName)
+            let neutral = pluralNoun(wanted.relation.term(sex: nil))
+            let list = englishList(unknown)
+            return ArchivistGraphResult(
+                conclusion: .missingFact,
+                prose: "I can't tell. \(list) \(unknown.count == 1 ? "is" : "are") "
+                    + "\(possessive) \(unknown.count == 1 ? wanted.relation.term(sex: nil) : neutral), "
+                    + "but I don't have a recorded sex for "
+                    + "\(unknown.count == 1 ? "that person" : "them"), so I can't say "
+                    + "which of \(possessive) \(neutral) are \(relation.rawValue)s. "
+                    + "Recording it in the People tab would answer this.",
+                basisLine: "\(overlayBasisPrefix): the relationship is stored, the sex is not.",
+                evidence: nil,
+                candidates: [], profileCandidates: [], ambiguityCandidates: [],
+                catalogPersonName: nil)
+        }
 
         let anchorMember = anchors.compactMap { overlay.member($0) }.first
         let anchorName = anchorMember?.name ?? typed

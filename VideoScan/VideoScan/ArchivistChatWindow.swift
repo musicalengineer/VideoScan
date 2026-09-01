@@ -237,7 +237,7 @@ struct ArchivistChatWindow: View {
     /// asleep and you are talking to the laptop" look identical
     /// otherwise (Rick 2026-08-12).
     @State private var lastResponder: String?
-    @AppStorage("archivist.ollamaModel") private var ollamaModel = "qwen3.6:35b-a3b-nvfp4"
+    @AppStorage("archivist.ollamaModel") private var ollamaModel = HallieBrain.defaultModel
 
     @State private var messages: [ArchivistMessage] = []
     @State private var transcriptSessionID = UUID()

@@ -9,7 +9,7 @@ enum HallieShellCLI {
     struct Options: Equatable {
         var catalogURL: URL = defaultCatalogURL
         var hosts: [String] = OllamaEndpoints.defaultHosts
-        var model = "qwen3.6:35b-a3b-nvfp4"
+        var model = HallieBrain.defaultModel
         var gedcomURL: URL?
         var once: String?
         /// `--compose`: let the model phrase composable answers (verified,

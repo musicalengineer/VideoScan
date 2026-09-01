@@ -114,7 +114,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
 
     var host: String = "ricksm5.local"
     var port: Int = 11434
-    var model: String = "qwen3.6:35b-a3b-nvfp4"
+    var model: String = HallieBrain.defaultModel
     /// Generation budget. Deliberately generous: a cold 35B model can
     /// take tens of seconds to produce its first byte, and ollama's
     /// non-streaming reply sends nothing until it is done — so this
@@ -885,4 +885,26 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     "yearEnd":null,"mediaKind":null,"keywords":["boys","cape"], \
     "transcript":[],"intent":"filter"}
     """
+}
+
+/// The brain's model tag, written down ONCE.
+///
+/// It had been copy-pasted into five files (two @AppStorage defaults, the
+/// shell CLI, the web bridge, and the translator), which is exactly the shape
+/// that drifts: change four and the fifth quietly keeps answering on the old
+/// model. Rick, 2026-09-01: swap the old qwen for the new one.
+///
+/// 2026-09-01 — qwen3.8:27b-mlx, chosen on measured evidence rather than size.
+/// Against the previous default (qwen3.6:35b-a3b-nvfp4, a MoE activating 3B of
+/// 35B parameters) on tools/model-fitness: code review 100% vs 70%, and
+/// crucially review PRECISION 2/2 vs 1/2 — the old model invented a defect in
+/// correct code. Overall 29/29 vs 26/29, at 12.4s/case vs 30.5s. Overnight it
+/// then read 21 real commits and found a genuine shipped bug (the Irish census
+/// link naming the wrong side of the water) while staying silent on 18.
+///
+/// TO SWITCH BACK WITHOUT REBUILDING, the stored preference wins over this
+/// default and is read fresh on every question:
+///     defaults write Rick-Breen.VideoScan archivist.ollamaModel qwen3.6:35b-a3b-nvfp4
+enum HallieBrain {
+    static let defaultModel = "qwen3.8:27b-mlx"
 }

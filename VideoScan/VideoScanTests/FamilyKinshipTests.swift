@@ -1090,3 +1090,79 @@ struct FamilyKinshipTests {
         #expect(queryTime < .milliseconds(200), "10 cousin + 10 path queries took \(queryTime)")
     }
 }
+
+// MARK: - A gendered question must not answer with unknown-sex people
+//
+// Rick, 2026-08-31: "Rick's brothers: Beth, Ellen, Matt, Tim, Timmy."
+// Fixing relation(fromWord:) that day corrected the AST — the query now
+// reads `relation=brother` — and the answer stayed wrong, because it does
+// not come from the tree at all. It comes from the People-tab overlay,
+// whose sex filter reads:
+//
+//     if let sex, let memberSex = member.sex, memberSex != sex { return nil }
+//
+// The second `let` FAILS OPEN: a profile with no recorded sex matches every
+// gendered relation, so Rick's sisters were offered as his brothers.
+//
+// Fail CLOSED here, unlike the Verify window's era filter which deliberately
+// shows undated findings under every era. The difference is what the two
+// mistakes cost. There, hiding a finding hides fixable work and showing it
+// costs a glance. Here, including an unknown-sex person states something
+// false about a named member of the family — and Rick knows his own family,
+// so a wrong name is not a small error, it is the kind that stops him
+// trusting the rest of the answer.
+
+struct KinshipOverlayUnknownSexTests {
+
+    /// Two brothers, two sisters, and one sibling whose sex was never
+    /// recorded — Rick's actual shape.
+    private func overlay() -> FamilyKinshipOverlay {
+        FamilyKinshipOverlay(snapshots: [
+            ArchivistGraphProfileSnapshot(
+                stableID: "rick", canonicalName: "Rick",
+                kinships: [
+                    Kinship(relation: .sibling, relativeTo: .profile(name: "Matt")),
+                    Kinship(relation: .sibling, relativeTo: .profile(name: "Tim")),
+                    Kinship(relation: .sibling, relativeTo: .profile(name: "Beth")),
+                    Kinship(relation: .sibling, relativeTo: .profile(name: "Ellen")),
+                    Kinship(relation: .sibling, relativeTo: .profile(name: "Timmy")),
+                ],
+                sex: .male),
+            ArchivistGraphProfileSnapshot(stableID: "matt", canonicalName: "Matt", sex: .male),
+            ArchivistGraphProfileSnapshot(stableID: "tim", canonicalName: "Tim", sex: .male),
+            ArchivistGraphProfileSnapshot(stableID: "beth", canonicalName: "Beth", sex: .female),
+            ArchivistGraphProfileSnapshot(stableID: "ellen", canonicalName: "Ellen", sex: .female),
+            // Sex never recorded — the case that broke.
+            ArchivistGraphProfileSnapshot(stableID: "timmy", canonicalName: "Timmy"),
+        ], graph: nil)
+    }
+
+    private func names(_ relation: KinshipRelation, _ sex: PersonSex?) -> [String] {
+        overlay().relatives(of: .profile(stableID: "rick"), relation: relation, sex: sex)
+            .map(\.member.name).sorted()
+    }
+
+    @Test func sistersAreNeverListedAsBrothers() {
+        let brothers = names(.sibling, .male)
+        #expect(!brothers.contains("Beth"), "Beth is a sister: \(brothers)")
+        #expect(!brothers.contains("Ellen"), "Ellen is a sister: \(brothers)")
+        #expect(brothers.contains("Matt"))
+        #expect(brothers.contains("Tim"))
+    }
+
+    @Test func anUnrecordedSexIsNotEverySex() {
+        // The defect itself: "Timmy" has no sex recorded, and used to appear
+        // under BOTH brothers and sisters.
+        #expect(!names(.sibling, .male).contains("Timmy"),
+                "an unrecorded sex must not satisfy a gendered relation")
+        #expect(!names(.sibling, .female).contains("Timmy"))
+    }
+
+    /// The ungendered question is unaffected — everyone still appears,
+    /// including the person whose sex is unknown. Without this the fix could
+    /// be satisfied by filtering too hard.
+    @Test func theUngenderedQuestionStillReturnsEveryone() {
+        #expect(names(.sibling, nil)
+                == ["Beth", "Ellen", "Matt", "Tim", "Timmy"])
+    }
+}

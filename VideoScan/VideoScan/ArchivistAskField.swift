@@ -43,7 +43,7 @@ struct ArchivistAskPopover: View {
         let where_ = lastResponder ?? hosts.first ?? "the fleet"
         return "Asking \(ollamaModel) @ \(where_)…"
     }
-    @AppStorage("archivist.ollamaModel") private var ollamaModel = "qwen3.6:35b-a3b-nvfp4"
+    @AppStorage("archivist.ollamaModel") private var ollamaModel = HallieBrain.defaultModel
 
     /// One asked-and-answered turn in this session's conversation.
     struct Exchange: Identifiable {

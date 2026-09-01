@@ -58,7 +58,7 @@ final class HallieWebAccess: ObservableObject {
                     archivistName: archivist == "Name TBD" ? HallieTurnExecutor.Speakers.defaultArchivistName : archivist,
                     archivistPersonName: d.string(forKey: HallieTurnExecutor.Speakers.archivistPersonNameDefaultsKey),
                     hosts: OllamaEndpoints.resolved(from: d),
-                    modelName: d.string(forKey: "archivist.ollamaModel") ?? "qwen3.6:35b-a3b-nvfp4",
+                    modelName: d.string(forKey: "archivist.ollamaModel") ?? HallieBrain.defaultModel,
                     composeWithModel: HallieCompositionSettings.isEnabled(d))
             },
             proxy: proxyCache,

@@ -589,7 +589,20 @@ struct FamilyKinshipOverlay: Sendable {
         }
         return best.compactMap { node, hops -> Hit? in
             guard let member = members[node] else { return nil }
-            if let sex, let memberSex = member.sex, memberSex != sex { return nil }
+            // FAIL CLOSED on an unrecorded sex (Rick, 2026-08-31: "Rick's
+            // brothers: Beth, Ellen, Matt, Tim, Timmy"). The old form was
+            // `let memberSex = member.sex, memberSex != sex`, whose second
+            // binding quietly let a profile with NO recorded sex satisfy
+            // every gendered relation — so Rick's sisters were offered as
+            // his brothers.
+            //
+            // Deliberately the opposite choice from the Verify window's era
+            // filter, which shows undated findings under every era. There,
+            // hiding a finding hides fixable work and showing one costs a
+            // glance. Here, including an unknown-sex person states something
+            // false about a named member of the family, to the one reader
+            // who knows for certain that it is false.
+            if let sex, member.sex != sex { return nil }
             return Hit(member: member, hops: hops)
         }
         .sorted { lhs, rhs in
