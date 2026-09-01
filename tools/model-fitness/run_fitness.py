@@ -297,6 +297,38 @@ def compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def rescore(args: argparse.Namespace) -> int:
+    """Re-grade saved answers against the current corpus, contacting no model.
+
+    The whole reason every raw response is kept. Substring grading is
+    auditable but brittle — on 2026-08-31 it failed four correct answers
+    before it failed a wrong one — so the grader gets corrected more often
+    than the models do, and a corrected grader must be able to re-judge
+    history without paying for inference again.
+    """
+    cases = {c["id"]: c for c in load_corpus(Path(args.corpus))}
+    records = [json.loads(line) for line in Path(args.run).read_text().splitlines()
+               if line.strip()]
+    changed = 0
+    for record in records:
+        case = cases.get(record["id"])
+        if case is None or record.get("error"):
+            continue
+        passed, reasons = grade(case, record["answer"])
+        if passed != record["passed"]:
+            changed += 1
+            print(f"  {'now PASS' if passed else 'now FAIL'}  {record['id']}")
+        record["passed"], record["reasons"] = passed, reasons
+
+    out = Path(args.out or args.run)
+    with out.open("w") as sink:
+        for record in records:
+            sink.write(json.dumps(record) + "\n")
+    print(f"{changed} verdict(s) changed -> {out}\n")
+    report(records, records[0]["model"] if records else args.run)
+    return 0
+
+
 def validate(args: argparse.Namespace) -> int:
     cases = load_corpus(Path(args.corpus))
     counts: dict[str, int] = defaultdict(int)
@@ -329,6 +361,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--only", nargs="*", help="limit to these categories")
     r.add_argument("--out", help="raw JSONL path")
     r.set_defaults(func=run)
+
+    s_ = sub.add_parser("rescore", help="re-grade a saved run; contacts no model")
+    s_.add_argument("--run", required=True)
+    s_.add_argument("--corpus", default=str(DEFAULT_CORPUS))
+    s_.add_argument("--out", help="default: rewrite the run in place")
+    s_.set_defaults(func=rescore)
 
     c = sub.add_parser("compare", help="report and diff two or more runs")
     c.add_argument("runs", nargs="+")
