@@ -18,6 +18,60 @@ struct HalliePronounContinuityTests {
         #expect(P.rewrite("show me his guitar videos", lastPeople: ["Rick"])?.question == "show me Rick's guitar videos")
     }
 
+    /// Eval 2026-09-01: "and her husband?" — "her" before a kin noun is
+    /// the possessive, so the translator must see "Martha Lamson's
+    /// husband", not "Martha Lamson husband". As an object it stays bare.
+    @Test func herBeforeAKinNounIsPossessive() {
+        #expect(P.rewrite("and her husband?", lastPeople: ["Martha Lamson"])?.question == "and Martha Lamson's husband?")
+        #expect(P.rewrite("who were her parents", lastPeople: ["Martha Lamson"])?.question == "who were Martha Lamson's parents")
+        #expect(P.rewrite("her kids?", lastPeople: ["Donna"])?.question == "Donna's kids?")
+        #expect(P.rewrite("when did her mother die", lastPeople: ["Donna"])?.question == "when did Donna's mother die")
+        #expect(P.rewrite("her brothers and sisters", lastPeople: ["Donna"])?.question == "Donna's brothers and sisters")
+        // A name ending in s takes the bare apostrophe.
+        #expect(P.rewrite("her husband", lastPeople: ["Agnes"])?.question == "Agnes' husband")
+        // Object uses are unchanged.
+        #expect(P.rewrite("show me videos of her", lastPeople: ["Donna"])?.question == "show me videos of Donna")
+        #expect(P.rewrite("tell me about her", lastPeople: ["Donna"])?.question == "tell me about Donna")
+        #expect(P.rewrite("did she have kids", lastPeople: ["Martha Lamson"])?.question == "did Martha Lamson have kids")
+        // Two people: "her" is still a guess and is left alone.
+        #expect(P.rewrite("and her husband?", lastPeople: ["Rick", "Donna"]) == nil)
+    }
+
+    /// The memory side of the same eval miss: after "did she have kids"
+    /// (a kinship answer listing Isaac and Patience) the reader is still
+    /// talking about Martha. A kinship answer about X's relatives keeps X
+    /// as the subject for "her"; the children never become the referent.
+    @Test func aKinshipAnswerKeepsItsSubjectForTheNextPronoun() {
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let bio = HallieTurnExecutor.Result(
+            route: .graph, outcome: .answered,
+            prose: "Martha Lamson was born before 13 January 1633.",
+            basisLine: "Basis: GEDCOM", queryDescription: "shape=graph",
+            citations: [], catalogPersonName: "Martha Lamson")
+        memory.record(intent: .init(originalQuestion: "when was Martha Lamson born",
+                                    ast: .graph(.init(people: ["Martha Lamson"], operation: .birth))),
+                      result: bio)
+        let kids = HallieTurnExecutor.Result(
+            route: .graph, outcome: .answered,
+            prose: "Martha Lamson's children: Isaac Rice, Patience Rice.",
+            basisLine: "Basis: GEDCOM", queryDescription: "shape=graph operation=kinship",
+            citations: [], catalogPersonName: nil)
+        memory.record(intent: .init(originalQuestion: "did she have kids",
+                                    ast: .graph(.init(people: ["Martha Lamson"], operation: .kinship, relation: .children))),
+                      result: kids)
+        #expect(memory.pronounReferents == ["Martha Lamson"])
+        #expect(P.rewrite("and her husband?", lastPeople: memory.pronounReferents)?.question
+                == "and Martha Lamson's husband?")
+        // Through preTranslation with no tree: the follow-up refiner must
+        // NOT read "husband" as a person; the fragment goes on as a kinship
+        // ask for Martha's husband (the lineage shape claims it first).
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "and her husband?", playAfterAnswer: false,
+            memory: memory, isKnownPerson: { $0.lowercased() == "husband" })
+        guard case .run(let intent) = pre else { Issue.record("expected a local kinship intent, got \(pre)"); return }
+        #expect(intent.ast == .graph(.init(people: ["Martha Lamson"], operation: .kinship, relation: .husband)))
+    }
+
     @Test func leavesQuestionsAloneWhenNothingApplies() {
         #expect(P.rewrite("when did they get married", lastPeople: []) == nil, "no last answer")
         #expect(P.rewrite("where was he born", lastPeople: ["Rick", "Donna"]) == nil, "he with two people is a guess")

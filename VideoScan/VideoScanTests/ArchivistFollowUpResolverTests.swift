@@ -347,6 +347,35 @@ struct ArchivistFollowUpResolverTests {
             reason: "a who-appears-with question only takes a person"))
     }
 
+    /// Eval 2026-09-01: "and her husband?" after "did she have kids"
+    /// (graph kinship children for Martha Lamson). "and" was a lead, "her"
+    /// filler, and "husband" a KNOWN PERSON because the tree has five
+    /// people with Husband in the name — so the refiner replaced the
+    /// person and kept relation = children: "Which Husband do you mean?".
+    /// A fragment carrying a third-person pronoun is about the last
+    /// answer's subject and belongs to the pronoun rewrite, never here.
+    @Test func aPronounFragmentIsNeverARefinement() {
+        let kids = Resolver.Snapshot(
+            ast: .graph(.init(people: ["martha lamson"], operation: .kinship, relation: .children)),
+            items: [])
+        let treeHasAHusband: (String) -> Bool = { name in
+            ["martha lamson", "husband", "rick"].contains(name.lowercased())
+        }
+        #expect(Resolver.resolve("and her husband?", snapshot: kids, isKnownPerson: treeHasAHusband) == .none)
+        #expect(Resolver.resolve("and his kids", snapshot: kids, isKnownPerson: treeHasAHusband) == .none)
+        #expect(Resolver.resolve("her parents", snapshot: kids, isKnownPerson: treeHasAHusband) == .none)
+        #expect(Resolver.resolve("what about their children", snapshot: kids, isKnownPerson: treeHasAHusband) == .none)
+        // The same fragments against a LIST answer are not refinements either.
+        #expect(resolve("and her husband?") == .none)
+        #expect(resolve("and him at the cape") == .none)
+        // A named person still refines as before.
+        #expect(Resolver.resolve("what about rick?", snapshot: kids, isKnownPerson: treeHasAHusband) == .refine(
+            .graph(.init(people: ["rick"], operation: .kinship, relation: .children)),
+            chain: Chain(terms: ["rick"]), whatChanged: "Switched to Rick"))
+        // A lone pronoun with nothing beside it keeps the old honest decline.
+        #expect(resolve("and her?") == .declineUninterpretable("and her"))
+    }
+
     @Test func refinementWithoutAPreviousQuestionDeclinesOrDefers() {
         #expect(resolve("and in the 90s?", snapshot: nil) == .declineNoPriorResult(nil))
         #expect(resolve("what about matt?", snapshot: nil) == .declineNoPriorResult(nil))

@@ -73,13 +73,19 @@ struct WorldKnowledgeTests {
         #expect(F.assess(birthYear: nil, deathYear: 1877, medium: .soundRecording) == .possible)
     }
 
-    @Test func unknownDeathIsNeverImpossible() {
+    @Test func unknownDeathVetoesOnlyThroughTheLifespanCap() {
         for medium in WorldKnowledge.Medium.allCases {
-            #expect(F.assess(birthYear: 1600, deathYear: nil, medium: medium) == .unknown, "\(medium)")
-            #expect(F.assess(birthYear: 1750, deathYear: nil, medium: medium) == .unknown, "\(medium)")
+            // b. 1600 + 125 = 1725, before every medium: rule 5 (2026-09-01).
+            #expect(F.assess(birthYear: 1600, deathYear: nil, medium: medium) == .impossible(medium.fact), "\(medium)")
             #expect(F.assess(birthYear: nil, deathYear: nil, medium: medium) == .unknown, "\(medium)")
-            #expect(!F.assess(birthYear: 1600, deathYear: nil, medium: medium).isImpossible)
+            // Within a lifetime of the medium: still a guess, never "can't".
+            #expect(F.assess(birthYear: medium.earliestYear - 100, deathYear: nil, medium: medium) == .unknown, "\(medium)")
         }
+        // b. 1750 + 125 = 1875: photograph (1838) possible on the record,
+        // sound (1877) and film (1888) not.
+        #expect(F.assess(birthYear: 1750, deathYear: nil, medium: .photograph) == .unknown)
+        #expect(F.assess(birthYear: 1750, deathYear: nil, medium: .soundRecording).isImpossible)
+        #expect(F.assess(birthYear: 1750, deathYear: nil, medium: .film).isImpossible)
         // codex #708: a birth AT OR AFTER the earliest year proves the
         // medium existed in the person's lifetime — .possible without a
         // death year; a birth before it stays .unknown.
@@ -92,8 +98,10 @@ struct WorldKnowledgeTests {
         #expect(F.assess(birthYear: 1877, deathYear: nil, medium: .soundRecording) == .possible)
         // A death before the earliest year still wins over any birth.
         #expect(F.assess(birthYear: 1850, deathYear: 1870, medium: .film).isImpossible)
-        // The legacy convenience agrees: no veto without a death year.
-        #expect(WorldKnowledge.photography.canHavePhotograph(birthYear: 1600, deathYear: nil) == true)
+        // The legacy convenience agrees: no veto without a death year
+        // unless the birth is more than a lifetime before photography.
+        #expect(WorldKnowledge.photography.canHavePhotograph(birthYear: 1750, deathYear: nil) == true)
+        #expect(WorldKnowledge.photography.canHavePhotograph(birthYear: 1600, deathYear: nil) == false)
         #expect(WorldKnowledge.photography.canHavePhotograph(birthYear: nil, deathYear: 1837) == false)
         #expect(WorldKnowledge.photography.canHavePhotograph(birthYear: nil, deathYear: 1838) == true)
     }
@@ -133,9 +141,10 @@ struct WorldKnowledgeTests {
             // Exact behaves as before.
             #expect(f("\(e - 1)") == .impossible(fact))
             #expect(f("\(e)") == .possible)
-            // Birth lower bound alone proves possible; birth upper bound never vetoes.
+            // Birth lower bound alone proves possible; a birth upper bound
+            // vetoes only through the lifespan cap (rule 5, below).
             #expect(f(nil, "AFT \(e - 1)") == .possible, "\(medium) birth AFT e-1")
-            #expect(f(nil, "BEF \(e - 50)") == .unknown, "\(medium) early birth is not a veto")
+            #expect(f(nil, "BEF \(e - 50)") == .unknown, "\(medium) early birth within a lifetime is not a veto")
             #expect(f(nil, "ABT \(e + 2)") == .possible)
             #expect(f(nil, "ABT \(e + 1)") == .unknown)
             // Contradictory record (death ends before birth begins) → unknown, not a veto.
@@ -144,6 +153,81 @@ struct WorldKnowledgeTests {
             // Open ends are not contradictions.
             #expect(f("AFT \(e - 50)", "BEF \(e - 40)") == .unknown)
         }
+    }
+
+    // MARK: Rule 5 (2026-09-01) — a birth more than a lifetime before the medium
+
+    /// Martha Lamson (b. BEF 13 JAN 1633, d. AFT 1717): the open-ended
+    /// death says nothing about 1888, so before rule 5 "videos of her" was
+    /// a catalog search. Nobody born by 1633 was alive for film or
+    /// photography.
+    @Test func aBirthMoreThanALifetimeBeforeTheMediumIsAVeto() {
+        typealias I = GedcomYearInterval
+        let martha = (birth: I.parse("BEF 13 JAN 1633"), death: I.parse("AFT 1717"))
+        #expect(F.assess(birth: martha.birth, death: martha.death, medium: .film) == .impossible(WorldKnowledge.Medium.film.fact))
+        #expect(F.assess(birth: martha.birth, death: martha.death, medium: .photograph) == .impossible(WorldKnowledge.Medium.photograph.fact))
+        #expect(F.assess(birth: martha.birth, death: martha.death, medium: .soundRecording).isImpossible)
+        // Negatives: within a lifetime of the medium the birth proves nothing.
+        #expect(F.assess(birthYear: 1760, deathYear: nil, medium: .photograph) == .unknown, "1838 − 1760 = 78 < 125")
+        #expect(F.assess(birthYear: 1800, deathYear: nil, medium: .photograph) == .unknown)
+        #expect(F.assess(birthYear: 1800, deathYear: nil, medium: .film) == .unknown)
+        #expect(F.assess(birthYear: 1800, deathYear: nil, medium: .soundRecording) == .unknown)
+        #expect(F.assess(birth: I.parse("BEF 1800"), death: I.parse("AFT 1830"), medium: .photograph) == .unknown)
+        // Boundary, every medium: exactly 125 years before → unknown;
+        // 126 → impossible. Strict, so a person could on the record still
+        // be alive in the medium's first year.
+        for medium in WorldKnowledge.Medium.allCases {
+            let e = medium.earliestYear
+            #expect(F.assess(birthYear: e - 125, deathYear: nil, medium: medium) == .unknown, "\(medium) e-125")
+            #expect(F.assess(birthYear: e - 126, deathYear: nil, medium: medium) == .impossible(medium.fact), "\(medium) e-126")
+            // Qualified births use their UPPER bound: "BEF e-125" ends at
+            // e-126 → veto; "ABT e-127" ends at e-125 → not.
+            #expect(F.assess(birth: I.parse("BEF \(e - 125)"), death: nil, medium: medium).isImpossible, "\(medium) BEF e-125")
+            #expect(F.assess(birth: I.parse("ABT \(e - 127)"), death: nil, medium: medium) == .unknown, "\(medium) ABT e-127")
+            #expect(F.assess(birth: I.parse("AFT 1500"), death: nil, medium: medium) == .unknown, "\(medium) no upper bound, no veto")
+            // A PROVEN death at/after the medium outranks the cap (rule 4
+            // before rule 5): a 130-year record is broken, not a veto.
+            #expect(F.assess(birthYear: e - 130, deathYear: e, medium: medium) == .possible, "\(medium) broken record")
+        }
+        #expect(F.birthProvesGone(I.exact(1762), before: 1888))
+        #expect(!F.birthProvesGone(I.exact(1763), before: 1888))
+        #expect(F.maximumLifespanYears == 125)
+    }
+
+    @Test func theLifespanCapGetsItsOwnHonestLine() {
+        typealias P = WorldKnowledge.photography
+        let g = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Martha /Lamson/
+        1 SEX F
+        1 BIRT
+        2 DATE BEF 13 JAN 1633
+        1 DEAT
+        2 DATE AFT 1717
+        0 @I2@ INDI
+        1 NAME Birth /Only/
+        1 SEX M
+        1 BIRT
+        2 DATE 1350
+        0 TRLR
+        """)
+        let martha = g.people["@I1@"]!, early = g.people["@I2@"]!
+        #expect(P.impossibilityNote(person: martha, medium: .film) == "b. before 1633 + 125 < film 1888")
+        #expect(P.impossibilityNote(person: martha, medium: .photograph) == "b. before 1633 + 125 < photograph 1838")
+        // The line leans on the birth, never on "died after 1717" (which
+        // proves nothing about 1888), and says why a birth can veto.
+        #expect(P.impossibilityLine(person: martha, medium: .film)
+                == "Martha Lamson was born before 1633, more than two and a half centuries before motion pictures begin in 1888 — no one lives that long, so there can’t be film of her. There can’t be a photograph either; a painting, engraving, or gravestone photo in her People folder is the best the family can do, and I’ll show it.")
+        #expect(P.impossibilityLine(person: martha, medium: .photograph)
+                == "Martha Lamson was born before 1633, nearly two centuries before photography begins in 1838 — no one lives that long, so there can’t be a photograph of her. If the family has a painting, engraving, or gravestone photo, put it in her People folder and I’ll show it.")
+        #expect(P.impossibilityLine(person: early, medium: .film)?.hasPrefix("Birth Only was born in 1350, more than five centuries before motion pictures begin in 1888 — no one lives that long, so there can’t be film of him.") == true)
+        #expect(P.impossibilityNote(person: early) == "b. 1350 + 125 < photograph 1838")
+        // A death that decides it still gets the death phrasing (unchanged).
+        #expect(P.impossibilityNote(person: Self.graph.people["@I1@"]!, medium: .film) == "d. 1737 < film 1888")
+        #expect(P.distancePhrase(years: 255) == "more than two and a half centuries")
+        #expect(P.distancePhrase(years: 300) == "more than three centuries")
+        #expect(P.distancePhrase(years: 225) == "nearly two centuries")
     }
 
     @Test func qualifiedPersonsGetHonestNotesAndLines() {
@@ -233,7 +317,9 @@ struct WorldKnowledgeTests {
         let mid = Self.graph.people["@I5@"]!
         #expect(F.assess(person: nathaniel, medium: .photograph).isImpossible)
         #expect(F.assess(person: thankful, medium: .photograph) == .possible)
-        #expect(F.assess(person: early, medium: .photograph) == .unknown)
+        // Early Bird, b. ABT 1700 (upper 1702), no death: 1702 + 125 = 1827
+        // < 1838 — the lifespan cap (rule 5) makes a photograph impossible.
+        #expect(F.assess(person: early, medium: .photograph).isImpossible)
         #expect(F.assess(person: undated, medium: .film) == .unknown)
         #expect(F.assess(person: mid, medium: .photograph) == .possible)
         #expect(F.assess(person: mid, medium: .film).isImpossible)
@@ -243,7 +329,7 @@ struct WorldKnowledgeTests {
         #expect(P.impossibilityNote(person: nathaniel, medium: .film) == "d. 1737 < film 1888")
         #expect(P.impossibilityNote(person: mid, medium: .photograph) == nil)
         #expect(P.impossibilityNote(person: mid, medium: .film) == "d. 1850 < film 1888")
-        #expect(P.impossibilityNote(person: early, medium: .photograph) == nil)
+        #expect(P.impossibilityNote(person: early, medium: .photograph) == "b. about 1700 + 125 < photograph 1838")
         #expect(P.impossibilityNote(person: thankful, medium: .photograph) == nil)
     }
 
@@ -264,9 +350,12 @@ struct WorldKnowledgeTests {
         #expect(P.impossibilityLine(person: mid, medium: .soundRecording)
                 == "Mid Century died in 1850, decades before sound recording begins in 1877 — there can’t be a recording of her. If the family has a photograph of her, put it in her People folder and I’ll show it.")
         #expect(P.impossibilityLine(person: mid, medium: .photograph) == nil)
-        // Unknown death: no line for any medium.
+        // No dates at all: no line for any medium. Early Bird (b. about
+        // 1700, no death) gets the BIRTH line for every medium — rule 5.
+        let undated = Self.graph.people["@I4@"]!
         for medium in WorldKnowledge.Medium.allCases {
-            #expect(P.impossibilityLine(person: early, medium: medium) == nil, "\(medium)")
+            #expect(P.impossibilityLine(person: undated, medium: medium) == nil, "\(medium)")
+            #expect(P.impossibilityLine(person: early, medium: medium)?.hasPrefix("Early Bird was born about 1700, ") == true, "\(medium)")
         }
         #expect(P.impossibilityLine(person: thankful, medium: .photograph) == nil)
     }

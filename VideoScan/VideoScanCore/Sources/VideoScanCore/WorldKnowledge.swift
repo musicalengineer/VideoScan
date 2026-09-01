@@ -19,8 +19,13 @@
 //     medium existed in the person's lifetime → `.possible`; a birth
 //     before it is `.unknown` — an early birth makes a photograph
 //     unlikely, not impossible, and Hallie does not say "can't" on a
-//     guess. Only `.impossible` is operational (vetoes); the other two
-//     arms behave identically today (ordinary offer).
+//     guess — UNLESS the latest possible birth is more than a lifetime
+//     (`maximumLifespanYears`, 125; nobody has lived past 122) before
+//     the medium: then the person was gone before it existed and it is
+//     `.impossible` (eval 2026-09-01: "videos of Martha Lamson", b. BEF
+//     1633, d. AFT 1717, was a catalog search). Only `.impossible` is
+//     operational (vetoes); the other two arms behave identically today
+//     (ordinary offer).
 //
 // Dates are GEDCOM dates, qualifiers included (codex #721/#723): the
 // rule reasons on `GedcomYearInterval`s, never on a bare year. "AFT
@@ -169,7 +174,9 @@ public enum WorldKnowledge {
         /// that the person was alive on the milestone date. Whether
         /// anyone actually captured them is the catalog's business.
         case possible
-        /// No death year on record. Never a veto.
+        /// Nothing proven either way: no dates, a death straddling the
+        /// line, or a birth before the medium but within a lifetime of
+        /// it. Never a veto.
         case unknown
 
         public var isImpossible: Bool {
@@ -184,16 +191,39 @@ public enum WorldKnowledge {
                    medium: medium)
         }
 
-        /// The rule, on intervals (codex #708 ordering, #721/#723 bounds):
+        /// Nobody has lived past 122 (Jeanne Calment, 1875–1997). A birth
+        /// interval whose LATEST year plus this is still before a medium's
+        /// earliest year proves the person was gone before the medium
+        /// existed, death record or not. 125 leaves a margin over the
+        /// record; the boundary is strict (see `birthProvesGone`).
+        public static let maximumLifespanYears = 125
+
+        /// Rule 5: the latest possible birth year is more than a lifetime
+        /// before `year` — born in `year − 126` or earlier. A birth exactly
+        /// `maximumLifespanYears` before is NOT a veto (the person could,
+        /// on the record, still be alive that year).
+        public static func birthProvesGone(_ birth: GedcomYearInterval, before year: Int) -> Bool {
+            guard let latestBirth = birth.upper else { return false }
+            return latestBirth + maximumLifespanYears < year
+        }
+
+        /// The rule, on intervals (codex #708 ordering, #721/#723 bounds;
+        /// rule 5 added 2026-09-01 for the Martha Lamson case):
         ///   1. birth and death contradict (death ends before birth
         ///      begins) → `.unknown` — the record is broken, not the person
         ///      pre-photographic;
         ///   2. death entirely before the earliest year → `.impossible`;
         ///   3. birth entirely at/after the earliest year → `.possible`;
         ///   4. death entirely at/after the earliest year → `.possible`;
-        ///   5. otherwise `.unknown` ("AFT 1837" death with no lower-bound
-        ///      proof, "ABT 1838" straddling the line, no dates at all).
-        /// A birth never vetoes.
+        ///   5. birth ends more than `maximumLifespanYears` before the
+        ///      earliest year → `.impossible` — the only way a birth
+        ///      vetoes, and only when no death bound has already decided
+        ///      (a PROVEN death at/after the medium, rule 4, outranks it:
+        ///      a 130-year lifespan is a broken record, not a veto);
+        ///   6. otherwise `.unknown` ("AFT 1837" death with no lower-bound
+        ///      proof, "ABT 1838" straddling the line, a birth within a
+        ///      lifetime of the medium, no dates at all).
+        /// A birth otherwise never vetoes.
         public static func assess(birth: GedcomYearInterval?, death: GedcomYearInterval?,
                                   medium: Medium) -> MediumFeasibility {
             let earliest = medium.earliestYear
@@ -201,6 +231,7 @@ public enum WorldKnowledge {
             if let death, death.isEntirelyBefore(earliest) { return .impossible(medium.fact) }
             if let birth, birth.isEntirelyAtOrAfter(earliest) { return .possible }
             if let death, death.isEntirelyAtOrAfter(earliest) { return .possible }
+            if let birth, birthProvesGone(birth, before: earliest) { return .impossible(medium.fact) }
             return .unknown
         }
 
@@ -227,13 +258,18 @@ public enum WorldKnowledge {
         }
 
         /// Why the medium is impossible, for the log: "d. 1737 < photograph
-        /// 1838" / "d. before 1800 < photograph 1838". Nil unless
+        /// 1838" / "d. before 1800 < photograph 1838" / — by the lifespan
+        /// cap (rule 5) — "b. before 1633 + 125 < film 1888". Nil unless
         /// `.impossible`.
         public static func impossibilityNote(person: GedcomFamilyGraph.Person,
                                              medium: Medium = .photograph) -> String? {
-            guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium),
-                  let d = person.deathYearInterval else { return nil }
-            return "d. \(d.spoken) < \(medium.rawValue) \(fact.earliestYear)"
+            guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium)
+            else { return nil }
+            if let d = person.deathYearInterval, d.isEntirelyBefore(fact.earliestYear) {
+                return "d. \(d.spoken) < \(medium.rawValue) \(fact.earliestYear)"
+            }
+            guard let b = person.birthYearInterval else { return nil }
+            return "b. \(b.spoken) + \(MediumFeasibility.maximumLifespanYears) < \(medium.rawValue) \(fact.earliestYear)"
         }
 
         /// The honest line for a direct "photo of X" / "videos of X" /
@@ -243,23 +279,33 @@ public enum WorldKnowledge {
         /// is `.impossible` for this person.
         public static func impossibilityLine(person: GedcomFamilyGraph.Person,
                                              medium: Medium) -> String? {
-            guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium),
-                  let d = person.deathYearInterval, let latest = d.upper else { return nil }
-            // "died in 1737" / "died before 1800" / "died about 1700".
-            let lived = "\(person.name) died \(d.qualifier == .exact ? "in " : "")\(d.spoken)"
-            // Distance from the LATEST possible death — the smallest gap the
-            // record allows, so the phrase can only understate.
-            let gap = fact.earliestYear - latest
-            let distance: String
-            switch gap {
-            case 180...: distance = "nearly two centuries"
-            case 80..<180: distance = "about a century"
-            case 20..<80: distance = "decades"
-            default: distance = "\(gap) year\(gap == 1 ? "" : "s")"
+            guard case .impossible(let fact) = MediumFeasibility.assess(person: person, medium: medium)
+            else { return nil }
+            let lived: String
+            let gap: Int
+            let why: String
+            if let d = person.deathYearInterval, d.isEntirelyBefore(fact.earliestYear), let latest = d.upper {
+                // "died in 1737" / "died before 1800" / "died about 1700".
+                lived = "\(person.name) died \(d.qualifier == .exact ? "in " : "")\(d.spoken)"
+                // Distance from the LATEST possible death — the smallest gap
+                // the record allows, so the phrase can only understate.
+                gap = fact.earliestYear - latest
+                why = ""
+            } else if let b = person.birthYearInterval, let latest = b.upper {
+                // Rule 5 — no death bound decided it; the latest possible
+                // BIRTH is more than a lifetime before the medium: "born
+                // before 1633" (an open-ended "died after 1717" says nothing
+                // about 1888, so the line does not lean on it).
+                lived = "\(person.name) was born \(b.qualifier == .exact ? "in " : "")\(b.spoken)"
+                gap = fact.earliestYear - latest
+                why = " no one lives that long, so"
+            } else {
+                return nil
             }
+            let distance = distancePhrase(years: gap)
             let possessive = person.sex == "M" ? "his" : person.sex == "F" ? "her" : "their"
             let objective = person.sex == "M" ? "him" : person.sex == "F" ? "her" : "them"
-            let head = "\(lived), \(distance) before \(fact.spokenClause) — there can\u{2019}t be \(medium.noun) of \(objective)."
+            let head = "\(lived), \(distance) before \(fact.spokenClause) —\(why) there can\u{2019}t be \(medium.noun) of \(objective)."
             switch medium {
             case .photograph:
                 return head + " If the family has a painting, engraving, or gravestone photo, put it in \(possessive) People folder and I\u{2019}ll show it."
@@ -270,6 +316,23 @@ public enum WorldKnowledge {
                     return head + " There can\u{2019}t be a photograph either; a painting, engraving, or gravestone photo in \(possessive) People folder is the best the family can do, and I\u{2019}ll show it."
                 }
                 return head + " If the family has a photograph of \(objective), put it in \(possessive) People folder and I\u{2019}ll show it."
+            }
+        }
+
+        /// "decades" / "about a century" / "nearly two centuries" / "more
+        /// than two and a half centuries" — a gap in years, as said.
+        static func distancePhrase(years gap: Int) -> String {
+            switch gap {
+            case 250...:
+                let centuries = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+                let whole = gap / 100
+                let half = gap % 100 >= 50 ? " and a half" : ""
+                let count = whole < centuries.count ? centuries[whole] : "\(whole)"
+                return "more than \(count)\(half) centuries"
+            case 180..<250: return "nearly two centuries"
+            case 80..<180: return "about a century"
+            case 20..<80: return "decades"
+            default: return "\(gap) year\(gap == 1 ? "" : "s")"
             }
         }
     }

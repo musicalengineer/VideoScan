@@ -53,6 +53,51 @@ struct ArchivistConversationCommandTests {
         #expect(!Command.smalltalkReply(kind).isEmpty)
     }
 
+    // Eval 2026-09-01 (smalltalk 8 misses): everyday thanks, apologies,
+    // "hold on" and goodbyes are social lines, not presence searches.
+    @Test(arguments: [
+        ("Thanks, that's really helpful.", Command.Smalltalk.thanks),
+        ("I appreciate you.", .thanks),
+        ("really appreciate your time hallie", .thanks),
+        ("sorry, thanks anyway", .thanks),
+        ("Sorry, I meant something else.", .apology),
+        ("My apologies, I keep typing the wrong name.", .apology),
+        ("oops, my bad", .apology),
+        ("hold on a sec", .holdOn),
+        ("one moment please", .holdOn),
+        ("hang on, be right back", .holdOn),
+        ("brb", .holdOn),
+        ("ok gotta run, talk later", .farewell),
+        ("Have a good night.", .farewell),
+        ("see ya", .farewell),
+        ("thanks, talk to you later", .farewell),
+        ("take care hallie", .farewell),
+    ])
+    func everydaySocialLinesGetAFriendlyReply(text: String, kind: Command.Smalltalk) {
+        #expect(Command.detect(text) == .smalltalk(kind), Comment(rawValue: text))
+        #expect(!Command.smalltalkReply(kind).isEmpty)
+    }
+
+    @Test(arguments: [
+        "sorry, who was donna's mother?",
+        "sorry, I meant Timmy",
+        "hold on, show me the second one",
+        "thanks for the videos",
+        "one moment, what year was that",
+        "It's pouring rain here in the Berkshires today.",
+        "that was terrible lol",
+        "gotta go find the 1994 tape",
+        "thanks, now play the first one",
+    ])
+    func socialLinesWithRealContentStayOnThePipeline(text: String) {
+        #expect(Command.detect(text) == nil, Comment(rawValue: text))
+    }
+
+    @Test func apologyAndHoldOnRepliesInviteAnotherTry() {
+        #expect(Command.smalltalkReply(.apology).contains("No need to apologize"))
+        #expect(Command.smalltalkReply(.holdOn).contains("Take your time"))
+    }
+
     @Test func localDateAndTimeRepliesUseTheSuppliedClock() throws {
         let instant = Date(timeIntervalSince1970: 1_787_328_000) // 2026-08-21 16:00Z
         let zone = try #require(TimeZone(secondsFromGMT: -4 * 60 * 60))

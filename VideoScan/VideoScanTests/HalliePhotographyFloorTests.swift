@@ -97,6 +97,15 @@ struct HalliePhotographyFloorTests {
     private static let midFilmLine =
         "Mid Century died in 1850, decades before motion pictures begin in 1888 — there can’t be film of her. "
         + "If the family has a photograph of her, put it in her People folder and I’ll show it."
+    /// Early Bird, b. ABT 1700 (upper 1702) and NO death: 1702 + 125 = 1827
+    /// < 1838, so WorldKnowledge rule 5 (the lifespan cap, 2026-09-01)
+    /// vetoes a photograph AND film on the birth alone.
+    private static let earlyPhotoLine =
+        "Early Bird was born about 1700, about a century before photography begins in 1838 — no one lives that long, so there can’t be a photograph of her. "
+        + "If the family has a painting, engraving, or gravestone photo, put it in her People folder and I’ll show it."
+    private static let earlyFilmLine =
+        "Early Bird was born about 1700, nearly two centuries before motion pictures begin in 1888 — no one lives that long, so there can’t be film of her. "
+        + "There can’t be a photograph either; a painting, engraving, or gravestone photo in her People folder is the best the family can do, and I’ll show it."
 
     // MARK: Detection
 
@@ -108,11 +117,12 @@ struct HalliePhotographyFloorTests {
         #expect(Q.detect("videos of donna from 1992 to 1995") != .personVideos(person: "Donna From 1992 To 1995"))
         #expect(Q.detect("find the oldest photo of the oldest person in the tree")
                 == .superlative(kind: .earliestBorn, scope: .wholeTree, media: "photo"))
-        // The suppressor answers NOTHING for a person who could be filmed,
-        // and NOTHING for an unknown death year (Early Bird, b. 1700).
+        // The suppressor answers NOTHING for a person who could be filmed.
+        // An unknown death year is no veto by itself — but a birth more
+        // than a lifetime before film is (Early Bird, b. about 1700; rule 5).
         #expect(HallieLineageAnswer.answer(.personVideos(person: "Donna Hudson"), context: context) == nil)
         #expect(HallieLineageAnswer.answer(.personVideos(person: "David Latta"), context: context) == nil)
-        #expect(HallieLineageAnswer.answer(.personVideos(person: "Early Bird"), context: context) == nil)
+        #expect(HallieLineageAnswer.answer(.personVideos(person: "Early Bird"), context: context)?.prose == Self.earlyFilmLine)
         #expect(HallieLineageAnswer.answer(.personVideos(person: "Nobody Known"), context: context) == nil)
         #expect(HallieLineageAnswer.answer(.personVideos(person: "the family"), context: context) == nil)
     }
@@ -132,15 +142,17 @@ struct HalliePhotographyFloorTests {
         #expect(r.basisLine.contains("1838"), "the basis cites the photograph fact")
         #expect(r.offeredActions == [.openFamilyTreePerson(personID: "@I1@", personName: "Nathaniel Parker Sr")])
 
-        // Birth-only, very early, NO death year: unknown is not "can't" —
-        // the ordinary "not yet" answer with her folder card.
+        // Birth-only, very early, NO death year: a birth more than a
+        // lifetime before photography is "can't" too (rule 5, 2026-09-01)
+        // — the honest line, no folder card.
         guard case .answer(let early) = pre("do we have any pictures of Early Bird") else {
             Issue.record("the photo ask went to the translator"); return
         }
-        #expect(early.prose == "I don’t have a photo of Early Bird yet.")
-        #expect(early.queryDescription == "photo: Early Bird")
+        #expect(early.prose == Self.earlyPhotoLine)
+        #expect(early.queryDescription == "photo: Early Bird (before photography)")
         #expect(early.outcome == .declined)
-        #expect(!early.basisLine.contains("No search was run"), "not the floor's basis")
+        #expect(early.basisLine.contains("No search was run"))
+        #expect(early.attachments.isEmpty)
     }
 
     @Test func photoAskUsesThePhotographFactNotTheFilmOne() throws {
@@ -186,10 +198,15 @@ struct HalliePhotographyFloorTests {
         #expect(r.queryDescription == "videos: Nathaniel Parker Sr (before motion pictures)")
         #expect(r.citations.isEmpty && r.attachments.isEmpty)
 
-        // Everyone else still goes to the presence route, as typed —
-        // including the unknown-death Early Bird.
+        // Everyone else still goes to the presence route, as typed.
+        // Early Bird (b. about 1700, no death) is vetoed by the lifespan
+        // cap on the FILM fact (rule 5): one honest line, no search.
         #expect(pre("videos of David Latta") == .translate(question: "videos of David Latta", playAfterAnswer: false))
-        #expect(pre("videos of Early Bird") == .translate(question: "videos of Early Bird", playAfterAnswer: false))
+        guard case .answer(let early) = pre("videos of Early Bird") else {
+            Issue.record("Early Bird's video ask went to the translator (presence search)"); return
+        }
+        #expect(early.prose == Self.earlyFilmLine)
+        #expect(early.queryDescription == "videos: Early Bird (before motion pictures)")
         #expect(pre("show me videos of Donna Hudson") == .translate(question: "show me videos of Donna Hudson", playAfterAnswer: false))
         #expect(pre("videos of the family") == .translate(question: "videos of the family", playAfterAnswer: false))
     }
@@ -257,12 +274,14 @@ struct HalliePhotographyFloorTests {
         #expect(name == "David Latta")
         #expect(FileManager.default.fileExists(atPath: folder.path))
 
-        // Birth-only early person (unknown death → no veto), a d. 1850
-        // person (photograph possible even though film is not), and a
-        // person known only by name: all keep the folder card.
+        // Birth-only early person: no death, but b. about 1700 + 125 <
+        // 1838 — the lifespan cap drops the card (rule 5). A d. 1850
+        // person (photograph possible even though film is not) and a
+        // person known only by name keep the folder card.
         let early = HallieBiographyPhotoOffer.decide(
             canonicalName: "Early Bird", graphMatches: [person("@I4@")], assets: store)
-        #expect(early.suppressedNote == nil && !early.attachments.isEmpty)
+        #expect(early.suppressedNote == "b. about 1700 + 125 < photograph 1838")
+        #expect(early.attachments.isEmpty)
         let mid = HallieBiographyPhotoOffer.decide(
             canonicalName: "Mid Century", graphMatches: [person("@I7@")], assets: store)
         #expect(mid.suppressedNote == nil && !mid.attachments.isEmpty)
@@ -300,7 +319,7 @@ struct HalliePhotographyFloorTests {
     @MainActor @Test func legacyVideosChipHonoursTheFilmFloor() {
         #expect(ArchivistChatWindow.mayOfferMedia(for: "Nathaniel Parker Sr", in: graph) == false)
         #expect(ArchivistChatWindow.mayOfferMedia(for: "Mid Century", in: graph) == false, "d. 1850 < film 1888")
-        #expect(ArchivistChatWindow.mayOfferMedia(for: "Early Bird", in: graph) == true, "unknown death is not a veto")
+        #expect(ArchivistChatWindow.mayOfferMedia(for: "Early Bird", in: graph) == false, "b. about 1700 + 125 < film 1888 (rule 5)")
         #expect(ArchivistChatWindow.mayOfferMedia(for: "David Latta", in: graph) == true)
         // Thankful Pratt d. 1849: a PHOTO is possible, but this chip offers
         // VIDEO — the film fact (1888) decides, and it says no.

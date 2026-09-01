@@ -23,6 +23,11 @@
 // thinner ones. So this returns nil unless the clauses look like genuinely
 // DIFFERENT questions — see `looksLikeSeparateQuestion`. When in doubt it
 // declines to split, because the existing single-query path is the tested one.
+//
+// WHO CALLS IT. Three paths, one switch (`isEnabled`): the headless shell
+// (HallieShellCLI.answer), the chat window (ArchivistChatWindow.askLocally)
+// and the iPad bridge (HallieWebBridge.ask). Each runs the clauses in order
+// against the conversation state the previous clause just wrote.
 
 import Foundation
 
@@ -32,6 +37,17 @@ enum HallieQuestionSplitter {
     /// generous for speech; beyond that the reader is dictating a list and a
     /// wall of answers helps nobody.
     static let maxClauses = 3
+
+    /// The one switch every path consults. ON by default;
+    /// `VIDEOSCAN_HALLIE_SPLIT=0` is only a kill switch, so the eval harness
+    /// can A/B against the pre-split behaviour without a rebuild.
+    ///
+    /// Computed rather than stored on purpose: under Swift 6 a mutable
+    /// `static var` is shared global state and the compiler refuses it —
+    /// think of a C++ `static` data member with no lock around it.
+    static var isEnabled: Bool {
+        ProcessInfo.processInfo.environment["VIDEOSCAN_HALLIE_SPLIT"] != "0"
+    }
 
     /// Clauses to answer in order, or nil to leave the question alone.
     ///

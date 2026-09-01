@@ -38,6 +38,34 @@ struct HallieQuestionSplitterTests {
         #expect(parts[1].hasPrefix("do we have"))
     }
 
+    // MARK: Rick's second example (2026-09-01): place and date
+
+    @Test func aPlaceAndADateQuestionSplitAndBothCarryTheName() throws {
+        let parts = try #require(
+            HallieQuestionSplitter.split("where was Martha Lamson born and when was she born"))
+        #expect(parts.count == 2)
+        #expect(parts[0].hasPrefix("where was"))
+        #expect(parts[1].hasPrefix("when was"))
+        #expect(parts[0].contains("Martha Lamson"))
+        #expect(parts[1].contains("Martha Lamson"),
+                "'she' must be bound to the name from the first clause: \(parts[1])")
+    }
+
+    @Test func withNoNameInTheLineThePronounSurvivesTheSplit() throws {
+        // "did she have kids" is `.other` (no kind word), "where did she
+        // live" is `.place`; both open like questions, so the line splits.
+        // There is no capitalised name to bind, so `she` is left in BOTH
+        // clauses on purpose — the caller runs clause 2 against the memory
+        // clause 1 wrote, and if nobody was named the normal "who do you
+        // mean?" decline still applies. The splitter must never invent one.
+        let parts = try #require(
+            HallieQuestionSplitter.split("did she have kids and where did she live"))
+        #expect(parts.count == 2)
+        #expect(parts.allSatisfy { $0.lowercased().contains("she") })
+        #expect(parts[0] == "did she have kids")
+        #expect(parts[1] == "where did she live")
+    }
+
     // MARK: Not splitting — the larger half of the job
 
     @Test func sameShapeConjunctionsAreLeftAlone() {
@@ -49,6 +77,9 @@ struct HallieQuestionSplitterTests {
     @Test func aCompoundNounPhraseIsNotTwoQuestions() {
         #expect(HallieQuestionSplitter.split("show me Rick and Donna") == nil)
         #expect(HallieQuestionSplitter.split("who are Rick and Donna") == nil)
+        // "Mark together" is not a question, so "Dan and Mark" stays one
+        // noun phrase — the media query must see both names.
+        #expect(HallieQuestionSplitter.split("find the videos with Dan and Mark together") == nil)
     }
 
     @Test func aPlaceNameContainingAndIsNotASplit() {
@@ -67,6 +98,21 @@ struct HallieQuestionSplitterTests {
 
     @Test func anAbsurdlyLongLineIsLeftToTheNormalPath() {
         #expect(HallieQuestionSplitter.split(String(repeating: "who was x and ", count: 40)) == nil)
+    }
+
+    // MARK: The switch
+
+    @Test func theSwitchIsOnUnlessTheKillSwitchIsSet() {
+        // Never mutate the process environment from a test: it is shared
+        // with every other test in this host. Assert the contract against
+        // whatever the environment IS — unset means on, "0" means off,
+        // anything else means on — so the test is honest under a harness
+        // that set the variable and is not skipped for it.
+        let value = ProcessInfo.processInfo.environment["VIDEOSCAN_HALLIE_SPLIT"]
+        #expect(HallieQuestionSplitter.isEnabled == (value != "0"))
+        if value == nil {
+            #expect(HallieQuestionSplitter.isEnabled, "the default is ON everywhere")
+        }
     }
 
     // MARK: Bounds

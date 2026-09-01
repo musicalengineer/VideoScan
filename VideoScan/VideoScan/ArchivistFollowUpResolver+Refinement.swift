@@ -200,6 +200,14 @@ extension ArchivistFollowUpResolver {
         let residual = scan.residual
         if residual.contains(where: { sentenceVerbs.contains($0) }) { return true }
         if residual.contains(where: { $0.hasSuffix("'s") }) { return true }
+        // "and her husband?" / "and his kids": a third-person pronoun with
+        // anything beside it is a follow-up ABOUT the last answer's subject
+        // (HalliePronounContinuity owns that), never a fragment refining the
+        // last query. Before this rule (eval 2026-09-01) "her" was filler,
+        // "husband" matched five tree people named Husband, and the graph
+        // AST came out as people = ["husband"] relation = children.
+        if residual.count >= 2,
+           residual.contains(where: HalliePronounContinuity.isThirdPersonPronoun) { return true }
         if residual.count > (scan.hadLead ? 6 : 4) { return true }
         if !scan.explicit, residual.contains(where: { mediaNouns.contains($0) }) { return true }
         return false

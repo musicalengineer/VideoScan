@@ -154,6 +154,9 @@ enum HallieConversationGuard {
         guard !directPersonaFacts.contains(where: normalized.contains) else {
             return nil
         }
+        if isSecondPersonLifeExperience(text, tokens: tokens) {
+            return .personaPast
+        }
 
         let archiveCommands = [
             "show ", "find ", "search ", "play ", "reveal ", "open ",
@@ -211,6 +214,141 @@ enum HallieConversationGuard {
             return nil
         }
         return .generalKnowledge
+    }
+
+    // MARK: Second-person life-experience asks
+
+    // Eval 2026-09-01 (grandparent_style 8/22): "what was your first job",
+    // "what did you do for fun", "what's your earliest memory", "who was
+    // your best friend growing up", "how did you meet grandma" all slipped
+    // past the six literal persona phrases above. The translator then bound
+    // "you" to the archivist (HallieSpeakerBinding) and answered with Hallie
+    // Mae McGill's 1876 tree record — a biography nobody asked for — or gave
+    // up. The rule a person would use: a question addressed to Hallie as a
+    // PERSON about a life experience is a persona question, and she has no
+    // life of her own to report. Deterministic, before translation, and it
+    // yields the same fixed no-memory boundary as the phrases above.
+    //
+    // What stays out on purpose:
+    //   - tree facts about her ("who was your father", "when were you born")
+    //     are `directPersonaFacts`, checked before this;
+    //   - a relative's fact ("what was your mother's job") names a kin word
+    //     after "your" — that is a graph question about the relative;
+    //   - "can you …" / "do you have …" are requests, not a second-person
+    //     subject: the lead is peeled before looking for "you";
+    //   - anything naming media or a search verb ("did you find any videos
+    //     of my friend") and anything with a catalog year stays archive.
+
+    /// Phrases that make a "you" question about a lived experience.
+    private static let lifeExperiencePhrases = [
+        "first job", "first date", "first kiss", "first car", "first love",
+        "first day of school", "growing up", "grew up", "when you were",
+        "younger version of yourself", "younger self", "my age",
+        "your life", "your childhood", "your memory", "your memories",
+        "earliest memory", "fondest memory", "favorite memory",
+        "favourite memory", "best memory", "worst memory",
+        "most proud", "proud of", "for fun", "have fun", "your hobbies",
+        "your hobby", "be remembered", "did you meet", "your best friend",
+        "your friends", "your childhood home", "where did you grow up",
+        "when you were little", "as a kid", "as a teenager",
+    ]
+
+    /// Single words that carry the same meaning on their own.
+    private static let lifeExperienceWords: Set<String> = [
+        "childhood", "memory", "memories", "job", "fun", "hobby", "hobbies",
+        "chores", "proud", "happiest", "saddest", "remembered", "kid",
+        "teenager", "toys",
+    ]
+
+    /// Era cues that address her lifetime without saying "you" ("were there
+    /// computers back then"). Only when no proper name is typed: a
+    /// capitalised word after the first ("what was Rick like back then")
+    /// is a tree ask. The identity resolver is deliberately NOT consulted
+    /// here — in a 39k-person tree "back" and "there" resolve as people.
+    private static let implicitEraPhrases = [
+        "back then", "in those days", "in the old days", "the olden days",
+        "in your day", "back in your day",
+    ]
+
+    /// "can you …", "do you have …" at the START of the line: "you" here is
+    /// the addressee of a request, not the subject of a life question. Only
+    /// the opening is peeled — "how would you like to be remembered" keeps
+    /// its "you".
+    private static let requestLeads = [
+        "can you", "could you", "would you", "will you", "do you know",
+        "do you have", "did you find", "have you got", "are you able to",
+        "you can", "you could",
+    ]
+    private static let leadFillers = ["hallie", "please", "ok", "okay", "so", "hey"]
+
+    /// Search verbs and media nouns: with one of these the sentence is an
+    /// archive request whatever else it says.
+    private static let searchAndMediaWords: Set<String> = [
+        "show", "find", "search", "play", "reveal", "open", "list", "count",
+        "video", "videos", "clip", "clips", "photo", "photos", "picture",
+        "pictures", "footage", "tape", "tapes", "recording", "recordings",
+        "file", "files", "catalog", "archive", "transcript", "movie",
+        "movies", "film", "films",
+    ]
+
+    /// "your mother's job" / "your grandma" — a relative, not her.
+    private static let kinWords = [
+        "mom", "mum", "mother", "dad", "father", "parents", "parent",
+        "grandma", "grandmother", "grandpa", "grandfather", "grandparents",
+        "husband", "wife", "spouse", "son", "daughter", "children", "child",
+        "brother", "sister", "uncle", "aunt", "cousin", "nana", "ancestor",
+        "ancestors", "in-law", "in-laws",
+    ]
+
+    static func isSecondPersonLifeExperience(
+        _ text: String,
+        tokens: [String]
+    ) -> Bool {
+        guard !tokens.isEmpty else { return false }
+        let normalized = normalize(text)
+        if !Set(tokens).isDisjoint(with: searchAndMediaWords) { return false }
+        if tokens.contains(where: {
+            guard $0.count == 4, let year = Int($0) else { return false }
+            return ArchivistQueryAST.yearRange.contains(year)
+        }) {
+            return false
+        }
+        let padded = " " + normalized + " "
+        for kin in kinWords {
+            if padded.contains(" your \(kin) ") || padded.contains(" your \(kin)'s ")
+                || padded.contains(" \(kin)'s ") {
+                return false
+            }
+        }
+
+        // Peel an opening request lead so "can you tell me about Donna's
+        // childhood" has no second-person subject left.
+        var remaining = tokens
+        while let first = remaining.first, leadFillers.contains(first) {
+            remaining.removeFirst()
+        }
+        let opening = " " + remaining.joined(separator: " ") + " "
+        for lead in requestLeads where opening.hasPrefix(" \(lead) ") {
+            remaining.removeFirst(lead.split(separator: " ").count)
+            break
+        }
+        let secondPerson = remaining.contains {
+            ["you", "your", "yours", "yourself"].contains($0)
+        }
+        if secondPerson {
+            if lifeExperiencePhrases.contains(where: padded.contains) { return true }
+            if !Set(remaining).isDisjoint(with: lifeExperienceWords) { return true }
+        }
+        // "were there computers back then": her era, no "you" in it. A
+        // typed proper name ("what was Rick like back then") is a tree ask.
+        if implicitEraPhrases.contains(where: padded.contains) {
+            let typedNames = text
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+                .dropFirst()
+                .filter { $0.first?.isUppercase == true && $0.lowercased() != "hallie" }
+            return typedNames.isEmpty
+        }
+        return false
     }
 
     private static func containsKnownPerson(

@@ -262,6 +262,28 @@ struct HallieLineageDetectTests {
         #expect(Q.possessor(in: "about rick's") == "Rick")
     }
 
+    /// Eval 2026-09-01: "and her husband?" is a bare possessive + one-hop
+    /// kin noun, the whole question. Claimed deterministically (the
+    /// executor resolves a pronoun possessor from memory); a full sentence
+    /// with a question word keeps its translator route.
+    @Test func bareKinFragmentsAreKinshipAsks() {
+        #expect(Q.detect("and her husband?") == .kinship(person: "Her", relation: .husband, side: nil))
+        #expect(Q.detect("her kids") == .kinship(person: "Her", relation: .children, side: nil))
+        #expect(Q.detect("And his parents?") == .kinship(person: "His", relation: .parents, side: nil))
+        #expect(Q.detect("what about their children") == .kinship(person: "Their", relation: .children, side: nil))
+        #expect(Q.detect("and Martha Lamson's husband") == .kinship(person: "Martha Lamson", relation: .husband, side: nil))
+        #expect(Q.detect("donna's brothers?") == .kinship(person: "Donna", relation: .brother, side: nil))
+        #expect(Q.detect("my brother") == .kinship(person: nil, relation: .brother, side: nil))
+        #expect(Q.detect("and her husband please") == .kinship(person: "Her", relation: .husband, side: nil))
+        // Not claimed: sentences, unknown nouns, family references, apposition.
+        #expect(Q.detect("who is tim's brother") == nil)
+        #expect(Q.detect("tell me about martha lamson's husband") == nil)
+        #expect(Q.detect("and her guitar") == nil)
+        #expect(Q.detect("the family's husband") == nil)
+        #expect(Q.detect("and her husband matthew rice") != .kinship(person: "Her", relation: .husband, side: nil))
+        #expect(Q.kinFragmentQuestion(in: "and her husband") == .kinship(person: "Her", relation: .husband, side: nil))
+    }
+
     @Test func surnameTreeShapes() {
         #expect(Q.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
         #expect(Q.detect("show the family tree for the current breen family") == .surnameTree(surname: "breen"))

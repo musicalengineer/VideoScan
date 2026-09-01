@@ -802,11 +802,20 @@ enum HallieShellCLI {
         options: Options,
         state: inout Session,
         output: (String) -> Void,
-        dependencies: Dependencies
+        dependencies: Dependencies,
+        recordUserTurn: Bool = true
     ) async -> AnswerOutcome {
-        let userEvent = transcriptEvent(
-            kind: .user, text: question, state: &state)
-        await dependencies.recordTranscript([userEvent])
+        // The transcript pairs each assistant turn with the most recent
+        // user turn by text (scripts/hallie_eval.py). A split question
+        // records the FULL line here, once; each clause below passes
+        // `recordUserTurn: false`, so the transcript reads
+        //   user(full question), assistant(clause 1), assistant(clause 2)
+        // and the harness can find its own question again.
+        if recordUserTurn {
+            let userEvent = transcriptEvent(
+                kind: .user, text: question, state: &state)
+            await dependencies.recordTranscript([userEvent])
+        }
 
         // CONJUNCTION (Rick, 2026-09-01). "who was Martha Lamson and do we
         // have any videos of her" is two questions; the AST holds one shape,
@@ -821,13 +830,22 @@ enum HallieShellCLI {
         // question, so a clause never splits again.
         //
         // Set VIDEOSCAN_HALLIE_SPLIT=0 to compare against the old behaviour
-        // without rebuilding.
-        if ProcessInfo.processInfo.environment["VIDEOSCAN_HALLIE_SPLIT"] != "0",
+        // without rebuilding (HallieQuestionSplitter.isEnabled — the same
+        // switch the chat window and the web bridge consult).
+        if HallieQuestionSplitter.isEnabled,
            let clauses = HallieQuestionSplitter.split(question) {
             var outcome: AnswerOutcome = .declined
             for clause in clauses {
                 outcome = await answer(clause, options: options, state: &state,
-                                       output: output, dependencies: dependencies)
+                                       output: output, dependencies: dependencies,
+                                       recordUserTurn: false)
+                // A which-one is pending: the next clause would be consumed
+                // as a REPLY to it ("who is Tim's brother and how old is
+                // Tim" → "Which tim do you mean?" → "I need one of the
+                // listed names or numbers", eval 2026-09-01). Stop here —
+                // the reader's choice resumes only this clause. Same rule
+                // as the chat window's askLocally and the web bridge.
+                if state.pendingClarification != nil { break }
             }
             return outcome
         }

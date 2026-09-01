@@ -378,9 +378,35 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         return content
     }
 
+    /// One token of generation whose only job is to make ollama load the
+    /// model and start its keep_alive clock. The reply is discarded; the
+    /// caller wants the side effect. Same transport and envelope handling
+    /// as a real turn, so a missing model or a dead host classify the
+    /// same way for the failover walk.
+    func warmUp() async throws {
+        _ = try await requestContent(
+            "hi", schema: nil, systemPrompt: "",
+            options: ["temperature": 0, "num_predict": 1])
+    }
+
     /// Shared transport and ollama-envelope machinery. The only caller-
     /// selected inputs are the output schema (nil = free text), the
     /// system prompt, and generation options.
+    /// Every request carries a context window unless the caller chose one.
+    /// Ollama otherwise runs the model at its MAXIMUM (262K for the
+    /// current brain), and the KV cache for that doubled the resident size:
+    /// 18 GB of weights became 37 GB on the GPU and, with a second model
+    /// beside it, Rick's M4 was paging (2026-09-01). Hallie's prompts are a
+    /// few thousand tokens — a schema, a plan, a handful of history turns —
+    /// so 32K is generous headroom at a fraction of the memory.
+    static let defaultContextTokens = 32_768
+
+    static func bounded(_ options: [String: Any]) -> [String: Any] {
+        var out = options
+        if out["num_ctx"] == nil { out["num_ctx"] = defaultContextTokens }
+        return out
+    }
+
     private func requestContent(
         _ text: String,
         schema: [String: Any]?,
@@ -398,7 +424,12 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "model": model,
             "stream": false,
             "think": false,
-            "options": options,
+            // Keep the model resident between turns (Rick, 2026-09-01).
+            // Ollama's default idle unload turned the first question of
+            // every visit into a cold load, and the grounded composer's
+            // 6 s budget fell back to the template each time.
+            "keep_alive": "30m",
+            "options": Self.bounded(options),
             "messages": [
                 ["role": "system",
                  "content": systemPrompt

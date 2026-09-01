@@ -117,6 +117,72 @@ struct HallieConversationLogTests {
         #expect(try files[0].resourceValues(forKeys: [.fileSizeKey]).fileSize == 0)
     }
 
+    // A transcript search carried every hit with every basis string —
+    // 461 KB, then 1.1 MB — and the whole turn was refused, so the eval
+    // graded eight questions as "produced no matched turn" (2026-09-01).
+    @Test func oversizedEvidenceIsTrimmedRatherThanDroppingTheTurn() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HallieTranscriptFileStore(directoryURL: root)
+        let evidence = (1...3_000).map { index in
+            HallieTranscriptEvent.MediaEvidence(
+                recordID: UUID(), filename: "clip-\(index).mov",
+                fullPath: "/Volumes/Archive/clip-\(index).mov", playbackSeconds: 12.5,
+                bases: (1...6).map { "transcript hit \($0): " + String(repeating: "word ", count: 40) })
+        }
+        let event = HallieTranscriptEvent(
+            sessionID: UUID(), eventID: UUID(), sequence: 3, client: .shell,
+            kind: .assistant, text: "35 videos: 22 where someone says “school”.",
+            queryDescription: "presence: says school", route: "presence",
+            outcome: "answered", mediaEvidence: evidence)
+
+        try store.append([event])
+
+        let file = try #require(FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil).first)
+        let line = try #require(String(contentsOf: file, encoding: .utf8)
+            .split(separator: "\n").first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(HallieTranscriptEvent.self, from: Data(line.utf8))
+        #expect(decoded.text == event.text)
+        #expect(decoded.outcome == "answered")
+        #expect(decoded.mediaEvidence.count == HallieTranscriptEvent.boundedEvidenceItems)
+        #expect(decoded.mediaEvidence[0].bases.count == HallieTranscriptEvent.boundedBasesPerItem)
+        #expect(decoded.queryDescription?.contains("evidence trimmed for the log: 3000 media") == true)
+        #expect(line.utf8.count <= HallieTranscriptFileStore.maximumEncodedEventBytes)
+    }
+
+    @Test func evidenceTooLargeEvenWhenTrimmedIsStrippedNotDropped() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HallieTranscriptFileStore(directoryURL: root)
+        let excerpt = String(repeating: "spoken word ", count: 3_000)   // ~36 KB per basis
+        let evidence = (1...40).map { index in
+            HallieTranscriptEvent.MediaEvidence(
+                recordID: UUID(), filename: "clip-\(index).mov",
+                fullPath: "/Volumes/Archive/clip-\(index).mov", playbackSeconds: nil,
+                bases: [excerpt, excerpt, excerpt])
+        }
+        let event = HallieTranscriptEvent(
+            sessionID: UUID(), eventID: UUID(), sequence: 3, client: .shell,
+            kind: .assistant, text: "15 videos where someone says “westford house”.",
+            route: "presence", outcome: "answered", mediaEvidence: evidence)
+
+        try store.append([event])
+
+        let file = try #require(FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil).first)
+        let line = try #require(String(contentsOf: file, encoding: .utf8)
+            .split(separator: "\n").first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(HallieTranscriptEvent.self, from: Data(line.utf8))
+        #expect(decoded.text == event.text)
+        #expect(decoded.mediaEvidence.isEmpty)
+        #expect(decoded.queryDescription?.contains("evidence stripped for the log: 40 media") == true)
+    }
+
     @Test func thousandEventBatchStaysBounded() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

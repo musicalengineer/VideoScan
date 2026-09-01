@@ -24,26 +24,47 @@ enum HalliePronounContinuity {
         return plural.contains(key) || singular.contains(key)
     }
 
+    /// Kin nouns after which "her" is possessive, not an object: "and her
+    /// husband?" → "Martha Lamson's husband", never "Martha Lamson husband"
+    /// (eval 2026-09-01). One-hop family words plus their everyday forms.
+    static let kinNouns: Set<String> = [
+        "husband", "wife", "spouse", "spouses", "partner",
+        "parents", "parent", "mother", "father", "mom", "mum", "dad", "mama", "papa",
+        "children", "child", "kids", "kid", "sons", "son", "daughters", "daughter",
+        "siblings", "sibling", "brothers", "brother", "sisters", "sister",
+        "grandparents", "grandmother", "grandfather", "grandma", "grandpa",
+        "grandchildren", "grandson", "granddaughter",
+        "uncle", "uncles", "aunt", "aunts", "cousin", "cousins",
+        "nephew", "nephews", "niece", "nieces", "family", "relatives", "in-laws",
+    ]
+
     /// The question with its first bare pronoun replaced by the last
     /// answer's people ("they" → "Rick and Donna"; "he"/"she" → the one
     /// person when there was exactly one). Nil when nothing applies.
     static func rewrite(_ question: String, lastPeople: [String]) -> (question: String, note: String)? {
         let people = lastPeople.filter { !$0.isEmpty && !isThirdPersonPronoun($0) }
         guard !people.isEmpty else { return nil }
-        let scanner = question.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" })
-        guard let pronoun = scanner.map(String.init).first(where: { token in
+        let tokens = question.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "’" && $0 != "-" })
+            .map(String.init)
+        guard let index = tokens.firstIndex(where: { token in
             let key = token.lowercased()
             return plural.contains(key) || (singular.contains(key) && people.count == 1)
         }) else { return nil }
+        let pronoun = tokens[index]
         let key = pronoun.lowercased()
+        // "her" is both object and possessive. Before a kin noun it is the
+        // possessive ("and her husband?" → "Martha Lamson's husband"); as an
+        // object the bare name reads fine either way.
+        let nextWord = index + 1 < tokens.count ? tokens[index + 1].lowercased() : ""
+        let herIsPossessive = key == "her" && kinNouns.contains(nextWord)
         let replacement: String
         switch key {
         case "their", "theirs", "his", "hers":
             // Possessive: "their wedding" → "Rick and Donna's wedding".
-            let joined = joinNames(people)
-            replacement = joined.hasSuffix("s") ? joined + "'" : joined + "'s"
+            replacement = possessive(joinNames(people))
+        case "her" where herIsPossessive:
+            replacement = possessive(people[0])
         case "her":
-            // "her" is both object and possessive; object reads fine either way.
             replacement = people[0]
         default:
             replacement = joinNames(plural.contains(key) ? people : [people[0]])
@@ -59,6 +80,10 @@ enum HalliePronounContinuity {
     /// to stand for.
     static func whoDoYouMean(_ pronoun: String) -> String {
         "I'm not sure who you mean by “\(pronoun)” — ask me by name, or ask right after a question about someone and I'll take it to mean them."
+    }
+
+    private static func possessive(_ name: String) -> String {
+        name.hasSuffix("s") ? name + "'" : name + "'s"
     }
 
     private static func joinNames(_ names: [String]) -> String {

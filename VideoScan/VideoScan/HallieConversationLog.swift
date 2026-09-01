@@ -106,6 +106,61 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.attachmentOutline = attachmentOutline
         self.composedBy = composedBy
     }
+
+    /// The evidence kept when a line would exceed the store's cap. A
+    /// transcript search ("35 videos where someone says 'school'") carried
+    /// every hit with every basis string — 461 KB, then 1.1 MB — and the
+    /// whole turn was refused, so the eval harness graded eight questions
+    /// as "produced no matched turn" and nobody saw it (2026-09-01). The
+    /// text is the record; evidence past this many items is trimmed to the
+    /// first page and each item to its first few bases.
+    static let boundedEvidenceItems = 40
+    static let boundedBasesPerItem = 3
+
+    /// The last resort: the text and outcome with NO evidence at all.
+    /// A transcript search's bases can each carry a long excerpt, so even
+    /// forty items × three bases stayed over the cap (683 KB, 2026-09-01).
+    /// The turn is still worth more than its citations.
+    func strippedForLog() -> HallieTranscriptEvent {
+        let note = "evidence stripped for the log: \(mediaEvidence.count) media, "
+            + "\(knowledgeEvidence.count) knowledge items not written"
+        return HallieTranscriptEvent(
+            timestamp: timestamp, sessionID: sessionID, runID: runID,
+            eventID: eventID, sequence: sequence, client: client, kind: kind,
+            text: text,
+            queryDescription: queryDescription.map { "\($0) — \(note)" } ?? note,
+            basisLine: basisLine, responder: responder, model: model,
+            route: route, outcome: outcome, offeredActions: offeredActions,
+            mediaEvidence: [], knowledgeEvidence: [],
+            attachmentOutline: nil, composedBy: composedBy)
+    }
+
+    /// This event with its evidence trimmed to the bounds above. The text,
+    /// outcome and citations that would fit on a page survive; the count
+    /// of what was trimmed is appended to `queryDescription` so a reader
+    /// of the log knows the evidence was longer.
+    func boundedForLog() -> HallieTranscriptEvent {
+        let trimmedMedia = mediaEvidence.prefix(Self.boundedEvidenceItems).map {
+            MediaEvidence(recordID: $0.recordID, filename: $0.filename,
+                          fullPath: $0.fullPath, playbackSeconds: $0.playbackSeconds,
+                          bases: Array($0.bases.prefix(Self.boundedBasesPerItem)))
+        }
+        let trimmedKnowledge = Array(knowledgeEvidence.prefix(Self.boundedEvidenceItems))
+        let dropped = (mediaEvidence.count - trimmedMedia.count)
+            + (knowledgeEvidence.count - trimmedKnowledge.count)
+        let note = "evidence trimmed for the log: \(mediaEvidence.count) media, "
+            + "\(knowledgeEvidence.count) knowledge; \(dropped) items not written"
+        return HallieTranscriptEvent(
+            timestamp: timestamp, sessionID: sessionID, runID: runID,
+            eventID: eventID, sequence: sequence, client: client, kind: kind,
+            text: text,
+            queryDescription: queryDescription.map { "\($0) — \(note)" } ?? note,
+            basisLine: basisLine, responder: responder, model: model,
+            route: route, outcome: outcome, offeredActions: offeredActions,
+            mediaEvidence: trimmedMedia, knowledgeEvidence: trimmedKnowledge,
+            attachmentOutline: attachmentOutline.map { Array($0.prefix(Self.boundedEvidenceItems)) },
+            composedBy: composedBy)
+    }
 }
 
 enum HallieTranscriptStoreError: Error, Equatable {
@@ -197,6 +252,18 @@ struct HallieTranscriptFileStore: Sendable {
         for event in events {
             var line = try encoder.encode(event)
             line.append(0x0A)
+            if line.count > Self.maximumEncodedEventBytes {
+                // Evidence, not text, is what grows past the cap: keep the
+                // turn, trim the evidence (see boundedForLog). A line that
+                // is STILL too big is an unbounded message and is refused
+                // as before, with nothing written.
+                line = try encoder.encode(event.boundedForLog())
+                line.append(0x0A)
+            }
+            if line.count > Self.maximumEncodedEventBytes {
+                line = try encoder.encode(event.strippedForLog())
+                line.append(0x0A)
+            }
             guard line.count <= Self.maximumEncodedEventBytes else {
                 throw HallieTranscriptStoreError.eventTooLarge(line.count)
             }

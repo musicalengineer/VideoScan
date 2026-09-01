@@ -116,6 +116,35 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
         }
     }
 
+    /// Pre-load the model on the first reachable host so the first real
+    /// question of a visit is not a cold load (Rick, 2026-09-01: with no
+    /// keep_alive the model unloaded between turns, and the grounded
+    /// composer's 6 s budget fell back to the template every first call).
+    ///
+    /// Fire-and-forget by design: the outcome is one log line, never an
+    /// error, and the generation budget is widened because a cold load of
+    /// a 27B model is exactly the thing this is waiting on. The same host
+    /// walk / probe / connection-retry policy as a real question applies,
+    /// so a sleeping primary still costs one 3 s probe, not a hang.
+    func warmUp() async {
+        var fleet = self
+        fleet.template.timeoutSeconds = max(template.timeoutSeconds, 120)
+        fleet.repairOnBadResponse = false
+        let clock = ContinuousClock()
+        let started = clock.now
+        do {
+            let host = try await fleet.walkHosts { attempt in
+                try await attempt.warmUp()
+                return attempt.host
+            }
+            let ms = Int((clock.now - started) / .milliseconds(1))
+            appLog.write("Hallie: brain warm-up \(template.model) @ \(host) in \(ms) ms")
+        } catch {
+            let ms = Int((clock.now - started) / .milliseconds(1))
+            appLog.write("Hallie: brain warm-up skipped after \(ms) ms — \(Self.shortReason(error))")
+        }
+    }
+
     private func walkHosts<Result>(
         _ request: (OllamaQueryTranslator) async throws -> Result
     ) async throws -> Result {

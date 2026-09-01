@@ -280,3 +280,64 @@ struct HallieWebBrowseTests {
         if case .data(let d) = page.body { #expect(String(data: d, encoding: .utf8)?.contains("Browse the archive") == true) }
     }
 }
+
+// MARK: - One reply for a split line (HallieWebBridge.merge)
+//
+// Rick, 2026-09-01: "where was Martha Lamson born and when was she born"
+// runs as two coordinator turns on the iPad path, but HTTP answers once.
+// `merge` is the pure join; the loop around it lives in `ask` and is
+// exercised by the eval harness, not here.
+
+struct HallieWebMergeTests {
+
+    private func response(prose: String, basis: String,
+                          citing: [(UUID, String)]) -> HallieAppTurnCoordinator.Response {
+        let citations = citing.map {
+            HallieTurnExecutor.Citation(recordID: $0.0, fullPath: $0.1,
+                                        filename: ($0.1 as NSString).lastPathComponent,
+                                        playbackSeconds: nil, bases: [])
+        }
+        return HallieAppTurnCoordinator.Response(
+            result: HallieTurnExecutor.Result(
+                route: .presence, outcome: .answered, prose: prose, basisLine: basis,
+                queryDescription: nil, citations: citations, catalogPersonName: nil),
+            responderHost: "fixture",
+            biographyPhoto: nil,
+            capturedReferentID: nil,
+            citations: citations,
+            pendingClarification: nil,
+            playAfterAnswer: false,
+            executedIntent: nil)
+    }
+
+    @Test func oneResponseMergesToItselfFieldForField() throws {
+        let id = UUID()
+        let only = response(prose: "Born in Sudbury.", basis: "Basis: tree", citing: [(id, "/v/a.mp4")])
+        let merged = try #require(HallieWebBridge.merge([only]))
+        #expect(merged.prose == "Born in Sudbury.")
+        #expect(merged.basis == "Basis: tree")
+        #expect(merged.citations == only.citations)
+        #expect(merged.attachments.isEmpty)
+        #expect(merged.last.responderHost == "fixture")
+    }
+
+    @Test func nothingExecutedMergesToNothing() {
+        #expect(HallieWebBridge.merge([]) == nil)
+    }
+
+    @Test func twoResponsesJoinProseAndUnionCitationsInOrderWithoutDuplicates() throws {
+        let shared = UUID()
+        let second = UUID()
+        let first = response(prose: "Born in Sudbury.", basis: "Basis: tree",
+                             citing: [(shared, "/v/a.mp4")])
+        let last = response(prose: "Born in 1712.", basis: "Basis: census",
+                            citing: [(second, "/v/b.mp4"), (shared, "/v/a.mp4")])
+        let merged = try #require(HallieWebBridge.merge([first, last]))
+        #expect(merged.prose == "Born in Sudbury.\n\nBorn in 1712.")
+        #expect(merged.basis == "Basis: tree\nBasis: census")
+        #expect(merged.citations.map(\.recordID) == [shared, second],
+                "first clause's evidence first; the repeat is dropped, not re-listed")
+        #expect(merged.last.result.prose == "Born in 1712.",
+                "chips, play and the pending which-one come from the LAST piece")
+    }
+}

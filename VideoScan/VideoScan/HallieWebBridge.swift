@@ -153,6 +153,7 @@ final class HallieWebBridge {
 
         do {
             let response: HallieAppTurnCoordinator.Response
+            var merged: MergedReply?
             if let select = object["select"] as? [String: Any],
                let pending = session.pendingClarification,
                let candidateID = Self.candidateID(from: select) {
@@ -169,42 +170,67 @@ final class HallieWebBridge {
                     session = Session()
                     session.lastSeen = Date()
                 }
-                // "play donna at christmas" is recognised inside the
-                // coordinator (pre-translation), same as the chat window.
-                response = try await HallieAppTurnCoordinator.execute(
-                    question: text,
-                    records: records(),
-                    referent: .init(recordID: nil, temporalDate: nil),
-                    hosts: config.hosts,
-                    modelName: config.modelName,
-                    playAfterAnswer: false,
-                    memory: session.memory,
-                    composeWithModel: config.composeWithModel,
-                    history: session.history,
-                    telling: session.telling,
-                    drill: session.drill,
-                    picker: session.picker,
-                    dependencies: turnDependencies)
-                session.history.append(.init(user: text, assistant: response.result.prose))
-                if session.history.count > HallieGroundedComposer.historyTurns {
-                    session.history.removeFirst(session.history.count - HallieGroundedComposer.historyTurns)
+                // CONJUNCTION (Rick, 2026-09-01): "where was Martha Lamson
+                // born and when was she born" is two questions and the AST
+                // holds one shape. Same clause loop as the chat window's
+                // askLocally: clause N+1 runs against the memory / telling /
+                // drill / picker clause N left in the session. The splitter
+                // returns nil for anything it is not sure about, so this is
+                // a one-element list for nearly every line — and that path
+                // is the old one, unchanged.
+                let clauses = HallieQuestionSplitter.isEnabled
+                    ? (HallieQuestionSplitter.split(text) ?? [text])
+                    : [text]
+                if clauses.count > 1 {
+                    appLog.write("Hallie: split into \(clauses.count) questions (web): "
+                        + clauses.map { "\"\($0)\"" }.joined(separator: " | "))
                 }
+                var executed: [HallieAppTurnCoordinator.Response] = []
+                for (index, clause) in clauses.enumerated() {
+                    // "play donna at christmas" is recognised inside the
+                    // coordinator (pre-translation), same as the chat window.
+                    let step = try await HallieAppTurnCoordinator.execute(
+                        question: clause,
+                        records: records(),
+                        referent: .init(recordID: nil, temporalDate: nil),
+                        hosts: config.hosts,
+                        modelName: config.modelName,
+                        playAfterAnswer: false,
+                        memory: session.memory,
+                        composeWithModel: config.composeWithModel,
+                        history: session.history,
+                        telling: session.telling,
+                        drill: session.drill,
+                        picker: session.picker,
+                        dependencies: turnDependencies)
+                    session.history.append(.init(user: clause, assistant: step.result.prose))
+                    if session.history.count > HallieGroundedComposer.historyTurns {
+                        session.history.removeFirst(session.history.count - HallieGroundedComposer.historyTurns)
+                    }
+                    executed.append(step)
+                    // A which-one is pending: the next clause would run
+                    // against an unresolved subject. Stop here — the
+                    // reader's choice resumes only this clause.
+                    if step.pendingClarification != nil { break }
+                    // The LAST clause is carried below with the full text,
+                    // exactly as a single question always was.
+                    if index < clauses.count - 1 {
+                        Self.carry(step, question: clause, into: &session)
+                    }
+                }
+                guard let reply = Self.merge(executed) else {
+                    return .text(500, "no answer")
+                }
+                merged = reply
+                response = reply.last
             }
-            if response.result.outcome == .repaired, response.pendingClarification == nil {
-                // A repair re-asked the pending which-one; keep it selectable.
-            } else {
-                session.pendingClarification = response.pendingClarification
-            }
-            session.telling = response.telling
-            session.drill = response.drill
-            session.picker = response.picker
-            session.memory.record(intent: response.executedIntent, result: response.result,
-                                  question: object["text"] as? String)
+            Self.carry(response, question: object["text"] as? String, into: &session)
             let isFollowUpAction = response.result.route == .followUp
                 && response.result.mediaAction != nil
-            if !isFollowUpAction { session.lastCitations = response.citations }
+            let citations = merged?.citations ?? response.citations
+            if !isFollowUpAction { session.lastCitations = citations }
             sessions[sessionID] = session
-            return .json(payload(for: response, citations: isFollowUpAction ? [] : response.citations))
+            return .json(payload(for: response, citations: isFollowUpAction ? [] : citations, merged: merged))
         } catch {
             sessions[sessionID] = session
             return .json([
@@ -214,6 +240,75 @@ final class HallieWebBridge {
                 "citations": [], "chips": [], "play": [],
             ])
         }
+    }
+
+    /// The state one answer leaves for the next turn — or, inside a split
+    /// line, for the next clause. Mirrors the chat window's `commitHallie`
+    /// rule for rule, so the second clause sees the same world on the iPad
+    /// as it would in the app.
+    private static func carry(
+        _ response: HallieAppTurnCoordinator.Response,
+        question: String?,
+        into session: inout Session
+    ) {
+        if response.result.outcome == .repaired, response.pendingClarification == nil {
+            // A repair re-asked the pending which-one; keep it selectable.
+        } else {
+            session.pendingClarification = response.pendingClarification
+        }
+        session.telling = response.telling
+        session.drill = response.drill
+        session.picker = response.picker
+        session.memory.record(intent: response.executedIntent, result: response.result,
+                              question: question)
+    }
+
+    /// One HTTP reply for a line answered in pieces (a split conjunction):
+    /// the proses in order, the evidence from every piece, and the LAST
+    /// response for everything modal — chips, play, the pending which-one —
+    /// because that is the state the session is actually in.
+    struct MergedReply: Sendable {
+        let prose: String
+        let basis: String
+        let citations: [HallieTurnExecutor.Citation]
+        let knowledge: [HallieTurnExecutor.KnowledgeCitation]
+        let attachments: [HallieAttachment]
+        let last: HallieAppTurnCoordinator.Response
+    }
+
+    /// Pure — no session, no network — so it can be tested on its own.
+    /// One response merges to itself, field for field; nil only for none.
+    nonisolated static func merge(_ responses: [HallieAppTurnCoordinator.Response]) -> MergedReply? {
+        guard let last = responses.last else { return nil }
+        if responses.count == 1 {
+            return MergedReply(
+                prose: last.result.prose, basis: last.result.basisLine,
+                citations: last.citations, knowledge: last.result.knowledgeCitations,
+                attachments: last.result.attachments, last: last)
+        }
+        var seenRecords = Set<UUID>()
+        var citations: [HallieTurnExecutor.Citation] = []
+        var seenKnowledge = Set<String>()
+        var knowledge: [HallieTurnExecutor.KnowledgeCitation] = []
+        var attachments: [HallieAttachment] = []
+        for response in responses {
+            for citation in response.citations where seenRecords.insert(citation.recordID).inserted {
+                citations.append(citation)
+            }
+            for item in response.result.knowledgeCitations where seenKnowledge.insert(item.id).inserted {
+                knowledge.append(item)
+            }
+            for attachment in response.result.attachments where !attachments.contains(attachment) {
+                attachments.append(attachment)
+            }
+        }
+        return MergedReply(
+            prose: responses.map(\.result.prose).joined(separator: "\n\n"),
+            basis: responses.map(\.result.basisLine).joined(separator: "\n"),
+            citations: citations,
+            knowledge: knowledge,
+            attachments: attachments,
+            last: last)
     }
 
     private func pruneIdleSessions() {
@@ -241,8 +336,13 @@ final class HallieWebBridge {
         }
     }
 
+    /// `merged` is set only for a split line; it overrides the prose,
+    /// basis, attachments and knowledge with the union across the pieces.
+    /// For one clause it is nil (or equal to the response) and the payload
+    /// is byte-for-byte what it always was.
     func payload(for response: HallieAppTurnCoordinator.Response,
-                 citations: [HallieTurnExecutor.Citation]) -> [String: Any] {
+                 citations: [HallieTurnExecutor.Citation],
+                 merged: MergedReply? = nil) -> [String: Any] {
         let result = response.result
         var chips: [[String: Any]] = []
         if let clarification = result.clarification {
@@ -276,7 +376,7 @@ final class HallieWebBridge {
         }
         // The variations picker: the web client has no phoneme playback,
         // so the list rides in the prose and each chip replies by number.
-        var prose = result.prose
+        var prose = merged?.prose ?? result.prose
         if let offer = response.picker {
             prose += "\n" + HalliePronunciationPicker.numberedList(offer)
             for (index, candidate) in offer.candidates.enumerated() {
@@ -293,15 +393,15 @@ final class HallieWebBridge {
         }
         return [
             "prose": prose,
-            "basis": result.basisLine,
-            "attachments": result.attachments.map { attachmentJSON($0) },
+            "basis": merged?.basis ?? result.basisLine,
+            "attachments": (merged?.attachments ?? result.attachments).map { attachmentJSON($0) },
             "route": HallieTurnExecutor.label(result.route),
             "outcome": HallieTurnExecutor.label(result.outcome),
             "responder": response.responderHost,
             "citations": cited,
             "chips": chips,
             "play": play,
-            "knowledge": result.knowledgeCitations.map {
+            "knowledge": (merged?.knowledge ?? result.knowledgeCitations).map {
                 ["id": $0.id, "title": $0.title, "attribution": $0.attribution ?? ""]
             },
             "listening": response.telling != nil,

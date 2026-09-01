@@ -97,11 +97,25 @@ the remaining misses are in steps 5–6 and in the eval corpus itself.
 
 ## Open gaps, ranked by what a family reader would notice
 
-1. **grandparent_style register (36%).** Questions addressed to Hallie as if
-   she were a grandparent ("did you have TV growing up"). The expected shape
-   is a warm persona decline plus a pivot to what the archive holds. First
-   check whether the grader's `PERSONA_DECLINE_PAT` simply does not
-   recognise the new model's wording before touching the prompt.
+1. **grandparent_style (36%) — NOT the model's register.** Read every
+   failure (evening of 09-01): "what was your first job", "what's your
+   earliest memory", "what was your childhood home like" all came back as
+   the BIOGRAPHY OF HALLIE MAE McGILL (1876–1908), the real ancestor the
+   persona is named after. Second-person "you/your" was resolving to the
+   namesake's tree record. Three more ended in interpretation-failed.
+   Deterministic routing, fixed the same evening (persona question →
+   conversation lane, never graph). Fifth "Hallie is dumb" failure this
+   week whose cause was plumbing.
+1b. **smalltalk (67%) — thanks, apologies, "hold on", goodbyes** were routed
+   to a presence search ("I need something to look for"). Deterministic
+   social detector, same evening.
+1c. **Eight questions were never graded at all.** A transcript-search answer
+   ("35 videos where someone says 'school'") carried every hit with every
+   basis string, blew the conversation log's 256 KB line cap, and the
+   whole turn was refused (`[HallieTranscript] append failed:
+   eventTooLarge`). The store now trims evidence instead of dropping the
+   turn. Any category can hide misses this way — check the "produced no
+   matched turn" warning every run.
 2. **temporal (60%)** — "was that before or after we moved" depends on
    CyberBrain facts that are not entered yet.
 3. **Sound-recording floor.** "recordings of Edmund Rice's voice" should

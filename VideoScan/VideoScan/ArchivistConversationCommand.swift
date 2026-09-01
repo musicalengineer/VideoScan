@@ -31,6 +31,11 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         case thanks
         case farewell
         case affirmation
+        /// "sorry, I meant something else" / "my apologies, I keep typing
+        /// the wrong name" — no search, no fuss.
+        case apology
+        /// "hold on a sec" / "one moment please" — wait, say so.
+        case holdOn
     }
 
     /// A topic the help card can be scoped to. Deterministic: "help with
@@ -175,6 +180,12 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             }
         }
 
+        // Thanks / apology / hold-on / goodbye in their everyday shapes,
+        // which no phrase table can enumerate.
+        if let social = detectSocialLine(words: words, raw: lowered) {
+            return .smalltalk(social)
+        }
+
         // "how do i …" / "how can we …" is a how-to question about Hallie
         // herself; the help card answers it with worked examples. Capability
         // questions ("how do i change donna's bio") are classified BEFORE
@@ -195,6 +206,123 @@ enum ArchivistConversationCommand: Equatable, Sendable {
            words.contains(where: { ["you", "ask", "hallie"].contains($0) }),
            words.allSatisfy({ helpVocabulary.contains($0) }) {
             return .help()
+        }
+        return nil
+    }
+
+    // MARK: - Social lines by shape
+
+    // Eval 2026-09-01 (smalltalk 8 misses): "Thanks, that's really
+    // helpful.", "I appreciate you.", "Sorry, I meant something else.",
+    // "My apologies, I keep typing the wrong name.", "hold on a sec",
+    // "one moment please", "ok gotta run, talk later", "Have a good night."
+    // each went to the translator, came back as a presence search with no
+    // subject, and were declined with "I need something to look for". The
+    // exact-phrase table above cannot enumerate everyday English; this
+    // recogniser is bounded by SHAPE instead: a short line (at most eight
+    // words), no question, no search verb, no media noun, no year, and one
+    // clear social cue. "thanks, now show me rick" and "sorry, who was
+    // Donna's mother?" still fall through to the ordinary pipeline.
+
+    /// Words that mean the line is a question or a request, not a social
+    /// aside. Any one of them disqualifies the line.
+    private static let socialBlockWords: Set<String> = [
+        "who", "whom", "what", "when", "where", "which", "why", "how",
+        "show", "find", "search", "play", "reveal", "open", "list", "count",
+        "tell", "give", "look", "video", "videos", "clip", "clips", "photo",
+        "photos", "picture", "pictures", "footage", "tape", "tapes", "file",
+        "files", "movie", "movies", "recording", "recordings", "catalog",
+        "archive", "tree", "born", "died", "married", "related",
+    ]
+
+    private static let farewellPhrases = [
+        "gotta run", "gotta go", "got to go", "got to run", "have to go",
+        "have to run", "need to go", "need to run", "talk later",
+        "talk to you later", "talk soon", "talk tomorrow", "see ya",
+        "see you", "see you later", "see you tomorrow", "catch you later",
+        "good night", "have a good night", "have a good day",
+        "have a good one", "have a good evening", "have a great",
+        "have a nice", "take care", "signing off", "logging off",
+        "until next time", "bye for now", "off to bed", "heading out",
+        "heading to bed", "going to bed",
+    ]
+    private static let farewellWords: Set<String> = [
+        "bye", "goodbye", "goodnight", "cya", "ttyl", "farewell",
+    ]
+
+    private static let holdOnPhrases = [
+        "hold on", "hang on", "one moment", "one sec", "one second",
+        "just a sec", "just a second", "just a moment", "just a minute",
+        "give me a sec", "give me a second", "give me a minute",
+        "give me a moment", "wait a sec", "wait a second", "wait a minute",
+        "wait a moment", "be right back", "hold that thought",
+        "back in a sec", "back in a minute", "back in a moment",
+    ]
+    private static let holdOnWords: Set<String> = ["brb"]
+
+    private static let apologyLeads = [
+        "sorry", "so sorry", "i'm sorry", "im sorry", "i am sorry",
+        "my apologies", "apologies", "my bad", "my mistake", "i apologize",
+        "i apologise", "oops", "whoops", "oop", "pardon me", "excuse me",
+    ]
+    /// What may follow an apology and still be only an apology. A name or
+    /// anything else outside this list ("sorry, I meant Timmy") is a real
+    /// correction for the pipeline, not a pleasantry.
+    private static let apologyTailVocabulary: Set<String> = [
+        "i", "i'm", "im", "meant", "mean", "something", "else", "different",
+        "that", "was", "wrong", "a", "the", "typo", "typing", "type", "typed",
+        "keep", "name", "names", "mistake", "my", "about", "ignore", "didn't",
+        "didnt", "did", "not", "bad", "again", "spelling", "spelled",
+        "misspelled", "misspelt", "it", "there", "here", "confusing",
+        "confused", "you", "hallie", "so", "for", "and", "sorry", "one",
+        "last", "question", "message", "thing", "wrote", "said", "say",
+        "asked", "ask", "mixed", "up", "muddled", "garbled", "fat", "fingers",
+        "fingered", "on", "phone", "ipad", "autocorrect", "hit", "enter",
+        "early", "too", "soon", "fast", "quick", "quickly", "never", "mind",
+    ]
+
+    private static let thanksWords: Set<String> = [
+        "thanks", "thank", "thx", "ty", "cheers", "thankyou",
+    ]
+
+    /// The social kind of a short line, by shape. `words` is the line with
+    /// "hallie", "please", and leading "ok"/"hey" already removed; `raw`
+    /// is the lowercased original, used only to spot a question mark.
+    static func detectSocialLine(words: [String], raw: String) -> Smalltalk? {
+        guard !words.isEmpty, words.count <= 8 else { return nil }
+        guard !raw.hasSuffix("?") else { return nil }
+        let wordSet = Set(words)
+        guard wordSet.isDisjoint(with: socialBlockWords) else { return nil }
+        guard !words.contains(where: { $0.count == 4 && Int($0) != nil }) else { return nil }
+        let padded = " " + words.joined(separator: " ") + " "
+
+        // Goodbyes first: "thanks, talk later" is a goodbye.
+        if farewellPhrases.contains(where: { padded.contains(" \($0) ") })
+            || !wordSet.isDisjoint(with: farewellWords) {
+            return .farewell
+        }
+        if holdOnPhrases.contains(where: { padded.contains(" \($0) ") })
+            || !wordSet.isDisjoint(with: holdOnWords) {
+            return .holdOn
+        }
+        for lead in apologyLeads where padded.hasPrefix(" \(lead) ") {
+            let tail = words.dropFirst(lead.split(separator: " ").count)
+            // "sorry, thanks anyway" is thanks.
+            if tail.contains(where: { thanksWords.contains($0) }) { return .thanks }
+            if tail.allSatisfy({ apologyTailVocabulary.contains($0) }) {
+                return .apology
+            }
+            return nil
+        }
+        if !wordSet.isDisjoint(with: thanksWords) { return .thanks }
+        // "I appreciate you" / "appreciate your help" / "much appreciated".
+        if let index = words.firstIndex(where: { $0 == "appreciate" || $0 == "appreciated" }) {
+            let after = words.dropFirst(index + 1)
+            if after.isEmpty || after.contains(where: {
+                ["you", "it", "that", "this", "your", "the"].contains($0)
+            }) {
+                return .thanks
+            }
         }
         return nil
     }
@@ -288,7 +416,11 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         // relationship query, which is both unfriendly and factually dangerous.
         "how are you": .wellbeing, "how are you doing": .wellbeing,
         "how are you today": .wellbeing, "how is your day": .wellbeing,
-        "how's your day": .wellbeing, "hows it going": .wellbeing,
+        "how's your day": .wellbeing, "hows your day": .wellbeing,
+        "how's your day going": .wellbeing, "hows your day going": .wellbeing,
+        "how is your day going": .wellbeing, "how's your day been": .wellbeing,
+        "how are things": .wellbeing, "how are you holding up": .wellbeing,
+        "hows it going": .wellbeing,
         "how's it going": .wellbeing, "how r you": .wellbeing,
         "how re you": .wellbeing,
         // A small conversational second turn. These are deliberately about
@@ -497,6 +629,10 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             }
         case .thanks:
             return "You're very welcome. I'm glad I could help."
+        case .apology:
+            return "No need to apologize. Say it again however it comes out, and I'll take another look."
+        case .holdOn:
+            return "Take your time — I'll be right here."
         case .farewell:
             return "Bye for now — I'll be right here when you want to look through more."
         case .affirmation:

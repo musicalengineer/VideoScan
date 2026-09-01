@@ -458,14 +458,18 @@ extension HallieTurnExecutor {
     /// ("him", "her", "his", …) → the conversation's one current subject;
     /// plural ("them", "their", …) → a polite no, one person at a time.
     /// No subject in memory → "who do you mean?" (never a lookup of "Him").
-    static func mediaAskPronounSubject(_ pronoun: String, memory: ConversationMemory) -> MediaAskPronoun {
+    static func mediaAskPronounSubject(
+        _ pronoun: String, memory: ConversationMemory,
+        ask: String = "media ask",
+        pluralProse: String = "I can look for pictures of one person at a time — who do you mean?"
+    ) -> MediaAskPronoun {
         let key = pronoun.lowercased()
         if HalliePronounContinuity.plural.contains(key) {
             return .ask(Result(
                 route: .graph, outcome: .declined,
-                prose: "I can look for pictures of one person at a time — who do you mean?",
+                prose: pluralProse,
                 basisLine: "Basis: a plural pronoun names no one person; nothing was looked up.",
-                queryDescription: "media ask: pronoun \(key) (plural)",
+                queryDescription: "\(ask): pronoun \(key) (plural)",
                 citations: [], catalogPersonName: nil))
         }
         let referents = memory.pronounReferents.filter {
@@ -476,7 +480,7 @@ extension HallieTurnExecutor {
                 route: .graph, outcome: .declined,
                 prose: HalliePronounContinuity.whoDoYouMean(key),
                 basisLine: "Basis: no one person from the last answer to stand for “\(key)”; nothing was looked up.",
-                queryDescription: "media ask: pronoun \(key) (no subject)",
+                queryDescription: "\(ask): pronoun \(key) (no subject)",
                 citations: [], catalogPersonName: nil))
         }
         return .subject(referents[0])
@@ -521,7 +525,20 @@ extension HallieTurnExecutor {
         // paternal side") is not answered by the lineage code: it is a
         // ready-made graph intent, run by the ordinary kinship route so
         // it keeps the chips, People-tab fallback and told knowledge.
-        if case .kinship(let person, let relation, let side) = lineage {
+        if case .kinship(var person, let relation, let side) = lineage {
+            // "and her husband?" (eval 2026-09-01): the possessor is a
+            // pronoun; it stands for the last answer's ONE subject, the
+            // same way "photos of him" does. Martha stays the subject
+            // after "did she have kids" — a kinship answer about X's
+            // relatives leaves X in memory, not the relatives.
+            if let pronoun = person, HalliePronounContinuity.isThirdPersonPronoun(pronoun) {
+                switch mediaAskPronounSubject(
+                    pronoun, memory: memory, ask: "kinship ask",
+                    pluralProse: "I can look up one person's family at a time — who do you mean?") {
+                case .subject(let name): person = name
+                case .ask(let result): return .answer(result)
+                }
+            }
             return .run(Intent(
                 originalQuestion: question,
                 ast: .graph(.init(people: [person ?? "me"], operation: .kinship,

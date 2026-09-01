@@ -248,6 +248,9 @@ struct ArchivistChatWindow: View {
     @State private var isThinking = false
     @State private var activeRequestID: UUID?
     @State private var activeRequestTask: Task<Void, Never>?
+    /// The fire-and-forget model pre-load started by `.onAppear`; kept so
+    /// a second onAppear cannot start another and onDisappear can cancel it.
+    @State private var brainWarmUpTask: Task<Void, Never>?
     @State private var pendingHallieClarification:
         HallieAppTurnCoordinator.PendingClarification?
     @FocusState private var inputFocused: Bool
@@ -402,6 +405,7 @@ struct ArchivistChatWindow: View {
         .onAppear {
             inputFocused = true
             consumePendingAskRequest()
+            warmUpBrain()
             // A pre-avatar launch may have persisted the placeholder —
             // she has a name now (Rick's great-grandmother's).
             if archivistName == "Name TBD" { archivistName = "Hallie Mae" }
@@ -418,6 +422,8 @@ struct ArchivistChatWindow: View {
             if messages.isEmpty { greet() }
         }
         .onDisappear {
+            brainWarmUpTask?.cancel()
+            brainWarmUpTask = nil
             activeRequestID = nil
             activeRequestTask?.cancel()
             activeRequestTask = nil
@@ -1087,11 +1093,6 @@ struct ArchivistChatWindow: View {
         let records = model.records
         let wantsPlayAfter = playAfterAnswer
         playAfterAnswer = false
-        let memory = hallieMemory
-        let telling = hallieTelling
-        let drill = hallieDrill
-        let picker = halliePicker
-        let history = recentHistory()
         let compose = composeWithModel
         let requestID = UUID()
         activeRequestTask?.cancel()
@@ -1099,6 +1100,19 @@ struct ArchivistChatWindow: View {
         isThinking = true
         let hosts = OllamaEndpoints.resolved(from: .standard)
         let modelName = ollamaModel
+        // CONJUNCTION (Rick, 2026-09-01): "where was Martha Lamson born and
+        // when was she born" is two questions, and the AST holds one shape.
+        // The splitter returns nil for anything it is not sure about, so
+        // this is [text] for nearly every line. The one user bubble is
+        // already on screen; each clause adds its own answer bubble with
+        // its own citations and photo.
+        let clauses = HallieQuestionSplitter.isEnabled
+            ? (HallieQuestionSplitter.split(text) ?? [text])
+            : [text]
+        if clauses.count > 1 {
+            appLog.write("Hallie: split into \(clauses.count) questions: "
+                + clauses.map { "\"\($0)\"" }.joined(separator: " | "))
+        }
         activeRequestTask = Task { @MainActor in
             defer {
                 if activeRequestID == requestID {
@@ -1108,33 +1122,68 @@ struct ArchivistChatWindow: View {
                     inputFocused = true
                 }
             }
-            do {
-                let response = try await HallieAppTurnCoordinator.execute(
-                    question: text,
-                    records: records,
-                    referent: referent,
-                    hosts: hosts,
-                    modelName: modelName,
-                    playAfterAnswer: wantsPlayAfter,
-                    memory: memory,
-                    composeWithModel: compose,
-                    history: history,
-                    telling: telling,
-                    drill: drill,
-                    picker: picker)
-                guard !Task.isCancelled,
-                      activeRequestID == requestID else { return }
-                commitHallie(response, question: text)
-            } catch {
-                guard !Task.isCancelled,
-                      activeRequestID == requestID else { return }
-                appLog.write(ArchivistDiagnosticLine.failure(.interpretation, error: error))
-                lastMatches = []
-                messages.append(ArchivistMessage(
-                    role: .assistant,
-                    text: HallieHelperFailure.message(for: error),
-                    basisLine: HallieHelperFailure.basisLine))
+            for (index, clause) in clauses.enumerated() {
+                guard !Task.isCancelled, activeRequestID == requestID else { return }
+                let isLast = index == clauses.count - 1
+                do {
+                    // Memory, listening, drill, picker and history are read
+                    // HERE, per clause, not captured above: clause N's
+                    // commitHallie just rewrote them, and clause N+1 must
+                    // see that world (a pronoun the splitter could not bind
+                    // statically finds its subject in memory).
+                    let response = try await HallieAppTurnCoordinator.execute(
+                        question: clause,
+                        records: records,
+                        referent: referent,
+                        hosts: hosts,
+                        modelName: modelName,
+                        playAfterAnswer: isLast && wantsPlayAfter,
+                        memory: hallieMemory,
+                        composeWithModel: compose,
+                        history: recentHistory(),
+                        telling: hallieTelling,
+                        drill: hallieDrill,
+                        picker: halliePicker)
+                    guard !Task.isCancelled,
+                          activeRequestID == requestID else { return }
+                    commitHallie(response, question: clause)
+                    // A which-one is pending: the next clause would run
+                    // against an unresolved subject. Stop here — the
+                    // reader's choice resumes only this clause.
+                    if response.pendingClarification != nil { return }
+                } catch {
+                    guard !Task.isCancelled,
+                          activeRequestID == requestID else { return }
+                    appLog.write(ArchivistDiagnosticLine.failure(.interpretation, error: error))
+                    lastMatches = []
+                    messages.append(ArchivistMessage(
+                        role: .assistant,
+                        text: HallieHelperFailure.message(for: error),
+                        basisLine: HallieHelperFailure.basisLine))
+                    return
+                }
             }
+        }
+    }
+
+    /// Load the brain while the greeting is on screen (Rick, 2026-09-01),
+    /// so the first question of the visit is not a cold model load.
+    /// `Task.detached` ≈ spawning a thread that owns nothing of ours: it
+    /// never blocks the window, and cancelling it costs one log line. The
+    /// coordinator's own demand-start hook (`Dependencies.live.startLocalBrain`)
+    /// brings up a local Ollama and routes this Mac's name to loopback first,
+    /// exactly as the first real question would.
+    private func warmUpBrain() {
+        guard brainWarmUpTask == nil else { return }
+        let hosts = OllamaEndpoints.resolved(from: .standard)
+        let modelName = ollamaModel
+        brainWarmUpTask = Task.detached(priority: .utility) {
+            let routed = (try? await HallieAppTurnCoordinator.Dependencies.live
+                .startLocalBrain(hosts)) ?? hosts
+            guard !Task.isCancelled else { return }
+            var template = OllamaQueryTranslator()
+            template.model = modelName
+            await OllamaFailoverTranslator(hosts: routed, template: template).warmUp()
         }
     }
 

@@ -1453,7 +1453,7 @@
       "id": "cj004",
       "category": "conjunction",
       "text": "who was Martha Lamson and do we have any videos of her",
-      "expect": "biography",
+      "expect": "graceful_decline",
       "mustMatch": [
         "Lamson",
         "1888|motion picture|film|footage|video"
@@ -1462,7 +1462,7 @@
         "who do you mean",
         "not sure who you mean"
       ],
-      "notes": "The measured failure of 2026-09-01: translator kept the media half and dropped the biography, then 'her' had no antecedent."
+      "notes": "The measured failure of 2026-09-01. Biography half answers; the video half is CORRECTLY the film-floor line (b. before 1633 + a lifetime < 1888), so the merged turn grades as a graceful decline; mustMatch requires both halves."
     },
     {
       "id": "cj005",

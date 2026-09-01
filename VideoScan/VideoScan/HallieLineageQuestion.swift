@@ -688,6 +688,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// `extendedRelation(fromPhrase:)` table so nothing is named here that
     /// the traversal cannot walk; an unknown word ("grandson") → nil.
     static func kinshipQuestion(in lower: String) -> HallieLineageQuestion? {
+        if let fragment = kinFragmentQuestion(in: lower) { return fragment }
         // The relation word: "(great )*grand<x>", "3rd great grand<x>",
         // "5x great grand<x>", "three times great grand<x>".
         let pattern = /(?:^|\s)(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+)(?:\s+on\s+(?:his|her|my|our|their|the)\s+(paternal|maternal|father'?s|mother'?s)\s+side)?\b/
@@ -723,6 +724,61 @@ enum HallieLineageQuestion: Equatable, Sendable {
         }
         guard let sex = grandparentSex(noun) else { return nil }
         return .deepAncestor(person: person, depth: greats + 2, sex: sex, side: side)
+    }
+
+    /// One-hop kin nouns a bare fragment may end in, mapped to the closed
+    /// relation vocabulary. Plurals of the single-sex words ("brothers")
+    /// take the same relation: the executor lists every match anyway.
+    static let kinFragmentNouns: [String: ArchivistQueryAST.Graph.Relation] = [
+        "father": .father, "dad": .father, "daddy": .father, "papa": .father,
+        "mother": .mother, "mom": .mother, "mum": .mother, "mama": .mother,
+        "parents": .parents, "parent": .parents,
+        "brother": .brother, "brothers": .brother,
+        "sister": .sister, "sisters": .sister,
+        "siblings": .siblings, "sibling": .siblings,
+        "son": .son, "sons": .son, "daughter": .daughter, "daughters": .daughter,
+        "children": .children, "child": .children, "kids": .children, "kid": .children,
+        "husband": .husband, "wife": .wife, "spouse": .spouse, "spouses": .spouse,
+        "uncle": .uncle, "uncles": .uncle, "aunt": .aunt, "aunts": .aunt,
+        "cousin": .cousin, "cousins": .cousins,
+        "nephew": .nephew, "nephews": .nephew, "niece": .niece, "nieces": .niece,
+    ]
+
+    /// Words that make a possessive prefix a SENTENCE, not a fragment
+    /// ("who is tim's brother" keeps going to the translator, whose closed
+    /// vocabulary handles the full question; only the bare fragment form
+    /// is claimed here).
+    private static let kinFragmentSentenceWords: Set<String> = [
+        "who", "whom", "whose", "what", "where", "when", "how", "why", "which",
+        "is", "was", "are", "were", "did", "do", "does", "can", "could", "would",
+        "tell", "me", "us", "about", "show", "find", "list", "give", "name",
+        "have", "has", "had", "of", "for", "with", "to", "in", "on", "i", "we", "you",
+    ]
+
+    /// A BARE possessive + one-hop kin noun, the whole question — "and her
+    /// husband?", "her kids", "and martha lamson's husband", "my brother"
+    /// (eval 2026-09-01: "and her husband?" after "did she have kids" was
+    /// read by the follow-up refiner as a person named Husband). Optional
+    /// continuation leads in front. A pronoun possessor ("Her") is handed
+    /// on as the person and resolved from conversation memory by the
+    /// executor's pre-translation step, exactly like "photos of him".
+    /// Anything with a verb or question word in the possessor is NOT
+    /// claimed — full sentences keep their translator route.
+    static func kinFragmentQuestion(in lower: String) -> HallieLineageQuestion? {
+        let pattern = /^(?:(?:and|also|then|now|so|ok|okay|hallie|please|what about|how about|and what about|and how about),?\s+)*(?:(my|our)|(his|her|their)|([a-z][a-z .'-]*?)'s?)\s+(?:own\s+)?([a-z]+)\s*(?:,?\s*(?:please|hallie|then))?$/
+        guard let m = lower.firstMatch(of: pattern),
+              let relation = kinFragmentNouns[String(m.4)] else { return nil }
+        if m.1 != nil { return .kinship(person: nil, relation: relation, side: nil) }
+        if let pronoun = m.2 {
+            return .kinship(person: capitalizedName(String(pronoun)), relation: relation, side: nil)
+        }
+        let possessor = String(m.3 ?? "").trimmingCharacters(in: .whitespaces)
+        let words = possessor.split(separator: " ").map(String.init)
+        guard !words.isEmpty, words.count <= 5,
+              !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
+              possessor.firstMatch(of: /^[a-z][a-z .'-]*$/) != nil,
+              !possessor.hasPrefix("the ") else { return nil }
+        return .kinship(person: capitalizedName(possessor), relation: relation, side: nil)
     }
 
     /// "great great great grandpa" → (3, "grandpa"); "3rd great
