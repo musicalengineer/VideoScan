@@ -233,6 +233,14 @@ extension HallieTurnExecutor {
             case .death:
                 outcome = .declined
                 sentences.append("The People profile for \(name) doesn't record that.")
+            case .birthPlace, .deathPlace:
+                // A People profile carries a birth DATE and nothing else
+                // about the event, so there is no place to give. Say that
+                // rather than substituting the date for the place.
+                outcome = .declined
+                sentences.append(
+                    "The People profile for \(name) doesn't record a place — "
+                        + "it only carries a birth date.")
             case .kinship, .familyTree, .relationship, .commonAncestor:
                 outcome = .declined
                 let what = payload.relation.map { "\($0.rawValue) " } ?? "relatives "

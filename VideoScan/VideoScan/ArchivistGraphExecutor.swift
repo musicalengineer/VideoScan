@@ -114,6 +114,10 @@ struct ArchivistGraphAmbiguityCandidate: Sendable, Equatable {
 struct ArchivistGraphQuery: Sendable, Equatable {
     enum Operation: String, Sendable, Equatable {
         case biography, birth, death, kinship, familyTree
+        /// "where was X born / did X die" — the PLACE, not the date
+        /// (Rick, 2026-08-31). See ArchivistQueryAST.Graph.Operation.
+        case birthPlace = "birth-place"
+        case deathPlace = "death-place"
         /// "how is A related to B" — `people` is exactly two (2026-08-18).
         case relationship
     }
@@ -201,6 +205,8 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         case .biography: operation = .biography
         case .birth: operation = .birth
         case .death: operation = .death
+        case .birthPlace: operation = .birthPlace
+        case .deathPlace: operation = .deathPlace
         case .kinship: operation = .kinship
         case .familyTree: operation = .familyTree
         case .relationship, .commonAncestor: operation = .relationship
@@ -929,6 +935,27 @@ enum ArchivistGraphExecutor {
                     .init(personID: $0.child.id, personName: $0.child.name)
                 })
 
+        case .birthPlace, .deathPlace:
+            guard query.relation == nil else {
+                return declineUnexpectedRelation()
+            }
+            // The place, not the date. lifePlace fails closed with its own
+            // wording when the record simply has no place recorded, which
+            // is common in this tree — that is a better answer than
+            // silently handing back the birthday, which is what "where was
+            // Eileen Latta born" used to do.
+            let placeAnswer = ArchivistBiographyPolicy.lifePlace(
+                personID: person.id,
+                birth: query.operation == .birthPlace,
+                in: graph)
+            return fromPolicy(
+                placeAnswer,
+                evidence: lifeDateEvidence(
+                    for: person, birth: query.operation == .birthPlace,
+                    identityBridge: identityBridge),
+                identityBridge: identityBridge,
+                unresolvedProfileRoute: nil)
+
         case .birth, .death:
             guard query.relation == nil else {
                 return declineUnexpectedRelation()
@@ -995,6 +1022,14 @@ enum ArchivistGraphExecutor {
                 candidates: candidates, in: graph)
         case .death:
             return ArchivistBiographyPolicy.lifeDate(
+                for: typedName, birth: false,
+                candidates: candidates, in: graph)
+        case .birthPlace:
+            return ArchivistBiographyPolicy.lifePlace(
+                for: typedName, birth: true,
+                candidates: candidates, in: graph)
+        case .deathPlace:
+            return ArchivistBiographyPolicy.lifePlace(
                 for: typedName, birth: false,
                 candidates: candidates, in: graph)
         case .biography, .kinship, .familyTree, .relationship:

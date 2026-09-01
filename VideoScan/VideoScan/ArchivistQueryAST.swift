@@ -225,6 +225,18 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
     struct Graph: Codable, Equatable, Sendable {
         enum Operation: String, Codable, Equatable, Sendable {
             case biography, birth, death, kinship
+            /// "WHERE was Eileen Latta born / did she die / is she buried"
+            /// (Rick, 2026-08-31). Until now the vocabulary had no place
+            /// concept at all, so "when was X born" and "where was X born"
+            /// both landed on `.birth` and both were answered with the
+            /// DATE. ArchivistBiographyPolicy.lifePlace had existed and
+            /// been tested since 2026-08-30 — added when Donna asked this
+            /// on the web client — but it was reachable only through
+            /// ArchivistChatWindow's legacy parser, never from the AST
+            /// route the app actually uses. The answer existed; the
+            /// question could not get to it.
+            case birthPlace = "birth-place"
+            case deathPlace = "death-place"
             /// "show Donna's family tree" — a neighbourhood summary (person)
             /// or a surname roll-up, plus an offer to open the Family Tree tab.
             case familyTree

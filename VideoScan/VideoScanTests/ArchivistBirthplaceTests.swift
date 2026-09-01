@@ -162,3 +162,95 @@ struct ArchivistBirthplaceTests {
         #expect(!mabel.contains("xx"), Comment(rawValue: mabel))
     }
 }
+
+// MARK: - The AST route could not reach the place answer (Rick, 2026-08-31)
+//
+// Rick: "I ask where was eillen latta born, hallie just says the birthday,
+// no idea of places. Bug."
+//
+// Everything above this line was already true and already passing. The
+// answer existed, was correct, and was tested — and was UNREACHABLE from
+// the route the app actually uses. ArchivistQuestionParser is called from
+// exactly one place, ArchivistChatWindow's legacy path. The main app and
+// the web client go through the AST, and ArchivistQueryAST.Graph.Operation
+// had no place concept at all: "when was X born" and "where was X born"
+// both decoded to `.birth`, and `.birth` is answered with lifeDate.
+//
+// So a green suite proved the feature worked while the user could not get
+// to it. These tests pin the ROUTE, not just the answer.
+
+struct ArchivistBirthplaceRoutingTests {
+
+    private func graph() -> GedcomFamilyGraph {
+        GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Eileen /Latta/
+        1 SEX F
+        1 BIRT
+        2 DATE 14 MAR 1930
+        2 PLAC Boston, Suffolk, Massachusetts
+        1 DEAT
+        2 DATE 2 FEB 2023
+        2 PLAC Springfield, Hampden, Massachusetts
+        0 TRLR
+        """)
+    }
+
+    /// The vocabulary itself. Without these two cases the question has
+    /// nowhere to go, whatever the translator emits.
+    @Test func theASTCarriesAPlaceOperationDistinctFromTheDate() {
+        #expect(ArchivistQueryAST.Graph.Operation(rawValue: "birth-place") == .birthPlace)
+        #expect(ArchivistQueryAST.Graph.Operation(rawValue: "death-place") == .deathPlace)
+        #expect(ArchivistQueryAST.Graph.Operation.birthPlace != .birth)
+        #expect(ArchivistQueryAST.Graph.Operation.deathPlace != .death)
+    }
+
+    /// The AST operation survives the hop into the executor's own enum.
+    /// This mapping is where a new case silently becomes `.biography` if
+    /// someone adds a `default:`.
+    @Test func thePlaceOperationSurvivesTheHopIntoTheExecutorQuery() {
+        let birth = ArchivistGraphQuery(
+            .init(people: ["eileen latta"], operation: .birthPlace))
+        #expect(birth.operation == .birthPlace)
+        let death = ArchivistGraphQuery(
+            .init(people: ["eileen latta"], operation: .deathPlace))
+        #expect(death.operation == .deathPlace)
+    }
+
+    /// The bug, end to end: the place question must answer with the PLACE.
+    @Test func whereWasSheBornAnswersWithThePlaceNotTheBirthday() {
+        let answer = ArchivistBiographyPolicy.lifePlace(
+            personID: "@I1@", birth: true, in: graph())
+        #expect(answer.state == .answered)
+        #expect(answer.text.contains("Boston, Suffolk, Massachusetts"),
+                "got: \(answer.text)")
+    }
+
+    @Test func whereDidSheDieAnswersWithThePlace() {
+        let answer = ArchivistBiographyPolicy.lifePlace(
+            personID: "@I1@", birth: false, in: graph())
+        #expect(answer.state == .answered)
+        #expect(answer.text.contains("Springfield, Hampden, Massachusetts"),
+                "got: \(answer.text)")
+    }
+
+    /// And the date question is untouched — the fix must not swap the bug
+    /// around so that "when" now answers with a town.
+    @Test func whenWasSheBornStillAnswersWithTheDate() {
+        let answer = ArchivistBiographyPolicy.lifeDate(
+            personID: "@I1@", birth: true, in: graph())
+        #expect(answer.state == .answered)
+        #expect(answer.text.contains("1930"), "got: \(answer.text)")
+    }
+
+    /// The translator has to emit the new operation or the vocabulary is
+    /// decoration. Pin the two examples in the prompt.
+    @Test func theTranslatorPromptTeachesWhenVersusWhere() {
+        let prompt = OllamaQueryTranslator.astSystemPrompt
+        #expect(prompt.contains("birth-place"),
+                "the prompt must show the model how to ask for a birthplace")
+        #expect(prompt.contains("death-place"))
+        #expect(prompt.contains("WHEN asks for the date; WHERE asks for the place"))
+    }
+}

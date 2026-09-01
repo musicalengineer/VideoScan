@@ -753,6 +753,13 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     {"shape":"graph","payload":{"people":["ellen"],"operation":"birth"}}
     "when did Ellen die?" -> \
     {"shape":"graph","payload":{"people":["ellen"],"operation":"death"}}
+    WHEN asks for the date; WHERE asks for the place. They are different \
+    operations and must never be swapped — answering "where was she born" \
+    with a birthday is wrong, not merely incomplete.
+    "where was Ellen born?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"birth-place"}}
+    "where did Ellen die?" / "where is Ellen buried?" -> \
+    {"shape":"graph","payload":{"people":["ellen"],"operation":"death-place"}}
     "who is Ellen's father?" -> \
     {"shape":"graph","payload":{"people":["ellen"],"operation":"kinship","relation":"father"}}
     "who was Donna's great grandmother on her maternal side?" -> \

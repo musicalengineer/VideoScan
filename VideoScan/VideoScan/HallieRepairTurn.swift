@@ -272,6 +272,12 @@ enum HallieRepairTurn {
             case .death:
                 return g.people.count == 1 ? "a question about when \(g.people[0]) died"
                     : "a question about death dates\(list(g.people))"
+            case .birthPlace:
+                return g.people.count == 1 ? "a question about where \(g.people[0]) was born"
+                    : "a question about birthplaces\(list(g.people))"
+            case .deathPlace:
+                return g.people.count == 1 ? "a question about where \(g.people[0]) died"
+                    : "a question about where people died\(list(g.people))"
             }
         case .presence(let p):
             let kind = p.mediaKind == .photo ? "photos" : "videos"
