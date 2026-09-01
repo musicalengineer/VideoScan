@@ -16,14 +16,25 @@
 set -u
 
 REPO=${REPO:-$HOME/dev/VideoScan}
-HOST=${HOST:-http://localhost:11434}
+# NOT $HOST. zsh predefines HOST as the machine's hostname, so
+# `HOST=${HOST:-http://localhost:11434}` silently keeps "RicksM4" and every
+# request goes nowhere. Caught 2026-08-31 by running the script instead of
+# scheduling it.
+ENDPOINT=${ENDPOINT:-http://localhost:11434}
 SEED=${SEED:-101}
 # Three models, chosen so the result is INTERPRETABLE rather than merely
 # favourable. Baseline vs 3.6-dense isolates architecture (3B active -> 27B
 # active at the same generation); 3.6-dense vs 3.8-dense isolates the
 # generation (identical shape, ten months of post-training apart). Without
 # the middle model a win is real but unattributable.
-MODELS=(${MODELS:-qwen3.6:35b-a3b-nvfp4 qwen3.6:27b-mlx qwen3.8:27b-mlx})
+# zsh does NOT word-split an unquoted expansion the way bash does, so
+# `MODELS=(${MODELS:-a b c})` yields ONE element containing all three names.
+# Split explicitly with ${=...}.
+if [[ -z ${MODELS:-} ]]; then
+  MODELS=(qwen3.6:35b-a3b-nvfp4 qwen3.6:27b-mlx qwen3.8:27b-mlx)
+else
+  MODELS=(${=MODELS})
+fi
 BASELINE=${MODELS[1]}
 CANDIDATE=${MODELS[-1]}
 
@@ -35,9 +46,8 @@ LOG=$OUT/run.log
 say() { print -r -- "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 
 say "=== overnight model fitness ==="
-say "baseline  $BASELINE"
-say "candidate $CANDIDATE"
-say "host      $HOST"
+say "models    ${MODELS[*]}"
+say "endpoint  $ENDPOINT"
 say "output    $OUT"
 
 # Only run models that are actually present; a typo'd tag must not look like
@@ -55,7 +65,7 @@ for m in $MODELS; do
   say ""
   say "--- fitness corpus: $m ---"
   python3 "$REPO/tools/model-fitness/run_fitness.py" run \
-    --model "$m" --host "$HOST" --seed "$SEED" \
+    --model "$m" --host "$ENDPOINT" --seed "$SEED" \
     --out "$OUT/fitness-$slug.jsonl" >>"$LOG" 2>&1
   say "exit=$?"
   RUNS+=("$OUT/fitness-$slug.jsonl")
@@ -66,7 +76,7 @@ for m in $MODELS; do
   say ""
   say "--- qwen-bench tool planning: $m ---"
   python3 "$REPO/tools/qwen-bench/qwen_bench.py" run \
-    --transport native-tools --host "$HOST" --model "$m" \
+    --transport native-tools --host "$ENDPOINT" --model "$m" \
     --seed "$SEED" --samples 1 \
     --out "$OUT/qwenbench-$slug.jsonl" >>"$LOG" 2>&1
   say "exit=$?"
