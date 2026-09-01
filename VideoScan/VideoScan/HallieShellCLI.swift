@@ -807,6 +807,30 @@ enum HallieShellCLI {
         let userEvent = transcriptEvent(
             kind: .user, text: question, state: &state)
         await dependencies.recordTranscript([userEvent])
+
+        // CONJUNCTION (Rick, 2026-09-01). "who was Martha Lamson and do we
+        // have any videos of her" is two questions; the AST holds one shape,
+        // so today one clause silently wins and the other is discarded.
+        // HallieQuestionSplitter returns nil for everything it is not sure
+        // about, so this fires only on a genuine cross-shape conjunction.
+        //
+        // Recursing through `answer` on purpose: the second clause then runs
+        // against the conversation memory the FIRST clause just wrote, so a
+        // pronoun the splitter could not bind statically still finds a
+        // subject. Termination is safe — split() returns nil for a single
+        // question, so a clause never splits again.
+        //
+        // Set VIDEOSCAN_HALLIE_SPLIT=0 to compare against the old behaviour
+        // without rebuilding.
+        if ProcessInfo.processInfo.environment["VIDEOSCAN_HALLIE_SPLIT"] != "0",
+           let clauses = HallieQuestionSplitter.split(question) {
+            var outcome: AnswerOutcome = .declined
+            for clause in clauses {
+                outcome = await answer(clause, options: options, state: &state,
+                                       output: output, dependencies: dependencies)
+            }
+            return outcome
+        }
         // A reset is a control-plane turn, not modal input. Detect it before
         // the picker / drill / telling owners: otherwise "start over" can be
         // consumed as a drill correction or as the end of a telling session.

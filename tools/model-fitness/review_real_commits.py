@@ -54,6 +54,55 @@ SYSTEM = (
 )
 
 
+def configured_model() -> str:
+    """Whatever Settings ▸ Archivist Brain is set to, else the shipped default.
+
+    One dropdown governs both Hallie and this reviewer. Hard-coding a second
+    copy of the tag here is how the app and its tools end up disagreeing about
+    which brain is in use — the same five-copies problem the Swift side just
+    finished collapsing into HallieBrain.defaultModel.
+    """
+    try:
+        out = subprocess.run(
+            ["defaults", "read", "Rick-Breen.VideoScan", "archivist.ollamaModel"],
+            capture_output=True, text=True, timeout=5)
+        tag = out.stdout.strip()
+        if out.returncode == 0 and tag:
+            return tag
+    except Exception:                                 # noqa: BLE001
+        pass
+    return "qwen3.8:27b-mlx"
+
+
+def units(args: argparse.Namespace) -> list[tuple[str, str, str]]:
+    """(label, subject, diff) for whatever the caller asked to review."""
+    def run(cmd: list[str]) -> str:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              check=True).stdout
+
+    if args.working or args.staged:
+        staged = ["--cached"] if args.staged else []
+        diff = run(["git", "diff", *staged, "--stat", "--patch"])
+        if not diff.strip():
+            return []
+        what = "staged changes" if args.staged else "working tree"
+        return [("local", what, diff)]
+
+    if args.range:
+        shas = run(["git", "log", "--no-merges", "--format=%H%x00%s",
+                    args.range]).splitlines()
+    else:
+        shas = run(["git", "log", "--no-merges", f"-{args.count}",
+                    "--format=%H%x00%s"]).splitlines()
+    out = []
+    for line in shas:
+        if "\0" not in line:
+            continue
+        sha, subject = line.split("\0", 1)
+        out.append((sha[:8], subject, diff_of(sha)))
+    return out
+
+
 def commits(count: int) -> list[tuple[str, str]]:
     """(sha, subject) newest first, merges excluded."""
     out = subprocess.run(
@@ -106,29 +155,40 @@ def clean(answer: str) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--model", default="qwen3.8:27b-mlx")
+    parser.add_argument("--model", default=None,
+                        help="default: whatever Settings > Archivist Brain is set to")
     parser.add_argument("--endpoint", default="http://localhost:11434")
-    parser.add_argument("--count", type=int, default=21)
+    parser.add_argument("--count", type=int, default=21,
+                        help="review the last N commits (default)")
+    parser.add_argument("--range", default=None,
+                        help="a git range, e.g. origin/main..HEAD")
+    parser.add_argument("--staged", action="store_true",
+                        help="review what is staged, before you commit it")
+    parser.add_argument("--working", action="store_true",
+                        help="review the working tree, committed or not")
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
+    args.model = args.model or configured_model()
 
     stamp = time.strftime("%Y%m%d-%H%M")
     out = Path(args.out or (Path.home() / "Library/Logs/VideoScan"
                             / f"real-review-{stamp}"))
     out.mkdir(parents=True, exist_ok=True)
 
-    rows = commits(args.count)
+    rows = units(args)
+    if not rows:
+        print("nothing to review")
+        return 0
     print(f"model    {args.model}")
-    print(f"commits  {len(rows)}")
+    print(f"units    {len(rows)}")
     print(f"out      {out}\n", flush=True)
 
     flagged, quiet, broken = [], [], []
-    for index, (sha, subject) in enumerate(rows, 1):
-        prompt = ("Review this commit.\n\n```diff\n" + diff_of(sha) + "\n```")
+    for index, (short, subject, diff) in enumerate(rows, 1):
+        prompt = ("Review this change.\n\n```diff\n" + diff + "\n```")
         answer, seconds, error = ask(args.endpoint, args.model, prompt, args.timeout)
 
-        short = sha[:8]
         if error:
             broken.append((short, subject, error))
             state = "ERROR"
@@ -148,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     total = len(rows)
     print(f"\n{'=' * 64}")
-    print(f"{args.model} over {total} commits believed correct")
+    print(f"{args.model} over {total} change(s)")
     print(f"{'=' * 64}")
     print(f"  quiet (NO FINDINGS)  {len(quiet):>3}/{total}")
     print(f"  flagged              {len(flagged):>3}/{total}"
