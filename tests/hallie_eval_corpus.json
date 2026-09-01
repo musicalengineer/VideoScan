@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 200 questions across nine categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 229 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -1404,6 +1404,196 @@
       "text": "show me the family tree for Donna",
       "expect": "kinship",
       "notes": "A person, not a surname — must fall through to the person family-tree route, not decline."
+    },
+    {
+      "id": "cj001",
+      "category": "conjunction",
+      "text": "where was Martha Lamson born and when was she born",
+      "expect": "biography",
+      "mustMatch": [
+        "Ridgewell|Essex|England",
+        "1633"
+      ],
+      "mustNotContain": [
+        "who do you mean",
+        "not sure who you mean"
+      ],
+      "notes": "Rick 2026-09-01. Cross-shape conjunction (place + date). Both halves must be answered; the pronoun binds to the name six words earlier."
+    },
+    {
+      "id": "cj002",
+      "category": "conjunction",
+      "text": "did she have kids",
+      "expect": "kinship",
+      "followsPrevious": true,
+      "mustMatch": [
+        "child|children|son|daughter|kids"
+      ],
+      "mustNotContain": [
+        "who do you mean",
+        "not sure who you mean"
+      ],
+      "notes": "Pronoun follow-up after a split question: conversation memory must hold Martha Lamson."
+    },
+    {
+      "id": "cj003",
+      "category": "conjunction",
+      "text": "and her husband?",
+      "expect": "kinship",
+      "followsPrevious": true,
+      "mustMatch": [
+        "Rice"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ],
+      "notes": "Librarian conversation: a fragment that continues the thread."
+    },
+    {
+      "id": "cj004",
+      "category": "conjunction",
+      "text": "who was Martha Lamson and do we have any videos of her",
+      "expect": "biography",
+      "mustMatch": [
+        "Lamson",
+        "1888|motion picture|film|footage|video"
+      ],
+      "mustNotContain": [
+        "who do you mean",
+        "not sure who you mean"
+      ],
+      "notes": "The measured failure of 2026-09-01: translator kept the media half and dropped the biography, then 'her' had no antecedent."
+    },
+    {
+      "id": "cj005",
+      "category": "conjunction",
+      "text": "when did she die",
+      "expect": "kinship",
+      "followsPrevious": true,
+      "mustMatch": [
+        "1717"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ]
+    },
+    {
+      "id": "cj006",
+      "category": "conjunction",
+      "text": "who was Thomasine Frost and are there any photos of her",
+      "expect": "graceful_decline",
+      "mustMatch": [
+        "Frost",
+        "1838|photograph|photo|painting|portrait"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ],
+      "notes": "Biography + photo ask for someone who died two centuries before photography. The photo half is CORRECTLY a decline (the 1838 line), so the merged turn is graded as a graceful decline; mustMatch still requires the biography half."
+    },
+    {
+      "id": "cj007",
+      "category": "conjunction",
+      "text": "when was Donna born and who are her sons",
+      "expect": "kinship",
+      "mustMatch": [
+        "19\\d\\d",
+        "Dan|Mark|Tim|Matt"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ]
+    },
+    {
+      "id": "cj008",
+      "category": "conjunction",
+      "text": "who is Tim's brother and how old is Tim",
+      "expect": "kinship",
+      "mustMatch": [
+        "Dan|Mark|Matt",
+        "\\d+"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ]
+    },
+    {
+      "id": "cj009",
+      "category": "conjunction",
+      "text": "who were Martha Lamson's parents and where was she born",
+      "expect": "kinship",
+      "mustMatch": [
+        "Ridgewell|Essex|England"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ],
+      "notes": "Person + place. If the tree records no parents the first half may honestly say so; the place half must still answer."
+    },
+    {
+      "id": "cj010",
+      "category": "conjunction",
+      "text": "tell me about Martha Lamson then show me the family tree on her",
+      "expect": "biography",
+      "mustMatch": [
+        "Lamson"
+      ],
+      "mustNotContain": [
+        "who do you mean"
+      ],
+      "notes": "'then' conjunction; second clause is a tree action."
+    },
+    {
+      "id": "cj011",
+      "category": "conjunction",
+      "text": "show me Donna and the boys at Christmas",
+      "expect": "catalog",
+      "notes": "NEGATIVE: compound noun phrase, must NOT split. 'the boys at Christmas' is a fragment, not a question."
+    },
+    {
+      "id": "cj012",
+      "category": "conjunction",
+      "text": "how many videos do we have from 1994 and what happened that year",
+      "expect": "catalog",
+      "mustMatch": [
+        "\\d+"
+      ],
+      "notes": "Count + open temporal. The second half may honestly say the catalog cannot narrate a year; the count must still be given."
+    },
+    {
+      "id": "ec011",
+      "category": "edge_cases",
+      "text": "show me a video of Edmund Rice",
+      "expect": "graceful_decline",
+      "mustMatch": [
+        "1888|motion picture|film"
+      ],
+      "mustNotContain": [
+        "couldn't find",
+        "no evidence"
+      ],
+      "notes": "Historical plausibility (Rick 2026-09-01): died 1663, motion pictures begin 1888. The honest line, not a failed search."
+    },
+    {
+      "id": "ec012",
+      "category": "edge_cases",
+      "text": "are there any photos of Thomasine Frost",
+      "expect": "graceful_decline",
+      "mustMatch": [
+        "1838|photograph"
+      ],
+      "mustNotContain": [
+        "couldn't find",
+        "no evidence"
+      ],
+      "notes": "Died 1654; photography begins 1838."
+    },
+    {
+      "id": "ec013",
+      "category": "edge_cases",
+      "text": "do we have any recordings of Edmund Rice's voice",
+      "expect": "graceful_decline",
+      "notes": "Probe: sound recording begins 1877 (WorldKnowledge has the fact). Any honest decline passes; the floor line would be better."
     }
   ]
 }

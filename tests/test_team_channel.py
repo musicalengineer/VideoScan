@@ -241,3 +241,10 @@ class TeamChannelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WriteOnlySeatTests(unittest.TestCase):
+    def test_reviewer_can_post_but_all_never_addresses_it(self) -> None:
+        self.assertIn("reviewer", team_channel.AGENTS)
+        self.assertNotIn("reviewer", team_channel.expand_recipients("claude", "all"))
+        self.assertEqual(["claude"], team_channel.expand_recipients("reviewer", "claude"))

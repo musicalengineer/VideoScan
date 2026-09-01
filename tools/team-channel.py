@@ -18,7 +18,11 @@ from datetime import datetime
 from pathlib import Path
 
 
-AGENTS = ("codex", "claude", "rick", "bob")
+AGENTS = ("codex", "claude", "rick", "bob", "reviewer")
+# Seats that only ever WRITE. "reviewer" is the nightly local-model code
+# review (tools/model-fitness/nightly_review.sh, 2026-09-01); nothing reads
+# its inbox, so "all" must not address it.
+WRITE_ONLY = ("reviewer",)
 DEFAULT_DB = (
     Path.home()
     / "Library"
@@ -98,7 +102,7 @@ def expand_recipients(author: str, value: str) -> list[str]:
     if "all" in requested:
         if len(requested) != 1:
             raise ValueError("use 'all' by itself")
-        return [agent for agent in AGENTS if agent != author]
+        return [agent for agent in AGENTS if agent != author and agent not in WRITE_ONLY]
     recipients = list(dict.fromkeys(validate_agent(part) for part in requested if part))
     if not recipients:
         raise ValueError("at least one recipient is required")

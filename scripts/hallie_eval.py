@@ -38,6 +38,71 @@ MEDIA_FILENAME_EXTENSIONS = (
 
 # ---------------------------------------------------------------- run
 
+# The ONE place the shipped tag is written in Swift is HallieBrain.defaultModel
+# (OllamaQueryTranslator.swift). Mirror it here; Settings overrides it.
+SHIPPED_BRAIN = "qwen3.8:27b-mlx"
+
+
+def configured_model():
+    """Settings > Archivist Brain, else the shipped brain. The harness used
+    to default to the RETIRED MoE tag, so a run without --model measured
+    the wrong model (2026-09-01)."""
+    try:
+        value = subprocess.run(
+            ["defaults", "read", "Rick-Breen.VideoScan", "archivist.ollamaModel"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        value = ""
+    return value or SHIPPED_BRAIN
+
+
+def pair_turns(turns):
+    """(question text, assistant event) pairs, in order.
+
+    Assistant turns carry `outcome`; user turns don't. A conjunction the
+    shell split ("where was Martha Lamson born and when was she born",
+    2026-09-01) logs ONE user turn followed by one assistant turn PER
+    clause. Those extra assistant turns are folded into the same pair —
+    prose joined, evidence concatenated — so the reader's actual question
+    is graded on everything Hallie said in reply to it. Before this, the
+    second answer had no user turn to pair with and the question graded as
+    "produced no matched turn", which is why the splitter measured a point
+    DOWN on the day it was added. The merged event keeps the FIRST clause's
+    route/outcome and records every clause's outcome in `outcomes`.
+    """
+    pairs, pending, open_pair = [], None, False
+    for t in turns:
+        kind = t.get("kind")
+        if kind == "system":
+            pending, open_pair = None, False
+            continue
+        if kind == "user":
+            pending, open_pair = t.get("text", ""), False
+            continue
+        if kind not in ("assistant", "error"):
+            continue
+        if pending is not None:
+            merged = dict(t)
+            merged["outcomes"] = [t.get("outcome")]
+            pairs.append((pending, merged))
+            pending, open_pair = None, True
+        elif open_pair and pairs[-1][1].get("kind") == kind:
+            _, prev = pairs[-1]
+            prev["text"] = " ".join(
+                part for part in (prev.get("text", ""), t.get("text", "")) if part
+            )
+            prev["outcomes"] = prev.get("outcomes", []) + [t.get("outcome")]
+            for key in ("mediaEvidence", "knowledgeEvidence"):
+                if t.get(key):
+                    prev[key] = list(prev.get(key) or []) + list(t[key])
+            # A decline in ANY clause is a defect for the whole question:
+            # half an answer is the failure this exists to measure.
+            if t.get("outcome") == "declined" and prev.get("outcome") != "declined":
+                prev["outcome"] = "declined"
+    return pairs
+
+
+
 
 def load_corpus(path):
     with open(path) as f:
@@ -142,65 +207,41 @@ def read_run_turns(run_id):
                     continue
                 if event.get("runID") == run_id:
                     turns.append(event)
-    return sorted(turns, key=lambda event: event.get("timestamp", ""))
+    return order_turns(turns)
 
 
-def run(args):
-    questions = load_corpus(args.corpus)
-    if args.limit:
-        questions = questions[: args.limit]
-    run_id = f"hallie-eval-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+def order_turns(turns):
+    """Session order, then the shell's own per-session `sequence`.
 
-    cmd = [str(HALLIE), "--no-actions", "--log-run-id", run_id]
-    if not args.no_compose:
-        cmd.append("--compose")
-    if args.host:
-        cmd += ["--host", args.host]
-    if args.model:
-        cmd += ["--model", args.model]
+    Timestamps are whole seconds and the shell writes the transcript
+    asynchronously, so an answer could land in the file AFTER the next
+    scenario's `:reset` system event with the same timestamp. Sorted by
+    timestamp alone, 17 of 229 questions graded as "produced no matched
+    turn" on 2026-09-01 — the answer was there, just filed under the next
+    session. Sessions are ordered by first appearance (the `:reset` that
+    opens each one is written synchronously), events within a session by
+    `sequence`; events without either fall back to file order.
+    """
+    first_seen = {}
+    for index, event in enumerate(turns):
+        first_seen.setdefault(event.get("sessionID"), index)
 
-    # PIN THE BINARY. The launcher otherwise picks the newest build it can
-    # DISCOVER, which is not necessarily the one carrying the change under
-    # test — on 2026-08-21 two full passes silently measured a stale XcodeRAM
-    # build and read as "no improvement". A run that cannot name its binary
-    # is not a measurement.
-    env = dict(os.environ)
-    binary = args.bin or newest_build()
-    if binary:
-        env["VIDEOSCAN_APP_BIN"] = binary
-        built = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
-        print(f"[eval] binary: {binary} (built {built})", flush=True)
-    else:
-        raise RuntimeError("no built VideoScan executable found; build once before eval")
+    def key(pair):
+        index, event = pair
+        sequence = event.get("sequence")
+        return (first_seen[event.get("sessionID")],
+                sequence if sequence is not None else index,
+                index)
 
-    print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
-    t0 = time.time()
-    proc = subprocess.run(
-        cmd,
-        input=build_stdin(questions),
-        capture_output=True,
-        text=True,
-        timeout=args.timeout,
-        cwd=str(REPO),
-        env=env,
-    )
-    elapsed = time.time() - t0
-    print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
+    return [event for _, event in sorted(enumerate(turns), key=key)]
 
+
+
+def build_records(questions, turns):
+    """Join the corpus to the transcript. Returns (records, used indexes,
+    unmatched question texts). Pure: `pair` re-runs it on an old runID."""
     unmatched = []
-    turns = read_run_turns(run_id)
-    # Pair: assistant turns carry `outcome`; user turns don't. Walk in order.
-    pairs, pending = [], None
-    for t in turns:
-        if t.get("kind") == "system":
-            pending = None
-            continue
-        if t.get("kind") == "user":
-            pending = t.get("text", "")
-            continue
-        if t.get("kind") in ("assistant", "error") and pending is not None:
-            pairs.append((pending, t))
-            pending = None
+    pairs = pair_turns(turns)
 
     # Align by the QUESTION TEXT the log recorded, never by position: a turn
     # that logs nothing (or twice) used to shift every later label, which
@@ -245,6 +286,7 @@ def run(args):
                 "answer": ans.get("text", ""),
                 "route": ans.get("route"),
                 "outcome": ans.get("outcome"),
+                "outcomes": ans.get("outcomes"),
                 "composedBy": ans.get("composedBy"),
                 "basis": ans.get("basisLine"),
                 "mediaEvidence": ans.get("mediaEvidence") or [],
@@ -255,6 +297,84 @@ def run(args):
                 "eventID": ans.get("eventID"),
             }
         )
+    return records, used, unmatched
+
+
+def pair(args):
+    """Re-join an existing run's transcript to the corpus with the CURRENT
+    pairing code — no Hallie session is started. For a run whose meta was
+    written by an older harness (or to re-grade after a corpus edit)."""
+    questions = load_corpus(args.corpus)
+    meta = {}
+    if args.run:
+        with open(args.run) as f:
+            first = json.loads(f.readline())
+            meta = first.get("meta", {})
+    run_id = args.run_id or meta.get("runID")
+    if not run_id:
+        raise SystemExit("pair: need --run-id or a --run file with meta.runID")
+    records, used, unmatched = build_records(questions, read_run_turns(run_id))
+    meta.update({"questions": len(questions), "paired": len(records),
+                 "runID": run_id, "repaired": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        f.write(json.dumps({"meta": meta}) + "\n")
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    print(f"[eval] re-paired {len(records)}/{len(questions)} → {out}")
+    if unmatched:
+        print(f"[eval] WARNING: {len(unmatched)} logged turns matched no corpus question")
+    if len(records) < len(questions):
+        missing = [q["id"] for i, q in enumerate(questions) if i not in used]
+        print(f"[eval] WARNING: {len(questions) - len(records)} questions produced no "
+              f"matched turn: {', '.join(missing[:12])}")
+    return 0
+
+
+def run(args):
+    questions = load_corpus(args.corpus)
+    if args.limit:
+        questions = questions[: args.limit]
+    run_id = f"hallie-eval-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+    cmd = [str(HALLIE), "--no-actions", "--log-run-id", run_id]
+    if not args.no_compose:
+        cmd.append("--compose")
+    if args.host:
+        cmd += ["--host", args.host]
+    if args.model:
+        cmd += ["--model", args.model]
+
+    # PIN THE BINARY. The launcher otherwise picks the newest build it can
+    # DISCOVER, which is not necessarily the one carrying the change under
+    # test — on 2026-08-21 two full passes silently measured a stale XcodeRAM
+    # build and read as "no improvement". A run that cannot name its binary
+    # is not a measurement.
+    env = dict(os.environ)
+    binary = args.bin or newest_build()
+    if binary:
+        env["VIDEOSCAN_APP_BIN"] = binary
+        built = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
+        print(f"[eval] binary: {binary} (built {built})", flush=True)
+    else:
+        raise RuntimeError("no built VideoScan executable found; build once before eval")
+
+    print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
+    t0 = time.time()
+    proc = subprocess.run(
+        cmd,
+        input=build_stdin(questions),
+        capture_output=True,
+        text=True,
+        timeout=args.timeout,
+        cwd=str(REPO),
+        env=env,
+    )
+    elapsed = time.time() - t0
+    print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
+
+    records, used, unmatched = build_records(questions, read_run_turns(run_id))
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -377,7 +497,7 @@ def grade_record(r):
         flags.append("terse")
     # Warmth proxy: a decline that offers nothing is a dead end.
     if (declined and not persona_decline
-            and not re.search(r"\?|would you|want|try|i do have|i can", a, re.I)):
+            and not re.search(r"\?|would you|want|try|i do have|i can|i['’]ll|put it in", a, re.I)):
         flags.append("dead_end_decline")
 
     expected_routes = r.get("expectedRoutes") or []
@@ -535,11 +655,19 @@ def main():
     pr.add_argument("--out", required=True)
     pr.add_argument("--limit", type=int)
     pr.add_argument("--host")
-    pr.add_argument("--model", default="qwen3.6:35b-a3b-nvfp4")
+    pr.add_argument("--model", default=configured_model(),
+                    help="default: Settings > Archivist Brain, else the shipped brain")
     pr.add_argument("--no-compose", action="store_true")
     pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
     pr.add_argument("--timeout", type=int, default=5400)
     pr.set_defaults(func=run)
+
+    pp = sub.add_parser("pair", help="re-join an old run's transcript with the current pairing code")
+    pp.add_argument("--corpus", default=str(REPO / "tests/hallie_eval_corpus.json"))
+    pp.add_argument("--run", help="an existing run file; its meta.runID is reused")
+    pp.add_argument("--run-id")
+    pp.add_argument("--out", required=True)
+    pp.set_defaults(func=pair)
 
     pg = sub.add_parser("grade")
     pg.add_argument("--run", required=True)

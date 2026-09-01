@@ -599,3 +599,125 @@ class HallieEvalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PairTurnsTests(unittest.TestCase):
+    """A split conjunction logs one user turn and several assistant turns
+    (2026-09-01); the harness must grade the reader's question on all of
+    them, not lose the second half as an unmatched turn."""
+
+    def test_plain_turns_pair_one_to_one(self):
+        turns = [
+            {"kind": "user", "text": "who is Donna"},
+            {"kind": "assistant", "text": "Donna is…", "outcome": "answered"},
+            {"kind": "user", "text": "when was she born"},
+            {"kind": "assistant", "text": "1957.", "outcome": "answered"},
+        ]
+        pairs = hallie_eval.pair_turns(turns)
+        self.assertEqual([q for q, _ in pairs], ["who is Donna", "when was she born"])
+        self.assertEqual(pairs[0][1]["outcomes"], ["answered"])
+
+    def test_split_answers_fold_into_the_question_they_answer(self):
+        turns = [
+            {"kind": "user", "text": "where was Martha Lamson born and when was she born"},
+            {"kind": "assistant", "text": "Ridgewell, Essex.", "outcome": "answered",
+             "knowledgeEvidence": [{"id": "a"}]},
+            {"kind": "assistant", "text": "Before 1633.", "outcome": "answered",
+             "knowledgeEvidence": [{"id": "b"}]},
+            {"kind": "user", "text": "did she have kids"},
+            {"kind": "assistant", "text": "Yes.", "outcome": "answered"},
+        ]
+        pairs = hallie_eval.pair_turns(turns)
+        self.assertEqual(len(pairs), 2)
+        question, answer = pairs[0]
+        self.assertEqual(question, "where was Martha Lamson born and when was she born")
+        self.assertEqual(answer["text"], "Ridgewell, Essex. Before 1633.")
+        self.assertEqual(answer["outcomes"], ["answered", "answered"])
+        self.assertEqual([e["id"] for e in answer["knowledgeEvidence"]], ["a", "b"])
+        self.assertEqual(pairs[1][0], "did she have kids")
+
+    def test_a_declined_half_marks_the_whole_question_declined(self):
+        turns = [
+            {"kind": "user", "text": "who was Martha Lamson and do we have any videos of her"},
+            {"kind": "assistant", "text": "Martha Lamson was…", "outcome": "answered"},
+            {"kind": "assistant", "text": "I'm not sure who you mean.", "outcome": "declined"},
+        ]
+        (_, answer), = hallie_eval.pair_turns(turns)
+        self.assertEqual(answer["outcome"], "declined")
+        flags = hallie_eval.grade_record({
+            "answer": answer["text"], "expect": "biography",
+            "outcome": answer["outcome"], "route": "graph"})
+        self.assertIn("declined_expected_answer", flags)
+
+    def test_a_system_turn_resets_pairing_and_orphans_do_not_merge(self):
+        turns = [
+            {"kind": "system", "text": "session start"},
+            {"kind": "assistant", "text": "Hello.", "outcome": "answered"},
+            {"kind": "user", "text": "hi"},
+            {"kind": "assistant", "text": "Hi.", "outcome": "answered"},
+        ]
+        pairs = hallie_eval.pair_turns(turns)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0][1]["text"], "Hi.")
+
+
+class OrderTurnsTests(unittest.TestCase):
+    """The shell writes the transcript asynchronously with whole-second
+    timestamps; an answer can be filed after the next scenario's :reset
+    (17 unmatched questions on 2026-09-01). Order by session, then sequence."""
+
+    def test_an_answer_filed_after_the_next_reset_returns_to_its_session(self):
+        t = "2026-09-01T23:03:03Z"
+        turns = [
+            {"kind": "system", "text": ":reset", "sessionID": "A", "sequence": 1, "timestamp": t},
+            {"kind": "user", "text": "did you have cars", "sessionID": "A", "sequence": 2, "timestamp": t},
+            {"kind": "system", "text": ":reset", "sessionID": "B", "sequence": 1, "timestamp": t},
+            {"kind": "assistant", "text": "No childhood.", "sessionID": "A", "sequence": 3, "timestamp": t},
+            {"kind": "user", "text": "what was school like", "sessionID": "B", "sequence": 2, "timestamp": t},
+            {"kind": "assistant", "text": "No school.", "sessionID": "B", "sequence": 3, "timestamp": t},
+        ]
+        ordered = hallie_eval.order_turns(turns)
+        self.assertEqual([e["text"] for e in ordered],
+                         [":reset", "did you have cars", "No childhood.",
+                          ":reset", "what was school like", "No school."])
+        pairs = hallie_eval.pair_turns(ordered)
+        self.assertEqual([(q, a["text"]) for q, a in pairs],
+                         [("did you have cars", "No childhood."),
+                          ("what was school like", "No school.")])
+
+    def test_events_without_sequence_keep_file_order(self):
+        turns = [{"kind": "user", "text": "a", "sessionID": None},
+                 {"kind": "assistant", "text": "b", "sessionID": None}]
+        self.assertEqual([e["text"] for e in hallie_eval.order_turns(turns)], ["a", "b"])
+
+    def test_an_orphan_after_a_reset_never_merges_into_the_previous_question(self):
+        turns = [
+            {"kind": "user", "text": "who is Donna"},
+            {"kind": "assistant", "text": "Donna is…", "outcome": "answered"},
+            {"kind": "system", "text": ":reset"},
+            {"kind": "assistant", "text": "stray", "outcome": "answered"},
+        ]
+        pairs = hallie_eval.pair_turns(turns)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0][1]["text"], "Donna is…")
+
+
+class ConfiguredModelTests(unittest.TestCase):
+    def test_falls_back_to_the_shipped_brain_when_settings_are_silent(self):
+        with patch.object(hallie_eval.subprocess, "run",
+                          return_value=SimpleNamespace(stdout="")):
+            self.assertEqual(hallie_eval.configured_model(), hallie_eval.SHIPPED_BRAIN)
+        self.assertEqual(hallie_eval.SHIPPED_BRAIN, "qwen3.8:27b-mlx")
+
+    def test_settings_win(self):
+        with patch.object(hallie_eval.subprocess, "run",
+                          return_value=SimpleNamespace(stdout="qwen3.6:27b-mlx\n")):
+            self.assertEqual(hallie_eval.configured_model(), "qwen3.6:27b-mlx")
+
+    def test_floor_line_offer_is_not_a_dead_end(self):
+        flags = hallie_eval.grade_record({
+            "answer": "Thomasine Frost died in 1654, nearly two centuries before photography "
+                      "begins in 1838 — there can’t be a photograph of her. If the family has a "
+                      "painting, put it in her People folder and I’ll show it.",
+            "expect": "graceful_decline", "outcome": "declined", "route": "graph"})
+        self.assertNotIn("dead_end_decline", flags)
