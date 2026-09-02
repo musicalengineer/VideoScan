@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 289 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 290 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2270,7 +2270,7 @@
       "mustContain": [
         "William Love Latta"
       ],
-      "notes": "setup turn for -013: did-you-mean offer (observed live 9/02: PASS)."
+      "notes": "setup turn for the SYNTHETIC yes-after-did-you-mean contract (-013); the did-you-mean offer itself was observed live 9/02: PASS."
     },
     {
       "id": "lv260902-013",
@@ -2284,7 +2284,19 @@
       "mustNotContain": [
         "couldn't tell how"
       ],
-      "notes": "observed live 2026-09-02 18:44 after 'did you mean William Love Latta Sr.?': MISS — 'yes' refused as an unclear refinement. Needs the did-you-mean antecedent turn before it in a chain (research william love latter). DISPATCH: follow-up resolver accepts yes/that one after a which-one/did-you-mean."
+      "notes": "SYNTHETIC contract (codex #973): the live 9/02 sequence was 'research william love latter' → did-you-mean → Rick re-asked with the right name → biography → 'yes' → unclear-refinement decline. An immediate yes after a did-you-mean is the contract worth pinning; -013a → -013 is not the observed sequence. DISPATCH: follow-up resolver accepts yes/that one after a which-one/did-you-mean."
+    },
+    {
+      "id": "lv260902-014",
+      "category": "live",
+      "text": "tell me about rick's parents",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "Eileen",
+        "Richard"
+      ],
+      "notes": "observed live 2026-09-02 18:52 (codex #973 caught it): MISS — basis and evidence cited both Richard Harding Breen Sr and Eileen Latta; the model-composed prose described only Eileen. Wanted: both parents named. DISPATCH: composer completeness — a kinship answer must name every person in the evidence (verifier claim-coverage rule)."
     }
   ]
 }
