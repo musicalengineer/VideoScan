@@ -81,12 +81,14 @@ struct ArchivistGraphExecutorTests {
         #expect(result.conclusion == .answered)
         // One person card for .biography and .familyTree (2026-08-29):
         // a sentence per fact, policy order inside each.
+        // Born 1930, no death recorded, nobody around him dated earlier:
+        // living by LifeStatus (2026-09-01), so the present tense.
         #expect(result.prose
                 == "Chris River was born 3 March 1930. "
-                    + "He was the child of Alex River Sr and Bailey River. "
-                    + "He had 1 recorded sibling, Zoe River. "
-                    + "He was married to Morgan Vale. "
-                    + "He had 2 recorded children, Aaron River and Zoe River Jr. "
+                    + "He is the child of Alex River Sr and Bailey River. "
+                    + "He has 1 recorded sibling, Zoe River. "
+                    + "He is married to Morgan Vale. "
+                    + "He has 2 recorded children, Aaron River and Zoe River Jr. "
                     + "His family tree includes 2 recorded ancestors across 1 generation "
                     + "and 2 recorded descendants across 1 generation.")
         #expect(execute(people: ["Chris River"], operation: .familyTree).prose == result.prose)
@@ -180,9 +182,11 @@ struct ArchivistGraphExecutorTests {
             graph: reversedOrder)
 
         #expect(first == reversed)
+        // Undated all round: living by LifeStatus (2026-09-01); an
+        // unrecorded sex reads "They", which takes the plural verb.
         #expect(first.prose
-                == "Parent One was married to Amy Partner and Zoe Partner. "
-                    + "They had 3 recorded children, Aaron Child, Sam Child and Sam Child. "
+                == "Parent One is married to Amy Partner and Zoe Partner. "
+                    + "They have 3 recorded children, Aaron Child, Sam Child and Sam Child. "
                     + "Their family tree includes 3 recorded descendants across 1 generation.")
         let evidence = try #require(first.evidence)
         #expect(evidence.relationships.map(\.relation) == [.spouse, .children])
@@ -807,8 +811,9 @@ struct ArchivistGraphExecutorTests {
         // People-tab relationship overlay — still identity, still no notes,
         // photos, or paths. Any further field must be justified here.
         #expect(Mirror(reflecting: snapshot).children.compactMap(\.label)
-                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate", "uuid",
-                    "treeIdentity", "treeIdentityUnreadable"])   // 2026-08-29: the tree PIN is identity
+                == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate",
+                    "deathdate",   // 2026-09-01: living / passed on decides Hallie's tense (LifeStatus)
+                    "uuid", "treeIdentity", "treeIdentityUnreadable"])   // 2026-08-29: the tree PIN is identity
         #expect(!String(reflecting: snapshot).contains(profile.referencePath))
         #expect(!String(reflecting: snapshot).contains(profile.notes))
         #expect(!String(reflecting: snapshot).contains(profile.identityNotes!))

@@ -437,6 +437,10 @@ struct HallieGroundedComposer: Sendable {
         "They", or a surname alone.
         - Keep the subject's birth and death dates and birthplace from the \
         claims; they are the facts the reader wants first.
+        - When a line says the Subject is living, speak of them in the present \
+        tense ("is the child of", "is married to", "has four sons"); a living \
+        person's life is not finished. Only "was born" is in the past. When the \
+        line says the Subject has passed on, use the past tense.
         - Keep it short: at most 3 sentences for a list of items, at most 6 for \
         a biography.
         - Plain text only. No headings, bullets, markdown, or preamble.
@@ -456,6 +460,9 @@ struct HallieGroundedComposer: Sendable {
         }
         if let subject = plan.subject, !subject.isEmpty {
             lines.append("Subject: \(subject)")
+        }
+        if let life = plan.subjectLifeStatus {
+            lines.append(life.composerInstruction)
         }
         lines.append("Answer shape: \(plan.shape.rawValue) (at most \(plan.maxSentences) sentences)")
         if plan.shape == .list {

@@ -621,7 +621,8 @@ extension TreeIdentityDeriver {
                     stableID: snapshot.stableID, canonicalName: snapshot.canonicalName,
                     aliases: snapshot.aliases, birthdate: snapshot.birthdate, note: snapshot.note,
                     kinships: snapshot.kinships, sex: snapshot.sex, uuid: snapshot.uuid,
-                    treeIdentity: candidate.identity(fingerprint: nil))
+                    treeIdentity: candidate.identity(fingerprint: nil),
+                    deathdate: snapshot.deathdate)
             }
             if added == 0 { break }
         }

@@ -337,7 +337,7 @@ enum HallieAppTurnCoordinator {
                             aliases: $0.aliases,
                             birthdate: $0.birthdate, note: $0.notes,
                             kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
-                            treeIdentity: $0.treeIdentity)
+                            treeIdentity: $0.treeIdentity, deathdate: $0.deathdate)
                     }
                 case .unavailable:
                     return nil

@@ -148,7 +148,14 @@ extension ArchivistGraphExecutor {
                         + treeCited.joined(separator: ", ") + ")."),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
-            catalogPersonName: nil)
+            catalogPersonName: nil,
+            // The anchor's own status (LifeStatus, 2026-09-01), so the
+            // composer never turns "Rick's brothers: Tim" into "Rick had a
+            // brother" for a living Rick.
+            subjectLifeStatus: subjectLifeStatus(
+                treePerson: anchorMember?.gedcomID.flatMap { inputs.graph.people[$0] },
+                profileStableID: anchorMember?.profileStableID,
+                inputs: inputs))
     }
 
     /// Two-person relationship from the overlay, or nil to fall through.

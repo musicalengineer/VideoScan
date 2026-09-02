@@ -107,25 +107,25 @@ enum ResearchEligibility: Equatable, Sendable {
     case refused(reason: String)
 
     /// How many years back a birth must be before someone with no death
-    /// date is treated as deceased.
-    static let presumedLivingYears = 100
+    /// date is treated as deceased. The number lives in `LifeStatus`, the
+    /// one rule for living / passed on (2026-09-01); read it from there.
+    static var presumedLivingYears: Int { LifeStatus.presumedLivingYears }
 
     /// The ONLY way to obtain a subject: from a tree record. A People-tab
     /// profile (contemporary, no GEDCOM record) never reaches here, so it
     /// can never be researched — `refusedForProfile` is what the caller
-    /// shows instead.
+    /// shows instead. With `graph`, the family around the record is
+    /// consulted too (an ancestor of someone deceased is deceased); the
+    /// default keeps the record-only verdict every existing caller had.
     static func evaluate(_ person: GedcomFamilyGraph.Person?,
+                         graph: GedcomFamilyGraph? = nil,
                          now: Date = Date(),
                          calendar: Calendar = .current) -> ResearchEligibility {
         guard let person else {
             return .refused(reason: "Only people with a family-tree record can be researched.")
         }
         let subject = ResearchSubject(person: person)
-        let currentYear = calendar.component(.year, from: now)
-        if subject.deathYear != nil || subject.deathDate?.isEmpty == false {
-            return .eligible(subject)
-        }
-        if let birth = subject.birthYear, birth <= currentYear - presumedLivingYears {
+        if LifeStatus.of(person, in: graph, now: now, calendar: calendar) != .living {
             return .eligible(subject)
         }
         if subject.birthYear == nil {

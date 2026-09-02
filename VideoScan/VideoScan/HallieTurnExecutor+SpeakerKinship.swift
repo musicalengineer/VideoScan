@@ -25,7 +25,8 @@ extension HallieTurnExecutor {
         return FamilyKinshipOverlay(snapshots: profiles.map {
             ArchivistGraphProfileSnapshot(
                 stableID: $0.stableID, canonicalName: $0.canonicalName, aliases: $0.aliases,
-                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate, uuid: $0.uuid,
+                kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate,
+                deathdate: $0.deathdate, uuid: $0.uuid,
                 treeIdentity: $0.treeIdentity)
         }, graph: context.graph)
     }

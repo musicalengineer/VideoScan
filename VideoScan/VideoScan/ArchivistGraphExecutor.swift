@@ -14,6 +14,10 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
     /// and "older" vs "younger"; no notes or photos cross this boundary.
     let sex: PersonSex?
     let birthdate: Date?
+    /// The profile's recorded death, if any (LifeStatus, 2026-09-01): the
+    /// only thing that makes a People-tab person "passed on" in Hallie's
+    /// tense. Additive; nil = none recorded.
+    let deathdate: Date?
     /// Durable profile identity that `.profile(id:)` kinship anchors use.
     let uuid: UUID?
     /// The profile's durable tree pin (design amendment 1). nil = unpinned.
@@ -24,6 +28,7 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
 
     init(stableID: String, canonicalName: String, aliases: [String] = [],
          kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil,
+         deathdate: Date? = nil,
          uuid: UUID? = nil, treeIdentity: TreeIdentity? = nil, treeIdentityUnreadable: Bool = false) {
         self.stableID = stableID
         self.canonicalName = canonicalName
@@ -31,6 +36,7 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
         self.kinships = kinships
         self.sex = sex
         self.birthdate = birthdate
+        self.deathdate = deathdate
         self.uuid = uuid
         self.treeIdentity = treeIdentity
         self.treeIdentityUnreadable = treeIdentityUnreadable
@@ -47,6 +53,7 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
             kinships: profile.kinships,
             sex: profile.sex,
             birthdate: profile.birthdate,
+            deathdate: profile.deathdate,
             uuid: profile.uuid,
             treeIdentity: profile.treeIdentity,
             treeIdentityUnreadable: profile.treeIdentityQuarantined != nil)
@@ -328,6 +335,10 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// whose record shows both parents, for the "Show possible duplicate
     /// in Family Tree" chip. Nil when the card raised no flag.
     let possibleDuplicate: PossibleDuplicate?
+    /// Living or passed on for the person the answer is about (LifeStatus,
+    /// 2026-09-01), so the composer keeps the template's tense. Nil when
+    /// the result has no single subject (declines, ambiguity, no person).
+    let subjectLifeStatus: LifeStatus?
 
     struct PossibleDuplicate: Sendable, Equatable {
         let personID: String
@@ -346,7 +357,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         familyTreeFocus: ArchivistFamilyTreeFocus? = nil,
         subjectIndex: Int? = nil,
         answerPlan: HallieAnswerPlan? = nil,
-        possibleDuplicate: PossibleDuplicate? = nil
+        possibleDuplicate: PossibleDuplicate? = nil,
+        subjectLifeStatus: LifeStatus? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -360,6 +372,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.subjectIndex = subjectIndex
         self.answerPlan = answerPlan
         self.possibleDuplicate = possibleDuplicate
+        self.subjectLifeStatus = subjectLifeStatus
     }
 
     /// The same result tagged with the people-list slot it concerns.
@@ -371,7 +384,24 @@ struct ArchivistGraphResult: Sendable, Equatable {
             ambiguityCandidates: ambiguityCandidates,
             catalogPersonName: catalogPersonName,
             familyTreeFocus: familyTreeFocus, subjectIndex: index,
-            answerPlan: answerPlan, possibleDuplicate: possibleDuplicate)
+            answerPlan: answerPlan, possibleDuplicate: possibleDuplicate,
+            subjectLifeStatus: subjectLifeStatus)
+    }
+
+    /// The same result carrying the subject's life status. Only an answer
+    /// or a missing-fact (which still names the person) is tagged; a
+    /// decline about nobody in particular stays untagged.
+    func withSubjectLifeStatus(_ status: LifeStatus?) -> ArchivistGraphResult {
+        guard let status, conclusion == .answered || conclusion == .missingFact else { return self }
+        return ArchivistGraphResult(
+            conclusion: conclusion, prose: prose, basisLine: basisLine,
+            evidence: evidence, candidates: candidates,
+            profileCandidates: profileCandidates,
+            ambiguityCandidates: ambiguityCandidates,
+            catalogPersonName: catalogPersonName,
+            familyTreeFocus: familyTreeFocus, subjectIndex: subjectIndex,
+            answerPlan: answerPlan, possibleDuplicate: possibleDuplicate,
+            subjectLifeStatus: status)
     }
 }
 
@@ -893,12 +923,47 @@ enum ArchivistGraphExecutor {
             [], profileRoute: profileRoute, spellingCorrection: nil)
     }
 
+    /// Living or passed on for the resolved subject (LifeStatus,
+    /// 2026-09-01): the tree record's verdict, overridden by a death the
+    /// People-tab profile records when the subject came through one.
+    static func subjectLifeStatus(
+        treePerson: GedcomFamilyGraph.Person?,
+        profileStableID: String?,
+        inputs: ArchivistGraphInputs
+    ) -> LifeStatus? {
+        let profile = profileStableID.flatMap { id in inputs.profiles.first { $0.stableID == id } }
+        switch (treePerson, profile) {
+        case (nil, nil):
+            return nil
+        case (let person?, nil):
+            return LifeStatus.of(person, in: inputs.graph)
+        case (let person, let profile?):
+            return LifeStatus.ofProfile(deathdate: profile.deathdate, bridged: person, in: inputs.graph)
+        }
+    }
+
     private static func executeResolved(
         _ query: ArchivistGraphQuery,
         person: GedcomFamilyGraph.Person,
         inputs: ArchivistGraphInputs,
         identityBridge: ArchivistGraphEvidence.IdentityBridge?,
         profileStableID: String?
+    ) -> ArchivistGraphResult {
+        let life = subjectLifeStatus(
+            treePerson: person, profileStableID: profileStableID, inputs: inputs)
+        return executeResolvedOperation(
+            query, person: person, inputs: inputs, identityBridge: identityBridge,
+            profileStableID: profileStableID, lifeStatus: life)
+            .withSubjectLifeStatus(life)
+    }
+
+    private static func executeResolvedOperation(
+        _ query: ArchivistGraphQuery,
+        person: GedcomFamilyGraph.Person,
+        inputs: ArchivistGraphInputs,
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?,
+        profileStableID: String?,
+        lifeStatus: LifeStatus?
     ) -> ArchivistGraphResult {
         let graph = inputs.graph
         switch query.operation {
@@ -912,7 +977,7 @@ enum ArchivistGraphExecutor {
             let peopleTab = peopleTabKin(
                 for: person, profileStableID: profileStableID, inputs: inputs)
             let (answer, plan, card) = HallieBiographyCard.answer(
-                for: person, in: graph, peopleTab: peopleTab)
+                for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(

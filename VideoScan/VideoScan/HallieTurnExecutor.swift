@@ -281,6 +281,9 @@ enum HallieTurnExecutor {
         /// profile becomes a tree vertex in the kinship overlay. Seam for
         /// Phase B (engine-backed answers); carried, not yet reasoned over.
         let treeIdentity: TreeIdentity?
+        /// The profile's recorded death (LifeStatus, 2026-09-01): what makes
+        /// a People-tab person "passed on" in Hallie's tense. Additive.
+        let deathdate: Date?
 
         init(
             stableID: String,
@@ -291,7 +294,8 @@ enum HallieTurnExecutor {
             kinships: [Kinship] = [],
             sex: PersonSex? = nil,
             uuid: UUID? = nil,
-            treeIdentity: TreeIdentity? = nil
+            treeIdentity: TreeIdentity? = nil,
+            deathdate: Date? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
@@ -302,6 +306,7 @@ enum HallieTurnExecutor {
             self.sex = sex
             self.uuid = uuid
             self.treeIdentity = treeIdentity
+            self.deathdate = deathdate
         }
     }
 
@@ -452,6 +457,11 @@ enum HallieTurnExecutor {
         /// on X"): a client with that surface performs it without a tap;
         /// a client without one (shell, web) just lists it. Off by default.
         let performsFirstOfferedAction: Bool
+        /// Living or passed on for the person the answer is about
+        /// (LifeStatus, 2026-09-01). Read by HallieAnswerPlan.derive when
+        /// the route built no plan of its own, so the composer is told the
+        /// tense for a templated kinship answer too. Nil = no verdict.
+        let subjectLifeStatus: LifeStatus?
 
         init(
             route: Route,
@@ -470,7 +480,8 @@ enum HallieTurnExecutor {
             composedBy: HallieComposedBy = .template,
             transcriptText: String? = nil,
             attachments: [HallieAttachment] = [],
-            performsFirstOfferedAction: Bool = false
+            performsFirstOfferedAction: Bool = false,
+            subjectLifeStatus: LifeStatus? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -489,6 +500,7 @@ enum HallieTurnExecutor {
             self.transcriptText = transcriptText
             self.attachments = attachments
             self.performsFirstOfferedAction = performsFirstOfferedAction
+            self.subjectLifeStatus = subjectLifeStatus
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -501,7 +513,8 @@ enum HallieTurnExecutor {
                 clarification: clarification, matchCount: matchCount, mediaAction: mediaAction,
                 offeredActions: offeredActions, answerPlan: answerPlan, composedBy: composedBy,
                 transcriptText: transcriptText, attachments: attachments + extra,
-                performsFirstOfferedAction: performsFirstOfferedAction)
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                subjectLifeStatus: subjectLifeStatus)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -526,7 +539,8 @@ enum HallieTurnExecutor {
                 transcriptText: composition.composedBy == .model
                     ? composition.transcriptText : nil,
                 attachments: attachments,
-                performsFirstOfferedAction: performsFirstOfferedAction)
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                subjectLifeStatus: subjectLifeStatus)
         }
     }
 
@@ -980,6 +994,7 @@ enum HallieTurnExecutor {
                     kinships: $0.kinships,
                     sex: $0.sex,
                     birthdate: $0.birthdate,
+                    deathdate: $0.deathdate,
                     uuid: $0.uuid,
                     treeIdentity: $0.treeIdentity)
             },
@@ -1144,7 +1159,8 @@ enum HallieTurnExecutor {
             citations: [],
             catalogPersonName: result.catalogPersonName,
             offeredActions: graphOffers(result),
-            answerPlan: result.answerPlan)
+            answerPlan: result.answerPlan,
+            subjectLifeStatus: result.subjectLifeStatus)
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {
@@ -1323,6 +1339,8 @@ enum HallieTurnExecutor {
         let answered = plan.answerState == .answered
             || plan.answerState == .disputed
         let prose = CyberBrainDeterministicComposer.compose(plan)
+        let life = cyberBrainSubjectLifeStatus(
+            subject: plan.subject, requestedName: requestedName, index: index, context: context)
         return Result(
             route: .graph,
             outcome: answered ? .answered : .declined,
@@ -1337,8 +1355,39 @@ enum HallieTurnExecutor {
             // The approved CyberBrain claims, verbatim, are the only thing a
             // model may rephrase for this answer (docs/cyberbrain_design.md §9).
             answerPlan: answered
-                ? HallieAnswerPlan.biography(plan, fallbackText: prose)
-                : nil)
+                ? HallieAnswerPlan.biography(plan, fallbackText: prose, subjectLifeStatus: life)
+                : nil,
+            subjectLifeStatus: answered ? life : nil)
+    }
+
+    /// Living or passed on for a CyberBrain biography subject (LifeStatus,
+    /// 2026-09-01): the tree record CyberBrain links the person to, and a
+    /// death the People-tab profile of the same name records. Nil when the
+    /// subject has neither a tree record nor a profile — then nothing about
+    /// tense is said to the composer.
+    static func cyberBrainSubjectLifeStatus(
+        subject: String,
+        requestedName: String,
+        index: CyberBrainIndex,
+        context: Context
+    ) -> LifeStatus? {
+        var treePerson: GedcomFamilyGraph.Person?
+        for name in [subject, requestedName] where treePerson == nil {
+            if case .resolved(let person) = index.resolve(name),
+               let gedcomID = person.gedcomPersonID {
+                treePerson = context.graph?.people[gedcomID]
+            }
+        }
+        // The profile that claims the name outright; two claimants = none.
+        let wanted = Set([subject, requestedName].map(PersonResolver.normalize))
+        let claimants = (context.profiles ?? []).filter { snapshot in
+            ([snapshot.canonicalName] + snapshot.aliases)
+                .contains { wanted.contains(PersonResolver.normalize($0)) }
+        }
+        let profile = claimants.count == 1 ? claimants[0] : nil
+        guard treePerson != nil || profile != nil else { return nil }
+        return LifeStatus.ofProfile(
+            deathdate: profile?.deathdate, bridged: treePerson, in: context.graph)
     }
 
     /// Non-biography graph operations (kinship, birth, death) routed through
@@ -1450,7 +1499,8 @@ enum HallieTurnExecutor {
             citations: [],
             catalogPersonName: result.catalogPersonName,
             offeredActions: graphOffers(result),
-            answerPlan: result.answerPlan)
+            answerPlan: result.answerPlan,
+            subjectLifeStatus: result.subjectLifeStatus)
         // "who are Rick's sons" arrives here (CyberBrain knows "rick"); the
         // tree stops in 1959, but the family has told Hallie about the sons.
         return FamilyKnowledgeSupplement.apply(

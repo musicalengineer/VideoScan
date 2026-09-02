@@ -66,6 +66,12 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// The deterministic prose the route already produces. Shown verbatim
     /// whenever composition is off, unavailable, slow, or fails verification.
     let fallbackText: String
+    /// Whether the subject is living or has passed on (LifeStatus,
+    /// 2026-09-01), when the route knows. The composer is told, so the
+    /// model keeps the template's tense; the verifier rejects a sentence
+    /// that speaks of a living subject's life as finished. Nil = the route
+    /// has no subject or no verdict; nothing about tense is said or checked.
+    let subjectLifeStatus: LifeStatus?
 
     init(
         route: HallieTurnExecutor.Route,
@@ -73,7 +79,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
         subject: String? = nil,
         claims: [Claim] = [],
         counts: [Count] = [],
-        fallbackText: String
+        fallbackText: String,
+        subjectLifeStatus: LifeStatus? = nil
     ) {
         self.route = route
         self.shape = shape
@@ -81,6 +88,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         self.claims = claims
         self.counts = counts
         self.fallbackText = fallbackText
+        self.subjectLifeStatus = subjectLifeStatus
     }
 
     /// Whether a model may phrase this answer at all.
@@ -150,7 +158,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subject: result.catalogPersonName,
             claims: claims,
             counts: result.matchCount.map { [Count(label: "matching catalog items", value: $0)] } ?? [],
-            fallbackText: result.prose)
+            fallbackText: result.prose,
+            subjectLifeStatus: result.subjectLifeStatus)
     }
 
     // MARK: - Route-specific builders (called by the executor)
@@ -253,7 +262,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// their own claims so a disputed account can be voiced but not resolved.
     static func biography(
         _ plan: CyberBrainAnswerPlan,
-        fallbackText: String
+        fallbackText: String,
+        subjectLifeStatus: LifeStatus? = nil
     ) -> HallieAnswerPlan {
         var claims: [Claim] = []
         let attributionBySource = Dictionary(uniqueKeysWithValues:
@@ -280,7 +290,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subject: plan.subject,
             claims: claims,
             counts: [Count(label: "supporting sources", value: plan.sourceCitations.count)],
-            fallbackText: fallbackText)
+            fallbackText: fallbackText,
+            subjectLifeStatus: subjectLifeStatus)
     }
 }
 

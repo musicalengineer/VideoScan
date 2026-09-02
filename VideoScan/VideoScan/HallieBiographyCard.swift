@@ -56,6 +56,10 @@ enum HallieBiographyCard {
         /// Duplicate-parent flags the card stated (subject first, then
         /// each parent), for the "Show possible duplicate" chip.
         let dataQualityFlags: [DataQualityFlag]
+        /// Living or passed on (LifeStatus, 2026-09-01): decided the tense
+        /// of every sentence above and is handed to the composer so the
+        /// model's phrasing keeps it.
+        let lifeStatus: LifeStatus
 
         var prose: String { sentences.map(\.text).joined(separator: " ") }
 
@@ -69,7 +73,8 @@ enum HallieBiographyCard {
                         id: "c\(index + 1)", text: sentence.text,
                         evidenceIDs: sentence.evidenceIDs)
                 },
-                fallbackText: prose)
+                fallbackText: prose,
+                subjectLifeStatus: lifeStatus)
         }
     }
 
@@ -140,14 +145,30 @@ enum HallieBiographyCard {
 
     // MARK: - Build
 
+    /// `lifeStatus` nil ⇒ decided from the tree record and the family around
+    /// it (LifeStatus.of); the executor passes the People-tab verdict when
+    /// the subject is a profile, whose recorded death the tree may lack.
     static func card(for person: GedcomFamilyGraph.Person,
                      in graph: GedcomFamilyGraph,
-                     peopleTab: PeopleTabKin? = nil) -> Card {
+                     peopleTab: PeopleTabKin? = nil,
+                     lifeStatus: LifeStatus? = nil) -> Card {
         let summary = ArchivistFamilyTreePolicy.summary(of: person, in: graph)
         let name = person.name
         let pronoun = Pronoun(sex: person.sex)
+        // Tense (Rick, 2026-09-01): a living subject IS the child of, HAS
+        // siblings, IS married; the departed keep the past tense exactly as
+        // before. A birth is always "was born" (vitalsClause).
+        let life = lifeStatus ?? LifeStatus.of(person, in: graph)
+        let living = life.isLiving
         var sentences: [Card.Sentence] = []
         var storedOn = Set<String>()
+        // Verb agreement for the sentence about to be added: the lead names
+        // the subject (singular); later sentences use the pronoun, and an
+        // unrecorded sex gives "They", which takes the plural verb.
+        // (C++: local lambdas reading the enclosing `sentences` by reference.)
+        func plural() -> Bool { !sentences.isEmpty && pronoun.subject == "They" }
+        func be() -> String { living ? (plural() ? "are" : "is") : (plural() ? "were" : "was") }
+        func have() -> String { living ? (plural() ? "have" : "has") : "had" }
         // The first sentence, whichever it is, names the subject in full
         // (HallieAnswerPlan.subjectLeadSentence needs one; the composer's
         // name-first rule rests on it). A subject bridged from a People-tab
@@ -180,7 +201,7 @@ enum HallieBiographyCard {
         // 2. Parents, with grandparents folded in (the family-tree summary
         //    always named them; one claim keeps the sentence budget).
         if !summary.parents.isEmpty {
-            var text = "\(lead()) was the child of \(joinedNames(summary.parents))"
+            var text = "\(lead()) \(be()) the child of \(joinedNames(summary.parents))"
             if !summary.grandparents.isEmpty {
                 let plural = summary.grandparents.count > 1
                 text += "; \(pronoun.possessive) recorded grandparent\(plural ? "s were" : " was") "
@@ -201,7 +222,7 @@ enum HallieBiographyCard {
         if !summary.siblings.isEmpty {
             let n = summary.siblings.count
             sentences.append(.init(
-                text: "\(lead()) had \(n) recorded \(n == 1 ? "sibling" : "siblings"), "
+                text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "sibling" : "siblings"), "
                     + listedNames(summary.siblings) + ".",
                 evidenceIDs: [person.id] + summary.siblings.map(\.id)))
         }
@@ -217,7 +238,9 @@ enum HallieBiographyCard {
         }
         // 4. Marriage(s) with the MARR date when the family record has one.
         let marriages = orderedMarriages(graph.marriages(of: person))
-        if !marriages.isEmpty, let clause = marriageClause(marriages) {
+        if !marriages.isEmpty,
+           let clause = marriageClause(marriages, subjectLiving: living, plural: plural(),
+                                       spouseLiving: { LifeStatus.of($0, in: graph).isLiving }) {
             sentences.append(.init(
                 text: "\(lead()) \(clause).",
                 evidenceIDs: [person.id] + marriages.compactMap(\.spouse?.id)))
@@ -229,7 +252,7 @@ enum HallieBiographyCard {
         if !summary.children.isEmpty {
             let n = summary.children.count
             sentences.append(.init(
-                text: "\(lead()) had \(n) recorded \(n == 1 ? "child" : "children"), "
+                text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "child" : "children"), "
                     + listedNames(summary.children) + ".",
                 evidenceIDs: [person.id] + summary.children.map(\.id)))
         } else if let peopleTab, let extra = peopleTabSentence(peopleTab.children, treeIDs: []) {
@@ -243,14 +266,16 @@ enum HallieBiographyCard {
                                    evidenceIDs: [person.id]))
         }
         return Card(subject: person, sentences: sentences,
-                    peopleTabStoredOn: storedOn.sorted(), dataQualityFlags: flags)
+                    peopleTabStoredOn: storedOn.sorted(), dataQualityFlags: flags,
+                    lifeStatus: life)
     }
 
     /// The policy-shaped answer both graph operations return.
     static func answer(for person: GedcomFamilyGraph.Person,
                        in graph: GedcomFamilyGraph,
-                       peopleTab: PeopleTabKin? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
-        let card = card(for: person, in: graph, peopleTab: peopleTab)
+                       peopleTab: PeopleTabKin? = nil,
+                       lifeStatus: LifeStatus? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
+        let card = card(for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
         guard !card.sentences.isEmpty else {
             return (ArchivistBiographyAnswer(
                 state: .missingFact,
@@ -386,23 +411,42 @@ enum HallieBiographyCard {
     /// "was married to Martha Lamson (married 12 May 1650)"; several
     /// marriages joined with "and"; a family with a date but no recorded
     /// spouse is stated as such. Nil when no marriage says anything.
+    /// The departed subject's form — every marriage in the past tense.
     static func marriageClause(_ marriages: [GedcomFamilyGraph.Marriage]) -> String? {
-        var parts: [String] = []
+        marriageClause(marriages, subjectLiving: false, spouseLiving: { _ in false })
+    }
+
+    /// Tense-aware form (2026-09-01). A living subject "is married to" a
+    /// living spouse and "was married to" one who has passed on (or one
+    /// the tree does not name): "is married to Donna Hudson and was
+    /// married to Jane Doe". A subject who has passed on keeps "was
+    /// married to" for all of them, exactly as before. `plural` = the
+    /// sentence opens with "They" (unrecorded sex): "are" / "were".
+    static func marriageClause(_ marriages: [GedcomFamilyGraph.Marriage],
+                               subjectLiving: Bool,
+                               plural: Bool = false,
+                               spouseLiving: (GedcomFamilyGraph.Person) -> Bool) -> String? {
+        var present: [String] = []
+        var past: [String] = []
         for marriage in orderedMarriages(marriages) {
             let date = spokenDate(marriage.date)
             switch (marriage.spouse, date) {
             case (let spouse?, let date?):
-                parts.append("\(spouse.name) (married \(date))")
+                let part = "\(spouse.name) (married \(date))"
+                if subjectLiving, spouseLiving(spouse) { present.append(part) } else { past.append(part) }
             case (let spouse?, nil):
-                parts.append(spouse.name)
+                if subjectLiving, spouseLiving(spouse) { present.append(spouse.name) } else { past.append(spouse.name) }
             case (nil, let date?):
-                parts.append("someone the tree does not name (married \(date))")
+                past.append("someone the tree does not name (married \(date))")
             case (nil, nil):
                 continue
             }
         }
-        guard !parts.isEmpty else { return nil }
-        return "was married to " + joined(parts)
+        var clauses: [String] = []
+        if !present.isEmpty { clauses.append("\(plural ? "are" : "is") married to " + joined(present)) }
+        if !past.isEmpty { clauses.append("\(plural ? "were" : "was") married to " + joined(past)) }
+        guard !clauses.isEmpty else { return nil }
+        return clauses.joined(separator: " and ")
     }
 
     /// Policy order (name, then pointer), not FAMS file order, so two

@@ -265,7 +265,10 @@ extension HallieTurnExecutor {
                 basisLine: checked,
                 queryDescription: queryDescription,
                 citations: [],
-                catalogPersonName: tagCount > 0 ? name : nil)
+                catalogPersonName: tagCount > 0 ? name : nil,
+                // A People-tab person is living unless the profile records a
+                // death (LifeStatus, 2026-09-01).
+                subjectLifeStatus: LifeStatus.ofProfile(deathdate: profile.deathdate))
         }
 
         // MARK: - Helpers
@@ -289,7 +292,8 @@ extension HallieTurnExecutor {
                         kinships: existing.kinships + profile.kinships,
                         sex: existing.sex ?? profile.sex,
                         uuid: existing.uuid ?? profile.uuid,
-                        treeIdentity: existing.treeIdentity ?? profile.treeIdentity)
+                        treeIdentity: existing.treeIdentity ?? profile.treeIdentity,
+                        deathdate: existing.deathdate ?? profile.deathdate)
                 } else {
                     byID[profile.stableID] = profile
                     order.append(profile.stableID)

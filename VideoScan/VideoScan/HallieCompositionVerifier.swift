@@ -59,6 +59,12 @@ enum HallieCompositionVerifier {
             /// carry the full name: "McGill is Rick's great-great-grandfather"
             /// reads as a first name (live 2026-08-26, spoken "Mic Gill").
             case bareSurnameOpening
+            /// The plan says the subject is LIVING and the sentence speaks of
+            /// their life as finished — "Rick was the child of …", "Dan,
+            /// Mark, and Timmy were sons of Rick", "Matt had four brothers"
+            /// (Rick, 2026-09-01: "it makes it sound like he's passed on").
+            /// "was born" is the one past-tense form a living person keeps.
+            case finishedLifeForLiving
         }
         let text: String
         let reason: Reason
@@ -185,6 +191,14 @@ enum HallieCompositionVerifier {
             }
             if containsUnvouchedFilename(display, claims: claims) {
                 dropped.append(Dropped(text: raw, reason: .alteredFilename))
+                continue
+            }
+            // A living subject is never spoken of as finished (LifeStatus,
+            // 2026-09-01). Only plans that carry a verdict are checked, so
+            // media / presence phrasing is untouched.
+            if plan.subjectLifeStatus == .living,
+               speaksOfLifeAsFinished(display, subject: plan.subject) {
+                dropped.append(Dropped(text: raw, reason: .finishedLifeForLiving))
                 continue
             }
             let allowedTokens = allowedTokens(claims: claims, personaName: personaName)
@@ -583,6 +597,51 @@ enum HallieCompositionVerifier {
     /// after it is not capitalized (so "McGill Family Reunion.mov" and
     /// "Sullivan Breen" are not bare). The person's full name is right
     /// there in the facts; opening with half of it is a phrasing error.
+    // MARK: Living subject, finished-life phrasing (2026-09-01)
+
+    /// Relationship words that, after "was"/"were"/"had", state a living
+    /// person's family as a thing of the past.
+    static let finishedLifeKinWords =
+        "married|child|children|son|sons|daughter|daughters|brother|brothers|"
+        + "sister|sisters|sibling|siblings|husband|wife|father|mother|parent|parents"
+
+    /// True when the sentence says
+    ///   • "<Subject|He|She|They> was/were …" with anything but "born" next
+    ///     ("Rick was a Marine", "He was the child of", but not "Rick was
+    ///     born and raised in Boston"), or
+    ///   • "was/were [a|an|the] <kin word>" anywhere ("were sons of Rick",
+    ///     "was married to"), or
+    ///   • "had [N] [recorded] <kin word>" anywhere ("had four brothers").
+    /// Deliberately narrow: nothing about places, work, or media. A sentence
+    /// the model phrased this way is dropped and, for a biography, the
+    /// plan's own present-tense claim is restored verbatim.
+    static func speaksOfLifeAsFinished(_ sentence: String, subject: String?) -> Bool {
+        var subjects = ["he", "she", "they"]
+        if let subject {
+            // "Richard Harding Breen Jr (Rick in the People tab)" → the full
+            // name, its first token, and the alias's first token.
+            let bare = subject.replacingOccurrences(
+                of: "\\([^)]*\\)", with: "", options: .regularExpression)
+            let full = bare.trimmingCharacters(in: .whitespacesAndNewlines)
+            if full.count > 1 { subjects.append(full) }
+            if let first = full.split(separator: " ").first, first.count > 1 {
+                subjects.append(String(first))
+            }
+            if let open = subject.firstIndex(of: "("),
+               let aliasFirst = subject[subject.index(after: open)...]
+                .split(separator: " ").first, aliasFirst.count > 1 {
+                subjects.append(String(aliasFirst).trimmingCharacters(in: CharacterSet(charactersIn: ")")))
+            }
+        }
+        let names = subjects.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+        let patterns = [
+            "(?i)\\b(\(names))\\s+(was|were)\\b(?!\\s+born\\b)",
+            "(?i)\\b(was|were)\\s+(a\\s+|an\\s+|the\\s+)?(\(finishedLifeKinWords))\\b",
+            "(?i)\\bhad\\s+(\\S+\\s+)?(recorded\\s+)?(\(finishedLifeKinWords))\\b",
+        ]
+        return patterns.contains { sentence.range(of: $0, options: .regularExpression) != nil }
+    }
+
     static func opensWithBareSurname(_ sentence: String, claims: [HallieAnswerPlan.Claim]) -> Bool {
         let words = sentence.split(separator: " ").map(String.init)
         guard let first = words.first else { return false }

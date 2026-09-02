@@ -160,11 +160,13 @@ struct HallieBiographyCardTests {
     @Test func sparsePersonDegradesGracefully() async throws {
         let r = try await ask("Sparse Person", .biography)
         #expect(r.outcome == .answered)
+        // No dates anywhere around Sparse Person ⇒ living by LifeStatus
+        // (2026-09-01), so "is the child of"; Matthew Rice above keeps "was".
         #expect(r.prose
-                == "Sparse Person was the child of Only Parent. "
+                == "Sparse Person is the child of Only Parent. "
                     + "Their family tree includes 1 recorded ancestor across 1 generation.")
         #expect(r.answerPlan?.claims.count == 2)
-        #expect(r.answerPlan?.subjectLeadSentence?.text == "Sparse Person was the child of Only Parent.")
+        #expect(r.answerPlan?.subjectLeadSentence?.text == "Sparse Person is the child of Only Parent.")
         #expect(!r.prose.contains("born") && !r.prose.contains("died") && !r.prose.contains("married"))
         #expect(try await ask("Sparse Person", .familyTree).prose == r.prose)
     }

@@ -84,6 +84,7 @@ extension HallieTurnExecutor {
                     kinships: $0.kinships,
                     sex: $0.sex,
                     birthdate: $0.birthdate,
+                    deathdate: $0.deathdate,
                     uuid: $0.uuid,
                     treeIdentity: $0.treeIdentity)
             },

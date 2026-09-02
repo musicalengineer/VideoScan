@@ -182,7 +182,8 @@ extension HallieTurnExecutor {
                 // composer turned the coverage note into "it likely stops…").
                 answerPlan: HallieAnswerPlan(route: result.route, shape: .fixed, fallbackText: prose),
                 composedBy: result.composedBy,
-                transcriptText: nil)
+                transcriptText: nil,
+                subjectLifeStatus: result.subjectLifeStatus)
         }
 
         /// A not-found answer that explains the tree's reach and offers the
@@ -211,7 +212,8 @@ extension HallieTurnExecutor {
                 composedBy: result.composedBy,
                 transcriptText: result.transcriptText,
                 attachments: result.attachments,
-                performsFirstOfferedAction: result.performsFirstOfferedAction)
+                performsFirstOfferedAction: result.performsFirstOfferedAction,
+                subjectLifeStatus: result.subjectLifeStatus)
         }
     }
 }

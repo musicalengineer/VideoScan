@@ -295,7 +295,8 @@ struct HallieCrossWorldFamilyCardTests {
         #expect(r.prose.contains("In the People tab: Tim — brother."), Comment(rawValue: r.prose))
         #expect(r.prose.contains("The tree records no siblings for him."), Comment(rawValue: r.prose))
         #expect(r.prose.contains("In the People tab: Matt — son."), Comment(rawValue: r.prose))
-        #expect(r.prose.contains("He was married to Donna Hudson."))
+        // Rick is living (born 1959, no death): present tense (2026-09-01).
+        #expect(r.prose.contains("He is married to Donna Hudson."), Comment(rawValue: r.prose))
         #expect(!r.prose.contains("Donna — wife"))
         #expect(r.prose.hasPrefix("Richard Harding Breen Jr (Rick in the People tab) was born 4 March 1959 in Boston, Suffolk, Massachusetts."),
                 Comment(rawValue: r.prose))
@@ -332,7 +333,9 @@ struct HallieCrossWorldFamilyCardTests {
 
     @Test func treeOnlyPersonIsUnchanged() async throws {
         let r = try await ask("Isaac Rice", .familyTree, context: context(profiles()))
-        #expect(r.prose == "Isaac Rice was the child of Martha Lamson and Matthew Rice; "
+        // This fixture's Isaac has no dates and nobody dated around him, so
+        // LifeStatus (2026-09-01) reads him as living — "is the child of".
+        #expect(r.prose == "Isaac Rice is the child of Martha Lamson and Matthew Rice; "
                 + "his recorded grandparents were Barnaby Lamson, Edmund Rice, Mary Ayer and Thomasine Frost. "
                 + "His family tree includes 6 recorded ancestors across 2 generations.", Comment(rawValue: r.prose))
         #expect(r.offeredActions == [.openFamilyTree(personName: "Isaac Rice")])
