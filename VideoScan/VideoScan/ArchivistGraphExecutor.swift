@@ -1271,9 +1271,10 @@ enum ArchivistGraphExecutor {
     /// People-tab profile: through the profile the typed name went
     /// through (`profileStableID`), or through a profile pinned / assumed
     /// onto this tree record (the overlay put that profile on the record's
-    /// own vertex). Explicit rows only (one hop) — a derived route is not a
-    /// stored fact. Nil when nobody in the People tab is this person, so
-    /// an unbridged card stays exactly as it was.
+    /// own vertex). One hop only — a stored row, or a parent/child edge the
+    /// overlay derived from sibling rows (2026-09-02, marked in the basis);
+    /// never a composed route. Nil when nobody in the People tab is this
+    /// person, so an unbridged card stays exactly as it was.
     static func peopleTabKin(
         for person: GedcomFamilyGraph.Person,
         profileStableID: String?,
@@ -1297,7 +1298,8 @@ enum ArchivistGraphExecutor {
                         name: hit.member.name,
                         term: relation.term(sex: hit.member.sex),
                         evidenceID: hit.member.identity.isEmpty ? hit.member.node.auditID : hit.member.identity,
-                        gedcomID: hit.member.gedcomID)
+                        gedcomID: hit.member.gedcomID,
+                        derivation: overlay.derivationNote(for: hit.hops))
                 }
         }
         let siblings = relatives(.sibling)

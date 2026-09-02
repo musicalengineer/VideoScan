@@ -7,6 +7,11 @@
 // knows something; otherwise the caller falls through to the tree, so
 // ancestor questions are untouched. Every answer says where it came from
 // ("Basis: People tab relationship …") and which profile stores the row.
+//
+// Derived hops (2026-09-02, "full siblings share parents"): "who are
+// Eileen's children" now lists Tim, Ellen and Beth from Rick's rows. The
+// prose stays plain; the basis carries the marker — "derived from Rick's
+// rows: full siblings share parents" — so the inference is checkable.
 
 import Foundation
 import VideoScanCore
@@ -18,13 +23,34 @@ extension ArchivistGraphExecutor {
     /// "Beth", "Beth and Ellen", "Beth, Ellen and Matt" — Hallie reads
     /// aloud, so a bare comma list is wrong in the ear.
     static func englishList(_ items: [String]) -> String {
-        switch items.count {
-        case 0: return ""
-        case 1: return items[0]
-        case 2: return "\(items[0]) and \(items[1])"
-        default: return items.dropLast().joined(separator: ", ")
-            + " and " + (items.last ?? "")
+        FamilyKinshipOverlay.englishList(items)
+    }
+
+    /// "(stored on Rick's profile; Tim, Ellen and Beth derived from Rick's
+    /// rows: full siblings share parents)" — the stored-on clause plus, when
+    /// any hit rests on a derived hop, who was derived and by which rule.
+    /// `namesByNote` groups the People-tab names under their derivation note.
+    static func overlayStoredOnClause(storedOn: [String], namesByNote: [(note: String, names: [String])]) -> String {
+        var clause = "(stored on " + storedOn.map { "\($0)'s profile" }.joined(separator: ", ")
+        for entry in namesByNote where !entry.names.isEmpty {
+            clause += "; " + englishList(entry.names) + " " + entry.note
         }
+        return clause + ")"
+    }
+
+    /// Group hits by their derivation note, in first-seen order; hits
+    /// without a derived hop are skipped.
+    static func derivedNamesByNote(
+        _ hits: [FamilyKinshipOverlay.Hit], overlay: FamilyKinshipOverlay
+    ) -> [(note: String, names: [String])] {
+        var order: [String] = []
+        var names: [String: [String]] = [:]
+        for hit in hits {
+            guard let note = overlay.derivationNote(for: hit.hops) else { continue }
+            if names[note] == nil { order.append(note) }
+            names[note, default: []].append(hit.member.name)
+        }
+        return order.map { (note: $0, names: names[$0] ?? []) }
     }
 
     /// Single-anchor kinship from the overlay, or nil to fall through.
@@ -124,6 +150,7 @@ extension ArchivistGraphExecutor {
             return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
         }
         let storedOn = Array(Set(hits.flatMap { $0.hops.map(\.storedOn) })).sorted()
+        let derived = derivedNamesByNote(hits, overlay: overlay)
         let evidence = ArchivistGraphEvidence(
             subjectID: anchors[0].auditID,
             subjectName: anchorName,
@@ -140,11 +167,11 @@ extension ArchivistGraphExecutor {
         return ArchivistGraphResult(
             conclusion: .answered,
             prose: "\(possessive) \(noun): " + names.joined(separator: ", ") + ".",
-            basisLine: "\(overlayBasisPrefix) (stored on "
-                + storedOn.map { "\($0)'s profile" }.joined(separator: ", ")
+            basisLine: "\(overlayBasisPrefix) "
+                + overlayStoredOnClause(storedOn: storedOn, namesByNote: derived)
                 + (treeCited.isEmpty
-                    ? "); local only, not from the family tree."
-                    : "); name and dates from the imported family tree (GEDCOM: "
+                    ? "; local only, not from the family tree."
+                    : "; name and dates from the imported family tree (GEDCOM: "
                         + treeCited.joined(separator: ", ") + ")."),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
@@ -199,6 +226,7 @@ extension ArchivistGraphExecutor {
             prose = "\(subjectB) \(verb) related to \(objectA) through \(route) — the People tab links them, but not in a way with a single name."
         }
         let storedOn = Array(Set(hops.map(\.storedOn))).sorted()
+        let derived = overlay.derivationNote(for: hops).map { [(note: $0, names: [memberB.name])] } ?? []
         let evidence = ArchivistGraphEvidence(
             subjectID: a.auditID, subjectName: memberA.name,
             birthDate: nil, deathDate: nil, relationships: [], identityBridge: nil,
@@ -210,9 +238,9 @@ extension ArchivistGraphExecutor {
         return ArchivistGraphResult(
             conclusion: .answered,
             prose: prose,
-            basisLine: "\(overlayBasisPrefix) (stored on "
-                + storedOn.map { "\($0)'s profile" }.joined(separator: ", ")
-                + "); path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree.",
+            basisLine: "\(overlayBasisPrefix) "
+                + overlayStoredOnClause(storedOn: storedOn, namesByNote: derived)
+                + "; path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree.",
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil)

@@ -15,6 +15,13 @@
 //   • gendered word — from the related person's sex (profile or tree record)
 //   • older/younger — from birth knowledge at its native precision; omitted
 //                     unless the order is provable
+//   • shared parents — FULL SIBLINGS SHARE PARENTS (Rick, Director,
+//                     2026-09-02: "we can do the 'children of' inference as
+//                     part of Biography. No need to edit gedcom."). Rick's
+//                     card says child of Ma and Dad and sibling of Tim, Ellen
+//                     and Beth; their cards carry no rows. So Tim, Ellen and
+//                     Beth become Ma's and Dad's children — DERIVED edges,
+//                     marked as such, never stored (`deriveSharedParents`).
 //
 // Bridging a profile to a tree person (design amendment 1, 2026-08-29:
 // identity ≠ relationship): ONLY an explicit `treeIdentity` pin bridges. A
@@ -126,6 +133,51 @@ struct FamilyKinshipOverlay: Sendable {
         /// What a sibling row asserts about shared parents (both directions
         /// carry the row's basis).
         var basis: SiblingBasis = .unspecified
+        /// nil for a stored row (or its implied inverse); set when the edge
+        /// exists only by read-time inference (`Derivation`).
+        var derivation: Derivation? = nil
+
+        var isDerived: Bool { derivation != nil }
+    }
+
+    /// Why an edge exists when no stored row says so. One rule today
+    /// (Rick, 2026-09-02); the basis prose names the rule and the profiles
+    /// whose rows it rests on, so a wrong inference is one edit away.
+    enum Derivation: Hashable, Sendable {
+        /// A parent copied across sibling rows: `parentRowsOn` are the
+        /// profiles whose stored parent rows were copied ("Rick"),
+        /// `siblingRowsOn` the profiles whose sibling rows link the two
+        /// ("Ellen", "Beth" in the transitive case), `half` when the row
+        /// was attested HALF and only its named shared parent crossed.
+        case siblingsShareParents(parentRowsOn: [String], siblingRowsOn: [String], half: Bool)
+
+        /// The rule, as the basis line states it.
+        var rule: String {
+            switch self {
+            case .siblingsShareParents(_, _, let half):
+                return half ? Self.halfSiblingRule : Self.fullSiblingRule
+            }
+        }
+
+        static let fullSiblingRule = "full siblings share parents"
+        static let halfSiblingRule = "half siblings share the named parent"
+
+        /// "derived from Rick's rows: full siblings share parents (sibling
+        /// rows on Beth and Ellen)" — the parenthesis only when a sibling
+        /// row lives on a profile other than the one the parents came from.
+        var note: String {
+            switch self {
+            case .siblingsShareParents(let parentRowsOn, let siblingRowsOn, _):
+                var text = "derived from "
+                    + FamilyKinshipOverlay.englishList(parentRowsOn.map(KinshipDisplay.possessive))
+                    + " rows: " + rule
+                let others = siblingRowsOn.filter { !parentRowsOn.contains($0) }
+                if !others.isEmpty {
+                    text += " (sibling rows on " + FamilyKinshipOverlay.englishList(others) + ")"
+                }
+                return text
+            }
+        }
     }
 
     /// One relative reached from an anchor with the hops that got there.
@@ -135,7 +187,13 @@ struct FamilyKinshipOverlay: Sendable {
     }
 
     private var members: [Node: Member] = [:]
+    /// Stored rows + their implied inverses ONLY. The inference engine and
+    /// KinshipValidation read this (`edges(from:)`) and keep their own,
+    /// stricter policy for unattested sibling rows (codex #830).
     private var outgoing: [Node: [Edge]] = [:]
+    /// Read-time derived edges (`Derivation`), kept apart so a consumer can
+    /// tell a stored fact from an inference; the walks union the two.
+    private var derivedOutgoing: [Node: [Edge]] = [:]
     private var nodeByProfileStableID: [String: Node] = [:]
     /// POIProfile.uuid (lowercased) → vertex, for durable `.profile(id:)` anchors.
     private var nodeByUUID: [String: Node] = [:]
@@ -179,7 +237,9 @@ struct FamilyKinshipOverlay: Sendable {
     ]
 
     var isEmpty: Bool { outgoing.isEmpty }
+    /// Stored rows + inverses (derived edges are counted separately).
     var edgeCount: Int { outgoing.values.reduce(0) { $0 + $1.count } }
+    var derivedEdgeCount: Int { derivedOutgoing.values.reduce(0) { $0 + $1.count } }
 
     // MARK: Build
 
@@ -240,6 +300,157 @@ struct FamilyKinshipOverlay: Sendable {
                     outgoing[edge.from, default: []].append(edge)
                 }
             }
+        }
+        // Pass 3: parents shared across sibling rows (derived, never stored).
+        deriveSharedParents()
+    }
+
+    /// FULL SIBLINGS SHARE PARENTS (Rick, Director, 2026-09-02). If P has
+    /// stored parent rows and S is P's sibling, S is a child of those
+    /// parents — transitively over the sibling set (siblings of siblings),
+    /// as one pass over the sibling graph, never a stored row.
+    ///
+    /// Assumptions, stated once here and in every basis line:
+    ///   • A sibling row with basis `.unspecified` or `.attestedFull` is
+    ///     read as FULL (Rick has never recorded a half sibling; the
+    ///     vocabulary's only half form is `.attestedHalf(sharedParent:)`).
+    ///   • An `.attestedHalf` row shares ONLY its named parent, one hop —
+    ///     it never joins the full-sibling set and nothing crosses it
+    ///     transitively.
+    ///   • A sibling with ANY stored parent row of its own keeps exactly
+    ///     those parents: nothing is added, so a stored contradiction is
+    ///     never papered over (conservative by design; the engine's
+    ///     attested path merges per parent — this one does not).
+    ///   • A sibling set whose stored parents add up to more than two
+    ///     people is a data error; nothing is derived for it and a
+    ///     warning names the problem.
+    ///
+    /// Cost: union-find over the sibling edges (near-linear in the number
+    /// of sibling rows), then one visit per set member. Memory: one small
+    /// dictionary per vertex that carries a sibling row.
+    ///
+    /// C++ readers: the nested `find` is a disjoint-set (union-find) with
+    /// path halving over a dictionary — the same structure you would build
+    /// with a `std::unordered_map<Node, Node>`.
+    private mutating func deriveSharedParents() {
+        var parentLink: [Node: Node] = [:]
+        func find(_ node: Node) -> Node {
+            var current = node
+            while let up = parentLink[current], up != current {
+                if let grand = parentLink[up] { parentLink[current] = grand }
+                current = up
+            }
+            return current
+        }
+        func union(_ a: Node, _ b: Node) {
+            let ra = find(a), rb = find(b)
+            guard ra != rb else { return }
+            // Deterministic root: the smaller identity key wins.
+            if ra.identityKey < rb.identityKey { parentLink[rb] = ra } else { parentLink[ra] = rb }
+        }
+        var halfEdges: [Edge] = []
+        var siblingRowsOn: [Node: Set<String>] = [:]
+        for node in outgoing.keys.sorted(by: { $0.identityKey < $1.identityKey }) {
+            for edge in outgoing[node] ?? [] where edge.relation == .sibling {
+                switch edge.basis {
+                case .unspecified, .attestedFull:
+                    parentLink[edge.from] = parentLink[edge.from] ?? edge.from
+                    parentLink[edge.to] = parentLink[edge.to] ?? edge.to
+                    union(edge.from, edge.to)
+                case .attestedHalf:
+                    halfEdges.append(edge)
+                }
+            }
+        }
+        func explicitParents(of node: Node) -> [Node] {
+            var out: [Node] = []
+            for edge in outgoing[node] ?? [] where edge.relation == .parent && !out.contains(edge.to) {
+                out.append(edge.to)
+            }
+            return out
+        }
+        // Group the full-sibling sets by root; remember whose profile each
+        // sibling row sits on so the basis can cite it.
+        var sets: [Node: [Node]] = [:]
+        for node in parentLink.keys {
+            sets[find(node), default: []].append(node)
+        }
+        for node in parentLink.keys {
+            for edge in outgoing[node] ?? [] where edge.relation == .sibling {
+                if case .attestedHalf = edge.basis { continue }
+                siblingRowsOn[find(node), default: []].insert(edge.storedOn)
+            }
+        }
+        var seenDerived = Set<Edge>()
+        func addDerived(child: Node, parent: Node, storedOn: String, derivation: Derivation) {
+            // Never duplicate a stored row or an earlier derivation.
+            if outgoing[child]?.contains(where: { $0.relation == .parent && $0.to == parent }) ?? false { return }
+            let identity = members[parent]?.identity ?? ""
+            let up = Edge(from: child, to: parent, relation: .parent, storedOn: storedOn,
+                          storedOnIdentity: identity, basis: .unspecified, derivation: derivation)
+            let down = Edge(from: parent, to: child, relation: .child, storedOn: storedOn,
+                            storedOnIdentity: identity, basis: .unspecified, derivation: derivation)
+            for edge in [up, down] where seenDerived.insert(edge).inserted {
+                derivedOutgoing[edge.from, default: []].append(edge)
+            }
+        }
+        for root in sets.keys.sorted(by: { $0.identityKey < $1.identityKey }) {
+            let siblings = (sets[root] ?? []).sorted { $0.identityKey < $1.identityKey }
+            guard siblings.count > 1 else { continue }
+            // parent vertex → the profiles whose stored rows name it.
+            var sources: [Node: [String]] = [:]
+            var orphans: [Node] = []
+            for sibling in siblings {
+                let parents = explicitParents(of: sibling)
+                if parents.isEmpty { orphans.append(sibling); continue }
+                let name = members[sibling]?.name ?? sibling.auditID
+                for parent in parents where !(sources[parent]?.contains(name) ?? false) {
+                    sources[parent, default: []].append(name)
+                }
+            }
+            guard !sources.isEmpty, !orphans.isEmpty else { continue }
+            if sources.count > 2 {
+                let names = sources.keys.map { members[$0]?.name ?? $0.auditID }.sorted()
+                let who = siblings.map { members[$0]?.name ?? $0.auditID }.sorted()
+                note("Sibling rows on \(Self.englishList(who)) imply more than two parents (\(names.joined(separator: ", "))) — nothing derived until one is corrected")
+                continue
+            }
+            let rowsOn = (siblingRowsOn[root] ?? []).sorted()
+            for orphan in orphans {
+                for parent in sources.keys.sorted(by: { $0.identityKey < $1.identityKey }) {
+                    let from = (sources[parent] ?? []).sorted()
+                    addDerived(child: orphan, parent: parent, storedOn: from[0],
+                               derivation: .siblingsShareParents(
+                                parentRowsOn: from, siblingRowsOn: rowsOn, half: false))
+                }
+            }
+        }
+        // Half rows: only the named shared parent, only across this one row.
+        for edge in halfEdges {
+            guard case .attestedHalf(let shared) = edge.basis, let parent = peekAnchor(shared),
+                  explicitParents(of: edge.to).isEmpty,
+                  explicitParents(of: edge.from).contains(parent) else { continue }
+            let from = members[edge.from]?.name ?? edge.from.auditID
+            addDerived(child: edge.to, parent: parent, storedOn: from,
+                       derivation: .siblingsShareParents(
+                        parentRowsOn: [from], siblingRowsOn: [edge.storedOn], half: true))
+        }
+        // Stable order per vertex: parents before children, then by name.
+        for node in derivedOutgoing.keys {
+            derivedOutgoing[node]?.sort { lhs, rhs in
+                if lhs.relation != rhs.relation { return lhs.relation == .parent }
+                return lhs.to.identityKey < rhs.to.identityKey
+            }
+        }
+    }
+
+    /// "Beth", "Beth and Ellen", "Beth, Ellen and Matt".
+    static func englishList(_ items: [String]) -> String {
+        switch items.count {
+        case 0: return ""
+        case 1: return items[0]
+        case 2: return "\(items[0]) and \(items[1])"
+        default: return items.dropLast().joined(separator: ", ") + " and " + (items.last ?? "")
         }
     }
 
@@ -543,12 +754,37 @@ struct FamilyKinshipOverlay: Sendable {
         }
     }
 
-    /// Does this vertex have any overlay knowledge at all?
-    func knows(_ node: Node) -> Bool { !(outgoing[node] ?? []).isEmpty }
+    /// Does this vertex have any overlay knowledge at all (stored or derived)?
+    func knows(_ node: Node) -> Bool { !allEdges(from: node).isEmpty }
 
-    /// Directed edges out of a vertex (stored rows + implied inverses), for
-    /// FamilyKinshipInference / KinshipValidation. Empty for unknown vertices.
+    /// Directed edges out of a vertex — stored rows + implied inverses
+    /// ONLY, for FamilyKinshipInference / KinshipValidation, which apply
+    /// their own policy to unattested sibling rows. Empty for unknown
+    /// vertices. Derived edges: `derivedEdges(from:)`.
     func edges(from node: Node) -> [Edge] { outgoing[node] ?? [] }
+
+    /// Edges that exist only by read-time inference (`Derivation`).
+    func derivedEdges(from node: Node) -> [Edge] { derivedOutgoing[node] ?? [] }
+
+    /// Stored first, then derived — the order the walks visit them, so an
+    /// explicit hop always wins a tie on chain length.
+    private func allEdges(from node: Node) -> [Edge] {
+        guard let derived = derivedOutgoing[node] else { return outgoing[node] ?? [] }
+        return (outgoing[node] ?? []) + derived
+    }
+
+    /// The inference behind the derived hops in `hops`, as basis prose
+    /// ("derived from Rick's rows: full siblings share parents"); nil when
+    /// every hop is a stored row. Distinct derivations joined with "; ".
+    func derivationNote(for hops: [Edge]) -> String? {
+        Self.derivationNote(for: hops.compactMap(\.derivation))
+    }
+
+    static func derivationNote(for derivations: [Derivation]) -> String? {
+        var seen = Set<Derivation>()
+        let notes = derivations.filter { seen.insert($0).inserted }.map(\.note)
+        return notes.isEmpty ? nil : notes.joined(separator: "; ")
+    }
 
     /// The installed tree this overlay was built against, so the inference
     /// engine walks the SAME graph the vertices were bridged to.
@@ -621,7 +857,7 @@ struct FamilyKinshipOverlay: Sendable {
             let (node, path) = queue[index]
             index += 1
             guard path.count < 4 else { continue }
-            for edge in outgoing[node] ?? [] where !visited.contains(edge.to) {
+            for edge in allEdges(from: node) where !visited.contains(edge.to) {
                 let next = path + [edge]
                 if edge.to == b { return next }
                 visited.insert(edge.to)
@@ -634,7 +870,7 @@ struct FamilyKinshipOverlay: Sendable {
     private func walk(from node: Node, path: [Edge], maxHops: Int, visit: ([Edge]) -> Void) {
         guard path.count < maxHops else { return }
         let onPath = Set(path.map(\.to)).union([path.first?.from ?? node])
-        for edge in outgoing[node] ?? [] where !onPath.contains(edge.to) {
+        for edge in allEdges(from: node) where !onPath.contains(edge.to) {
             let next = path + [edge]
             visit(next)
             walk(from: edge.to, path: next, maxHops: maxHops, visit: visit)
