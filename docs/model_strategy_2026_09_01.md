@@ -178,3 +178,28 @@ Prep before delivery: write the escalation-tier design (trigger
 conditions, budget, what the second model may and may not see — same
 grounded-composer contract), and add a `--model-b` A/B mode to the eval
 that unloads the other model when it finishes.
+
+### Decided (Rick, 2026-09-01 ~20:10): fleet roles
+
+**M5 Ultra = primary dev Mac. M4 Max = model host, running one or two
+models as Rick and Claude determine.**
+
+What the M4 Max needs to become the brain host (all configuration):
+
+1. Ollama listening on the LAN (`OLLAMA_HOST=0.0.0.0`, launchd, login-free),
+   the 27B brain pinned with the 30 m keep-alive and the 32K cap the app
+   already sends. Budget on 64 GB: 27B at 19 GB, a second 27B-class model
+   at 19 GB, and 20+ GB left for the OS, the family web server and the
+   nightly jobs. A 70B-class model does NOT fit beside the brain here.
+2. The app's host list (Settings ▸ Archivist Brain, `OllamaEndpoints`)
+   points at the M4 Max first; the M5 Ultra's local Ollama is second in the
+   walk for when the M4 is down. Same list for the shell and the web bridge.
+3. Nightly test, eval and reviewer jobs move to the M4 Max (they already
+   run there — nothing moves; what leaves is Rick's daytime use).
+4. The escalation model (70B-class, ~40 GB) lives on the **M5 Ultra**,
+   opportunistically: the host walk tries it and falls back to the 27B when
+   the dev Mac is asleep. The always-on answer never depends on it.
+5. The second M4 slot is either a second 27B-class model dedicated to code
+   review (so a review never evicts the brain mid-conversation) or the
+   escalation model if a ~30 GB one proves worth it — decided by the
+   harnesses, not by preference.
