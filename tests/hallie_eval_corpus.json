@@ -476,7 +476,8 @@
       "text": "who else is in it",
       "expect": "catalog",
       "followsPrevious": true,
-      "notes": "'it' = the video now playing."
+      "notes": "'it' = the video now playing. 'it' = the selected video; selected via :select (harness, 2026-09-01).",
+      "select": "Christmas_1994_etc.mkv"
     },
     {
       "id": "cs004",
