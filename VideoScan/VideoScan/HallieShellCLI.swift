@@ -1480,15 +1480,23 @@ enum HallieShellCLI {
             state: &state)
     }
 
-    /// The FIRST catalog record whose filename contains `needle`
-    /// (case-insensitive), in catalog order. Deterministic on purpose: the
-    /// same fragment selects the same file every session.
+    /// The record `:select <text>` means: the resolver's exact tiers first
+    /// (full path, filename, stem, unique whole-token match — the same
+    /// rules a question's file name gets, 2026-09-02), then the original
+    /// FIRST-substring rule as the last fallback so every corpus `select`
+    /// value written for it ("christmas_1994", "xmas") still selects the
+    /// same file. An ambiguous exact tier also falls back to the substring
+    /// rule: `:select` is a harness command and must stay deterministic.
     static func selectRecord(
         matchingFilename needle: String,
         in records: [VideoRecord]
     ) -> VideoRecord? {
         let key = needle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !key.isEmpty else { return nil }
+        if case .resolved(let record) = ArchivistRecordReferenceResolver.resolve(
+            file: needle, in: records) {
+            return record
+        }
         return records.first { $0.filename.lowercased().contains(key) }
     }
 
