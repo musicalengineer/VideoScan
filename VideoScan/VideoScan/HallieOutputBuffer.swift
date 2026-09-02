@@ -96,9 +96,15 @@ enum HallieOutputBuffer {
     /// the audio thread starving; a stutter with dozens is.
     final class OverloadCounter {
         let device: AudioDeviceID
-        private let queue = DispatchQueue(label: "Rick-Breen.VideoScan.hallie-overloads")
+        private static let queueKey = DispatchSpecificKey<Void>()
+        private let queue: DispatchQueue
         private var counted = 0
-        private var installed = false
+        /// True while the HAL listener is registered. Exposed for tests.
+        private(set) var installed = false
+        /// Result of the last remove call — surfaced, not swallowed
+        /// (codex #961). A failed removal leaves a listener that only ever
+        /// touches `self` weakly, so it is harmless but worth seeing.
+        private(set) var removalStatus: OSStatus = noErr
         private var address = AudioObjectPropertyAddress(
             mSelector: kAudioDeviceProcessorOverload,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -109,16 +115,24 @@ enum HallieOutputBuffer {
 
         init(device: AudioDeviceID) {
             self.device = device
+            let queue = DispatchQueue(label: "Rick-Breen.VideoScan.hallie-overloads")
+            queue.setSpecific(key: Self.queueKey, value: ())
+            self.queue = queue
             installed = AudioObjectAddPropertyListenerBlock(device, &address, queue, listener) == noErr
         }
 
-        var count: Int { queue.sync { counted } }
+        /// Safe from any thread — including the listener queue itself, so a
+        /// final release inside the block cannot deadlock `deinit → stop`.
+        var count: Int {
+            if DispatchQueue.getSpecific(key: Self.queueKey) != nil { return counted }
+            return queue.sync { counted }
+        }
 
-        /// Removes the listener; returns the final count.
+        /// Removes the listener (idempotent); returns the final count.
         @discardableResult
         func stop() -> Int {
             if installed {
-                AudioObjectRemovePropertyListenerBlock(device, &address, queue, listener)
+                removalStatus = AudioObjectRemovePropertyListenerBlock(device, &address, queue, listener)
                 installed = false
             }
             return count

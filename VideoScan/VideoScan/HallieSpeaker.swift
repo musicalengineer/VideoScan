@@ -74,9 +74,9 @@ final class HallieSpeaker: NSObject, ObservableObject {
     private var neuralNode: AVAudioPlayerNode?
     private var neuralPlaybackID = UUID()
     private var neuralAudioURLs: [URL] = []
-    private var neuralChunksScheduled = 0
-    private var neuralChunksPlayed = 0
-    private var neuralSynthesisFinished = false
+    /// Scheduled / played / synthesis-finished bookkeeping — a chunk is
+    /// counted only once the player node has ACCEPTED it (codex #961).
+    private var neuralLedger = HallieNeuralPlaybackLedger()
     /// Missed-deadline counter on the output device for the life of one
     /// engine; its total goes in the log when playback ends (Babyface
     /// stutter chase, 2026-09-02).
@@ -319,6 +319,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
             var playbackID = UUID()
             var totalFrames: Int64 = 0
             var sampleRate = 0.0
+            var residentBytes = 0
             var index = 0
             var retries = 0
             let abandoned = { @MainActor [weak self] () -> Bool in
@@ -349,7 +350,13 @@ final class HallieSpeaker: NSObject, ObservableObject {
                         return
                     }
                     self.neuralAudioURLs.append(audioURL)
-                    let file = try AVAudioFile(forReading: audioURL)
+                    // Opened and read OFF the main actor: the whole chunk
+                    // (~96 KB per second of speech) is loaded up front so no
+                    // disk read sits between the render thread and a USB
+                    // interface's deadline; past the resident budget the
+                    // remainder streams from disk as before (codex #961).
+                    let chunkAudio = try await Self.loadChunk(at: audioURL, residentSoFar: residentBytes)
+                    let file = chunkAudio.file
                     if engine == nil {
                         let newEngine = AVAudioEngine()
                         let newNode = AVAudioPlayerNode()
@@ -358,42 +365,41 @@ final class HallieSpeaker: NSObject, ObservableObject {
                         // Raise the device buffer BEFORE the engine starts its
                         // I/O cycle so the larger size applies from the first frame.
                         bufferNote = HallieOutputBuffer.ensureMinimum()
-                        self.neuralOverloads = HallieOutputBuffer.defaultOutputDevice()
-                            .map { HallieOutputBuffer.OverloadCounter(device: $0) }
                         newEngine.prepare()
                         try newEngine.start()
+                        // Installed only once the engine is running, so a
+                        // start failure leaves no listener behind (codex #961).
+                        self.neuralOverloads = HallieOutputBuffer.defaultOutputDevice()
+                            .map { HallieOutputBuffer.OverloadCounter(device: $0) }
                         playbackID = UUID()
                         self.neuralPlaybackID = playbackID
                         self.neuralEngine = newEngine
                         self.neuralNode = newNode
-                        self.neuralChunksScheduled = 0
-                        self.neuralChunksPlayed = 0
-                        self.neuralSynthesisFinished = false
+                        self.neuralLedger = HallieNeuralPlaybackLedger()
                         engine = newEngine
                         node = newNode
                     }
                     guard let node else { return }
-                    self.neuralChunksScheduled += 1
                     let id = playbackID
-                    // The whole chunk goes into memory first (a 50 s chunk
-                    // is ~5 MB): scheduleFile streams from disk on a reader
-                    // thread, one more thing that can miss a USB interface's
-                    // deadline; a scheduled buffer cannot.
-                    guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
-                                                     frameCapacity: AVAudioFrameCount(file.length)) else {
-                        throw HallieSpeakerError.bufferAllocation(frames: file.length)
-                    }
-                    try file.read(into: pcm)
-                    node.scheduleBuffer(pcm, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                    let onPlayed: AVAudioPlayerNodeCompletionHandler = { [weak self] _ in
                         Task { @MainActor in
                             guard let self, self.neuralPlaybackID == id else { return }
-                            self.neuralChunksPlayed += 1
-                            if self.neuralSynthesisFinished,
-                               self.neuralChunksPlayed >= self.neuralChunksScheduled {
-                                self.finishNeuralPlayback()
-                            }
+                            if self.neuralLedger.notePlayed() { self.finishNeuralPlayback() }
                         }
                     }
+                    if let pcm = chunkAudio.pcm {
+                        node.scheduleBuffer(pcm, completionCallbackType: .dataPlayedBack,
+                                            completionHandler: onPlayed)
+                        residentBytes += chunkAudio.bytes
+                    } else {
+                        node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack,
+                                          completionHandler: onPlayed)
+                    }
+                    // Counted only now that the node holds the chunk: a failed
+                    // allocation or read throws ABOVE, and a count taken
+                    // earlier waited forever for a completion that could
+                    // never come, leaving Hallie "speaking" (codex #961).
+                    self.neuralLedger.noteScheduled()
                     if !node.isPlaying { node.play() }
                     totalFrames += file.length
                     sampleRate = file.processingFormat.sampleRate
@@ -401,8 +407,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 }
                 guard let self, let engine, !abandoned() else { return }
                 self.neuralJob = nil
-                self.neuralSynthesisFinished = true
-                if self.neuralChunksPlayed >= self.neuralChunksScheduled { self.finishNeuralPlayback() }
+                if self.neuralLedger.noteSynthesisFinished() { self.finishNeuralPlayback() }
                 let duration = sampleRate > 0 ? Double(totalFrames) / sampleRate : 0
                 appLog.write(String(
                     format: "[hallie-voice] %@ synthesized %.1fs of %d Hz audio in %.1fs (%@; %d chunk%@%@); engine → %@; %@",
@@ -428,13 +433,19 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 self.neuralTask = nil
                 self.neuralJob = nil
                 let remaining = Array(chunks[index...])
-                if engine != nil, !self.neuralSynthesisFinished {
+                if engine != nil, !self.neuralLedger.synthesisFinished {
                     // Bella is mid-answer: let what is queued finish, then Apple
                     // reads the rest rather than cutting her off mid-sentence.
-                    self.neuralSynthesisFinished = true
+                    // With nothing queued (the FIRST chunk failed to load)
+                    // this finishes at once — no completion is owed.
                     self.appleContinuation = remaining
-                    if self.neuralChunksPlayed >= self.neuralChunksScheduled { self.finishNeuralPlayback() }
+                    if self.neuralLedger.noteSynthesisFinished() { self.finishNeuralPlayback() }
                 } else {
+                    // No engine was ever running (or the answer already
+                    // ended): nothing to tear down but a listener that may
+                    // have been installed before a start failure.
+                    self.neuralOverloads?.stop()
+                    self.neuralOverloads = nil
                     self.speakWithApple(remaining.isEmpty ? Self.sentences(text, lexicon: HalliePronunciationLexicon(entries: [])) : remaining)
                 }
             }
@@ -474,9 +485,7 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralEngine = nil
         for url in neuralAudioURLs { HallieNeuralSpeech.removeTemporaryAudio(url) }
         neuralAudioURLs = []
-        neuralChunksScheduled = 0
-        neuralChunksPlayed = 0
-        neuralSynthesisFinished = false
+        neuralLedger = HallieNeuralPlaybackLedger()
         appleContinuation = []
     }
 
@@ -496,6 +505,34 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// A short line so a newly chosen voice can be judged.
     func audition() {
         speak("Hello — I'm Hallie Mae. This is how I sound.")
+    }
+}
+
+extension HallieSpeaker {
+    /// One synthesized chunk, opened and (within budget) fully read.
+    struct LoadedChunk {
+        let file: AVAudioFile
+        /// nil when the resident budget is spent — the chunk then streams.
+        let pcm: AVAudioPCMBuffer?
+        let bytes: Int
+    }
+
+    /// Runs on the cooperative pool, never the main actor (`@concurrent`:
+    /// with approachable concurrency a plain `nonisolated async` would
+    /// inherit the caller's actor — see project_approachable_concurrency_trap).
+    @concurrent
+    nonisolated static func loadChunk(at url: URL, residentSoFar: Int) async throws -> LoadedChunk {
+        let file = try AVAudioFile(forReading: url)
+        let bytes = HallieNeuralResidency.bytes(frames: file.length, format: file.processingFormat)
+        guard HallieNeuralResidency.keepsResident(bytesSoFar: residentSoFar, chunkBytes: bytes) else {
+            return LoadedChunk(file: file, pcm: nil, bytes: bytes)
+        }
+        guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                         frameCapacity: AVAudioFrameCount(file.length)) else {
+            throw HallieSpeakerError.bufferAllocation(frames: file.length)
+        }
+        try file.read(into: pcm)
+        return LoadedChunk(file: file, pcm: pcm, bytes: bytes)
     }
 }
 
