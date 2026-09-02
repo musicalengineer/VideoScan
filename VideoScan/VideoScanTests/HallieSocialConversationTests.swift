@@ -49,6 +49,23 @@ struct HallieSocialConversationTests {
                 people: ["you"], operation: .kinship, relation: .father))))
     }
 
+    /// Live 9/02: the model, scolded, disowned the role. The reader never
+    /// sees that reply.
+    @Test func modelDisowningTheArchivistRoleIsReplacedByTheTemplate() async {
+        let live = "I appreciate the enthusiasm, but I don't have access to the specific family archive or private details you're referring to. As a librarian, I can help you navigate the collection, but I can't provide personal facts or memories. Please check the archive directly for those specific records."
+        let reply = await HallieSocialConversation.reply(
+            kind: .casual, question: "you are the archivist, you should know these things.",
+            modelCall: { _, _ in live })
+        #expect(reply.composedByModel == false)
+        #expect(reply.text == HallieSocialConversation.roleDenialReply)
+        #expect(reply.note.contains("disowned"))
+
+        let fine = await HallieSocialConversation.reply(
+            kind: .casual, question: "how are you today?",
+            modelCall: { _, _ in "Doing well, thank you. What would you like to look at?" })
+        #expect(fine.composedByModel == true)
+    }
+
     @Test func archiveGuardPrefersFalseArchiveOverFalseSocial() {
         let known: (String) -> Bool = { $0.lowercased() == "donna" }
         #expect(HallieConversationGuard.requiresArchive(

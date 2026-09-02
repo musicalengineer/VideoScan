@@ -12,6 +12,24 @@ enum HallieSocialConversation {
     }
 
     static let maximumReplyBytes = 1_200
+    /// Live 9/02 18:51: told "you are the archivist, you should know these
+    /// things", the model answered "I don't have access to the specific
+    /// family archive … As a librarian …" — disowning the role in front of
+    /// the reader. A reply that denies the archive or the role never
+    /// reaches the reader; this stands in for it.
+    static let roleDenialReply = """
+    You're right — that's my job. I couldn't turn your last question into a lookup I trust. Ask it as a count ("how many videos are archived"), a person ("videos of Donna"), or one video ("who is in this video") and I'll answer from the catalog.
+    """
+    static let roleDenialPhrases = [
+        "don't have access", "do not have access", "no access to",
+        "as a librarian", "as an assistant", "as an archivist, i can't",
+        "can't provide personal facts", "cannot provide personal facts",
+        "check the archive directly", "consult the archive directly",
+    ]
+    static func deniesRole(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return roleDenialPhrases.contains(where: lowered.contains)
+    }
     static let maximumHistoryTurns = 3
 
     private static let noMemoryReply = """
@@ -60,6 +78,12 @@ enum HallieSocialConversation {
                     text: fallbackReply,
                     composedByModel: false,
                     note: "template fallback: unsafe or malformed social reply")
+            }
+            if deniesRole(clean) {
+                return Reply(
+                    text: roleDenialReply,
+                    composedByModel: false,
+                    note: "template fallback: model disowned the archivist role")
             }
             return Reply(
                 text: clean,

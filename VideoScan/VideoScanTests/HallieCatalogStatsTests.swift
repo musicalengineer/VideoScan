@@ -9,6 +9,10 @@ struct HallieCatalogStatsTests {
     @Test func typoForgivenessReachesVocabularyOnly() {
         #expect(HallieCatalogStats.detect("how mny videos are in the family catalog?") == .total)
         #expect(HallieCatalogStats.detect("how many are archved") == .archived)
+        // Live 9/02: time framing must not turn a count into a search.
+        #expect(HallieCatalogStats.detect("how many videos do we have promoted to the archive as of today?") == .archived)
+        #expect(HallieCatalogStats.detect("how many videos are archived right now") == .archived)
+        #expect(HallieCatalogStats.detect("how many videos do we have to date") == .total)
         #expect(HallieCatalogStats.detect("how much disk spce") == .diskSpace)
         // A typo'd NAME must still fall through to a real search.
         #expect(HallieCatalogStats.detect("show me dona at the cape") == nil)

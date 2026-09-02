@@ -156,6 +156,10 @@ struct HallieCatalogStats: Equatable, Sendable {
         "overall", "whole", "entire", "catalog", "catalogue", "archive", "collection", "library", "family",
         "hallie", "please", "can", "could", "you", "tell", "me", "what", "whats", "what's", "roughly",
         "about", "approximately", "exactly", "so", "far", "now", "currently", "at", "moment", "got",
+        // "as of today", "up to now", "to date", "right now", "yet" — time
+        // framing, never content (live 9/02: "how many videos do we have
+        // promoted to the archive as of today?" fell through on "as"/"today").
+        "as", "today", "date", "up", "right", "yet", "till", "until", "tonight",
     ]
 
     static func detect(_ text: String) -> Question? {
