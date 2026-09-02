@@ -364,6 +364,10 @@ enum HallieTurnExecutor {
         let needsRecompile: [URL]
         let cyberBrain: CyberBrainIndex?
         let selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot?
+        /// The ONE record a `record` question is about, resolved by the
+        /// client before execution (+Record, 2026-09-02). `.noSelection`
+        /// for every other route.
+        let recordScope: RecordScope
         /// Who "I" and "you" are (2026-08-18). `.none` = pronouns cannot be
         /// bound and the executor says so.
         let speakers: Speakers
@@ -385,6 +389,7 @@ enum HallieTurnExecutor {
             needsRecompile: [URL] = [],
             cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
+            recordScope: RecordScope = .noSelection,
             speakers: Speakers = .none,
             assumedTreeBridges: [String: String] = [:]
         ) {
@@ -396,6 +401,7 @@ enum HallieTurnExecutor {
             self.needsRecompile = graph == nil ? needsRecompile : []
             self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
+            self.recordScope = recordScope
             self.speakers = speakers
             self.assumedTreeBridges = assumedTreeBridges
             self.continuationToken = UUID()
