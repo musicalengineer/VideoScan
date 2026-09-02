@@ -369,6 +369,81 @@
           "note": "Miss #18: pronunciation teaching precedes the surname-origin shape for a quoted family name."
         }
       ]
+    },
+    {
+      "id": "record_scope_2026_09_02",
+      "expectedRoutes": [
+        "record"
+      ],
+      "expectedOutcomes": [
+        "answered",
+        "declined"
+      ],
+      "noFabricatedPersonalMemory": true,
+      "forbidRawInternals": true,
+      "mustNotContain": [
+        "29 videos",
+        "9 videos",
+        "3 videos",
+        "Setting aside",
+        "resolve the anchor"
+      ],
+      "prompts": [
+        {
+          "id": "rc001-examine-stem",
+          "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
+          "note": "2026-09-02 (Rick): 'this video New Hampshire' = ONE file by stem; date + people from its own fields. Was a 29-video keyword sweep."
+        },
+        {
+          "id": "rc002-names-and-date",
+          "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+          "note": "2026-09-02: one verdict per asked name (tagged / face matcher / transcript / not found) + the date. Was a cross decline."
+        },
+        {
+          "id": "rc003-about-by-path",
+          "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+          "note": "2026-09-02: the dossier by full path. Was 'Nothing matches all of that … 9 items'."
+        },
+        {
+          "id": "rc004-my-name",
+          "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
+          "note": "2026-09-02: 'my name' = the owner's configured name. Was a 3-video filename sweep."
+        },
+        {
+          "id": "rc005-who-else-selected",
+          "text": "who else is in it",
+          "select": "Christmas_1994_etc.mkv",
+          "note": "cs003 on the record route: the selected video's people by tier."
+        },
+        {
+          "id": "rc006-who-is-in-this",
+          "text": "who is in this video",
+          "select": "Christmas_1994_etc.mkv"
+        },
+        {
+          "id": "rc007-is-donna-in-this",
+          "text": "is Donna in this?",
+          "select": "Christmas_1994_etc.mkv"
+        },
+        {
+          "id": "rc008-tell-me-about-this",
+          "text": "tell me about this video",
+          "select": "Christmas_1994_etc.mkv"
+        },
+        {
+          "id": "rc009-ambiguous-christmas",
+          "text": "who is in Christmas.mov",
+          "mustContain": [
+            "Which one do you mean"
+          ],
+          "note": "Several Christmas files: a which-one list (≤5 filenames, one chip each), never a sweep."
+        },
+        {
+          "id": "rc010-my-name-selected",
+          "text": "does it have my name in it",
+          "select": "New Hampshire.mov"
+        }
+      ]
     }
   ]
 }
