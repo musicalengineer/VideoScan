@@ -5,7 +5,7 @@
 //  Rick's spot test: "general navigation." Tabs cycle, the catalog
 //  inspector toggles, the Media File Operations window opens from the
 //  Window menu, and the About window shows the live version + git hash
-//  summary (BuildInfo.summary — "VideoScan v2.6 …").
+//  summary (BuildInfo.summary — "VideoScan v3.5 …").
 //
 //  No fixtures needed: this flow runs against the empty isolated
 //  catalog, which also keeps the accessibility tree tiny and fast
@@ -15,6 +15,11 @@
 import XCTest
 
 final class Gauntlet05NavigationUITests: GauntletTestCase {
+
+    /// Keep in sync with MARKETING_VERSION in VideoScan.xcodeproj.
+    /// A UI test runs out-of-process, so it can't read the app's
+    /// Bundle — this literal is the one place the version is pinned.
+    static let marketingVersion = "3.5"
 
     @MainActor
     func testTabsInspectorMFOWindowAndAbout() throws {
@@ -73,17 +78,17 @@ final class Gauntlet05NavigationUITests: GauntletTestCase {
         // A styled SwiftUI Text carrying only an .accessibilityIdentifier
         // exposes its string via the element's `value`, not `label`, on
         // macOS 26 — `label` comes back empty. (Flow 5's first real run,
-        // 2026-07-20, caught this: the app renders "v2.6 …" correctly, but
+        // 2026-07-20, caught this: the app renders "v3.5 …" correctly, but
         // this assertion read the wrong attribute.) Read label, falling back
         // to value — same pattern as Gauntlet01's `textViews...value as? String`.
         let summaryText = summary.label.isEmpty
             ? (summary.value as? String ?? "")
             : summary.label
-        XCTAssertTrue(summaryText.contains("2.6"),
-                      "About summary lost the v2.6 marketing version: \(summaryText)")
+        XCTAssertTrue(summaryText.contains(Self.marketingVersion),
+                      "About summary lost the v\(Self.marketingVersion) marketing version: \(summaryText)")
         // The genuine-git-hash release feature (67e765a): the summary
         // must carry SOME hash/branch info beyond the bare version.
-        XCTAssertGreaterThan(summaryText.count, "2.6".count + 4,
+        XCTAssertGreaterThan(summaryText.count, Self.marketingVersion.count + 4,
                              "About summary is suspiciously bare — git hash/branch info missing: \(summaryText)")
     }
 }

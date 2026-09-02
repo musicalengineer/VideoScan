@@ -15,7 +15,7 @@ each an exact encoding of one item in Rick's ritual:
 | 2 | `Gauntlet02CatalogSearchUITests` | Scan-in via Scan All; the catalog search field filters rows in and back out. |
 | 3 | `Gauntlet03SetDateUITests` | Inspector "WHEN WAS THIS?": "1992" + Best guess → Date column "1992 (est.)"; "6/14/1992" + I'm sure → canonical "1992-06-14", no (est.); garbage → the friendly rejection line, saved date untouched. |
 | 4 | `Gauntlet04BalanceAudioUITests` | Two-pair DV (12-bit camcorder shape): right-click → Balance Audio… → job reaches done in the MFO window and `<stem>_balanced.mov` lands on disk. True-stereo fixture: the sheet explains ("True stereo … Nothing to fix.") and offers NO Balance button. |
-| 5 | `Gauntlet05NavigationUITests` | All six tabs, inspector toggle, MFO window from the Window menu, About window shows the live `BuildInfo.summary` (v2.6 + git hash). |
+| 5 | `Gauntlet05NavigationUITests` | All six tabs, inspector toggle, MFO window from the Window menu, About window shows the live `BuildInfo.summary` (v3.5 + git hash). |
 
 Every flow:
 
