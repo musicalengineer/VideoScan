@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 273 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 274 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -1921,6 +1921,18 @@
       "followsPrevious": true
     },
     {
+      "id": "lv260902-000",
+      "category": "live",
+      "text": "tell me about thankful pratt",
+      "expect": "biography",
+      "mustContain": [
+        "Thankful Pratt",
+        "1761"
+      ],
+      "followsPrevious": false,
+      "notes": "setup turn for the 9/02 chain (codex #962): the harvester dropped it as already-known, which broke the antecedent for -001/-002. Observed live 9/02: PASS, biography with 3 citations."
+    },
+    {
       "id": "lv260902-001",
       "category": "live",
       "text": "would there be a photo of her if she born so long ago?",
@@ -1928,7 +1940,12 @@
       "notes": "observed live 2026-09-02 13:xx ET: MISS — lineage resolver took 'Her If She Born So Long Ago' as a person name and declined. 'her' must bind to the previous subject (Thankful Pratt) and the shape is photo-plausibility (d. 1849 vs photography 1839): possible but unlikely; none in the catalog. DISPATCH: pronoun binding in HallieLineageQuestion (small).",
       "followsPrevious": true,
       "mustNotContain": [
-        "Her If She Born"
+        "Her If She Born",
+        "don't find"
+      ],
+      "mustContain": [
+        "Thankful Pratt",
+        "photograph"
       ]
     },
     {
@@ -1939,6 +1956,12 @@
       "notes": "observed live 2026-09-02 13:xx ET: PASS — 'her' bound to Thankful Pratt, biography repeated.",
       "mustMatch": [
         "Thankful Pratt"
+      ],
+      "followsPrevious": true,
+      "mustContain": [
+        "Thankful Pratt",
+        "1761",
+        "Parker"
       ]
     },
     {
@@ -1950,7 +1973,11 @@
       "followsPrevious": true,
       "mustNotContain": [
         "passed away",
-        "no longer with us"
+        "no longer with us",
+        "at rest"
+      ],
+      "mustContain": [
+        "photograph"
       ]
     },
     {
@@ -1959,7 +1986,16 @@
       "text": "find videos of my brother tim",
       "expect": "catalog",
       "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one.",
-      "followsPrevious": true
+      "followsPrevious": false,
+      "mustContain": [
+        "Tim"
+      ],
+      "mustNotContain": [
+        "Matt",
+        "Timmy",
+        "Which one",
+        "which one do you mean"
+      ]
     },
     {
       "id": "lv260902-005",
@@ -1970,6 +2006,10 @@
       "mustNotContain": [
         "Matt",
         "Timmy"
+      ],
+      "followsPrevious": true,
+      "mustContain": [
+        "Tim"
       ]
     },
     {
@@ -1977,21 +2017,39 @@
       "category": "live",
       "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
       "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — became a catalog-wide keyword presence over 29 videos. Wanted: ONE record (selection or filename 'New Hampshire.mov'), its resolved date and who is in it. DISPATCH: record-scope feature (plan in progress).",
-      "followsPrevious": true,
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — became a catalog-wide keyword presence over 29 videos. Wanted: ONE record (selection or filename 'New Hampshire.mov'), its resolved date and who is in it. DISPATCH: record-scope feature (plan in progress). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
+      "followsPrevious": false,
       "mustMatch": [
         "New Hampshire.mov"
       ],
-      "select": "New Hampshire.mov"
+      "select": "New Hampshire.mov",
+      "mustContain": [
+        "New Hampshire.mov"
+      ],
+      "mustNotContain": [
+        "29 videos",
+        "videos:",
+        "in the directory",
+        "in the filename"
+      ]
     },
     {
       "id": "lv260902-007",
       "category": "live",
       "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
       "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — filename dropped; keyword sweep for tim/nancy/rick/donna and the literal word 'date'. Wanted: transcript name mentions + date within that one file. DISPATCH: record-scope (what-is-said operation).",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — filename dropped; keyword sweep for tim/nancy/rick/donna and the literal word 'date'. Wanted: transcript name mentions + date within that one file. DISPATCH: record-scope (what-is-said operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
       "mustMatch": [
         "New Hampshire.mov"
+      ],
+      "followsPrevious": true,
+      "mustContain": [
+        "New Hampshire.mov"
+      ],
+      "mustNotContain": [
+        "9 videos",
+        "videos:",
+        "someone says “tim”"
       ]
     },
     {
@@ -1999,10 +2057,18 @@
       "category": "live",
       "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
       "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — declined ('metadata' and 'new hampshire.mov' became keywords, Rick a person filter). Full path given. Wanted: dossier-style summary of one record (metadata, date, people, transcript highlights) + is Rick in it. DISPATCH: record-scope (tell-me-all-about-it operation).",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — declined ('metadata' and 'new hampshire.mov' became keywords, Rick a person filter). Full path given. Wanted: dossier-style summary of one record (metadata, date, people, transcript highlights) + is Rick in it. DISPATCH: record-scope (tell-me-all-about-it operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
       "followsPrevious": true,
       "mustMatch": [
         "New Hampshire.mov"
+      ],
+      "mustContain": [
+        "New Hampshire.mov"
+      ],
+      "mustNotContain": [
+        "Setting aside",
+        "Nothing matches",
+        "items. Want those"
       ]
     },
     {
@@ -2010,10 +2076,20 @@
       "category": "live",
       "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
       "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: NEAR — filename matcher returned the exact file first (+2 near-misses) but 'my name' was dropped as a non-search word. Wanted: is Rick in New Hampshire.mov (tags/Find-and-Tag/transcript). DISPATCH: record-scope (who-is-in-it) + 'my name' = speaker.",
+      "notes": "observed live 2026-09-02 13:xx ET: NEAR — filename matcher returned the exact file first (+2 near-misses) but 'my name' was dropped as a non-search word. Wanted: is Rick in New Hampshire.mov (tags/Find-and-Tag/transcript). DISPATCH: record-scope (who-is-in-it) + 'my name' = speaker. Graded on ONE record: a count-of-videos answer must fail (codex #962).",
       "followsPrevious": true,
       "mustMatch": [
         "New Hampshire.mov"
+      ],
+      "mustContain": [
+        "New Hampshire.mov",
+        "Rick"
+      ],
+      "mustNotContain": [
+        "3 videos",
+        "videos with",
+        "in the filename",
+        "not a search word"
       ]
     }
   ]

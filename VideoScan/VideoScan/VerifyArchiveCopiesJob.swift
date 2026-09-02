@@ -49,8 +49,8 @@ private let verifyArchiveLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// it is what the catalog record's path joins on), by the copy's
 /// `record_id`, and by `source_record_id` (fallbacks for a copy record
 /// whose path is no longer under the current root). Latest row wins per
-/// key — the manifest is append-only, so a re-promote's newer row
-/// supersedes.
+/// key — the manifest is append-only, so a later row for the same file
+/// (a retried promotion, or a future Refile) supersedes.
 struct VerifyArchiveManifestIndex: Sendable {
     struct Row: Sendable, Equatable {
         let relPath: String

@@ -240,7 +240,7 @@ extension ArchiveView {
         case .verified:
             return "Copied to the Master Archive, re-read and its SHA-256 compared before being recorded."
         case .unverified:
-            return "An archive copy exists but no fixity record — cataloged by rescan, not by Promote. Re-promote or verify."
+            return "An archive copy exists but no fixity record — cataloged by rescan, not by Promote. Verify copies… restores it from the manifest."
         case .orphanCopy:
             return "This is a Master Archive copy whose source record is no longer in the catalog."
         case .notArchived:

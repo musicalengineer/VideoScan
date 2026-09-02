@@ -280,7 +280,7 @@ struct ArchiveView: View {
                         Text("· \(totals.unverified) unverified")
                             .font(.system(size: 13))
                             .foregroundStyle(Color.yellow)
-                            .help("Archive copies cataloged by rescan without a fixity record — re-promote or verify to record their checksums.")
+                            .help("Archive copies cataloged by rescan without a fixity record — Verify copies… restores the checksum from the manifest. (Promote skips files already in the archive.)")
                     }
                 }
                 .padding(.leading, 8)
