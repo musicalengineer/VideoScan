@@ -859,7 +859,7 @@ final class MainWindowHelper {
         openWindowAction?(id: "main")
     }
 
-    private func findMainWindow() -> NSWindow? {
+    func findMainWindow() -> NSWindow? {
         // SwiftUI stamps a WindowGroup window's identifier with its scene
         // id ("main-AppWindow-1" for WindowGroup(id: "main")) — the ONLY
         // positive identity we have. Title heuristics are the fallback.

@@ -502,7 +502,7 @@ extension CatalogContent {
                         Button("Compare These Two Files…") {
                             fileOpsCenter.startCompare(
                                 recordA: fileA, recordB: fileB)
-                            openWindow(id: "combine")
+                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
                         }
                         .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
                                   || !VolumeReachability.isReachable(path: fileB.fullPath))
@@ -542,7 +542,7 @@ extension CatalogContent {
                     if rec.streamType == .videoOnly {
                         Button("Find Matching Audio…") {
                             repairAudio(for: rec)
-                            openWindow(id: "combine")
+                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.repairAudio")
@@ -557,7 +557,7 @@ extension CatalogContent {
                     if rec.streamType == .audioOnly {
                         Button("Find Matching Video…") {
                             repairVideo(for: rec)
-                            openWindow(id: "combine")
+                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.repairVideo")
@@ -882,7 +882,7 @@ extension CatalogContent {
                                     person: "Donna",
                                     records: selectedRecs,
                                     model: model)
-                                openWindow(id: "combine")   // MFO window (legacy id)
+                                MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // MFO window (legacy id)
                             }
                             Divider()
                             // should not be hardwired rather lookup if recipes
@@ -1139,7 +1139,7 @@ extension CatalogContent {
                 model.noteMissingFileForUserAction(r)
                 fileOpsCenter.startVerifyAudio(record: r, model: model)
             }
-            openWindow(id: "combine")
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
         .disabled(verifiableRecs.isEmpty)
         .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
@@ -1156,7 +1156,7 @@ extension CatalogContent {
                     diagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
                     onFindMatchingAudio: {
                         repairAudio(for: rec)
-                        openWindow(id: "combine")
+                        MediaFileOperationsWindowOpener.openBehindMain(openWindow)
                     })
             }
             .help("Audio properties from the catalog — plus Verify Audio findings and any repair offer when a check has run.")
@@ -1174,7 +1174,7 @@ extension CatalogContent {
                     fileOpsCenter.startVerifyAudio(
                         record: r, model: model, autoRepair: true)
                 }
-                openWindow(id: "combine")
+                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
             }
             .help("Re-check each damaged file and, where the damage is fixable (an old sound format), rebuild a repaired copy next to the original. Originals are never changed.")
             .accessibilityIdentifier("catalog.row.repairDamagedAudio")
@@ -1293,7 +1293,7 @@ extension CatalogContent {
                 stages: stages
             )
         }
-        if !modern.isEmpty { openWindow(id: "combine") }
+        if !modern.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
 
         guard !needsReformat.isEmpty else { return }
         // One combined confirm for the legacy-codec subset.
@@ -1315,7 +1315,7 @@ extension CatalogContent {
                     orchestrator: captionOrchestrator
                 )
             }
-            openWindow(id: "combine")
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
     }
 
@@ -1329,7 +1329,7 @@ extension CatalogContent {
                 orchestrator: captionOrchestrator,
                 stages: stages
             )
-            openWindow(id: "combine")
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
             return
         }
         // Legacy codec — confirm reformat first.
@@ -1358,7 +1358,7 @@ extension CatalogContent {
                 record: rec, model: model,
                 orchestrator: captionOrchestrator
             )
-            openWindow(id: "combine")
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
     }
 

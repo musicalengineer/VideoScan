@@ -286,6 +286,6 @@ struct PromoteToArchiveSheet: View {
         }
         fileOpsCenter.startPromote(plan: confirmed, model: model)
         dismiss()
-        openWindow(id: "combine")   // Media File Operations window (legacy id)
+        MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
     }
 }

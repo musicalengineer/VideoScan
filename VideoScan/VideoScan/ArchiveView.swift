@@ -294,7 +294,7 @@ struct ArchiveView: View {
                     // '· N unverified' count above is what it repairs.
                     Button("Verify copies…") {
                         fileOpsCenter.startVerifyArchiveCopies(model: model)
-                        openWindow(id: "combine")   // Media File Operations window (legacy id)
+                        MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
                     }
                     .disabled(model.isReadOnly)
                     .help("Re-read every Master Archive copy end to end and compare its SHA-256 against the manifest. Matches restore the catalog's fixity record; a mismatch is flagged and never papered over.")

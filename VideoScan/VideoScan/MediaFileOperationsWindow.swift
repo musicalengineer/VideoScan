@@ -1,4 +1,5 @@
 import Combine
+import AppKit
 import SwiftUI
 
 // MARK: - Media File Operations window
@@ -17,6 +18,51 @@ import SwiftUI
 //     original views (`CombineJobsSection`), behavior untouched.
 // Visual unity first; type unity (combine conforming to the job
 // protocol) is deferred.
+
+/// Opens (or reveals) the Media File Operations window BEHIND the window
+/// the user is working in (2026-09-02). Every job start used to call
+/// `openWindow(id: "combine")` directly, and SwiftUI brings a newly opened
+/// window to the front — so clicking Promote in the archive sheet, or
+/// "Verify copies…", buried the main window (and any sheet on it) under the
+/// job list. The window is still created and still updates; it just lands
+/// one level down, where it is found rather than fought.
+///
+/// The anchor is the main window when there is one, else whatever window
+/// was key BEFORE the open (captured first — the open makes the job window
+/// key). SwiftUI creates the window asynchronously, so the reorder is
+/// retried on two later run-loop turns; if it never appears, nothing
+/// happens (no throw, no log spam).
+@MainActor
+enum MediaFileOperationsWindowOpener {
+    static let sceneID = "combine"   // legacy "Combine & Render" scene id
+    static let title = "Media File Operations"
+
+    /// Pure predicate, so the window-identity rule is table-testable.
+    nonisolated static func isJobWindow(identifier: String?, title: String) -> Bool {
+        if let identifier, identifier.hasPrefix(sceneID) { return true }
+        return title == Self.title
+    }
+
+    static func openBehindMain(_ openWindow: OpenWindowAction) {
+        let anchor = MainWindowHelper.shared.findMainWindow() ?? NSApp.keyWindow
+        openWindow(id: sceneID)
+        for delay in [0.0, 0.15, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                sendBehind(anchor)
+            }
+        }
+    }
+
+    private static func sendBehind(_ anchor: NSWindow?) {
+        guard let anchor, anchor.isVisible,
+              let job = NSApp.windows.first(where: {
+                  isJobWindow(identifier: $0.identifier?.rawValue, title: $0.title)
+              }),
+              job !== anchor else { return }
+        job.order(.below, relativeTo: anchor.windowNumber)
+        anchor.makeKeyAndOrderFront(nil)
+    }
+}
 
 struct MediaFileOperationsWindow: View {
     @EnvironmentObject var model: VideoScanModel

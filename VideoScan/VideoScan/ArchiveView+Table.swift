@@ -55,7 +55,7 @@ extension ArchiveView {
                     openHelper: { id in
                         guard let seed = model.record(forID: id) else { return }
                         fileOpsCenter.startAssessCopies(seed: seed, model: model)
-                        openWindow(id: "combine")   // Media File Operations window (legacy id)
+                        MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
                     },
                     showInCatalog: { id in
                         guard let rec = model.record(forID: id) else { return }
