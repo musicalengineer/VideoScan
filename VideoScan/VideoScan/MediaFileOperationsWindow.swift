@@ -43,24 +43,58 @@ enum MediaFileOperationsWindowOpener {
         return title == Self.title
     }
 
+    /// What one retry does. Pure, so the focus rules are table-testable
+    /// (codex #964): never touch windows while an app-modal alert runs
+    /// (the retry would fight NSAlert.runModal); restore key only when the
+    /// open actually stole it, so a retry that finds the user already back
+    /// in the main window does nothing; skip entirely with no usable anchor.
+    enum Step: Equatable { case skip, reorder, reorderAndRestoreKey }
+
+    nonisolated static func step(jobIsKey: Bool, modalRunning: Bool, anchorVisible: Bool) -> Step {
+        if modalRunning || !anchorVisible { return .skip }
+        return jobIsKey ? .reorderAndRestoreKey : .reorder
+    }
+
+    /// The job window is the RESULT the user asked for (Archive Helper's
+    /// expanded row, Compare) — open it in front like any other window.
+    static func openInFront(_ openWindow: OpenWindowAction) {
+        openWindow(id: sceneID)
+    }
+
+    /// A job was started as a side effect; the window the user is working
+    /// in stays on top. The anchor is captured BEFORE the open (the open
+    /// makes the job window key); SwiftUI creates the window
+    /// asynchronously, so the reorder is retried on later run-loop turns.
+    /// If the captured anchor has since closed, the current main window
+    /// stands in.
     static func openBehindMain(_ openWindow: OpenWindowAction) {
-        let anchor = MainWindowHelper.shared.findMainWindow() ?? NSApp.keyWindow
+        let captured = MainWindowHelper.shared.findMainWindow() ?? NSApp.keyWindow
         openWindow(id: sceneID)
         for delay in [0.0, 0.15, 0.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                sendBehind(anchor)
+                sendBehind(captured)
             }
         }
     }
 
-    private static func sendBehind(_ anchor: NSWindow?) {
-        guard let anchor, anchor.isVisible,
-              let job = NSApp.windows.first(where: {
-                  isJobWindow(identifier: $0.identifier?.rawValue, title: $0.title)
-              }),
-              job !== anchor else { return }
-        job.order(.below, relativeTo: anchor.windowNumber)
-        anchor.makeKeyAndOrderFront(nil)
+    private static func sendBehind(_ captured: NSWindow?) {
+        guard let job = NSApp.windows.first(where: {
+            isJobWindow(identifier: $0.identifier?.rawValue, title: $0.title)
+        }) else { return }
+        let anchor = (captured?.isVisible == true ? captured : nil)
+            ?? MainWindowHelper.shared.findMainWindow()
+        guard let anchor, anchor !== job else { return }
+        switch step(jobIsKey: NSApp.keyWindow === job,
+                    modalRunning: NSApp.modalWindow != nil,
+                    anchorVisible: anchor.isVisible) {
+        case .skip:
+            return
+        case .reorder:
+            job.order(.below, relativeTo: anchor.windowNumber)
+        case .reorderAndRestoreKey:
+            job.order(.below, relativeTo: anchor.windowNumber)
+            anchor.makeKeyAndOrderFront(nil)
+        }
     }
 }
 
@@ -96,7 +130,15 @@ struct MediaFileOperationsWindow: View {
         .onAppear {
             DispatchQueue.main.async {
                 for window in NSApp.windows where window.title.contains("Media File Operations") {
-                    window.level = .floating
+                    // A NORMAL-level window since 2026-09-02. It floated
+                    // (2026-04-26, as the Combine progress palette) and a
+                    // floating window sits above every normal window no
+                    // matter how they are ordered — which is exactly the
+                    // "job list covers the Promote sheet" complaint. It is
+                    // now ordered behind the window a job was started from
+                    // (MediaFileOperationsWindowOpener) and comes forward
+                    // when clicked, like any other window.
+                    window.level = .normal
                     window.isMovableByWindowBackground = true
                 }
             }

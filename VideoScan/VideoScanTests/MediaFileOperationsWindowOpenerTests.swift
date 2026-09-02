@@ -21,4 +21,21 @@ final class MediaFileOperationsWindowOpenerTests: XCTestCase {
         XCTAssertFalse(MediaFileOperationsWindowOpener.isJobWindow(identifier: nil, title: "Media File Operations — Console"))
         XCTAssertFalse(MediaFileOperationsWindowOpener.isJobWindow(identifier: "compare-AppWindow-1", title: "Compare Volumes"))
     }
+
+    // MARK: - Retry step (codex #964)
+
+    func testModalAlertFreezesEverything() {
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: true, modalRunning: true, anchorVisible: true), .skip)
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: false, modalRunning: true, anchorVisible: true), .skip)
+    }
+
+    func testNoVisibleAnchorMeansNoAction() {
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: true, modalRunning: false, anchorVisible: false), .skip)
+    }
+
+    func testKeyIsRestoredOnlyWhenTheOpenStoleIt() {
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: true, modalRunning: false, anchorVisible: true), .reorderAndRestoreKey)
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: false, modalRunning: false, anchorVisible: true), .reorder,
+                       "a stale retry with the user already back in the main window must not re-key it")
+    }
 }

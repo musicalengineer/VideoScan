@@ -502,7 +502,8 @@ extension CatalogContent {
                         Button("Compare These Two Files…") {
                             fileOpsCenter.startCompare(
                                 recordA: fileA, recordB: fileB)
-                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                            // The compare result lives in the job window — in front (codex #964).
+                            MediaFileOperationsWindowOpener.openInFront(openWindow)
                         }
                         .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
                                   || !VolumeReachability.isReachable(path: fileB.fullPath))
@@ -541,8 +542,7 @@ extension CatalogContent {
                     // only.
                     if rec.streamType == .videoOnly {
                         Button("Find Matching Audio…") {
-                            repairAudio(for: rec)
-                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                            repairAudio(for: rec)   // Combine sheet or alert is the result; no job window (codex #964)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.repairAudio")
@@ -556,8 +556,7 @@ extension CatalogContent {
                     // record, it returns the best video-only match.
                     if rec.streamType == .audioOnly {
                         Button("Find Matching Video…") {
-                            repairVideo(for: rec)
-                            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                            repairVideo(for: rec)   // Combine sheet or alert is the result; no job window (codex #964)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.repairVideo")
@@ -1155,8 +1154,7 @@ extension CatalogContent {
                     record: rec,
                     diagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
                     onFindMatchingAudio: {
-                        repairAudio(for: rec)
-                        MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                        repairAudio(for: rec)   // Combine sheet or alert is the result; no job window (codex #964)
                     })
             }
             .help("Audio properties from the catalog — plus Verify Audio findings and any repair offer when a check has run.")
