@@ -27,7 +27,23 @@ import Foundation
 //                         confirmedByUserPeople, rejectedPeople,
 //                         mediaDisposition, lifecycleStage,
 //                         archiveStage, starRating, junkScore, notes,
-//                         tags, userNotes.
+//                         tags, userNotes, userDate, userDateConfidence.
+//   Archive provenance  — archiveFixity, originalFullPath, originVolume,
+//                         masterLocation. Stamped by Promote / Verify
+//                         Archive Copies / move-adoption, never by a
+//                         scan, so a rescan can only ever lose them.
+//
+// 2026-09-02: archiveFixity was never in the list; a rescan of the
+// archive volume dropped 28 fixity records' worth of provenance in
+// Rick's catalog. The sidebar then showed every archive copy as
+// unverified ("cataloged by rescan, not by Promote") and the only way
+// back was Verify Copies re-reading every byte (one file is 73 GB).
+// Same audit found originalFullPath / originVolume / masterLocation
+// (Promote's self-contained "where did this come from" provenance) and
+// userDate / userDateConfidence (Rick's hand-typed Estimated Date —
+// which the Update Catalog sheet promises "stays with the file") were
+// missing too. All six are additive here; the scan never writes any of
+// them, so restoring verbatim can never clobber a fresher value.
 //
 // What we DON'T preserve (the scan re-derives these from disk):
 //   filename, ext, size, sizeBytes, duration, durationSeconds,
@@ -114,6 +130,36 @@ struct RescanPreservedFields: Sendable {
     let derivedFrom: UUID?
     let derivationKind: String?
 
+    /// Master Archive fixity (2026-09-02): the whole-file SHA-256 that
+    /// Promote stamps after read-back and Verify Archive Copies restores
+    /// after re-reading every byte. A rescan of the archive volume
+    /// produced fresh instances with archiveFixity == nil, so every
+    /// verified copy silently became "unverified" (see header note).
+    /// Restored VERBATIM — if the file on disk has since changed, the
+    /// stale sizeBytes inside the record IS the tamper signal Verify
+    /// Copies looks for; dropping it would destroy the evidence.
+    let archiveFixity: ArchiveFixity?
+
+    /// Promote's self-contained provenance on the archive copy (codex QA
+    /// major b): where the file came from, so the copy can still say so
+    /// after a retired-volume cleanup removes the source record. Also
+    /// written by move-adoption and Relocate for renamed/moved files.
+    /// Never written by a scan.
+    let originalFullPath: String?
+    let originVolume: String?
+
+    /// Which Master Archive holds this record's master ("Mac Studio SSD",
+    /// the archive target path). Stamped on BOTH the source and the copy
+    /// by Promote; "" = none.
+    let masterLocation: String
+
+    /// Rick's hand-entered Estimated Date (GH #117) + its confidence.
+    /// User-edit class (same contract as notes/tags) — and Promote copies
+    /// it onto the archive copy, so losing it on a rescan also loses the
+    /// copy's archive date.
+    let userDate: String?
+    let userDateConfidence: String?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -142,6 +188,12 @@ struct RescanPreservedFields: Sendable {
             || repairConfirmedDate != nil
             || derivedFrom != nil
             || derivationKind != nil
+            || archiveFixity != nil
+            || originalFullPath != nil
+            || originVolume != nil
+            || !masterLocation.isEmpty
+            || userDate != nil
+            || userDateConfidence != nil
     }
 
     @MainActor
@@ -176,6 +228,12 @@ struct RescanPreservedFields: Sendable {
         self.repairConfirmedDate = rec.repairConfirmedDate
         self.derivedFrom = rec.derivedFrom
         self.derivationKind = rec.derivationKind
+        self.archiveFixity = rec.archiveFixity
+        self.originalFullPath = rec.originalFullPath
+        self.originVolume = rec.originVolume
+        self.masterLocation = rec.masterLocation
+        self.userDate = rec.userDate
+        self.userDateConfidence = rec.userDateConfidence
     }
 
     /// Apply the snapshotted fields onto a freshly-scanned record.
@@ -214,6 +272,12 @@ struct RescanPreservedFields: Sendable {
         rec.repairConfirmedDate = self.repairConfirmedDate
         rec.derivedFrom = self.derivedFrom
         rec.derivationKind = self.derivationKind
+        rec.archiveFixity = self.archiveFixity
+        rec.originalFullPath = self.originalFullPath
+        rec.originVolume = self.originVolume
+        rec.masterLocation = self.masterLocation
+        rec.userDate = self.userDate
+        rec.userDateConfidence = self.userDateConfidence
     }
 }
 
