@@ -49,6 +49,12 @@ enum ArchivistFollowUpResolver {
         case show
     }
 
+    /// Which end of the date line "the newest" / "the oldest" points at.
+    enum DateOrder: Sendable, Equatable {
+        case newestFirst
+        case oldestFirst
+    }
+
     /// The cumulative refinement chain the user has stacked onto the base
     /// question — what the basis line prints ("refining: rick + guitar +
     /// westford · around 2005"). Terms are people and topic words in the
@@ -162,6 +168,12 @@ enum ArchivistFollowUpResolver {
         /// read as any refinement ("hmm?", "and then"). The client offers the
         /// help card.
         case declineUninterpretable(String)
+        /// "and the newest?" / "the most recent one" / "the second oldest"
+        /// (2026-09-02): re-run the last question sorted by date and name
+        /// the `ordinal`th (1-based). `verb` is a leading play/show/reveal,
+        /// when there was one. The client decides what the last question
+        /// was (a list, a count, the person an age was about).
+        case dateOrdered(order: DateOrder, ordinal: Int, verb: MediaVerb?)
     }
 
     // MARK: - Entry
@@ -179,6 +191,9 @@ enum ArchivistFollowUpResolver {
         }
         if let tree = familyTreeResolution(words) {
             return tree
+        }
+        if let ordered = dateOrderResolution(words) {
+            return ordered
         }
         if let media = mediaResolution(words, original: text, snapshot: snapshot) {
             return media
@@ -325,6 +340,70 @@ enum ArchivistFollowUpResolver {
             return .localQuery(.graph(.init(people: [], operation: .familyTree, surname: surname)))
         }
         return .localQuery(.graph(.init(people: people, operation: .familyTree)))
+    }
+
+    // MARK: - Newest / oldest
+
+    private static let newestWords: Set<String> = ["newest", "latest", "recent", "recently", "new"]
+    private static let oldestWords: Set<String> = ["oldest", "earliest", "old", "early"]
+    /// Words that may surround the superlative without changing it.
+    private static let dateOrderFiller: Set<String> = [
+        "the", "a", "an", "one", "ones", "of", "them", "those", "these", "it",
+        "video", "videos", "clip", "clips", "file", "files", "item", "items",
+        "recording", "recordings", "movie", "movies", "tape", "tapes", "photo",
+        "photos", "picture", "pictures", "which", "what", "whats", "what's", "is",
+        "was", "are", "were", "there", "here", "me", "us", "in", "list", "from",
+        "that", "this", "most", "very", "please", "hallie", "and", "then", "so",
+        "how", "about", "now", "ok", "okay", "also", "too", "tell", "give", "find",
+        "pick", "pull", "up", "out", "bring", "next", "after", "second", "third",
+        "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "1st",
+        "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th", "number",
+        "no", "one's", "ones'", "just", "only", "well",
+    ]
+
+    /// "and the newest?", "the most recent one", "what's the oldest?",
+    /// "show me the second newest", "play the earliest one" → dateOrdered.
+    /// Any other content word ("the newest of donna") means a fresh
+    /// question, not a follow-up.
+    private static func dateOrderResolution(_ rawWords: [String]) -> Resolution? {
+        var words = dropLead(rawWords)
+        guard !words.isEmpty else { return nil }
+        var verb: MediaVerb?
+        if let first = words.first {
+            if playVerbs.contains(first) { verb = .play }
+            else if revealVerbs.contains(first) { verb = .reveal }
+            else if showVerbs.contains(first) { verb = .show }
+            if verb != nil { words.removeFirst() }
+        }
+        var order: DateOrder?
+        for word in words {
+            if newestWords.contains(word) {
+                guard order == nil || order == .newestFirst else { return nil }
+                order = .newestFirst
+            } else if oldestWords.contains(word) {
+                guard order == nil || order == .oldestFirst else { return nil }
+                order = .oldestFirst
+            }
+        }
+        guard let order else { return nil }
+        // "most recent" needs its "most"; a bare "recent" / "old" / "new"
+        // is too loose to be a superlative.
+        let bareOnly = words.allSatisfy { !["newest", "latest", "oldest", "earliest"].contains($0) }
+        if bareOnly, !words.contains("most") { return nil }
+        let rest = words.filter {
+            !newestWords.contains($0) && !oldestWords.contains($0) && !dateOrderFiller.contains($0)
+        }
+        guard rest.isEmpty else { return nil }
+        let ordinal = numberedIndex(words) ?? 1
+        return .dateOrdered(order: order, ordinal: ordinal, verb: verb)
+    }
+
+    /// The position a media follow-up asked for ("the second one" → 2,
+    /// "the last one" → nil with `wantsLast`), for a client that has a
+    /// list to re-run but nothing shown yet (2026-09-02).
+    static func requestedPosition(in text: String) -> (ordinal: Int?, wantsLast: Bool) {
+        let words = dropLead(normalizedWords(text))
+        return (numberedIndex(words), words.contains("last") || words.contains("latest"))
     }
 
     // MARK: - Media actions

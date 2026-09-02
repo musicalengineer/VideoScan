@@ -137,4 +137,79 @@ struct HallieShellCLIFollowUpTests {
             #expect(harness.mediaActions.isEmpty, Comment(rawValue: question))
         }
     }
+
+    /// A count still carries the question it counted (2026-09-02, eval
+    /// cc007 / cs015): "and the newest?" re-runs it sorted by date, and
+    /// "ok show me the second one" is then the second in THAT order.
+    @Test func aCountThenTheNewestThenTheSecondOneChainsWithoutTheModel() async throws {
+        let harness = Harness(
+            inputs: [
+                "how many videos of donna do we have from the 90s?",
+                "and the newest?",
+                "ok show me the second one",
+                "and the oldest?",
+                ":quit",
+            ],
+            records: records(),
+            translations: [.presence(.init(people: ["donna"], yearStart: 1990, yearEnd: 1999, mediaKind: .video))])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+        let code = await HallieShellCLI.run(
+            options: options,
+            input: { harness.nextInput() },
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == 0)
+        #expect(harness.translatedQuestions == ["how many videos of donna do we have from the 90s?"])
+        // 30 records, paths /isolated/1990…/1999/donna_N.mov: the newest are
+        // donna_27/28/29 (1999); ties break by name, so 27 is first.
+        #expect(harness.output.contains("The newest of the 30 matches for Donna · 1990–1999 is donna_27.mov (1999)."),
+                Comment(rawValue: harness.output.joined(separator: "\n")))
+        #expect(harness.output.contains("Showing item 2 from my last answer: “donna_28.mov”."))
+        #expect(harness.output.contains("showing donna_28.mov — /isolated/1999/donna_28.mov"))
+        #expect(harness.output.contains("The oldest of the 30 matches for Donna · 1990–1999 is donna_0.mov (1990)."))
+        let routes = harness.transcriptEvents.compactMap(\.route)
+        #expect(routes == ["presence", "presence", "follow-up", "presence"])
+    }
+
+    /// A refinement that found nothing does not take the last shown list
+    /// away: "ok show me the second one" still means the second item that
+    /// was actually listed (eval cs015).
+    @Test func theSecondOneAfterAnEmptyRefinementShowsTheLastListShown() async throws {
+        let harness = Harness(
+            inputs: [
+                "do we have anything of donna?",
+                "narrow that to winter",
+                "ok show me the second one",
+                ":quit",
+            ],
+            records: records(),
+            translations: [.presence(.init(people: ["donna"]))])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+        _ = await HallieShellCLI.run(
+            options: options,
+            input: { harness.nextInput() },
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions == ["do we have anything of donna?"])
+        #expect(harness.output.contains { $0.contains("Winter — nothing matched.") },
+                Comment(rawValue: harness.output.joined(separator: "\n")))
+        #expect(harness.output.contains("Showing item 2 from the last list I showed you: “donna_1.mov”."),
+                Comment(rawValue: harness.output.joined(separator: "\n")))
+        #expect(harness.output.contains("showing donna_1.mov — /isolated/1990/donna_1.mov"))
+    }
+
+    /// With nothing asked yet the superlative is an honest ask, as before.
+    @Test func theNewestWithNothingToSortDeclines() async throws {
+        let harness = Harness(inputs: ["and the newest?", ":quit"], records: records(), translations: [])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+        _ = await HallieShellCLI.run(
+            options: options,
+            input: { harness.nextInput() },
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.hasPrefix("Ask me for something first — a search or a count — and then I can pick the newest of it.") })
+    }
 }

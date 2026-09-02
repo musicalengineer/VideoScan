@@ -318,7 +318,11 @@ struct HallieCatalogStats: Equatable, Sendable {
             queryDescription: "catalog-stats \(question)",
             citations: [],
             catalogPersonName: nil,
-            answerPlan: HallieAnswerPlan(route: .aggregate, shape: .fixed, fallbackText: prose))
+            answerPlan: HallieAnswerPlan(route: .aggregate, shape: .fixed, fallbackText: prose),
+            // "what's the oldest video" → "and the newest?" (eval cc007):
+            // a catalog-wide count or span still carries the whole catalog
+            // as the list to sort.
+            refinableQuery: question == .total || question == .years ? .wholeCatalog : nil)
     }
 
     /// The whole picture in one breath, then the invitation to ask.

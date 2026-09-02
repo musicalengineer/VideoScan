@@ -154,7 +154,8 @@ extension HallieTurnExecutor {
                     stableID: profile.stableID,
                     canonicalName: profile.canonicalName,
                     birthdate: profile.birthdate,
-                    deathdate: profile.deathdate))
+                    deathdate: profile.deathdate,
+                    sex: profile.sex))
         }
 
         let key = PersonResolver.normalize(requested)
@@ -190,7 +191,8 @@ extension HallieTurnExecutor {
                 stableID: profile.stableID,
                 canonicalName: profile.canonicalName,
                 birthdate: profile.birthdate,
-                deathdate: profile.deathdate))
+                deathdate: profile.deathdate,
+                    sex: profile.sex))
     }
 
     static func profileCandidates(

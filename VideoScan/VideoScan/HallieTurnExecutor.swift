@@ -157,6 +157,10 @@ enum HallieTurnExecutor {
         /// already disambiguated by a chip: slot index → chosen identity,
         /// so the second slot's clarification does not lose it.
         let pinnedGraphSubjects: [Int: CandidateID]
+        /// "and the newest?" / "the second oldest one" (2026-09-02): re-run
+        /// `ast` as a list sorted by date and pick one. Nil for every other
+        /// turn; the presence route reads it (+DateOrdered).
+        let dateOrder: DateOrderRequest?
 
         init(
             originalQuestion: String,
@@ -167,7 +171,8 @@ enum HallieTurnExecutor {
             refinementChain: ArchivistFollowUpResolver.Chain? = nil,
             refinementChange: String? = nil,
             speakerBindings: [SpeakerBinding] = [],
-            pinnedGraphSubjects: [Int: CandidateID] = [:]
+            pinnedGraphSubjects: [Int: CandidateID] = [:],
+            dateOrder: DateOrderRequest? = nil
         ) {
             self.originalQuestion = originalQuestion
             self.ast = ast
@@ -178,6 +183,7 @@ enum HallieTurnExecutor {
             self.refinementChange = refinementChange
             self.speakerBindings = speakerBindings
             self.pinnedGraphSubjects = pinnedGraphSubjects
+            self.dateOrder = dateOrder
         }
 
         /// The same intent with a rewritten graph AST and/or extra pins.
@@ -195,8 +201,35 @@ enum HallieTurnExecutor {
                 refinementChain: refinementChain,
                 refinementChange: refinementChange,
                 speakerBindings: newBindings ?? speakerBindings,
-                pinnedGraphSubjects: newPins ?? pinnedGraphSubjects)
+                pinnedGraphSubjects: newPins ?? pinnedGraphSubjects,
+                dateOrder: dateOrder)
         }
+    }
+
+    /// A list query that a NON-list answer still carries — the count it
+    /// counted, the person an age was about — so "and the newest?" has
+    /// something to sort (2026-09-02, eval cc007 / cs015 / tm009).
+    enum RefinableQuery: Sendable, Equatable {
+        /// Re-run this presence/cross AST. `anyOfPeople`: the people were
+        /// the joint subject of an age answer ("the boys"), so a video with
+        /// ANY of them counts — the presence executor's own reading of
+        /// several names is all-of-them.
+        case list(ArchivistQueryAST, anyOfPeople: Bool)
+        /// A catalog-wide count ("how many videos do you have", "what years
+        /// does the footage cover"): every dated record.
+        case wholeCatalog
+    }
+
+    /// "the newest" / "the second oldest one": which end, which position.
+    struct DateOrderRequest: Sendable, Equatable {
+        enum Order: Sendable, Equatable {
+            case newestFirst
+            case oldestFirst
+        }
+        let order: Order
+        /// 1-based: "the newest" = 1, "the second newest" = 2.
+        let ordinal: Int
+        let scope: RefinableQuery
     }
 
     struct Request: Sendable, Equatable {
@@ -462,6 +495,10 @@ enum HallieTurnExecutor {
         /// the route built no plan of its own, so the composer is told the
         /// tense for a templated kinship answer too. Nil = no verdict.
         let subjectLifeStatus: LifeStatus?
+        /// The list this non-list answer still carries (a count, an age)
+        /// for "and the newest?" — conversation memory keeps it. Nil = the
+        /// memory derives it (list answers) or forgets it (2026-09-02).
+        let refinableQuery: RefinableQuery?
 
         init(
             route: Route,
@@ -481,7 +518,8 @@ enum HallieTurnExecutor {
             transcriptText: String? = nil,
             attachments: [HallieAttachment] = [],
             performsFirstOfferedAction: Bool = false,
-            subjectLifeStatus: LifeStatus? = nil
+            subjectLifeStatus: LifeStatus? = nil,
+            refinableQuery: RefinableQuery? = nil
         ) {
             self.route = route
             self.outcome = outcome
@@ -501,6 +539,7 @@ enum HallieTurnExecutor {
             self.attachments = attachments
             self.performsFirstOfferedAction = performsFirstOfferedAction
             self.subjectLifeStatus = subjectLifeStatus
+            self.refinableQuery = refinableQuery
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -514,7 +553,8 @@ enum HallieTurnExecutor {
                 offeredActions: offeredActions, answerPlan: answerPlan, composedBy: composedBy,
                 transcriptText: transcriptText, attachments: attachments + extra,
                 performsFirstOfferedAction: performsFirstOfferedAction,
-                subjectLifeStatus: subjectLifeStatus)
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -540,7 +580,8 @@ enum HallieTurnExecutor {
                     ? composition.transcriptText : nil,
                 attachments: attachments,
                 performsFirstOfferedAction: performsFirstOfferedAction,
-                subjectLifeStatus: subjectLifeStatus)
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery)
         }
     }
 
@@ -775,9 +816,41 @@ enum HallieTurnExecutor {
             guard let profiles = context.profiles else {
                 return unavailableProfilesResult(route: .temporal)
             }
+            let question = request.intent.originalQuestion
+            let ask = ArchivistTemporalExecutor.detectAsk(in: question)
+            // "the boys" / "my dad" → People profiles through the People-tab
+            // relationships (+TemporalSubjects). Fresh turns only: a
+            // which-one chip already carries the chosen profile id.
+            if request.selectedIdentity == nil {
+                switch TemporalSubjects.resolve(
+                    question: question, subject: payload.subject, context: context) {
+                case .declined(let prose, let basis):
+                    return Result(
+                        route: .temporal, outcome: .declined,
+                        prose: prose, basisLine: basis,
+                        queryDescription: "shape=temporal operation=age subject=\(payload.subject)",
+                        citations: [], catalogPersonName: nil)
+                case .resolved(let group):
+                    return groupTemporalResult(
+                        group, payload: payload, ask: ask, question: question, context: context)
+                case .notApplicable:
+                    break
+                }
+            }
             let resolution = temporalResolution(
                 payload.subject, profiles: profiles,
                 selectedIdentity: request.selectedIdentity)
+            // A born-yet / would-have-been ask, or a person who had passed
+            // on before the record was made, is phrased by the group
+            // composer even for one person ("Dad would have been 58 in
+            // 1994 — he passed on in 1977"); a plain age keeps its wording.
+            if case .resolved(_, let subject) = resolution,
+               ask != .age || passedOnBeforeReference(subject, payload.reference, context: context) {
+                return groupTemporalResult(
+                    TemporalSubjects.Resolved(
+                        phrase: subject.canonicalName, subjects: [subject], note: ""),
+                    payload: payload, ask: ask, question: question, context: context)
+            }
             if case .ambiguous(_, let candidates) = resolution {
                 let choices = profileCandidates(candidates)
                 let clarification = Clarification(
@@ -814,6 +887,14 @@ enum HallieTurnExecutor {
                 result = dependencies.executeTemporal(
                     payload, resolution, context.selectedTemporalDate)
             }
+            // An answered age still carries "videos of that person" for
+            // "and the most recent one?" (conversation memory).
+            var refinable: RefinableQuery?
+            if result.value != nil, case .resolved(_, let subject) = resolution {
+                refinable = .list(
+                    .presence(.init(people: [subject.canonicalName], mediaKind: .video)),
+                    anyOfPeople: false)
+            }
             return Result(
                 route: .temporal,
                 outcome: result.value == nil ? .declined : .answered,
@@ -822,7 +903,8 @@ enum HallieTurnExecutor {
                 queryDescription:
                     "shape=temporal operation=age subject=\(payload.subject)",
                 citations: [],
-                catalogPersonName: nil)
+                catalogPersonName: nil,
+                refinableQuery: refinable)
 
         case .aggregate(let payload):
             guard request.selectedIdentity == nil else {
@@ -898,6 +980,84 @@ enum HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+    }
+
+    /// True when the subject's recorded death is before the reference the
+    /// question points at (a selected record's date or an explicit year).
+    private static func passedOnBeforeReference(
+        _ subject: ArchivistTemporalSubjectSnapshot,
+        _ reference: ArchivistQueryAST.Temporal.Reference,
+        context: Context
+    ) -> Bool {
+        guard let death = subject.deathdate else { return false }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let deathYear = utc.component(.year, from: death)
+        switch reference {
+        case .explicitYear(let year):
+            return year > deathYear
+        case .currentSelection:
+            guard let selection = context.selectedTemporalDate else { return false }
+            if selection.precision == .year {
+                return utc.component(.year, from: selection.date) > deathYear
+            }
+            return selection.date > death
+        }
+    }
+
+    /// Ages / born-yet / would-have-been for one or several resolved
+    /// people, against the selected record, an explicit year, or today.
+    private static func groupTemporalResult(
+        _ group: TemporalSubjects.Resolved,
+        payload: ArchivistQueryAST.Temporal,
+        ask: ArchivistTemporalExecutor.Ask,
+        question: String,
+        context: Context
+    ) -> Result {
+        let names = group.subjects.map(\.canonicalName)
+        let description = "shape=temporal operation=age subject=\(payload.subject)"
+            + " resolved=\(names.joined(separator: ","))"
+        let reference: ArchivistTemporalExecutor.GroupReference
+        switch payload.reference {
+        case .explicitYear(let year):
+            reference = .explicitYear(year)
+        case .currentSelection:
+            if let selection = context.selectedTemporalDate {
+                reference = .selection(selection)
+            } else if ask != .bornYet, ArchivistTemporalExecutor.isPresentTenseAge(question) {
+                // "how old are the boys now" with nothing selected: today.
+                reference = .today(Date())
+            } else {
+                let example = names.count == 1
+                    ? "how old was \(names[0]) in 1995?"
+                    : "how old were \(group.phrase.replacingOccurrences(of: "'", with: "")) in 1995?"
+                var basis = "Basis: the selected catalog record has no dated evidence."
+                if !group.note.isEmpty { basis = "Basis: \(group.note); " + basis.dropFirst("Basis: ".count) }
+                return Result(
+                    route: .temporal, outcome: .declined,
+                    prose: "I need a dated video to count from — select one in the Catalog and ask again, or give me a year (“\(example)”).",
+                    basisLine: basis, queryDescription: description,
+                    citations: [], catalogPersonName: nil)
+            }
+        }
+        let result = ArchivistTemporalExecutor.executeGroup(
+            subjects: group.subjects, phrase: group.phrase, ask: ask, reference: reference)
+        var basis = result.basisLine
+        if !group.note.isEmpty {
+            basis = "Basis: \(group.note); " + basis.dropFirst("Basis: ".count)
+        }
+        let answered = result.value != nil
+        return Result(
+            route: .temporal,
+            outcome: answered ? .answered : .declined,
+            prose: result.prose,
+            basisLine: basis,
+            queryDescription: description,
+            citations: [],
+            catalogPersonName: names.count == 1 ? names[0] : nil,
+            refinableQuery: answered
+                ? .list(.presence(.init(people: names, mediaKind: .video)), anyOfPeople: names.count > 1)
+                : nil)
     }
 
     /// The graph route proper, after pronoun binding. Split out so the

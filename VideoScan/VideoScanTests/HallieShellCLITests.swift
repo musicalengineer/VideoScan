@@ -22,6 +22,8 @@ struct HallieShellCLITests {
         var cyberBrain: CyberBrainIndex?
         var translations: [ArchivistQueryAST]
         var translationError: Error?
+        /// Who "I" is; injected so no test reads the real preferences.
+        var speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie")
         var unavailableMediaPaths: Set<String> = []
         var mediaActionShouldSucceed = true
         var executeTurn: @Sendable (
@@ -84,7 +86,8 @@ struct HallieShellCLITests {
                 performMediaAction: { _ in },
                 recordTranscript: { [self] events in
                     transcriptEvents.append(contentsOf: events)
-                })
+                },
+                speakers: { [self] in speakers })
         }
 
         func nextInput() -> String? {
@@ -1465,5 +1468,86 @@ struct HallieShellCLITests {
         #expect(shell.contains("dependencies.continueTurn("))
         #expect(shell.contains("case \":cancel\":"))
         #expect(shell.contains("Reply with a number or exact name"))
+    }
+
+    /// "the boys" / "my dad" through the shell (eval tm008, tm014, tm019,
+    /// 2026-09-01): the owner's household children and father come from the
+    /// People-tab relationships in the fixture profiles; the age arithmetic
+    /// counts from the selected record's resolved year; and "and the most
+    /// recent one?" afterwards is the boys' newest video.
+    @Test func theBoysAndMyDadResolveThroughThePeopleTabInTheShell() async throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
+            utc.date(from: DateComponents(year: y, month: m, day: d, hour: 12))!
+        }
+        func profile(_ name: String, born: Date, died: Date? = nil, sex: PersonSex = .male,
+                     kinships: [Kinship] = []) -> POIProfile {
+            var value = POIProfile(name: name, referencePath: "/isolated/\(name.lowercased())",
+                                   birthdate: born, deathdate: died, sex: sex)
+            value.kinships = kinships
+            return value
+        }
+        let profiles = [
+            profile("Rick", born: day(1958, 3, 1), kinships: [
+                Kinship(relation: .spouse, relativeTo: .profile(name: "Donna")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Dan")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Mark")),
+                Kinship(relation: .child, relativeTo: .profile(name: "Dad")),
+            ]),
+            profile("Donna", born: day(1959, 8, 4), sex: .female, kinships: [
+                Kinship(relation: .parent, relativeTo: .profile(name: "Matt")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Timmy")),
+            ]),
+            profile("Dan", born: day(1984, 6, 1)),
+            profile("Mark", born: day(1986, 11, 15)),
+            profile("Matt", born: day(1996, 5, 10)),
+            profile("Timmy", born: day(1999, 4, 22)),
+            profile("Dad", born: day(1936, 5, 10), died: day(1977, 6, 25)),
+        ]
+        let christmas = record("/isolated/Christmas1994/Christmas_1994_etc.mkv", confirmed: ["Dan", "Mark"])
+        christmas.userDate = "1994"
+        christmas.userDateConfidence = UserDateConfidence.known.rawValue
+        christmas.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07 transcode
+        let cape = record("/isolated/2003/Cape_2003.mov", confirmed: ["Matt", "Timmy"])
+        let wedding = record("/isolated/2011/Dan_wedding_2011.mov", confirmed: ["Dan"])
+        func temporal(_ subject: String) -> ArchivistQueryAST {
+            .temporal(.init(subject: subject, operation: .age, reference: .currentSelection))
+        }
+        let harness = Harness(
+            inputs: [":select Christmas_1994_etc.mkv",
+                     "were the boys born yet when this was shot",
+                     "how old would my dad have been in this video",
+                     "how old were the boys then",
+                     "and the most recent one?",
+                     ":quit"],
+            records: [christmas, cape, wedding],
+            profiles: profiles,
+            translations: [temporal("the boys"), temporal("my dad"), temporal("the boys")])
+        // The full request (original question, date-order intent) must
+        // reach the executor; the AST-only seam drops both.
+        harness.executeRequest = { request, context in
+            try await HallieTurnExecutor.execute(request, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions == [
+            "were the boys born yet when this was shot",
+            "how old would my dad have been in this video",
+            "how old were the boys then",
+        ])
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.output.contains { $0.contains("Dan and Mark were born by 1994; Matt and Timmy were not (Matt was born in 1996, Timmy in 1999).") }, Comment(rawValue: transcript))
+        #expect(harness.output.contains { $0.contains("Dad would have been 57 or 58 in 1994 — he passed on in 1977.") }, Comment(rawValue: transcript))
+        #expect(harness.output.contains { $0.contains("In 1994 Dan was 9 or 10 and Mark 7 or 8. Matt and Timmy weren't born yet (Matt was born in 1996, Timmy in 1999).") }, Comment(rawValue: transcript))
+        // The boys' newest video: any of the four counts; the 2011 wedding wins.
+        #expect(harness.output.contains { $0.contains("The newest of the 3 matches for Dan, Mark, Matt or Timmy is Dan_wedding_2011.mov (2011).") }, Comment(rawValue: transcript))
+        #expect(!harness.output.contains { $0.contains("I need to know who you mean") })
     }
 }

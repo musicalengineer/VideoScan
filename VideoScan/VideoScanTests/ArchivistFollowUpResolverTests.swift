@@ -474,4 +474,48 @@ struct ArchivistFollowUpResolverTests {
         #expect(years("cape") == nil)
         #expect(years("1850") == nil)
     }
+
+    // MARK: "and the newest?" (2026-09-02)
+
+    @Test(arguments: [
+        ("and the newest?", Resolver.DateOrder.newestFirst, 1, nil as Resolver.MediaVerb?),
+        ("the most recent one?", .newestFirst, 1, nil),
+        ("and the most recent one", .newestFirst, 1, nil),
+        ("what's the latest one", .newestFirst, 1, nil),
+        ("and the oldest?", .oldestFirst, 1, nil),
+        ("the earliest one", .oldestFirst, 1, nil),
+        ("which is the oldest", .oldestFirst, 1, nil),
+        ("the second newest", .newestFirst, 2, nil),
+        ("the third oldest one", .oldestFirst, 3, nil),
+        ("show me the newest one", .newestFirst, 1, .show),
+        ("play the earliest one", .oldestFirst, 1, .play),
+        ("play the latest one", .newestFirst, 1, .play),
+    ]) func superlativesReRunTheLastQuestionInDateOrder(
+        text: String, order: Resolver.DateOrder, ordinal: Int, verb: Resolver.MediaVerb?
+    ) {
+        #expect(resolve(text) == .dateOrdered(order: order, ordinal: ordinal, verb: verb), Comment(rawValue: text))
+        // The same words with no memory still resolve the same way: the
+        // client decides whether there is anything to sort.
+        #expect(resolve(text, snapshot: nil) == .dateOrdered(order: order, ordinal: ordinal, verb: verb), Comment(rawValue: text))
+    }
+
+    @Test func superlativesWithOtherContentAreNotFollowUps() {
+        // A person or topic beside the superlative is a fresh question.
+        #expect(resolve("the newest of donna") != .dateOrdered(order: .newestFirst, ordinal: 1, verb: nil))
+        #expect(resolve("newest videos at the cape") != .dateOrdered(order: .newestFirst, ordinal: 1, verb: nil))
+        // "the last one" is still the last CITED item, not the newest.
+        #expect(resolve("play the last one") == .mediaAction(verb: .play, indices: [2]))
+        // A bare "recent" / "old" is too loose to be a superlative.
+        #expect(resolve("the old one") != .dateOrdered(order: .oldestFirst, ordinal: 1, verb: nil))
+        #expect(resolve("and the recent one") != .dateOrdered(order: .newestFirst, ordinal: 1, verb: nil))
+        // Contradictory ends are not a follow-up.
+        #expect(resolve("the newest and the oldest") == .none)
+    }
+
+    @Test func requestedPositionReadsTheOrdinalOfAMediaPhrase() {
+        #expect(Resolver.requestedPosition(in: "ok show me the second one").ordinal == 2)
+        #expect(Resolver.requestedPosition(in: "play number 3").ordinal == 3)
+        #expect(Resolver.requestedPosition(in: "play the last one").wantsLast)
+        #expect(Resolver.requestedPosition(in: "show it").ordinal == nil)
+    }
 }

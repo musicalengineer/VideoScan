@@ -523,4 +523,179 @@ struct ArchivistTemporalExecutorTests {
         #expect(here.outcome == .answered)
         #expect(here.prose.contains("calculated age is 35 years"), Comment(rawValue: here.prose))
     }
+
+    // MARK: - Several people, born-yet, would-have-been (2026-09-02)
+
+    private func boy(_ name: String, _ y: Int, _ m: Int, _ d: Int) -> ArchivistTemporalSubjectSnapshot {
+        .init(stableID: name.lowercased(), canonicalName: name, birthdate: date(y, m, d), sex: .male)
+    }
+
+    private var theBoys: [ArchivistTemporalSubjectSnapshot] {
+        [boy("Dan", 1984, 6, 1), boy("Mark", 1986, 11, 15), boy("Matt", 1996, 5, 10), boy("Timmy", 1999, 4, 22)]
+    }
+
+    private var christmas1994: ArchivistTemporalSelectionDateSnapshot {
+        .resolved(recordID: UUID(), fullPath: "/Archive/Christmas_1994_etc.mkv",
+                  date: date(1994, 1, 1), source: .userDate, precision: .year, confidence: 0.9)
+    }
+
+    @Test func theQuestionsWordingDecidesTheAsk() {
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "were the boys born yet when this was shot") == .bornYet)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "had the boys been born when this was shot?") == .bornYet)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "was Timmy already born here") == .bornYet)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "how old would my dad have been in this video") == .wouldHaveBeen)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "how old would Dad be here") == .wouldHaveBeen)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "how old were the boys then") == .age)
+        #expect(ArchivistTemporalExecutor.detectAsk(in: "how old was Mark when this was taken") == .age)
+    }
+
+    @Test func agesOfSeveralPeopleAgainstAYearOnlyRecordAreOneAnswer() {
+        let result = ArchivistTemporalExecutor.executeGroup(
+            subjects: theBoys, phrase: "'the boys'", ask: .age, reference: .selection(christmas1994))
+        #expect(result.value == .group(answered: 4, of: 4))
+        #expect(result.prose == "In 1994 Dan was 9 or 10 and Mark 7 or 8. Matt and Timmy weren't born yet (Matt was born in 1996, Timmy in 1999).", Comment(rawValue: result.prose))
+        #expect(result.basisLine.hasPrefix("Basis: People profile birthdates Dan 1984-06-01, Mark 1986-11-15"))
+        #expect(result.basisLine.contains("selected record date 1994 from userDate (year precision"))
+    }
+
+    @Test func agesAtDayPrecisionAndAnExplicitYearKeepTheSinglePersonArithmetic() {
+        let day = ArchivistTemporalSelectionDateSnapshot.resolved(
+            recordID: UUID(), fullPath: "/Archive/xmas.mov", date: date(1994, 12, 25),
+            source: .embedded, precision: .day, confidence: 0.95)
+        let onTheDay = ArchivistTemporalExecutor.executeGroup(
+            subjects: Array(theBoys.prefix(2)), phrase: "'the boys'", ask: .age, reference: .selection(day))
+        #expect(onTheDay.prose == "On 25 December 1994 Dan was 10 and Mark 8.", Comment(rawValue: onTheDay.prose))
+
+        let year = ArchivistTemporalExecutor.executeGroup(
+            subjects: Array(theBoys.prefix(2)), phrase: "'the boys'", ask: .age, reference: .explicitYear(2000))
+        #expect(year.prose == "In 2000 Dan was 15 or 16 and Mark 13 or 14.", Comment(rawValue: year.prose))
+    }
+
+    @Test func bornYetIsAYesNoPerPerson() {
+        let mixed = ArchivistTemporalExecutor.executeGroup(
+            subjects: theBoys, phrase: "the boys", ask: .bornYet, reference: .selection(christmas1994))
+        #expect(mixed.value == .group(answered: 4, of: 4))
+        #expect(mixed.prose == "Dan and Mark were born by 1994; Matt and Timmy were not (Matt was born in 1996, Timmy in 1999).", Comment(rawValue: mixed.prose))
+
+        let all = ArchivistTemporalExecutor.executeGroup(
+            subjects: theBoys, phrase: "the boys", ask: .bornYet, reference: .explicitYear(2005))
+        #expect(all.prose == "Yes — all four of them (Dan, Mark, Matt and Timmy) were born by 2005.", Comment(rawValue: all.prose))
+
+        let none = ArchivistTemporalExecutor.executeGroup(
+            subjects: theBoys, phrase: "the boys", ask: .bornYet, reference: .explicitYear(1980))
+        #expect(none.prose == "No — none of the boys were born yet (Dan was born in 1984, Mark in 1986, Matt in 1996, Timmy in 1999).", Comment(rawValue: none.prose))
+
+        // Born during the record's own year: honest about the month.
+        let sameYear = ArchivistTemporalExecutor.executeGroup(
+            subjects: [boy("Dan", 1984, 6, 1), boy("Baby", 1994, 3, 3)], phrase: "the boys",
+            ask: .bornYet, reference: .selection(christmas1994))
+        #expect(sameYear.prose == "Dan was born by 1994. Baby was born during 1994 itself, so it depends on the month — the record is dated to the year only.", Comment(rawValue: sameYear.prose))
+
+        // Day precision compares real dates.
+        let day = ArchivistTemporalSelectionDateSnapshot.resolved(
+            recordID: UUID(), fullPath: "/Archive/xmas.mov", date: date(1996, 5, 9),
+            source: .embedded, precision: .day, confidence: 0.95)
+        let eve = ArchivistTemporalExecutor.executeGroup(
+            subjects: [boy("Matt", 1996, 5, 10)], phrase: "Matt", ask: .bornYet, reference: .selection(day))
+        #expect(eve.prose == "No — Matt wasn't born yet (born 1996).", Comment(rawValue: eve.prose))
+    }
+
+    @Test func someoneWhoHadPassedOnGetsAWouldHaveBeenWithTheDeathYear() {
+        let dad = ArchivistTemporalSubjectSnapshot(
+            stableID: "dad", canonicalName: "Dad", birthdate: date(1936, 5, 10),
+            deathdate: date(1977, 6, 25), sex: .male)
+        let result = ArchivistTemporalExecutor.executeGroup(
+            subjects: [dad], phrase: "'my dad'", ask: .wouldHaveBeen, reference: .selection(christmas1994))
+        #expect(result.value == .group(answered: 1, of: 1))
+        #expect(result.prose == "Dad would have been 57 or 58 in 1994 — he passed on in 1977.", Comment(rawValue: result.prose))
+        #expect(result.basisLine.contains("Dad 1936-05-10 (died 1977-06-25)"))
+
+        // Alive at the record: a would-have-been is just his age.
+        let alive = ArchivistTemporalExecutor.executeGroup(
+            subjects: [dad], phrase: "'my dad'", ask: .wouldHaveBeen, reference: .explicitYear(1970))
+        #expect(alive.prose == "In 1970 Dad would have been 33 or 34.", Comment(rawValue: alive.prose))
+
+        // A plain "how old was" after his death is still honest about it.
+        let plain = ArchivistTemporalExecutor.executeGroup(
+            subjects: [dad], phrase: "'my dad'", ask: .age, reference: .explicitYear(1994))
+        #expect(plain.prose == "Dad would have been 57 or 58 in 1994 — he passed on in 1977.", Comment(rawValue: plain.prose))
+    }
+
+    @Test func aMissingBirthdateInTheGroupIsSaidNotGuessed() {
+        let nana = ArchivistTemporalSubjectSnapshot(stableID: "nana", canonicalName: "Nana", birthdate: nil)
+        let result = ArchivistTemporalExecutor.executeGroup(
+            subjects: [boy("Dan", 1984, 6, 1), nana], phrase: "'the kids'", ask: .age, reference: .selection(christmas1994))
+        #expect(result.value == .group(answered: 1, of: 2))
+        #expect(result.prose == "In 1994 Dan was 9 or 10. I don't have a birthdate for Nana.", Comment(rawValue: result.prose))
+
+        let nobody = ArchivistTemporalExecutor.executeGroup(
+            subjects: [nana], phrase: "'the kids'", ask: .bornYet, reference: .selection(christmas1994))
+        #expect(nobody.value == nil)
+        #expect(nobody.decline == .missingBirthdate)
+    }
+
+    /// The turn executor: "the boys" = the household's children from the
+    /// People-tab relationships (Rick's card and Donna's card), "my dad" =
+    /// Rick's father — never the model, never a bare name lookup.
+    @Test func turnExecutorResolvesTheBoysAndMyDadThroughThePeopleTab() async throws {
+        let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
+            .init(stableID: "rick", canonicalName: "Rick", birthdate: date(1958, 3, 1),
+                  kinships: [
+                      .init(relation: .spouse, relativeTo: .profile(name: "Donna")),
+                      .init(relation: .parent, relativeTo: .profile(name: "Dan")),
+                      .init(relation: .parent, relativeTo: .profile(name: "Mark")),
+                      .init(relation: .child, relativeTo: .profile(name: "Dad")),
+                  ], sex: .male),
+            .init(stableID: "donna", canonicalName: "Donna", birthdate: date(1959, 8, 4),
+                  kinships: [
+                      .init(relation: .parent, relativeTo: .profile(name: "Matt")),
+                      .init(relation: .parent, relativeTo: .profile(name: "Timmy")),
+                  ], sex: .female),
+            .init(stableID: "dan", canonicalName: "Dan", birthdate: date(1984, 6, 1), sex: .male),
+            .init(stableID: "mark", canonicalName: "Mark", birthdate: date(1986, 11, 15), sex: .male),
+            .init(stableID: "matt", canonicalName: "Matt", birthdate: date(1996, 5, 10), sex: .male),
+            .init(stableID: "timmy", canonicalName: "Timmy", birthdate: date(1999, 4, 22), sex: .male),
+            .init(stableID: "dad", canonicalName: "Dad", aliases: ["Dad Breen"], birthdate: date(1936, 5, 10),
+                  sex: .male, deathdate: date(1977, 6, 25)),
+        ]
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles, selectedTemporalDate: christmas1994,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie"))
+        func ask(_ question: String, subject: String) async throws -> HallieTurnExecutor.Result {
+            try await HallieTurnExecutor.execute(
+                .init(intent: .init(originalQuestion: question, ast: .temporal(
+                    .init(subject: subject, operation: .age, reference: .currentSelection)))),
+                context: context)
+        }
+
+        let bornYet = try await ask("were the boys born yet when this was shot", subject: "the boys")
+        #expect(bornYet.route == .temporal)
+        #expect(bornYet.outcome == .answered)
+        #expect(bornYet.prose == "Dan and Mark were born by 1994; Matt and Timmy were not (Matt was born in 1996, Timmy in 1999).", Comment(rawValue: bornYet.prose))
+        #expect(bornYet.basisLine.hasPrefix("Basis: 'the boys' = Dan, Mark (children of Rick) and Matt, Timmy (children of Donna) in the People tab relationships; People profile birthdates Dan 1984-06-01"), Comment(rawValue: bornYet.basisLine))
+        #expect(bornYet.refinableQuery == .list(.presence(.init(people: ["Dan", "Mark", "Matt", "Timmy"], mediaKind: .video)), anyOfPeople: true))
+
+        // The translator trimmed the subject to the noun.
+        let ages = try await ask("how old were the boys then", subject: "boys")
+        #expect(ages.prose == "In 1994 Dan was 9 or 10 and Mark 7 or 8. Matt and Timmy weren't born yet (Matt was born in 1996, Timmy in 1999).", Comment(rawValue: ages.prose))
+
+        let dad = try await ask("how old would my dad have been in this video", subject: "my dad")
+        #expect(dad.outcome == .answered)
+        #expect(dad.prose == "Dad would have been 57 or 58 in 1994 — he passed on in 1977.", Comment(rawValue: dad.prose))
+        #expect(dad.basisLine.contains("'my dad' = Dad, father of Rick Breen in the People tab relationships"), Comment(rawValue: dad.basisLine))
+        #expect(dad.catalogPersonName == "Dad")
+        #expect(dad.refinableQuery == .list(.presence(.init(people: ["Dad"], mediaKind: .video)), anyOfPeople: false))
+
+        // A named subject is untouched by a kin phrase elsewhere in the question.
+        let donna = try await ask("how old was Donna when my dad died", subject: "Donna")
+        #expect(donna.prose.contains("Donna was 34\u{2013}35 years old during 1994"), Comment(rawValue: donna.prose))
+
+        // Nobody has said who "the boys" belong to.
+        let noOwner = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old were the boys then", ast: .temporal(
+                .init(subject: "the boys", operation: .age, reference: .currentSelection)))),
+            context: .init(profiles: profiles, selectedTemporalDate: christmas1994, speakers: .none))
+        #expect(noOwner.outcome == .declined)
+        #expect(noOwner.prose.hasPrefix("I don't know who “the boys” are — no one has told me who is using the archive."), Comment(rawValue: noOwner.prose))
+    }
 }

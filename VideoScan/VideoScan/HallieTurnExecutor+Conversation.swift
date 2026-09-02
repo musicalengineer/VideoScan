@@ -24,6 +24,16 @@ extension HallieTurnExecutor {
 
         /// The last answered result set (nil until a list answer lands).
         private(set) var lastResultSet: ResultSet?
+        /// The last list actually SHOWN, kept when a later refinement or
+        /// fresh list question found nothing (cs015: "narrow that to
+        /// winter" → nothing → "ok show me the second one" still means the
+        /// second Middlefield item). Cleared only by reset.
+        private(set) var lastShownList: ResultSet?
+        /// The list query the last archive answer still carries — a list's
+        /// own AST, the count it counted, the person an age was about, the
+        /// whole catalog for a catalog-wide count — so "and the newest?"
+        /// has something to sort (2026-09-02).
+        private(set) var lastRefinable: RefinableQuery?
         /// Where the last ARCHIVE answer came from, for "where did that
         /// come from?" / "how sure are you?" (HallieProvenanceFollowUp).
         /// Kept across follow-ups so the question can be asked after
@@ -117,6 +127,10 @@ extension HallieTurnExecutor {
                 // still see the stale pair (codex #716).
                 if intent == nil { lastPeople = [name] }
             }
+            // A non-list answer that names its list (a count, an age).
+            if let refinable = result.refinableQuery, result.outcome == .answered {
+                lastRefinable = refinable
+            }
             guard let intent else { return }
             let ast = intent.ast
             lastAST = ast
@@ -138,12 +152,27 @@ extension HallieTurnExecutor {
                         citations: result.citations,
                         shownCount: intent.citationOffset + result.citations.count,
                         totalMatchCount: result.matchCount ?? result.citations.count)
+                    if !result.citations.isEmpty { lastShownList = lastResultSet }
+                    if let ordered = intent.dateOrder {
+                        // "and the newest?" keeps the scope it sorted, so
+                        // "and the oldest?" sorts the same thing.
+                        lastRefinable = ordered.scope
+                    } else if result.refinableQuery == nil {
+                        lastRefinable = result.route == .aggregate ? nil : .list(ast, anyOfPeople: false)
+                    }
                 } else if intent.citationOffset == 0 {
                     // A fresh list question with no evidence: there is no
-                    // "one of them" any more.
+                    // "one of them" any more. A REFINEMENT that found
+                    // nothing keeps the list it was narrowing (cs015).
                     lastResultSet = nil
+                    if intent.refinementChain == nil { lastShownList = nil }
+                    if result.refinableQuery == nil, result.route != .aggregate {
+                        lastRefinable = nil
+                    }
                 }
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+            case .graph:
+                if result.refinableQuery == nil { lastRefinable = nil }
+            case .temporal, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
@@ -180,6 +209,21 @@ extension HallieTurnExecutor {
         var pronounReferents: [String] {
             if let lastSubject, lastPeople.count <= 1 { return [lastSubject] }
             return lastPeople
+        }
+
+        /// The last list shown, as a follow-up snapshot, for "show me the
+        /// second one" when the current result set is empty.
+        var shownListSnapshot: ArchivistFollowUpResolver.Snapshot? {
+            guard let shown = lastShownList, !shown.citations.isEmpty else { return nil }
+            return ArchivistFollowUpResolver.Snapshot(
+                ast: shown.ast,
+                items: shown.citations.map {
+                    ArchivistFollowUpResolver.Snapshot.Item(
+                        filename: $0.filename, fullPath: $0.fullPath, years: Self.years(of: $0))
+                },
+                shownCount: shown.shownCount,
+                totalMatchCount: shown.totalMatchCount,
+                chain: nil)
         }
 
         var followUpSnapshot: ArchivistFollowUpResolver.Snapshot? {
@@ -719,27 +763,30 @@ extension HallieTurnExecutor {
                 return .answer(followUpDecline(
                     "Ask me for something first, then I can \(verb.rawValue) one of them."))
             }
-            let kind: MediaActionRequest.Kind
-            let verbText: String
-            switch verb {
-            case .play: kind = .play; verbText = "Playing"
-            case .reveal: kind = .reveal; verbText = "Revealing"
-            case .show: kind = .show; verbText = "Showing"
+            return .answer(mediaActionAnswer(
+                verb: verb, indices: indices, chosen: chosen, source: "my last answer"))
+
+        case .dateOrdered(let order, let ordinal, let verb):
+            // "and the newest?": the last question, re-run sorted by date.
+            // A list, a count, and an age all leave one behind (memory).
+            guard let scope = memory.lastRefinable else {
+                return .answer(followUpDecline(
+                    "Ask me for something first — a search or a count — and then I can pick the "
+                    + (order == .newestFirst ? "newest" : "oldest") + " of it."))
             }
-            let names = chosen.map { "“\($0.filename)”" }
-            let which = indices.count == 1
-                ? "item \(indices[0] + 1) from my last answer"
-                : "\(chosen.count) items from my last answer"
-            return .answer(Result(
-                route: .followUp,
-                outcome: .answered,
-                prose: "\(verbText) \(which): " + names.joined(separator: ", ") + ".",
-                basisLine: "Basis: your last answer's cited items; no new search was run.",
-                queryDescription: "follow-up \(verb.rawValue) "
-                    + indices.map { "#\($0 + 1)" }.joined(separator: ","),
-                citations: chosen,
-                catalogPersonName: nil,
-                mediaAction: MediaActionRequest(kind: kind, citations: chosen)))
+            let ast: ArchivistQueryAST
+            switch scope {
+            case .list(let last, _): ast = last
+            case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
+            }
+            let request = DateOrderRequest(
+                order: order == .newestFirst ? .newestFirst : .oldestFirst,
+                ordinal: ordinal, scope: scope)
+            return .run(Intent(
+                originalQuestion: question, ast: ast,
+                playAfterAnswer: playAfterAnswer || verb == .play,
+                refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
+                dateOrder: request))
 
         case .nextPage:
             guard let last = memory.lastResultSet else {
@@ -769,6 +816,39 @@ extension HallieTurnExecutor {
                 playAfterAnswer: playAfterAnswer))
 
         case .declineNoPriorResult(let verb):
+            // "ok show me the second one" when the current result set is
+            // empty: the last list actually shown (a refinement that found
+            // nothing does not take the older list away), else the count
+            // or age the last answer still carries, re-run in date order.
+            if let verb {
+                if let shown = memory.shownListSnapshot,
+                   case .mediaAction(let v, let indices) = ArchivistFollowUpResolver.resolve(
+                       question, snapshot: shown, isKnownPerson: isKnownPerson),
+                   let citations = memory.lastShownList?.citations {
+                    let chosen = indices.compactMap { citations.indices.contains($0) ? citations[$0] : nil }
+                    if !chosen.isEmpty {
+                        return .answer(mediaActionAnswer(
+                            verb: v, indices: indices, chosen: chosen,
+                            source: "the last list I showed you"))
+                    }
+                }
+                if let scope = memory.lastRefinable {
+                    let position = ArchivistFollowUpResolver.requestedPosition(in: question)
+                    let ast: ArchivistQueryAST
+                    switch scope {
+                    case .list(let last, _): ast = last
+                    case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
+                    }
+                    let order: DateOrderRequest.Order = position.wantsLast ? .newestFirst : .oldestFirst
+                    return .run(Intent(
+                        originalQuestion: question, ast: ast,
+                        playAfterAnswer: playAfterAnswer || verb == .play,
+                        refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
+                        dateOrder: DateOrderRequest(
+                            order: order, ordinal: position.wantsLast ? 1 : (position.ordinal ?? 1),
+                            scope: scope)))
+                }
+            }
             let doing = verb.map { "\($0.rawValue) one of them" } ?? "refine it"
             return .answer(followUpDecline(
                 "Ask me for something first, then I can \(doing)."))
@@ -801,6 +881,39 @@ extension HallieTurnExecutor {
                     .ask(question: "start over", label: "Start over"),
                 ]))
         }
+    }
+
+    /// "Playing item 2 from my last answer: “x.mov”." — the media-action
+    /// answer, shared by the current result set and the last-shown fallback.
+    private static func mediaActionAnswer(
+        verb: ArchivistFollowUpResolver.MediaVerb,
+        indices: [Int],
+        chosen: [Citation],
+        source: String
+    ) -> Result {
+        let kind: MediaActionRequest.Kind
+        let verbText: String
+        switch verb {
+        case .play: kind = .play; verbText = "Playing"
+        case .reveal: kind = .reveal; verbText = "Revealing"
+        case .show: kind = .show; verbText = "Showing"
+        }
+        let names = chosen.map { "“\($0.filename)”" }
+        let which = indices.count == 1
+            ? "item \(indices[0] + 1) from \(source)"
+            : "\(chosen.count) items from \(source)"
+        return Result(
+            route: .followUp,
+            outcome: .answered,
+            prose: "\(verbText) \(which): " + names.joined(separator: ", ") + ".",
+            basisLine: source == "my last answer"
+                ? "Basis: your last answer's cited items; no new search was run."
+                : "Basis: the last list shown (the answer after it had nothing to show); no new search was run.",
+            queryDescription: "follow-up \(verb.rawValue) "
+                + indices.map { "#\($0 + 1)" }.joined(separator: ","),
+            citations: chosen,
+            catalogPersonName: nil,
+            mediaAction: MediaActionRequest(kind: kind, citations: chosen))
     }
 
     private static func followUpDecline(
@@ -972,6 +1085,7 @@ extension HallieTurnExecutor.Result {
             composedBy: composedBy,
             transcriptText: transcriptText,
             attachments: attachments,
-            performsFirstOfferedAction: performsFirstOfferedAction)
+            performsFirstOfferedAction: performsFirstOfferedAction,
+            refinableQuery: refinableQuery)
     }
 }

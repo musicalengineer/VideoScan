@@ -137,6 +137,15 @@ extension HallieTurnExecutor {
             }
         }
 
+        // "and the newest?": the same question, every match, in date
+        // order (+DateOrdered). Names have been recovered and rebound
+        // above, so the ordered run sees the canonical people.
+        if let ordered = request.intent.dateOrder {
+            return try await executeDateOrdered(
+                effective, order: ordered, route: route, intent: request.intent,
+                notes: notes, context: context)
+        }
+
         let query = ArchivistPresenceQuery(
             effective, citationOffset: request.intent.citationOffset)
         let records = context.presenceRecords

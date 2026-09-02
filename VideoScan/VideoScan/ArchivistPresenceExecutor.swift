@@ -265,6 +265,11 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
     let transcriptModel: String?
     let ocrDateCandidates: [SceneCaption]
     let ocrText: [SceneCaption]
+    /// The Catalog's own answer to "when was this shot" (RecordDateResolver:
+    /// Rick's date, the camera stamp, a confident inference, a date in the
+    /// filename), captured with the record; nil when it has none. What "the
+    /// newest one" sorts by (2026-09-02) — never a transcode stamp.
+    let resolvedDate: Date?
 
     init(
         id: UUID = UUID(),
@@ -285,7 +290,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         transcript: String? = nil,
         transcriptModel: String? = nil,
         ocrDateCandidates: [SceneCaption] = [],
-        ocrText: [SceneCaption] = []
+        ocrText: [SceneCaption] = [],
+        resolvedDate: Date? = nil
     ) {
         self.id = id
         self.fullPath = fullPath
@@ -306,6 +312,27 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         self.transcriptModel = transcriptModel
         self.ocrDateCandidates = ocrDateCandidates
         self.ocrText = ocrText
+        self.resolvedDate = resolvedDate
+    }
+
+    /// The date this record sorts by for "the newest / oldest one": the
+    /// Catalog's resolved date, else a standalone year in the path (as that
+    /// year, and never a year that hasn't happened — "2083" inside a UUID
+    /// filename is not a year). Nothing else: a low-confidence inference or
+    /// a file stamp is the transcode's date, which is exactly what made
+    /// "how old is Donna" answer 66 (2026-09-01) and, in the first probe of
+    /// this feature, made a 2026 re-cut "the newest video from 1994". A
+    /// record neither can date is undated here and the answer says so.
+    var orderingDate: Date? {
+        if let resolvedDate { return resolvedDate }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let thisYear = utc.component(.year, from: Date())
+        let bounded = ArchivistQueryAST.yearRange.lowerBound...min(ArchivistQueryAST.yearRange.upperBound, thisYear)
+        if let year = ArchivistPresenceExecutor.standalonePathYear(in: fullPath, matching: bounded) {
+            return utc.date(from: DateComponents(year: year, month: 1, day: 1, hour: 12))
+        }
+        return nil
     }
 
     // `@MainActor` is Swift's equivalent of "read this UI-owned object only
@@ -331,7 +358,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
             transcript: record.audioTranscript,
             transcriptModel: record.audioTranscriptModel,
             ocrDateCandidates: record.ocrDateCandidates,
-            ocrText: record.ocrText)
+            ocrText: record.ocrText,
+            resolvedDate: ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)?.date)
     }
 
     /// Bulk bridge yields between bounded batches so snapshot refresh cannot
@@ -407,6 +435,39 @@ enum ArchivistPresenceExecutor {
                 totalMatchCount: provenMatchCount,
                 isCitationListTruncated:
                     query.citationOffset + citations.count < provenMatchCount))
+    }
+
+    /// One proven match with the date it sorts by (2026-09-02, "and the
+    /// newest?"). `date` is nil for a record no field can date.
+    struct DatedMatch: Sendable, Equatable {
+        let citation: ArchivistEvidenceCitation
+        let date: Date?
+    }
+
+    /// EVERY proven match for `query` (no 25-item cap — the caller sorts and
+    /// picks), each with its ordering date. An empty `query` (nil) means
+    /// every record. Memory is one citation per match; a family catalog is
+    /// thousands of records, not millions.
+    static func datedMatches(
+        _ query: ArchivistPresenceQuery?,
+        records: [ArchivistPresenceRecordSnapshot]
+    ) -> [DatedMatch] {
+        var matches: [DatedMatch] = []
+        for (index, record) in records.enumerated() {
+            if index.isMultiple(of: cancellationPollStride), Task.isCancelled { return [] }
+            if let query {
+                guard !query.hasInvalidYearRange, !query.isEmpty,
+                      let citation = citation(for: record, query: query) else { continue }
+                matches.append(DatedMatch(citation: citation, date: record.orderingDate))
+            } else {
+                matches.append(DatedMatch(
+                    citation: ArchivistEvidenceCitation(
+                        recordID: record.id, fullPath: record.fullPath,
+                        filename: record.filename, playbackSeconds: nil, bases: []),
+                    date: record.orderingDate))
+            }
+        }
+        return matches
     }
 
     /// The relax-and-explain ladder: when the full AND finds nothing, retry
@@ -711,7 +772,7 @@ enum ArchivistPresenceExecutor {
     }
 
     /// One O(path length) scan, independent of the requested range width.
-    private static func standalonePathYear(
+    static func standalonePathYear(
         in path: String,
         matching range: ClosedRange<Int>
     ) -> Int? {

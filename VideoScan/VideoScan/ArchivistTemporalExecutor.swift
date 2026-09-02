@@ -15,13 +15,17 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
     /// present-tense path reads it: "how old is X" for someone who has
     /// passed on is answered as the age at death, never an age today.
     let deathdate: Date?
+    /// The profile's recorded sex, for the pronoun in "(he passed on in
+    /// 1977)". Nil = no pronoun is used. Additive (2026-09-02).
+    let sex: PersonSex?
 
     init(
         stableID: String,
         canonicalName: String,
         birthdate: Date?,
         birthdateProvenance: ArchivistTemporalBirthdateProvenance? = nil,
-        deathdate: Date? = nil
+        deathdate: Date? = nil,
+        sex: PersonSex? = nil
     ) {
         self.stableID = stableID
         self.canonicalName = canonicalName
@@ -29,6 +33,7 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
         self.birthdateProvenance = birthdateProvenance
             ?? .poiProfile(profileID: stableID)
         self.deathdate = deathdate
+        self.sex = sex
     }
 
     /// Copies the actor-owned profile into an immutable value. `@MainActor`
@@ -40,7 +45,8 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
             canonicalName: profile.name,
             birthdate: profile.birthdate,
             birthdateProvenance: .poiProfile(profileID: profile.id),
-            deathdate: profile.deathdate)
+            deathdate: profile.deathdate,
+            sex: profile.sex)
     }
 }
 
@@ -212,6 +218,10 @@ enum ArchivistTemporalValue: Sendable, Equatable {
     case ageRange(ClosedRange<Int>)
     /// Year arithmetic only — the tree gave a birth YEAR, no month/day.
     case approximateAge(Int)
+    /// Several people at once ("the boys"), or a born-yet / would-have-been
+    /// ask: `answered` of `of` subjects got a definite verdict. The prose
+    /// carries the per-person facts (ArchivistTemporalExecutor.executeGroup).
+    case group(answered: Int, of: Int)
 }
 
 enum ArchivistTemporalDecline: Sendable, Equatable {
@@ -724,5 +734,377 @@ enum ArchivistTemporalExecutor {
         return ArchivistTemporalResult(
             value: nil, decline: reason, prose: prose, basisLine: basis,
             evidence: nil)
+    }
+}
+
+// MARK: - Several people at once, "born yet", "would have been"
+
+/// "were the boys born yet when this was shot" / "how old would my dad have
+/// been in this video" / "how old were the boys then" (eval tm008, tm014,
+/// tm019, 2026-09-01). The subjects arrive already resolved — the turn
+/// executor turns "the boys" into the owner's children and "my dad" into the
+/// owner's father through the People-tab relationships — and the date
+/// arithmetic is the SAME single-person `execute` / `executePresentAge`
+/// run once per person; this section only phrases the verdicts together.
+extension ArchivistTemporalExecutor {
+
+    /// What the question is really asking about the reference date.
+    enum Ask: Sendable, Equatable {
+        /// "how old was / were …" — an age per person.
+        case age
+        /// "were they born yet …" — yes / no per person.
+        case bornYet
+        /// "how old would … have been" — an age, said as a would-have-been
+        /// (with the death year) for someone who had passed on by then.
+        case wouldHaveBeen
+    }
+
+    /// Deterministic read of the ORIGINAL question. Born-yet wording wins
+    /// over would-have-been ("would the boys have been born yet").
+    static func detectAsk(in question: String) -> Ask {
+        let lowered = question.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        let collapsed = lowered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let bornYet = [
+            #"\bborn yet\b"#, #"\bbeen born\b"#, #"\balready born\b"#,
+            #"\bborn (?:by|before|already|at the time|at that point|back then)\b"#,
+            #"\bborn (?:when|then)\b"#, #"\balive (?:yet|then|at the time)\b"#,
+            #"\baround yet\b"#, #"\bon the scene yet\b"#,
+        ]
+        if bornYet.contains(where: { collapsed.range(of: $0, options: .regularExpression) != nil }) {
+            return .bornYet
+        }
+        if collapsed.range(of: #"\bwould(?:'ve)?\b[^.?!]{0,40}?\b(?:have been|been|be)\b"#,
+                           options: .regularExpression) != nil {
+            return .wouldHaveBeen
+        }
+        return .age
+    }
+
+    /// The point in time the group answer counts to.
+    enum GroupReference: Sendable, Equatable {
+        case explicitYear(Int)
+        case selection(ArchivistTemporalSelectionDateSnapshot)
+        /// Present tense with nothing selected ("how old are the boys now").
+        case today(Date)
+    }
+
+    /// One person's verdict against the reference, before phrasing.
+    private enum GroupVerdict {
+        case age(text: String, wouldHaveBeen: Bool, deathYear: Int?)
+        case notYetBorn(birthYear: Int)
+        case bornThatPeriod(birthYear: Int)
+        case wasBorn
+        case noBirthdate
+        case other(prose: String)
+    }
+
+    /// `subjects` in the order the answer should name them (the caller
+    /// sorts oldest first). `phrase` is what the question called them
+    /// ("the boys") for the basis line. Reuses the single-person paths for
+    /// every date computation; nothing here resolves a date on its own.
+    static func executeGroup(
+        subjects: [ArchivistTemporalSubjectSnapshot],
+        phrase: String,
+        ask: Ask,
+        reference: GroupReference,
+        now: Date = Date()
+    ) -> ArchivistTemporalResult {
+        guard !subjects.isEmpty else { return decline(.missingSubject) }
+        let names = subjects.map(\.canonicalName)
+
+        // The reference as a canonical day + precision, for born-yet
+        // comparisons and the lead-in ("In 1994", "On 25 December 1994").
+        let referenceDay: Date?
+        let referenceYear: Int
+        let precision: RecordDateResolution.Precision
+        let leadIn: String
+        let byLabel: String
+        let referenceBasisText: String
+        switch reference {
+        case .explicitYear(let year):
+            guard validReferenceYears.contains(year) else {
+                return decline(.invalidReferenceYear, name: names.first)
+            }
+            referenceDay = nil
+            referenceYear = year
+            precision = .year
+            leadIn = "In \(year)"
+            byLabel = "by \(year)"
+            referenceBasisText = "the question supplied year \(year) without a month/day"
+        case .selection(let selection):
+            guard let day = canonicalDay(selection.date) else {
+                return decline(.invalidDate, name: names.first)
+            }
+            referenceDay = day
+            referenceYear = calendar.component(.year, from: day)
+            precision = selection.precision
+            switch precision {
+            case .year, .decade, .unknown:
+                leadIn = "In \(referenceYear)"
+                byLabel = "by \(referenceYear)"
+            case .month:
+                leadIn = "In \(monthYearString(day))"
+                byLabel = "by \(monthYearString(day))"
+            case .day:
+                leadIn = "On \(longDayString(day))"
+                byLabel = "by \(longDayString(day))"
+            }
+            referenceBasisText = referenceBasis(selection, date: day)
+        case .today(let date):
+            guard let day = canonicalDay(date) else {
+                return decline(.invalidDate, name: names.first)
+            }
+            referenceDay = day
+            referenceYear = calendar.component(.year, from: day)
+            precision = .day
+            leadIn = "Today"
+            byLabel = "by today"
+            referenceBasisText = "counted to today (\(dayString(day))); no video selected"
+        }
+
+        // One single-person computation per subject; the verdict is read
+        // from the result's value / decline, never recomputed here.
+        var verdicts: [(name: String, verdict: GroupVerdict)] = []
+        var birthLines: [String] = []
+        for subject in subjects {
+            let name = subject.canonicalName
+            guard let rawBirth = subject.birthdate, let birthdate = canonicalDay(rawBirth) else {
+                verdicts.append((name, .noBirthdate))
+                birthLines.append("no birthdate for \(name)")
+                continue
+            }
+            let birthYear = calendar.component(.year, from: birthdate)
+            birthLines.append("\(name) \(dayString(birthdate))"
+                + (subject.deathdate.flatMap(canonicalDay).map { " (died \(dayString($0)))" } ?? ""))
+
+            if ask == .bornYet {
+                let born: Bool
+                var thatPeriod = false
+                if precision == .year || referenceDay == nil {
+                    born = birthYear < referenceYear
+                    thatPeriod = birthYear == referenceYear
+                } else if precision == .month, let referenceDay {
+                    let birthMonth = calendar.dateComponents([.year, .month], from: birthdate)
+                    let referenceMonth = calendar.dateComponents([.year, .month], from: referenceDay)
+                    let sameMonth = birthMonth.year == referenceMonth.year && birthMonth.month == referenceMonth.month
+                    born = !sameMonth && birthdate < referenceDay
+                    thatPeriod = sameMonth
+                } else if let referenceDay {
+                    born = birthdate <= referenceDay
+                } else {
+                    born = false
+                }
+                if thatPeriod {
+                    verdicts.append((name, .bornThatPeriod(birthYear: birthYear)))
+                } else {
+                    verdicts.append((name, born ? .wasBorn : .notYetBorn(birthYear: birthYear)))
+                }
+                continue
+            }
+
+            let single = ArchivistQueryAST.Temporal(
+                subject: name, operation: .age,
+                reference: {
+                    if case .explicitYear(let year) = reference { return .explicitYear(year) }
+                    return .currentSelection
+                }())
+            let resolution = ArchivistTemporalSubjectResolution.resolved(requested: name, subject: subject)
+            let result: ArchivistTemporalResult
+            switch reference {
+            case .today:
+                result = executePresentAge(single, subject: resolution, now: now)
+            case .explicitYear:
+                result = execute(single, subject: resolution, currentSelection: nil)
+            case .selection(let selection):
+                result = execute(single, subject: resolution, currentSelection: selection)
+            }
+            if case .today = reference {
+                // The present-tense path already phrases death correctly
+                // ("Dad passed on in 1977 at 41").
+                verdicts.append((name, .other(prose: result.prose)))
+                continue
+            }
+            if let value = result.value {
+                let text: String
+                switch value {
+                case .exactAge(let age): text = "\(age)"
+                case .approximateAge(let age): text = "about \(age)"
+                case .ageRange(let range):
+                    text = range.lowerBound == range.upperBound
+                        ? "\(range.upperBound)" : "\(range.lowerBound) or \(range.upperBound)"
+                case .group: text = ""
+                }
+                // Passed on before the reference: the age is a would-have-been.
+                var deathYear: Int?
+                if let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) {
+                    let year = calendar.component(.year, from: deathDay)
+                    let after: Bool
+                    if precision == .year || referenceDay == nil {
+                        after = referenceYear > year
+                    } else if let referenceDay {
+                        after = referenceDay > deathDay
+                    } else {
+                        after = false
+                    }
+                    if after { deathYear = year }
+                }
+                verdicts.append((name, .age(
+                    text: text,
+                    wouldHaveBeen: deathYear != nil || ask == .wouldHaveBeen,
+                    deathYear: deathYear)))
+            } else if result.decline == .referenceBeforeBirth {
+                verdicts.append((name, .notYetBorn(birthYear: birthYear)))
+            } else {
+                verdicts.append((name, .other(prose: result.prose)))
+            }
+        }
+
+        let prose = ask == .bornYet
+            ? bornYetProse(verdicts, subjects: subjects, phrase: phrase, byLabel: byLabel, precision: precision)
+            : ageProse(verdicts, subjects: subjects, leadIn: leadIn, isToday: { if case .today = reference { return true }; return false }())
+        let answered = verdicts.filter {
+            switch $0.verdict {
+            case .noBirthdate, .other: return false
+            case .age, .notYetBorn, .bornThatPeriod, .wasBorn: return true
+            }
+        }.count
+        // The caller prefixes how the people were found ("'the boys' =
+        // Dan, Mark (children of Rick) …"); this line carries the facts.
+        let basis = "Basis: People profile birthdates "
+            + birthLines.joined(separator: ", ") + "; " + referenceBasisText + "."
+        return ArchivistTemporalResult(
+            value: answered > 0 ? .group(answered: answered, of: subjects.count) : nil,
+            decline: answered > 0 ? nil : .missingBirthdate,
+            prose: prose, basisLine: basis, evidence: nil)
+    }
+
+    /// "In 1994 Dan was 9 or 10 and Mark 7 or 8. Matt and Timmy weren't
+    /// born yet (Matt was born in 1996, Timmy in 1999)."
+    private static func ageProse(
+        _ verdicts: [(name: String, verdict: GroupVerdict)],
+        subjects: [ArchivistTemporalSubjectSnapshot],
+        leadIn: String,
+        isToday: Bool
+    ) -> String {
+        var sentences: [String] = []
+        var agedClauses: [String] = []
+        var wouldHaveBeen: [String] = []
+        var notYet: [(String, Int)] = []
+        var thatPeriod: [(String, Int)] = []
+        var others: [String] = []
+        let pronoun: (String) -> String = { name in
+            switch subjects.first(where: { $0.canonicalName == name })?.sex {
+            case .male?: return "he"
+            case .female?: return "she"
+            case nil: return "they"
+            }
+        }
+        for (name, verdict) in verdicts {
+            switch verdict {
+            case .age(let text, let would, let deathYear):
+                if let deathYear {
+                    let year = leadIn.split(separator: " ").last.map(String.init) ?? ""
+                    wouldHaveBeen.append("\(name) would have been \(text) in \(year) — \(pronoun(name)) passed on in \(deathYear).")
+                } else if would {
+                    agedClauses.append(agedClauses.isEmpty ? "\(name) would have been \(text)" : "\(name) \(text)")
+                } else {
+                    agedClauses.append(agedClauses.isEmpty ? "\(name) was \(text)" : "\(name) \(text)")
+                }
+            case .notYetBorn(let year): notYet.append((name, year))
+            case .bornThatPeriod(let year): thatPeriod.append((name, year))
+            case .wasBorn: break
+            case .noBirthdate: others.append("I don't have a birthdate for \(name).")
+            case .other(let prose): others.append(prose)
+            }
+        }
+        if !agedClauses.isEmpty {
+            sentences.append((isToday ? "" : leadIn + " ") + joinClauses(agedClauses) + ".")
+        }
+        sentences.append(contentsOf: wouldHaveBeen)
+        if !notYet.isEmpty {
+            let names = joinNames(notYet.map(\.0))
+            let born = notYet.enumerated().map { index, entry in
+                index == 0 ? "\(entry.0) was born in \(entry.1)" : "\(entry.0) in \(entry.1)"
+            }.joined(separator: ", ")
+            sentences.append("\(names) \(notYet.count == 1 ? "wasn't" : "weren't") born yet (\(born)).")
+        }
+        for (name, year) in thatPeriod {
+            sentences.append("\(name) was born that year (\(year)), so it depends on the month.")
+        }
+        sentences.append(contentsOf: others)
+        return sentences.joined(separator: " ")
+    }
+
+    /// "Dan and Mark were born by 1994; Matt and Timmy were not (Matt was
+    /// born in 1996, Timmy in 1999)." / "Yes — all four of them (…) were
+    /// born by 1994." / "No — none of the boys were born yet in 1994."
+    private static func bornYetProse(
+        _ verdicts: [(name: String, verdict: GroupVerdict)],
+        subjects: [ArchivistTemporalSubjectSnapshot],
+        phrase: String,
+        byLabel: String,
+        precision: RecordDateResolution.Precision
+    ) -> String {
+        var yes: [String] = []
+        var no: [(String, Int)] = []
+        var thatPeriod: [(String, Int)] = []
+        var others: [String] = []
+        for (name, verdict) in verdicts {
+            switch verdict {
+            case .wasBorn: yes.append(name)
+            case .notYetBorn(let year): no.append((name, year))
+            case .bornThatPeriod(let year): thatPeriod.append((name, year))
+            case .noBirthdate: others.append("I don't have a birthdate for \(name).")
+            case .other(let prose): others.append(prose)
+            case .age: break
+            }
+        }
+        let known = yes.count + no.count + thatPeriod.count
+        var sentences: [String] = []
+        let bornList = no.enumerated().map { index, entry in
+            index == 0 ? "\(entry.0) was born in \(entry.1)" : "\(entry.0) in \(entry.1)"
+        }.joined(separator: ", ")
+        if known > 0 {
+            if no.isEmpty, thatPeriod.isEmpty {
+                sentences.append(yes.count == 1
+                    ? "Yes — \(yes[0]) was born \(byLabel)."
+                    : "Yes — \(yes.count == 2 ? "both" : "all \(countWord(yes.count))") of them (\(joinNames(yes))) were born \(byLabel).")
+            } else if yes.isEmpty, thatPeriod.isEmpty {
+                sentences.append(no.count == 1
+                    ? "No — \(no[0].0) wasn't born yet (born \(no[0].1))."
+                    : "No — none of \(phrase) were born yet (\(bornList)).")
+            } else {
+                var parts: [String] = []
+                if !yes.isEmpty {
+                    parts.append("\(joinNames(yes)) \(yes.count == 1 ? "was" : "were") born \(byLabel)")
+                }
+                if !no.isEmpty {
+                    parts.append("\(joinNames(no.map(\.0))) \(no.count == 1 ? "was" : "were") not (\(bornList))")
+                }
+                sentences.append(parts.joined(separator: "; ") + ".")
+            }
+            for (name, year) in thatPeriod {
+                sentences.append(precision == .year
+                    ? "\(name) was born during \(year) itself, so it depends on the month — the record is dated to the year only."
+                    : "\(name) was born that same month (\(year)), so it depends on the day.")
+            }
+        }
+        sentences.append(contentsOf: others)
+        return sentences.joined(separator: " ")
+    }
+
+    private static func joinClauses(_ clauses: [String]) -> String {
+        guard clauses.count > 1 else { return clauses.first ?? "" }
+        return clauses.dropLast().joined(separator: ", ") + " and " + clauses[clauses.count - 1]
+    }
+
+    static func joinNames(_ names: [String]) -> String {
+        guard names.count > 1 else { return names.first ?? "" }
+        return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+    }
+
+    private static func countWord(_ count: Int) -> String {
+        let words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+        return count < words.count ? words[count] : "\(count)"
     }
 }
