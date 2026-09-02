@@ -540,6 +540,11 @@ final class VideoScanModel: ObservableObject {
     /// Private index — go through record(forPath:).
     private let recordPathIndex = RecordPathIndex()
 
+    /// Hallie's filename / stem memo for "who is in New Hampshire.mov"
+    /// (ArchivistRecordReferenceResolver, 2026-09-02): rebuilt at most once
+    /// per RecordsVersion, read once per chat turn, never in a view body.
+    let hallieRecordIndex = ArchivistRecordReferenceIndex()
+
     /// Fast per-file record resolution for the dossier writeback path
     /// and single-file Analyze batches. Replaces per-file
     /// `records.first(where: { $0.fullPath == path })` scans — on a

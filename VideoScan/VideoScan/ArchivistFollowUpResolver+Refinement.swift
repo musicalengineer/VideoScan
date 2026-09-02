@@ -693,6 +693,17 @@ extension ArchivistFollowUpResolver {
             }
             return .declineNotRefinable(
                 reason: "a who-appears-with question only takes a person")
+
+        case .record(var payload):
+            // "and Donna?" after "is Rick in this video" — same record,
+            // another name. Years and topic words have no place here.
+            if let name = person(change) {
+                payload.people = [name]
+                payload.operations = [.people]
+                return done(.record(payload))
+            }
+            return .declineNotRefinable(
+                reason: "a question about one video only takes a person")
         }
     }
 }

@@ -15,6 +15,9 @@ import Foundation
 ///       "operation":"relationship"}}
 ///     {"shape":"cross","payload":{"people":["Dan"],
 ///       "keywords":["red bike"],"transcript":["opens"]}}
+///     {"shape":"record","payload":{"reference":{"kind":"file",
+///       "name":"New Hampshire.mov"},"operations":["people","date"],
+///       "people":["Rick","me"]}}
 ///
 /// All catalog/text constraints are optional so sparse model output stays
 /// sparse. Semantic fields for temporal, aggregate, and graph queries are
@@ -416,15 +419,157 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
         }
     }
 
+    /// ONE catalog record — the selected Catalog row or a file named in the
+    /// question — and what to say about it (2026-09-02). Until this shape
+    /// existed "who is in New Hampshire.mov" could only become a catalog-wide
+    /// keyword sweep ("29 videos…") and "who else is in it" an aggregate whose
+    /// anchor was the word "it". The executor resolves the reference to
+    /// exactly one record and answers from that record's own fields; nothing
+    /// here widens to a search. This payload is the future
+    /// `catalog.record(id)` tool of docs/hallie_proposer_with_tools_design.md.
+    struct Record: Codable, Equatable, Sendable {
+        /// What to report. `about` is the whole dossier (metadata + date +
+        /// people) and therefore stands alone; `people` and `date` combine.
+        enum Operation: String, Codable, Equatable, Sendable, CaseIterable {
+            case people, date, about
+        }
+
+        enum Reference: Codable, Equatable, Sendable {
+            /// The one selected Catalog row ("this video", "it").
+            case currentSelection
+            /// A file named in the question: a filename, a filename without
+            /// its extension, or a full path. Resolved by
+            /// ArchivistRecordReferenceResolver; never a substring search.
+            case file(name: String)
+
+            private enum Kind: String, Codable { case currentSelection, file }
+            private enum CodingKeys: String, CodingKey, CaseIterable { case kind, name }
+
+            init(from decoder: Decoder) throws {
+                let raw = try decoder.container(keyedBy: ArchivistAnyCodingKey.self)
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                let kind = try c.decode(Kind.self, forKey: .kind)
+                let permitted: Set<String> = kind == .currentSelection
+                    ? [CodingKeys.kind.rawValue]
+                    : [CodingKeys.kind.rawValue, CodingKeys.name.rawValue]
+                try decoder.rejectUnknownKeys(raw.allKeys.map(\.stringValue),
+                                              permitted: permitted)
+                switch kind {
+                case .currentSelection:
+                    self = .currentSelection
+                case .file:
+                    let name = try c.decode(String.self, forKey: .name)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else {
+                        throw DecodingError.dataCorruptedError(
+                            forKey: .name, in: c,
+                            debugDescription: "file name must not be empty")
+                    }
+                    self = .file(name: name)
+                }
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                switch self {
+                case .currentSelection:
+                    try c.encode(Kind.currentSelection, forKey: .kind)
+                case .file(let name):
+                    try c.encode(Kind.file, forKey: .kind)
+                    try c.encode(name, forKey: .name)
+                }
+            }
+        }
+
+        var reference: Reference
+        /// 1–3 distinct operations; `about` only ever alone.
+        var operations: [Operation]
+        /// Names to give a verdict on (≤ maxListItems). Speaker pronouns
+        /// are kept ("me", "my name") — the executor binds them to the
+        /// owner, exactly as the graph route does.
+        var people: [String]?
+
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case reference, operations, people
+        }
+
+        init(reference: Reference, operations: [Operation], people: [String]? = nil) {
+            self.reference = reference
+            self.operations = operations
+            self.people = people
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.strictContainer(keyedBy: CodingKeys.self)
+            reference = try c.decode(Reference.self, forKey: .reference)
+            operations = try c.decode([Operation].self, forKey: .operations)
+            guard !operations.isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .operations, in: c,
+                    debugDescription: "operations must not be empty")
+            }
+            guard Set(operations).count == operations.count else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .operations, in: c,
+                    debugDescription: "operations must be distinct")
+            }
+            if operations.contains(.about), operations.count > 1 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .operations, in: c,
+                    debugDescription: "about stands alone (it already covers people and date)")
+            }
+            people = try c.decodeBoundedListIfPresent(.people)
+        }
+
+        /// The media filename extensions a question may name (mirror of
+        /// MEDIA_FILENAME_EXTENSIONS in scripts/hallie_eval.py — keep the
+        /// two lists identical). Lowercase, no dot.
+        static let mediaFilenameExtensions: Set<String> = [
+            "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg",
+            "mpeg", "m2v", "vob", "wmv", "asf", "webm", "ogv", "ogg", "rm", "rmvb",
+            "divx", "flv", "f4v", "3gp", "3g2", "dv", "dif", "braw", "r3d", "vro",
+            "mod", "tod", "wav", "aif", "aiff", "mp3", "mp2", "m4a", "aac", "flac",
+            "caf", "wma", "ac3", "oga", "opus", "alac", "amr", "au", "snd",
+        ]
+
+        /// True when `text` ends in ".<media extension>" (case-insensitive):
+        /// "New Hampshire.mov", "/Volumes/X/tape.MXF". A bare word is not.
+        static func endsWithMediaExtension(_ text: String) -> Bool {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let dot = trimmed.lastIndex(of: "."), dot != trimmed.startIndex else {
+                return false
+            }
+            let ext = trimmed[trimmed.index(after: dot)...].lowercased()
+            return !ext.isEmpty && mediaFilenameExtensions.contains(ext)
+        }
+
+        /// The spellings of "the selected video" a translator may put in a
+        /// people list (see decodeTranslatorOutput rewrite (a)).
+        static func isSelectionWord(_ value: String) -> Bool {
+            let key = value.lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .joined(separator: " ")
+            return selectionWords.contains(key)
+        }
+
+        private static let selectionWords: Set<String> = [
+            "currentselection", "current selection", "selection", "the selection",
+            "it", "this", "that", "this one", "this video", "that video",
+            "the video", "the selected video", "selected video", "this clip",
+            "this tape", "this file", "the file", "this recording",
+        ]
+    }
+
     case presence(Presence)
     case temporal(Temporal)
     case aggregate(Aggregate)
     case event(Event)
     case graph(Graph)
     case cross(Cross)
+    case record(Record)
 
     private enum Shape: String, Codable {
-        case presence, temporal, aggregate, event, graph, cross
+        case presence, temporal, aggregate, event, graph, cross, record
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case shape, payload }
@@ -438,6 +583,7 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
         case .event: self = .event(try c.decode(Event.self, forKey: .payload))
         case .graph: self = .graph(try c.decode(Graph.self, forKey: .payload))
         case .cross: self = .cross(try c.decode(Cross.self, forKey: .payload))
+        case .record: self = .record(try c.decode(Record.self, forKey: .payload))
         }
     }
 
@@ -461,6 +607,9 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
             try c.encode(value, forKey: .payload)
         case .cross(let value):
             try c.encode(Shape.cross, forKey: .shape)
+            try c.encode(value, forKey: .payload)
+        case .record(let value):
+            try c.encode(Shape.record, forKey: .shape)
             try c.encode(value, forKey: .payload)
         }
     }
@@ -599,6 +748,14 @@ private extension KeyedDecodingContainer {
 ///     `"currentSelection"`, or a bare year — is rewritten to the contract's
 ///     `{"kind":…}` object. The meaning is unambiguous; only the spelling
 ///     differs (seen live from qwen3.6, 2026-08-16).
+///   * An aggregate whose ONLY anchor is a selection word ("it", "this
+///     video", "currentSelection") is a question about the selected record,
+///     not a co-occurrence count over the catalog ("who else is in it",
+///     eval cs003) → `record{currentSelection, [people]}`.
+///   * A presence/cross whose keywords name a media FILE ("New
+///     Hampshire.mov") is a question about that one record, not a keyword
+///     sweep ("who is in New Hampshire.mov" → 29 videos, live 2026-09-02)
+///     → `record{file, [people]}` carrying the people list.
 extension ArchivistQueryAST {
     struct TranslatorDecoding: Sendable {
         let ast: ArchivistQueryAST
@@ -613,6 +770,7 @@ extension ArchivistQueryAST {
         "shape", "payload", "people", "yearStart", "yearEnd", "mediaKind",
         "keywords", "transcript", "subject", "operation", "reference", "kind",
         "year", "anchorPeople", "relation", "limit", "side", "surname",
+        "name", "operations",
     ]
 
     /// Keys whose presence means the model stopped translating and started
@@ -640,6 +798,7 @@ extension ArchivistQueryAST {
         }
 
         var notes: [String] = []
+        top = recordScopeRewrite(top, notes: &notes)
         let shape = top["shape"] as? String
         top = try sanitize(top, path: "", shape: shape, notes: &notes)
         if var payload = top["payload"] as? [String: Any] {
@@ -664,6 +823,50 @@ extension ArchivistQueryAST {
         let cleaned = try JSONSerialization.data(withJSONObject: top)
         let ast = try JSONDecoder().decode(ArchivistQueryAST.self, from: cleaned)
         return TranslatorDecoding(ast: ast, notes: notes)
+    }
+
+    /// Rewrites (a) and (b) from the doc comment above: a catalog-wide shape
+    /// that is really about ONE record becomes `record`. Runs on the raw
+    /// object, before list normalization would drop "it" as a stopword.
+    private static func recordScopeRewrite(
+        _ top: [String: Any],
+        notes: inout [String]
+    ) -> [String: Any] {
+        guard let shape = top["shape"] as? String,
+              let payload = top["payload"] as? [String: Any] else { return top }
+        var result = top
+        if shape == "aggregate",
+           let anchors = payload["anchorPeople"] as? [String],
+           anchors.count == 1, Record.isSelectionWord(anchors[0]) {
+            result["shape"] = "record"
+            result["payload"] = [
+                "reference": ["kind": "currentSelection"],
+                "operations": ["people"],
+            ] as [String: Any]
+            notes.append("rewrote aggregate anchored on '\(anchors[0])' to record{currentSelection}")
+            return result
+        }
+        if shape == "presence" || shape == "cross",
+           let keywords = payload["keywords"] as? [String],
+           let file = keywords.first(where: Record.endsWithMediaExtension) {
+            var rewritten: [String: Any] = [
+                "reference": ["kind": "file",
+                              "name": file.trimmingCharacters(in: .whitespacesAndNewlines)],
+                "operations": ["people"],
+            ]
+            if let people = payload["people"] { rewritten["people"] = people }
+            result["shape"] = "record"
+            result["payload"] = rewritten
+            let dropped = keywords.filter { $0 != file }
+                + ((payload["transcript"] as? [String]) ?? [])
+            var note = "rewrote \(shape) naming file '\(file)' to record{file}"
+            if !dropped.isEmpty {
+                note += " (dropped keywords: \(dropped.joined(separator: ", ")))"
+            }
+            notes.append(note)
+            return result
+        }
+        return top
     }
 
     /// Graph-payload spellings the model uses for meanings the contract

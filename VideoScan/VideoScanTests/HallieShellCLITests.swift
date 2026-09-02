@@ -1596,4 +1596,230 @@ struct HallieShellCLITests {
         #expect(harness.output.contains { $0.contains("The newest of the 3 matches for Dan, Mark, Matt or Timmy is Dan_wedding_2011.mov (2011).") }, Comment(rawValue: transcript))
         #expect(!harness.output.contains { $0.contains("I need to know who you mean") })
     }
+
+    // MARK: - Record scope: one video (2026-09-02 sensors)
+
+    private static let newHampshirePath =
+        "/Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov"
+
+    /// The 2026-09-02 catalog neighbourhood: the file Rick asked about, the
+    /// two longer names that contain it, a Westford tape whose transcript
+    /// says "new hampshire" (what the keyword sweep used to cite), and the
+    /// eval's Christmas tape.
+    private func newHampshireCatalog() -> [VideoRecord] {
+        let nh = record(Self.newHampshirePath, confirmed: ["Donna", "Rick"])
+        nh.userDate = "1994"
+        nh.userDateConfidence = UserDateConfidence.known.rawValue
+        nh.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07 transcode
+        nh.container = "mov"
+        nh.videoCodec = "h264"
+        nh.audioCodec = "aac"
+        nh.durationSeconds = 754
+        nh.sizeBytes = 1_200_000_000
+        nh.detectedPeople = ["Tim"]
+        nh.audioTranscript = "Okay everybody wave. Nancy, get in the picture."
+        nh.audioTranscriptModel = "fixture-whisper"
+        let long = record("/Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/Long Sequence - New Hampshire Christmas .mov")
+        let photos = record("/Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/ChristmasNewHampshirePhotos.mov")
+        let westford = record("/Volumes/LaCie/1994-xx-xx_Westford_1994-1995.mkv", confirmed: ["Donna"])
+        westford.audioTranscript = "we drove up to new hampshire"
+        let christmas = record("/isolated/Christmas1994/Christmas_1994_etc.mkv", confirmed: ["Donna", "Dan"])
+        return [westford, long, photos, nh, christmas]
+    }
+
+    private func assistantRoutes(_ harness: Harness) -> [String?] {
+        harness.transcriptEvents.filter { $0.kind == .assistant }.map(\.route)
+    }
+
+    /// cs003 through the shell: `:select New Hampshire.mov` + "who else is
+    /// in it" is answered from THAT record, model-free — no aggregate, no
+    /// "couldn't resolve the anchor currentSelection".
+    @Test func whoElseIsInItAnswersFromTheSelectedRecordWithoutTheModel() async throws {
+        let harness = Harness(
+            inputs: [":select New Hampshire.mov", "who else is in it", ":quit"],
+            records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.output.contains("selected New Hampshire.mov (1994)"))
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(assistantRoutes(harness) == ["record"])
+        #expect(harness.output.contains("In New Hampshire.mov, Donna and Rick are tagged (confirmed by a person). The face matcher thinks Tim is in it too — not confirmed."),
+                Comment(rawValue: harness.output.joined(separator: "\n")))
+        #expect(!harness.output.contains { $0.contains("resolve the anchor") })
+        #expect(!harness.output.contains { $0.contains("videos") })
+    }
+
+    /// The four live 2026-09-02 questions, by filename / path, nothing
+    /// selected: every one is a record turn about New Hampshire.mov, none
+    /// becomes the keyword sweep ("29 videos…", "Setting aside …").
+    @Test func theFourLiveNewHampshireQuestionsAreRecordTurnsByName() async throws {
+        let questions = [
+            "can you examine this video New Hampshire and see if it has a date and who is in it?",
+            "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+            "tell me all about this video, including the metadata whether it has rick in it: \(Self.newHampshirePath)",
+            "Examine the video New Hampshire.mov and see if it has my name in it?",
+        ]
+        let harness = Harness(inputs: questions + [":quit"], records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty, Comment(rawValue: transcript))
+        #expect(assistantRoutes(harness) == ["record", "record", "record", "record"], Comment(rawValue: transcript))
+        #expect(harness.transcriptEvents.filter { $0.kind == .assistant }.allSatisfy { $0.outcome == "answered" })
+        // Q1: date + people from the stem "New Hampshire".
+        #expect(harness.output.contains("This was filmed in 1994. In New Hampshire.mov, Donna and Rick are tagged (confirmed by a person). The face matcher thinks Tim is in it too — not confirmed."),
+                Comment(rawValue: transcript))
+        // Q2: one verdict per asked name, then the date.
+        #expect(harness.output.contains { line in
+            line.hasPrefix("This was filmed in 1994. In New Hampshire.mov, the face matcher thinks Tim is in it — not confirmed. Nancy isn't tagged, but someone says the name “Nancy” in the transcript. Rick is tagged (confirmed by a person). Donna is tagged (confirmed by a person).")
+        }, Comment(rawValue: transcript))
+        // Q3: the dossier by full path, with Rick's verdict.
+        #expect(harness.output.contains("New Hampshire.mov is a mov video with sound, h264 with aac audio, 12:34 long, 1.2 GB, on SanDiskWorkspace — not yet archived. This was filmed in 1994. In New Hampshire.mov, Rick is tagged (confirmed by a person). The transcript opens: “Okay everybody wave.”"),
+                Comment(rawValue: transcript))
+        // Q4: "my name" is the owner (harness speakers: Rick Breen → tag Rick).
+        #expect(harness.output.contains("In New Hampshire.mov, Rick is tagged (confirmed by a person)."), Comment(rawValue: transcript))
+        for forbidden in ["29 videos", "9 videos", "3 videos", "Setting aside", "resolve the anchor", "Westford"] {
+            #expect(!transcript.contains(forbidden), Comment(rawValue: "must not contain \(forbidden)"))
+        }
+    }
+
+    /// Isolation: poisoned Ollama host preferences and an injected catalog
+    /// path cannot make a record turn reach a model or another catalog —
+    /// the four live questions answer with no translation at all.
+    @Test func recordTurnsIgnorePoisonedTranslatorPreferences() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hallie-record-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalog = root.appendingPathComponent("catalog.json")
+        let sentinel = Data("READ-ONLY-SENTINEL".utf8)
+        try sentinel.write(to: catalog)
+
+        let poisonKey = OllamaEndpoints.hostsKey
+        let priorHosts = UserDefaults.standard.object(forKey: poisonKey)
+        UserDefaults.standard.set("poison.invalid", forKey: poisonKey)
+        defer {
+            if let priorHosts {
+                UserDefaults.standard.set(priorHosts, forKey: poisonKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: poisonKey)
+            }
+        }
+
+        let harness = Harness(
+            inputs: [
+                "can you examine this video New Hampshire and see if it has a date and who is in it?",
+                "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+                "tell me all about this video, including the metadata whether it has rick in it: \(Self.newHampshirePath)",
+                "Examine the video New Hampshire.mov and see if it has my name in it?",
+                ":quit",
+            ],
+            records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--catalog", catalog.path, "--host", "isolated-translator.local",
+        ])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.loadedURLs == [catalog])
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.translationOptions.isEmpty)
+        #expect(assistantRoutes(harness) == ["record", "record", "record", "record"])
+        #expect(try Data(contentsOf: catalog) == sentinel)
+    }
+
+    /// A name several files fit is a which-one with one chip per file, and
+    /// the chip's question (by full path) answers about that file alone.
+    @Test func ambiguousFileNameListsCandidatesAndAChipResolvesOne() async throws {
+        let harness = Harness(
+            inputs: [
+                "who is in Christmas.mov",
+                "who is in /isolated/Christmas1994/Christmas_1994_etc.mkv",
+                ":quit",
+            ],
+            records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains("I found 3 files that could be “Christmas.mov”: Long Sequence - New Hampshire Christmas .mov, ChristmasNewHampshirePhotos.mov, Christmas_1994_etc.mkv. Which one do you mean?"),
+                Comment(rawValue: transcript))
+        #expect(harness.output.contains("offer: ask “who is in /isolated/Christmas1994/Christmas_1994_etc.mkv”"))
+        let events = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(events.map(\.route) == ["record", "record"])
+        #expect(events.map(\.outcome) == ["declined", "answered"])
+        #expect(events.first?.offeredActions == [
+            "Long Sequence - New Hampshire Christmas .mov", "ChristmasNewHampshirePhotos.mov", "Christmas_1994_etc.mkv",
+        ])
+        #expect(harness.output.contains("In Christmas_1994_etc.mkv, Donna and Dan are tagged (confirmed by a person)."),
+                Comment(rawValue: transcript))
+    }
+
+    @Test func selectionQuestionsWithNothingSelectedAskForASelectionOrAName() async throws {
+        let harness = Harness(
+            inputs: ["who is in this video", "who is in Nowhere.mov", ":quit"],
+            records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains("Which video? Select one in the Catalog, or name the file, and ask me again."))
+        #expect(harness.output.contains { $0.hasPrefix("I couldn't find a file called “Nowhere.mov” in the catalog.") })
+        #expect(assistantRoutes(harness) == ["record", "record"])
+    }
+
+    /// Scale: a record turn over 100k records resolves the named file once
+    /// and never captures a catalog-wide snapshot — the whole session,
+    /// including the 100k-record catalog open, stays within the same budget
+    /// as the one-shot presence sensor above.
+    @Test func recordTurnOverOneHundredThousandRecordsStaysWithinBudget() async throws {
+        var records: [VideoRecord] = []
+        records.reserveCapacity(100_000)
+        for index in 0..<100_000 {
+            records.append(record("/isolated/scale/vol\(index % 5)/clip_\(index).mov",
+                                  confirmed: index == 73_421 ? ["Donna"] : []))
+        }
+        let harness = Harness(
+            inputs: ["who is in clip_73421.mov", ":select clip_73421.mov", "tell me about this video", ":quit"],
+            records: records)
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let started = ContinuousClock.now
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+        let elapsed = ContinuousClock.now - started
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(assistantRoutes(harness) == ["record", "record"])
+        #expect(harness.output.contains("In clip_73421.mov, Donna is tagged (confirmed by a person)."))
+        #expect(harness.output.contains { $0.hasPrefix("clip_73421.mov is a video with sound") })
+        #expect(elapsed < .seconds(4), "two record turns over 100k records took \(elapsed)")
+    }
 }

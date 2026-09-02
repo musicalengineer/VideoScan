@@ -97,7 +97,7 @@ extension HallieTurnExecutor {
             }
             recordExchange(intent: intent, result: result, question: question)
             switch result.route {
-            case .presence, .cross, .aggregate, .temporal, .graph, .telling:
+            case .presence, .cross, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
             default:
                 break
@@ -109,7 +109,8 @@ extension HallieTurnExecutor {
             switch (shownPhoto, result.route) {
             case (let photo?, _):
                 lastPhotoAttachment = photo
-            case (nil, .presence), (nil, .cross), (nil, .aggregate), (nil, .temporal), (nil, .graph):
+            case (nil, .presence), (nil, .cross), (nil, .aggregate), (nil, .temporal), (nil, .graph),
+                 (nil, .record):
                 lastPhotoAttachment = nil
             default:
                 break
@@ -172,6 +173,17 @@ extension HallieTurnExecutor {
                 }
             case .graph:
                 if result.refinableQuery == nil { lastRefinable = nil }
+            case .record:
+                // One record: "play it" / "show it in the catalog" work on
+                // the single citation; there is no list to refine or page.
+                if result.outcome == .answered, !result.citations.isEmpty {
+                    lastResultSet = ResultSet(
+                        ast: ast, citations: result.citations,
+                        shownCount: result.citations.count,
+                        totalMatchCount: result.citations.count)
+                    lastShownList = lastResultSet
+                }
+                lastRefinable = nil
             case .temporal, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
@@ -188,7 +200,8 @@ extension HallieTurnExecutor {
                 substantive = true
             } else {
                 switch result.route {
-                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent:
+                case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent,
+                     .record:
                     substantive = result.outcome == .answered || result.outcome == .needsClarification
                 case .followUp, .capability, .help, .smalltalk, .conversation, .reset:
                     substantive = false
@@ -259,6 +272,9 @@ extension HallieTurnExecutor {
                 return ([p.subject], nil)
             case .aggregate(let p): return (p.anchorPeople, nil)
             case .graph(let p): return (p.people, nil)
+            // The people asked about ("is Donna in it") are the pronoun
+            // referents for the next turn; the record itself is not a person.
+            case .record(let p): return (p.people ?? [], nil)
             }
         }
 
@@ -673,6 +689,17 @@ extension HallieTurnExecutor {
         // temporal route asks for a selection, as before.
         if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
             return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
+        }
+        // "who is in New Hampshire.mov" / "does it have my name in it" /
+        // "tell me about this video" (2026-09-02): ONE record, answered
+        // from its own fields by the record route — never a catalog-wide
+        // sweep. The client resolves the reference (selection or named
+        // file) when it captures the context.
+        if let record = ArchivistRecordQuestion.detect(question) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .record(record),
+                playAfterAnswer: playAfterAnswer))
         }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"

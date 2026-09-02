@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 274 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 284 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2095,6 +2095,133 @@
         "not a search word"
       ],
       "expectEvidenceCount": 1
+    },
+    {
+      "id": "rc001",
+      "category": "record_scope",
+      "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
+      "expect": "catalog",
+      "notes": "Live 2026-09-02 (Rick). ONE video by stem: route=record, date + people from New Hampshire.mov's own fields. Was a 29-video keyword sweep.",
+      "mustNotContain": [
+        "29 videos",
+        "9 videos",
+        "Setting aside",
+        "3 videos"
+      ]
+    },
+    {
+      "id": "rc002",
+      "category": "record_scope",
+      "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+      "expect": "catalog",
+      "notes": "Live 2026-09-02. route=record; one verdict per name (tagged / face matcher / transcript / not found) plus the date. Was a cross decline.",
+      "mustNotContain": [
+        "29 videos",
+        "9 videos",
+        "Setting aside",
+        "3 videos"
+      ]
+    },
+    {
+      "id": "rc003",
+      "category": "record_scope",
+      "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+      "expect": "catalog",
+      "notes": "Live 2026-09-02. route=record by full path; about = metadata line + date + Rick's verdict + transcript opening. Was 'Nothing matches all of that … 9 items'.",
+      "mustNotContain": [
+        "29 videos",
+        "9 videos",
+        "Setting aside",
+        "3 videos"
+      ]
+    },
+    {
+      "id": "rc004",
+      "category": "record_scope",
+      "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
+      "expect": "catalog",
+      "notes": "Live 2026-09-02. route=record; 'my name' = the owner's configured name. Was a 3-video filename sweep.",
+      "mustNotContain": [
+        "29 videos",
+        "9 videos",
+        "Setting aside",
+        "3 videos"
+      ]
+    },
+    {
+      "id": "rc005",
+      "category": "record_scope",
+      "text": "who else is in it",
+      "expect": "catalog",
+      "notes": "cs003 with the record route: the selected video's people by tier. Was aggregate → 'couldn't resolve the anchor currentSelection'.",
+      "select": "Christmas_1994_etc.mkv",
+      "mustNotContain": [
+        "resolve the anchor"
+      ]
+    },
+    {
+      "id": "rc006",
+      "category": "record_scope",
+      "text": "who is in this video",
+      "expect": "catalog",
+      "notes": "route=record on the selection.",
+      "select": "Christmas_1994_etc.mkv",
+      "mustNotContain": [
+        "resolve the anchor",
+        "Setting aside"
+      ]
+    },
+    {
+      "id": "rc007",
+      "category": "record_scope",
+      "text": "is Donna in this?",
+      "expect": "catalog",
+      "notes": "route=record; one verdict for Donna on the selected video.",
+      "select": "Christmas_1994_etc.mkv",
+      "mustNotContain": [
+        "resolve the anchor",
+        "Setting aside",
+        "videos"
+      ]
+    },
+    {
+      "id": "rc008",
+      "category": "record_scope",
+      "text": "tell me about this video",
+      "expect": "catalog",
+      "notes": "route=record about: metadata line, date, people, transcript opening.",
+      "select": "Christmas_1994_etc.mkv",
+      "mustNotContain": [
+        "resolve the anchor",
+        "Setting aside"
+      ]
+    },
+    {
+      "id": "rc009",
+      "category": "record_scope",
+      "text": "who is in Christmas.mov",
+      "expect": "clarify",
+      "notes": "Several Christmas files: route=record declines with a which-one list (≤5 filenames, one chip each) — never a keyword sweep.",
+      "mustContain": [
+        "Which one do you mean"
+      ],
+      "mustNotContain": [
+        "Setting aside",
+        "videos"
+      ]
+    },
+    {
+      "id": "rc010",
+      "category": "record_scope",
+      "text": "does it have my name in it",
+      "expect": "catalog",
+      "notes": "route=record; 'my name' bound to the owner on the selected video.",
+      "select": "New Hampshire.mov",
+      "mustNotContain": [
+        "resolve the anchor",
+        "Setting aside",
+        "videos"
+      ]
     }
   ]
-}\n
+}

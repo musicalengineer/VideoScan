@@ -47,7 +47,7 @@ enum HallieShellCLI {
     }
 
     enum Route: Equatable {
-        case presence, temporal, aggregate, graph, cross
+        case presence, temporal, aggregate, graph, cross, record
         case unsupportedEvent
         case followUp, capability
         case help, smalltalk, conversation, telling, reset
@@ -589,6 +589,7 @@ enum HallieShellCLI {
         case .aggregate: return .aggregate
         case .graph: return .graph
         case .cross: return .cross
+        case .record: return .record
         case .unsupportedEvent: return .unsupportedEvent
         case .followUp: return .followUp
         case .capability: return .capability
@@ -1082,6 +1083,7 @@ enum HallieShellCLI {
                 }
             }
 
+            var recordScope: HallieTurnExecutor.RecordScope = .noSelection
             switch HallieTurnExecutor.route(intent.ast) {
             case .presence, .cross:
                 if state.presenceSnapshots == nil {
@@ -1093,6 +1095,10 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
+            case .record:
+                // ONE record, resolved here (selection or named file); the
+                // executor never sees the catalog. No catalog-wide snapshot.
+                recordScope = await captureRecordScope(for: intent.ast, state: state)
             case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
@@ -1115,6 +1121,7 @@ enum HallieShellCLI {
                 needsRecompile: state.needsRecompile,
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate,
+                recordScope: recordScope,
                 speakers: state.speakers)
             let request = HallieTurnExecutor.Request(intent: intent)
             var result = try await dependencies.executeRequest(request, context)
@@ -1479,15 +1486,23 @@ enum HallieShellCLI {
             state: &state)
     }
 
-    /// The FIRST catalog record whose filename contains `needle`
-    /// (case-insensitive), in catalog order. Deterministic on purpose: the
-    /// same fragment selects the same file every session.
+    /// The record `:select <text>` means: the resolver's exact tiers first
+    /// (full path, filename, stem, unique whole-token match — the same
+    /// rules a question's file name gets, 2026-09-02), then the original
+    /// FIRST-substring rule as the last fallback so every corpus `select`
+    /// value written for it ("christmas_1994", "xmas") still selects the
+    /// same file. An ambiguous exact tier also falls back to the substring
+    /// rule: `:select` is a harness command and must stay deterministic.
     static func selectRecord(
         matchingFilename needle: String,
         in records: [VideoRecord]
     ) -> VideoRecord? {
         let key = needle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !key.isEmpty else { return nil }
+        if case .resolved(let record) = ArchivistRecordReferenceResolver.resolve(
+            file: needle, in: records) {
+            return record
+        }
         return records.first { $0.filename.lowercased().contains(key) }
     }
 
@@ -1514,6 +1529,22 @@ enum HallieShellCLI {
     /// first, the legacy inference/stamp chain only when it has nothing.
     /// Until 2026-09-01 this preferred the catalog creation stamp, which
     /// for a transcode is the transcode's date ("how old is Donna" → 66).
+    /// The record scope for a `record` turn: the selection or the named file,
+    /// resolved once against the session's records (2026-09-02).
+    /// `.noSelection` for every other shape.
+    static func captureRecordScope(
+        for ast: ArchivistQueryAST,
+        state: Session
+    ) async -> HallieTurnExecutor.RecordScope {
+        guard case .record(let payload) = ast else { return .noSelection }
+        let resolution = ArchivistRecordReferenceResolver.resolve(
+            payload.reference,
+            selectedRecordID: state.selectedRecordID,
+            records: state.records,
+            recordForID: state.record)
+        return await HallieTurnExecutor.RecordScope(resolution)
+    }
+
     static func temporalSelectionDate(
         _ record: VideoRecord
     ) -> ArchivistTemporalSelectionDateSnapshot? {

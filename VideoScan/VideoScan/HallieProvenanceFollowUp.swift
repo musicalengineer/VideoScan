@@ -174,6 +174,10 @@ enum HallieProvenanceFollowUp {
             return "That came from counting person-confirmed tags across the whole video catalog."
         case .temporal:
             return "That came from the selected recording's date and the person's birth date in the family records."
+        case .record:
+            return p.humanConfirmed
+                ? "That came from that one video's own catalog entry — its tags (some confirmed by a person), its dates and its transcript."
+                : "That came from that one video's own catalog entry: its file details, dates, tags and transcript."
         case .graph:
             return p.knowledge.isEmpty
                 ? "That came from the family tree (the imported GEDCOM), not the video catalog."

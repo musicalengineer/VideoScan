@@ -101,6 +101,11 @@ enum ArchivistFollowUpResolver {
                 return Chain(terms: [p.subject])
             case .aggregate(let p): return Chain(terms: p.anchorPeople)
             case .graph(let p): return Chain(terms: p.people + (p.surname.map { ["the \($0)s"] } ?? []))
+            case .record(let p):
+                switch p.reference {
+                case .currentSelection: return Chain(terms: ["the selected video"] + (p.people ?? []))
+                case .file(let name): return Chain(terms: [name] + (p.people ?? []))
+                }
             }
         }
 

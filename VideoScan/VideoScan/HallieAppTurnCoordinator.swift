@@ -24,6 +24,13 @@ enum HallieAppTurnCoordinator {
     struct CapturedReferent: Sendable {
         let recordID: UUID?
         let temporalDate: ArchivistTemporalSelectionDateSnapshot?
+        /// The selected row as a record dossier (2026-09-02), captured with
+        /// the date so a `record` turn about "this video" needs no lookup.
+        var selectedDossier: ArchivistRecordDossierSnapshot? = nil
+        /// The model's per-RecordsVersion filename memo for a named file,
+        /// and the version it is valid for; nil → the linear resolver.
+        var recordIndex: ArchivistRecordReferenceIndex? = nil
+        var recordsVersion: RecordsVersion? = nil
     }
 
     /// A clarification keeps the exact immutable evidence context used by
@@ -640,7 +647,7 @@ enum HallieAppTurnCoordinator {
         let context = try await captureContext(
             ast: intent.ast,
             records: records,
-            selectedDate: referent.temporalDate,
+            referent: referent,
             dependencies: dependencies)
         let request = HallieTurnExecutor.Request(intent: intent)
         return try await runOffMain(
@@ -795,12 +802,14 @@ enum HallieAppTurnCoordinator {
     private static func captureContext(
         ast: ArchivistQueryAST,
         records: [VideoRecord],
-        selectedDate: ArchivistTemporalSelectionDateSnapshot?,
+        referent: CapturedReferent,
         dependencies: Dependencies
     ) async throws -> HallieTurnExecutor.Context {
+        let selectedDate = referent.temporalDate
         let route = HallieTurnExecutor.route(ast)
         let presenceRecords: [ArchivistPresenceRecordSnapshot]
         let aggregateRecords: [ArchivistAggregateRecordSnapshot]
+        var recordScope: HallieTurnExecutor.RecordScope = .noSelection
         switch route {
         case .presence, .cross:
             presenceRecords = await ArchivistPresenceRecordSnapshot.capture(
@@ -810,6 +819,16 @@ enum HallieAppTurnCoordinator {
             presenceRecords = []
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
+        case .record:
+            // ONE record: the captured selection dossier, or a named file
+            // resolved once here (memoised exact tiers when the model's
+            // index came with the referent). No catalog-wide snapshot.
+            presenceRecords = []
+            aggregateRecords = []
+            if case .record(let payload) = ast {
+                recordScope = resolveRecordScope(
+                    for: payload.reference, referent: referent, records: records)
+            }
         case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
              .help, .smalltalk, .conversation, .telling, .reset:
             presenceRecords = []
@@ -847,8 +866,10 @@ enum HallieAppTurnCoordinator {
                 graph = needsBirthYear || HallieTurnExecutor.isPhotoAsk(ast)
                     ? dependencies.loadGraph() : nil
                 cyberBrain = dependencies.loadCyberBrain()
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .record, .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
+                // A record turn reads ONE record's own fields (captured on
+                // the main actor above); no identity source is loaded.
                 profiles = []
                 graph = nil
                 cyberBrain = nil
@@ -876,6 +897,7 @@ enum HallieAppTurnCoordinator {
                 needsRecompile: needsRecompile,
                 cyberBrain: cyberBrain,
                 selectedTemporalDate: selectedDate,
+                recordScope: recordScope,
                 speakers: dependencies.loadSpeakers(),
                 assumedTreeBridges: assumed)
             try Task.checkCancellation()
@@ -885,6 +907,31 @@ enum HallieAppTurnCoordinator {
             try await worker.value
         } onCancel: {
             worker.cancel()
+        }
+    }
+
+    /// The record scope for one reference: "this video" is the dossier the
+    /// chat window captured with the referent (no lookup); a named file is
+    /// resolved against the records — through the model's memo when the
+    /// referent carries one, else linearly. Once per turn, on the main actor.
+    @MainActor
+    private static func resolveRecordScope(
+        for reference: ArchivistQueryAST.Record.Reference,
+        referent: CapturedReferent,
+        records: [VideoRecord]
+    ) -> HallieTurnExecutor.RecordScope {
+        switch reference {
+        case .currentSelection:
+            return referent.selectedDossier.map { .resolved($0) } ?? .noSelection
+        case .file(let name):
+            let resolution: ArchivistRecordReferenceResolver.Resolution
+            if let index = referent.recordIndex, let version = referent.recordsVersion {
+                resolution = ArchivistRecordReferenceResolver.resolve(
+                    file: name, in: records, index: index, version: version)
+            } else {
+                resolution = ArchivistRecordReferenceResolver.resolve(file: name, in: records)
+            }
+            return HallieTurnExecutor.RecordScope(resolution)
         }
     }
 

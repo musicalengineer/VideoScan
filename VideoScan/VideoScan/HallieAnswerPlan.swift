@@ -133,7 +133,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         case .capability, .help, .smalltalk, .conversation, .telling, .reset,
              .followUp, .unsupportedEvent:
             return fixed
-        case .presence, .cross, .temporal, .aggregate, .graph:
+        case .presence, .cross, .temporal, .aggregate, .graph, .record:
             break
         }
         guard result.outcome == .answered, result.clarification == nil else {
@@ -149,7 +149,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         switch result.route {
         case .presence, .cross, .aggregate: shape = .list
         case .graph: shape = result.knowledgeCitations.isEmpty ? .fact : .biography
-        case .temporal: shape = .fact
+        case .temporal, .record: shape = .fact
         default: shape = .fact
         }
         return HallieAnswerPlan(

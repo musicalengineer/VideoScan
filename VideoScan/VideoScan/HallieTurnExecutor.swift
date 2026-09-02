@@ -14,6 +14,9 @@ enum HallieTurnExecutor {
         /// executor with every basis cited (2026-08-17: "show timmy as a
         /// baby saying peekaboo").
         case cross
+        /// ONE catalog record — the selected row or a named file — and its
+        /// people / date / dossier (ArchivistRecordExecutor, 2026-09-02).
+        case record
         case unsupportedEvent
         /// A model-free turn about the previous answer: play/reveal/show a
         /// cited item, paging, an elliptical refinement, or an honest
@@ -361,6 +364,10 @@ enum HallieTurnExecutor {
         let needsRecompile: [URL]
         let cyberBrain: CyberBrainIndex?
         let selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot?
+        /// The ONE record a `record` question is about, resolved by the
+        /// client before execution (+Record, 2026-09-02). `.noSelection`
+        /// for every other route.
+        let recordScope: RecordScope
         /// Who "I" and "you" are (2026-08-18). `.none` = pronouns cannot be
         /// bound and the executor says so.
         let speakers: Speakers
@@ -382,6 +389,7 @@ enum HallieTurnExecutor {
             needsRecompile: [URL] = [],
             cyberBrain: CyberBrainIndex? = nil,
             selectedTemporalDate: ArchivistTemporalSelectionDateSnapshot? = nil,
+            recordScope: RecordScope = .noSelection,
             speakers: Speakers = .none,
             assumedTreeBridges: [String: String] = [:]
         ) {
@@ -393,6 +401,7 @@ enum HallieTurnExecutor {
             self.needsRecompile = graph == nil ? needsRecompile : []
             self.cyberBrain = cyberBrain
             self.selectedTemporalDate = selectedTemporalDate
+            self.recordScope = recordScope
             self.speakers = speakers
             self.assumedTreeBridges = assumedTreeBridges
             self.continuationToken = UUID()
@@ -670,6 +679,7 @@ enum HallieTurnExecutor {
         case .graph: return .graph
         case .event: return .unsupportedEvent
         case .cross: return .cross
+        case .record: return .record
         }
     }
 
@@ -680,6 +690,7 @@ enum HallieTurnExecutor {
         case .aggregate: return "shape=aggregate"
         case .graph: return "shape=graph"
         case .cross: return "shape=cross"
+        case .record: return "shape=record"
         case .unsupportedEvent: return "shape=event (unsupported)"
         case .followUp: return "follow-up"
         case .capability: return "capability"
@@ -700,6 +711,7 @@ enum HallieTurnExecutor {
         case .aggregate: return "aggregate"
         case .graph: return "graph"
         case .cross: return "cross"
+        case .record: return "record"
         case .unsupportedEvent: return "unsupported-event"
         case .followUp: return "follow-up"
         case .capability: return "capability"
@@ -966,6 +978,12 @@ enum HallieTurnExecutor {
                 return result.prefixingBasis(note)
             }
             return result
+
+        case .record(let payload):
+            guard request.selectedIdentity == nil else {
+                return invalidContinuationResult(for: ast)
+            }
+            return executeRecord(payload, request: request, context: context)
 
         case .event:
             guard request.selectedIdentity == nil else {

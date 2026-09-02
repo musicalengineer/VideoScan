@@ -1084,12 +1084,19 @@ struct ArchivistChatWindow: View {
         // Capture the sole Catalog referent and its best date BEFORE any
         // translation await. A later row change cannot alter this turn.
         let selectedID = model.hallieCurrentSelectionID
-        let selectedDate = selectedID
-            .flatMap { model.record(forID: $0) }
+        let selectedRecord = selectedID.flatMap { model.record(forID: $0) }
+        let selectedDate = selectedRecord
             .flatMap { ArchivistTemporalSelectionDateSnapshot.capture(record: $0) }
+        // The record itself too (O(1)), so "who is in this video" answers
+        // from the row that was selected when the question was asked; and
+        // the filename memo for a NAMED file (2026-09-02).
         let referent = HallieAppTurnCoordinator.CapturedReferent(
             recordID: selectedID,
-            temporalDate: selectedDate)
+            temporalDate: selectedDate,
+            selectedDossier: selectedRecord.map { ArchivistRecordDossierSnapshot(record: $0) },
+            recordIndex: model.hallieRecordIndex,
+            recordsVersion: RecordsVersion(count: model.records.count,
+                                           revision: model.volumeAggregatesRevision))
         let records = model.records
         let wantsPlayAfter = playAfterAnswer
         playAfterAnswer = false
