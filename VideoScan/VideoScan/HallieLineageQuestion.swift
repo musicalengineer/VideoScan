@@ -680,6 +680,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
                 stripped = true
             }
         }
+        // A trace question can describe the requested output before naming
+        // its owner: "the birth locations of donna's maternal line". The
+        // anchored descriptor is not part of Donna's name; leave later "of"
+        // words alone so names such as John of Gaunt remain intact.
+        s = s.replacing(/^(?:the\s+)?(?:birth\s*places?|birth\s+locations?)\s+of\s+/, with: "")
         // Trailing nouns the question attached to the person: "rick's
         // ancestors" → "rick's"; "the family" → "the".
         while let m = s.firstMatch(of: /\s*\b(?:family|ancestors|ancestry|roots|line|lineage|links?|heritage|tree|people|side|pedigree|maternal|paternal|mother'?s|father'?s)\b\s*$/) {

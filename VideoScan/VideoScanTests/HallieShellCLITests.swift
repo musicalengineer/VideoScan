@@ -448,6 +448,67 @@ struct HallieShellCLITests {
         })
     }
 
+    /// Live 2026-09-02 (lv260902-010): the requested-output phrase before
+    /// Donna's possessive was previously sent to the resolver as part of her
+    /// name. Pin the currently supported maternal-line answer through the
+    /// real shell boundary; stopping at the first non-US ancestor is a
+    /// separate lineage operation and deliberately is not simulated here.
+    @Test func maternalBirthLocationTraceResolvesDonnaThroughTheShell() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Donna /Hudson/
+        1 SEX F
+        1 BIRT
+        2 DATE 4 APR 1958
+        2 PLAC Brockton, Massachusetts, USA
+        1 FAMC @F1@
+        0 @I2@ INDI
+        1 NAME Elaine /Bowser/
+        1 SEX F
+        1 BIRT
+        2 DATE 3 MAR 1934
+        2 PLAC Stoughton, Massachusetts, USA
+        1 FAMC @F2@
+        1 FAMS @F1@
+        0 @I3@ INDI
+        1 NAME Ethel /Cote/
+        1 SEX F
+        1 BIRT
+        2 DATE 2 FEB 1908
+        2 PLAC Quebec, Canada
+        1 FAMS @F2@
+        0 @F1@ FAM
+        1 WIFE @I2@
+        1 CHIL @I1@
+        0 @F2@ FAM
+        1 WIFE @I3@
+        1 CHIL @I2@
+        0 TRLR
+        """)
+        let question = "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA"
+        let harness = Harness(graph: graph)
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", question,
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.contains("Elaine Bowser")
+            && $0.contains("born Stoughton, Massachusetts, USA") })
+        #expect(harness.output.contains { $0.contains("Ethel Cote")
+            && $0.contains("born Quebec, Canada") })
+        #expect(!harness.output.contains { $0.contains("The Birth Locations Of Donna") })
+        #expect(!harness.output.contains { $0.contains("don't find") })
+        #expect(harness.transcriptEvents.contains {
+            $0.queryDescription == "lineage maternal ×12: Donna Hudson"
+        })
+    }
+
     @Test func normalConversationHidesDiagnosticsButLogRetainsThem() async throws {
         for diagnostics in [false, true] {
             let path = "/isolated/archive/Donna-Cape.mov"
