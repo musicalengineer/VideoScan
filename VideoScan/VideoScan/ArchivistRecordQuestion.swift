@@ -250,13 +250,21 @@ enum ArchivistRecordQuestion {
     private static let ageGuard = rx(#"\bhow old\b|\bwhat age\b|\bborn yet\b|\bwould have been\b"#)
     private static let peopleVerb = rx(
         #"\bwho(?:'s| is| are| was| were| else is| else was| all is)?(?: all| else)? (?:in|on|appears in|appear in|shows up in|is in|are in) \#(referent)\b"#
-        + #"|\bwho else\b"#
+        // "who else" only as the whole question (cs003) — not as two words
+        // inside a longer sentence that happens to contain "it".
+        + #"|^(?:hallie[, ]+)?who else(?: is| was| is there| was there)?(?: in \#(referent))?\??$"#
         + #"|\bwhat(?:'s| is)? in \#(referent)\b"#
         + #"|\b(?:does|did|do) \#(referent) (?:have|has|contain|include|feature|show)\b"#
         + #"|\b(?:has|have|contains?|includes?|features?) .+? in (?:it|this|that|there|fileref)\b"#
         + #"|\bis .+? in \#(referent)\b"#
-        + #"|\b(?:people'?s? )?names?\b"#
-        + #"|\bmy name\b"#)
+        // "names" / "my name" need the record nearby: a file reference in
+        // front, or "in <this/it/that>" after. A bare "it" elsewhere in the
+        // sentence is not a selection (live 9/02: "I know it is confusing …
+        // can you read their names for me?" asked for the People tab).
+        + #"|\bfileref\b.{0,80}\b(?:people'?s? )?names?\b"#
+        + #"|\b(?:people'?s? )?names?\b.{0,40}\b(?:in|of|from|on) \#(referent)\b"#
+        + #"|\bfileref\b.{0,80}\bmy name\b"#
+        + #"|\bmy name\b.{0,24}\bin \#(referent)\b"#)
     private static let aboutVerb = rx(
         #"\b(?:all|everything|more|anything) about \#(referent)\b"#
         + #"|\btell me about \#(referent)\b"#

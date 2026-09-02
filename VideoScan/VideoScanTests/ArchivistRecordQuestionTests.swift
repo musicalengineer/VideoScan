@@ -26,6 +26,7 @@ struct ArchivistRecordQuestionTests {
          Record(reference: .file(name: "New Hampshire.mov"), operations: [.people], people: ["me"])),
         // Selection forms.
         ("who else is in it", Record(reference: .currentSelection, operations: [.people])),
+        ("what are the names in this video", Record(reference: .currentSelection, operations: [.people])),
         ("who is in this video", Record(reference: .currentSelection, operations: [.people])),
         ("Who's in this one?", Record(reference: .currentSelection, operations: [.people])),
         ("is Donna in this?", Record(reference: .currentSelection, operations: [.people], people: ["Donna"])),
@@ -59,6 +60,11 @@ struct ArchivistRecordQuestionTests {
 
     @Test(arguments: [
         "show me New Hampshire videos",
+        "matt is my son. timmy is my son. tim os my brother. I know it is confusing. I will fix it in the people tab. do you know the people in the people tab and can you read their names for me?",
+        "can you read their names for me",
+        "tell me about the people in the catalog",
+        "what are their names",
+        "who else was at the wedding, it was a big one",
         "how old is Donna here",
         "how old was Timmy in this",
         "when was this filmed",
