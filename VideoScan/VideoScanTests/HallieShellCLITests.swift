@@ -402,6 +402,52 @@ struct HallieShellCLITests {
         #expect(harness.output.contains("Hallie is thinking…"))
     }
 
+    /// Live 2026-09-02 (lv260902-001): after a Thankful Pratt biography,
+    /// the photo question's trailing "if" clause was swallowed into the
+    /// name. Exercise the real shell state so both the photo turn and the
+    /// next ordinary pronoun follow-up prove that Thankful remains the
+    /// remembered subject.
+    @Test func photoPronounWithTrailingClauseKeepsThePreviousSubject() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Thankful /Pratt/
+        1 SEX F
+        1 BIRT
+        2 DATE 6 OCT 1761
+        1 DEAT
+        2 DATE 1 NOV 1849
+        0 TRLR
+        """)
+        let biography = ArchivistQueryAST.graph(.init(
+            people: ["Thankful Pratt"], operation: .biography))
+        let harness = Harness(
+            inputs: [
+                "tell me about thankful pratt",
+                "would there be a photo of her if she born so long ago?",
+                "tell me about her again",
+                ":quit",
+            ],
+            graph: graph,
+            translations: [biography, biography])
+
+        let code = await HallieShellCLI.run(
+            options: .init(), input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions == [
+            "tell me about thankful pratt",
+            "tell me about Thankful Pratt again",
+        ])
+        #expect(harness.output.contains("I don’t have a photo of Thankful Pratt yet."))
+        #expect(!harness.output.contains { $0.contains("Her If She Born So Long Ago") })
+        #expect(harness.transcriptEvents.contains {
+            $0.queryDescription == "photo: Thankful Pratt"
+        })
+    }
+
     @Test func normalConversationHidesDiagnosticsButLogRetainsThem() async throws {
         for diagnostics in [false, true] {
             let path = "/isolated/archive/Donna-Cape.mov"

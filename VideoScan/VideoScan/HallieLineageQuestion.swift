@@ -195,7 +195,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
            m.1.firstMatch(of: /\b(?:and|with)\b|&|,/) == nil {
             // "are there are photos of …" (live 2026-08-27, a typo): "there"
             // is a lead word too.
-            let name = HallieLineageQuestion.capitalizedName(String(m.1).trimmingCharacters(in: .whitespaces))
+            let name = mediaAskPerson(in: String(m.1))
             return .personPhoto(person: name)
         }
         // "show me his photo" / "her picture" — the pronoun is the person;
@@ -333,9 +333,9 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "videos of nathaniel parker sr" — last, and only so the answer
         // can decline for a pre-photography person; see `.personVideos`.
         if let m = lower.firstMatch(of: /\b(?:videos?|films?|footage|movies?|clips?|home movies)\s+of\s+([a-z][a-z .'-]+?)\s*$/) {
-            let name = String(m.1).trimmingCharacters(in: .whitespaces)
+            let name = mediaAskPerson(in: String(m.1))
             if !name.isEmpty, name.split(separator: " ").count <= 5 {
-                return .personVideos(person: HallieLineageQuestion.capitalizedName(name))
+                return .personVideos(person: name)
             }
         }
         // "show me his videos" — same pronoun rule as the photo shape.
@@ -344,6 +344,28 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .personVideos(person: HallieLineageQuestion.capitalizedName(String(m.1)))
         }
         return nil
+    }
+
+    /// Returns the person at the front of a photo/video object phrase.
+    /// Named subjects keep the existing full-phrase behavior. A pronoun,
+    /// however, is already a complete subject; when a dependent clause
+    /// follows it ("her if she was born then"), the clause is context for
+    /// the question rather than part of a person's name. Keeping this as
+    /// subject extraction—not an intent-specific photo rule—also covers
+    /// the equivalent video wording.
+    private static func mediaAskPerson(in raw: String) -> String {
+        let phrase = raw.trimmingCharacters(in: .whitespaces)
+        let words = phrase.split(separator: " ").map(String.init)
+        let clauseOpeners: Set<String> = [
+            "after", "although", "as", "because", "before", "if", "since",
+            "though", "unless", "when", "whereas", "while",
+        ]
+        if words.count > 1,
+           HalliePronounContinuity.isThirdPersonPronoun(words[0]),
+           clauseOpeners.contains(words[1]) {
+            return capitalizedName(words[0])
+        }
+        return capitalizedName(phrase)
     }
 
     /// The person a photo / video / center-the-tree ask is about, when
