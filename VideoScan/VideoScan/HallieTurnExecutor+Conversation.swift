@@ -68,6 +68,21 @@ extension HallieTurnExecutor {
         /// failures, follow-up refusals) and repairs themselves leave it in
         /// place so a second complaint still points at the same ask.
         private(set) var lastExchange: Exchange?
+        /// The file a `record` turn could not settle ("New Hampshire.mov",
+        /// "the selected video") — set when a record turn is declined
+        /// (not found / ambiguous / nothing selected), which also empties
+        /// the playable memory, so "play it" right after names the gap
+        /// instead of playing an older list's item (codex #976 item 2).
+        /// Cleared by the next answer that leaves something to play.
+        private(set) var lastRecordDecline: RecordDecline?
+
+        enum RecordDecline: Sendable, Equatable {
+            /// A file named in the question that was not found or fit
+            /// several records.
+            case file(String)
+            /// "this video" with nothing selected.
+            case selection
+        }
 
         struct Exchange: Sendable, Equatable {
             let question: String
@@ -154,6 +169,7 @@ extension HallieTurnExecutor {
                         shownCount: intent.citationOffset + result.citations.count,
                         totalMatchCount: result.matchCount ?? result.citations.count)
                     if !result.citations.isEmpty { lastShownList = lastResultSet }
+                    lastRecordDecline = nil
                     if let ordered = intent.dateOrder {
                         // "and the newest?" keeps the scope it sorted, so
                         // "and the oldest?" sorts the same thing.
@@ -174,20 +190,37 @@ extension HallieTurnExecutor {
             case .graph:
                 if result.refinableQuery == nil { lastRefinable = nil }
             case .record:
-                // One record: "play it" / "show it in the catalog" work on
-                // the single citation; there is no list to refine or page.
-                if result.outcome == .answered, !result.citations.isEmpty {
-                    lastResultSet = ResultSet(
-                        ast: ast, citations: result.citations,
-                        shownCount: result.citations.count,
-                        totalMatchCount: result.citations.count)
-                    lastShownList = lastResultSet
-                }
-                lastRefinable = nil
+                recordRecordTurn(ast: ast, result: result)
             case .temporal, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
+        }
+
+        /// One record: "play it" / "show it in the catalog" work on the
+        /// single citation; there is no list to refine or page. A DECLINED
+        /// record turn (not found / ambiguous / nothing selected) empties
+        /// the playable memory — an older list must not answer "play it"
+        /// (codex #976 item 2: search → missing file → "play it" played
+        /// the old media) — and remembers what could not be settled.
+        private mutating func recordRecordTurn(ast: ArchivistQueryAST, result: Result) {
+            if result.outcome == .answered, !result.citations.isEmpty {
+                lastResultSet = ResultSet(
+                    ast: ast, citations: result.citations,
+                    shownCount: result.citations.count,
+                    totalMatchCount: result.citations.count)
+                lastShownList = lastResultSet
+                lastRecordDecline = nil
+            } else if result.outcome == .declined {
+                lastResultSet = nil
+                lastShownList = nil
+                if case .record(let payload) = ast, case .file(let name) = payload.reference {
+                    lastRecordDecline = .file(name)
+                } else {
+                    lastRecordDecline = .selection
+                }
+            }
+            lastRefinable = nil
         }
 
         private mutating func recordExchange(intent: Intent?, result: Result, question: String?) {
@@ -690,17 +723,38 @@ extension HallieTurnExecutor {
         if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
             return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
         }
-        // "who is in New Hampshire.mov" / "does it have my name in it" /
-        // "tell me about this video" (2026-09-02): ONE record, answered
-        // from its own fields by the record route — never a catalog-wide
-        // sweep. The client resolves the reference (selection or named
-        // file) when it captures the context.
-        if let record = ArchivistRecordQuestion.detect(question) {
-            return .run(Intent(
-                originalQuestion: question,
-                ast: .record(record),
-                playAfterAnswer: playAfterAnswer))
+        if let turn = knowledgeLaneTurn(
+            question: question, playAfterAnswer: playAfterAnswer, memory: memory,
+            isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
+            return turn
         }
+        if let turn = catalogLaneTurn(
+            question: question, memory: memory, catalogStats: catalogStats,
+            rosterAnswer: rosterAnswer, relationshipsOverview: relationshipsOverview,
+            researchAnswer: researchAnswer) {
+            return turn
+        }
+        return followUpTurn(
+            question: question, playAfterAnswer: playAfterAnswer,
+            memory: memory, isKnownPerson: isKnownPerson)
+    }
+
+    /// The model-free lanes that read the family knowledge or the ONE
+    /// record: surname history, a property of a known person, lineage
+    /// shapes, capability and help/small-talk/reset, then the record
+    /// recogniser. Nil when none of them claims the question.
+    ///
+    /// Capability and the help card run BEFORE the record recogniser
+    /// (codex #976 item 5): "what can you do with it" / "can you tell me
+    /// the date on things" are questions about Hallie, not about a video
+    /// that happens to be selected.
+    private static func knowledgeLaneTurn(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool,
+        lineageAnswer: ((HallieLineageQuestion) -> Result?)?
+    ) -> PreTranslation? {
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
         // does not become either an invented family-tree fact or a catalog
@@ -739,6 +793,32 @@ extension HallieTurnExecutor {
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
         }
+        // "who is in New Hampshire.mov" / "does it have my name in it" /
+        // "tell me about this video" (2026-09-02): ONE record, answered
+        // from its own fields by the record route — never a catalog-wide
+        // sweep. The client resolves the reference (selection or named
+        // file) when it captures the context.
+        if let record = ArchivistRecordQuestion.detect(question) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .record(record),
+                playAfterAnswer: playAfterAnswer))
+        }
+        return nil
+    }
+
+    /// The model-free lanes answered from the catalog's own summaries:
+    /// the relationships overview, research findings, the roster,
+    /// provenance of the last answer, catalog-wide counts. Nil when none
+    /// claims the question.
+    private static func catalogLaneTurn(
+        question: String,
+        memory: ConversationMemory,
+        catalogStats: HallieCatalogStats?,
+        rosterAnswer: (() -> Result)?,
+        relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)?,
+        researchAnswer: ((HallieResearchQuestion) -> Result)?
+    ) -> PreTranslation? {
         // "how am I related to the people in the People tab?" — one subject
         // against the whole tab, from the kinship engine (live miss #12).
         // Ahead of the roster, which would otherwise catch "tell … people tab".
@@ -767,6 +847,18 @@ extension HallieTurnExecutor {
         if let stats = catalogStats, let question = HallieCatalogStats.detect(question) {
             return .answer(HallieCatalogStats.answer(question, stats: stats))
         }
+        return nil
+    }
+
+    /// The follow-up resolver's verdict turned into a turn: a media action
+    /// on the last answer, paging, a date-ordered re-run, a refinement,
+    /// or — when nothing was claimed — the translator.
+    private static func followUpTurn(
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool
+    ) -> PreTranslation {
         let resolution = ArchivistFollowUpResolver.resolve(
             question, snapshot: memory.followUpSnapshot,
             isKnownPerson: isKnownPerson)
@@ -794,26 +886,9 @@ extension HallieTurnExecutor {
                 verb: verb, indices: indices, chosen: chosen, source: "my last answer"))
 
         case .dateOrdered(let order, let ordinal, let verb):
-            // "and the newest?": the last question, re-run sorted by date.
-            // A list, a count, and an age all leave one behind (memory).
-            guard let scope = memory.lastRefinable else {
-                return .answer(followUpDecline(
-                    "Ask me for something first — a search or a count — and then I can pick the "
-                    + (order == .newestFirst ? "newest" : "oldest") + " of it."))
-            }
-            let ast: ArchivistQueryAST
-            switch scope {
-            case .list(let last, _): ast = last
-            case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
-            }
-            let request = DateOrderRequest(
-                order: order == .newestFirst ? .newestFirst : .oldestFirst,
-                ordinal: ordinal, scope: scope)
-            return .run(Intent(
-                originalQuestion: question, ast: ast,
-                playAfterAnswer: playAfterAnswer || verb == .play,
-                refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-                dateOrder: request))
+            return dateOrderedTurn(
+                order: order, ordinal: ordinal, verb: verb,
+                question: question, playAfterAnswer: playAfterAnswer, memory: memory)
 
         case .nextPage:
             guard let last = memory.lastResultSet else {
@@ -843,42 +918,9 @@ extension HallieTurnExecutor {
                 playAfterAnswer: playAfterAnswer))
 
         case .declineNoPriorResult(let verb):
-            // "ok show me the second one" when the current result set is
-            // empty: the last list actually shown (a refinement that found
-            // nothing does not take the older list away), else the count
-            // or age the last answer still carries, re-run in date order.
-            if let verb {
-                if let shown = memory.shownListSnapshot,
-                   case .mediaAction(let v, let indices) = ArchivistFollowUpResolver.resolve(
-                       question, snapshot: shown, isKnownPerson: isKnownPerson),
-                   let citations = memory.lastShownList?.citations {
-                    let chosen = indices.compactMap { citations.indices.contains($0) ? citations[$0] : nil }
-                    if !chosen.isEmpty {
-                        return .answer(mediaActionAnswer(
-                            verb: v, indices: indices, chosen: chosen,
-                            source: "the last list I showed you"))
-                    }
-                }
-                if let scope = memory.lastRefinable {
-                    let position = ArchivistFollowUpResolver.requestedPosition(in: question)
-                    let ast: ArchivistQueryAST
-                    switch scope {
-                    case .list(let last, _): ast = last
-                    case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
-                    }
-                    let order: DateOrderRequest.Order = position.wantsLast ? .newestFirst : .oldestFirst
-                    return .run(Intent(
-                        originalQuestion: question, ast: ast,
-                        playAfterAnswer: playAfterAnswer || verb == .play,
-                        refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
-                        dateOrder: DateOrderRequest(
-                            order: order, ordinal: position.wantsLast ? 1 : (position.ordinal ?? 1),
-                            scope: scope)))
-                }
-            }
-            let doing = verb.map { "\($0.rawValue) one of them" } ?? "refine it"
-            return .answer(followUpDecline(
-                "Ask me for something first, then I can \(doing)."))
+            return declineNoPriorResultTurn(
+                verb: verb, question: question, playAfterAnswer: playAfterAnswer,
+                memory: memory, isKnownPerson: isKnownPerson)
 
         case .declineOutOfRange(let requested, let available):
             return .answer(followUpDecline(
@@ -908,6 +950,98 @@ extension HallieTurnExecutor {
                     .ask(question: "start over", label: "Start over"),
                 ]))
         }
+    }
+
+    /// "and the newest?": the last question, re-run sorted by date. A
+    /// list, a count, and an age all leave one behind (memory).
+    private static func dateOrderedTurn(
+        order: ArchivistFollowUpResolver.DateOrder,
+        ordinal: Int,
+        verb: ArchivistFollowUpResolver.MediaVerb?,
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory
+    ) -> PreTranslation {
+        guard let scope = memory.lastRefinable else {
+            return .answer(followUpDecline(
+                "Ask me for something first — a search or a count — and then I can pick the "
+                + (order == .newestFirst ? "newest" : "oldest") + " of it."))
+        }
+        let ast: ArchivistQueryAST
+        switch scope {
+        case .list(let last, _): ast = last
+        case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
+        }
+        let request = DateOrderRequest(
+            order: order == .newestFirst ? .newestFirst : .oldestFirst,
+            ordinal: ordinal, scope: scope)
+        return .run(Intent(
+            originalQuestion: question, ast: ast,
+            playAfterAnswer: playAfterAnswer || verb == .play,
+            refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
+            dateOrder: request))
+    }
+
+    /// "ok show me the second one" when the current result set is empty:
+    /// the last list actually shown (a refinement that found nothing does
+    /// not take the older list away), else the count or age the last
+    /// answer still carries, re-run in date order; after a record turn
+    /// that could not settle its file, an honest "nothing to play".
+    private static func declineNoPriorResultTurn(
+        verb: ArchivistFollowUpResolver.MediaVerb?,
+        question: String,
+        playAfterAnswer: Bool,
+        memory: ConversationMemory,
+        isKnownPerson: (String) -> Bool
+    ) -> PreTranslation {
+        if let verb {
+            if let shown = memory.shownListSnapshot,
+               case .mediaAction(let v, let indices) = ArchivistFollowUpResolver.resolve(
+                   question, snapshot: shown, isKnownPerson: isKnownPerson),
+               let citations = memory.lastShownList?.citations {
+                let chosen = indices.compactMap { citations.indices.contains($0) ? citations[$0] : nil }
+                if !chosen.isEmpty {
+                    return .answer(mediaActionAnswer(
+                        verb: v, indices: indices, chosen: chosen,
+                        source: "the last list I showed you"))
+                }
+            }
+            if let scope = memory.lastRefinable {
+                let position = ArchivistFollowUpResolver.requestedPosition(in: question)
+                let ast: ArchivistQueryAST
+                switch scope {
+                case .list(let last, _): ast = last
+                case .wholeCatalog: ast = .presence(.init(mediaKind: nil))
+                }
+                let order: DateOrderRequest.Order = position.wantsLast ? .newestFirst : .oldestFirst
+                return .run(Intent(
+                    originalQuestion: question, ast: ast,
+                    playAfterAnswer: playAfterAnswer || verb == .play,
+                    refinementNote: "the last question sorted by date (\(order == .newestFirst ? "newest" : "oldest") first)",
+                    dateOrder: DateOrderRequest(
+                        order: order, ordinal: position.wantsLast ? 1 : (position.ordinal ?? 1),
+                        scope: scope)))
+            }
+            // The record turn just before this could not settle its file,
+            // and it emptied the playable memory on purpose (codex #976
+            // item 2): say what is missing rather than reach further back.
+            switch memory.lastRecordDecline {
+            case .file(let name)?:
+                return .answer(followUpDecline(
+                    "Nothing to \(verb.rawValue) — I couldn't settle which file “\(name)” is. "
+                    + "Name the file exactly as it appears in the Catalog, or select one there, "
+                    + "and ask me again."))
+            case .selection?:
+                return .answer(followUpDecline(
+                    "Nothing to \(verb.rawValue) — nothing was selected for my last answer. "
+                    + "Name the file, or select one in the Catalog, and ask me again."))
+            case nil:
+                break
+            }
+        }
+        let doing = verb.map { "\($0.rawValue) one of them" } ?? "refine it"
+        return .answer(followUpDecline(
+            "Ask me for something first, then I can \(doing)."))
     }
 
     /// "Playing item 2 from my last answer: “x.mov”." — the media-action

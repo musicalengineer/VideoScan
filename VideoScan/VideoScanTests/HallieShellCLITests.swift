@@ -1792,6 +1792,48 @@ struct HallieShellCLITests {
         #expect(assistantRoutes(harness) == ["record", "record"])
     }
 
+    /// codex #976 item 2: search → a record turn that cannot settle its
+    /// file → "play it" must NOT play the search's item; it names the gap.
+    /// The same after an ambiguous name and after "this video" with
+    /// nothing selected.
+    @Test func playItAfterADeclinedRecordTurnPlaysNothingAndSaysSo() async throws {
+        let presence = ArchivistQueryAST.presence(.init(people: ["Donna"]))
+        let harness = Harness(
+            inputs: [
+                "videos of Donna", "who is in Nowhere.mov", "play it",
+                "videos of Donna", "who is in Christmas.mov", "play it",
+                "videos of Donna", "who is in this video", "play it",
+                ":quit",
+            ],
+            records: newHampshireCatalog(),
+            translations: [presence, presence, presence])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions == ["videos of Donna", "videos of Donna", "videos of Donna"], Comment(rawValue: transcript))
+        #expect(harness.mediaActions.isEmpty, Comment(rawValue: "nothing may play: \(harness.mediaActions)"))
+        #expect(!transcript.contains("Playing item"), Comment(rawValue: transcript))
+        #expect(harness.output.filter {
+            $0.hasPrefix("Nothing to play — I couldn't settle which file “Nowhere.mov” is.")
+        }.count == 1, Comment(rawValue: transcript))
+        #expect(harness.output.filter {
+            $0.hasPrefix("Nothing to play — I couldn't settle which file “Christmas.mov” is.")
+        }.count == 1, Comment(rawValue: transcript))
+        #expect(harness.output.filter {
+            $0.hasPrefix("Nothing to play — nothing was selected for my last answer.")
+        }.count == 1, Comment(rawValue: transcript))
+        #expect(assistantRoutes(harness) == [
+            "presence", "record", "follow-up",
+            "presence", "record", "follow-up",
+            "presence", "record", "follow-up",
+        ], Comment(rawValue: transcript))
+    }
+
     /// codex #976 item 3: an explicit path nobody has never answers from a
     /// same-named file elsewhere; the decline offers that file by exact
     /// path and the chip answers about it.
@@ -1825,9 +1867,9 @@ struct HallieShellCLITests {
         #expect(events.map(\.outcome) == ["declined", "answered", "declined"])
         // The first decline's ONLY answer-bearing line is the offer: the
         // wrong volume's people were never reported.
-        let firstAnswer = harness.output.firstIndex { $0.hasPrefix("I don't have /Volumes/Nowhere/New Hampshire.mov") }
-        let realAnswer = harness.output.firstIndex { $0.hasPrefix("In New Hampshire.mov, Donna and Rick are tagged") }
-        #expect(firstAnswer != nil && realAnswer != nil && firstAnswer! < realAnswer!)
+        let firstAnswer = try #require(harness.output.firstIndex { $0.hasPrefix("I don't have /Volumes/Nowhere/New Hampshire.mov") })
+        let realAnswer = try #require(harness.output.firstIndex { $0.hasPrefix("In New Hampshire.mov, Donna and Rick are tagged") })
+        #expect(firstAnswer < realAnswer)
     }
 
     /// Scale: a record turn over 100k records resolves the named file once

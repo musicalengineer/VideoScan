@@ -148,6 +148,71 @@ struct HallieRecordScopeTurnTests {
         #expect(record?.operations == [.people])
     }
 
+    /// codex #976 item 2: a DECLINED record turn empties the playable
+    /// memory — "play it" after "who is in Nowhere.mov" must not play the
+    /// earlier list's item.
+    @Test func aDeclinedRecordTurnClearsThePlayableMemory() async throws {
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let earlier = HallieTurnExecutor.Intent(
+            originalQuestion: "videos of Donna", ast: .presence(.init(people: ["Donna"])))
+        memory.record(intent: earlier, result: HallieTurnExecutor.Result(
+            route: .presence, outcome: .answered, prose: "1 video", basisLine: "fixture",
+            queryDescription: "shape=presence",
+            citations: [.init(recordID: recordID, fullPath: path, filename: "New Hampshire.mov", playbackSeconds: nil, bases: [])],
+            catalogPersonName: nil, matchCount: 1))
+        #expect(memory.lastResultSet?.citations.count == 1)
+
+        let intent = HallieTurnExecutor.Intent(originalQuestion: "who is in Nowhere.mov", ast: ast(.file(name: "Nowhere.mov")))
+        let declined = try await HallieTurnExecutor.execute(.init(intent: intent), context: .init())
+        #expect(declined.outcome == .declined)
+        memory.record(intent: intent, result: declined)
+        #expect(memory.lastResultSet == nil)
+        #expect(memory.lastShownList == nil)
+        #expect(memory.lastRecordDecline == .file("Nowhere.mov"))
+
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "play it", playAfterAnswer: false, memory: memory, isKnownPerson: { _ in false })
+        guard case .answer(let answer) = pre else { Issue.record("expected a local decline, got \(pre)"); return }
+        #expect(answer.route == .followUp)
+        #expect(answer.outcome == .declined)
+        #expect(answer.mediaAction == nil)
+        #expect(answer.prose == "Nothing to play — I couldn't settle which file “Nowhere.mov” is. Name the file exactly as it appears in the Catalog, or select one there, and ask me again.")
+
+        // An answered record turn afterwards restores a playable item.
+        let answeredIntent = HallieTurnExecutor.Intent(originalQuestion: "who is in this video", ast: ast())
+        let answered = try await HallieTurnExecutor.execute(
+            .init(intent: answeredIntent), context: .init(recordScope: .resolved(snapshot())))
+        memory.record(intent: answeredIntent, result: answered)
+        #expect(memory.lastRecordDecline == nil)
+        #expect(memory.lastResultSet?.citations.map(\.recordID) == [recordID])
+    }
+
+    @Test func aContinuationIsRefusedOnTheRecordRoute() async throws {
+        // Records have no which-person clarification; a stale chip cannot resume one.
+        let result = try await HallieTurnExecutor.execute(ast(), context: .init(recordScope: .resolved(snapshot())))
+        #expect(result.clarification == nil)
+    }
+
+    @Test func memoryKeepsTheSingleCitationForPlayItAndForgetsNoList() async throws {
+        let context = HallieTurnExecutor.Context(recordScope: .resolved(snapshot()))
+        let intent = HallieTurnExecutor.Intent(originalQuestion: "who is in this video", ast: ast())
+        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        var memory = HallieTurnExecutor.ConversationMemory()
+        memory.record(intent: intent, result: result)
+        #expect(memory.lastResultSet?.citations.map(\.recordID) == [recordID])
+        #expect(memory.lastRefinable == nil)
+        #expect(memory.lastProvenance?.route == .record)
+        // "play it" resolves against that one citation.
+        let followUp = ArchivistFollowUpResolver.resolve(
+            "play it", snapshot: memory.followUpSnapshot, isKnownPerson: { _ in false })
+        if case .mediaAction(let verb, let indices) = followUp {
+            #expect(verb == .play)
+            #expect(indices == [0])
+        } else {
+            Issue.record("expected a media action, got \(followUp)")
+        }
+    }
+
     @Test func provenanceNamesTheOneRecord() async throws {
         let context = HallieTurnExecutor.Context(recordScope: .resolved(snapshot()))
         let result = try await HallieTurnExecutor.execute(ast(), context: context)
@@ -191,6 +256,26 @@ struct HallieRecordScopeTurnTests {
             isKnownPerson: { _ in false }) {} else {
             Issue.record("'when was this filmed' with no selection must translate")
         }
+    }
+
+    /// codex #976 item 5: capability and help run BEFORE the record
+    /// recogniser, so a question about Hallie that happens to carry "it"
+    /// and a date word is answered as capability, never as a record turn.
+    @Test(arguments: [
+        ("can you change the date on it", HallieTurnExecutor.Route.capability),
+        ("can you delete it", .capability),
+        ("can you remember the date of this one", .capability),
+        ("help", .help),
+    ] as [(String, HallieTurnExecutor.Route)])
+    func capabilityAndHelpOutrankTheRecordRecogniser(question: String, route: HallieTurnExecutor.Route) {
+        let selected = HallieTurnExecutor.SelectedRecord(recordID: recordID, date: nil)
+        let pre = HallieTurnExecutor.preTranslation(
+            question: question, playAfterAnswer: false, memory: .init(),
+            isKnownPerson: { _ in false }, selectedRecord: selected)
+        guard case .answer(let result) = pre else {
+            Issue.record("\(question): expected a local answer, got \(pre)"); return
+        }
+        #expect(result.route == route, Comment(rawValue: "\(question) → \(result.route)"))
     }
 
     /// The same words with the noun beside the referent are still ours.
