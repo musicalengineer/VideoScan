@@ -191,7 +191,9 @@ struct ArchivistTemporalExecutorTests {
     }
 
     /// Production sensor: real POIProfile and VideoRecord fields produce the
-    /// same immutable values used by the pure executor, with dossier priority.
+    /// same immutable values used by the pure executor. A confident dossier
+    /// inference is a RecordDateResolver source (2026-09-01), so it arrives
+    /// as `.resolved(source: .inferred)` with its confidence intact.
     @Test func productionSnapshotsPreferDossierDateAndRetainProvenance() throws {
         let profile = POIProfile(
             name: "Timmy", referencePath: "/People/Timmy",
@@ -212,19 +214,141 @@ struct ArchivistTemporalExecutorTests {
             currentSelection: referenceSnapshot)
 
         #expect(result.value == .exactAge(20))
-        #expect(result.prose.contains("inferred date 2020-08-04"))
-        #expect(result.prose.contains("inference confidence 0.85"))
+        #expect(result.prose.contains("date 2020-08-04 (the dossier's inferred date)"))
+        #expect(result.basisLine.contains("from inferred (day precision, confidence 0.85"))
         #expect(result.evidence?.subjectID == profile.id)
-        guard case .currentSelection(.dossierInferred(
-            let recordID, let path, let selectedDate, let confidence))
+        guard case .currentSelection(.resolved(
+            let recordID, let path, let selectedDate, let source, let precision, let confidence))
             = result.evidence?.reference else {
-            Issue.record("expected dossier-inferred production provenance")
+            Issue.record("expected resolved (inferred) production provenance")
             return
         }
         #expect(recordID == record.id)
         #expect(path == record.fullPath)
         #expect(selectedDate == date(2020, 8, 4))
+        #expect(source == .inferred)
+        #expect(precision == .day)
         #expect(confidence == 0.85)
+    }
+
+    /// The bug (eval 2026-09-01): Christmas_1994_etc.mkv carries Rick's
+    /// userDate "1994" and a 2026-07-14 catalog stamp from the transcode.
+    /// The old capture skipped the user date and answered "Donna is 66".
+    /// The app snapshot now resolves through RecordDateResolver first.
+    @Test func appSnapshotResolvesRicksYearAheadOfTheTranscodeStamp() throws {
+        let record = VideoRecord()
+        record.fullPath = "/Volumes/MediaExpansion/Converted_VHS_Tapes_2026/Christmas1994/Christmas_1994_etc.mkv"
+        record.filename = "Christmas_1994_etc.mkv"
+        record.userDate = "1994"
+        record.userDateConfidence = UserDateConfidence.known.rawValue
+        record.dateCreatedRaw = date(2026, 7, 14)
+        record.dateModifiedRaw = date(2026, 7, 15)
+
+        let snapshot = try #require(
+            ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+        guard case .resolved(let id, let path, let selectedDate, let source, let precision, let confidence)
+            = snapshot else {
+            Issue.record("expected a resolver-backed snapshot, got \(snapshot)")
+            return
+        }
+        #expect(id == record.id)
+        #expect(path == record.fullPath)
+        #expect(selectedDate == date(1994, 1, 1))
+        #expect(source == .userDate)
+        #expect(precision == .year)
+        #expect(confidence == 1.0)
+
+        // Donna-shaped subject: born mid-1959 → 34–35 during 1994, never 66.
+        let result = ArchivistTemporalExecutor.execute(
+            query(.currentSelection),
+            subject: subject(birthdate: date(1959, 6, 15), id: "donna", name: "Donna"),
+            currentSelection: snapshot)
+        #expect(result.value == .ageRange(34...35))
+        #expect(result.prose.contains("34\u{2013}35 years old during 1994"))
+        #expect(result.prose.contains("dated to the year only (from the date Rick entered)"))
+        #expect(result.basisLine.contains("date 1994 from userDate (year precision, confidence 1.00"))
+        #expect(!result.prose.contains("66"))
+    }
+
+    /// Same record shape, no user date: the year in the FILENAME still beats
+    /// the transcode stamp, at year precision and filename confidence.
+    @Test func appSnapshotFallsBackToTheFilenameYearBeforeAnyStamp() throws {
+        let record = VideoRecord()
+        record.fullPath = "/isolated/Christmas1994/Christmas_1994_etc.mkv"
+        record.filename = "Christmas_1994_etc.mkv"
+        record.dateCreatedRaw = date(2026, 7, 14)
+
+        let snapshot = try #require(
+            ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+        guard case .resolved(_, _, let selectedDate, let source, let precision, let confidence)
+            = snapshot else {
+            Issue.record("expected a resolver-backed snapshot, got \(snapshot)")
+            return
+        }
+        #expect(selectedDate == date(1994, 1, 1))
+        #expect(source == .filename)
+        #expect(precision == .year)
+        #expect(confidence == RecordDateResolver.filenameConfidence)
+    }
+
+    /// An embedded camera stamp gives day precision and an exact age.
+    @Test func appSnapshotUsesTheEmbeddedCameraDateAtDayPrecision() throws {
+        let record = VideoRecord()
+        record.fullPath = "/isolated/tape.mov"
+        record.filename = "tape.mov"
+        record.embeddedCreationDate = date(1994, 12, 25)
+        record.originMake = "Sony"
+        record.dateCreatedRaw = date(2026, 7, 14)
+
+        let snapshot = try #require(
+            ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+        #expect(snapshot.precision == .day)
+        #expect(snapshot.sourceLabel == "the camera's embedded date")
+        let result = ArchivistTemporalExecutor.execute(
+            query(.currentSelection),
+            subject: subject(birthdate: date(1959, 6, 15), id: "donna", name: "Donna"),
+            currentSelection: snapshot)
+        #expect(result.value == .exactAge(35))
+        #expect(result.prose == "Using the selected record's date 1994-12-25 (the camera's embedded date), Donna's calculated age is 35 years.")
+    }
+
+    /// The shell and the app must capture the SAME snapshot for a record.
+    @Test func shellAndAppCapturePathsAgree() {
+        let record = VideoRecord()
+        record.fullPath = "/isolated/Christmas1994/Christmas_1994_etc.mkv"
+        record.filename = "Christmas_1994_etc.mkv"
+        record.userDate = "1994"
+        record.userDateConfidence = UserDateConfidence.known.rawValue
+        record.dateCreatedRaw = date(2026, 7, 14)
+        #expect(HallieShellCLI.temporalSelectionDate(record)
+                == ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+
+        let undated = VideoRecord()
+        undated.fullPath = "/isolated/tape.mov"
+        undated.filename = "tape.mov"
+        undated.dateCreatedRaw = date(2026, 7, 14)
+        #expect(HallieShellCLI.temporalSelectionDate(undated)
+                == ArchivistTemporalSelectionDateSnapshot.capture(record: undated))
+        #expect(HallieShellCLI.temporalSelectionDate(undated)?.isUnverifiedFallback == true)
+    }
+
+    /// A dossier inference UNDER the resolver's floor (0.6) is not a
+    /// resolver source; the legacy chain still surfaces it, labelled.
+    @Test func lowConfidenceInferenceStaysOnTheLegacyChain() throws {
+        let record = VideoRecord()
+        record.fullPath = "/isolated/tape.mov"
+        record.filename = "tape.mov"
+        record.inferredRecordDate = date(1994, 1, 1)
+        record.inferredDateConfidence = 0.5
+        record.dateCreatedRaw = date(2026, 7, 14)
+        let snapshot = try #require(
+            ArchivistTemporalSelectionDateSnapshot.capture(record: record))
+        guard case .dossierInferred(_, _, let selectedDate, let confidence) = snapshot else {
+            Issue.record("expected the legacy dossierInferred case, got \(snapshot)")
+            return
+        }
+        #expect(selectedDate == date(1994, 1, 1))
+        #expect(confidence == 0.5)
     }
 
     @Test func catalogFallbackIsExplicitlyLabeledAsPotentialIngestDate() throws {

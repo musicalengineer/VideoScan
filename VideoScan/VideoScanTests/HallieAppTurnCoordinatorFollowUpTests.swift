@@ -72,6 +72,57 @@ struct HallieAppTurnCoordinatorFollowUpTests {
         return response
     }
 
+    /// "when was this filmed" with a Catalog row selected is answered in
+    /// the app's pre-translation lane from the captured referent's resolved
+    /// date — no translate call, no identity loading (2026-09-01).
+    @Test func selectionDateQuestionAnswersFromTheCapturedReferent() async throws {
+        let calls = Recorder()
+        let record = records()[0]
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let snapshot = ArchivistTemporalSelectionDateSnapshot.resolved(
+            recordID: record.id, fullPath: record.fullPath,
+            date: utc.date(from: DateComponents(year: 1994, month: 12, day: 25, hour: 12))!,
+            source: .embedded, precision: .day, confidence: 0.95)
+
+        let response = try await HallieAppTurnCoordinator.execute(
+            question: "when was this filmed?", records: records(),
+            referent: .init(recordID: record.id, temporalDate: snapshot),
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            memory: .init(), dependencies: dependencies(calls: calls))
+
+        #expect(response.result.prose == "This was filmed on 25 December 1994.")
+        #expect(response.result.route == .temporal)
+        #expect(response.capturedReferentID == record.id)
+        #expect(!calls.values.contains { $0.hasPrefix("translate:") })
+
+        // "how old was Timmy in this" is still the person-age path.
+        let personAge = try await HallieAppTurnCoordinator.execute(
+            question: "how old was Timmy in this?", records: records(),
+            referent: .init(recordID: record.id, temporalDate: snapshot),
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            memory: .init(),
+            dependencies: dependencies(
+                calls: calls,
+                translation: .temporal(.init(subject: "Timmy", operation: .age,
+                                             reference: .currentSelection))))
+        #expect(calls.values.contains("translate:how old was Timmy in this?"))
+        #expect(personAge.result.prose != "This was filmed on 25 December 1994.")
+
+        // Nothing selected: the same words translate, as before.
+        let none = try await HallieAppTurnCoordinator.execute(
+            question: "when was this filmed?", records: records(),
+            referent: .init(recordID: nil, temporalDate: nil),
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            memory: .init(),
+            dependencies: dependencies(
+                calls: calls,
+                translation: .temporal(.init(subject: "this", operation: .age,
+                                             reference: .currentSelection))))
+        #expect(calls.values.contains("translate:when was this filmed?"))
+        #expect(none.result.prose != "This was filmed on 25 December 1994.")
+    }
+
     @Test func followUpsRunWithoutTranslationAndReturnMediaActions() async throws {
         var memory = HallieTurnExecutor.ConversationMemory()
         let calls = Recorder()

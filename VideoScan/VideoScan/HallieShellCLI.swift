@@ -973,6 +973,11 @@ enum HallieShellCLI {
             if HallieCatalogStats.detect(routingQuestion) != nil, state.catalogStats == nil {
                 state.catalogStats = HallieCatalogStats.compute(records: state.records)
             }
+            // The selected row and its resolved date, captured once for the
+            // whole turn (the pre-translation lane and the executor context
+            // must agree on which date "this" is).
+            let selectedRecord = state.selectedRecordID.flatMap(state.record)
+            let selectedDate = selectedRecord.flatMap(temporalSelectionDate)
             let pre = HallieTurnExecutor.preTranslation(
                 question: routingQuestion,
                 playAfterAnswer: false,
@@ -982,7 +987,10 @@ enum HallieShellCLI {
                 rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) },
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) },
                 relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: identity) },
-                researchAnswer: { HallieResearchQuestion.answer($0, context: identity) })
+                researchAnswer: { HallieResearchQuestion.answer($0, context: identity) },
+                selectedRecord: selectedRecord.map {
+                    HallieTurnExecutor.SelectedRecord(recordID: $0.id, date: selectedDate)
+                })
             let intent: HallieTurnExecutor.Intent
             switch pre {
             case .answer(let result):
@@ -1099,9 +1107,6 @@ enum HallieShellCLI {
                     kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
                     treeIdentity: $0.treeIdentity, deathdate: $0.deathdate)
             }
-            let selectedDate = state.selectedRecordID
-                .flatMap(state.record)
-                .flatMap(temporalSelectionDate)
             let context = HallieTurnExecutor.Context(
                 presenceRecords: state.presenceSnapshots ?? [],
                 aggregateRecords: state.aggregateSnapshots ?? [],
@@ -1504,29 +1509,16 @@ enum HallieShellCLI {
         return resolution.year
     }
 
-    private static func temporalSelectionDate(
+    /// The selected record's date for temporal questions: the Catalog's
+    /// shared ranking (RecordDateResolver — the year `:select` prints)
+    /// first, the legacy inference/stamp chain only when it has nothing.
+    /// Until 2026-09-01 this preferred the catalog creation stamp, which
+    /// for a transcode is the transcode's date ("how old is Donna" → 66).
+    static func temporalSelectionDate(
         _ record: VideoRecord
     ) -> ArchivistTemporalSelectionDateSnapshot? {
-        if let inferred = record.inferredRecordDate {
-            return .dossierInferred(
-                recordID: record.id,
-                fullPath: record.fullPath,
-                date: inferred,
-                confidence: record.inferredDateConfidence)
-        }
-        if let created = record.dateCreatedRaw {
-            return .catalogCreation(
-                recordID: record.id,
-                fullPath: record.fullPath,
-                date: created)
-        }
-        if let modified = record.dateModifiedRaw {
-            return .fileModification(
-                recordID: record.id,
-                fullPath: record.fullPath,
-                date: modified)
-        }
-        return nil
+        ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)
+            ?? ArchivistTemporalSelectionDateSnapshot.legacyFallback(record: record)
     }
 
     private static var defaultCatalogURL: URL {

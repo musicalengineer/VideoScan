@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 enum ArchivistTemporalBirthdateProvenance: Sendable, Equatable {
     case poiProfile(profileID: String)
@@ -60,6 +61,16 @@ enum ArchivistTemporalSubjectResolution: Sendable, Equatable {
 /// labeled because a transcode or ingest can change them without changing the
 /// family event date.
 enum ArchivistTemporalSelectionDateSnapshot: Sendable, Equatable {
+    /// The Catalog's own answer to "when was this shot" — RecordDateResolver
+    /// (2026-09-01): Rick's hand-entered date, the embedded camera stamp, a
+    /// confident dossier inference, or a date in the filename, in that order.
+    /// `date` is the START of the resolved period at UTC noon ("1994" →
+    /// 1994-01-01); `precision` says how much of it is real.
+    case resolved(
+        recordID: UUID, fullPath: String, date: Date,
+        source: RecordDateResolution.Source,
+        precision: RecordDateResolution.Precision,
+        confidence: Float)
     case dossierInferred(
         recordID: UUID, fullPath: String, date: Date, confidence: Float?)
     case catalogCreation(recordID: UUID, fullPath: String, date: Date)
@@ -67,18 +78,118 @@ enum ArchivistTemporalSelectionDateSnapshot: Sendable, Equatable {
 
     var date: Date {
         switch self {
-        case .dossierInferred(_, _, let date, _),
+        case .resolved(_, _, let date, _, _, _),
+             .dossierInferred(_, _, let date, _),
              .catalogCreation(_, _, let date),
              .fileModification(_, _, let date):
             return date
         }
     }
 
-    /// Production extraction prefers the dossier's family-event inference.
-    /// The lower-confidence catalog fallbacks are never presented as inferred
-    /// family truth; their provenance remains attached to the answer.
+    var recordID: UUID {
+        switch self {
+        case .resolved(let id, _, _, _, _, _),
+             .dossierInferred(let id, _, _, _),
+             .catalogCreation(let id, _, _),
+             .fileModification(let id, _, _):
+            return id
+        }
+    }
+
+    var fullPath: String {
+        switch self {
+        case .resolved(_, let path, _, _, _, _),
+             .dossierInferred(_, let path, _, _),
+             .catalogCreation(_, let path, _),
+             .fileModification(_, let path, _):
+            return path
+        }
+    }
+
+    /// How much of `date` is a recorded fact. The filesystem stamps are
+    /// full timestamps (day). A low-confidence dossier inference sitting
+    /// exactly on noon-UTC 1 January is the codebase's year-only
+    /// placeholder (DateTriangulation.yearOnlyDate), not New Year's Day.
+    var precision: RecordDateResolution.Precision {
+        switch self {
+        case .resolved(_, _, _, _, let precision, _):
+            return precision
+        case .dossierInferred(_, _, let date, _):
+            var utc = Calendar(identifier: .gregorian)
+            utc.timeZone = TimeZone(secondsFromGMT: 0)!
+            let parts = utc.dateComponents([.month, .day, .hour], from: date)
+            return parts.month == 1 && parts.day == 1 && parts.hour == 12 ? .year : .day
+        case .catalogCreation, .fileModification:
+            return .day
+        }
+    }
+
+    /// Where the date came from, in words a family member would use.
+    var sourceLabel: String {
+        switch self {
+        case .resolved(_, _, _, let source, _, _):
+            switch source {
+            case .userDate: return "the date Rick entered"
+            case .embedded: return "the camera's embedded date"
+            case .inferred: return "the dossier's inferred date"
+            case .filename: return "the filename"
+            case .none: return "no recorded source"
+            }
+        case .dossierInferred: return "the dossier's inferred date"
+        case .catalogCreation: return "the catalog creation stamp"
+        case .fileModification: return "the file modification stamp"
+        }
+    }
+
+    /// True for the legacy stamps that may be an ingest/transcode date.
+    var isUnverifiedFallback: Bool {
+        switch self {
+        case .resolved, .dossierInferred: return false
+        case .catalogCreation, .fileModification: return true
+        }
+    }
+
+    /// Production extraction: the Catalog's shared date ranking first
+    /// (RecordDateResolver — the same one placement and ArchiveReadiness
+    /// use), then the older chain only when the resolver has nothing. The
+    /// old chain preferred `inferredRecordDate` then the CATALOG CREATION
+    /// stamp, which for a 2026 transcode of a 1994 tape answered "how old is
+    /// Donna" with 66 instead of 35 (eval 2026-09-01). The lower-confidence
+    /// catalog fallbacks are never presented as inferred family truth; their
+    /// provenance remains attached to the answer.
     @MainActor
     static func capture(record: VideoRecord) -> Self? {
+        if let resolved = resolvedCatalogDate(record: record) { return resolved }
+        return legacyFallback(record: record)
+    }
+
+    /// RecordDateResolver's verdict for the record, or nil when it has no
+    /// dated signal at all. Shared by the app (`capture`) and the shell.
+    static func resolvedCatalogDate(record: VideoRecord) -> Self? {
+        let resolution = RecordDateResolver.resolve(
+            userDate: record.userDate,
+            userDateConfidence: record.userDateConfidence,
+            embeddedCreationDate: record.embeddedCreationDate,
+            originMake: record.originMake,
+            originModel: record.originModel,
+            originEncoder: record.originEncoder,
+            inferredRecordDate: record.inferredRecordDate,
+            inferredDateConfidence: record.inferredDateConfidence,
+            filename: record.filename.isEmpty ? nil : record.filename)
+        guard resolution.precision <= .year, let start = resolution.date else { return nil }
+        // Noon, not midnight: the executor canonicalises to UTC noon and
+        // the resolver hands back 00:00Z — same day either way, but a
+        // noon instant survives any later local-time rendering intact.
+        return .resolved(
+            recordID: record.id, fullPath: record.fullPath,
+            date: start.addingTimeInterval(12 * 3600),
+            source: resolution.source, precision: resolution.precision,
+            confidence: resolution.confidence)
+    }
+
+    /// The pre-2026-09-01 chain, kept only for records the resolver cannot
+    /// date: a low-confidence inference, then the filesystem stamps.
+    static func legacyFallback(record: VideoRecord) -> Self? {
         if let date = record.inferredRecordDate {
             return .dossierInferred(
                 recordID: record.id, fullPath: record.fullPath, date: date,
@@ -232,6 +343,36 @@ enum ArchivistTemporalExecutor {
             guard let referenceDate = canonicalDay(selection.date) else {
                 return decline(.invalidDate, name: subject.canonicalName)
             }
+            let evidence = ArchivistTemporalEvidence(
+                subjectID: subject.stableID,
+                canonicalName: subject.canonicalName,
+                birthdate: birthdate,
+                birthdateProvenance: subject.birthdateProvenance,
+                reference: .currentSelection(selection))
+            let birthYear = calendar.component(.year, from: birthdate)
+            let referenceYear = calendar.component(.year, from: referenceDate)
+            let basis = "Basis: POI profile birthdate \(dayString(birthdate)); "
+                + referenceBasis(selection, date: referenceDate) + "."
+
+            // A year-only date ("1994" typed by Rick, or a bare year in the
+            // filename) is the whole year, not 1 January: the honest answer
+            // is the same range the explicit-year path gives.
+            if selection.precision == .year {
+                guard referenceYear >= birthYear else {
+                    return decline(.referenceBeforeBirth, name: subject.canonicalName)
+                }
+                let upper = referenceYear - birthYear
+                let birthParts = calendar.dateComponents([.month, .day], from: birthdate)
+                let bornOnJanuaryFirst = birthParts.month == 1 && birthParts.day == 1
+                let lower = bornOnJanuaryFirst ? upper : max(0, upper - 1)
+                let ages = lower == upper ? "\(upper)" : "\(lower)\u{2013}\(upper)"
+                return ArchivistTemporalResult(
+                    value: .ageRange(lower...upper), decline: nil,
+                    prose: "\(subject.canonicalName) was \(ages) years old during "
+                        + "\(referenceYear) — the selected record is dated to the "
+                        + "year only (from \(selection.sourceLabel)).",
+                    basisLine: basis, evidence: evidence)
+            }
             guard referenceDate >= birthdate else {
                 return decline(.referenceBeforeBirth,
                                name: subject.canonicalName)
@@ -241,19 +382,20 @@ enum ArchivistTemporalExecutor {
                   age >= 0 else {
                 return decline(.invalidDate, name: subject.canonicalName)
             }
-            let evidence = ArchivistTemporalEvidence(
-                subjectID: subject.stableID,
-                canonicalName: subject.canonicalName,
-                birthdate: birthdate,
-                birthdateProvenance: subject.birthdateProvenance,
-                reference: .currentSelection(selection))
+            if selection.precision == .month {
+                return ArchivistTemporalResult(
+                    value: .approximateAge(age), decline: nil,
+                    prose: "\(subject.canonicalName) was about \(age) in "
+                        + "\(monthYearString(referenceDate)) — the selected record "
+                        + "is dated to the month (from \(selection.sourceLabel)).",
+                    basisLine: basis, evidence: evidence)
+            }
             return ArchivistTemporalResult(
                 value: .exactAge(age), decline: nil,
                 prose: referenceProse(
                     selection, name: subject.canonicalName, age: age,
                     date: referenceDate),
-                basisLine: "Basis: POI profile birthdate \(dayString(birthdate)); "
-                    + referenceBasis(selection, date: referenceDate) + ".",
+                basisLine: basis,
                 evidence: evidence)
         }
     }
@@ -445,6 +587,42 @@ enum ArchivistTemporalExecutor {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// "December 1994" in the executor's UTC calendar.
+    static func monthYearString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter.string(from: date)
+    }
+
+    /// ISO at the given precision: "1994-12-25" / "1994-12" / "1994".
+    static func periodString(
+        _ date: Date, precision: RecordDateResolution.Precision
+    ) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        switch precision {
+        case .day, .unknown, .decade:
+            return String(format: "%04d-%02d-%02d",
+                          parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        case .month:
+            return String(format: "%04d-%02d", parts.year ?? 0, parts.month ?? 0)
+        case .year:
+            return String(format: "%04d", parts.year ?? 0)
+        }
+    }
+
+    static func precisionLabel(_ precision: RecordDateResolution.Precision) -> String {
+        switch precision {
+        case .day: return "day"
+        case .month: return "month"
+        case .year: return "year"
+        case .decade: return "decade"
+        case .unknown: return "unknown"
+        }
+    }
+
     private static func dayString(_ date: Date) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d",
@@ -456,6 +634,10 @@ enum ArchivistTemporalExecutor {
         date: Date
     ) -> String {
         switch selection {
+        case .resolved(_, let path, _, let source, let precision, let confidence):
+            return "selected record date \(periodString(date, precision: precision)) "
+                + "from \(source.rawValue) (\(precisionLabel(precision)) precision, "
+                + "confidence \(String(format: "%.2f", confidence)), \(path))"
         case .dossierInferred(_, let path, _, let confidence):
             let confidenceText = confidence.map { String(format: "%.2f", $0) }
                 ?? "not recorded"
@@ -479,6 +661,10 @@ enum ArchivistTemporalExecutor {
         date: Date
     ) -> String {
         switch selection {
+        case .resolved:
+            return "Using the selected record's date \(dayString(date)) "
+                + "(\(selection.sourceLabel)), \(name)'s calculated age is "
+                + "\(age) years."
         case .dossierInferred(_, _, _, let confidence):
             let confidenceText = confidence.map { String(format: "%.2f", $0) }
                 ?? "not recorded"

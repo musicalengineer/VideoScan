@@ -897,6 +897,120 @@ struct HallieShellCLITests {
         #expect(harness.output.filter { $0.hasPrefix("No such citation") }.isEmpty)
     }
 
+    /// The eval's five phrasings (2026-09-01), asked of the real record
+    /// shape: Rick's userDate "1994", a 2026 transcode stamp, no embedded
+    /// date. All answered locally from the resolved date — no translation.
+    @Test func selectionDateQuestionsAnswerFromTheResolvedDateWithoutTheModel() async throws {
+        let christmas = record("/isolated/Christmas1994/Christmas_1994_etc.mkv", confirmed: ["Donna"])
+        christmas.userDate = "1994"
+        christmas.userDateConfidence = UserDateConfidence.known.rawValue
+        christmas.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
+        let harness = Harness(
+            inputs: [":select Christmas_1994_etc.mkv",
+                     "when was this filmed",
+                     "what year is that from",
+                     "how old is this tape",
+                     "what season was this filmed in",
+                     "how long ago was that",
+                     ":quit"],
+            records: [christmas])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.output.contains("selected Christmas_1994_etc.mkv (1994)"))
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.contains("This was filmed in 1994.") })
+        #expect(harness.output.contains { $0.contains("This is from 1994.") })
+        let thisYear = Calendar(identifier: .gregorian).component(.year, from: Date())
+        #expect(harness.output.contains { $0.contains("About \(thisYear - 1994) years old — filmed in 1994.") })
+        #expect(harness.output.contains { $0.contains("I only know the year — 1994 — so I can't say the season") })
+        #expect(harness.output.contains { $0.contains("About \(thisYear - 1994) years ago (1994).") })
+        #expect(!harness.output.contains { $0.contains("I need to know who you mean") })
+        #expect(!harness.output.contains { $0.contains("2026") && $0.contains("filmed") })
+    }
+
+    /// Day precision through the shell: an embedded camera date gives the
+    /// full date, the season, and a real elapsed-years count.
+    @Test func selectionDateQuestionsUseTheEmbeddedDateAtDayPrecision() async throws {
+        let tape = record("/isolated/tapes/xmas.mov")
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        tape.embeddedCreationDate = utc.date(from: DateComponents(year: 1994, month: 12, day: 25, hour: 15))!
+        tape.originMake = "Sony"
+        tape.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
+        let harness = Harness(
+            inputs: [":select xmas", "when was this filmed", "what season was this filmed in", ":quit"],
+            records: [tape])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.contains("This was filmed on 25 December 1994.") })
+        #expect(harness.output.contains { $0.contains("This was filmed in winter, on 25 December 1994.") })
+    }
+
+    /// Nothing selected: the words still go to the translator and the
+    /// temporal route asks for a selection, exactly as before.
+    @Test func selectionDateQuestionsWithoutASelectionStillTranslate() async throws {
+        let ast = ArchivistQueryAST.temporal(.init(
+            subject: "this", operation: .age, reference: .currentSelection))
+        let harness = Harness(
+            inputs: ["when was this filmed", ":quit"],
+            records: [record("/isolated/Christmas1994/Christmas_1994_etc.mkv")],
+            translations: [ast])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions == ["when was this filmed"])
+        #expect(!harness.output.contains { $0.contains("This was filmed") })
+    }
+
+    /// Bug A through the shell: "how old is Donna" with the 1994 tape
+    /// selected counts from Rick's year, not from the 2026 transcode stamp.
+    @Test func personAgeWithSelectionCountsFromTheResolvedDateNotTheTranscodeStamp() async throws {
+        let christmas = record("/isolated/Christmas1994/Christmas_1994_etc.mkv", confirmed: ["Donna"])
+        christmas.userDate = "1994"
+        christmas.userDateConfidence = UserDateConfidence.known.rawValue
+        christmas.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let born = utc.date(from: DateComponents(year: 1959, month: 6, day: 15, hour: 12))!
+        let ast = ArchivistQueryAST.temporal(.init(
+            subject: "Donna", operation: .age, reference: .currentSelection))
+        let harness = Harness(
+            inputs: [":select christmas_1994", "how old is Donna", ":quit"],
+            records: [christmas],
+            profiles: [POIProfile(name: "Donna", referencePath: "/isolated/donna", birthdate: born)],
+            translations: [ast])
+        harness.executeRequest = { request, context in
+            try await HallieTurnExecutor.execute(request, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.translatedQuestions == ["how old is Donna"])
+        #expect(harness.output.contains { $0.contains("34\u{2013}35 years old during 1994") })
+        #expect(!harness.output.contains { $0.contains("66") })
+        #expect(!harness.output.contains { $0.contains("catalog creation date") })
+    }
+
     @Test func selectByFilenameTakesTheFirstCatalogMatchCaseInsensitively() {
         let a = record("/isolated/one/XMAS_1994.mkv")
         let b = record("/isolated/two/xmas_1995.mkv")

@@ -245,6 +245,15 @@ extension HallieTurnExecutor {
         }
     }
 
+    /// The Catalog row the user has selected, captured before any await
+    /// (2026-09-01). `date` is nil when the record has no date signal at
+    /// all; the struct itself is nil when nothing is selected — the two
+    /// get different answers to "when was this filmed".
+    struct SelectedRecord: Sendable, Equatable {
+        let recordID: UUID
+        let date: ArchivistTemporalSelectionDateSnapshot?
+    }
+
     /// The decision taken before translation.
     enum PreTranslation: Sendable, Equatable {
         /// Nothing local applies; translate the question as typed.
@@ -317,7 +326,8 @@ extension HallieTurnExecutor {
         rosterAnswer: (() -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
-        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil
+        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
+        selectedRecord: SelectedRecord? = nil
     ) -> PreTranslation {
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
@@ -325,14 +335,14 @@ extension HallieTurnExecutor {
                isKnownPerson: isKnownPerson, catalogStats: catalogStats,
                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                relationshipsOverview: relationshipsOverview,
-                researchAnswer: researchAnswer),
+               researchAnswer: researchAnswer, selectedRecord: selectedRecord),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
                 isKnownPerson: isKnownPerson, catalogStats: catalogStats,
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                 relationshipsOverview: relationshipsOverview,
-                researchAnswer: researchAnswer)
+                researchAnswer: researchAnswer, selectedRecord: selectedRecord)
             if case .answer(let b) = secondTurn, b.route != .reset {
                 return .answer(joinedTwoQuestionAnswer(a, b))
             }
@@ -353,7 +363,7 @@ extension HallieTurnExecutor {
             isKnownPerson: isKnownPerson, catalogStats: catalogStats,
             rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
             relationshipsOverview: relationshipsOverview,
-                researchAnswer: researchAnswer)
+            researchAnswer: researchAnswer, selectedRecord: selectedRecord)
     }
 
     /// Both answers' facts survive the join (codex #707 item 5: only b's
@@ -603,7 +613,8 @@ extension HallieTurnExecutor {
         rosterAnswer: (() -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
-        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil
+        researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
+        selectedRecord: SelectedRecord? = nil
     ) -> PreTranslation {
         // A turn ABOUT the previous answer ("that's wrong", "you presented
         // me a list of people born hundreds of years ago") is repaired from
@@ -611,6 +622,13 @@ extension HallieTurnExecutor {
         // With nothing to repair the same words route as a fresh question.
         if let exchange = memory.lastExchange, HallieRepairTurn.isRepair(question) {
             return .answer(HallieRepairTurn.answer(question, exchange: exchange))
+        }
+        // "when was this filmed" / "how old is this tape" with a Catalog row
+        // selected (2026-09-01): the record's own resolved date, no model.
+        // With nothing selected the words go on to the translator and the
+        // temporal route asks for a selection, as before.
+        if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
+            return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
         }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"

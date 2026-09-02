@@ -528,7 +528,11 @@ enum HallieAppTurnCoordinator {
             ? HallieCatalogStats.compute(records: records) : nil
         let preTranslation = try await preTranslationOffMain(
             question: routingQuestion, playAfterAnswer: playAfterAnswer,
-            memory: memory, catalogStats: catalogStats, dependencies: dependencies)
+            memory: memory, catalogStats: catalogStats,
+            selectedRecord: referent.recordID.map {
+                HallieTurnExecutor.SelectedRecord(recordID: $0, date: referent.temporalDate)
+            },
+            dependencies: dependencies)
         try Task.checkCancellation()
 
         let intent: HallieTurnExecutor.Intent
@@ -686,6 +690,7 @@ enum HallieAppTurnCoordinator {
         playAfterAnswer: Bool,
         memory: HallieTurnExecutor.ConversationMemory,
         catalogStats: HallieCatalogStats? = nil,
+        selectedRecord: HallieTurnExecutor.SelectedRecord? = nil,
         dependencies: Dependencies
     ) async throws -> HallieTurnExecutor.PreTranslation {
         let worker = Task.detached(priority: .userInitiated) {
@@ -720,7 +725,8 @@ enum HallieAppTurnCoordinator {
                 rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) },
                 relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) },
-                researchAnswer: { HallieResearchQuestion.answer($0, context: sources()) })
+                researchAnswer: { HallieResearchQuestion.answer($0, context: sources()) },
+                selectedRecord: selectedRecord)
         }
         return try await withTaskCancellationHandler {
             try await worker.value
