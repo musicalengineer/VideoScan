@@ -11,6 +11,13 @@
 //   4. "I"/"me"/"my" → owner, "you"/"Hallie" → archivist (2026-08-18),
 //      recorded on the Intent so continuations read them the same way.
 // Returns nil when none applies and the ordinary lookup should run.
+//
+//   0. (eval bi013, 2026-09-01, ahead of everything) "what's the story
+//      behind the Westford house": the translator made "westford house" a
+//      person and the surname roster fuzzed "house" into Goushill. A
+//      question about the <X> house / trip / place whose X is nobody in
+//      the tree, the People tab or the CyberBrain is a catalog search for
+//      X, never a family-tree lookup.
 
 import Foundation
 
@@ -22,6 +29,10 @@ extension HallieTurnExecutor {
         context: Context,
         dependencies: Dependencies
     ) async throws -> Result? {
+        if let place = try await placeQuestionAsCatalogSearch(
+            rawPayload, request: request, context: context, dependencies: dependencies) {
+            return place
+        }
         // Live miss #8 (2026-08-29): a tree on disk whose compiled
         // generation this version refused is not "no tree" — every graph
         // ask gets the recompile offer before any binding or lookup.
@@ -87,5 +98,45 @@ extension HallieTurnExecutor {
                 context: context, dependencies: dependencies)
         }
         return nil
+    }
+
+    /// Nouns that make "the <X> …" a thing or a place, not a person.
+    static let placeNouns: Set<String> = [
+        "house", "home", "trip", "vacation", "place", "story", "farm",
+        "cottage", "cabin", "camp", "visit", "holiday",
+    ]
+
+    private static let placeArticles: Set<String> = [
+        "the", "a", "an", "our", "my", "your", "old", "new", "that", "this",
+    ]
+
+    /// The catalog cross search for a place question that reached the
+    /// graph route as a person — or nil when the "person" IS someone.
+    static func placeQuestionAsCatalogSearch(
+        _ payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result? {
+        guard payload.people.count == 1, let typed = payload.people.first else { return nil }
+        let questionWords = Set(request.intent.originalQuestion.lowercased()
+            .split(whereSeparator: { !$0.isLetter }).map(String.init))
+        guard !questionWords.isDisjoint(with: placeNouns) else { return nil }
+        let tokens = typed.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+            .map(String.init)
+        let nameTokens = tokens.filter {
+            !placeNouns.contains($0.lowercased()) && !placeArticles.contains($0.lowercased())
+        }
+        guard nameTokens.count == 1, let name = nameTokens.first else { return nil }
+        // Someone by that name (or by the whole typed string) → a real
+        // person question; leave it to the tree.
+        guard !isKnownPerson(name, context: context, acceptSurname: true),
+              !isKnownPerson(typed, context: context, acceptSurname: true) else { return nil }
+        let cross = ArchivistQueryAST.cross(.init(people: [], keywords: [name]))
+        let result = try await execute(
+            Request(intent: request.intent.replacing(ast: cross)),
+            context: context, dependencies: dependencies)
+        return result.prefixingBasis(
+            "“\(typed)” is a place or a thing, not a person I know, so I searched the catalog for “\(name)”")
     }
 }

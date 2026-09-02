@@ -73,6 +73,15 @@ extension HallieTurnExecutor {
             notes.append(contentsOf: kin.notes)
         }
 
+        // "can you play a video for me?" (eval ic009, 2026-09-01): a first-
+        // or second-person pronoun the translator kept as a name or a word
+        // is you or me, never a search term. Kinship rebinding above has
+        // already had its chance to turn "my dad" into a person.
+        let droppedPronouns = dropSpeakerPronouns(&effective)
+        if !droppedPronouns.isEmpty {
+            notes.append("“\(droppedPronouns.joined(separator: "”, “"))” means you or me, not a search word, so I left it out")
+        }
+
         // "pull up anything from Franklin": the translator took a place for
         // a person. A name nobody knows — no profile, no tree, no CyberBrain,
         // no person tag anywhere in the catalog — is searched as a place or
@@ -132,8 +141,39 @@ extension HallieTurnExecutor {
             effective, citationOffset: request.intent.citationOffset)
         let records = context.presenceRecords
         let execute = dependencies.executePresence
-        let result = try await detached {
+        var result = try await detached {
             execute(query, records)
+        }
+        // "pull up anything from Franklin" when the family tree DOES know a
+        // Franklin (eval cs018, 2026-09-01): the name survived demotion as
+        // a person, nobody is tagged with it, and the search came back
+        // empty — while a folder named Franklin sat there. When the only
+        // constraint is a name no catalog record is tagged with, the same
+        // words are tried once as a place / filename / folder / transcript
+        // search before declining. Both empty → the honest decline stands.
+        if result.conclusion != .present,
+           request.intent.citationOffset == 0,
+           let people = effective.people, !people.isEmpty,
+           (effective.keywords ?? []).isEmpty {
+            let taggedNames = Set(records.flatMap {
+                $0.confirmedPeople.map { PersonResolver.normalize($0.name) }
+            })
+            if people.allSatisfy({ !taggedNames.contains(PersonResolver.normalize($0)) }) {
+                var asWords = effective
+                asWords.people = nil
+                asWords.keywords = people
+                let wordQuery = ArchivistPresenceQuery(asWords, citationOffset: 0)
+                let wordResult = try await detached {
+                    execute(wordQuery, records)
+                }
+                if wordResult.conclusion == .present {
+                    let names = people.map { "“\($0)”" }.joined(separator: ", ")
+                    notes.append(
+                        "no one in the catalog is tagged \(names), so I searched it as a place or word")
+                    effective = asWords
+                    result = wordResult
+                }
+            }
         }
         let answer = ArchivistPresenceAnswerComposer.compose(result)
 
@@ -188,6 +228,40 @@ extension HallieTurnExecutor {
             catalogPersonName: nil,
             matchCount: result.conclusion == .present ? total : 0,
             answerPlan: plan)
+    }
+
+    /// First- and second-person words that must never reach the catalog
+    /// as a person or a keyword.
+    static let speakerPronouns: Set<String> = [
+        "i", "me", "my", "mine", "myself", "we", "us", "our", "ours", "ourselves",
+        "you", "your", "yours", "yourself", "yourselves",
+    ]
+
+    /// Removes speaker pronouns from `people` and `keywords`; returns what
+    /// was dropped, in order, for the basis line. Empty lists become nil so
+    /// downstream "no constraints" logic sees them as absent.
+    static func dropSpeakerPronouns(_ payload: inout ArchivistQueryAST.Presence) -> [String] {
+        func isPronoun(_ word: String) -> Bool {
+            speakerPronouns.contains(
+                word.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: ".,?!'’")))
+        }
+        var dropped: [String] = []
+        if let people = payload.people {
+            let kept = people.filter { word in
+                if isPronoun(word) { dropped.append(word); return false }
+                return true
+            }
+            payload.people = kept.isEmpty ? nil : kept
+        }
+        if let keywords = payload.keywords {
+            let kept = keywords.filter { word in
+                if isPronoun(word) { dropped.append(word); return false }
+                return true
+            }
+            payload.keywords = kept.isEmpty ? nil : kept
+        }
+        return dropped
     }
 
     private struct PresencePeopleRecovery {

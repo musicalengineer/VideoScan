@@ -20,6 +20,50 @@ struct HallieCatalogStatsTests {
         #expect(HallieCatalogStats.detect("how many recordings of Carey") == nil)
     }
 
+    // Eval ic006 (2026-09-01): "what do you know about our videos" fell
+    // through to a presence search and declined for lack of a term.
+    @Test func whatDoYouKnowAboutTheVideosIsTheOverview() {
+        for text in ["what do you know about our videos", "What do you know about the archive?",
+                     "what do you know about the collection", "what kind of videos do we have",
+                     "what do you have in the catalog", "what's the overall picture of the archive",
+                     "what do you know about the family videos"] {
+            #expect(HallieCatalogStats.detect(text) == .overview, Comment(rawValue: text))
+        }
+        // A person, a place, a year, or a people question is not an overview.
+        for text in ["what do you know about Donna", "what do you know about the family",
+                     "what do you know about the Cape", "what videos do we have from 1994",
+                     "what do you know", "who do you know"] {
+            #expect(HallieCatalogStats.detect(text) == nil, Comment(rawValue: text))
+        }
+        // Every specific kind still wins over the overview (including the
+        // pre-existing readings of "what's in the archive" and "what videos
+        // do we have", which the closed vocabulary already claimed).
+        #expect(HallieCatalogStats.detect("what's in the archive") == .archived)
+        #expect(HallieCatalogStats.detect("what videos do we have") == .total)
+        #expect(HallieCatalogStats.detect("how many videos do we have") == .total)
+        #expect(HallieCatalogStats.detect("what years does the archive cover") == .years)
+        #expect(HallieCatalogStats.detect("how many videos are archived") == .archived)
+    }
+
+    @Test func overviewAnswersTheWholePictureThenInvitesAnAsk() {
+        let stats = HallieCatalogStats.compute(records: [
+            record("a.mov", bytes: 10, seconds: 3600, year: 1994),
+            record("b.mov", bytes: 10, seconds: 3600, year: 2005),
+            record("c.mov", bytes: 10, seconds: 60, year: 1994, fixity: true),
+        ])
+        let result = HallieCatalogStats.answer(.overview, stats: stats)
+        #expect(result.route == .aggregate)
+        #expect(result.outcome == .answered)
+        #expect(result.prose.hasPrefix("There are 3 media files in the catalog across 1 volume"), Comment(rawValue: result.prose))
+        #expect(result.prose.contains("about 2.0 hours of footage"), Comment(rawValue: result.prose))
+        #expect(result.prose.contains("running from 1994 to 2005"), Comment(rawValue: result.prose))
+        #expect(result.prose.contains("1 has a verified copy in the Master Archive"), Comment(rawValue: result.prose))
+        #expect(result.prose.hasSuffix("Ask me for a person, a year, a place, or a word — “show me Donna in the 90s”."))
+        #expect(result.queryDescription == "catalog-stats overview")
+        #expect(HallieCatalogStats.answer(.overview, stats: HallieCatalogStats.compute(records: [])).prose
+                == "The catalog is empty right now.")
+    }
+
     @Test func promotedToArchivePhrasingDetects() {
         // Live miss 2026-08-24: "to" was outside the closed vocabulary and
         // the question became a 5,886-item generic search.

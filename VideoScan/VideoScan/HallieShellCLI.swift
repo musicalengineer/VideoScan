@@ -530,7 +530,8 @@ enum HallieShellCLI {
     """
 
     static let help = """
-    Commands: :help, :quit, :cancel, :reset, :session, :list, :select N, :play N, :reveal N,
+    Commands: :help, :quit, :cancel, :reset, :session, :list, :select N, :select <filename>,
+              :play N, :reveal N,
               :photo, :open-photo, :reveal-photo
     :reset forgets the current conversation and starts a new logged session.
     Say "let me tell you about <someone>" and Hallie listens and remembers
@@ -1397,6 +1398,19 @@ enum HallieShellCLI {
                    ? "opening \(photo.fileURL.lastPathComponent)"
                    : "revealing \(photo.fileURL.lastPathComponent)")
         case ":list": printCitations(state.citations, output: output)
+        case ":select" where parts.count >= 2 && Int(parts[1]) == nil:
+            // ":select Christmas_1994_etc.mkv" — by filename fragment, not
+            // by citation number, so a harness (or a person who knows the
+            // file) can select without asking first. Mirrors ":select N":
+            // the only state the numeric form sets is selectedRecordID; the
+            // temporal date is derived from it on every turn.
+            let needle = parts.dropFirst().joined(separator: " ")
+            guard let match = selectRecord(matchingFilename: needle, in: state.records) else {
+                output("no file matches “\(needle)”")
+                return .continueSession
+            }
+            state.selectedRecordID = match.id
+            output("selected \(match.filename) (\(catalogYear(of: match).map(String.init) ?? "undated"))")
         case ":select", ":play", ":reveal":
             guard parts.count == 2, let number = Int(parts[1]),
                   state.citations.indices.contains(number - 1) else {
@@ -1458,6 +1472,36 @@ enum HallieShellCLI {
             text: ":reset",
             basisLine: "Conversation memory, citations, history, and active modes cleared.",
             state: &state)
+    }
+
+    /// The FIRST catalog record whose filename contains `needle`
+    /// (case-insensitive), in catalog order. Deterministic on purpose: the
+    /// same fragment selects the same file every session.
+    static func selectRecord(
+        matchingFilename needle: String,
+        in records: [VideoRecord]
+    ) -> VideoRecord? {
+        let key = needle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return nil }
+        return records.first { $0.filename.lowercased().contains(key) }
+    }
+
+    /// The year the Catalog shows for a record (RecordDateResolver: user
+    /// date, embedded date, dossier inference, filename) — NOT the catalog
+    /// creation stamp, which for a transcode is the transcode's date.
+    static func catalogYear(of record: VideoRecord) -> Int? {
+        let resolution = RecordDateResolver.resolve(
+            userDate: record.userDate,
+            userDateConfidence: record.userDateConfidence,
+            embeddedCreationDate: record.embeddedCreationDate,
+            originMake: record.originMake,
+            originModel: record.originModel,
+            originEncoder: record.originEncoder,
+            inferredRecordDate: record.inferredRecordDate,
+            inferredDateConfidence: record.inferredDateConfidence,
+            filename: record.filename.isEmpty ? nil : record.filename)
+        guard resolution.precision <= .year else { return nil }
+        return resolution.year
     }
 
     private static func temporalSelectionDate(

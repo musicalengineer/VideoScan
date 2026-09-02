@@ -14,6 +14,13 @@ enum ArchivistCapabilityQuestion: Equatable {
     /// A media action outside the read-only contract (delete, export,
     /// email, upload …).
     case unsupportedMediaAction(verb: String)
+    /// "can you play a video for me?" / "can you show me a video?" — asked
+    /// with nothing to look for (eval ic009, 2026-09-01). The answer is
+    /// yes, with one example ask; the word "me" is never a search term.
+    case playback
+    /// "can you help me find things in the archive, or just tell me about
+    /// them?" (ic015) — what she searches by, and that she also tells.
+    case searchHelp
 
     private static let modalLead: [String] = [
         "can we", "can you", "can i", "could we", "could you", "could i",
@@ -73,6 +80,51 @@ enum ArchivistCapabilityQuestion: Equatable {
         "reveal", "open", "display", "get", "give",
     ]
 
+    /// Verbs that open a capability ask about PLAYING when nothing
+    /// specific follows ("can you play a video").
+    private static let playbackVerbs: Set<String> = [
+        "play", "show", "open", "watch", "display", "pull", "bring",
+    ]
+
+    /// Verbs that open a capability ask about FINDING ("can you help me
+    /// find things", "can you search the archive").
+    private static let searchVerbs: Set<String> = [
+        "help", "find", "search", "look", "locate", "browse",
+    ]
+
+    /// The closed vocabulary of a content-free ask. ANY other word — a
+    /// name, a year, a place, "first", "baby" — means the person asked for
+    /// something specific and the normal pipeline must run.
+    private static let assistanceFiller: Set<String> = [
+        "a", "an", "the", "me", "us", "for", "some", "any", "one", "of", "our",
+        "my", "your", "please", "up", "something", "anything", "things",
+        "stuff", "in", "from", "archive", "archives", "catalog", "catalogue",
+        "collection", "library", "family", "videos", "video", "clip", "clips",
+        "movie", "movies", "film", "films", "file", "files", "footage",
+        "recording", "recordings", "tape", "tapes", "media", "just", "or",
+        "and", "also", "about", "them", "tell", "what", "do", "you", "know",
+        "can", "it", "with", "here", "on", "this", "too", "at", "all", "to",
+        "through", "around", "through", "there", "is", "are", "have", "we",
+        "i", "want", "like", "see", "get", "able", "possible", "hallie",
+    ]
+
+    /// A content-free "can you play / show / find … ?" is a question about
+    /// what Hallie can do. Nil when any word outside the closed vocabulary
+    /// appears — that is a real request and goes to the pipeline.
+    private static func assistanceQuestion(
+        words: [String], firstWord: String
+    ) -> ArchivistCapabilityQuestion? {
+        let allowed = assistanceFiller.union(playbackVerbs).union(searchVerbs)
+        guard words.allSatisfy({ allowed.contains($0) }) else { return nil }
+        if playbackVerbs.contains(firstWord) {
+            return .playback
+        }
+        if searchVerbs.contains(firstWord) {
+            return .searchHelp
+        }
+        return nil
+    }
+
     static func detect(_ text: String) -> ArchivistCapabilityQuestion? {
         var lowered = text.lowercased()
             .replacingOccurrences(of: "’", with: "'")
@@ -109,6 +161,13 @@ enum ArchivistCapabilityQuestion: Equatable {
         }
         // "tell me about donna" is a read; "tell hallie that…" is teaching.
         if firstWord == "tell", words.count > 1, words[1] == "me" { return nil }
+        // "can you play a video for me?" / "can you help me find things in
+        // the archive?" — a modal plus a content-free ask is a question
+        // about her powers, answered yes with an example. "can you show me
+        // donna in 1994?" has content and stays a search.
+        if hadModal, let assistance = assistanceQuestion(words: words, firstWord: firstWord) {
+            return assistance
+        }
         if firstWord == "get" || firstWord == "give" || readVerbs.contains(firstWord) {
             return nil
         }

@@ -73,6 +73,85 @@ struct ArchivistCapabilityQuestionTests {
         #expect(ArchivistCapabilityQuestion.detect(text) == nil, Comment(rawValue: text))
     }
 
+    // Eval ic009 / ic015 (2026-09-01): "Can you play a video for me?" was
+    // searched for the word "me"; "Can you help me find things in the
+    // archive, or just tell me about them?" declined for lack of a search
+    // term. Both are questions about her powers, answered yes.
+    @Test(arguments: [
+        "Can you play a video for me?",
+        "can you show me a video?",
+        "could you play something for me",
+        "can you play videos",
+        "are you able to show me some videos from the archive?",
+        "can you pull up a clip for me",
+    ])
+    func contentFreePlaybackAsksAreCapabilityQuestions(text: String) {
+        #expect(ArchivistCapabilityQuestion.detect(text) == .playback, Comment(rawValue: text))
+    }
+
+    @Test(arguments: [
+        "Can you help me find things in the archive, or just tell me about them?",
+        "can you help me find things?",
+        "can you search the archive for me",
+        "could you help me look through the videos",
+        "can you find things in our family videos?",
+    ])
+    func contentFreeSearchAsksAreCapabilityQuestions(text: String) {
+        #expect(ArchivistCapabilityQuestion.detect(text) == .searchHelp, Comment(rawValue: text))
+    }
+
+    @Test(arguments: [
+        "can you play the first one",
+        "could you play the first one",
+        "can you show me donna in 1994?",
+        "can you find timmy as a baby",
+        "can you help me find Donna",
+        "can you play the Cape video",
+        "play a video",
+        "show me a video",
+        "can you show me the family tree",
+    ])
+    func asksWithContentStayRequests(text: String) {
+        let detected = ArchivistCapabilityQuestion.detect(text)
+        #expect(detected != .playback && detected != .searchHelp, Comment(rawValue: "\(text): \(String(describing: detected))"))
+    }
+
+    @Test func playbackAndSearchHelpAnswerYesWithOneExampleAsk() {
+        let play = HallieTurnExecutor.capabilityResult(.playback)
+        #expect(play.route == .capability)
+        #expect(play.outcome == .answered)
+        #expect(play.prose.hasPrefix("Yes — "))
+        #expect(play.prose.contains("“play Donna at Christmas”"))
+        #expect(play.citations.isEmpty)
+        #expect(play.mediaAction == nil)
+        #expect(play.offeredActions == [
+            .ask(question: "play Donna at Christmas", label: "Play Donna at Christmas"),
+        ])
+        #expect(play.basisLine.contains("no catalog query"))
+
+        let help = HallieTurnExecutor.capabilityResult(.searchHelp)
+        #expect(help.outcome == .answered)
+        #expect(help.prose.hasPrefix("Both."))
+        #expect(help.prose.contains("by person, year or decade, place"))
+        #expect(help.prose.contains("tell you about the family"))
+        #expect(help.citations.isEmpty)
+
+        // Through pre-translation: no model, no identity lookups, no search.
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "Can you play a video for me?",
+            playAfterAnswer: false,
+            memory: .init(),
+            isKnownPerson: { _ in
+                Issue.record("capability answers must not consult identity sources")
+                return false
+            })
+        guard case .answer(let result) = pre else {
+            Issue.record("expected a local answer, got \(pre)")
+            return
+        }
+        #expect(result.queryDescription == "capability playback")
+    }
+
     @Test func theHonestAnswerNamesTheRoadmapAndOffersWhatExists() {
         let result = HallieTurnExecutor.capabilityResult(.editKnowledge(subject: "Donna"))
         #expect(result.route == .capability)

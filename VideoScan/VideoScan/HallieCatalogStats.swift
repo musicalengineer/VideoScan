@@ -106,6 +106,11 @@ struct HallieCatalogStats: Equatable, Sendable {
         case duplicates     // how many duplicates
         case diskSpace      // how much disk space
         case years          // how many years / what years
+        /// "what do you know about our videos / the archive / the
+        /// collection" (eval ic006, 2026-09-01): the whole picture in one
+        /// breath — count, footage, years, archive progress. LAST in the
+        /// order so every specific kind wins when its key is present.
+        case overview
 
         /// Every token of the question must come from the shared filler
         /// plus this kind's own words, and at least one KEY word must be
@@ -119,6 +124,10 @@ struct HallieCatalogStats: Equatable, Sendable {
             case .duplicates: return ["duplicates", "duplicate", "dupes", "copies", "duplicated"]
             case .diskSpace: return ["space", "disk", "storage", "big", "bytes", "gb", "tb", "gigabytes", "terabytes", "size"]
             case .years: return ["years", "year", "decades", "span", "earliest", "oldest", "latest", "newest", "cover", "covers", "range", "from"]
+            // The catalog nouns are the keys: "what do you know about the
+            // FAMILY" has no such noun and falls through (it is a people
+            // question, never a file count).
+            case .overview: return ["videos", "video", "footage", "recordings", "tapes", "clips", "movies", "files", "media", "archive", "archives", "catalog", "catalogue", "collection", "library"]
             }
         }
 
@@ -135,6 +144,7 @@ struct HallieCatalogStats: Equatable, Sendable {
             case .duplicates: return ["files", "videos", "there", "are", "many", "have", "we", "got", "of", "any", "much"]
             case .diskSpace: return ["whole", "archive", "catalog", "collection", "everything", "take", "takes", "taking", "up", "use", "uses", "used", "does", "much", "how", "is", "it", "total", "altogether", "all", "the", "library", "files", "videos"]
             case .years: return ["footage", "video", "videos", "archive", "catalog", "collection", "do", "does", "we", "have", "many", "much", "what", "which", "is", "the", "to", "does", "it", "go", "back", "far", "how", "recording", "recordings"]
+            case .overview: return ["know", "overview", "summary", "summarize", "summarise", "describe", "gist", "idea", "sense", "picture", "hold", "holds", "contain", "contains", "stored", "kept", "keep", "kind", "kinds", "sort", "sorts", "type", "types", "your", "you", "do", "in", "here", "have", "got", "there", "is", "on", "hand", "general", "generally", "big", "overall"]
             }
         }
     }
@@ -288,6 +298,8 @@ struct HallieCatalogStats: Equatable, Sendable {
             prose = s.grossBytes == 0
                 ? "I don't have file sizes for the catalog yet."
                 : "Everything in the catalog takes up \(MediaBytes.display(s.grossBytes)) across \(s.volumeCount) volume\(s.volumeCount == 1 ? "" : "s"); the unique content is \(MediaBytes.display(s.uniqueBytes)), and \(MediaBytes.display(s.duplicateBytes)) of that total is duplicate copies."
+        case .overview:
+            prose = Self.overviewProse(s)
         case .years:
             if let first = s.earliestYear, let last = s.latestYear {
                 let span = last - first + 1
@@ -307,6 +319,30 @@ struct HallieCatalogStats: Equatable, Sendable {
             citations: [],
             catalogPersonName: nil,
             answerPlan: HallieAnswerPlan(route: .aggregate, shape: .fixed, fallbackText: prose))
+    }
+
+    /// The whole picture in one breath, then the invitation to ask.
+    static func overviewProse(_ s: HallieCatalogStats) -> String {
+        guard s.fileCount > 0 else { return "The catalog is empty right now." }
+        var parts: [String] = []
+        parts.append("There are \(s.fileCount.formatted()) media files in the catalog across "
+            + "\(s.volumeCount) volume\(s.volumeCount == 1 ? "" : "s") — "
+            + "\(s.uniqueFileCount.formatted()) unique once the duplicate copies are set aside")
+        if s.totalDurationSeconds >= 60 {
+            parts.append("about \(Self.hours(s.totalDurationSeconds)) of footage")
+        }
+        if let first = s.earliestYear, let last = s.latestYear {
+            parts.append(first == last ? "everything I can date is from \(first)"
+                         : "running from \(first) to \(last)")
+        }
+        var text = parts.joined(separator: "; ") + "."
+        let promoted = s.archivedVerified + s.archivedUnverified
+        if promoted > 0 {
+            text += " \(s.archivedVerified.formatted()) \(s.archivedVerified == 1 ? "has" : "have") "
+                + "a verified copy in the Master Archive."
+        }
+        text += " Ask me for a person, a year, a place, or a word — “show me Donna in the 90s”."
+        return text
     }
 
     static func hours(_ seconds: Double) -> String {

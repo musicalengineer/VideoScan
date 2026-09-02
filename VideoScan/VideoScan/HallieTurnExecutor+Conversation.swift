@@ -870,6 +870,32 @@ extension HallieTurnExecutor {
                 queryDescription: "capability unsupported-action \(verb)",
                 citations: [],
                 catalogPersonName: nil)
+        case .playback:
+            return Result(
+                route: .capability,
+                outcome: .answered,
+                prose: "Yes — tell me what you'd like to see and I'll find it and play it. "
+                    + "For example, say “play Donna at Christmas”, and I'll play the first match; "
+                    + "or ask “show me the boys at the Cape” first and then say “play the first one”.",
+                basisLine: "Basis: capability answer; no model call, no catalog query, no media action.",
+                queryDescription: "capability playback",
+                citations: [],
+                catalogPersonName: nil,
+                offeredActions: [.ask(question: "play Donna at Christmas", label: "Play Donna at Christmas")])
+        case .searchHelp:
+            return Result(
+                route: .capability,
+                outcome: .answered,
+                prose: "Both. I can find things in the archive by person, year or decade, place, "
+                    + "and spoken or visible words — “show me Donna in the 90s”, “videos at the Cape”, "
+                    + "“where does someone say happy birthday”. And I can tell you about the family "
+                    + "from the tree and what I've been told — “who is Donna's mother”, "
+                    + "“tell me about Dad Breen”, “how am I related to Rick”.",
+                basisLine: "Basis: capability answer; no model call, no catalog query, no media action.",
+                queryDescription: "capability search-help",
+                citations: [],
+                catalogPersonName: nil,
+                offeredActions: [.ask(question: "show me Donna in the 90s", label: "Show Donna in the 90s")])
         }
     }
 

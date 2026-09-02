@@ -265,4 +265,138 @@ struct ArchivistTemporalExecutorTests {
         #expect(result.basisLine.contains("file modification date"))
         #expect(result.basisLine.contains("may reflect ingest/transcode"))
     }
+
+
+    // MARK: - Present tense: "how old is Donna" with nothing selected (ft022)
+
+    private func resolved(
+        _ name: String, birthdate: Date?, deathdate: Date? = nil
+    ) -> ArchivistTemporalSubjectResolution {
+        .resolved(
+            requested: name,
+            subject: ArchivistTemporalSubjectSnapshot(
+                stableID: name.lowercased(), canonicalName: name,
+                birthdate: birthdate, deathdate: deathdate))
+    }
+
+    private func ageQuery(_ name: String) -> ArchivistQueryAST.Temporal {
+        .init(subject: name, operation: .age, reference: .currentSelection)
+    }
+
+    @Test(arguments: [
+        "how old is Donna", "How old is Donna?", "what age is Rick",
+        "how old is Matt now", "how old is donna today", "what is Donna's age now",
+        "how old's Timmy",
+    ])
+    func presentTenseAgeIsRecognised(text: String) {
+        #expect(ArchivistTemporalExecutor.isPresentTenseAge(text), Comment(rawValue: text))
+    }
+
+    @Test(arguments: [
+        "how old was Donna", "how old was Donna in 1995?", "how old is Donna here",
+        "how old is Donna in this video", "how old is Timmy in the clip",
+        "what age was Rick", "how old were the boys", "how old is that",
+        "show me Donna", "when was Donna born",
+    ])
+    func pastTenseAndSelectionPointersAreNotPresentTense(text: String) {
+        #expect(!ArchivistTemporalExecutor.isPresentTenseAge(text), Comment(rawValue: text))
+    }
+
+    @Test func presentAgeCountsFromTheProfileBirthdateToToday() {
+        let result = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Donna"),
+            subject: resolved("Donna", birthdate: date(1959, 8, 4)),
+            now: date(2026, 9, 1))
+        #expect(result.value == .exactAge(67))
+        #expect(result.decline == nil)
+        #expect(result.prose == "Donna is 67 today — born 4 August 1959.")
+        #expect(result.basisLine == "Basis: from Donna's People profile birthdate 1959-08-04, "
+                + "counted to today (2026-09-01); no video selected.")
+        #expect(result.evidence?.reference == .today(date(2026, 9, 1)))
+
+        // The day before the birthday is still the previous age.
+        let eve = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Donna"),
+            subject: resolved("Donna", birthdate: date(1959, 8, 4)),
+            now: date(2026, 8, 3))
+        #expect(eve.value == .exactAge(66))
+    }
+
+    @Test func someoneWhoHasPassedOnGetsTheirAgeAtDeathNotAnAgeToday() {
+        let result = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Dad"),
+            subject: resolved("Dad", birthdate: date(1936, 5, 10), deathdate: date(2011, 2, 1)),
+            now: date(2026, 9, 1))
+        #expect(result.value == .exactAge(74))
+        #expect(result.prose == "Dad passed on in 2011 at 74.")
+        #expect(result.basisLine.contains("recorded death 2011-02-01"))
+        #expect(!result.prose.contains("today"))
+        #expect(result.evidence?.reference == .death(date(2011, 2, 1)))
+    }
+
+    @Test func aTreeBirthYearAloneGivesAnApproximateAgeAndSaysSo() {
+        let result = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Nana"),
+            subject: resolved("Nana", birthdate: nil),
+            approximateBirthYear: .init(year: 1936, source: "the family tree"),
+            now: date(2026, 9, 1))
+        #expect(result.value == .approximateAge(90))
+        #expect(result.prose == "Nana is about 90 — the family tree gives only the birth year, 1936.")
+        #expect(result.basisLine.contains("birth year 1936 from the family tree"))
+        #expect(result.evidence == nil)
+    }
+
+    @Test func presentAgeStillFailsClosedWithoutAnyBirthEvidence() {
+        let noBirth = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Nana"), subject: resolved("Nana", birthdate: nil), now: date(2026, 9, 1))
+        #expect(noBirth.decline == .missingBirthdate)
+        #expect(noBirth.prose == "I don't have a birthdate for Nana.")
+
+        let missing = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Nobody"), subject: .missing(requested: "Nobody"), now: date(2026, 9, 1))
+        #expect(missing.decline == .missingSubject)
+
+        let crossWired = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Donna"), subject: resolved("Rick", birthdate: date(1958, 1, 1)),
+            now: date(2026, 9, 1))
+        #expect(crossWired.decline == .resolutionMismatch)
+    }
+
+    @Test func turnExecutorAnswersTodayOnlyForPresentTenseWithNothingSelected() async throws {
+        let context = HallieTurnExecutor.Context(
+            presenceRecords: [],
+            profiles: [.init(stableID: "donna", canonicalName: "Donna", birthdate: date(1959, 8, 4))])
+        let now = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Donna"), subject: resolved("Donna", birthdate: date(1959, 8, 4)))
+        guard case .exactAge(let expected)? = now.value else {
+            Issue.record("fixture should compute an age"); return
+        }
+
+        let present = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old is Donna", ast: .temporal(ageQuery("Donna")))),
+            context: context)
+        #expect(present.route == .temporal)
+        #expect(present.outcome == .answered)
+        #expect(present.prose == "Donna is \(expected) today — born 4 August 1959.", Comment(rawValue: present.prose))
+        #expect(present.basisLine.contains("People profile birthdate 1959-08-04"))
+
+        // Past tense with nothing selected keeps today's honest ask.
+        let past = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old was Donna", ast: .temporal(ageQuery("Donna")))),
+            context: context)
+        #expect(past.outcome == .declined)
+        #expect(past.prose.hasPrefix("I need a dated video to count from"))
+
+        // A selection wins even for present-tense wording ("how old is Donna here").
+        let selected = HallieTurnExecutor.Context(
+            presenceRecords: [],
+            profiles: [.init(stableID: "donna", canonicalName: "Donna", birthdate: date(1959, 8, 4))],
+            selectedTemporalDate: .dossierInferred(
+                recordID: UUID(), fullPath: "/Archive/1994.mkv", date: date(1994, 12, 25), confidence: 0.9))
+        let here = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old is Donna here", ast: .temporal(ageQuery("Donna")))),
+            context: selected)
+        #expect(here.outcome == .answered)
+        #expect(here.prose.contains("calculated age is 35 years"), Comment(rawValue: here.prose))
+    }
 }

@@ -796,8 +796,24 @@ enum HallieTurnExecutor {
                     catalogPersonName: nil,
                     clarification: clarification)
             }
-            let result = dependencies.executeTemporal(
-                payload, resolution, context.selectedTemporalDate)
+            // "how old is Donna" with NOTHING selected (eval ft022,
+            // 2026-09-01): present tense means today, from the profile
+            // birthdate (or "about N" from a tree birth year) — or the age
+            // at death for someone who has passed on. Past tense and "in
+            // this video" keep asking for a dated video or a year.
+            let result: ArchivistTemporalResult
+            if payload.reference == .currentSelection,
+               context.selectedTemporalDate == nil,
+               ArchivistTemporalExecutor.isPresentTenseAge(request.intent.originalQuestion) {
+                let approximate = birthYear(of: payload.subject, context: context).map {
+                    ArchivistTemporalExecutor.ApproximateBirthYear(year: $0.year, source: $0.source)
+                }
+                result = ArchivistTemporalExecutor.executePresentAge(
+                    payload, subject: resolution, approximateBirthYear: approximate)
+            } else {
+                result = dependencies.executeTemporal(
+                    payload, resolution, context.selectedTemporalDate)
+            }
             return Result(
                 route: .temporal,
                 outcome: result.value == nil ? .declined : .answered,

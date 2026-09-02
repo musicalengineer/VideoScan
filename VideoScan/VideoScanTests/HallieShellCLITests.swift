@@ -867,6 +867,45 @@ struct HallieShellCLITests {
         #expect(harness.mediaActions.isEmpty)
     }
 
+    @Test func selectByFilenameFragmentSetsTheSameSelectionAsSelectN() async throws {
+        // Eval enabler (2026-09-01): ":select Christmas_1994_etc.mkv" before
+        // "when was this filmed" — no prior answer, no citation list.
+        let christmas = record("/isolated/archive/Christmas_1994_etc.mkv", confirmed: ["Donna"])
+        christmas.embeddedCreationDate = Date(timeIntervalSince1970: 788_000_000) // 1994-12-21 UTC
+        // A 2026 transcode stamp must not become the file's year.
+        christmas.dateCreatedRaw = Date(timeIntervalSince1970: 1_784_000_000) // 2026-07
+        let undated = record("/isolated/archive/Cape tape.mov")
+        let harness = Harness(
+            inputs: [":select christmas_1994", ":session",
+                     ":select Cape tape", ":select nothing-like-this", ":quit"],
+            records: [undated, christmas])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(harness.output.contains("selected Christmas_1994_etc.mkv (1994)"))
+        #expect(harness.output.contains {
+            $0.hasPrefix("session:") && $0.contains("selected \(christmas.id.uuidString)")
+        })
+        // Spaces in the fragment survive the command split; no date → "undated".
+        #expect(harness.output.contains("selected Cape tape.mov (undated)"))
+        #expect(harness.output.contains("no file matches “nothing-like-this”"))
+        #expect(harness.mediaActions.isEmpty)
+        #expect(harness.output.filter { $0.hasPrefix("No such citation") }.isEmpty)
+    }
+
+    @Test func selectByFilenameTakesTheFirstCatalogMatchCaseInsensitively() {
+        let a = record("/isolated/one/XMAS_1994.mkv")
+        let b = record("/isolated/two/xmas_1995.mkv")
+        #expect(HallieShellCLI.selectRecord(matchingFilename: "xmas", in: [a, b])?.id == a.id)
+        #expect(HallieShellCLI.selectRecord(matchingFilename: "1995", in: [a, b])?.id == b.id)
+        #expect(HallieShellCLI.selectRecord(matchingFilename: "  ", in: [a, b]) == nil)
+        #expect(HallieShellCLI.selectRecord(matchingFilename: "/isolated/one", in: [a, b]) == nil)
+    }
+
     @Test func unavailableCitationNeverClaimsPlayOrRevealAndReturnsMediaFailure() async throws {
         for command in [":play 1", ":reveal 1"] {
             let path = "/offline/archive/missing.mov"

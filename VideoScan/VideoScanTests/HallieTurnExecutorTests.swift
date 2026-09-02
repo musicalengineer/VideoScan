@@ -853,4 +853,161 @@ struct HallieTurnExecutorTests {
         #expect(person.citations.count == 2)
         #expect(!person.basisLine.contains("isn't a person I know"))
     }
+
+
+    @Test func speakerPronounsAreNeverSearchTerms() async throws {
+        // Eval ic009 (2026-09-01): "Can you play a video for me?" reached the
+        // presence executor as person "me", was demoted to a keyword, and
+        // matched 24 directories containing the letters "me".
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Media/home.mov",
+                directory: "/Volumes/X/Media", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)]),
+        ]
+        let context = HallieTurnExecutor.Context(presenceRecords: records, profiles: [
+            .init(stableID: "donna", canonicalName: "Donna"),
+        ])
+        let asPerson = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "can you play a video for me?",
+                                ast: .presence(.init(people: ["me"], mediaKind: .video)))),
+            context: context)
+        #expect(!asPerson.basisLine.contains("searched it as a place or word"), Comment(rawValue: asPerson.basisLine))
+        #expect(asPerson.basisLine.contains("“me” means you or me, not a search word"), Comment(rawValue: asPerson.basisLine))
+        #expect(!asPerson.citations.contains { $0.bases.contains { "\($0)".contains("contains me") } })
+
+        let asKeyword = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "show me something of my videos",
+                                ast: .presence(.init(people: ["Donna"], keywords: ["my", "me"])))),
+            context: context)
+        #expect(asKeyword.outcome == .answered, Comment(rawValue: asKeyword.prose))
+        #expect(asKeyword.citations.map(\.filename) == ["home.mov"])
+        #expect(asKeyword.basisLine.contains("“my”, “me” means you or me"), Comment(rawValue: asKeyword.basisLine))
+
+        var payload = ArchivistQueryAST.Presence(people: ["You", "Donna"], keywords: ["me", "cape"])
+        #expect(HallieTurnExecutor.dropSpeakerPronouns(&payload) == ["You", "me"])
+        #expect(payload.people == ["Donna"])
+        #expect(payload.keywords == ["cape"])
+    }
+
+
+    /// A tiny tree with a Franklin surname and a Goushill — the two names
+    /// the live tree used to keep "Franklin" a person and to fuzz "house".
+    private func placeGuardTree() -> GedcomFamilyGraph {
+        GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Benjamin /Franklin/
+        1 SEX M
+        1 BIRT
+        2 DATE 1706
+        0 @I2@ INDI
+        1 NAME Robert /Goushill/
+        1 SEX M
+        1 BIRT
+        2 DATE 1350
+        0 TRLR
+        """)
+    }
+
+    @Test func aNameTheTreeKnowsButNobodyIsTaggedWithFallsBackToPlaceAndFolder() async throws {
+        // Eval cs018 (2026-09-01): with the real tree loaded, "Franklin" IS a
+        // surname, so cycle 9's demotion never fired and the answer was
+        // "no videos tagged with franklin" — while 24 files sat in a folder
+        // named Franklin.
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Franklin/Franklin_1990_p216.mkv",
+                directory: "/Volumes/X/Franklin", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)]),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Cape/beach.mov",
+                directory: "/Volumes/X/Cape", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)]),
+        ]
+        let context = HallieTurnExecutor.Context(
+            presenceRecords: records,
+            profiles: [.init(stableID: "donna", canonicalName: "Donna")],
+            graph: placeGuardTree())
+        let place = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "pull up anything from Franklin",
+                                ast: .presence(.init(people: ["Franklin"])))),
+            context: context)
+        #expect(place.outcome == .answered, Comment(rawValue: place.prose))
+        #expect(place.citations.map(\.filename) == ["Franklin_1990_p216.mkv"])
+        #expect(place.basisLine.contains("no one in the catalog is tagged “Franklin”, so I searched it as a place or word"),
+                Comment(rawValue: place.basisLine))
+
+        // Both empty → the honest decline stands, unchanged.
+        let nobody = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "pull up anything from Goushill",
+                                ast: .presence(.init(people: ["Goushill"])))),
+            context: context)
+        #expect(nobody.outcome == .declined)
+        #expect(nobody.prose.lowercased().hasPrefix("i don't have any videos tagged with goushill yet"), Comment(rawValue: nobody.prose))
+        #expect(!nobody.basisLine.contains("searched it as a place or word"))
+
+        // A tagged person with a keyword alongside is never widened.
+        let tagged = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "Donna at the parade",
+                                ast: .presence(.init(people: ["Donna"], keywords: ["parade"])))),
+            context: context)
+        #expect(tagged.outcome == .declined)
+        #expect(!tagged.basisLine.contains("no one in the catalog is tagged"))
+    }
+
+    @Test func theStoryBehindThePlaceHouseIsACatalogSearchNotATreeLookup() async throws {
+        // Eval bi013 (2026-09-01): "what's the story behind the Westford
+        // house" → graph person "westford house" → "I don't know a
+        // “Westford” Goushill" (three Goushills offered).
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Christmas2010Westford/Christmas2010_In_Westford.mov",
+                directory: "/Volumes/X/Christmas2010Westford", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)]),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/Cape/beach.mov",
+                directory: "/Volumes/X/Cape", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Donna", confirmedAt: stamp)]),
+        ]
+        let context = HallieTurnExecutor.Context(
+            presenceRecords: records,
+            profiles: [.init(stableID: "donna", canonicalName: "Donna")],
+            graph: placeGuardTree())
+        let house = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "what's the story behind the Westford house",
+                                ast: .graph(.init(people: ["westford house"], operation: .biography)))),
+            context: context)
+        #expect(house.route == .cross, Comment(rawValue: house.prose))
+        #expect(house.outcome == .answered, Comment(rawValue: house.prose))
+        #expect(house.citations.map(\.filename) == ["Christmas2010_In_Westford.mov"])
+        #expect(house.basisLine.contains("“westford house” is a place or a thing, not a person I know, so I searched the catalog for “westford”"),
+                Comment(rawValue: house.basisLine))
+        #expect(!house.prose.contains("Goushill"))
+
+        // The same shape with a single token and a trip word.
+        let trip = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "tell me about the Westford trip",
+                                ast: .graph(.init(people: ["Westford"], operation: .biography)))),
+            context: context)
+        #expect(trip.route == .cross)
+        #expect(trip.citations.map(\.filename) == ["Christmas2010_In_Westford.mov"])
+
+        // A real person's house is still a person question for the tree.
+        let person = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "what's the story of the Goushill house",
+                                ast: .graph(.init(people: ["Goushill"], operation: .biography)))),
+            context: context)
+        #expect(person.route == .graph, Comment(rawValue: person.prose))
+
+        // No place word → the guard stays out of the way entirely.
+        let plain = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "who is Westford",
+                                ast: .graph(.init(people: ["Westford"], operation: .biography)))),
+            context: context)
+        #expect(plain.route == .graph)
+    }
 }
