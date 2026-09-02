@@ -721,3 +721,13 @@ class ConfiguredModelTests(unittest.TestCase):
                       "painting, put it in her People folder and I’ll show it.",
             "expect": "graceful_decline", "outcome": "declined", "route": "graph"})
         self.assertNotIn("dead_end_decline", flags)
+
+
+class SelectDirectiveTests(unittest.TestCase):
+    def test_a_select_field_emits_the_shell_command_before_the_question(self):
+        batch = hallie_eval.build_stdin([
+            {"id": "tm001", "text": "when was this filmed", "select": "Christmas_1994_etc.mkv"},
+            {"id": "tm002", "text": "how old was Timmy in this", "followsPrevious": True},
+        ]).splitlines()
+        self.assertEqual(batch, [":reset", ":select Christmas_1994_etc.mkv",
+                                 "when was this filmed", "how old was Timmy in this", ":quit"])

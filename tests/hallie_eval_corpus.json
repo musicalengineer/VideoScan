@@ -688,20 +688,24 @@
       "category": "temporal",
       "text": "when was this filmed",
       "expect": "catalog",
-      "notes": "'this' with no prior context - should ask which video, or use the currently selected one."
+      "notes": "'this' with no prior context - should ask which video, or use the currently selected one. Selected video via :select before asking (harness, 2026-09-01).",
+      "select": "Christmas_1994_etc.mkv"
     },
     {
       "id": "tm002",
       "category": "temporal",
       "text": "how old was Timmy in this",
       "expect": "catalog",
-      "notes": "Needs a birthdate from the family graph plus a capture date from the catalog."
+      "notes": "Needs a birthdate from the family graph plus a capture date from the catalog. Selected video via :select before asking (harness, 2026-09-01).",
+      "select": "Christmas_1994_etc.mkv"
     },
     {
       "id": "tm003",
       "category": "temporal",
       "text": "what year is that from",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "1984-11-xx_Thanksgiving_1984.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm004",
@@ -748,13 +752,17 @@
       "category": "temporal",
       "text": "was that before or after we moved to Middlefield",
       "expect": "catalog",
-      "followsPrevious": true
+      "followsPrevious": true,
+      "select": "Christmas_1994_etc.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm011",
       "category": "temporal",
       "text": "how old is this tape",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "1984-11-xx_Thanksgiving_1984.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm012",
@@ -766,25 +774,33 @@
       "id": "tm013",
       "category": "temporal",
       "text": "how old was Mark when this was taken",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "Christmas_1994_etc.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm014",
       "category": "temporal",
       "text": "were the boys born yet when this was shot",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "1984-11-xx_Thanksgiving_1984.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm015",
       "category": "temporal",
       "text": "what season was this filmed in",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "Christmas_1994_etc.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm016",
       "category": "temporal",
       "text": "how long ago was that",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "1984-11-xx_Thanksgiving_1984.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm017",
@@ -803,7 +819,9 @@
       "id": "tm019",
       "category": "temporal",
       "text": "how old would my dad have been in this video",
-      "expect": "catalog"
+      "expect": "catalog",
+      "select": "Christmas_1994_etc.mkv",
+      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
     },
     {
       "id": "tm020",
@@ -1229,7 +1247,8 @@
       "id": "gp022",
       "category": "grandparent_style",
       "text": "what was life like before cell phones",
-      "expect": "graceful_decline"
+      "expect": "social",
+      "notes": "Rick wants Hallie to know her history: period colour with no invented family fact is the librarian answer (2026-09-01)."
     },
     {
       "id": "gp023",
@@ -1300,7 +1319,8 @@
       "id": "ec008",
       "category": "edge_cases",
       "text": "show me videos of Elvis",
-      "expect": "graceful_decline"
+      "expect": "catalog",
+      "notes": "9 transcript hits say 'elvis' — a real catalog answer, not a decline (2026-09-01 eval)."
     },
     {
       "id": "ec009",
@@ -1880,8 +1900,8 @@
       "id": "lv260901-027",
       "category": "live",
       "text": "would there be any photos or videos of martha lampson?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed"
+      "expect": "graceful_decline",
+      "notes": "Martha Lamson b. before 1633: the film/photo floor line IS the answer."
     },
     {
       "id": "lv260901-028",

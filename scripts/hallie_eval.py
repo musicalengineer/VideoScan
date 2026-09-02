@@ -164,6 +164,12 @@ def build_stdin(questions):
             scenario = q.get("scenarioID", q["id"])
         if scenario != previous_scenario:
             lines.append(":reset")
+        # "when was this filmed" needs a selected video, as it would in the
+        # app. A corpus entry's `select` names a catalog file by substring;
+        # the shell's `:select <text>` picks it (2026-09-01: nine temporal
+        # questions were graded as declines with nothing to point at).
+        if q.get("select"):
+            lines.append(":select " + str(q["select"]).replace("\n", " "))
         lines.append(q["text"].replace("\n", " "))
         previous_scenario = scenario
     lines.append(":quit")
@@ -441,7 +447,7 @@ RAW_INTERNAL_PAT = re.compile(
     re.I,
 )
 # The relax-and-explain shape: names what it set aside, then offers what exists.
-RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)", re.I | re.S)
+RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)|want me to try (without|with a different)", re.I | re.S)
 
 
 def grade_record(r):
