@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 264 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 273 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -1919,6 +1919,102 @@
       "expect": "kinship",
       "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
       "followsPrevious": true
+    },
+    {
+      "id": "lv260902-001",
+      "category": "live",
+      "text": "would there be a photo of her if she born so long ago?",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — lineage resolver took 'Her If She Born So Long Ago' as a person name and declined. 'her' must bind to the previous subject (Thankful Pratt) and the shape is photo-plausibility (d. 1849 vs photography 1839): possible but unlikely; none in the catalog. DISPATCH: pronoun binding in HallieLineageQuestion (small).",
+      "followsPrevious": true,
+      "mustNotContain": [
+        "Her If She Born"
+      ]
+    },
+    {
+      "id": "lv260902-002",
+      "category": "live",
+      "text": "tell me about her again",
+      "expect": "biography",
+      "notes": "observed live 2026-09-02 13:xx ET: PASS — 'her' bound to Thankful Pratt, biography repeated.",
+      "mustMatch": [
+        "Thankful Pratt"
+      ]
+    },
+    {
+      "id": "lv260902-003",
+      "category": "live",
+      "text": "why do you ask me for a photo of Thankful Pratt who died before photography was commonly available?",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — routed to the death operation ('has been at rest since'). Meta question about the photograph offer; answer = photography 1839 vs death 1849, so a daguerreotype is possible, which is why the offer exists. DISPATCH: world-knowledge lane / offer-explanation shape (corpus first, no regex).",
+      "followsPrevious": true,
+      "mustNotContain": [
+        "passed away",
+        "no longer with us"
+      ]
+    },
+    {
+      "id": "lv260902-004",
+      "category": "live",
+      "text": "find videos of my brother tim",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one.",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260902-005",
+      "category": "live",
+      "text": "tell me about rick's brother",
+      "expect": "kinship",
+      "notes": "observed live 2026-09-02 13:xx ET: DATA — same People-card rows; expect 'Tim' only once fixed. Also a good declarative-correction target ('Matt and Timmy are sons, not brothers' declined as un-searchable → should propose People-row edits).",
+      "mustNotContain": [
+        "Matt",
+        "Timmy"
+      ]
+    },
+    {
+      "id": "lv260902-006",
+      "category": "live",
+      "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — became a catalog-wide keyword presence over 29 videos. Wanted: ONE record (selection or filename 'New Hampshire.mov'), its resolved date and who is in it. DISPATCH: record-scope feature (plan in progress).",
+      "followsPrevious": true,
+      "mustMatch": [
+        "New Hampshire.mov"
+      ],
+      "select": "New Hampshire.mov"
+    },
+    {
+      "id": "lv260902-007",
+      "category": "live",
+      "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — filename dropped; keyword sweep for tim/nancy/rick/donna and the literal word 'date'. Wanted: transcript name mentions + date within that one file. DISPATCH: record-scope (what-is-said operation).",
+      "mustMatch": [
+        "New Hampshire.mov"
+      ]
+    },
+    {
+      "id": "lv260902-008",
+      "category": "live",
+      "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: MISS — declined ('metadata' and 'new hampshire.mov' became keywords, Rick a person filter). Full path given. Wanted: dossier-style summary of one record (metadata, date, people, transcript highlights) + is Rick in it. DISPATCH: record-scope (tell-me-all-about-it operation).",
+      "followsPrevious": true,
+      "mustMatch": [
+        "New Hampshire.mov"
+      ]
+    },
+    {
+      "id": "lv260902-009",
+      "category": "live",
+      "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
+      "expect": "catalog",
+      "notes": "observed live 2026-09-02 13:xx ET: NEAR — filename matcher returned the exact file first (+2 near-misses) but 'my name' was dropped as a non-search word. Wanted: is Rick in New Hampshire.mov (tags/Find-and-Tag/transcript). DISPATCH: record-scope (who-is-in-it) + 'my name' = speaker.",
+      "followsPrevious": true,
+      "mustMatch": [
+        "New Hampshire.mov"
+      ]
     }
   ]
 }
