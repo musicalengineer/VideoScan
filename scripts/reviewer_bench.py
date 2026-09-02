@@ -113,8 +113,10 @@ def score(answer: str, concepts: list[str]) -> tuple[bool, list[str]]:
 
 def count_claims(answer: str) -> int:
     """Rough count of distinct problems asserted, for a noise signal."""
+    # Global inline flags must lead the pattern on Python 3.11+; a mid-pattern
+    # (?i) raised re.error and took every bench run down (2026-09-01).
     markers = re.findall(
-        r"(?m)^\s*(?:[-*•]|\d+[.)])\s+|(?i)\b(?:another|second|also|additionally"
+        r"(?im)^\s*(?:[-*•]|\d+[.)])\s+|\b(?:another|second|also|additionally"
         r"|furthermore|a further)\b", answer)
     return max(1, len(markers))
 
