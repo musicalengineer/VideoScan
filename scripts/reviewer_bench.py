@@ -68,34 +68,48 @@ ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 THINKING_END = "...done thinking."
 
 
-def ask_ollama(model: str, prompt: str, timeout: int = 900) -> tuple[str, str, float]:
+def ask_ollama(model: str, prompt: str, timeout: int = 900,
+               endpoint: str = "http://localhost:11434") -> tuple[str, str, float]:
     """Returns (final answer, thinking chain, seconds).
 
     Two things learned running this against qwen3.6 on 2026-08-30:
 
-    1. `ollama run` streams with terminal redraw escapes, which corrupt any
-       naive keyword match — the visible text contains fragments like
-       "\x1b[3D\x1b[K" mid-word. Strip ANSI before scoring.
-    2. A reasoning model's chain is most of the output (34k chars of
-       thinking for a 700-char answer) and it explores WRONG hypotheses on
-       the way. Scoring the whole transcript would credit a model for
-       considering the right cause and then rejecting it, and would count
-       every discarded idea as NOISE. Score the final answer only; keep the
-       chain for a human to read.
+    1. `ollama run` streams with terminal redraw escapes that corrupt any
+       naive keyword match — so this now uses the HTTP API, where the
+       answer and the thinking chain arrive as separate fields.
+    2. A reasoning model's chain is most of the output and explores WRONG
+       hypotheses on the way. Score the final answer only; keep the chain
+       for a human to read.
+
+    2026-09-01: `ollama run` also cannot set a context window, so the
+    model ran at its 262K maximum and a 32B reviewer on a 48 GB Mac came
+    back empty. The API call carries num_ctx.
     """
+    import json as _json
+    import urllib.request
+    body = _json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768},
+    }).encode()
+    request = urllib.request.Request(
+        f"{endpoint.rstrip('/')}/api/chat", data=body,
+        headers={"Content-Type": "application/json"})
     started = time.time()
-    proc = subprocess.run(
-        ["ollama", "run", model, prompt],
-        capture_output=True, text=True, timeout=timeout,
-    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = _json.loads(response.read())
+    except Exception as exc:                      # noqa: BLE001 - report, never raise
+        return f"<ERROR: {str(exc)[:400]}>", "", time.time() - started
     elapsed = time.time() - started
-    if proc.returncode != 0:
-        return f"<ERROR rc={proc.returncode}: {proc.stderr.strip()[:400]}>", "", elapsed
-    clean = ANSI.sub("", proc.stdout)
-    if THINKING_END in clean:
-        thinking, _, answer = clean.partition(THINKING_END)
-    else:
-        thinking, answer = "", clean
+    message = payload.get("message") or {}
+    answer = ANSI.sub("", message.get("content") or "")
+    thinking = message.get("thinking") or ""
+    if THINKING_END in answer:
+        thinking, _, answer = answer.partition(THINKING_END)
+    if not answer.strip():
+        return "<ERROR: empty reply " + _json.dumps(payload)[:300] + ">", thinking.strip(), elapsed
     return answer.strip(), thinking.strip(), elapsed
 
 
