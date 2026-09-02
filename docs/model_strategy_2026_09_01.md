@@ -138,3 +138,43 @@ the remaining misses are in steps 5–6 and in the eval corpus itself.
   additive. Test design and metrics stay with the `testing` and `metrics`
   agents — a 27B local model is not a substitute there, and the harness
   numbers above say so.
+
+## Update, same evening — the hardware arrived on order
+
+Rick, 2026-09-01 ~20:00: **M5 Ultra Mac Studio ordered, 96 GB unified
+memory, 30-core CPU (10 super + 20 performance), 64-core GPU with neural
+accelerators, 32-core Neural Engine, 1.2 TB/s memory bandwidth.**
+
+What that changes, in order of certainty:
+
+1. **Speed first, not size.** Local inference on Apple silicon is
+   bandwidth-bound. 1.2 TB/s against the M4 Max's ~0.55 TB/s is roughly 2×
+   tokens per second for the SAME 27B brain, and the M5 GPU's neural
+   accelerators speed up prefill (the long system prompts) more than that.
+   The composer's 6 s budget stops being a budget. Nothing to build.
+2. **Two brains resident is now fine.** 96 GB holds the 27B at 19 GB (32K
+   ctx) plus a second model of ~40 GB with the app, Xcode and the catalog
+   still comfortable. That makes the **escalation tier** real: the 27B
+   answers every turn; when the verifier rejects its phrasing or the
+   translator declines a non-catalog question, the same turn is retried on
+   the bigger model. Per-domain routing stays pointless (the 27B wins or
+   ties everywhere); escalation-on-failure is the design.
+3. **Which bigger model** is decided the day the machine arrives, not now:
+   a 70B-class dense at 4-bit (~40 GB) from whatever the Qwen/GLM lineup
+   offers that week, judged on `review_real_commits.py` over real commits
+   and on `scripts/hallie_eval.py` over the 229-question corpus. The
+   synthetic fitness corpus is saturated and cannot rank candidates.
+4. **Fleet roles to decide (Rick's call).** Either the M5 Ultra is Rick's
+   desk AND the Hallie brain (fastest demo), with the M4 Max becoming the
+   always-on family web/iPad server plus the nightly test, eval and
+   reviewer host — or the reverse. The app already walks a host list
+   (OllamaFailoverTranslator), so either split is configuration, not code.
+   Keep the 32K context cap on every host regardless of memory.
+5. **Neural Engine / ray tracing** do not touch Hallie: Ollama's MLX path
+   runs on the GPU. The 32-core ANE matters for the Vision/ArcFace face
+   pipeline and Kokoro speech, which is a separate win.
+
+Prep before delivery: write the escalation-tier design (trigger
+conditions, budget, what the second model may and may not see — same
+grounded-composer contract), and add a `--model-b` A/B mode to the eval
+that unloads the other model when it finishes.
