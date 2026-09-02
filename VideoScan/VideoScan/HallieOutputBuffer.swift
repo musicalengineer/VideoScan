@@ -35,39 +35,120 @@ enum HallieOutputBuffer {
     /// suspect once the buffer is ruled out.
     @discardableResult
     static func ensureMinimum(_ minimum: UInt32 = configuredMinimum()) -> String {
+        guard let device = defaultOutputDevice() else {
+            return "output buffer: no default output device"
+        }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyBufferFrameSize,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var frames = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &frames)
+        guard status == noErr else {
+            return "output buffer: could not read frame size (status \(status))"
+        }
+        let rate = nominalSampleRate(device).map { " @ \(Int($0)) Hz" } ?? ""
+        let shape = outputShape(device)
+        guard frames < minimum else {
+            return "output buffer: \(frames) frames on \(deviceName(device))\(rate)\(shape) (left alone; min \(minimum))"
+        }
+        var wanted = minimum
+        status = AudioObjectSetPropertyData(
+            device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &wanted)
+        guard status == noErr else {
+            return "output buffer: \(frames) frames on \(deviceName(device))\(rate)\(shape); raise to \(minimum) refused (status \(status))"
+        }
+        return "output buffer: raised \(frames) → \(minimum) frames on \(deviceName(device))\(rate)\(shape)"
+    }
+
+    /// The system's current default output device, or nil when there is none.
+    static func defaultOutputDevice() -> AudioDeviceID? {
         var device = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        var status = AudioObjectGetPropertyData(
+        let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
-        guard status == noErr, device != 0 else {
-            return "output buffer: no default output device (status \(status))"
+        return status == noErr && device != 0 ? device : nil
+    }
+
+    /// ", 14 ch, latency 32+64" — output channel count plus the device's
+    /// own latency and safety offset in frames (2026-09-02: the Babyface
+    /// stuttered at the same 512-frame buffer the BenQ played cleanly; the
+    /// channel count and the safety margin are what differ between them).
+    static func outputShape(_ device: AudioDeviceID) -> String {
+        var parts: [String] = []
+        if let channels = outputChannelCount(device) { parts.append("\(channels) ch") }
+        let latency = outputFrames(device, kAudioDevicePropertyLatency)
+        let safety = outputFrames(device, kAudioDevicePropertySafetyOffset)
+        if latency != nil || safety != nil {
+            parts.append("latency \(latency ?? 0)+\(safety ?? 0)")
+        }
+        return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
+    }
+
+    /// Counts CoreAudio processor overloads (missed I/O deadlines) on one
+    /// device for as long as it lives. A stutter with zero overloads is not
+    /// the audio thread starving; a stutter with dozens is.
+    final class OverloadCounter {
+        let device: AudioDeviceID
+        private let queue = DispatchQueue(label: "Rick-Breen.VideoScan.hallie-overloads")
+        private var counted = 0
+        private var installed = false
+        private var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDeviceProcessorOverload,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        private lazy var listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.counted += 1     // already on `queue`
         }
 
-        address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyBufferFrameSize,
+        init(device: AudioDeviceID) {
+            self.device = device
+            installed = AudioObjectAddPropertyListenerBlock(device, &address, queue, listener) == noErr
+        }
+
+        var count: Int { queue.sync { counted } }
+
+        /// Removes the listener; returns the final count.
+        @discardableResult
+        func stop() -> Int {
+            if installed {
+                AudioObjectRemovePropertyListenerBlock(device, &address, queue, listener)
+                installed = false
+            }
+            return count
+        }
+
+        deinit { stop() }
+    }
+
+    private static func outputChannelCount(_ device: AudioDeviceID) -> Int? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain)
-        var frames = UInt32(0)
-        size = UInt32(MemoryLayout<UInt32>.size)
-        status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &frames)
-        guard status == noErr else {
-            return "output buffer: could not read frame size (status \(status))"
-        }
-        let rate = nominalSampleRate(device).map { " @ \(Int($0)) Hz" } ?? ""
-        guard frames < minimum else {
-            return "output buffer: \(frames) frames on \(deviceName(device))\(rate) (left alone; min \(minimum))"
-        }
-        var wanted = minimum
-        status = AudioObjectSetPropertyData(
-            device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &wanted)
-        guard status == noErr else {
-            return "output buffer: \(frames) frames on \(deviceName(device))\(rate); raise to \(minimum) refused (status \(status))"
-        }
-        return "output buffer: raised \(frames) → \(minimum) frames on \(deviceName(device))\(rate)"
+        var size = UInt32(0)
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return nil }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return nil }
+        let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+
+    private static func outputFrames(_ device: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var value = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr ? value : nil
     }
 
     private static func nominalSampleRate(_ device: AudioDeviceID) -> Double? {

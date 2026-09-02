@@ -77,6 +77,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
     private var neuralChunksScheduled = 0
     private var neuralChunksPlayed = 0
     private var neuralSynthesisFinished = false
+    /// Missed-deadline counter on the output device for the life of one
+    /// engine; its total goes in the log when playback ends (Babyface
+    /// stutter chase, 2026-09-02).
+    private var neuralOverloads: HallieOutputBuffer.OverloadCounter?
     /// Chunks the Apple voice reads once Bella's queued audio has played,
     /// set only when a later chunk failed after playback had begun.
     private var appleContinuation: [String] = []
@@ -354,6 +358,8 @@ final class HallieSpeaker: NSObject, ObservableObject {
                         // Raise the device buffer BEFORE the engine starts its
                         // I/O cycle so the larger size applies from the first frame.
                         bufferNote = HallieOutputBuffer.ensureMinimum()
+                        self.neuralOverloads = HallieOutputBuffer.defaultOutputDevice()
+                            .map { HallieOutputBuffer.OverloadCounter(device: $0) }
                         newEngine.prepare()
                         try newEngine.start()
                         playbackID = UUID()
@@ -369,7 +375,16 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     guard let node else { return }
                     self.neuralChunksScheduled += 1
                     let id = playbackID
-                    node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                    // The whole chunk goes into memory first (a 50 s chunk
+                    // is ~5 MB): scheduleFile streams from disk on a reader
+                    // thread, one more thing that can miss a USB interface's
+                    // deadline; a scheduled buffer cannot.
+                    guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                     frameCapacity: AVAudioFrameCount(file.length)) else {
+                        throw HallieSpeakerError.bufferAllocation(frames: file.length)
+                    }
+                    try file.read(into: pcm)
+                    node.scheduleBuffer(pcm, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                         Task { @MainActor in
                             guard let self, self.neuralPlaybackID == id else { return }
                             self.neuralChunksPlayed += 1
@@ -450,6 +465,11 @@ final class HallieSpeaker: NSObject, ObservableObject {
         neuralPlaybackID = UUID()   // orphan any in-flight completion
         neuralNode?.stop()
         neuralEngine?.stop()
+        if let overloads = neuralOverloads {
+            let count = overloads.stop()
+            appLog.write("[hallie-voice] playback ended: \(count) processor overload\(count == 1 ? "" : "s") on the output device")
+            neuralOverloads = nil
+        }
         neuralNode = nil
         neuralEngine = nil
         for url in neuralAudioURLs { HallieNeuralSpeech.removeTemporaryAudio(url) }
@@ -476,6 +496,15 @@ final class HallieSpeaker: NSObject, ObservableObject {
     /// A short line so a newly chosen voice can be judged.
     func audition() {
         speak("Hello — I'm Hallie Mae. This is how I sound.")
+    }
+}
+
+enum HallieSpeakerError: LocalizedError {
+    case bufferAllocation(frames: Int64)
+    var errorDescription: String? {
+        switch self {
+        case .bufferAllocation(let frames): return "could not allocate a \(frames)-frame playback buffer"
+        }
     }
 }
 
