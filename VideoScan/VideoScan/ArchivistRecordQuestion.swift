@@ -15,7 +15,10 @@
 // / tell me about / examine). A pronoun with no record verb is not ours:
 // "when was this filmed" stays on the selection-date lane, "how old is
 // Donna here" on the temporal route, "videos of dad" goes to the
-// translator.
+// translator. With ONLY a pronoun the date / metadata noun must sit
+// beside the referent ("the date of it", "does it have a date", "about
+// this one") — a noun anywhere in the sentence is not a record question
+// (codex #976 item 5: "can you tell me the date on things").
 //
 // (For Rick: a handful of NSRegularExpression literals compiled once,
 // like static `std::regex` members; `detect` is a pure function.)
@@ -47,17 +50,21 @@ enum ArchivistRecordQuestion {
         let hasSelection = matches(selectionPronoun, masked)
         guard file != nil || hasSelection else { return nil }
 
-        // 2. Verbs.
-        let people = matches(peopleVerb, masked)
-        let aboutStrong = matches(aboutVerb, masked)
+        // 2. Verbs. "does it have a date" is a date ask, not a people ask
+        // (the generic "does it have …" form is otherwise people).
+        let people = matches(peopleVerb, masked) && !matches(hasOnlyADate, masked)
         let examine = matches(examineVerb, masked)
+        let aboutStrong: Bool
         let date: Bool
         if file != nil {
+            aboutStrong = matches(aboutVerb, masked) || matches(metadataAnywhere, masked)
             date = matches(dateNoun, masked) || matches(dateWhenFile, masked)
         } else {
-            // With only a pronoun, "when was this filmed" belongs to the
-            // selection-date lane; only the noun "date" is ours.
-            date = matches(dateNoun, masked)
+            // With only a pronoun the noun must be NEXT to the referent:
+            // "when was this filmed" belongs to the selection-date lane,
+            // "can you tell me the date on things" to nobody here.
+            aboutStrong = matches(aboutVerb, masked)
+            date = matches(dateBesideReferent, masked)
         }
 
         // 3. Names.
@@ -67,12 +74,16 @@ enum ArchivistRecordQuestion {
         if asksMe, !peopleList.contains("me") { peopleList.append("me") }
         peopleList = Array(peopleList.prefix(ArchivistQueryAST.maxListItems))
 
-        // 4. Operations.
+        // 4. Operations. With only a pronoun, a name list is never enough
+        // on its own — "It's pouring rain here in the Berkshires today"
+        // has "it" and a capitalised word, and is nobody's record
+        // question (eval sm022); a record VERB must be there. A named
+        // file plus names ("New Hampshire.mov: tim, nancy") still counts.
         var operations: [Record.Operation] = []
         if aboutStrong {
             operations = [.about]
         } else {
-            if people || !peopleList.isEmpty { operations.append(.people) }
+            if people || (file != nil && !peopleList.isEmpty) { operations.append(.people) }
             if date { operations.append(.date) }
             if operations.isEmpty {
                 // A bare file name, or "examine it": the whole dossier.
@@ -93,35 +104,40 @@ enum ArchivistRecordQuestion {
         let range: Range<String.Index>
     }
 
-    /// A media filename or path in the text, extracted exactly. The
-    /// non-space run ending in the extension is the core; preceding words
-    /// join it while they are capitalised or numeric ("New Hampshire.mov",
-    /// "Christmas 1994 Part 2.mkv") and stop at a lead word ("file",
-    /// "video", "about"); a word starting with "/" is the path's head and
-    /// takes everything ("/Volumes/X/QuicktimeMovies/New Hampshire.mov").
-    /// Nil when no word ends in a media extension; a bare stem after
-    /// "this video" ("this video New Hampshire") is taken as a file name
-    /// too, resolved by stem downstream.
+    /// A media filename or path in the text, extracted exactly. The first
+    /// non-space run ending in a media extension is the core. A word
+    /// before it that begins with "/" is the path's head and the name is
+    /// taken verbatim from there ("/Volumes/X/QuicktimeMovies/New
+    /// Hampshire.mov", "/volumes/a/new hampshire.mov"); otherwise the
+    /// name is the longest run of words ending at the core that does not
+    /// cross a stop word ("file", "video", "in", "who", "does" …) or a
+    /// punctuation break, case-insensitive ("new hampshire.mov",
+    /// "Christmas 1994 Part 2.mkv"; codex #976 item 4 — the old rule kept
+    /// only capitalised words and read "new hampshire.mov" as
+    /// "hampshire.mov"). Nil when no word ends in a media extension; a
+    /// bare stem after "this video" ("this video New Hampshire") is taken
+    /// as a file name too, resolved by stem downstream.
     static func fileReference(in text: String) -> FileReference? {
         let words = wordRanges(in: text)
-        guard let coreIndex = words.firstIndex(where: {
-            Record.endsWithMediaExtension(cleanedWord(text[$0]))
+        // The core is a word ending in a media extension — or a bare
+        // ".mov" after a space ("Long Sequence - New Hampshire Christmas
+        // .mov" is a real catalog name), which is the tail of a spaced
+        // name, never a file on its own.
+        guard let coreIndex = words.firstIndex(where: { range in
+            let word = cleanedWord(text[range])
+            return Record.endsWithMediaExtension(word)
+                || (word.hasPrefix(".") && range.lowerBound != text.startIndex
+                    && Record.endsWithMediaExtension("x" + word))
         }) else {
             return stemAfterMediaNoun(in: text, words: words)
         }
-        var start = coreIndex
-        var index = coreIndex
-        while index > 0 {
-            let previousRange = words[index - 1]
-            let previous = String(text[previousRange])
-            if previous.hasPrefix("/") { start = index - 1; break }
-            let cleaned = cleanedWord(text[previousRange])
-            guard let first = cleaned.first,
-                  first.isUppercase || first.isNumber,
-                  !leadWords.contains(cleaned.lowercased()),
-                  !previous.hasSuffix(":"), !previous.hasSuffix(",") else { break }
-            start = index - 1
-            index -= 1
+        let start: Int
+        if cleanedWord(text[words[coreIndex]]).hasPrefix("/") {
+            start = coreIndex
+        } else if let head = pathHead(before: coreIndex, words: words, text: text) {
+            start = head
+        } else {
+            start = nameStart(before: coreIndex, words: words, text: text)
         }
         var lower = words[start].lowerBound
         var upper = words[coreIndex].upperBound
@@ -133,6 +149,52 @@ enum ArchivistRecordQuestion {
         let name = String(text[lower..<upper])
         guard Record.endsWithMediaExtension(name) else { return nil }
         return FileReference(name: name, range: lower..<upper)
+    }
+
+    /// The nearest word before the core that begins with "/" — the head of
+    /// a path whose components may contain spaces and ordinary words
+    /// ("/Volumes/A/the new hampshire.mov"). The scan crosses stop words
+    /// but not a punctuation break or a sentence verb ("is", "who",
+    /// "tell"), so "check /Volumes/A and tell me who is in new
+    /// hampshire.mov" names "new hampshire.mov", not one long path.
+    private static func pathHead(before coreIndex: Int, words: [Range<String.Index>], text: String) -> Int? {
+        var index = coreIndex
+        while index > 0 {
+            let raw = String(text[words[index - 1]])
+            let cleaned = cleanedWord(text[words[index - 1]])
+            if cleaned.hasPrefix("/") { return index - 1 }
+            if raw.hasSuffix(":") || raw.hasSuffix(",") || raw.hasSuffix(";") || raw.hasSuffix("?")
+                || raw.hasSuffix("!") || raw.hasSuffix(".") || sentenceVerbs.contains(cleaned.lowercased()) {
+                return nil
+            }
+            index -= 1
+        }
+        return nil
+    }
+
+    /// The first word of a spaced filename ending at the core: walk back
+    /// while the previous word is not a stop word and no punctuation
+    /// break sits between ("who is in New Hampshire.mov" → "New"; "the
+    /// video hampshire.mov" → the core itself). A word that opens with a
+    /// quote or bracket is the name's first word.
+    private static func nameStart(before coreIndex: Int, words: [Range<String.Index>], text: String) -> Int {
+        // A core that itself opens a quote is the whole name.
+        if let first = text[words[coreIndex]].first, leadingPunctuation.contains(first) { return coreIndex }
+        var start = coreIndex
+        var index = coreIndex
+        while index > 0 {
+            let previousRange = words[index - 1]
+            let previous = String(text[previousRange])
+            let cleaned = cleanedWord(text[previousRange])
+            guard !cleaned.isEmpty,
+                  !filenameStopWords.contains(cleaned.lowercased()),
+                  !previous.hasSuffix(":"), !previous.hasSuffix(","), !previous.hasSuffix(";"),
+                  !previous.hasSuffix("?"), !previous.hasSuffix("!"), !previous.hasSuffix(".") else { break }
+            start = index - 1
+            index -= 1
+            if let first = previous.first, leadingPunctuation.contains(first) { break }
+        }
+        return start
     }
 
     /// "this video New Hampshire and …" → "New Hampshire": capitalised
@@ -265,16 +327,38 @@ enum ArchivistRecordQuestion {
         + #"|\b(?:people'?s? )?names?\b.{0,40}\b(?:in|of|from|on) \#(referent)\b"#
         + #"|\bfileref\b.{0,80}\bmy name\b"#
         + #"|\bmy name\b.{0,24}\bin \#(referent)\b"#)
+    /// The dossier asks, each with the referent beside the ask.
     private static let aboutVerb = rx(
         #"\b(?:all|everything|more|anything) about \#(referent)\b"#
         + #"|\btell me about \#(referent)\b"#
         + #"|\bdescribe \#(referent)\b"#
-        + #"|\bmetadata\b"#
+        + #"|\bmetadata (?:of|on|for|in|from|about|behind) \#(referent)\b"#
+        + #"|\#(referent)(?:'s)? metadata\b"#
         + #"|\b(?:details|info|information) (?:on|about|for) \#(referent)\b"#
         + #"|\bwhat (?:do you know|can you tell me) about \#(referent)\b"#)
+    /// With a file NAMED in the sentence, "metadata" anywhere is the
+    /// dossier ("tell me all about this video, including the metadata
+    /// whether it has rick in it: /Volumes/…"). Never on a bare pronoun.
+    private static let metadataAnywhere = rx(#"\bmetadata\b"#)
     private static let examineVerb = rx(#"\b(?:examine|inspect|look at|analy[sz]e|check) \#(referent)\b"#)
+    /// "does it have a date?" — the whole object is the date, so the
+    /// generic "does it have …" people form does not apply.
+    private static let hasOnlyADate = rx(
+        #"\b(?:does|did|do) \#(referent) (?:have|has|contain|include|show) (?:a |the |any |no |its )?dates?\b(?: (?:on|in) \#(referent)\b)?\s*[?.!]*$"#)
+    /// A date word anywhere — only with a file named in the sentence.
     private static let dateNoun = rx(#"\b(?:a |the |any |its |no )?dates?\b|\bdated\b"#)
     private static let dateWhenFile = rx(#"\bwhen\b|\bwhat year\b|\bwhich year\b|\bhow old\b"#)
+    /// With only a pronoun, the date word must sit beside the referent:
+    /// "the date of it", "does it have a date", "is this dated". "when
+    /// was this filmed" is the selection-date lane's; "the date on
+    /// things" is nobody's here.
+    private static let dateBesideReferent = rx(
+        #"\b(?:a |the |any |its |no )?dates?\b (?:of|on|for|in|from|behind) \#(referent)\b"#
+        + #"|\#(referent) (?:has|have|had|is|was|got|carries|carry) (?:a |the |any |no |its )?dates?\b"#
+        + #"|\#(referent)(?:'s)? dates?\b"#
+        + #"|\bits dates?\b"#
+        + #"|\b(?:is|was) \#(referent) dated\b"#
+        + #"|\#(referent) (?:is |was )?dated\b"#)
     private static let myName = rx(#"\bmy (?:own )?name\b|\b(?:has|have|is|am) (?:i|me|myself) in\b"#)
     private static let listAfterCue = rx(
         #"\b(?:like|such as|named|names?:|for example|e\.g\.,?)\s+(.+?)(?:\s+and\s+(?:a |the )?dates?\b|[?.!]|$)"#)
@@ -287,6 +371,35 @@ enum ArchivistRecordQuestion {
         "the", "of", "in", "on", "about", "examine", "called", "named", "this",
         "that", "is", "for", "and", "with", "from", "at", "to", "a", "an", "it",
         "into", "check", "search", "inspect", "open", "play", "select",
+    ]
+    /// Words a spaced filename never crosses when read backwards from its
+    /// extension: the lead words plus question words, auxiliaries,
+    /// pronouns and conjunctions ("does New Hampshire.mov have…" stops at
+    /// "does"; "who is in new hampshire.mov" stops at "in").
+    private static let filenameStopWords: Set<String> = leadWords.union([
+        "who", "whom", "whose", "what", "when", "where", "which", "why", "how",
+        "does", "do", "did", "is", "are", "was", "were", "has", "have", "had",
+        "can", "could", "would", "will", "should", "shall", "may", "might", "must",
+        "tell", "show", "see", "look", "find", "get", "give", "read", "describe",
+        "analyze", "analyse", "watch", "reveal", "list",
+        "me", "you", "i", "we", "us", "my", "your", "our", "his", "her", "their", "its",
+        "please", "hallie", "or", "but", "if", "whether", "not", "no", "yes", "so",
+        "then", "than", "also", "too", "again", "like", "such", "as", "e.g.", "eg",
+        "by", "up", "out", "over", "there", "here", "these", "those", "some", "any",
+        "all", "both", "each", "every", "either", "neither", "one", "ones",
+        "files", "clips", "tapes", "movies", "recordings", "metadata", "people",
+        "person", "everyone", "anybody", "anyone", "someone", "including", "whats",
+        "what's", "who's", "where's", "when's", "it's", "that's", "there's",
+    ])
+    /// Words a path scan (looking backwards for the "/" head) will not
+    /// cross: a sentence verb between the core and a "/" word means the
+    /// "/" word is not this file's head.
+    private static let sentenceVerbs: Set<String> = [
+        "who", "whom", "what", "when", "where", "which", "why", "how",
+        "is", "are", "was", "were", "does", "do", "did", "has", "have", "had",
+        "can", "could", "would", "will", "should", "tell", "show", "examine",
+        "check", "look", "search", "find", "play", "open", "hallie", "please",
+        "whether", "if", "about",
     ]
     private static let mediaNouns: Set<String> = [
         "video", "clip", "tape", "file", "movie", "recording", "footage",

@@ -52,6 +52,27 @@ struct ArchivistRecordQuestionTests {
          Record(reference: .file(name: "Christmas 1994 Part 2.mkv"), operations: [.people, .date])),
         ("does New Hampshire.mov have Nancy in it",
          Record(reference: .file(name: "New Hampshire.mov"), operations: [.people], people: ["Nancy"])),
+        // Lowercase multiword names and paths (codex #976 item 4): the
+        // name is the run of words up to the extension, not just the last
+        // capitalised ones.
+        ("who is in new hampshire.mov", Record(reference: .file(name: "new hampshire.mov"), operations: [.people])),
+        ("tell me about /volumes/archive/new hampshire.mov",
+         Record(reference: .file(name: "/volumes/archive/new hampshire.mov"), operations: [.about])),
+        ("who is in /Volumes/A/the new hampshire.mov",
+         Record(reference: .file(name: "/Volumes/A/the new hampshire.mov"), operations: [.people])),
+        ("is Donna in christmas 1994 part 2.mkv",
+         Record(reference: .file(name: "christmas 1994 part 2.mkv"), operations: [.people], people: ["Donna"])),
+        ("does new hampshire.mov have Nancy in it",
+         Record(reference: .file(name: "new hampshire.mov"), operations: [.people], people: ["Nancy"])),
+        // Pronoun-only date / metadata asks with the noun BESIDE the
+        // referent (codex #976 item 5).
+        ("what is the date of it", Record(reference: .currentSelection, operations: [.date])),
+        ("what's the date on this one", Record(reference: .currentSelection, operations: [.date])),
+        ("does it have a date", Record(reference: .currentSelection, operations: [.date])),
+        ("is this dated", Record(reference: .currentSelection, operations: [.date])),
+        ("show the metadata for this video", Record(reference: .currentSelection, operations: [.about])),
+        ("what's in this video and what is its date",
+         Record(reference: .currentSelection, operations: [.people, .date])),
     ] as [(String, Record)])
     func recognisesOneVideoQuestions(question: String, expected: Record) {
         let detected = ArchivistRecordQuestion.detect(question)
@@ -83,6 +104,22 @@ struct ArchivistRecordQuestionTests {
         "find videos from 1994",
         "hi Hallie",
         "what can you do",
+        // Capability / general asks with a stray pronoun or a date word
+        // NOT beside the referent (codex #976 item 5).
+        "what can you do with it",
+        "can you tell me the date on things",
+        "can you tell me the metadata you keep",
+        "what metadata do you keep about videos",
+        "do you keep dates for videos",
+        "is it possible to get the date",
+        "what do you know about dates",
+        "can you change the date on things",
+        "it would be nice to know the dates",
+        // A pronoun plus a capitalised word is not a record question
+        // without a record verb (eval sm022 hit the record route).
+        "It's pouring rain here in the Berkshires today.",
+        "Donna and I loved it in the Berkshires",
+        "that was the year Tim was born",
     ])
     func leavesOtherShapesAlone(question: String) {
         #expect(ArchivistRecordQuestion.detect(question) == nil, Comment(rawValue: question))
@@ -93,10 +130,60 @@ struct ArchivistRecordQuestionTests {
         #expect(ArchivistRecordQuestion.fileReference(in: "the file \"New Hampshire.mov\" please")?.name == "New Hampshire.mov")
         #expect(ArchivistRecordQuestion.fileReference(in: "look at \(Self.path) for me")?.name == Self.path)
         #expect(ArchivistRecordQuestion.fileReference(in: "who is in Christmas 1994 Part 2.mkv")?.name == "Christmas 1994 Part 2.mkv")
-        // A lowercase word before the core is not part of the name.
+        // A stop word before the core is not part of the name; a plain
+        // lowercase word is (codex #976 item 4).
         #expect(ArchivistRecordQuestion.fileReference(in: "the video hampshire.mov")?.name == "hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "who is in new hampshire.mov")?.name == "new hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "does new hampshire.mov have Nancy in it")?.name == "new hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "is Donna in christmas 1994 part 2.mkv")?.name == "christmas 1994 part 2.mkv")
+        #expect(ArchivistRecordQuestion.fileReference(in: "the file \"new hampshire.mov\" please")?.name == "new hampshire.mov")
+        // A path is verbatim from its "/" head, whatever words its folders hold.
+        #expect(ArchivistRecordQuestion.fileReference(in: "tell me about /volumes/archive/new hampshire.mov")?.name
+                == "/volumes/archive/new hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "who is in /Volumes/A/the new hampshire.mov")?.name
+                == "/Volumes/A/the new hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "who is in /Volumes/A/rick and donna/tape.mov")?.name
+                == "/Volumes/A/rick and donna/tape.mov")
+        // A "/" word separated from the core by a sentence verb or a
+        // punctuation break is not its head.
+        #expect(ArchivistRecordQuestion.fileReference(in: "check /Volumes/A and tell me who is in new hampshire.mov")?.name
+                == "new hampshire.mov")
+        #expect(ArchivistRecordQuestion.fileReference(in: "is /Volumes/A mounted? who is in new hampshire.mov")?.name
+                == "new hampshire.mov")
+        // A bare ".mov" after a space is the tail of a spaced name.
+        #expect(ArchivistRecordQuestion.fileReference(in: "who is in Long Sequence - New Hampshire Christmas .mov")?.name
+                == "Long Sequence - New Hampshire Christmas .mov")
         #expect(ArchivistRecordQuestion.fileReference(in: "this video New Hampshire and see")?.name == "New Hampshire")
         #expect(ArchivistRecordQuestion.fileReference(in: "who is in the picture") == nil)
+    }
+
+    /// A lowercase full path survives the trip through the recogniser,
+    /// and every chip the ambiguity / missing-path declines generate
+    /// (ArchivistRecordExecutor.question(for:path:)) detects as a record
+    /// question about exactly that path (codex #976 items 3, 4, 6).
+    @Test(arguments: [
+        "/volumes/archive/new hampshire.mov",
+        "/Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+        "/Volumes/LaCie/1994-xx-xx_Westford_1994-1995.mkv",
+        "/Volumes/A/rick and donna/christmas 1994 part 2.mkv",
+        "/Volumes/A/Long Sequence - New Hampshire Christmas .mov",
+        "/Users/rick/Movies/tape.mov",
+    ])
+    func chipQuestionsRoundTripThroughDetect(path: String) {
+        let shapes: [(ArchivistQueryAST.Record, [Record.Operation], [String]?)] = [
+            (Record(reference: .file(name: "x"), operations: [.people]), [.people], nil),
+            (Record(reference: .file(name: "x"), operations: [.people], people: ["Donna", "Rick"]), [.people], ["Donna", "Rick"]),
+            (Record(reference: .file(name: "x"), operations: [.date]), [.date], nil),
+            (Record(reference: .file(name: "x"), operations: [.people, .date]), [.people, .date], nil),
+            (Record(reference: .file(name: "x"), operations: [.about]), [.about], nil),
+        ]
+        for (query, operations, people) in shapes {
+            let chip = ArchivistRecordExecutor.question(for: query, path: path)
+            let detected = ArchivistRecordQuestion.detect(chip)
+            #expect(detected?.reference == .file(name: path), Comment(rawValue: chip))
+            #expect(detected?.operations == operations, Comment(rawValue: chip))
+            #expect(detected?.people == people, Comment(rawValue: chip))
+        }
     }
 
     @Test func peopleListDropsDateWordsAndQuestionWords() {
