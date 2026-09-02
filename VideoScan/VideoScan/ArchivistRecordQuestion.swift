@@ -40,7 +40,9 @@ enum ArchivistRecordQuestion {
         let file = fileReference(in: text)
         var masked = lower
         if let file {
-            masked = lower.replacingCharacters(in: file.range, with: "«file»")
+            // A plain word so `\b` still works after it (a non-word marker
+            // such as "«file»" silently ends every referent pattern).
+            masked = lower.replacingCharacters(in: file.range, with: fileMask)
         }
         let hasSelection = matches(selectionPronoun, masked)
         guard file != nil || hasSelection else { return nil }
@@ -183,8 +185,13 @@ enum ArchivistRecordQuestion {
                 if !found.contains("me") { found.append("me") }
                 return
             }
-            guard !nameStopWords.contains(key), !dateWords.contains(key),
-                  key.rangeOfCharacter(from: .letters) != nil,
+            // A name is one to three word tokens, none of them a question
+            // or date word: "tim" yes, "who is" no, "the metadata whether it
+            // has rick" no (the token filter is what keeps a clause out).
+            let tokens = key.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "-" }).map(String.init)
+            guard !tokens.isEmpty, tokens.count <= 3,
+                  !tokens.contains(where: nonNameTokens.contains),
+                  !nameStopWords.contains(key), !dateWords.contains(key),
                   !found.contains(where: { $0.lowercased() == key }) else { return }
             found.append(entry)
         }
@@ -233,8 +240,10 @@ enum ArchivistRecordQuestion {
 
     // MARK: - Patterns
 
+    /// What a named file becomes in the masked text (a word, see `detect`).
+    private static let fileMask = "fileref"
     private static let referent =
-        #"(?:«file»|this video|this one|this clip|this tape|this file|this recording|this movie|the selected video|the selection|this|that|it|there)"#
+        #"(?:fileref|this video|this one|this clip|this tape|this file|this recording|this movie|the selected video|the selection|this|that|it|there)"#
     private static let selectionPronoun = rx(
         #"\b(?:this video|this one|this clip|this tape|this file|this recording|this movie|the selected video|the selection|this|that|it)\b"#)
     private static let openerGuard = rx(#"^(?:hallie[, ]+)?(?:please )?(?:play|open|reveal|show me|find|list|search for) "#)
@@ -244,7 +253,7 @@ enum ArchivistRecordQuestion {
         + #"|\bwho else\b"#
         + #"|\bwhat(?:'s| is)? in \#(referent)\b"#
         + #"|\b(?:does|did|do) \#(referent) (?:have|has|contain|include|feature|show)\b"#
-        + #"|\b(?:has|have|contains?|includes?|features?) .+? in (?:it|this|that|there|«file»)\b"#
+        + #"|\b(?:has|have|contains?|includes?|features?) .+? in (?:it|this|that|there|fileref)\b"#
         + #"|\bis .+? in \#(referent)\b"#
         + #"|\b(?:people'?s? )?names?\b"#
         + #"|\bmy name\b"#)
@@ -260,10 +269,10 @@ enum ArchivistRecordQuestion {
     private static let dateWhenFile = rx(#"\bwhen\b|\bwhat year\b|\bwhich year\b|\bhow old\b"#)
     private static let myName = rx(#"\bmy (?:own )?name\b|\b(?:has|have|is|am) (?:i|me|myself) in\b"#)
     private static let listAfterCue = rx(
-        #"\b(?:like|such as|named|names?:|for example|e\.g\.,?|including)\s+(.+?)(?:\s+and\s+(?:a |the )?dates?\b|[?.!]|$)"#)
-    private static let hasNamesInIt = rx(#"\b(?:has|have|contains?|includes?|features?) (.+?) in (?:it|this|that|there|«file»)\b"#)
+        #"\b(?:like|such as|named|names?:|for example|e\.g\.,?)\s+(.+?)(?:\s+and\s+(?:a |the )?dates?\b|[?.!]|$)"#)
+    private static let hasNamesInIt = rx(#"\b(?:has|have|contains?|includes?|features?) (.+?) in (?:it|this|that|there|fileref)\b"#)
     private static let isNameIn = rx(#"\bis (.+?) in \#(referent)\b"#)
-    private static let whetherNameIn = rx(#"\b(?:whether|if) (?:it|this|that|«file») (?:has|have|contains?|includes?) (.+?) in\b"#)
+    private static let whetherNameIn = rx(#"\b(?:whether|if) (?:it|this|that|fileref) (?:has|have|contains?|includes?) (.+?) in\b"#)
 
     private static let leadWords: Set<String> = [
         "file", "video", "videos", "clip", "tape", "movie", "recording", "footage",
@@ -279,8 +288,18 @@ enum ArchivistRecordQuestion {
         "a", "an", "the", "this", "that", "it", "there", "anyone", "anybody",
         "someone", "somebody", "people", "person", "names", "name", "peoples",
         "people's", "family", "everyone", "everybody", "who", "anything",
-        "something", "«file»", "file", "video", "them", "him", "her", "us", "we",
+        "something", "fileref", "file", "video", "them", "him", "her", "us", "we",
         "you", "hallie", "kids", "the kids", "all", "of", "each", "both",
+    ]
+    /// A captured entry containing any of these is a clause, not a name.
+    private static let nonNameTokens: Set<String> = [
+        "who", "whom", "is", "are", "was", "were", "what", "which", "in", "on",
+        "it", "this", "that", "the", "a", "an", "and", "or", "date", "dates",
+        "name", "names", "people", "anyone", "someone", "has", "have", "had",
+        "see", "if", "whether", "there", "any", "all", "else", "of", "to",
+        "for", "with", "about", "metadata", "fileref", "video", "file", "text",
+        "search", "examine", "including", "tell", "me", "my", "your", "its",
+        "when", "where", "how", "does", "do", "did", "not", "no", "yes",
     ]
     private static let dateWords: Set<String> = [
         "date", "dates", "a date", "the date", "any date", "its date", "when", "year",

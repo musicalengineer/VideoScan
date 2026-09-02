@@ -1098,14 +1098,7 @@ enum HallieShellCLI {
             case .record:
                 // ONE record, resolved here (selection or named file); the
                 // executor never sees the catalog. No catalog-wide snapshot.
-                if case .record(let payload) = intent.ast {
-                    let resolution = ArchivistRecordReferenceResolver.resolve(
-                        payload.reference,
-                        selectedRecordID: state.selectedRecordID,
-                        records: state.records,
-                        recordForID: state.record)
-                    recordScope = await HallieTurnExecutor.RecordScope(resolution)
-                }
+                recordScope = await captureRecordScope(for: intent.ast, state: state)
             case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
@@ -1536,6 +1529,22 @@ enum HallieShellCLI {
     /// first, the legacy inference/stamp chain only when it has nothing.
     /// Until 2026-09-01 this preferred the catalog creation stamp, which
     /// for a transcode is the transcode's date ("how old is Donna" → 66).
+    /// The record scope for a `record` turn: the selection or the named file,
+    /// resolved once against the session's records (2026-09-02).
+    /// `.noSelection` for every other shape.
+    static func captureRecordScope(
+        for ast: ArchivistQueryAST,
+        state: Session
+    ) async -> HallieTurnExecutor.RecordScope {
+        guard case .record(let payload) = ast else { return .noSelection }
+        let resolution = ArchivistRecordReferenceResolver.resolve(
+            payload.reference,
+            selectedRecordID: state.selectedRecordID,
+            records: state.records,
+            recordForID: state.record)
+        return await HallieTurnExecutor.RecordScope(resolution)
+    }
+
     static func temporalSelectionDate(
         _ record: VideoRecord
     ) -> ArchivistTemporalSelectionDateSnapshot? {
