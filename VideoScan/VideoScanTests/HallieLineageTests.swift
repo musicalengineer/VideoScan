@@ -284,6 +284,30 @@ struct HallieLineageDetectTests {
         #expect(Q.kinFragmentQuestion(in: "and her husband") == .kinship(person: "Her", relation: .husband, side: nil))
     }
 
+    /// Live 2026-09-02: the named-photo capture swallowed a pronoun and
+    /// its trailing clause as one name ("Her If She Born So Long Ago").
+    /// A clause after a pronoun must not become part of the subject. Other
+    /// noun phrases remain intact, and non-media follow-ups stay out of the
+    /// lineage detector for the ordinary conversation-memory rewrite.
+    @Test func photoPronounSubjectStopsBeforeATrailingClause() {
+        let cases: [(String, Q?)] = [
+            ("would there be a photo of her if she born so long ago?",
+             .personPhoto(person: "Her")),
+            ("could there be video of him because he lived so long ago?",
+             .personVideos(person: "Him")),
+            ("tell me about her again", nil),
+            ("would there be a photo of her mother?",
+             .personPhoto(person: "Her Mother")),
+            ("would there be a photo of her and Donna?", nil),
+            ("would there be a photo of her wearing red?",
+             .personPhoto(person: "Her Wearing Red")),
+        ]
+
+        for (question, expected) in cases {
+            #expect(Q.detect(question) == expected, Comment(rawValue: question))
+        }
+    }
+
     @Test func surnameTreeShapes() {
         #expect(Q.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
         #expect(Q.detect("show the family tree for the current breen family") == .surnameTree(surname: "breen"))
