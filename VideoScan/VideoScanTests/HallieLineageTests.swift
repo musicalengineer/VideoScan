@@ -365,6 +365,35 @@ struct HallieLineageDetectTests {
         #expect(Q.detect("trace our heritage back as far as you can") == .originTrail(person: nil, country: nil, line: .both))
     }
 
+    /// Live 2026-09-02 (lv260902-010): "the birth locations of" is a
+    /// description of the requested output, not part of the possessive
+    /// person's name. Keep real multi-word names containing "of", and do
+    /// not collapse ambiguous or differently-shaped phrases to Donna.
+    @Test func birthLocationTraceExtractsOnlyThePossessivePerson() {
+        let deep = HallieLineageQuestion.maxGenerations
+        let cases: [(question: String, expected: Q?)] = [
+            ("can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
+             .ancestorLine(person: "Donna", line: .maternal, generations: deep)),
+            ("trace the birthplaces of john of gaunt's paternal line",
+             .ancestorLine(person: "John Of Gaunt", line: .paternal, generations: deep)),
+        ]
+        for item in cases {
+            #expect(Q.detect(item.question) == item.expected,
+                    Comment(rawValue: item.question))
+        }
+
+        let negatives = [
+            "trace the migration history of donna's maternal line",
+            "trace birth locations near donna's maternal line",
+            "trace the birth locations of donna and rick's maternal line",
+        ]
+        for question in negatives {
+            #expect(Q.detect(question) != .ancestorLine(
+                person: "Donna", line: .maternal, generations: deep),
+                Comment(rawValue: question))
+        }
+    }
+
     @Test func namedTargetHelper() {
         #expect(Q.namedTarget(in: " from my great great grandmother edit lucy parker") == "Edit Lucy Parker")
         #expect(Q.namedTarget(in: "from rick's family") == "Rick")
