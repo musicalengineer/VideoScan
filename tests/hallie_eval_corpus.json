@@ -2031,7 +2031,8 @@
         "videos:",
         "in the directory",
         "in the filename"
-      ]
+      ],
+      "expectEvidenceCount": 1
     },
     {
       "id": "lv260902-007",
@@ -2050,7 +2051,8 @@
         "9 videos",
         "videos:",
         "someone says “tim”"
-      ]
+      ],
+      "expectEvidenceCount": 1
     },
     {
       "id": "lv260902-008",
@@ -2069,7 +2071,8 @@
         "Setting aside",
         "Nothing matches",
         "items. Want those"
-      ]
+      ],
+      "expectEvidenceCount": 1
     },
     {
       "id": "lv260902-009",
@@ -2090,7 +2093,8 @@
         "videos with",
         "in the filename",
         "not a search word"
-      ]
+      ],
+      "expectEvidenceCount": 1
     }
   ]
-}
+}\n

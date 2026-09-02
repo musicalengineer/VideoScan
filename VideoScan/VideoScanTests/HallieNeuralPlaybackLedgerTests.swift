@@ -73,10 +73,13 @@ final class HallieNeuralPlaybackLedgerTests: XCTestCase {
         }
         let counter = HallieOutputBuffer.OverloadCounter(device: device)
         XCTAssertTrue(counter.installed)
-        XCTAssertEqual(counter.stop(), 0)
+        // The device may genuinely overload between init and stop (a build
+        // is pinning the cores): the contract is that stop is idempotent
+        // and the count is frozen and readable afterwards, not that it is 0.
+        let first = counter.stop()
         XCTAssertFalse(counter.installed)
         XCTAssertEqual(counter.removalStatus, noErr)
-        XCTAssertEqual(counter.stop(), 0, "second stop is a no-op")
-        XCTAssertEqual(counter.count, 0, "count is readable after stop")
+        XCTAssertEqual(counter.stop(), first, "second stop is a no-op")
+        XCTAssertEqual(counter.count, first, "count is readable after stop")
     }
 }

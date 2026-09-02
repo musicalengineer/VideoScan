@@ -283,6 +283,7 @@ def build_records(questions, turns):
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
                 "mustMatch": q.get("mustMatch", []),
+                "expectEvidenceCount": q.get("expectEvidenceCount"),
                 "noFabricatedPersonalMemory": bool(
                     q.get("noFabricatedPersonalMemory")),
                 "currentEvidenceOnly": bool(q.get("currentEvidenceOnly")),
@@ -450,6 +451,18 @@ RAW_INTERNAL_PAT = re.compile(
 RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)|want me to try (without|with a different)", re.I | re.S)
 
 
+MATCHING_PAT = re.compile(r"(\d+)\s+cited\s+of\s+(\d+)\s+matching", re.I)
+
+
+def evidence_cardinality(r):
+    """How many catalog items the answer rests on: the larger of the
+    evidence list and the basis line's 'N cited of M matching' (M)."""
+    listed = len(r.get("mediaEvidence") or [])
+    m = MATCHING_PAT.search(r.get("basis") or "")
+    matching = int(m.group(2)) if m else 0
+    return max(listed, matching)
+
+
 def grade_record(r):
     """Return (flags, ok). Conservative: flags mean 'a human should look'."""
     flags = []
@@ -548,6 +561,15 @@ def grade_record(r):
         if not matches:
             flags.append("missing_required_match")
             break
+    # Structural contract (codex #968): a question about ONE record must rest
+    # on exactly that many catalog items, whatever the prose says. Counted
+    # from the turn's media evidence, and from the basis line's "cited of N
+    # matching" when the transcript carried no evidence list — so a sweep
+    # that paraphrases its way past every phrase check still fails here.
+    expected_evidence = r.get("expectEvidenceCount")
+    if expected_evidence is not None:
+        if evidence_cardinality(r) != expected_evidence:
+            flags.append("evidence_cardinality")
     if r.get("noFabricatedPersonalMemory") and PERSONAL_MEMORY_PAT.search(a):
         flags.append("fabricated_personal_memory")
     if r.get("forbidRawInternals") and RAW_INTERNAL_PAT.search(a):

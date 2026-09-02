@@ -182,6 +182,45 @@ class HallieEvalTests(unittest.TestCase):
         self.assertIn("raw_internal_error", flags)
 
 
+    def test_evidence_cardinality_rejects_every_sweep_paraphrase(self):
+        """codex #968: phrase blacklists cannot keep up with paraphrase; a
+        one-record question is graded on how many catalog items the answer
+        RESTS ON, from the evidence list or the basis line."""
+        sweeps = [
+            ("I found 29 matching catalog items including New Hampshire.mov.",
+             [{"filename": f"clip{i}.mov"} for i in range(29)], ""),
+            ("I found 9 matching catalog items.",
+             [{"filename": f"clip{i}.mov"} for i in range(9)], ""),
+            ("There are 9 matching catalog items.",
+             [], "Basis: 9 cited of 9 matching catalog items."),
+            ("Three matching files for Rick include New Hampshire.mov and two near matches.",
+             [{"filename": "New Hampshire.mov"}, {"filename": "a.mov"}, {"filename": "b.mov"}],
+             "Basis: 3 cited of 3 matching catalog items."),
+        ]
+        for answer, evidence, basis in sweeps:
+            record = {
+                "answer": answer, "route": "presence", "outcome": "answered",
+                "expectEvidenceCount": 1, "mediaEvidence": evidence, "basis": basis,
+                "mustContain": ["New Hampshire.mov"] if "New Hampshire.mov" in answer else [],
+            }
+            self.assertIn("evidence_cardinality", hallie_eval.grade_record(record), answer)
+
+    def test_evidence_cardinality_accepts_the_one_record_answer(self):
+        record = {
+            "answer": "New Hampshire.mov is from 1994; Rick is tagged in it.",
+            "route": "record", "outcome": "answered",
+            "expectEvidenceCount": 1,
+            "mediaEvidence": [{"filename": "New Hampshire.mov"}],
+            "basis": "Basis: 1 cited of 1 matching catalog items.",
+        }
+        self.assertNotIn("evidence_cardinality", hallie_eval.grade_record(record))
+        self.assertEqual(hallie_eval.evidence_cardinality(record), 1)
+
+    def test_evidence_cardinality_is_off_when_the_corpus_does_not_ask(self):
+        record = {"answer": "29 videos.", "route": "presence", "outcome": "answered",
+                  "mediaEvidence": [{"filename": f"c{i}.mov"} for i in range(29)]}
+        self.assertNotIn("evidence_cardinality", hallie_eval.grade_record(record))
+
     def test_grade_detects_cross_turn_filename_leakage(self):
         record = {
         "answer": "I found old-answer.mov and current.mov.",

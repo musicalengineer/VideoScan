@@ -132,8 +132,15 @@ enum HallieOutputBuffer {
         @discardableResult
         func stop() -> Int {
             if installed {
-                removalStatus = AudioObjectRemovePropertyListenerBlock(device, &address, queue, listener)
-                installed = false
+                let status = AudioObjectRemovePropertyListenerBlock(device, &address, queue, listener)
+                removalStatus = status
+                if status == noErr {
+                    installed = false
+                } else {
+                    // Still registered as far as we know — say so and let
+                    // the next stop (or deinit) try again (codex #967).
+                    NSLog("VideoScan: overload listener removal failed (status %d); will retry", status)
+                }
             }
             return count
         }

@@ -356,6 +356,14 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     // interface's deadline; past the resident budget the
                     // remainder streams from disk as before (codex #961).
                     let chunkAudio = try await Self.loadChunk(at: audioURL, residentSoFar: residentBytes)
+                    // Stop can land while the load is in flight (codex #967):
+                    // it bumps the generation and tears down. Nothing below
+                    // may create an engine, install a listener or schedule
+                    // audio for an answer that is already over.
+                    guard !abandoned() else {
+                        HallieNeuralSpeech.removeTemporaryAudio(audioURL)
+                        return
+                    }
                     let file = chunkAudio.file
                     if engine == nil {
                         let newEngine = AVAudioEngine()
@@ -442,10 +450,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     if self.neuralLedger.noteSynthesisFinished() { self.finishNeuralPlayback() }
                 } else {
                     // No engine was ever running (or the answer already
-                    // ended): nothing to tear down but a listener that may
-                    // have been installed before a start failure.
-                    self.neuralOverloads?.stop()
-                    self.neuralOverloads = nil
+                    // ended): clear whatever partial state the attempt left
+                    // — synthesized URLs, ledger, any listener installed
+                    // before a start failure (codex #967).
+                    self.tearDownNeuralPlayback()
                     self.speakWithApple(remaining.isEmpty ? Self.sentences(text, lexicon: HalliePronunciationLexicon(entries: [])) : remaining)
                 }
             }
