@@ -158,7 +158,7 @@ struct ArchiveTimelinePane: View {
                                    count: timeline.undated.count,
                                    anchor: Self.undatedAnchor,
                                    dimmed: false,
-                                   help: "Archived without a resolvable year — set a date in the Inspector, re-promote files them in place.",
+                                   help: "Archived without a resolvable year. The date is part of the path and there is no refile yet, so these stay here until Refile ships.",
                                    proxy: proxy)
                     }
                 }
