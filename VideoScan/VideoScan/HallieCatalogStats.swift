@@ -340,10 +340,17 @@ struct HallieCatalogStats: Equatable, Sendable {
                          : "running from \(first) to \(last)")
         }
         var text = parts.joined(separator: "; ") + "."
-        let promoted = s.archivedVerified + s.archivedUnverified
-        if promoted > 0 {
+        // Say what the numbers are, never "0 have a verified copy" when the
+        // copies exist but are unverified (nightly reviewer, 2026-09-02).
+        if s.archivedVerified > 0 {
             text += " \(s.archivedVerified.formatted()) \(s.archivedVerified == 1 ? "has" : "have") "
-                + "a verified copy in the Master Archive."
+                + "a verified copy in the Master Archive"
+            text += s.archivedUnverified > 0
+                ? ", and \(s.archivedUnverified.formatted()) more \(s.archivedUnverified == 1 ? "is" : "are") promoted but not yet verified."
+                : "."
+        } else if s.archivedUnverified > 0 {
+            text += " \(s.archivedUnverified.formatted()) \(s.archivedUnverified == 1 ? "is" : "are") "
+                + "promoted to the Master Archive but not yet verified."
         }
         text += " Ask me for a person, a year, a place, or a word — “show me Donna in the 90s”."
         return text

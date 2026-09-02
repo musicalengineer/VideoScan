@@ -107,8 +107,14 @@ extension HallieTurnExecutor {
             // Every match carries the same date (a year-only 1994 for
             // "videos from 1994"): there is no newest among them, and
             // saying so beats picking one by filename in silence.
+            // Name the file at the ordinal the reader asked for, and say
+            // which it is: "the second by name" — the nightly reviewer
+            // (2026-09-02) caught this sentence calling dated[index] "first".
+            let byName = index == 0
+                ? "first by name is \(pick.citation.filename)"
+                : "\(ordinalWord(index + 1)) by name is \(pick.citation.filename)"
             prose = "The \(dated.count) matches for \(scopeText) are all dated \(year) and nothing finer, "
-                + "so there's no \(endWord) among them — first by name is \(pick.citation.filename)."
+                + "so there's no \(endWord) among them — \(byName)."
         } else {
             let which = request.ordinal <= 1 ? "The \(endWord)" : "The \(ordinalWord(request.ordinal)) \(endWord)"
             prose = "\(which) of \(countText) for \(scopeText) is \(pick.citation.filename)"

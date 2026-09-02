@@ -201,6 +201,36 @@ struct HallieShellCLIFollowUpTests {
     }
 
     /// With nothing asked yet the superlative is an honest ask, as before.
+    /// Nightly reviewer, 2026-09-02: when every match carries the same
+    /// year-only date, the sentence named dated[ordinal − 1] but called it
+    /// "first by name". The ordinal is now said out loud.
+    @Test func sameDateMatchesNameTheOrdinalByName() async throws {
+        let sameYear: [VideoRecord] = (0..<4).map { index in
+            let record = VideoRecord()
+            record.fullPath = "/isolated/1994/donna_\(index).mov"
+            record.filename = "donna_\(index).mov"
+            record.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            record.confirmedByUserPeople = [
+                ConfirmedTag(name: "Donna", confirmedAt: Date(timeIntervalSince1970: 0)),
+            ]
+            return record
+        }
+        let harness = Harness(
+            inputs: ["how many videos of donna from 1994?", "and the newest?", "and the second newest?", ":quit"],
+            records: sameYear,
+            translations: [.presence(.init(people: ["donna"], yearStart: 1994, yearEnd: 1994, mediaKind: .video))])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+        _ = await HallieShellCLI.run(
+            options: options,
+            input: { harness.nextInput() },
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+        let joined = harness.output.joined(separator: "\n")
+        #expect(joined.contains("no newest among them — first by name is donna_0.mov"), Comment(rawValue: joined))
+        #expect(joined.contains("second by name is donna_1.mov"), Comment(rawValue: joined))
+        #expect(!joined.contains("first by name is donna_1.mov"), Comment(rawValue: joined))
+    }
+
     @Test func theNewestWithNothingToSortDeclines() async throws {
         let harness = Harness(inputs: ["and the newest?", ":quit"], records: records(), translations: [])
         let options = try HallieShellCLI.parse(arguments: ["--hallie"])

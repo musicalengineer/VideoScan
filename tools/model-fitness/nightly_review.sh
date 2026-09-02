@@ -43,7 +43,10 @@ python3 tools/model-fitness/review_real_commits.py \
   --range "$range" --endpoint "$ENDPOINT" --out "$out" \
   > "$out.summary.txt" 2>&1
 rc=$?
-echo "$head" > "$STATE/last_sha"
+# Advance the baseline only when the review actually ran: a transient
+# failure (ollama down at 04:30) must not skip these commits forever
+# (nightly reviewer finding, 2026-09-02).
+if [[ $rc -eq 0 ]]; then echo "$head" > "$STATE/last_sha"; fi
 
 flagged=$(grep -l '^- verdict: FLAGGED' "$out"/*.md 2>/dev/null | wc -l | tr -d ' ')
 errors=$(grep -l '^- verdict: ERROR' "$out"/*.md 2>/dev/null | wc -l | tr -d ' ')

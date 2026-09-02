@@ -45,6 +45,28 @@ struct HallieCatalogStatsTests {
         #expect(HallieCatalogStats.detect("how many videos are archived") == .archived)
     }
 
+    // Nightly reviewer, 2026-09-02: the guard counted verified + unverified
+    // copies but the sentence reported only the verified ones, so two
+    // unverified promotions read "0 have a verified copy".
+    @Test func overviewNeverSaysZeroHaveAVerifiedCopy() {
+        let unverifiedOnly = HallieCatalogStats.compute(records: [
+            record("a.mov", bytes: 10, seconds: 60, year: 1994),
+            record("b.mov", bytes: 10, seconds: 60, year: 1994, promoted: true),
+            record("c.mov", bytes: 10, seconds: 60, year: 1994, promoted: true),
+        ])
+        let prose = HallieCatalogStats.answer(.overview, stats: unverifiedOnly).prose
+        #expect(!prose.contains("0 have"), Comment(rawValue: prose))
+        #expect(prose.contains("2 are promoted to the Master Archive but not yet verified"), Comment(rawValue: prose))
+
+        let mixed = HallieCatalogStats.compute(records: [
+            record("a.mov", bytes: 10, seconds: 60, year: 1994, fixity: true),
+            record("b.mov", bytes: 10, seconds: 60, year: 1994, promoted: true),
+        ])
+        let mixedProse = HallieCatalogStats.answer(.overview, stats: mixed).prose
+        #expect(mixedProse.contains("1 has a verified copy in the Master Archive, and 1 more is promoted but not yet verified."),
+                Comment(rawValue: mixedProse))
+    }
+
     @Test func overviewAnswersTheWholePictureThenInvitesAnAsk() {
         let stats = HallieCatalogStats.compute(records: [
             record("a.mov", bytes: 10, seconds: 3600, year: 1994),
@@ -102,7 +124,7 @@ struct HallieCatalogStatsTests {
     }
 
     private func record(_ name: String, bytes: Int64, seconds: Double, year: Int?,
-                        fixity: Bool = false, md5: String? = nil) -> VideoRecord {
+                        fixity: Bool = false, promoted: Bool = false, md5: String? = nil) -> VideoRecord {
         let r = VideoRecord()
         r.filename = name
         r.fullPath = "/Volumes/LaCie/\(name)"
@@ -112,6 +134,7 @@ struct HallieCatalogStatsTests {
             r.embeddedCreationDate = Calendar.current.date(from: DateComponents(year: year, month: 6, day: 1))
         }
         if let md5 { r.partialMD5 = md5 }
+        if promoted { r.derivationKind = ArchivePromotion.derivationKind }
         if fixity {
             // Fixity only ever lands on a promoted archive COPY in production.
             r.derivationKind = ArchivePromotion.derivationKind
