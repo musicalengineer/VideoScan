@@ -33,9 +33,27 @@ final class MediaFileOperationsWindowOpenerTests: XCTestCase {
         XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: true, modalRunning: false, anchorVisible: false), .skip)
     }
 
-    func testKeyIsRestoredOnlyWhenTheOpenStoleIt() {
+    func testKeyIsRestoredWhenTheJobWindowIsKeyAtTheFirstActingRetry() {
         XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: true, modalRunning: false, anchorVisible: true), .reorderAndRestoreKey)
-        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: false, modalRunning: false, anchorVisible: true), .reorder,
-                       "a stale retry with the user already back in the main window must not re-key it")
+        XCTAssertEqual(MediaFileOperationsWindowOpener.step(jobIsKey: false, modalRunning: false, anchorVisible: true), .reorder)
+    }
+
+    // MARK: - Retry ledger (codex #969)
+
+    func testFirstActingRetryRetiresTheRest() {
+        var ledger = MediaFileOperationsWindowOpener.RetryLedger()
+        XCTAssertEqual(ledger.apply(.skip), .skip, "window not created yet: nothing settles")
+        XCTAssertFalse(ledger.settled)
+        XCTAssertEqual(ledger.apply(.reorderAndRestoreKey), .reorderAndRestoreKey)
+        XCTAssertTrue(ledger.settled)
+        XCTAssertEqual(ledger.apply(.reorderAndRestoreKey), .skip,
+                       "the user clicked the job window on purpose after the 0.15 s retry; the 0.5 s retry must not steal focus back")
+        XCTAssertEqual(ledger.apply(.reorder), .skip)
+    }
+
+    func testAModalOnEveryRetryNeverSettles() {
+        var ledger = MediaFileOperationsWindowOpener.RetryLedger()
+        for _ in 0..<3 { XCTAssertEqual(ledger.apply(.skip), .skip) }
+        XCTAssertFalse(ledger.settled, "the caller must schedule a post-modal open instead")
     }
 }

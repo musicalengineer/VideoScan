@@ -1291,9 +1291,10 @@ extension CatalogContent {
                 stages: stages
             )
         }
-        if !modern.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
-
-        guard !needsReformat.isEmpty else { return }
+        guard !needsReformat.isEmpty else {
+            if !modern.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
+            return
+        }
         // One combined confirm for the legacy-codec subset.
         let alert = NSAlert()
         alert.messageText = "Reformat Required for \(needsReformat.count) File\(needsReformat.count == 1 ? "" : "s")"
@@ -1306,13 +1307,19 @@ extension CatalogContent {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Reformat and Analyze")
         alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
-        if alert.runModal() == .alertFirstButtonReturn {
+        let reformat = alert.runModal() == .alertFirstButtonReturn
+        if reformat {
             for rec in needsReformat {
                 fileOpsCenter.startReformat(
                     record: rec, model: model,
                     orchestrator: captionOrchestrator
                 )
             }
+        }
+        // Opened only AFTER the modal returns, whichever button was chosen:
+        // an open before runModal had every retry skipped by the modal
+        // guard and nothing rescheduled afterwards (codex #969).
+        if reformat || !modern.isEmpty {
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }
     }

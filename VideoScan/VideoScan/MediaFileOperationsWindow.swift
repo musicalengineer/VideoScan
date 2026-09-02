@@ -55,6 +55,22 @@ enum MediaFileOperationsWindowOpener {
         return jobIsKey ? .reorderAndRestoreKey : .reorder
     }
 
+    /// One open's retries share a ledger: the FIRST retry that acts retires
+    /// the rest (codex #969 — after the 0.15 s retry had restored the main
+    /// window, a user who then clicked the job window on purpose had focus
+    /// stolen back by the stale 0.5 s retry). Pure, table-tested.
+    struct RetryLedger: Equatable {
+        private(set) var settled = false
+        mutating func apply(_ step: Step) -> Step {
+            if settled { return .skip }
+            if step != .skip { settled = true }
+            return step
+        }
+    }
+
+    /// A newer open supersedes any older open's pending retries.
+    private static var generation = 0
+
     /// The job window is the RESULT the user asked for (Archive Helper's
     /// expanded row, Compare) — open it in front like any other window.
     static func openInFront(_ openWindow: OpenWindowAction) {
@@ -69,24 +85,34 @@ enum MediaFileOperationsWindowOpener {
     /// stands in.
     static func openBehindMain(_ openWindow: OpenWindowAction) {
         let captured = MainWindowHelper.shared.findMainWindow() ?? NSApp.keyWindow
+        generation += 1
+        let mine = generation
+        let ledger = RetryLedgerBox()
         openWindow(id: sceneID)
         for delay in [0.0, 0.15, 0.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                sendBehind(captured)
+                guard mine == generation else { return }   // a newer open owns the window now
+                sendBehind(captured, ledger: ledger)
             }
         }
     }
 
-    private static func sendBehind(_ captured: NSWindow?) {
+    /// Reference holder so the three retries of ONE open share a ledger.
+    private final class RetryLedgerBox { var ledger = RetryLedger() }
+
+    private static func sendBehind(_ captured: NSWindow?, ledger: RetryLedgerBox) {
         guard let job = NSApp.windows.first(where: {
             isJobWindow(identifier: $0.identifier?.rawValue, title: $0.title)
         }) else { return }
-        let anchor = (captured?.isVisible == true ? captured : nil)
-            ?? MainWindowHelper.shared.findMainWindow()
+        // A hidden captured main window must not stand in for itself:
+        // only a VISIBLE anchor is worth ordering against (codex #969).
+        let fallback = MainWindowHelper.shared.findMainWindow().flatMap { $0.isVisible ? $0 : nil }
+        let anchor = (captured?.isVisible == true ? captured : nil) ?? fallback
         guard let anchor, anchor !== job else { return }
-        switch step(jobIsKey: NSApp.keyWindow === job,
-                    modalRunning: NSApp.modalWindow != nil,
-                    anchorVisible: anchor.isVisible) {
+        let planned = step(jobIsKey: NSApp.keyWindow === job,
+                           modalRunning: NSApp.modalWindow != nil,
+                           anchorVisible: anchor.isVisible)
+        switch ledger.ledger.apply(planned) {
         case .skip:
             return
         case .reorder:
