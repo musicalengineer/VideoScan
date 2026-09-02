@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 284 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 289 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2222,6 +2222,69 @@
         "Setting aside",
         "videos"
       ]
+    },
+    {
+      "id": "lv260902-010",
+      "category": "live",
+      "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
+      "expect": "kinship",
+      "mustContain": [
+        "Brockton"
+      ],
+      "mustNotContain": [
+        "The Birth Locations Of Donna",
+        "don't find"
+      ],
+      "followsPrevious": false,
+      "notes": "observed live 2026-09-02 19:12: MISS — lineage resolver took 'The Birth Locations Of Donna' as a person name. Wanted: Donna's maternal line (Elaine Bowser → Ethel Evelyn Damon → …) with birthplaces, stopping at the first non-US birth. DISPATCH: codex lineage name extractor (same class as -001)."
+    },
+    {
+      "id": "lv260902-011",
+      "category": "live",
+      "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
+      "expect": "kinship",
+      "mustNotContain": [
+        "39,250",
+        "most common surnames"
+      ],
+      "followsPrevious": false,
+      "notes": "observed live 2026-09-02 19:08 (×2): MISS — answered with the generic tree overview. Wanted: nearest European-born ancestor of the owner, with generation count, name and birthplace. DISPATCH: lineage origin-trail walk (new operation)."
+    },
+    {
+      "id": "lv260902-012",
+      "category": "live",
+      "text": "show the archive window",
+      "expect": "catalog",
+      "mustNotContain": [
+        "couldn't turn that into a search"
+      ],
+      "followsPrevious": false,
+      "notes": "observed live 2026-09-02 18:49: MISS — generic decline; no tab/window navigation verbs (tree centering exists). DISPATCH: navigation chips (Archive/People/Storage/Catalog/Family Tree)."
+    },
+    {
+      "id": "lv260902-013a",
+      "category": "live",
+      "text": "research william love latter",
+      "expect": "clarify",
+      "followsPrevious": false,
+      "mustContain": [
+        "William Love Latta"
+      ],
+      "notes": "setup turn for -013: did-you-mean offer (observed live 9/02: PASS)."
+    },
+    {
+      "id": "lv260902-013",
+      "category": "live",
+      "text": "yes",
+      "expect": "kinship",
+      "followsPrevious": true,
+      "mustContain": [
+        "William Love Latta"
+      ],
+      "mustNotContain": [
+        "couldn't tell how"
+      ],
+      "notes": "observed live 2026-09-02 18:44 after 'did you mean William Love Latta Sr.?': MISS — 'yes' refused as an unclear refinement. Needs the did-you-mean antecedent turn before it in a chain (research william love latter). DISPATCH: follow-up resolver accepts yes/that one after a which-one/did-you-mean."
     }
   ]
 }
