@@ -131,7 +131,11 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, fl
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": 0, "seed": 101},
+        # num_ctx: without it ollama runs the model at its MAXIMUM context
+        # (262K), and a 32B reviewer on a 48 GB Mac came back with empty
+        # 200 replies that were counted as 25/25 FLAGGED (2026-09-01).
+        # A diff plus the system prompt is a few thousand tokens.
+        "options": {"temperature": 0, "seed": 101, "num_ctx": 32768},
     }).encode()
     request = urllib.request.Request(
         f"{endpoint.rstrip('/')}/api/chat", data=body,
@@ -144,6 +148,11 @@ def ask(endpoint: str, model: str, prompt: str, timeout: float) -> tuple[str, fl
         return "", time.monotonic() - started, str(exc)
     answer = (payload.get("message") or {}).get("content", "")
     answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
+    if not answer:
+        # An empty reply is a transport/server failure, never a finding:
+        # keep the raw payload so the cause (memory, context, load) is
+        # readable in the verdict file.
+        return "", time.monotonic() - started, "empty reply: " + json.dumps(payload)[:600]
     return answer, time.monotonic() - started, None
 
 
