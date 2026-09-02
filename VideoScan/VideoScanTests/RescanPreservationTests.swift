@@ -208,6 +208,16 @@ struct RescanPreservationTests {
         original.notes = "reunion reel, second tape"
         let purgedAt = Date(timeIntervalSince1970: 1_670_000_000)
         original.purgedAt = purgedAt
+        // Archive provenance + user date (2026-09-02 audit) — see the
+        // archive-provenance section below for the incident.
+        let fixityAt = Date(timeIntervalSince1970: 1_690_000_000)
+        original.archiveFixity = ArchiveFixity(digest: "ab" + String(repeating: "cd", count: 31),
+                                               verifiedAt: fixityAt, sizeBytes: 12_345)
+        original.originalFullPath = "/Volumes/LaCie/tapes/reunion.mov"
+        original.originVolume = "LaCie"
+        original.masterLocation = "/Volumes/FamilyArchive"
+        original.userDate = "1985-08"
+        original.userDateConfidence = "known"
 
         let snap = RescanPreservedFields(from: original)
 
@@ -249,6 +259,16 @@ struct RescanPreservationTests {
         #expect(fresh.junkScore == 7)
         #expect(fresh.notes == "reunion reel, second tape")
         #expect(fresh.purgedAt == purgedAt)
+
+        // Archive provenance + user date — all six (2026-09-02).
+        #expect(fresh.archiveFixity?.digest == "ab" + String(repeating: "cd", count: 31))
+        #expect(fresh.archiveFixity?.verifiedAt == fixityAt)
+        #expect(fresh.archiveFixity?.sizeBytes == 12_345)
+        #expect(fresh.originalFullPath == "/Volumes/LaCie/tapes/reunion.mov")
+        #expect(fresh.originVolume == "LaCie")
+        #expect(fresh.masterLocation == "/Volumes/FamilyArchive")
+        #expect(fresh.userDate == "1985-08")
+        #expect(fresh.userDateConfidence == "known")
 
         // Scan-derived field left untouched by apply().
         #expect(fresh.videoCodec == "hevc-NEW")
@@ -414,4 +434,274 @@ struct RescanPreservationTests {
         #expect(restoredB == 1)
         #expect(freshB.sceneCaptions.first?.text == "from B")
     }
+
+    // MARK: - Archive provenance survives a rescan (2026-09-02)
+    //
+    // Rick 2026-09-02: an Update Catalog rescan of the Master Archive volume
+    // (/Volumes/FamilyArchive — 39 records under the root, 28 carrying a
+    // SHA-256 fixity record stamped by Promote / Verify Archive Copies)
+    // replaced every same-path record with a fresh instance, and
+    // `archiveFixity` was NOT in RescanPreservedFields. All 28 fixity
+    // records vanished; the sidebar showed every archive copy as
+    // unverified ("cataloged by rescan, not by Promote") and the only way
+    // back was Verify Copies re-reading every byte (one file is 73 GB).
+    // The same audit found Promote's self-contained provenance
+    // (originalFullPath / originVolume / masterLocation) and Rick's
+    // hand-typed userDate / userDateConfidence were missing too.
+    //
+    // Five dimensions (feature-test checklist): logic, negative,
+    // isWorthRestoring, 100k scale, and an end-to-end scan-merge SENSOR.
+
+    /// One archive copy the way `registerPromotedCopy` leaves it.
+    private func archiveCopyRecord(
+        path: String = "/Volumes/FamilyArchive/BreenFamilyArchive/1980s/1985/reunion.mov",
+        sourceID: UUID = UUID(),
+        verifiedAt: Date = Date(timeIntervalSince1970: 1_755_000_000),
+        digest: String = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    ) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (path as NSString).lastPathComponent
+        r.fullPath = path
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.sizeBytes = 4_242
+        r.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: verifiedAt, sizeBytes: 4_242)
+        r.derivedFrom = sourceID
+        r.derivationKind = ArchivePromotion.derivationKind
+        r.originalFullPath = "/Volumes/LaCie/Tapes/reunion.mov"
+        r.originVolume = "LaCie"
+        r.masterLocation = "/Volumes/FamilyArchive"
+        r.archiveStage = .masterAssigned
+        r.lifecycleStage = .archived
+        r.mediaDisposition = .important
+        r.starRating = 3
+        r.userDate = "1985-08"
+        r.userDateConfidence = "known"
+        return r
+    }
+
+    // (a) LOGIC — the whole fixity record survives, field by field.
+    @Test func archiveFixitySurvivesSamePathRescan() {
+        let verifiedAt = Date(timeIntervalSince1970: 1_755_123_456)
+        let original = archiveCopyRecord(verifiedAt: verifiedAt)
+        let snap = RescanPreservedFields(from: original)
+
+        let fresh = freshlyScannedRecord(path: original.fullPath)
+        #expect(fresh.archiveFixity == nil, "precondition: a scan never mints fixity")
+        snap.apply(to: fresh)
+
+        let fixity = fresh.archiveFixity
+        #expect(fixity != nil, "rescan dropped the archive copy's fixity record — 2026-09-02 sensor")
+        #expect(fixity?.algorithm == "sha256")
+        #expect(fixity?.digest == "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+        #expect(fixity?.verifiedAt == verifiedAt)
+        #expect(fixity?.sizeBytes == 4_242)
+        #expect(fixity == original.archiveFixity, "restored verbatim (Equatable)")
+
+        // Promote's sibling provenance rides along.
+        #expect(fresh.originalFullPath == "/Volumes/LaCie/Tapes/reunion.mov")
+        #expect(fresh.originVolume == "LaCie")
+        #expect(fresh.masterLocation == "/Volumes/FamilyArchive")
+        #expect(fresh.userDate == "1985-08")
+        #expect(fresh.userDateConfidence == "known")
+        // Scan-derived size stays the FRESH value — fixity.sizeBytes is
+        // the verified-at-the-time figure, not a mirror of sizeBytes.
+        #expect(fresh.sizeBytes == 99_999)
+    }
+
+    // (b) NEGATIVE — no fixity in, no fixity out; unknown paths get none.
+    @Test func recordsWithoutFixityNeverGainOne_andUnknownPathsGetNone() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let copy = archiveCopyRecord(path: "/Volumes/FamilyArchive/a/copy.mov")
+        // A curated record (in the map because of its note) with NO fixity.
+        let plain = freshlyScannedRecord(path: "/Volumes/FamilyArchive/a/plain.mov")
+        plain.notes = "not an archive copy"
+        model.records = [copy, plain]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        model.records.removeAll()
+
+        let freshCopy = freshlyScannedRecord(path: copy.fullPath)
+        let freshPlain = freshlyScannedRecord(path: plain.fullPath)
+        let freshNew = freshlyScannedRecord(path: "/Volumes/FamilyArchive/a/never-seen.mov")
+        let restored = model.applyPreservedFieldsAfterRescan(
+            of: target, onto: [freshCopy, freshPlain, freshNew])
+
+        #expect(restored == 2, "copy + plain had snapshots; the never-seen path had none")
+        #expect(freshCopy.archiveFixity == copy.archiveFixity)
+        #expect(freshPlain.archiveFixity == nil, "a record with no fixity must not acquire one")
+        #expect(freshPlain.notes == "not an archive copy", "its own curated data still restores")
+        #expect(freshPlain.originalFullPath == nil)
+        #expect(freshPlain.masterLocation.isEmpty)
+        #expect(freshPlain.userDate == nil)
+        #expect(freshNew.archiveFixity == nil, "a fresh record at an unknown path gets no fixity")
+        #expect(freshNew.derivedFrom == nil)
+        #expect(freshNew.userDate == nil)
+    }
+
+    // (c) isWorthRestoring — fixity ALONE keeps the record in the map.
+    @Test func fixityAloneMakesSnapshotWorthRestoring() {
+        let r = VideoRecord()
+        r.filename = "copy.mov"
+        r.fullPath = "/Volumes/FamilyArchive/copy.mov"
+        r.archiveFixity = ArchiveFixity(digest: "00", verifiedAt: Date(), sizeBytes: 1)
+        #expect(RescanPreservedFields(from: r).isWorthRestoring,
+                "fixity alone must keep the snapshot in the rescan map, or the merge drops it")
+
+        // Each sibling provenance field alone must do the same.
+        let byPath = VideoRecord(); byPath.originalFullPath = "/Volumes/LaCie/x.mov"
+        #expect(RescanPreservedFields(from: byPath).isWorthRestoring, "originalFullPath alone")
+        let byVolume = VideoRecord(); byVolume.originVolume = "LaCie"
+        #expect(RescanPreservedFields(from: byVolume).isWorthRestoring, "originVolume alone")
+        let byMaster = VideoRecord(); byMaster.masterLocation = "/Volumes/FamilyArchive"
+        #expect(RescanPreservedFields(from: byMaster).isWorthRestoring, "masterLocation alone")
+        let byDate = VideoRecord(); byDate.userDate = "1992"
+        #expect(RescanPreservedFields(from: byDate).isWorthRestoring, "userDate alone")
+        let byConfidence = VideoRecord(); byConfidence.userDateConfidence = "estimated"
+        #expect(RescanPreservedFields(from: byConfidence).isWorthRestoring, "userDateConfidence alone")
+
+        // And the blank-record contract still holds (map stays small).
+        #expect(!RescanPreservedFields(from: VideoRecord()).isWorthRestoring)
+    }
+
+    // (d) SCALE — snapshot + restore + re-link over 100k archive copies.
+    // Real catalog is ~103k records; the pipeline applies the snapshot
+    // BEFORE commitScanResults, so `records` still holds the old 100k
+    // while the re-link pass walks them — modeled here (no removeAll).
+    @Test("scale: snapshot + restore of 100k fixity-bearing records within budget",
+          .timeLimit(.minutes(1)))
+    func scale_snapshotAndRestore100kArchiveCopiesWithinBudget() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let verifiedAt = Date(timeIntervalSince1970: 1_755_000_000)
+        var old: [VideoRecord] = []
+        old.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            let path = "/Volumes/FamilyArchive/BreenFamilyArchive/1990s/199\(i % 10)/clip\(i).mov"
+            let r = VideoRecord()
+            r.filename = "clip\(i).mov"
+            r.fullPath = path
+            r.sizeBytes = Int64(i)
+            r.archiveFixity = ArchiveFixity(digest: String(format: "%064x", i),
+                                            verifiedAt: verifiedAt, sizeBytes: Int64(i))
+            r.derivedFrom = UUID()
+            r.derivationKind = ArchivePromotion.derivationKind
+            r.archiveStage = .masterAssigned
+            old.append(r)
+        }
+        model.records = old
+        model.scanTargets = [target]
+
+        var fresh: [VideoRecord] = []
+        fresh.reserveCapacity(100_000)
+        for r in old { fresh.append(freshlyScannedRecord(path: r.fullPath)) }
+
+        let clock = ContinuousClock()
+        var restored = 0
+        let elapsed = clock.measure {
+            model.snapshotPreservedFieldsForRescan(of: target)
+            restored = model.applyPreservedFieldsAfterRescan(of: target, onto: fresh)
+        }
+        #expect(restored == 100_000)
+        #expect(fresh[0].archiveFixity == old[0].archiveFixity)
+        #expect(fresh[99_999].archiveFixity?.digest == String(format: "%064x", 99_999))
+        #expect(fresh[54_321].derivationKind == ArchivePromotion.derivationKind)
+        #expect(fresh[54_321].archiveStage == .masterAssigned)
+        #expect(fresh[54_321].sizeBytes == 99_999, "scan-derived size untouched")
+        #expect(elapsed < .seconds(2),
+                "100k snapshot + restore took \(elapsed) — budget 2s")
+    }
+
+    // (e) SENSOR — end to end through the REAL pipeline (startTarget →
+    // walker → probe → applyPreservedFieldsAfterRescan → commitScanResults),
+    // ScanMergeScopeTests style: a same-path rescan of the archive tree
+    // REPLACES the copy with a fresh instance, and that instance must
+    // still carry its fixity AND its Promote lineage (derivedFrom +
+    // derivationKind) together. RED before 2026-09-02 (fixity nil after
+    // the merge — exactly what Rick saw on /Volumes/FamilyArchive).
+    @Test func sensor_archiveCopyFixityAndPromotionProvenanceSurviveSamePathRescan_2026_09_02() async throws {
+        let dir = try makeArchiveTempDir("fixity")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let filePath = dir.appendingPathComponent("reunion.mov").path
+        // Junk bytes: ffprobe fails but extensioned damaged media is still
+        // cataloged, so the path IS re-seen and replaced by the merge.
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: filePath))
+
+        let model = makeArchivePipelineModel()
+        // The promotion SOURCE lives on another volume (outside the
+        // rescanned root) — its id is untouched by the merge, so the
+        // copy's derivedFrom must still point at it afterwards.
+        let source = freshlyScannedRecord(path: "/Volumes/LaCie/Tapes/reunion.mov")
+        let verifiedAt = Date(timeIntervalSince1970: 1_755_000_000)
+        let seed = archiveCopyRecord(path: filePath, sourceID: source.id, verifiedAt: verifiedAt)
+        seed.sizeBytes = 999_999                       // stale scan-derived value
+        seed.archiveFixity = ArchiveFixity(digest: seed.archiveFixity!.digest,
+                                           verifiedAt: verifiedAt, sizeBytes: 64)
+        model.records = [source, seed]
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.startTarget(target)
+        _ = await target.scanTask?.value
+
+        let refreshed = try #require(model.records.first { $0.fullPath == filePath },
+                                     "Re-seen path must still be cataloged after the rescan")
+        #expect(refreshed !== seed,
+                "The merge must have REPLACED the record with a freshly-scanned instance")
+        #expect(refreshed.sizeBytes == 64,
+                "Scan-derived fields must be refreshed from disk (got \(refreshed.sizeBytes))")
+
+        // The archive copy is still a VERIFIED archive copy — the exact
+        // test the sidebar / Volume dashboard / Hallie stats apply.
+        #expect(refreshed.archiveFixity != nil,
+                "fixity dropped by a same-path rescan — 2026-09-02 FamilyArchive incident")
+        #expect(refreshed.archiveFixity == seed.archiveFixity, "restored verbatim")
+        #expect(refreshed.archiveFixity?.verifiedAt == verifiedAt)
+        #expect(refreshed.archiveFixity?.sizeBytes == 64)
+        // …and it still knows it is a Promote output of THAT source.
+        #expect(refreshed.derivedFrom == source.id, "Promote lineage must survive with the fixity")
+        #expect(refreshed.derivationKind == ArchivePromotion.derivationKind)
+        #expect(refreshed.originalFullPath == "/Volumes/LaCie/Tapes/reunion.mov")
+        #expect(refreshed.originVolume == "LaCie")
+        #expect(refreshed.masterLocation == "/Volumes/FamilyArchive")
+        #expect(refreshed.archiveStage == .masterAssigned)
+        #expect(refreshed.lifecycleStage == .archived)
+        #expect(refreshed.userDate == "1985-08")
+        #expect(refreshed.userDateConfidence == "known")
+        // The source outside the tree is untouched.
+        #expect(model.records.contains { $0 === source })
+    }
+}
+
+// MARK: - Pipeline helpers for the end-to-end sensor (ScanMergeScopeTests style)
+
+/// Model with a DETERMINISTIC in-memory scan policy. VideoScanModel's
+/// default `scanOptions = .restored()` reads the developer's LIVE
+/// UserDefaults in the test host, so with factory defaults
+/// (skipSmallFiles=true) the 64-byte fixture would never be discovered.
+/// Pinned in memory only; `ScanOptions.save()` is never called, so real
+/// prefs are untouched (settings-pollution class).
+@MainActor
+private func makeArchivePipelineModel() -> VideoScanModel {
+    let model = VideoScanModel()
+    var opts = ScanOptions()
+    opts.skipSmallFiles = false      // fixture is a tiny junk-byte file
+    opts.skipChecksums = true        // speed; hashing is irrelevant here
+    opts.probeExtensionless = false
+    model.scanOptions = opts
+    return model
+}
+
+private func makeArchiveTempDir(_ label: String) throws -> URL {
+    // Canonicalize: NSTemporaryDirectory() is /var/folders/…, but the
+    // walker yields realpath'd /private/var/folders/… URLs. Seeded
+    // record paths must share the walker's prefix or nothing matches.
+    var dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vs_rescanfixity_\(label)_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    if let canonical = try dir.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath {
+        dir = URL(fileURLWithPath: canonical, isDirectory: true)
+    }
+    return dir
 }
