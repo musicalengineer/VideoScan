@@ -810,7 +810,7 @@ enum HallieAppTurnCoordinator {
             presenceRecords = []
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
-        case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+        case .temporal, .graph, .record, .unsupportedEvent, .followUp, .capability,
              .help, .smalltalk, .conversation, .telling, .reset:
             presenceRecords = []
             aggregateRecords = []
@@ -847,8 +847,10 @@ enum HallieAppTurnCoordinator {
                 graph = needsBirthYear || HallieTurnExecutor.isPhotoAsk(ast)
                     ? dependencies.loadGraph() : nil
                 cyberBrain = dependencies.loadCyberBrain()
-            case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
+            case .record, .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
+                // A record turn reads ONE record's own fields (captured on
+                // the main actor above); no identity source is loaded.
                 profiles = []
                 graph = nil
                 cyberBrain = nil

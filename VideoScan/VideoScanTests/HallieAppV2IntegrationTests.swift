@@ -65,6 +65,7 @@ struct HallieAppV2IntegrationTests {
             .graph(.init(people: ["Hallie Mae"], operation: .biography)),
             .event(.init(keywords: ["birthday"])),
             .cross(.init(people: ["Donna"], keywords: ["birthday"])),
+            .record(.init(reference: .currentSelection, operations: [.people])),
         ]
     }
 
@@ -209,6 +210,13 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.aggregateCount == 0)
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(invocation.graphWasInjected)
+            case .record:
+                // One record: nothing catalog-wide is captured — the
+                // sensor for "a record turn never snapshots the catalog".
+                #expect(invocation.presenceCount == 0)
+                #expect(invocation.aggregateCount == 0)
+                #expect(invocation.profiles?.isEmpty == true)
+                #expect(!invocation.graphWasInjected)
             case .unsupportedEvent, .followUp, .capability, .help, .smalltalk,
                  .conversation, .telling, .reset:
                 #expect(invocation.presenceCount == 0)

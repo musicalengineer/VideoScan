@@ -290,6 +290,13 @@ enum HallieRepairTurn {
             return "a question about \(p.subject) at a point in time"
         case .aggregate(let p):
             return "a count over the catalog\(list(p.anchorPeople))"
+        case .record(let p):
+            let what: String
+            switch p.reference {
+            case .currentSelection: what = "the selected video"
+            case .file(let name): what = "the file \(name)"
+            }
+            return "a question about \(what)\(list(p.people ?? []))"
         }
     }
 }

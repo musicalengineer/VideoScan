@@ -47,7 +47,7 @@ enum HallieShellCLI {
     }
 
     enum Route: Equatable {
-        case presence, temporal, aggregate, graph, cross
+        case presence, temporal, aggregate, graph, cross, record
         case unsupportedEvent
         case followUp, capability
         case help, smalltalk, conversation, telling, reset
@@ -589,6 +589,7 @@ enum HallieShellCLI {
         case .aggregate: return .aggregate
         case .graph: return .graph
         case .cross: return .cross
+        case .record: return .record
         case .unsupportedEvent: return .unsupportedEvent
         case .followUp: return .followUp
         case .capability: return .capability
@@ -1093,7 +1094,7 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
-            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
+            case .temporal, .graph, .record, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
