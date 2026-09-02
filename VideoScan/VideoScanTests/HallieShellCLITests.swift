@@ -1792,6 +1792,44 @@ struct HallieShellCLITests {
         #expect(assistantRoutes(harness) == ["record", "record"])
     }
 
+    /// codex #976 item 3: an explicit path nobody has never answers from a
+    /// same-named file elsewhere; the decline offers that file by exact
+    /// path and the chip answers about it.
+    @Test func aMissingPathDeclinesAndOffersTheSameNamedFileAsAChip() async throws {
+        let harness = Harness(
+            inputs: [
+                "who is in /Volumes/Nowhere/New Hampshire.mov",
+                "who is in \(Self.newHampshirePath)",
+                "who is in /Volumes/Nowhere/nothing.mov",
+                ":quit",
+            ],
+            records: newHampshireCatalog())
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions.isEmpty, Comment(rawValue: transcript))
+        #expect(harness.output.contains("I don't have /Volumes/Nowhere/New Hampshire.mov. I do have \(Self.newHampshirePath) — that one?"),
+                Comment(rawValue: transcript))
+        #expect(harness.output.contains("offer: ask “who is in \(Self.newHampshirePath)”"), Comment(rawValue: transcript))
+        #expect(harness.output.contains("In New Hampshire.mov, Donna and Rick are tagged (confirmed by a person). The face matcher thinks Tim is in it too — not confirmed."),
+                Comment(rawValue: transcript))
+        #expect(harness.output.contains { $0.hasPrefix("I don't have /Volumes/Nowhere/nothing.mov, and nothing in the catalog is called “nothing.mov”.") },
+                Comment(rawValue: transcript))
+        let events = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(events.map(\.route) == ["record", "record", "record"])
+        #expect(events.map(\.outcome) == ["declined", "answered", "declined"])
+        // The first decline's ONLY answer-bearing line is the offer: the
+        // wrong volume's people were never reported.
+        let firstAnswer = harness.output.firstIndex { $0.hasPrefix("I don't have /Volumes/Nowhere/New Hampshire.mov") }
+        let realAnswer = harness.output.firstIndex { $0.hasPrefix("In New Hampshire.mov, Donna and Rick are tagged") }
+        #expect(firstAnswer != nil && realAnswer != nil && firstAnswer! < realAnswer!)
+    }
+
     /// Scale: a record turn over 100k records resolves the named file once
     /// and never captures a catalog-wide snapshot — the whole session,
     /// including the 100k-record catalog open, stays within the same budget

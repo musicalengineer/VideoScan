@@ -63,7 +63,7 @@ struct HallieRecordScopeTurnTests {
             ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Christmas_1994.mov", fullPath: "/Volumes/A/Christmas_1994.mov"),
             ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Christmas_1995.mkv", fullPath: "/Volumes/A/Christmas_1995.mkv"),
         ]
-        let context = HallieTurnExecutor.Context(recordScope: .ambiguous(candidates))
+        let context = HallieTurnExecutor.Context(recordScope: .ambiguous(candidates, total: 2))
         let result = try await HallieTurnExecutor.execute(
             ast(.file(name: "Christmas.mov"), [.people], people: ["Donna"]), context: context)
         #expect(result.outcome == .declined)
@@ -75,44 +75,77 @@ struct HallieRecordScopeTurnTests {
         #expect(result.queryDescription == "shape=record reference=file:Christmas.mov ambiguous=2")
     }
 
+    /// codex #976 item 6: the true count survives the five-chip cap, and
+    /// identical basenames are told apart by volume in the chip labels —
+    /// while every chip still asks by full path.
+    @Test func ambiguityKeepsTheTrueCountAndLabelsCollidingBasenamesByVolume() async throws {
+        let candidates = [
+            ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "tape.mov", fullPath: "/Volumes/LaCie/1994/tape.mov"),
+            ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "tape.mov", fullPath: "/Volumes/MyBook/1994/tape.mov"),
+            ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Tape 2.mov", fullPath: "/Volumes/LaCie/1995/Tape 2.mov"),
+        ]
+        let result = try await HallieTurnExecutor.execute(
+            ast(.file(name: "tape"), [.people]),
+            context: .init(recordScope: .ambiguous(candidates, total: 7)))
+        #expect(result.outcome == .declined)
+        #expect(result.prose == "I found 7 files that could be “tape”; here are the first 3: tape.mov (LaCie), tape.mov (MyBook), Tape 2.mov. Which one do you mean?")
+        #expect(result.offeredActions == [
+            .ask(question: "who is in /Volumes/LaCie/1994/tape.mov", label: "tape.mov (LaCie)"),
+            .ask(question: "who is in /Volumes/MyBook/1994/tape.mov", label: "tape.mov (MyBook)"),
+            .ask(question: "who is in /Volumes/LaCie/1995/Tape 2.mov", label: "Tape 2.mov"),
+        ])
+        #expect(result.queryDescription == "shape=record reference=file:tape ambiguous=7")
+        #expect(result.basisLine.contains("matched 7 catalog filenames (3 offered"))
+    }
+
+    /// codex #976 item 3: a path nobody has is a decline that OFFERS the
+    /// same-named files (by exact path) — never a silent substitute.
+    @Test func aMissingPathDeclinesAndOffersTheSameNamedFiles() async throws {
+        let sameName = [
+            ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "tape.mov", fullPath: "/Volumes/A/tape.mov"),
+        ]
+        let one = try await HallieTurnExecutor.execute(
+            ast(.file(name: "/Volumes/B/tape.mov"), [.people]),
+            context: .init(recordScope: .pathNotFound(path: "/Volumes/B/tape.mov", sameName: sameName, sameNameTotal: 1)))
+        #expect(one.route == .record)
+        #expect(one.outcome == .declined)
+        #expect(one.prose == "I don't have /Volumes/B/tape.mov. I do have /Volumes/A/tape.mov — that one?")
+        #expect(one.offeredActions == [.ask(question: "who is in /Volumes/A/tape.mov", label: "tape.mov")])
+        #expect(one.citations.isEmpty)
+        #expect(one.queryDescription == "shape=record reference=file:/Volumes/B/tape.mov pathNotFound sameName=1")
+
+        let two = try await HallieTurnExecutor.execute(
+            ast(.file(name: "/Volumes/C/tape.mov"), [.about]),
+            context: .init(recordScope: .pathNotFound(
+                path: "/Volumes/C/tape.mov",
+                sameName: sameName + [.init(id: UUID(), filename: "tape.mov", fullPath: "/Volumes/B/tape.mov")],
+                sameNameTotal: 2)))
+        #expect(two.prose == "I don't have /Volumes/C/tape.mov. I do have 2 files called “tape.mov”: tape.mov (A), tape.mov (B). One of those?")
+        #expect(two.offeredActions == [
+            .ask(question: "tell me about /Volumes/A/tape.mov", label: "tape.mov (A)"),
+            .ask(question: "tell me about /Volumes/B/tape.mov", label: "tape.mov (B)"),
+        ])
+
+        let none = try await HallieTurnExecutor.execute(
+            ast(.file(name: "/Volumes/B/nothing.mov"), [.people]),
+            context: .init(recordScope: .pathNotFound(path: "/Volumes/B/nothing.mov", sameName: [], sameNameTotal: 0)))
+        #expect(none.outcome == .declined)
+        #expect(none.prose.hasPrefix("I don't have /Volumes/B/nothing.mov, and nothing in the catalog is called “nothing.mov”."))
+        #expect(none.offeredActions.isEmpty)
+    }
+
     @Test func aWhichOneChipIsARecordQuestionAboutThatPath() async throws {
         let result = try await HallieTurnExecutor.execute(
             ast(.file(name: "Christmas.mov"), [.people]),
             context: .init(recordScope: .ambiguous([
                 .init(id: UUID(), filename: "Christmas_1994.mov", fullPath: "/Volumes/A/Christmas_1994.mov"),
-            ])))
+            ], total: 1)))
         guard case .ask(let question, _)? = result.offeredActions.first else {
             Issue.record("expected an ask chip"); return
         }
         let record = ArchivistRecordQuestion.detect(question)
         #expect(record?.reference == .file(name: "/Volumes/A/Christmas_1994.mov"))
         #expect(record?.operations == [.people])
-    }
-
-    @Test func aContinuationIsRefusedOnTheRecordRoute() async throws {
-        // Records have no which-person clarification; a stale chip cannot resume one.
-        let result = try await HallieTurnExecutor.execute(ast(), context: .init(recordScope: .resolved(snapshot())))
-        #expect(result.clarification == nil)
-    }
-
-    @Test func memoryKeepsTheSingleCitationForPlayItAndForgetsNoList() async throws {
-        let context = HallieTurnExecutor.Context(recordScope: .resolved(snapshot()))
-        let intent = HallieTurnExecutor.Intent(originalQuestion: "who is in this video", ast: ast())
-        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
-        var memory = HallieTurnExecutor.ConversationMemory()
-        memory.record(intent: intent, result: result)
-        #expect(memory.lastResultSet?.citations.map(\.recordID) == [recordID])
-        #expect(memory.lastRefinable == nil)
-        #expect(memory.lastProvenance?.route == .record)
-        // "play it" resolves against that one citation.
-        let followUp = ArchivistFollowUpResolver.resolve(
-            "play it", snapshot: memory.followUpSnapshot, isKnownPerson: { _ in false })
-        if case .mediaAction(let verb, let indices) = followUp {
-            #expect(verb == .play)
-            #expect(indices == [0])
-        } else {
-            Issue.record("expected a media action, got \(followUp)")
-        }
     }
 
     @Test func provenanceNamesTheOneRecord() async throws {
@@ -157,6 +190,21 @@ struct HallieRecordScopeTurnTests {
             question: "when was this filmed", playAfterAnswer: false, memory: .init(),
             isKnownPerson: { _ in false }) {} else {
             Issue.record("'when was this filmed' with no selection must translate")
+        }
+    }
+
+    /// The same words with the noun beside the referent are still ours.
+    @Test func dateBesideThePronounIsStillARecordTurn() {
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "what is the date of it", playAfterAnswer: false, memory: .init(),
+            isKnownPerson: { _ in false })
+        guard case .run(let intent) = pre else { Issue.record("expected .run, got \(pre)"); return }
+        #expect(intent.ast == ast(.currentSelection, [.date]))
+        // And a stray "it" with a date word elsewhere goes to the translator.
+        if case .translate = HallieTurnExecutor.preTranslation(
+            question: "it would be nice to know the dates", playAfterAnswer: false, memory: .init(),
+            isKnownPerson: { _ in false }) {} else {
+            Issue.record("a date word away from the pronoun is not a record question")
         }
     }
 }

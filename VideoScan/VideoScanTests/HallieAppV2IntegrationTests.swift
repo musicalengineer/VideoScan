@@ -17,6 +17,9 @@ struct HallieAppV2IntegrationTests {
         let graphWasInjected: Bool
         let cyberBrainWasInjected: Bool
         let selectedDate: ArchivistTemporalSelectionDateSnapshot?
+        /// What the coordinator captured for a `record` turn — the
+        /// snapshot the executor will answer from (codex #976 item 8).
+        var recordScope: HallieTurnExecutor.RecordScope = .noSelection
     }
 
     /// A mutex-backed recorder is the Swift equivalent of a small C++ test
@@ -124,7 +127,8 @@ struct HallieAppV2IntegrationTests {
                     profiles: context.profiles,
                     graphWasInjected: context.graph != nil,
                     cyberBrainWasInjected: context.cyberBrain != nil,
-                    selectedDate: context.selectedTemporalDate))
+                    selectedDate: context.selectedTemporalDate,
+                    recordScope: context.recordScope))
                 return result ?? Self.fixtureResult(for: receivedAST)
             },
             continueTurn: { clarification, selectedID, context in
@@ -225,6 +229,83 @@ struct HallieAppV2IntegrationTests {
                 #expect(!invocation.graphWasInjected)
             }
         }
+    }
+
+    /// codex #976 item 8: the record SNAPSHOT captured with the referent
+    /// — not just its id — reaches the executor's Context. "this video"
+    /// carries the selected dossier verbatim; a named file is resolved
+    /// through the model-style memo against the records handed in, and a
+    /// missing path is a `pathNotFound` scope with the same-named offer.
+    @Test func recordTurnsHandTheCapturedDossierToTheExecutorContext() async throws {
+        let selected = VideoRecord()
+        selected.fullPath = "/isolated/catalog/selected.mov"
+        selected.filename = "selected.mov"
+        selected.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date(timeIntervalSince1970: 1))]
+        let named = VideoRecord()
+        named.fullPath = "/isolated/catalog/New Hampshire.mov"
+        named.filename = "New Hampshire.mov"
+        named.confirmedByUserPeople = [ConfirmedTag(name: "Rick", confirmedAt: Date(timeIntervalSince1970: 1))]
+        let records = [selected, named]
+        let dossier = ArchivistRecordDossierSnapshot(record: selected)
+        let index = ArchivistRecordReferenceIndex()
+        let referent = HallieAppTurnCoordinator.CapturedReferent(
+            recordID: selected.id, temporalDate: nil,
+            selectedDossier: dossier, recordIndex: index,
+            recordsVersion: RecordsVersion(count: records.count, revision: 1))
+
+        // "this video": the captured dossier, verbatim, no lookup.
+        let selectionRecorder = Recorder<Invocation>()
+        let selectionResponse = try await HallieAppTurnCoordinator.execute(
+            question: "fixture question", records: records, referent: referent,
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            dependencies: dependencies(
+                ast: .record(.init(reference: .currentSelection, operations: [.people])),
+                recorder: selectionRecorder))
+        let selectionInvocation = try #require(selectionRecorder.values.first)
+        #expect(selectionInvocation.recordScope == .resolved(dossier))
+        if case .resolved(let received) = selectionInvocation.recordScope {
+            #expect(received.id == selected.id)
+            #expect(received.fullPath == "/isolated/catalog/selected.mov")
+            #expect(received.confirmedPeople.map(\.name) == ["Donna"])
+        }
+        #expect(selectionResponse.capturedReferentID == selected.id)
+
+        // A named file: resolved through the memo, snapshot of THAT record.
+        let namedRecorder = Recorder<Invocation>()
+        _ = try await HallieAppTurnCoordinator.execute(
+            question: "fixture question", records: records, referent: referent,
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            dependencies: dependencies(
+                ast: .record(.init(reference: .file(name: "new hampshire.mov"), operations: [.people])),
+                recorder: namedRecorder))
+        let namedInvocation = try #require(namedRecorder.values.first)
+        #expect(namedInvocation.recordScope == .resolved(ArchivistRecordDossierSnapshot(record: named)))
+        #expect(index.rebuildCount == 1)
+
+        // A path nobody has: pathNotFound with the same-named file offered.
+        let pathRecorder = Recorder<Invocation>()
+        _ = try await HallieAppTurnCoordinator.execute(
+            question: "fixture question", records: records, referent: referent,
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            dependencies: dependencies(
+                ast: .record(.init(reference: .file(name: "/Volumes/Elsewhere/New Hampshire.mov"), operations: [.about])),
+                recorder: pathRecorder))
+        let pathInvocation = try #require(pathRecorder.values.first)
+        #expect(pathInvocation.recordScope == .pathNotFound(
+            path: "/Volumes/Elsewhere/New Hampshire.mov",
+            sameName: [.init(id: named.id, filename: "New Hampshire.mov", fullPath: "/isolated/catalog/New Hampshire.mov")],
+            sameNameTotal: 1))
+
+        // No referent capture at all: "this video" is noSelection.
+        let bareRecorder = Recorder<Invocation>()
+        _ = try await HallieAppTurnCoordinator.execute(
+            question: "fixture question", records: records,
+            referent: .init(recordID: nil, temporalDate: nil),
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            dependencies: dependencies(
+                ast: .record(.init(reference: .currentSelection, operations: [.people])),
+                recorder: bareRecorder))
+        #expect(try #require(bareRecorder.values.first).recordScope == .noSelection)
     }
 
     @Test func graphAndPresenceRoutesCaptureCyberBrainIdentityVocabulary() async throws {
@@ -444,7 +525,8 @@ struct HallieAppV2IntegrationTests {
                     profiles: context.profiles,
                     graphWasInjected: context.graph != nil,
                     cyberBrainWasInjected: context.cyberBrain != nil,
-                    selectedDate: context.selectedTemporalDate))
+                    selectedDate: context.selectedTemporalDate,
+                    recordScope: context.recordScope))
                 return Self.fixtureResult(for: receivedAST)
             },
             continueTurn: { clarification, selectedID, context in
