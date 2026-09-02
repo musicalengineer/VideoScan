@@ -471,6 +471,12 @@ enum HalliePronunciationQuery: Equatable, Sendable {
         #"^(?:hallie[,]?\s+)?(?:tell me|show me|give me|what is|what's|whats)\s+(?:the\s+|your\s+)?"# + pronunciationWord + #"\s+(?:of|for)\s+(?:the (?:name|word)\s+)?"# + name + #"\??$"#,
         // "do you know how to say Latta", "do you have a pronunciation for Latta"
         #"^(?:hallie[,]?\s+)?do you (?:know how to (?:say|pronounce)|have a "# + pronunciationWord + #" for)\s+"# + name + #"\??$"#,
+        // "say Stoughton again", "pronounce Latta", "say Beth one more time"
+        // (live 9/02: 'say stoughton again' right after a pronunciation
+        // note was taken as a refinement of the previous search). A
+        // trailing respelling ("say Edith as EE-dith") is the drill's, not
+        // ours: nothing may follow the name but again-words.
+        #"^(?:hallie[,]?\s+)?(?:please\s+|can you\s+|could you\s+|would you\s+)?(?:say|pronounce|read)\s+(?:the (?:name|word)\s+)?"# + name + #"(?:\s+(?:again|once more|one more time|for me|please|out loud|aloud))*\??$"#,
     ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
 
     static func detect(_ text: String) -> HalliePronunciationQuery? {
