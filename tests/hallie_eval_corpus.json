@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 229 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 264 questions across eleven categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -1594,6 +1594,310 @@
       "text": "do we have any recordings of Edmund Rice's voice",
       "expect": "graceful_decline",
       "notes": "Probe: sound recording begins 1877 (WorldKnowledge has the fact). Any honest decline passes; the floor line would be better."
+    },
+    {
+      "id": "tn001",
+      "category": "biography",
+      "text": "tell me about Rick",
+      "expect": "biography",
+      "mustNotContain": [
+        "Rick was the child",
+        "was married to",
+        "Rick was a ",
+        "Rick was an ",
+        "passed"
+      ],
+      "notes": "Rick 2026-09-01: living people must never be spoken of in the past tense ('Rick was …' sounds like he has passed on). 'was born' is fine."
+    },
+    {
+      "id": "tn002",
+      "category": "biography",
+      "text": "tell me about Tim",
+      "expect": "biography",
+      "mustNotContain": [
+        "Tim was the child",
+        "was married to",
+        "Tim was a ",
+        "Tim was an "
+      ],
+      "notes": "Living son; present tense for who he is."
+    },
+    {
+      "id": "tn003",
+      "category": "biography",
+      "text": "tell me about Matthew Rice",
+      "expect": "biography",
+      "mustMatch": [
+        "1629",
+        "was "
+      ],
+      "notes": "Control: a 17th-century ancestor keeps the past tense."
+    },
+    {
+      "id": "sb001",
+      "category": "family_tree",
+      "text": "who are my sisters",
+      "expect": "kinship",
+      "mustMatch": [
+        "Beth",
+        "Ellen"
+      ],
+      "mustNotContain": [
+        "can't tell",
+        "cannot tell",
+        "not sure who"
+      ],
+      "notes": "Rick 2026-09-01: 'It still doesn't know who my brothers and sisters are.' Beth and Ellen had no sex recorded in People."
+    },
+    {
+      "id": "sb002",
+      "category": "family_tree",
+      "text": "who are my brothers and sisters",
+      "expect": "kinship",
+      "mustMatch": [
+        "Beth|Ellen"
+      ],
+      "mustNotContain": [
+        "can't tell",
+        "cannot tell",
+        "not sure who"
+      ],
+      "notes": "One question, both groups; must not split on the plural conjunction."
+    },
+    {
+      "id": "sb003",
+      "category": "family_tree",
+      "text": "who are my brothers",
+      "expect": "kinship",
+      "mustNotContain": [
+        "Beth",
+        "Ellen",
+        "not sure who"
+      ],
+      "notes": "Sisters must not be listed as brothers (the 8/31 lookup-table bug)."
+    },
+    {
+      "id": "lv260901-001",
+      "category": "live",
+      "text": "show videos of tim",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-002",
+      "category": "live",
+      "text": "who is rick's brother?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-003",
+      "category": "live",
+      "text": "where was eileen latta born?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-004",
+      "category": "live",
+      "text": "tell me about William Love Latta Sr.",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-005",
+      "category": "live",
+      "text": "tell me about rick's brothers and sisters",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-006",
+      "category": "live",
+      "text": "how are you today hallie?",
+      "expect": "social",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-007",
+      "category": "live",
+      "text": "tell me about yourself",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-008",
+      "category": "live",
+      "text": "show me videos of Donna down the Cape in the 90s",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-009",
+      "category": "live",
+      "text": "tell me about thankful pratt",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-010",
+      "category": "live",
+      "text": "could a photo exist of someone prior to 1820?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-011",
+      "category": "live",
+      "text": "when was photography developed?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-012",
+      "category": "live",
+      "text": "how many lattas are in the tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-013",
+      "category": "live",
+      "text": "where was Martha lamson born and when?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-014",
+      "category": "live",
+      "text": "where was martha lamson born",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-015",
+      "category": "live",
+      "text": "tell me about donna breen",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-016",
+      "category": "live",
+      "text": "where was thankful pratt born?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-017",
+      "category": "live",
+      "text": "where was peter ronan born",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-018",
+      "category": "live",
+      "text": "when did the latta family come to america?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-019",
+      "category": "live",
+      "text": "tell me about John Robert Latta",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-020",
+      "category": "live",
+      "text": "could John Robert Latta have been in the american civil war?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-021",
+      "category": "live",
+      "text": "when was matt born?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-022",
+      "category": "live",
+      "text": "find matt in the home view catalog",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-023",
+      "category": "live",
+      "text": "how many videos in the archive now?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-024",
+      "category": "live",
+      "text": "who was martha lampson",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-025",
+      "category": "live",
+      "text": "who did she marry?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-026",
+      "category": "live",
+      "text": "are there any photos of martha?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-027",
+      "category": "live",
+      "text": "would there be any photos or videos of martha lampson?",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed"
+    },
+    {
+      "id": "lv260901-028",
+      "category": "live",
+      "text": "tell me about rick and donna breen",
+      "expect": "biography",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260901-029",
+      "category": "live",
+      "text": "who are rick's brothers?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+      "followsPrevious": true
     }
   ]
 }
