@@ -690,6 +690,17 @@ extension HallieTurnExecutor {
         if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
             return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
         }
+        // "who is in New Hampshire.mov" / "does it have my name in it" /
+        // "tell me about this video" (2026-09-02): ONE record, answered
+        // from its own fields by the record route — never a catalog-wide
+        // sweep. The client resolves the reference (selection or named
+        // file) when it captures the context.
+        if let record = ArchivistRecordQuestion.detect(question) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .record(record),
+                playAfterAnswer: playAfterAnswer))
+        }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
         // does not become either an invented family-tree fact or a catalog

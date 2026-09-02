@@ -1083,6 +1083,7 @@ enum HallieShellCLI {
                 }
             }
 
+            var recordScope: HallieTurnExecutor.RecordScope = .noSelection
             switch HallieTurnExecutor.route(intent.ast) {
             case .presence, .cross:
                 if state.presenceSnapshots == nil {
@@ -1094,7 +1095,18 @@ enum HallieShellCLI {
                     state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                         .capture(state.records)
                 }
-            case .temporal, .graph, .record, .unsupportedEvent, .followUp, .capability,
+            case .record:
+                // ONE record, resolved here (selection or named file); the
+                // executor never sees the catalog. No catalog-wide snapshot.
+                if case .record(let payload) = intent.ast {
+                    let resolution = ArchivistRecordReferenceResolver.resolve(
+                        payload.reference,
+                        selectedRecordID: state.selectedRecordID,
+                        records: state.records,
+                        recordForID: state.record)
+                    recordScope = await HallieTurnExecutor.RecordScope(resolution)
+                }
+            case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
             }
@@ -1116,6 +1128,7 @@ enum HallieShellCLI {
                 needsRecompile: state.needsRecompile,
                 cyberBrain: state.cyberBrain,
                 selectedTemporalDate: selectedDate,
+                recordScope: recordScope,
                 speakers: state.speakers)
             let request = HallieTurnExecutor.Request(intent: intent)
             var result = try await dependencies.executeRequest(request, context)
