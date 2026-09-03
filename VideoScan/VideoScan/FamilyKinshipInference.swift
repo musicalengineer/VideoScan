@@ -122,6 +122,10 @@ struct FamilyKinshipInference: Sendable {
         /// SHA-256 (16 hex) over the route as durable identities + hop kinds —
         /// the confirmation-ledger key for "this derivation, along this path".
         let pathHash: String
+        /// For a directly recorded sibling pair, the overlay's ONE verdict
+        /// (codex #1019 item 2) — what `term` was built from; nil for every
+        /// other route. A `.conflict` renders the neutral "sibling".
+        var siblingVerdict: FamilyKinshipOverlay.SiblingVerdict? = nil
 
         var usesTree: Bool { provenance.contains(.tree) }
         /// Some hop is a parent derived across a sibling row.
@@ -273,24 +277,19 @@ struct FamilyKinshipInference: Sendable {
         return Built(adjacency: adjacency, sorts: sorts)
     }
 
-    /// Row-derived hops (profile rows + inverses). Duplicate legacy rows for
-    /// one (relation, person) merge to the STRONGEST basis, so the answer
-    /// does not depend on row order: attested beats unspecified; two
-    /// different attestations keep the first and are reported by
-    /// validation.
+    /// Row-derived hops (profile rows + inverses), one per (relation,
+    /// person). A hop's `basis` is the first row's, informational only:
+    /// full / half / conflict for a sibling pair is the overlay's ONE
+    /// verdict (`siblingVerdict(_:_:)`, computed over every row on the
+    /// unordered pair — codex #1019 item 2), never re-decided here from
+    /// whichever row was read first.
     private static func rowHops(from node: Node, overlay: FamilyKinshipOverlay) -> [Hop] {
         var out: [Hop] = []
-        var position: [HopKey: Int] = [:]
+        var seen = Set<HopKey>()
         for edge in overlay.edges(from: node) where primitives.contains(edge.relation) {
-            let key = HopKey(relation: edge.relation, to: edge.to)
-            let hop = Hop(relation: edge.relation, from: node, to: edge.to,
-                          provenance: .profileRow(profileIdentity: edge.storedOnIdentity), basis: edge.basis)
-            if let i = position[key] {
-                if out[i].basis == .unspecified, edge.basis != .unspecified { out[i] = hop }
-            } else {
-                position[key] = out.count
-                out.append(hop)
-            }
+            guard seen.insert(HopKey(relation: edge.relation, to: edge.to)).inserted else { continue }
+            out.append(Hop(relation: edge.relation, from: node, to: edge.to,
+                           provenance: .profileRow(profileIdentity: edge.storedOnIdentity), basis: edge.basis))
         }
         return out
     }
@@ -533,9 +532,9 @@ struct FamilyKinshipInference: Sendable {
         for hop in hops(from: node) where hop.relation == .sibling {
             let theirs = explicitParents(of: hop.to).filter(derived.contains)
             guard !theirs.isEmpty else { continue }
-            let rule: String
-            if case .attestedHalf = hop.basis { rule = FamilyKinshipOverlay.Derivation.halfSiblingRule }
-            else { rule = FamilyKinshipOverlay.Derivation.fullSiblingRule }
+            let rule = overlay.siblingVerdict(node, hop.to)?.isHalf == true
+                ? FamilyKinshipOverlay.Derivation.halfSiblingRule
+                : FamilyKinshipOverlay.Derivation.fullSiblingRule
             let list = theirs.map(name(of:)).joined(separator: " and ")
             out.append(Proposal(
                 subject: node,
@@ -722,20 +721,27 @@ struct FamilyKinshipInference: Sendable {
     private func describe(_ route: [Hop], from: Node, to: Node) -> Derived {
         var term: String?
         var caveats: [String] = []
+        var pairVerdict: FamilyKinshipOverlay.SiblingVerdict?
         if let named = KinshipChainNamer.name(route.map(\.relation)) {
             var half = false
             var age: String?
             if named.isSibling {
                 let verdict = siblingVerdict(from, to, route: route)
                 half = verdict.half
+                pairVerdict = verdict.pair
                 if let caveat = verdict.caveat { caveats.append(caveat) }
                 age = BirthKnowledge.ageWord(subject: birth(of: to), anchor: birth(of: from))
             }
-            term = named.term(sex: sex(of: to), half: half, age: age)
+            // A conflicting pair gets the neutral word — no sex, no age, no
+            // "half-": the warning on both cards says what disagrees.
+            term = pairVerdict == .conflict
+                ? FamilyKinshipOverlay.siblingTerm(.conflict, sex: nil)
+                : named.term(sex: sex(of: to), half: half, age: age)
         }
         return Derived(from: from, to: to, term: term, route: route,
                        routeText: routeText(route), caveats: caveats,
-                       provenance: Set(route.map(\.provenance)), pathHash: pathHash(route))
+                       provenance: Set(route.map(\.provenance)), pathHash: pathHash(route),
+                       siblingVerdict: pairVerdict)
     }
 
     /// 16 hex chars of SHA-256 over "identity(from) >kind> identity(to)" per hop.
@@ -747,27 +753,41 @@ struct FamilyKinshipInference: Sendable {
         return hasher.finalize().prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Half only with complete evidence: an `.attestedHalf` row whose named
-    /// shared parent RESOLVES, or both people having two recorded parents
-    /// of which exactly one is shared. One shared parent + one unknown is
-    /// NOT half — it is "full assumed", with a caveat when the word came
-    /// from parent∘child rather than a row.
-    private func siblingVerdict(_ a: Node, _ b: Node, route: [Hop]) -> (half: Bool, caveat: String?) {
-        if route.count == 1, case .attestedHalf(let shared) = route[0].basis {
-            if let parent = overlay.node(for: shared), !overlay.isPlaceholder(parent) { return (true, nil) }
-            return (false, "the shared parent named on the half-sibling row could not be found — treated as unspecified")
-        }
+    /// A directly recorded pair takes the overlay's ONE verdict (codex
+    /// #1019 item 2) — computed over every row on the unordered pair, so
+    /// row order can't turn a conflict into "brother" or an unresolved half
+    /// into full. A pair met through parent∘child is half only with
+    /// complete evidence: both people having two recorded parents of which
+    /// exactly one is shared. One shared parent + one unknown is NOT half —
+    /// it is "full assumed", with a caveat.
+    private func siblingVerdict(_ a: Node, _ b: Node, route: [Hop])
+        -> (half: Bool, caveat: String?, pair: FamilyKinshipOverlay.SiblingVerdict?) {
         let pa = Set(parents(of: a).map(\.node)), pb = Set(parents(of: b).map(\.node))
-        if pa.count >= 2, pb.count >= 2 {
-            let shared = pa.intersection(pb).count
-            if shared == 0 {
-                return (false, "recorded parents don't overlap (\(pa.map(name(of:)).sorted().joined(separator: " and ")) vs \(pb.map(name(of:)).sorted().joined(separator: " and "))) — check the rows")
+        /// Both people fully recorded with no parent in common: the word
+        /// stands (a stored row, or a full verdict) with the evidence said.
+        let disjoint: String? = pa.count >= 2 && pb.count >= 2 && pa.isDisjoint(with: pb)
+            ? "recorded parents don't overlap (\(pa.map(name(of:)).sorted().joined(separator: " and ")) vs \(pb.map(name(of:)).sorted().joined(separator: " and "))) — check the rows"
+            : nil
+        if route.count == 1, route[0].relation == .sibling, route[0].provenance.isExplicit,
+           let verdict = overlay.siblingVerdict(a, b) {
+            switch verdict {
+            case .full:
+                return (false, disjoint, verdict)   // Rick's own row: his word stands
+            case .half:
+                return (true, nil, verdict)
+            case .unresolved:
+                return (true, "the shared parent named on the half-sibling row could not be found — pick them again", verdict)
+            case .conflict:
+                return (false, "full or half not established — the sibling rows between \(name(of: a)) and \(name(of: b)) disagree (see the relationship warning)", verdict)
             }
-            return (shared == 1, nil)
         }
-        guard route.count > 1 else { return (false, nil) }   // Rick's own row: his word stands
+        if pa.count >= 2, pb.count >= 2 {
+            if let disjoint { return (false, disjoint, nil) }
+            return (pa.intersection(pb).count == 1, nil, nil)
+        }
+        guard route.count > 1 else { return (false, nil, nil) }   // a stored row without a verdict: as written
         let short = pa.count < 2 ? a : b
-        return (false, "full or half not established — \(name(of: short))'s second parent is not recorded (full assumed)")
+        return (false, "full or half not established — \(name(of: short))'s second parent is not recorded (full assumed)", nil)
     }
 
     /// "wife Donna → sister Ann → husband Bob", with a named in-law prefix
@@ -780,8 +800,15 @@ struct FamilyKinshipInference: Sendable {
         while i < route.count {
             let end = foldEnd(route, from: i)
             let last = route[end - 1]
-            let word = (end - i > 1 ? KinshipRelation.compose(route[i..<end].map(\.relation)) : nil)
-                .map { $0.term(sex: sex(of: last.to)) } ?? last.relation.term(sex: sex(of: last.to))
+            let word: String
+            if end - i == 1, last.relation == .sibling, last.provenance.isExplicit {
+                // A stored sibling hop reads by the pair's ONE verdict
+                // ("half-brother Rick"; a conflict is "sibling Rick").
+                word = FamilyKinshipOverlay.siblingTerm(overlay.siblingVerdict(last.from, last.to), sex: sex(of: last.to))
+            } else {
+                word = (end - i > 1 ? KinshipRelation.compose(route[i..<end].map(\.relation)) : nil)
+                    .map { $0.term(sex: sex(of: last.to)) } ?? last.relation.term(sex: sex(of: last.to))
+            }
             segments.append("\(word) \(name(of: last.to))")
             i = end
         }

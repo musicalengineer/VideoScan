@@ -672,6 +672,234 @@ struct FamilyKinshipSiblingInferenceTests {
             #expect(overlay.warnings(forProfileNamed: name) == [line], Comment(rawValue: name))
         }
     }
+
+    // MARK: Codex #1019 — indirect cycles, one pair verdict, half provenance, vertex-keyed warnings
+
+    /// Codex #1019 item 1: A and B are full siblings, A is a child of P,
+    /// and P is a child of B. "Full siblings share parents" would derive B
+    /// as a child of P — B → P → B. The set fails closed BEFORE anything
+    /// is derived (the stored rows stand exactly as recorded), and A, B
+    /// and P all carry the one warning.
+    @Test func anIndirectParentCycleFailsClosed() {
+        let people = [
+            snapshot("A", sex: .male, kinships: [row(.sibling, "B"), row(.child, "P")]),
+            snapshot("B", sex: .male),
+            snapshot("P", sex: .female, kinships: [row(.child, "B")]),
+        ]
+        let overlay = Overlay(snapshots: people, graph: nil)
+        let line = "Sibling rows on A and B would derive B as a child of P, but P already descends from B (parent line: P → B) — that would make B an ancestor of their own parent; nothing derived for that sibling set until one row is corrected"
+        #expect(overlay.derivedEdgeCount == 0)
+        #expect(overlay.relatives(of: node("B"), relation: .parent).isEmpty)
+        #expect(names(overlay.relatives(of: node("B"), relation: .child)) == ["P"])     // the stored row stands
+        #expect(names(overlay.relatives(of: node("A"), relation: .parent)) == ["P"])
+        #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        expectWarning(line, on: ["A", "B", "P"], notOn: [], overlay: overlay)
+        #expect(overlay.siblingVerdict(node("A"), node("B")) == .full)   // the pair itself is not in dispute
+        let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+        #expect(engine.parents(of: node("B")).isEmpty)
+        #expect(engine.relation(from: node("B"), to: node("P"))?.term == "daughter")
+        for name in ["A", "B", "P"] {
+            #expect(engine.derivationProblems[node(name)] == line, Comment(rawValue: name))
+        }
+
+        // A longer loop: A child of P, P child of Q, Q child of B. The
+        // walk climbs the whole accepted parent line, and Q is involved.
+        let longer = [
+            snapshot("A", sex: .male, kinships: [row(.sibling, "B"), row(.child, "P")]),
+            snapshot("B", sex: .male),
+            snapshot("P", sex: .female, kinships: [row(.child, "Q")]),
+            snapshot("Q", sex: .male, kinships: [row(.child, "B")]),
+        ]
+        let two = Overlay(snapshots: longer, graph: nil)
+        let longLine = "Sibling rows on A and B would derive B as a child of P, but P already descends from B (parent line: P → Q → B) — that would make B an ancestor of their own parent; nothing derived for that sibling set until one row is corrected"
+        #expect(two.derivedEdgeCount == 0)
+        #expect(two.warnings == [longLine], Comment(rawValue: two.warnings.joined(separator: " | ")))
+        expectWarning(longLine, on: ["A", "B", "P", "Q"], notOn: [], overlay: two)
+        #expect(FamilyKinshipInference(snapshots: longer, graph: nil).parents(of: node("B")).isEmpty)
+
+        // The loop can also close through a parent edge ACCEPTED earlier in
+        // the same pass: A / B's set (planned first) puts B under P; P is a
+        // stored child of D; C / D's set would then put D under B — B → P
+        // → D → B. The walk climbs planned derivations as well as rows, so
+        // the second set fails, and because the loop needs BOTH sets' edges
+        // the first set is involved (and fails) too. Nothing is derived.
+        let viaDerived = [
+            snapshot("A", sex: .male, kinships: [row(.sibling, "B"), row(.child, "P")]),
+            snapshot("B", sex: .male),
+            snapshot("C", sex: .male, kinships: [row(.sibling, "D"), row(.child, "B")]),
+            snapshot("D", sex: .male),
+            snapshot("P", sex: .female, kinships: [row(.child, "D")]),
+        ]
+        let three = Overlay(snapshots: viaDerived, graph: nil)
+        let plannedLine = "Sibling rows on C and D would derive D as a child of B, but B already descends from D (parent line: B → P → D) — that would make D an ancestor of their own parent; nothing derived for that sibling set until one row is corrected"
+        #expect(three.derivedEdgeCount == 0)
+        #expect(three.relatives(of: node("D"), relation: .parent).isEmpty)
+        #expect(three.relatives(of: node("B"), relation: .parent).isEmpty)
+        #expect(three.warnings == [plannedLine], Comment(rawValue: three.warnings.joined(separator: " | ")))
+        expectWarning(plannedLine, on: ["A", "B", "C", "D", "P"], notOn: [], overlay: three)
+    }
+
+    /// Codex #1019 item 2: the verdict for a pair is computed from EVERY
+    /// row on the unordered pair, so the order the profiles (and their
+    /// rows) are read in cannot change it or its wording. Explicit full
+    /// against explicit half is a conflict: the neutral "sibling" plus the
+    /// warning on every surface — the profile-card line, the engine in
+    /// both directions, the Relationships overview and the two-person
+    /// route — never "brother" one way and "half-brother" the other.
+    @Test func rowOrderCannotChangeTheSiblingVerdictOrItsWording() {
+        let rick = snapshot("Rick", sex: .male,
+                            kinships: [row(.sibling, "Tim", basis: .attestedFull), row(.child, "Ma"), row(.child, "Dad")])
+        let tim = snapshot("Tim", sex: .male, kinships: [half("Rick", via: "Dad")])
+        let rest = [snapshot("Ma", sex: .female), snapshot("Dad", sex: .male)]
+        let line = "Sibling rows between Rick and Tim disagree — one says full sibling, one says half sibling through Dad — nothing derived for their sibling set until one is corrected"
+        var seen: Set<String> = []
+        for people in [[rick, tim] + rest, [tim, rick] + rest, rest + [tim, rick]] {
+            let overlay = Overlay(snapshots: people, graph: nil)
+            #expect(overlay.siblingVerdict(node("Rick"), node("Tim")) == .conflict)
+            #expect(overlay.siblingVerdict(node("Tim"), node("Rick")) == .conflict)
+            #expect(overlay.derivedEdgeCount == 0)
+            #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+            // The profile-card reader: neutral, from either card.
+            #expect(overlay.relationshipsLine(forProfileStableID: "tim", kinships: tim.kinships) == "Rick's sibling")
+            #expect(overlay.relationshipsLine(forProfileStableID: "rick", kinships: rick.kinships)
+                    == "Tim's sibling; Ma's son; Dad's son")
+            // The engine, both directions.
+            let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+            for (a, b) in [("Rick", "Tim"), ("Tim", "Rick")] {
+                let d = engine.relation(from: node(a), to: node(b))
+                #expect(d?.term == "sibling", Comment(rawValue: "\(a) → \(b): \(d?.term ?? "nil")"))
+                #expect(d?.siblingVerdict == .conflict)
+                #expect(d?.caveats == ["full or half not established — the sibling rows between \(a) and \(b) disagree (see the relationship warning)"])
+                seen.insert("\(a)>\(b) \(d?.term ?? "") \(d?.caveats.joined() ?? "")")
+            }
+            // The overview and the two-person route: the same word, the warning in the basis.
+            let context = HallieTurnExecutor.Context(
+                profiles: people.map(turnSnapshot), graph: nil,
+                speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
+            let overview = HallieRelationshipsOverview.answer(.init(subject: .named("Tim")), context: context)
+            #expect(overview.prose.contains("Rick — Tim's sibling"), Comment(rawValue: overview.prose))
+            #expect(!overview.prose.contains("brother"), Comment(rawValue: overview.prose))
+            #expect(overview.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: overview.basisLine))
+            let inputs = ArchivistGraphInputs(graph: GedcomFamilyGraph(gedcomText: treeText), profiles: people, ownerName: "Rick Breen")
+            let related = ArchivistGraphExecutor.execute(
+                ArchivistGraphQuery(people: ["Rick", "Tim"], operation: .relationship), inputs: inputs)
+            #expect(related.prose == "Tim is Rick's sibling.", Comment(rawValue: related.prose))
+            #expect(related.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: related.basisLine))
+            let brothers = ArchivistGraphExecutor.execute(
+                ArchivistGraphQuery(people: ["Rick"], operation: .kinship, relation: .brother), inputs: inputs)
+            #expect(brothers.prose == "Rick's brother: Tim (sibling rows disagree — full or half unknown).", Comment(rawValue: brothers.prose))
+        }
+        // Two ordered pairs, one wording each — identical across the three orders.
+        #expect(seen.count == 2, Comment(rawValue: seen.sorted().joined(separator: " | ")))
+
+        // An unresolved half (the named parent can't be found) beside a
+        // reciprocal unspecified row is still HALF in every order — never
+        // promoted to full — with the caveat saying what to fix.
+        let stale = snapshot("Tim", sex: .male,
+                             kinships: [row(.sibling, "Rick", basis: .attestedHalf(sharedParent: .profile(id: UUID())))])
+        let plain = snapshot("Rick", sex: .male, kinships: [row(.sibling, "Tim"), row(.child, "Ma"), row(.child, "Dad")])
+        let staleLine = "The shared parent named on the half-sibling row between Rick and Tim could not be found — nothing derived across that row until they are picked again"
+        for people in [[plain, stale] + rest, [stale, plain] + rest] {
+            let overlay = Overlay(snapshots: people, graph: nil)
+            #expect(overlay.siblingVerdict(node("Rick"), node("Tim")) == .unresolved)
+            #expect(overlay.derivedEdgeCount == 0)
+            #expect(overlay.warnings == [staleLine], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+            // A nudge on the two cards, not a set failure (nothing else is wrong).
+            for name in ["Rick", "Tim"] { #expect(overlay.warnings(forProfileNamed: name) == [staleLine], Comment(rawValue: name)) }
+            for name in ["Ma", "Dad"] { #expect(overlay.warnings(forProfileNamed: name).isEmpty, Comment(rawValue: name)) }
+            #expect(overlay.derivationProblems.isEmpty)
+            #expect(overlay.relationshipsLine(forProfileStableID: "tim", kinships: stale.kinships) == "Rick's half-brother")
+            #expect(overlay.relationshipsLine(forProfileStableID: "rick", kinships: plain.kinships)
+                    == "Tim's half-brother; Ma's son; Dad's son")
+            let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+            for (a, b) in [("Rick", "Tim"), ("Tim", "Rick")] {
+                let d = engine.relation(from: node(a), to: node(b))
+                #expect(d?.term == "half-brother", Comment(rawValue: "\(a) → \(b): \(d?.term ?? "nil")"))
+                #expect(d?.siblingVerdict == .unresolved)
+                #expect(d?.caveats == ["the shared parent named on the half-sibling row could not be found — pick them again"])
+            }
+            #expect(engine.parents(of: node("Tim")).isEmpty)
+        }
+    }
+
+    /// Codex #1019 item 3: a half verdict cites the half attestation — the
+    /// row that decided it — never the reciprocal unspecified row on the
+    /// same pair, even when that row's card sorts first. Neither card
+    /// records Dad, so the half row itself is the only source.
+    @Test func aHalfDerivationCitesTheHalfAttestationNotTheReciprocalRow() throws {
+        let rick = snapshot("Rick", sex: .male, kinships: [row(.sibling, "Tim")])   // legacy unspecified, no parents
+        let tim = snapshot("Tim", sex: .male, kinships: [half("Rick", via: "Dad")])
+        let people = [rick, tim, snapshot("Dad", sex: .male)]
+        let timIdentity = "uuid:" + (try #require(tim.uuid)).uuidString.lowercased()
+        let overlay = Overlay(snapshots: people, graph: nil)
+        #expect(overlay.siblingVerdict(node("Rick"), node("Tim")) == .half(sharedParent: node("Dad")))
+        let rickParents = overlay.relatives(of: node("Rick"), relation: .parent)
+        let timParents = overlay.relatives(of: node("Tim"), relation: .parent)
+        #expect(names(rickParents) == ["Dad"])
+        #expect(names(timParents) == ["Dad"])
+        for hit in rickParents + timParents {
+            let hop = try #require(hit.hops.first)
+            #expect(hop.isDerived)
+            #expect(hop.storedOn == "Tim", Comment(rawValue: hop.storedOn))
+            #expect(hop.storedOnIdentity == timIdentity, Comment(rawValue: hop.storedOnIdentity))
+            #expect(overlay.derivationNote(for: hit.hops) == "derived from Tim's rows: half siblings share the named parent")
+        }
+        #expect(names(overlay.relatives(of: node("Dad"), relation: .child)) == ["Rick", "Tim"])
+        #expect(overlay.derivedEdgeCount == 4)
+        #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        // The engine cites the same source, and reads the pair as half.
+        let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+        #expect(engine.parents(of: node("Rick")).map(\.provenance) == [.derivedSibling(sourceIdentity: timIdentity, half: true)])
+        #expect(engine.parents(of: node("Tim")).map(\.provenance) == [.derivedSibling(sourceIdentity: timIdentity, half: true)])
+        #expect(engine.relation(from: node("Rick"), to: node("Tim"))?.term == "half-brother")
+        #expect(engine.relation(from: node("Tim"), to: node("Rick"))?.term == "half-brother")
+        #expect(engine.proposals(for: node("Rick")).isEmpty)   // Tim records no parent row to copy
+        // With Dad recorded on Rick's card, the half derivation for Tim
+        // cites Rick's PARENT row (the card that names Dad), and the
+        // sibling-row clause names the half row's card only.
+        let withDad = [snapshot("Rick", sex: .male, kinships: [row(.sibling, "Tim"), row(.child, "Dad")]), tim, snapshot("Dad", sex: .male)]
+        let second = Overlay(snapshots: withDad, graph: nil)
+        let timDad = second.relatives(of: node("Tim"), relation: .parent)
+        #expect(names(timDad) == ["Dad"])
+        #expect(timDad.first?.hops.first?.storedOn == "Rick")
+        #expect(second.derivationNote(for: timDad.first?.hops ?? [])
+                == "derived from Rick's rows: half siblings share the named parent (sibling rows on Tim)")
+    }
+
+    /// Codex #1019 item 4: warnings are keyed by VERTEX. Two profiles that
+    /// both read "Mary" — one in a sibling set that failed closed and one
+    /// with an unrelated hygiene nudge — and each carries only its own.
+    @Test func warningsAreKeyedByProfileNotByDisplayName() {
+        let rick = snapshot("Rick", sex: .male, kinships: [row(.sibling, "Mary"), row(.child, "Ma"), row(.child, "Dad")])
+        let mary = Snapshot(stableID: "mary", canonicalName: "Mary",
+                            kinships: [row(.child, "Other")], sex: .female, uuid: UUID())
+        let namesake = Snapshot(stableID: "mary-2", canonicalName: "Mary", aliases: ["Mom"], sex: .female, uuid: UUID())
+        let people = [rick, mary, namesake, snapshot("Ma", sex: .female), snapshot("Dad", sex: .male),
+                      snapshot("Other", sex: .male)]
+        let overlay = Overlay(snapshots: people, graph: nil)
+        let conflict = "Sibling rows on Mary and Rick imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected"
+        let hygiene = "Alias 'Mom' on Mary looks relational — use a Relationship row instead"
+        #expect(overlay.warnings == [hygiene, conflict], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        #expect(overlay.derivedEdgeCount == 0)
+        // By stable id (the card badge's lookup): only the involved Mary.
+        #expect(overlay.warnings(forProfileStableID: "mary") == [conflict])
+        #expect(overlay.warnings(forProfileStableID: "mary-2") == [hygiene])
+        for id in ["rick", "ma", "dad", "other"] {
+            #expect(overlay.warnings(forProfileStableID: id) == [conflict], Comment(rawValue: id))
+        }
+        #expect(overlay.derivationWarnings(touching: [.profile(stableID: "mary-2")]).isEmpty)
+        #expect(overlay.derivationWarnings(touching: [.profile(stableID: "mary")]) == [conflict])
+        #expect(overlay.derivationProblems[.profile(stableID: "mary-2")] == nil)
+        // By name: a name is not an identity — both Marys carry the
+        // spelling, so the name form answers for both; nobody else.
+        #expect(overlay.warnings(forProfileNamed: "Mary") == [hygiene, conflict])
+        #expect(overlay.warnings(forProfileNamed: "Rick") == [conflict])
+        #expect(overlay.warnings(forProfileNamed: "Mom").isEmpty)
+        // The engine keys the problem by vertex too.
+        let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+        #expect(engine.derivationProblems[.profile(stableID: "mary")] == conflict)
+        #expect(engine.derivationProblems[.profile(stableID: "mary-2")] == nil)
+    }
 }
 
 /// The executor's own snapshot type (same fields, carried separately).
