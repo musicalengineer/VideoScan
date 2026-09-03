@@ -397,54 +397,46 @@ struct HallieClaimCoverageTests {
         #expect(plan.requiredPersonNames == ["Eileen Latta"])
     }
 
-    /// The card says only twelve grandparent names and "1 more". The hidden
-    /// thirteenth record supports the summary but is not a rendered-person
-    /// obligation.
-    @Test func biographyRequiredNamesStopAtTheRenderedGrandparentLimit() throws {
-        let grandNames = [
+    /// The card says only twelve names and "1 more". The hidden thirteenth
+    /// record supports the summary but is not a rendered-person obligation.
+    /// (Since 9/02 a person has ONE primary parent family, so the >12 list
+    /// is the subject's children, never grandparents.)
+    @Test func biographyRequiredNamesStopAtTheRenderedChildLimit() throws {
+        let childNames = [
             "Able", "Baker", "Charlie", "Dog", "Easy", "Fox", "George",
             "How", "Item", "Jig", "King", "Love", "Mike",
         ]
-        let parentFamilies = grandNames.indices
-            .map { "1 FAMC @FG\($0)@" }.joined(separator: "\n")
         var gedcom = """
         0 HEAD
         0 @I0@ INDI
         1 NAME Subject /Person/
-        1 FAMC @FS@
-        0 @IP@ INDI
-        1 NAME Parent /Person/
-        \(parentFamilies)
         1 FAMS @FS@
         0 @FS@ FAM
-        1 HUSB @IP@
-        1 CHIL @I0@
+        1 HUSB @I0@
         """
-        for (index, name) in grandNames.enumerated() {
+        for index in childNames.indices { gedcom += "\n1 CHIL @IC\(index)@" }
+        for (index, name) in childNames.enumerated() {
             gedcom += """
 
-            0 @IG\(index)@ INDI
+            0 @IC\(index)@ INDI
             1 NAME \(name) /Family/
-            1 FAMS @FG\(index)@
-            0 @FG\(index)@ FAM
-            1 HUSB @IG\(index)@
-            1 CHIL @IP@
+            1 FAMC @FS@
             """
         }
         gedcom += "\n0 TRLR\n"
         let graph = GedcomFamilyGraph(gedcomText: gedcom)
         let subject = try #require(graph.people["@I0@"])
-        let parent = try #require(graph.people["@IP@"])
-        let grandparents = ArchivistBiographyPolicy.orderedPeople(
-            graph.relatives(.parents, of: parent))
-        #expect(grandparents.count == 13)
+        let children = graph.relatives(.children, of: subject)
+        #expect(children.count == 13)
         let plan = HallieBiographyCard.card(for: subject, in: graph).plan
-        let claim = try #require(plan.claims.first)
-        let expected = [subject.name, parent.name]
-            + Array(grandparents.prefix(HallieBiographyCard.maxListedNames)).map(\.name)
-        #expect(claim.requiredPersonNames == expected)
+        let claim = try #require(plan.claims.first { $0.text.contains("recorded children") })
+        // The sentence names the subject too; the cap is on the LIST.
+        let rendered = Set(claim.requiredPersonNames).subtracting([subject.name])
+        #expect(rendered.count == HallieBiographyCard.maxListedNames)
+        let all = Set(children.map(\.name))
+        #expect(rendered.isSubset(of: all))
         #expect(claim.text.contains("and 1 more"))
-        let hidden = try #require(grandparents.last)
-        #expect(!HallieAnswerPlan.names(hidden.name, in: claim.text))
+        let hidden = try #require(all.subtracting(rendered).first)
+        #expect(!HallieAnswerPlan.names(hidden, in: claim.text))
     }
 }
