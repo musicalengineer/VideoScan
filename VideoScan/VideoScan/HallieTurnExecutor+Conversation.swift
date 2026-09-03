@@ -787,6 +787,12 @@ extension HallieTurnExecutor {
         isKnownPerson: (String) -> Bool,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?
     ) -> PreTranslation? {
+        // An explicit app-navigation command outranks lineage and roster
+        // questions. The recogniser requires "tab" or "window", so ordinary
+        // asks such as "show Donna in the archive" never land here.
+        if let destination = HallieAppNavigation.detect(question) {
+            return .answer(HallieAppNavigation.answer(destination))
+        }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
         // does not become either an invented family-tree fact or a catalog
@@ -1243,6 +1249,7 @@ extension HallieTurnExecutor {
         case .ask(_, let label): return label
         case .recompileFamilyTree: return "Recompile the family tree"
         case .openPeopleTab: return "Open the People tab"
+        case .openAppDestination(let destination): return "Open the \(destination.title) tab"
         case .showPossibleDuplicate: return "Show possible duplicate in Family Tree"
         }
     }
