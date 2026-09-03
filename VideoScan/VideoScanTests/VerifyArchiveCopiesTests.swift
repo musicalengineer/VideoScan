@@ -638,6 +638,86 @@ struct VerifyArchiveCopiesRaceTests {
                 "Verify must hash the off-root catalog fullPath, not the manifest's old relpath")
     }
 
+    @Test("raw link/../ path is refused before lexical normalization can hash different archive bytes and bless the catalog path")
+    func lexicalDotPathEscapeIsRefusedWithoutFixityVerdict() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("dotescape", count: 1)
+        defer { sb.cleanup() }
+        let copy = copies[0]
+        let safeArchivePath = copy.fullPath
+        let manifestFixity = try #require(copy.archiveFixity)
+        let rel = try #require(VerifyArchiveCopiesJob.relPath(
+            of: safeArchivePath, underRoot: sb.archiveRoot.path))
+
+        // `archiveRoot/link` points to `outside/child`. POSIX resolution of
+        // link/../REL therefore lands at outside/REL, while naively
+        // collapsing link/.. would land at archiveRoot/REL.
+        // Give those two files different bytes so hashing the standardized
+        // spelling would falsely verify the raw catalog path.
+        let outside = sb.root.appendingPathComponent("Outside", isDirectory: true)
+        let linkTarget = outside.appendingPathComponent("child", isDirectory: true)
+        try FileManager.default.createDirectory(at: linkTarget, withIntermediateDirectories: true)
+        let outsideFile = outside.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(
+            at: outsideFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try MasterArchiveTestSupport.writeBlob(
+            at: outsideFile, bytes: Int(copy.sizeBytes), seed: 99_999)
+        let outsideDigest = try #require(MasterArchiveTestSupport.sha256(ofFile: outsideFile.path))
+        #expect(outsideDigest != manifestFixity.digest)
+
+        let link = sb.archiveRoot.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: link.path, withDestinationPath: linkTarget.path)
+        let rawCatalogPath = sb.archiveRoot.path + "/link/../" + rel
+        let rawCatalogDigest = try #require(
+            MasterArchiveTestSupport.sha256(ofFile: rawCatalogPath))
+        #expect(rawCatalogDigest == outsideDigest,
+                "POSIX resolution must follow link then .. to the outside fixture")
+        #expect(MasterArchiveTestSupport.sha256(ofFile: safeArchivePath) == manifestFixity.digest)
+        #expect(rawCatalogDigest != manifestFixity.digest,
+                "the raw catalog target and lexically collapsed archive target must differ")
+        #expect(VerifyArchiveCopiesJob.relPath(
+            of: rawCatalogPath, underRoot: sb.archiveRoot.path) == nil,
+                "raw .. is rejected before relpath standardization")
+        #expect(VerifyArchiveCopiesJob.relPath(
+            of: sb.archiveRoot.path + "/./" + rel, underRoot: sb.archiveRoot.path) == nil,
+                "raw . is rejected by the same lexical guard")
+
+        copy.fullPath = rawCatalogPath
+        copy.directory = (rawCatalogPath as NSString).deletingLastPathComponent
+        model.records = model.records       // invalidate the path index
+
+        // With no prior claim, refusal must not restore one from the bytes
+        // at the standardized archive path.
+        copy.archiveFixity = nil
+        let strippedRun = await VerifyTestSupport.run(model)
+        guard case .failed(let strippedMessage) = strippedRun.state else {
+            Issue.record("unsafe raw path must make Verify red, got \(strippedRun.state)"); return
+        }
+        #expect(strippedMessage.contains("1 failed"))
+        #expect(strippedRun.tally.failed == 1)
+        #expect(strippedRun.tally.verified == 0 && strippedRun.tally.restored == 0)
+        #expect(strippedRun.tally.mismatch == 0 && strippedRun.tally.missing == 0)
+        #expect(copy.archiveFixity == nil,
+                "correct bytes at the standardized path must never bless the different raw catalog path")
+        #expect(strippedRun.outcomes.contains {
+            $0.kind == .failed && $0.detail.contains("refused without reading bytes")
+        })
+
+        // With an existing claim, the same refusal is NO VERDICT: it must
+        // neither refresh nor clear the record.
+        copy.archiveFixity = manifestFixity
+        let beforeRefusal = copy.archiveFixity
+        let claimedRun = await VerifyTestSupport.run(model)
+        guard case .failed = claimedRun.state else {
+            Issue.record("unsafe raw path must remain red, got \(claimedRun.state)"); return
+        }
+        #expect(claimedRun.tally.failed == 1)
+        #expect(claimedRun.tally.verified == 0 && claimedRun.tally.restored == 0)
+        #expect(claimedRun.tally.mismatch == 0 && claimedRun.tally.missing == 0)
+        #expect(copy.archiveFixity == beforeRefusal,
+                "path refusal is not a byte verdict; preserve the existing fixity exactly")
+    }
+
     @Test("a symlink/read refusal counts failed and makes the whole run red")
     func symlinkReadFailureMakesRunFail() async throws {
         let (sb, model, sources, copies) = try await VerifyTestSupport.promotedSandbox("readfail", count: 1)

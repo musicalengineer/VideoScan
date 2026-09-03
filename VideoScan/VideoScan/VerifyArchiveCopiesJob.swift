@@ -459,13 +459,27 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     /// `path` relative to `root` (component-wise, standardized), or nil
-    /// when not under it.
+    /// when not under it. Raw `.` / `..` components are rejected BEFORE
+    /// standardization: normalizing `root/link/../clip.mov` can erase a
+    /// symlink-sensitive traversal and make the contained hasher read a
+    /// different file from the catalog path.
     nonisolated static func relPath(of path: String, underRoot root: String) -> String? {
+        guard !containsLexicalDotComponent(path),
+              !containsLexicalDotComponent(root) else { return nil }
         let rootComps = URL(fileURLWithPath: root).standardizedFileURL.pathComponents
         let pathComps = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
         guard rootComps.count > 1, pathComps.count > rootComps.count,
               Array(pathComps.prefix(rootComps.count)) == rootComps else { return nil }
         return pathComps[rootComps.count...].joined(separator: "/")
+    }
+
+    /// Pure lexical check — deliberately does not resolve symlinks or touch
+    /// the filesystem. A literal `%2E%2E` filename remains legal; only path
+    /// components the POSIX resolver treats as `.` / `..` are refused.
+    nonisolated static func containsLexicalDotComponent(_ path: String) -> Bool {
+        path.split(separator: "/", omittingEmptySubsequences: true).contains {
+            $0 == "." || $0 == ".."
+        }
     }
 
     // MARK: Run
@@ -529,6 +543,19 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                            root: String,
                            totalBytes: Int64) async -> Bool {
         let name = item.relPath ?? item.filename
+        // Do not let the off-root fallback hash a raw path that relPath
+        // deliberately refused. With a symlink followed by `..`, the raw
+        // catalog path and its standardized spelling can name different
+        // files. That is no safe basis for either blessing or clearing
+        // fixity, so fail closed without reading bytes or writing catalog.
+        if Self.containsLexicalDotComponent(item.fullPath)
+            || Self.containsLexicalDotComponent(root) {
+            tally.failed += 1
+            let detail = "catalog path contains a '.' or '..' component — refused without reading bytes; existing fixity was preserved"
+            record(.failed, name, detail)
+            verifyArchiveLog.error("verify archive: \(item.fullPath, privacy: .public) — \(detail, privacy: .public)")
+            return true
+        }
         let actualOrNil: String?
         do {
             let reporter = PromoteProgressReporter()
