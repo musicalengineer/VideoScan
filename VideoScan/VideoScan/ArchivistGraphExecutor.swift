@@ -1294,10 +1294,19 @@ enum ArchivistGraphExecutor {
                 .filter { $0.hops.count == 1 }
                 .map { hit in
                     hit.hops.forEach { storedOn.insert($0.storedOn) }
+                    // Evidence for a stored row: the relative's own profile
+                    // (the row names them). Evidence for a DERIVED edge:
+                    // the profile whose row was copied — never the relative
+                    // or the parent the inference points at (codex #984
+                    // item 4).
+                    let hop = hit.hops[0]
+                    let evidence = hop.isDerived
+                        ? (hop.storedOnIdentity.isEmpty ? hop.storedOn : hop.storedOnIdentity)
+                        : (hit.member.identity.isEmpty ? hit.member.node.auditID : hit.member.identity)
                     return .init(
                         name: hit.member.name,
                         term: relation.term(sex: hit.member.sex),
-                        evidenceID: hit.member.identity.isEmpty ? hit.member.node.auditID : hit.member.identity,
+                        evidenceID: evidence,
                         gedcomID: hit.member.gedcomID,
                         derivation: overlay.derivationNote(for: hit.hops))
                 }
@@ -1305,8 +1314,11 @@ enum ArchivistGraphExecutor {
         let siblings = relatives(.sibling)
         let children = relatives(.child)
         let spouses = relatives(.spouse)
+        // A sibling set of this person's that failed closed: said in the
+        // basis even when no row was usable.
         return .init(profileName: member.name, siblings: siblings, children: children,
-                     spouses: spouses, storedOn: storedOn.sorted())
+                     spouses: spouses, storedOn: storedOn.sorted(),
+                     warnings: overlay.derivationWarnings(touching: [node]))
     }
 
     static func decline(

@@ -13,10 +13,12 @@
 //
 // Order = the engine's own hop rank for stored rows (parent < child <
 // spouse < sibling), then derived single words by route length, then
-// route text, then the unrecorded. Marks: "(derived)" for anything beyond
-// a stored row; "(assumed — confirm in the review sheet)" when a word rests
-// on an unattested sibling row; "(not attested — …)" when only a route can
-// be shown for that reason. Works with no GEDCOM at all — the overlay is
+// route text, then the unrecorded. Marks: "(derived)" for a composed
+// route; "(derived: full siblings share parents)" when a hop is a parent
+// the overlay derived across a sibling row — the SAME words the kinship
+// route and the biography put in their basis, so one data row gives one
+// answer everywhere (codex #984). A sibling set that failed closed is
+// stated in the basis line. Works with no GEDCOM at all — the overlay is
 // built from the profiles alone.
 //
 // C++ readers: a namespace of pure static functions over value types; the
@@ -222,9 +224,14 @@ enum HallieRelationshipsOverview {
 
         var entries: [Entry] = []
         var unrecorded: [String] = []
+        var touched: [Node] = [subjectNode]
         for other in others {
-            guard let node = overlay.node(profileStableID: other.stableID),
-                  let derived = inference.relation(from: subjectNode, to: node) else {
+            guard let node = overlay.node(profileStableID: other.stableID) else {
+                unrecorded.append(other.canonicalName)
+                continue
+            }
+            touched.append(node)
+            guard let derived = inference.relation(from: subjectNode, to: node) else {
                 unrecorded.append(other.canonicalName)
                 continue
             }
@@ -237,8 +244,7 @@ enum HallieRelationshipsOverview {
             pieces.append("\(unrecorded.joined(separator: ", ")) — no relationship recorded yet")
         }
         let related = entries.count
-        let derivedCount = entries.filter { $0.derived.route.count > 1 }.count
-        let assumedCount = entries.filter { !$0.derived.caveats.isEmpty }.count
+        let derivedCount = entries.filter { $0.derived.route.count > 1 && !$0.derived.usesDerivation }.count
 
         var sentences: [String] = []
         let who = isOwner ? "You're" : "\(subjectName) is"
@@ -247,18 +253,16 @@ enum HallieRelationshipsOverview {
         sentences.append(isOwner
             ? "That's from your entries in the People tab; derived where marked."
             : "That's from the entries in the People tab; derived where marked.")
-        // The review sheet's own asks, when the subject's sibling rows are
-        // not attested and a sibling has recorded parents.
-        for proposal in inference.proposals(for: subjectNode) {
-            sentences.append(proposal.text + ".")
-        }
 
         var basis = "Basis: People-tab relationships (\(people.count) profiles; \(related) linked to \(subjectName), \(unrecorded.count) unrecorded"
         if derivedCount > 0 { basis += "; \(derivedCount) derived" }
-        if assumedCount > 0 { basis += "; \(assumedCount) resting on an unattested sibling row" }
+        basis += derivationRuleCounts(entries)
         basis += ")"
         basis += context.graph == nil ? "; no family tree installed (local-only)" : "; family tree installed"
         basis += "; no model call."
+        // A sibling set of the subject's (or of anyone listed) that failed
+        // closed: the SAME warning the card badge and the kinship route show.
+        basis += ArchivistGraphExecutor.overlayWarningClause(overlay.derivationWarnings(touching: touched))
 
         var offers: [HallieTurnExecutor.OfferedAction] = [.openPeopleTab]
         let chipNames = lines.flatMap(\.names) + unrecorded   // nearest first, like the prose
@@ -269,6 +273,21 @@ enum HallieRelationshipsOverview {
                       prose: sentences.joined(separator: " "),
                       basisLine: basis, queryDescription: description,
                       citations: [], catalogPersonName: nil, offeredActions: offers)
+    }
+
+    /// "; 2 derived: full siblings share parents" — answers resting on a
+    /// parent the overlay derived across a sibling row, counted per rule,
+    /// first-seen order. Empty when none.
+    static func derivationRuleCounts(_ entries: [Entry]) -> String {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            for rule in entry.derived.derivationRules {
+                if counts[rule] == nil { order.append(rule) }
+                counts[rule, default: 0] += 1
+            }
+        }
+        return order.map { "; \(counts[$0] ?? 0) derived: \($0)" }.joined()
     }
 
     // MARK: - Grouping
@@ -295,21 +314,27 @@ enum HallieRelationshipsOverview {
             let half: Bool
             let age: String?
             let derived: Bool
-            let assumed: Bool
+            /// The derivation rules a hop rests on ("full siblings share
+            /// parents"); empty for stored rows and plain composition.
+            let rules: [String]
         }
         var groups: [Group] = []
         var singles: [(rank: (Int, Int), line: Line)] = []
+        func mark(derived: Bool, rules: [String]) -> String {
+            if !rules.isEmpty { return " (derived: " + rules.joined(separator: "; ") + ")" }
+            return derived ? " (derived)" : ""
+        }
 
         for entry in entries {
             let route = entry.derived.route
             let relations = route.map(\.relation)
-            let assumed = !entry.derived.caveats.isEmpty
+            let rules = entry.derived.derivationRules
             if let term = entry.derived.term {
                 let named = KinshipChainNamer.name(relations)
                 let half = term.contains("half-")
                 let age = ["older ", "younger "].first { term.hasPrefix($0) }.map { String($0.dropLast()) }
                 let neutral = named?.term(sex: nil, half: half, age: age) ?? term
-                let key = neutral + (assumed ? "|assumed" : "")
+                let key = neutral + "|" + rules.joined(separator: ";")
                 let rank: (Int, Int) = route.count == 1
                     ? (0, kindRank(relations[0]))
                     : (1, route.count)
@@ -319,13 +344,10 @@ enum HallieRelationshipsOverview {
                 } else {
                     groups.append(Group(key: key, rank: rank, names: [entry.name], sexes: [entry.sex],
                                         named: named, half: half, age: age,
-                                        derived: route.count > 1, assumed: assumed))
+                                        derived: route.count > 1, rules: rules))
                 }
             } else {
-                var text = entry.derived.routeText
-                text += assumed
-                    ? " (not attested — confirm the shared parents in the review sheet)"
-                    : " (derived)"
+                let text = entry.derived.routeText + mark(derived: true, rules: rules)
                 singles.append((rank: (2, route.count), line: Line(names: [entry.name], text: text)))
             }
         }
@@ -338,13 +360,11 @@ enum HallieRelationshipsOverview {
                 let sex: PersonSex? = sexes.count == 1 ? group.sexes[0] : nil
                 word = plural(named.term(sex: sex, half: group.half, age: group.age))
             } else if group.names.count > 1 {
-                word = plural(group.key.replacingOccurrences(of: "|assumed", with: ""))
+                word = plural(String(group.key.prefix { $0 != "|" }))
             } else {
                 word = entries.first { $0.name == group.names[0] }?.derived.term ?? group.key
             }
-            var text = "\(possessive) \(word)"
-            if group.derived { text += " (derived)" }
-            if group.assumed { text += " (assumed — confirm in the review sheet)" }
+            let text = "\(possessive) \(word)" + mark(derived: group.derived, rules: group.rules)
             out.append((rank: group.rank, order: order, line: Line(names: group.names, text: text)))
         }
         for (order, single) in singles.enumerated() {
