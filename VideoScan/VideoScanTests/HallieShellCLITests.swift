@@ -565,7 +565,7 @@ struct HallieShellCLITests {
         #expect(!harness.output.contains { $0.contains("The Birth Locations Of Donna") })
         #expect(!harness.output.contains { $0.contains("don't find") })
         #expect(harness.transcriptEvents.contains {
-            $0.queryDescription == "birthplace trail maternal stop=outside:United_States list: Donna Hudson [@I1@] shown 1-3 of 3"
+            $0.queryDescription == "birthplace trail maternal stop=outside:United_States list: Donna Hudson [@I1@] tree=\(HallieLineageAnswer.trailTreeToken(Self.trailTree)) shown 1-3 of 3"
         })
     }
 
@@ -590,7 +590,7 @@ struct HallieShellCLITests {
             $0 == "Two generations. Mary McGill, born 1904 in Glasgow, Scotland, is the first ancestor born in Europe on any line: you → Eileen Latta → Mary McGill."
         }, Comment(rawValue: harness.output.joined(separator: " | ")))
         #expect(harness.transcriptEvents.contains {
-            $0.queryDescription == "birthplace trail allAncestors stop=continent:Europe firstMatch: Rick Breen [@I20@] shown 1-3 of 3"
+            $0.queryDescription == "birthplace trail allAncestors stop=continent:Europe firstMatch: Rick Breen [@I20@] tree=\(HallieLineageAnswer.trailTreeToken(Self.trailTree)) shown 1-3 of 3"
         })
         #expect(!harness.output.contains { $0.contains("people and") })
     }
@@ -634,8 +634,116 @@ struct HallieShellCLITests {
             && $0.hasSuffix("The tree records no mother for Gen15 Chain, so that is where the line ends.") })
         #expect(harness.output.contains { $0.hasPrefix("That was the whole trail — 15 generations back from Anna Chain.") })
         #expect(harness.transcriptEvents.contains {
-            $0.queryDescription == "birthplace trail maternal stop=top list: Anna Chain [@I0@] shown 13-16 of 16"
+            $0.queryDescription == "birthplace trail maternal stop=top list: Anna Chain [@I0@] tree=\(HallieLineageAnswer.trailTreeToken(graph)) shown 13-16 of 16"
         })
+    }
+
+    /// A 15-generation maternal chain (16 lines, so the read-out pages);
+    /// @I0@ is `anchor`, the rest Gen1 … Gen15 Chain.
+    private static func pagedChain(anchor: String, depth: Int = 15) -> GedcomFamilyGraph {
+        var lines = ["0 HEAD"]
+        for g in 0...depth {
+            lines.append("0 @I\(g)@ INDI")
+            lines.append("1 NAME \(g == 0 ? anchor : "Gen\(g)") /Chain/")
+            lines.append("1 SEX F")
+            lines.append("1 BIRT")
+            lines.append("2 DATE \(2000 - 25 * g)")
+            lines.append("2 PLAC Town\(g), Massachusetts, USA")
+            if g < depth { lines.append("1 FAMC @F\(g)@") }
+            if g > 0 { lines.append("1 FAMS @F\(g - 1)@") }
+        }
+        for g in 0..<depth {
+            lines.append("0 @F\(g)@ FAM")
+            lines.append("1 WIFE @I\(g + 1)@")
+            lines.append("1 CHIL @I\(g)@")
+        }
+        lines.append("0 TRLR")
+        return GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
+    }
+
+    /// codex #1014 item 4: the shell's "show more" is bound to the tree the
+    /// read-out came from. A session whose tree was reloaded so that @I0@
+    /// names someone else — or the same names in a changed tree — refuses
+    /// the page instead of reading another person's line.
+    @Test func showMoreAfterTheTreeChangedIsRefusedThroughTheShell() async throws {
+        let first = Self.pagedChain(anchor: "Anna")
+        let harness = Harness(graph: first)
+        var output: [String] = []
+        var state = HallieShellCLI.Session(
+            records: [], profiles: [], graph: first, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            model: "fixture-model", runID: "trail-run")
+        _ = await HallieShellCLI.answer(
+            "trace the birth locations of anna chain's maternal line",
+            options: HallieShellCLI.Options(), state: &state,
+            output: { output.append($0) }, dependencies: harness.dependencies())
+        #expect(output.contains { $0.hasSuffix("4 more generations further back — say “show more” to continue.") })
+        #expect(state.memory.lastExchange?.queryDescription?.contains("tree=\(HallieLineageAnswer.trailTreeToken(first))") == true)
+
+        // Reloaded: @I0@ is now Zed Chain.
+        let reloaded = Self.pagedChain(anchor: "Zed")
+        var reloadedState = HallieShellCLI.Session(
+            records: [], profiles: [], graph: reloaded, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            model: "fixture-model", runID: "trail-run")
+        reloadedState.memory = state.memory
+        output = []
+        _ = await HallieShellCLI.answer(
+            "show more", options: HallieShellCLI.Options(), state: &reloadedState,
+            output: { output.append($0) }, dependencies: Harness(graph: reloaded).dependencies())
+        #expect(output.contains("That list is from an earlier tree; ask again."), Comment(rawValue: output.joined(separator: " | ")))
+        #expect(!output.contains { $0.contains("Zed Chain") })
+        #expect(!output.contains { $0.contains("Continuing") })
+
+        // Same names, one generation more: a different tree, refused too.
+        let grown = Self.pagedChain(anchor: "Anna", depth: 16)
+        var grownState = HallieShellCLI.Session(
+            records: [], profiles: [], graph: grown, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            model: "fixture-model", runID: "trail-run")
+        grownState.memory = state.memory
+        output = []
+        _ = await HallieShellCLI.answer(
+            "show more", options: HallieShellCLI.Options(), state: &grownState,
+            output: { output.append($0) }, dependencies: Harness(graph: grown).dependencies())
+        #expect(output.contains("That list is from an earlier tree; ask again."), Comment(rawValue: output.joined(separator: " | ")))
+
+        // The same tree: the page continues.
+        output = []
+        _ = await HallieShellCLI.answer(
+            "show more", options: HallieShellCLI.Options(), state: &state,
+            output: { output.append($0) }, dependencies: harness.dependencies())
+        #expect(output.contains { $0.hasPrefix("Continuing Anna Chain’s maternal line birthplaces, 13 to 16 of 16:") },
+                Comment(rawValue: output.joined(separator: " | ")))
+    }
+
+    /// codex #1014 item 4: a two-question turn ("…? what is gedcom") joins
+    /// the trail with another answer; "show more" still continues the
+    /// trail, whichever half it was.
+    @Test func joinedTwoQuestionTurnKeepsShowMoreForItsTrailThroughTheShell() async throws {
+        for question in ["trace the birth locations of anna chain's maternal line? what is gedcom",
+                         "what is gedcom? trace the birth locations of anna chain's maternal line"] {
+            let graph = Self.pagedChain(anchor: "Anna")
+            let harness = Harness(inputs: [question, "show more", ":quit"], graph: graph)
+            let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+            let code = await HallieShellCLI.run(
+                options: options, input: harness.nextInput,
+                output: { harness.output.append($0) },
+                dependencies: harness.dependencies())
+
+            #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+            #expect(harness.translatedQuestions.isEmpty, Comment(rawValue: question))
+            let joined = harness.output.joined(separator: " | ")
+            #expect(harness.output.contains { $0.contains("12. Gen11 Chain — 1725, Town11, Massachusetts, USA.") && $0.lowercased().contains("gedcom") },
+                    Comment(rawValue: joined))
+            #expect(harness.output.contains { $0.hasPrefix("Continuing Anna Chain’s maternal line birthplaces, 13 to 16 of 16:") },
+                    Comment(rawValue: joined))
+            #expect(harness.transcriptEvents.contains {
+                $0.queryDescription?.hasPrefix("two questions: ") == true
+                    && $0.queryDescription?.contains("birthplace trail maternal stop=top list: Anna Chain [@I0@] tree=\(HallieLineageAnswer.trailTreeToken(graph)) shown 1-12 of 16") == true
+            }, Comment(rawValue: question))
+        }
     }
 
     @Test func normalConversationHidesDiagnosticsButLogRetainsThem() async throws {
