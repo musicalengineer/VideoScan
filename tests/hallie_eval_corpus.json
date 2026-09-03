@@ -1985,7 +1985,7 @@
       "category": "live",
       "text": "find videos of my brother tim",
       "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one.",
+      "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one. 9/02 21:15 baseline: brother now resolves to Tim (rows fixed) but the presence answer reads 'tagged with tim and Tim' — the typed word and the resolved person are not de-duplicated case-insensitively. DISPATCH: presence person-term dedupe (small).",
       "followsPrevious": false,
       "mustContain": [
         "Tim"
@@ -1994,7 +1994,8 @@
         "Matt",
         "Timmy",
         "Which one",
-        "which one do you mean"
+        "which one do you mean",
+        "tim and Tim"
       ]
     },
     {
@@ -2229,14 +2230,14 @@
       "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
       "expect": "kinship",
       "mustContain": [
-        "Brockton"
+        "Elaine Bowser"
       ],
       "mustNotContain": [
         "The Birth Locations Of Donna",
         "don't find"
       ],
       "followsPrevious": false,
-      "notes": "observed live 2026-09-02 19:12: MISS — lineage resolver took 'The Birth Locations Of Donna' as a person name. Wanted: Donna's maternal line (Elaine Bowser → Ethel Evelyn Damon → …) with birthplaces, stopping at the first non-US birth. DISPATCH: codex lineage name extractor (same class as -001)."
+      "notes": "observed live 2026-09-02 19:12: MISS — lineage resolver took 'The Birth Locations Of Donna' as a person name. Wanted: Donna's maternal line (Elaine Bowser → Ethel Evelyn Damon → …) with birthplaces, stopping at the first non-US birth. DISPATCH: codex lineage name extractor (same class as -001). 9/02 21:15 baseline: the maternal line now answers (codex 495cf285) — 'Brockton' was a wrong expectation (Donna's own birthplace, not an ancestor's); the birthplace-per-generation + stop-outside-USA part is the trail feature."
     },
     {
       "id": "lv260902-011",
