@@ -414,6 +414,45 @@ struct HallieShellCLITests {
         #expect(harness.output.contains("Hallie is thinking…"))
     }
 
+    /// Sensor for the live catalog-roster miss: the real shell pipeline must
+    /// answer from People profiles before translation and must not enumerate
+    /// tree-only or family-told people.
+    @Test func catalogPeopleRosterIsLocalBoundedAndSourceScoped() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Tree Only /Secret/
+        0 TRLR
+        """)
+        let profiles = [
+            POIProfile(name: "Rick", referencePath: "/isolated/rick"),
+            POIProfile(name: "Donna", referencePath: "/isolated/donna"),
+        ]
+        let harness = Harness(profiles: profiles, graph: graph)
+        harness.cyberBrain = try CyberBrainIndex(archive: .init(
+            archiveID: "fixture", displayName: "Fixture",
+            people: [.init(id: "private", canonicalName: "Told Only Secret")],
+            sources: []))
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", "tell me about the people in the catalog",
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains {
+            $0.contains("The People-tab catalog roster has 2 people: Donna; Rick.")
+        })
+        #expect(!harness.output.contains { $0.contains("Tree Only Secret") })
+        #expect(!harness.output.contains { $0.contains("Told Only Secret") })
+        #expect(harness.transcriptEvents.contains {
+            $0.queryDescription == "shape=roster" && $0.responder == "local"
+        })
+    }
+
     /// Live 2026-09-02 (lv260902-001): after a Thankful Pratt biography,
     /// the photo question's trailing "if" clause was swallowed into the
     /// name. Exercise the real shell state so both the photo turn and the

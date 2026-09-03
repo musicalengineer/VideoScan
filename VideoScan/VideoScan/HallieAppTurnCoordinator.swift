@@ -730,7 +730,9 @@ enum HallieAppTurnCoordinator {
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
                 },
                 catalogStats: catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources()) },
+                rosterAnswer: { scope in
+                    HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources(), scope: scope)
+                },
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: sources()) },
                 relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: sources()) },
                 researchAnswer: { HallieResearchQuestion.answer($0, context: sources()) },
