@@ -703,7 +703,14 @@ struct FamilyKinshipTests {
         #expect(father.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab).")
         #expect(father.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile)"))
         let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs())
-        #expect(son.prose == "Dad's son: Richard Harding Breen Jr (Rick in the People tab).")
+        // Tim is Rick's sibling and Rick is Dad's child, so Tim is Dad's son
+        // too (full siblings share parents, 2026-09-02) — marked in the
+        // basis, plain in the prose. Ann is his daughter, not listed here.
+        #expect(son.prose == "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), Tim.")
+        // The sibling rows sit on Tim's and Ann's cards here (not Rick's),
+        // and the note says so.
+        #expect(son.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile; Tim derived from Rick's rows: full siblings share parents (sibling rows on Ann and Tim))"),
+                Comment(rawValue: son.basisLine))
         let related = ArchivistGraphExecutor.execute(relationship("Dicky", "Dick"), inputs: inputs())
         #expect(related.prose == "Dad (Richard Harding Breen Sr) is Rick's father.")
 
@@ -773,10 +780,13 @@ struct FamilyKinshipTests {
                 : "Rick's father: Dad"), Comment(rawValue: label))
             #expect(father.basisLine.contains("People tab relationship"), Comment(rawValue: label))
             // Son of Dad via a spelling only the Dad profile claims in BOTH shapes.
+            // The corrected shape has Rick's sibling rows, so Tim is Dad's
+            // son as well (full siblings share parents, 2026-09-02); the
+            // live shape carries no siblings.
             let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs(profiles))
             #expect(son.conclusion == .answered, Comment(rawValue: label))
             #expect(son.prose.hasPrefix(bridged
-                ? "Dad's son: Richard Harding Breen Jr (Rick in the People tab)"
+                ? "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), Tim"
                 : "Dad's son: Rick"), Comment(rawValue: label))
             // Asking about "Dad" never produces an answer about Rick's own children.
             let dadSon = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(profiles))

@@ -60,6 +60,18 @@ enum HallieBiographyCard {
         /// of every sentence above and is handed to the composer so the
         /// model's phrasing keeps it.
         let lifeStatus: LifeStatus
+        /// People-tab relatives the card named that rest on a read-time
+        /// inference rather than a stored row (2026-09-02, "full siblings
+        /// share parents"), grouped under the overlay's derivation note.
+        /// The basis line states them; the prose stays plain.
+        var peopleTabDerived: [DerivedNote] = []
+
+        struct DerivedNote: Sendable, Equatable {
+            /// "derived from Rick's rows: full siblings share parents".
+            let note: String
+            /// People-tab names, in the order the sentence listed them.
+            let names: [String]
+        }
 
         var prose: String { sentences.map(\.text).joined(separator: " ") }
 
@@ -79,8 +91,9 @@ enum HallieBiographyCard {
     }
 
     /// People-tab relatives of the subject, resolved by the executor from
-    /// the kinship overlay (explicit rows only — one hop, never a derived
-    /// route). Names are the profiles' canonical names ("Tim"), terms the
+    /// the kinship overlay (one hop — a stored row, or a parent/child edge
+    /// the overlay derived from sibling rows; never a composed route).
+    /// Names are the profiles' canonical names ("Tim"), terms the
     /// relation word for that person's sex ("brother").
     struct PeopleTabKin: Sendable, Equatable {
         struct Relative: Sendable, Equatable {
@@ -92,6 +105,19 @@ enum HallieBiographyCard {
             /// The tree record this relative is itself bridged to, so a
             /// relative the tree already lists is not said twice.
             let gedcomID: String?
+            /// The overlay's derivation note when this relative is an
+            /// inference ("derived from Rick's rows: full siblings share
+            /// parents"); nil for a stored row.
+            var derivation: String? = nil
+
+            init(name: String, term: String, evidenceID: String, gedcomID: String?,
+                 derivation: String? = nil) {
+                self.name = name
+                self.term = term
+                self.evidenceID = evidenceID
+                self.gedcomID = gedcomID
+                self.derivation = derivation
+            }
         }
         /// The subject's own People-tab canonical name ("Rick").
         let profileName: String
@@ -162,6 +188,8 @@ enum HallieBiographyCard {
         let living = life.isLiving
         var sentences: [Card.Sentence] = []
         var storedOn = Set<String>()
+        var derivedOrder: [String] = []
+        var derivedNames: [String: [String]] = [:]
         // Verb agreement for the sentence about to be added: the lead names
         // the subject (singular); later sentences use the pronoun, and an
         // unrecorded sex gives "They", which takes the plural verb.
@@ -189,6 +217,11 @@ enum HallieBiographyCard {
                                treeIDs: Set<String>) -> Card.Sentence? {
             let extra = relatives.filter { $0.gedcomID.map { !treeIDs.contains($0) } ?? true }
             guard !extra.isEmpty else { return nil }
+            for relative in extra {
+                guard let note = relative.derivation else { continue }
+                if derivedNames[note] == nil { derivedOrder.append(note) }
+                derivedNames[note, default: []].append(relative.name)
+            }
             let listed = extra.map { "\($0.name) — \($0.term)" }
             return .init(text: "In the People tab: " + joined(listed) + ".",
                          evidenceIDs: [person.id] + extra.map(\.evidenceID))
@@ -248,14 +281,18 @@ enum HallieBiographyCard {
             sentences.append(extra)
             peopleTab.storedOn.forEach { storedOn.insert($0) }
         }
-        // 5. Children: count and names.
+        // 5. Children: the tree's count and names, then the People tab's
+        //    that the tree lacks (2026-09-02: Eileen's tree lists Rick;
+        //    Tim, Ellen and Beth are hers through Rick's sibling rows).
         if !summary.children.isEmpty {
             let n = summary.children.count
             sentences.append(.init(
                 text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "child" : "children"), "
                     + listedNames(summary.children) + ".",
                 evidenceIDs: [person.id] + summary.children.map(\.id)))
-        } else if let peopleTab, let extra = peopleTabSentence(peopleTab.children, treeIDs: []) {
+        }
+        if let peopleTab,
+           let extra = peopleTabSentence(peopleTab.children, treeIDs: Set(summary.children.map(\.id))) {
             sentences.append(extra)
             peopleTab.storedOn.forEach { storedOn.insert($0) }
         }
@@ -267,7 +304,10 @@ enum HallieBiographyCard {
         }
         return Card(subject: person, sentences: sentences,
                     peopleTabStoredOn: storedOn.sorted(), dataQualityFlags: flags,
-                    lifeStatus: life)
+                    lifeStatus: life,
+                    peopleTabDerived: derivedOrder.map {
+                        .init(note: $0, names: derivedNames[$0] ?? [])
+                    })
     }
 
     /// The policy-shaped answer both graph operations return.
@@ -295,9 +335,14 @@ enum HallieBiographyCard {
     /// the card used none.
     static func peopleTabBasis(_ card: Card) -> String {
         guard !card.peopleTabStoredOn.isEmpty else { return "" }
-        return " People tab relationships (stored on "
-            + card.peopleTabStoredOn.map { "\($0)'s profile" }.joined(separator: ", ")
-            + "); local only, not from the family tree."
+        // "(stored on Rick's profile; Tim, Ellen and Beth derived from
+        // Rick's rows: full siblings share parents)" — same clause shape as
+        // the kinship route, so the two read alike.
+        return " People tab relationships "
+            + ArchivistGraphExecutor.overlayStoredOnClause(
+                storedOn: card.peopleTabStoredOn,
+                namesByNote: card.peopleTabDerived.map { (note: $0.note, names: $0.names) })
+            + "; local only, not from the family tree."
     }
 
     // MARK: - Data quality
