@@ -29,6 +29,12 @@ final class FamilyTreeRecompileCenter {
         /// The recompile ran and did not promote (a pull did not parse or
         /// the ingest was refused); the store log says why.
         case failed
+        /// A recompile was already in flight; this call did nothing. It
+        /// used to be reported as `.nothingPending`, i.e. "already
+        /// compiled — nothing to do", which is the opposite of the truth
+        /// and is exactly the kind of success-shaped answer that cost a
+        /// day on 2026-09-03.
+        case alreadyRunning
     }
 
     private weak var liveModel: FamilyTreeLiveModel?
@@ -44,28 +50,42 @@ final class FamilyTreeRecompileCenter {
 
     /// Recompile whatever is pending. `progress` receives the loader's
     /// phase captions ("Reading a.ged…", "Merging b.ged…", …) on the main
-    /// actor. Overlapping calls: the second returns `.nothingPending`
-    /// without running.
+    /// actor. Overlapping calls: the second returns `.alreadyRunning`
+    /// without running (it used to say `.nothingPending`, which the UI
+    /// renders as "already compiled — nothing to do").
     func recompile(
         configuration: FamilyAssetConfiguration? = nil,
         store: FamilyGraphCompiledStore? = nil,
         cache: FamilyGraphSharedCache = .shared,
         progress: @escaping @MainActor (String) -> Void
     ) async -> Outcome {
-        guard !isRunning else { return .nothingPending }
+        guard !isRunning else {
+            appLog.write("[family-tree] recompile requested while one is already running; ignored")
+            return .alreadyRunning
+        }
         isRunning = true
         defer { isRunning = false }
 
         // Path 1: the tab exists and shows the banner — its own recompile.
         if configuration == nil, store == nil,
            let model = liveModel, !model.needsRecompile.isEmpty {
+            appLog.write("[family-tree] recompile routed through the Family Tree tab "
+                         + "(\(model.needsRecompile.count) sources)")
             let phases = model.$loadPhase
                 .compactMap { $0 }
                 .receive(on: RunLoop.main)
                 .sink { phase in progress(phase) }
             await model.recompile()
             phases.cancel()
-            return model.needsRecompile.isEmpty ? .promoted : .failed
+            // The model clears `needsRecompile` only by installing a
+            // promoted generation, and it now logs an error line on every
+            // path that does not. Both halves agree or the log says so.
+            let promoted = model.needsRecompile.isEmpty
+            if !promoted {
+                appLog.write("\(FamilyTreeLiveModel.recompileFailedPrefix) "
+                             + "the Family Tree tab still lists \(model.needsRecompile.count) sources as pending")
+            }
+            return promoted ? .promoted : .failed
         }
 
         // Path 2: standalone, through the loader on the (injected or
@@ -73,7 +93,13 @@ final class FamilyTreeRecompileCenter {
         let configuration = configuration ?? FamilyAssetConfigurationCenter.shared.snapshot()
         let store = store ?? FamilyGraphCompiledStore.app
         let sources = cache.needsRecompile(for: configuration, store: store)
-        guard !sources.isEmpty else { return .nothingPending }
+        guard !sources.isEmpty else {
+            store.log("[family-tree] recompile: nothing is pending "
+                      + "(the compiled generation already matches this build, or there is no tree)")
+            return .nothingPending
+        }
+        store.log("\(FamilyTreeLiveModel.recompileStartedPrefix) \(sources.count) sources: "
+                  + sources.map(\.lastPathComponent).joined(separator: ", ") + " (standalone path)")
         let directory = configuration.gedcomDirectory()
         let promoted = await Task.detached(priority: .userInitiated) { () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)

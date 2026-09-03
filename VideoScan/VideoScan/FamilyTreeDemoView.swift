@@ -149,6 +149,16 @@ struct FamilyTreeDemoView: View {
                         Text(FamilyTreeViewerBanner.compiledElsewhereText())
                             .font(.system(size: 12))
                         Spacer()
+                    } else if model.isRecompiling {
+                        // 2026-09-03: while the compile runs the banner used
+                        // to keep saying "none compiled" beside a greyed-out
+                        // button, which is what "pressing Recompile does
+                        // nothing" looked like. It takes ~30 s on the real
+                        // pulls; say so, and show a spinner.
+                        ProgressView().controlSize(.small)
+                        Text("Recompiling \(model.needsRecompile.count) pulls — about half a minute. Leave the app open.")
+                            .font(.system(size: 12))
+                        Spacer()
                     } else {
                         Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
                             .font(.system(size: 12))
