@@ -985,7 +985,9 @@ enum HallieShellCLI {
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
                 catalogStats: state.catalogStats,
-                rosterAnswer: { HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity) },
+                rosterAnswer: { scope in
+                    HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity, scope: scope)
+                },
                 lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) },
                 relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: identity) },
                 researchAnswer: { HallieResearchQuestion.answer($0, context: identity) },

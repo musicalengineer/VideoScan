@@ -25,6 +25,20 @@ extension HallieTurnExecutor {
 
         // MARK: - "who do you know?"
 
+        enum RosterScope: Sendable, Equatable {
+            /// Everything Hallie can name as a source category. Only People
+            /// profiles are spelled out; tree-only and family-told names stay
+            /// private until the user asks about one of those sources.
+            case knowledge
+            /// The Catalog's People-tab roster only. This is deliberately
+            /// narrower than `knowledge` and never consults media rows.
+            case catalog
+        }
+
+        /// A spoken roster must remain useful and bounded even if a damaged
+        /// or synthetic profile store contains thousands of entries.
+        static let maxRosterEntries = 24
+
         private static let rosterPhrases: Set<String> = [
             "who do you know", "who do you know about", "who all do you know",
             "who else do you know", "whom do you know", "who do you know of",
@@ -56,58 +70,140 @@ extension HallieTurnExecutor {
             return words.joined(separator: " ")
         }
 
-        static func isRosterQuestion(_ text: String) -> Bool {
+        static func rosterScope(for text: String) -> RosterScope? {
             // "how is rick related to the people in the people tab" is an
             // overview of relationships, never the name list (live miss #12).
-            if HallieRelationshipsOverview.detect(text) != nil { return false }
+            if HallieRelationshipsOverview.detect(text) != nil { return nil }
             let question = normalizedQuestion(text)
-            if rosterPhrases.contains(question) { return true }
+            guard !question.isEmpty else { return nil }
+
+            // A named media/file request belongs to presence or the one-record
+            // route. A Family Tree roster belongs to the graph route. Keep
+            // these exclusions ahead of every broad "people" phrase.
+            let words = Set(question.split(separator: " ").map(String.init))
+            let mediaWords: Set<String> = [
+                "video", "videos", "photo", "photos", "picture", "pictures",
+                "footage", "clip", "clips", "film", "films", "movie", "movies",
+                "play", "watch", "find", "search", "showing", "appears", "appear",
+            ]
+            if question.contains("family tree") || question.contains("familytree")
+                || !words.isDisjoint(with: mediaWords) {
+                return nil
+            }
+
+            if rosterPhrases.contains(question) { return .knowledge }
+
+            // The live catalog wording means the People-tab catalog roster,
+            // not every person in the imported tree and not names mentioned
+            // privately in family testimony.
+            let mentionsCatalog = question.contains("catalog")
+                || question.contains("people tab")
+                || question.contains("people gallery")
+            if mentionsCatalog {
+                // The original long live utterance ended in this explicit
+                // request after several family corrections. Claim that exact
+                // tail even though the preamble is outside roster vocabulary.
+                if question.contains("do you know the people"),
+                   question.contains("read their names") {
+                    return .catalog
+                }
+                let rosterVocabulary: Set<String> = [
+                    "who", "whos", "which", "what", "is", "are", "the", "a",
+                    "people", "person", "everyone", "everybody", "all", "in",
+                    "from", "on", "catalog", "catalogue", "tab",
+                    "gallery", "roster", "listed", "list", "show", "me", "tell",
+                    "about", "read", "names", "name", "of", "do", "you", "know",
+                    "can", "could", "would", "and", "their", "for", "have", "profiles",
+                ]
+                guard words.isSubset(of: rosterVocabulary) else { return nil }
+                let asksForRoster = words.contains("people") || words.contains("person")
+                    || words.contains("names") || words.contains("name")
+                    || words.contains("everyone") || words.contains("everybody")
+                    || words.contains("roster") || words.contains("listed")
+                    || question.contains("who do you know")
+                    || question == "who is in the catalog"
+                    || question == "whos in the catalog"
+                let opener = question.split(separator: " ").first.map(String.init) ?? ""
+                let rosterOpeners: Set<String> = [
+                    "who", "whos", "which", "what", "list", "show", "tell", "read",
+                    "name", "names", "do", "can", "could", "would",
+                ]
+                if asksForRoster, rosterOpeners.contains(opener) { return .catalog }
+            }
+
+            // Close follow-ups from the live conversation. These remain
+            // intentionally exact so "read their names in these videos"
+            // stays a media question.
+            let nameFollowUps: Set<String> = [
+                "read their names", "read their names for me",
+                "can you read their names", "can you read their names for me",
+                "could you read their names", "read me their names",
+                "list their names", "can you list their names", "tell me their names",
+                "what are their names", "name them",
+            ]
+            if nameFollowUps.contains(question) { return .catalog }
+
             // "who is in the people tab", "which people are in the people tab",
             // "show me the people tab" …
             if question.contains("people tab") || question.contains("people gallery"),
                let first = question.split(separator: " ").first,
                ["who", "whos", "which", "what", "list", "show", "tell"].contains(first) {
-                return true
+                return .catalog
             }
-            return false
+            return nil
         }
 
-        static func rosterAnswer(context: Context) -> Result {
+        static func isRosterQuestion(_ text: String) -> Bool {
+            rosterScope(for: text) != nil
+        }
+
+        static func rosterAnswer(context: Context, scope: RosterScope = .knowledge) -> Result {
             rosterAnswer(profiles: context.profiles, graph: context.graph,
-                         cyberBrain: context.cyberBrain)
+                         cyberBrain: context.cyberBrain, scope: scope)
         }
 
         static func rosterAnswer(profiles: [ProfileSnapshot]?,
                                  graph: GedcomFamilyGraph?,
-                                 cyberBrain: CyberBrainIndex?) -> Result {
-            func result(_ prose: String, basis: String, outcome: Outcome = .answered) -> Result {
+                                 cyberBrain: CyberBrainIndex?,
+                                 scope: RosterScope = .knowledge) -> Result {
+            func result(_ prose: String, basis: String, outcome: Outcome = .answered,
+                        offers: [OfferedAction] = []) -> Result {
                 Result(route: .capability, outcome: outcome, prose: prose,
                        basisLine: basis, queryDescription: "shape=roster",
-                       citations: [], catalogPersonName: nil)
+                       citations: [], catalogPersonName: nil, offeredActions: offers)
             }
             guard let profiles else {
                 return result("I couldn't read the People tab just now, so I can't list who I know.",
                               basis: "Basis: People profiles were unreadable; no model call.",
-                              outcome: .declined)
+                              outcome: .declined,
+                              offers: scope == .catalog ? [.openPeopleTab] : [])
             }
             let people = Self.merged(profiles)
             guard !people.isEmpty else {
                 return result("The People tab is empty so far — add people there and I'll know them by name.",
-                              basis: "Basis: People profiles (0); no model call.")
+                              basis: "Basis: People profiles (0); no model call.",
+                              offers: scope == .catalog ? [.openPeopleTab] : [])
             }
-            let entries = people.map { profile -> String in
+            let shownPeople = people.prefix(maxRosterEntries)
+            let entries = shownPeople.map { profile -> String in
                 let aliases = Self.alternateNames(profile)
                 guard !aliases.isEmpty else { return profile.canonicalName }
                 let shown = aliases.prefix(3).joined(separator: ", ")
                 let more = aliases.count > 3 ? " and \(aliases.count - 3) more" : ""
                 return "\(profile.canonicalName) (also \(shown)\(more))"
             }
-            var sentences = [
-                "I know \(people.count) \(people.count == 1 ? "person" : "people") from the People tab: "
-                    + entries.joined(separator: "; ") + ".",
-            ]
+            let omitted = people.count - shownPeople.count
+            let boundedTail = omitted > 0
+                ? " I read the first \(shownPeople.count) alphabetically; \(omitted) more are in the People tab."
+                : ""
+            let lead = scope == .catalog
+                ? "The People-tab catalog roster has \(people.count) \(people.count == 1 ? "person" : "people"): "
+                : "I know \(people.count) \(people.count == 1 ? "person" : "people") from the People tab: "
+            var sentences = [lead + entries.joined(separator: "; ") + "." + boundedTail]
             var basis = "Basis: People profiles (\(people.count))"
-            if let graph, !graph.people.isEmpty {
+            if scope == .catalog {
+                basis += "; catalog roster only — family-tree and family-told names not listed"
+            } else if let graph, !graph.people.isEmpty {
                 let treeSize = graph.people.count
                 if let year = FamilyKnowledgeSupplement.latestBirthYear(in: graph) {
                     sentences.append("The family tree adds \(treeSize) more names, going up to people born in \(year).")
@@ -116,7 +212,7 @@ extension HallieTurnExecutor {
                 }
                 basis += "; family tree (\(treeSize) people)"
             }
-            if let cyberBrain {
+            if scope == .knowledge, let cyberBrain {
                 let told = cyberBrain.archive.people.count
                 if told > 0 {
                     sentences.append("And the family has told me about \(told) \(told == 1 ? "person" : "people") in their own words.")
@@ -124,7 +220,8 @@ extension HallieTurnExecutor {
                 basis += "; CyberBrain (\(told) people)"
             }
             sentences.append("Ask me about anyone by name.")
-            return result(sentences.joined(separator: " "), basis: basis + "; no model call.")
+            return result(sentences.joined(separator: " "), basis: basis + "; no model call.",
+                          offers: scope == .catalog ? [.openPeopleTab] : [])
         }
 
         // MARK: - One person, from the profile alone
@@ -300,7 +397,11 @@ extension HallieTurnExecutor {
                 }
             }
             return order.compactMap { byID[$0] }
-                .sorted { normalizeName($0.canonicalName) < normalizeName($1.canonicalName) }
+                .sorted {
+                    let lhs = normalizeName($0.canonicalName)
+                    let rhs = normalizeName($1.canonicalName)
+                    return lhs == rhs ? $0.stableID < $1.stableID : lhs < rhs
+                }
         }
 
         static func alternateNames(_ profile: ProfileSnapshot) -> [String] {

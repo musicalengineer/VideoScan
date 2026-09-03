@@ -253,12 +253,49 @@ struct HalliePeopleTabTests {
     @Test func rosterQuestionsAreRecognisedAndOrdinaryQuestionsAreNot() {
         for yes in ["who do you know?", "Hallie, who do you know about?", "Which people do you know",
                     "who is in the People tab", "who can I ask you about?", "list the people you know",
-                    "who's in the family?", "what people are in the people tab"] {
+                    "who's in the family?", "what people are in the people tab",
+                    "tell me about the people in the catalog", "read their names",
+                    "can you read their names for me"] {
             #expect(Tab.isRosterQuestion(yes), Comment(rawValue: yes))
         }
         for no in ["who do you know who was at the wedding?", "who is Timmy?", "what do you know",
-                   "show me videos of the people on the cape", "who knows Donna?"] {
+                   "show me videos of the people on the cape", "who knows Donna?",
+                   "who is in the family tree", "tell me about Tim in the catalog",
+                   "find videos of the people in the catalog", "who is in New Hampshire.mov"] {
             #expect(!Tab.isRosterQuestion(no), Comment(rawValue: no))
+        }
+    }
+
+    @Test func catalogRosterAndKnowledgeRosterAreDistinctIntents() {
+        for question in [
+            "tell me about the people in the catalog",
+            "Tell me about people in catalog",
+            "tell me about everyone in the catalog",
+            "who do you know in the catalog?",
+            "who is in the catalog?",
+            "list the names in the People tab",
+            "do you know the people in the people tab and can you read their names for me?",
+            "Matt is my son. Tim is my brother. Do you know the people in the people tab and can you read their names for me?",
+            "read their names",
+            "can you list their names?",
+            "what are their names?",
+        ] {
+            #expect(Tab.rosterScope(for: question) == .catalog, Comment(rawValue: question))
+        }
+        for question in ["who do you know?", "list everyone you know", "who can I ask you about?"] {
+            #expect(Tab.rosterScope(for: question) == .knowledge, Comment(rawValue: question))
+        }
+        for question in [
+            "tell me about the people in the family tree",
+            "who is Timmy?",
+            "tell me about Donna in the catalog",
+            "show me videos of people in the catalog",
+            "find footage with everyone in the People tab",
+            "which people in the catalog were at the Cape",
+            "which people in the catalog were at the wedding in 1994",
+            "who is in New Hampshire.mov",
+        ] {
+            #expect(Tab.rosterScope(for: question) == nil, Comment(rawValue: question))
         }
     }
 
@@ -278,19 +315,103 @@ struct HalliePeopleTabTests {
         #expect(empty.prose.contains("empty so far"))
     }
 
+    @Test func catalogRosterNamesOnlyPeopleProfiles() throws {
+        let privateTree = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Tree Only /Secret/
+        0 TRLR
+        """)
+        let privateTold = try CyberBrainIndex(archive: CyberBrainArchive(
+            archiveID: "fixture", displayName: "Fixture",
+            people: [CyberBrainPerson(id: "private", canonicalName: "Told Only Secret")],
+            sources: []))
+        let result = Tab.rosterAnswer(
+            profiles: [timmy, dad, tim], graph: privateTree,
+            cyberBrain: privateTold, scope: .catalog)
+
+        #expect(result.prose.hasPrefix(
+            "The People-tab catalog roster has 3 people: Dad (also Grampa Breen, Dick, Dad Breen); Tim (also Mimmy, Brother); Timmy (also Tim Jr)."))
+        #expect(!result.prose.contains("Tree Only Secret"))
+        #expect(!result.prose.contains("Told Only Secret"))
+        #expect(!result.prose.contains("family tree adds"))
+        #expect(!result.prose.contains("family has told"))
+        #expect(result.basisLine == "Basis: People profiles (3); catalog roster only — family-tree and family-told names not listed; no model call.")
+        #expect(result.offeredActions == [.openPeopleTab])
+    }
+
+    @Test func catalogRosterOrderingIsStableAcrossInputOrderAndNameTies() throws {
+        let a = Profile(stableID: "a", canonicalName: "Same Name", aliases: ["First Stable ID"])
+        let z = Profile(stableID: "z", canonicalName: "Same Name", aliases: ["Last Stable ID"])
+        let beta = Profile(stableID: "b", canonicalName: "Beta")
+        let forward = Tab.rosterAnswer(
+            profiles: [z, beta, a], graph: nil, cyberBrain: nil, scope: .catalog)
+        let reverse = Tab.rosterAnswer(
+            profiles: [a, beta, z], graph: nil, cyberBrain: nil, scope: .catalog)
+
+        #expect(forward.prose == reverse.prose)
+        let betaRange = try #require(forward.prose.firstRange(of: "Beta"))
+        let firstStableIDRange = try #require(forward.prose.firstRange(of: "First Stable ID"))
+        let lastStableIDRange = try #require(forward.prose.firstRange(of: "Last Stable ID"))
+        #expect(betaRange.lowerBound < firstStableIDRange.lowerBound)
+        #expect(firstStableIDRange.lowerBound < lastStableIDRange.lowerBound)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func hundredThousandProfileRosterIsBoundedAndDeterministic() {
+        var profiles: [Profile] = []
+        profiles.reserveCapacity(100_000)
+        for index in (0..<100_000).reversed() {
+            profiles.append(Profile(
+                stableID: String(format: "id-%06d", index),
+                canonicalName: String(format: "Person %06d", index),
+                aliases: [String(format: "Alias %06d", index)]))
+        }
+
+        let start = ContinuousClock.now
+        let result = Tab.rosterAnswer(
+            profiles: profiles, graph: nil, cyberBrain: nil, scope: .catalog)
+        let elapsed = ContinuousClock.now - start
+
+        #expect(elapsed < .seconds(10), Comment(rawValue: "100k roster took \(elapsed)"))
+        #expect(result.prose.contains("Person 000000 (also Alias 000000)"))
+        #expect(result.prose.contains("Person 000023 (also Alias 000023)"))
+        #expect(!result.prose.contains("Person 000024"))
+        #expect(!result.prose.contains("Person 099999"))
+        #expect(result.prose.contains("I read the first 24 alphabetically; 99976 more are in the People tab."))
+        #expect(result.prose.count < 4_000, "answer text must stay bounded")
+    }
+
+    @Test func poisonedPreferencesCannotAddNamesToTheCatalogRoster() {
+        let key = "HalliePeopleTabTests.poison.\(UUID().uuidString)"
+        let defaults = UserDefaults.standard
+        defaults.set(["Private Preferences Person", "Tree Only Secret"], forKey: key)
+        defer { defaults.removeObject(forKey: key) }
+
+        let result = Tab.rosterAnswer(
+            profiles: [dad], graph: nil, cyberBrain: nil, scope: .catalog)
+        #expect(result.prose.contains("Dad"))
+        #expect(!result.prose.contains("Private Preferences Person"))
+        #expect(!result.prose.contains("Tree Only Secret"))
+        #expect(defaults.array(forKey: key)?.count == 2,
+                "pure roster code must neither read nor mutate global preferences")
+    }
+
     @Test func rosterIsAnsweredBeforeTranslation() {
         let pre = HallieTurnExecutor.preTranslation(
-            question: "who do you know?", playAfterAnswer: false,
+            question: "tell me about the people in the catalog", playAfterAnswer: false,
             memory: .init(), isKnownPerson: { _ in false },
-            rosterAnswer: { Tab.rosterAnswer(profiles: [self.dad], graph: nil, cyberBrain: nil) })
+            rosterAnswer: { scope in
+                Tab.rosterAnswer(profiles: [self.dad], graph: nil, cyberBrain: nil, scope: scope)
+            })
         guard case .answer(let result) = pre else {
             Issue.record("expected a local answer, got \(pre)"); return
         }
-        #expect(result.prose.hasPrefix("I know 1 person from the People tab: Dad"))
+        #expect(result.prose.hasPrefix("The People-tab catalog roster has 1 person: Dad"))
+        #expect(result.offeredActions == [.openPeopleTab])
         // Without a roster closure (a client that doesn't supply one) the
         // question goes to the translator as before.
         let none = HallieTurnExecutor.preTranslation(
-            question: "who do you know?", playAfterAnswer: false,
+            question: "tell me about the people in the catalog", playAfterAnswer: false,
             memory: .init(), isKnownPerson: { _ in false })
         guard case .translate = none else { Issue.record("expected translate"); return }
     }

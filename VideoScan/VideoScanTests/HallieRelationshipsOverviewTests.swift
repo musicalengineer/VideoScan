@@ -104,7 +104,7 @@ struct HallieRelationshipsOverviewTests {
         let pre = HallieTurnExecutor.preTranslation(
             question: Self.rickSentence, playAfterAnswer: false,
             memory: .init(), isKnownPerson: { _ in false },
-            rosterAnswer: { Tab.rosterAnswer(context: context) },
+            rosterAnswer: { scope in Tab.rosterAnswer(context: context, scope: scope) },
             relationshipsOverview: { Overview.answer($0, context: context) })
         guard case .answer(let result) = pre else {
             Issue.record("expected a local answer, got \(pre)"); return

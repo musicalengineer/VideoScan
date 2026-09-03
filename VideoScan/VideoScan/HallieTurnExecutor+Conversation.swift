@@ -421,7 +421,7 @@ extension HallieTurnExecutor {
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats? = nil,
-        rosterAnswer: (() -> Result)? = nil,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
@@ -744,7 +744,7 @@ extension HallieTurnExecutor {
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats?,
-        rosterAnswer: (() -> Result)?,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
@@ -873,7 +873,7 @@ extension HallieTurnExecutor {
         question: String,
         memory: ConversationMemory,
         catalogStats: HallieCatalogStats?,
-        rosterAnswer: (() -> Result)?,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)?,
         researchAnswer: ((HallieResearchQuestion) -> Result)?
     ) -> PreTranslation? {
@@ -889,10 +889,12 @@ extension HallieTurnExecutor {
         if let researchAnswer, let ask = HallieResearchQuestion.detect(question) {
             return .answer(researchAnswer(ask))
         }
-        // "who do you know?" — the People tab, the tree, and what the family
-        // has told her; answered locally (PeopleTab), never by the model.
-        if let rosterAnswer, PeopleTab.isRosterQuestion(question) {
-            return .answer(rosterAnswer())
+        // "who do you know?" is the wider knowledge summary; "people in
+        // the catalog" is the People-tab roster only. Both are answered
+        // locally, and the explicit scope prevents catalog wording from
+        // leaking tree-only or family-told names.
+        if let rosterAnswer, let scope = PeopleTab.rosterScope(for: question) {
+            return .answer(rosterAnswer(scope))
         }
         // "Where did that come from?" — answered from the last answer's own
         // trail, never by the model.
