@@ -320,6 +320,61 @@ extension GedcomFamilyGraph {
         return ("P:\(p)|K:\(kids)", parents, false)
     }
 
+    /// FAMC link metadata (PEDI / STAT) from two sources for one person,
+    /// family by family (codex #1011). A nil on either side is filled from
+    /// the other. Two different non-nil values are resolved by a rule that
+    /// does NOT depend on operand order, and the disagreement is written
+    /// on the link (`conflict`, → `2 _VS_CONFLICT`, → the basis) and
+    /// reported (`fieldDisagreement`):
+    ///   • STAT — fail closed: disproven › challenged › proven (a doubt
+    ///     from either source is never upgraded away);
+    ///   • PEDI — fail closed the same way: the LOWER-ranking pedigree is
+    ///     kept (adopted over birth), so "birth" is claimed only when both
+    ///     sources say so;
+    ///   • an existing conflict note on both sides: the lexically smaller.
+    static func reconcileParentLinks(_ a: [String: ParentLink], _ b: [String: ParentLink],
+                                     who: String, personID: String,
+                                     conflicts: inout [ConflictReport]) -> [String: ParentLink] {
+        var out: [String: ParentLink] = [:]
+        for family in Set(a.keys).union(b.keys).sorted() {
+            let x = a[family] ?? ParentLink(), y = b[family] ?? ParentLink()
+            var merged = ParentLink()
+            var disagreements: [String] = []
+            switch (x.pedigree, y.pedigree) {
+            case let (p?, q?) where p != q:
+                let ranked = [p, q].sorted { l, r in
+                    let (pl, pr) = (ParentPedigree(raw: l), ParentPedigree(raw: r))
+                    return pl != pr ? pl < pr : l < r
+                }
+                merged.pedigree = ranked[1]
+                disagreements.append("PEDI \(ranked[0]) vs \(ranked[1]) (kept \(ranked[1]))")
+            case let (p, q):
+                merged.pedigree = p ?? q
+            }
+            switch (x.status, y.status) {
+            case let (s?, t?) where s != t:
+                let ranked = [s, t].sorted { l, r in
+                    let (sl, sr) = (ParentLinkStatus(raw: l), ParentLinkStatus(raw: r))
+                    return sl != sr ? sl < sr : l < r
+                }
+                merged.status = ranked[1]
+                disagreements.append("STAT \(ranked[0]) vs \(ranked[1]) (kept \(ranked[1]))")
+            case let (s, t):
+                merged.status = s ?? t
+            }
+            if disagreements.isEmpty {
+                merged.conflict = [x.conflict, y.conflict].compactMap { $0 }.min()
+            } else {
+                merged.conflict = disagreements.joined(separator: "; ")
+                conflicts.append(ConflictReport(
+                    kind: .fieldDisagreement, ids: [personID],
+                    resolution: "\(who) FAMC \(family): \(merged.conflict!)"))
+            }
+            if !merged.isEmpty { out[family] = merged }
+        }
+        return out
+    }
+
     /// The same record under a new pointer with its FAMC/FAMS rewritten.
     private static func relink(_ p: Person, as id: String, familyMap: [String: String]) -> Person {
         var out = Person(id: id, name: p.name, sex: p.sex, childOfFamily: nil)
@@ -384,15 +439,8 @@ extension GedcomFamilyGraph {
         where !famc.contains(f) { famc.append(f) }
         out.childOfFamilies = famc
         out.childOfFamily = famc.first
-        // FAMC link metadata (PEDI/STAT): first source's link wins per
-        // family; the second fills only what the first left empty.
-        out.parentLinks = a.parentLinks
-        for (family, link) in b.parentLinks {
-            var merged = out.parentLinks[family] ?? ParentLink()
-            if merged.pedigree == nil { merged.pedigree = link.pedigree }
-            if merged.status == nil { merged.status = link.status }
-            if !merged.isEmpty { out.parentLinks[family] = merged }
-        }
+        out.parentLinks = reconcileParentLinks(a.parentLinks, b.parentLinks, who: who,
+                                               personID: a.id, conflicts: &conflicts)
         var fams = a.spouseOfFamilies
         for f in b.spouseOfFamilies where !fams.contains(f) { fams.append(f) }
         out.spouseOfFamilies = fams

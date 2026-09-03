@@ -168,6 +168,7 @@ private let pedigreeTree = """
 2 STAT proven
 1 FAMC @F-BIRTH@
 2 PEDI birth
+2 STAT proven
 1 _FSFTID KID1-001
 0 @I2@ INDI
 1 NAME Birth /Mother/
@@ -202,6 +203,66 @@ private let pedigreeTree = """
 1 WIFE @I5@
 1 CHIL @I1@
 1 _FSFTID FAMA-001
+0 TRLR
+"""
+
+/// A one-sided file: @F1@ lists two children, but only the first links
+/// back with a FAMC.
+private let oneSidedTree = """
+0 HEAD
+0 @I1@ INDI
+1 NAME Linked /Child/
+1 SEX M
+1 FAMC @F1@
+0 @I2@ INDI
+1 NAME Loose /Child/
+1 SEX M
+0 @I3@ INDI
+1 NAME Father /Child/
+1 SEX M
+1 FAMS @F1@
+0 @I4@ INDI
+1 NAME Mother /Child/
+1 SEX F
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I1@
+1 CHIL @I2@
+0 TRLR
+"""
+
+/// Duplicate reciprocal FAM records: the same couple as HUSB/WIFE of
+/// @F3@ and @F3B@, one child linked to each.
+private let duplicateFamTree = """
+0 HEAD
+0 @I1@ INDI
+1 NAME First /Twin/
+1 SEX F
+1 FAMC @F3@
+0 @I2@ INDI
+1 NAME Second /Twin/
+1 SEX M
+1 FAMC @F3B@
+0 @I3@ INDI
+1 NAME Father /Twin/
+1 SEX M
+1 FAMS @F3@
+1 FAMS @F3B@
+0 @I4@ INDI
+1 NAME Mother /Twin/
+1 SEX F
+1 FAMS @F3@
+1 FAMS @F3B@
+0 @F3@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I1@
+0 @F3B@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I2@
 0 TRLR
 """
 
@@ -295,8 +356,8 @@ struct GedcomParentFamilyTests {
         // pedigreeTree already lists the adoptive family FIRST; swapping
         // the two links must not move the primary.
         let swapped = pedigreeTree.replacingOccurrences(
-            of: "1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n",
-            with: "1 FAMC @F-BIRTH@\n2 PEDI birth\n1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n")
+            of: "1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT proven\n",
+            with: "1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT proven\n1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n")
         for text in [pedigreeTree, swapped] {
             let g = GedcomFamilyGraph(gedcomText: text)
             let child = try #require(g.people["@I1@"])
@@ -363,16 +424,17 @@ struct GedcomParentFamilyTests {
         #expect(g.droppedLineCount == 0, "PEDI and STAT are retained, not counted lost")
         let child = try #require(g.people["@I1@"])
         #expect(child.parentLinks["@F-ADOPT@"] == .init(pedigree: "adopted", status: "proven"))
-        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: nil))
+        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: "proven"))
         #expect(g.pedigree(of: child, in: "@F-BIRTH@") == .birth)
+        #expect(g.linkStatus(of: child, in: "@F-BIRTH@") == .proven)
         #expect(g.pedigree(of: child, in: "@F-ADOPT@") == .adopted)
         #expect(g.pedigree(of: child, in: "@F-NONE@") == .unspecified)
 
         let choice = try #require(g.parentFamilyChoice(of: child))
         #expect(choice.primaryFamilyID == "@F-BIRTH@")
         #expect(choice.primaryPedigree == .birth)
-        #expect(choice.ranks[0] == Rank(familyID: "@F-BIRTH@", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 1, pedigree: .birth))
-        #expect(choice.ranks[1] == Rank(familyID: "@F-ADOPT@", hasBothParents: true, hasFamilySearchID: true, factCount: 6, order: 0, pedigree: .adopted))
+        #expect(choice.ranks[0] == Rank(familyID: "@F-BIRTH@", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 1, pedigree: .birth, status: .proven))
+        #expect(choice.ranks[1] == Rank(familyID: "@F-ADOPT@", hasBothParents: true, hasFamilySearchID: true, factCount: 6, order: 0, pedigree: .adopted, status: .proven))
         #expect(g.relatives(.mother, of: child).map(\.id) == ["@I2@"])
         #expect(g.relatives(.father, of: child).isEmpty, "the birth family records no father; the adoptive one is not borrowed")
         #expect(choice.alternates.map { "\($0.role.rawValue) \($0.person.id) \($0.pedigree)" } == ["father @I4@ adopted", "mother @I5@ adopted"])
@@ -408,7 +470,7 @@ struct GedcomParentFamilyTests {
         #expect(GedcomCompiledTree.firstDifference(child, poisoned) == "parentLinks")
 
         let written = g.gedcomText()
-        #expect(written.contains("1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n"), Comment(rawValue: written))
+        #expect(written.contains("1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT proven\n"), Comment(rawValue: written))
         let reparsed = GedcomFamilyGraph(gedcomText: written)
         #expect(reparsed.people["@I1@"]?.parentLinks == g.people["@I1@"]?.parentLinks)
         #expect(reparsed.parentFamilyChoice(of: try #require(reparsed.people["@I1@"]))?.primaryFamilyID == "@F-BIRTH@")
@@ -431,7 +493,7 @@ struct GedcomParentFamilyTests {
         let child = try #require(outcome.graph.people["@I1@"])
         #expect(outcome.sharedPeopleCount == 4)
         #expect(child.parentLinks["@F-ADOPT@"] == .init(pedigree: "adopted", status: "proven"), Comment(rawValue: "\(child.parentLinks)"))
-        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: nil))
+        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: "proven"))
         #expect(outcome.graph.parentFamilyChoice(of: child)?.primaryFamilyID == "@F-BIRTH@")
         // A second-file-only person keeps its links under the new pointers.
         let onlyB = GedcomFamilyGraph(gedcomText: pedigreeTree.replacingOccurrences(of: "1 _FSFTID KID1-001\n", with: ""))
@@ -614,19 +676,169 @@ struct GedcomParentFamilyTests {
     }
 
     /// Sibling consistency sensor: for every person in every fixture,
-    /// full siblings are symmetric, alternates are symmetric, and the two
-    /// sets never overlap.
-    @Test func siblingSetsAreSymmetricAndDisjoint() {
-        for text in [eileenTree, eileenTreeReversed, adoptionTree, pedigreeTree,
+    /// full siblings are symmetric, alternates are symmetric, the sets
+    /// never overlap, and the THREE SURFACES agree — relatives(.siblings),
+    /// the family-tree summary the biography reads, and directRelation —
+    /// on every candidate pair, from both sides.
+    @Test func siblingSetsAreSymmetricAndTheThreeSurfacesAgree() {
+        for text in [eileenTree, eileenTreeReversed, adoptionTree, pedigreeTree, oneSidedTree, duplicateFamTree,
                      GedcomSyntheticPedigree.gedcom(people: 2_000)] {
             let g = GedcomFamilyGraph(gedcomText: text)
             for person in g.people.values {
                 let full = g.relatives(.siblings, of: person), alt = g.alternateFamilySiblings(of: person)
-                #expect(Set(full.map(\.id)).isDisjoint(with: Set(alt.map(\.id))))
+                let oneSided = g.oneSidedSiblings(of: person)
+                let fullIDs = Set(full.map(\.id))
+                #expect(fullIDs.isDisjoint(with: Set(alt.map(\.id))))
+                #expect(fullIDs.isDisjoint(with: Set(oneSided.map(\.id))))
                 for s in full { #expect(g.relatives(.siblings, of: s).contains { $0.id == person.id }, "\(s.name) ↔ \(person.name)") }
                 for s in alt { #expect(g.alternateFamilySiblings(of: s).contains { $0.id == person.id }, "\(s.name) ↔ \(person.name)") }
+                #expect(ArchivistFamilyTreePolicy.summary(of: person, in: g).siblings.map(\.id).sorted() == full.map(\.id).sorted())
+                for other in g.siblingCandidates(of: person) + full + alt + oneSided {
+                    let verdict = g.siblingVerdict(person, other)
+                    #expect(verdict == g.siblingVerdict(other, person), "\(person.name) ↔ \(other.name)")
+                    let direct = g.directRelation(between: person.id, and: other.id)?.kind
+                    // directRelation names spouses / parent-child / ancestors
+                    // BEFORE the sibling verdict by design (the synthetic
+                    // pedigree marries a few siblings); only the sibling
+                    // kinds are compared.
+                    if [.spouses, .parentChild, .ancestorDescendant].contains(direct) { continue }
+                    #expect((direct == .siblings) == fullIDs.contains(other.id), "\(person.name) ↔ \(other.name): \(String(describing: direct))")
+                    #expect((direct == .oneSidedSiblings) == oneSided.contains { $0.id == other.id }, "\(person.name) ↔ \(other.name)")
+                    #expect((direct == .alternateFamilySiblings) == alt.contains { $0.id == other.id }, "\(person.name) ↔ \(other.name)")
+                }
             }
         }
+    }
+
+    /// A CHIL line with no FAMC back-link (a one-sided file): not a full
+    /// sibling on any surface, from either side; qualified in the basis
+    /// from the side that carries the link.
+    @Test func oneSidedChilIsQualifiedNotAFullSibling() throws {
+        let g = GedcomFamilyGraph(gedcomText: oneSidedTree)
+        let linked = try #require(g.people["@I1@"]), loose = try #require(g.people["@I2@"])
+        #expect(g.relatives(.siblings, of: linked).isEmpty)
+        #expect(g.relatives(.siblings, of: loose).isEmpty)
+        #expect(g.oneSidedSiblings(of: linked).map(\.id) == ["@I2@"])
+        #expect(g.oneSidedSiblings(of: loose).isEmpty, "the loose record carries nothing to see")
+        #expect(g.siblingVerdict(linked, loose) == .oneSided(familyID: "@F1@"))
+        #expect(g.siblingVerdict(loose, linked) == .oneSided(familyID: "@F1@"))
+        #expect(g.directRelation(between: "@I1@", and: "@I2@")?.kind == .oneSidedSiblings)
+        #expect(g.directRelation(between: "@I1@", and: "@I2@")?.term == "Loose Child is recorded as Linked Child’s brother on one side only")
+        #expect(g.directRelation(between: "@I2@", and: "@I1@")?.kind == .oneSidedSiblings)
+        #expect(ArchivistFamilyTreePolicy.summary(of: linked, in: g).siblings.isEmpty)
+        #expect(g.alternateSiblingBasisNote(for: linked)
+                == "Recorded as a sibling on one side only (no link back from that record): Loose Child, @I2@.")
+        #expect(g.alternateSiblingBasisNote(for: loose) == nil)
+    }
+
+    /// Duplicate reciprocal FAM records — the same two parents as HUSB and
+    /// WIFE of @F3@ and @F3B@, one child in each: full siblings on every
+    /// surface, from both sides, not two families.
+    @Test func duplicateReciprocalFamsAreFullSiblingsOnEverySurface() throws {
+        let g = GedcomFamilyGraph(gedcomText: duplicateFamTree)
+        let a = try #require(g.people["@I1@"]), b = try #require(g.people["@I2@"])
+        #expect(g.primaryParentFamilyID(of: a) == "@F3@")
+        #expect(g.primaryParentFamilyID(of: b) == "@F3B@")
+        #expect(g.relatives(.siblings, of: a).map(\.id) == ["@I2@"])
+        #expect(g.relatives(.siblings, of: b).map(\.id) == ["@I1@"])
+        #expect(g.siblingVerdict(a, b) == .full)
+        #expect(g.directRelation(between: "@I1@", and: "@I2@")?.kind == .siblings)
+        #expect(g.directRelation(between: "@I2@", and: "@I1@")?.kind == .siblings)
+        #expect(ArchivistFamilyTreePolicy.summary(of: a, in: g).siblings.map(\.id) == ["@I2@"])
+        #expect(g.alternateFamilySiblings(of: a).isEmpty && g.oneSidedSiblings(of: a).isEmpty)
+        #expect(g.alternateSiblingBasisNote(for: a) == nil)
+        // Father-only duplicates share ONE primary parent: half, on every surface.
+        let half = GedcomFamilyGraph(gedcomText: duplicateFamTree.replacingOccurrences(of: "1 WIFE @I4@\n", with: ""))
+        let ha = try #require(half.people["@I1@"]), hb = try #require(half.people["@I2@"])
+        #expect(half.siblingVerdict(ha, hb) == .half(through: "@I3@"))
+        #expect(half.relatives(.siblings, of: ha).isEmpty)
+        #expect(half.directRelation(between: "@I1@", and: "@I2@")?.kind == .halfSiblings)
+    }
+
+    // MARK: - Logic: STAT ranks first (fail closed) and merges deterministically
+
+    @Test("status ranks before pedigree: birth + disproven loses to adopted + proven")
+    func statusOutranksPedigree() {
+        typealias Status = GedcomFamilyGraph.ParentLinkStatus
+        let disprovenBirth = Rank(familyID: "A", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 0, pedigree: .birth, status: .disproven)
+        let provenAdopted = Rank(familyID: "B", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 1, pedigree: .adopted, status: .proven)
+        let plain = Rank(familyID: "C", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 2)
+        let challenged = Rank(familyID: "D", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 3, pedigree: .birth, status: .challenged)
+        #expect(Rank.outranks(provenAdopted, disprovenBirth))
+        #expect(!Rank.outranks(disprovenBirth, provenAdopted))
+        #expect(Rank.ranked([disprovenBirth, challenged, plain, provenAdopted]).map(\.familyID) == ["B", "C", "D", "A"])
+        #expect(Status.proven < .unspecified && Status.unspecified < .challenged && Status.challenged < .disproven)
+        #expect(Status(raw: "PROVEN") == .proven)
+        #expect(Status(raw: " disproven ") == .disproven)
+        #expect(Status(raw: nil) == .unspecified)
+        #expect(Status(raw: "submitted") == .unspecified)
+    }
+
+    @Test func disprovenBirthLinkLosesToProvenAdoptiveFamilyAndIsQualified() throws {
+        let text = pedigreeTree.replacingOccurrences(of: "1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT proven\n", with: "1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT disproven\n")
+        for variant in [text, text.replacingOccurrences(
+            of: "1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT disproven\n",
+            with: "1 FAMC @F-BIRTH@\n2 PEDI birth\n2 STAT disproven\n1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n")] {
+            let g = GedcomFamilyGraph(gedcomText: variant)
+            let child = try #require(g.people["@I1@"])
+            let choice = try #require(g.parentFamilyChoice(of: child))
+            #expect(choice.primaryFamilyID == "@F-ADOPT@")
+            #expect(choice.primaryStatus == .proven)
+            #expect(choice.ranks.map(\.status) == [.proven, .disproven])
+            #expect(g.relatives(.mother, of: child).map(\.id) == ["@I5@"])
+            #expect(g.relatives(.father, of: child).map(\.id) == ["@I4@"])
+            #expect(g.parentFamilyBasisNote(for: child)
+                    == "A second parent family is recorded (mother Birth Mother, BMOM-001 — link disproven); ask about it by name.")
+        }
+        // Challenged alone (no PEDI anywhere): the unlabelled family wins.
+        let challenged = GedcomFamilyGraph(gedcomText: adoptionTree.replacingOccurrences(of: "1 FAMC @F-BIRTH@\n", with: "1 FAMC @F-BIRTH@\n2 STAT challenged\n"))
+        #expect(challenged.parentFamilyChoice(of: try #require(challenged.people["@I1@"]))?.primaryFamilyID == "@F-ADOPT@")
+        #expect(challenged.parentFamilyBasisNote(for: try #require(challenged.people["@I1@"]))
+                == "A second parent family is recorded (father Birth Father, @I2@; mother Birth Mother, @I3@ — link challenged); ask about it by name.")
+    }
+
+    /// Two sources disagree on the same FAMC's PEDI and STAT: the result
+    /// is the same whichever source comes first (fail closed: disproven
+    /// over proven, adopted over birth), the disagreement is written on
+    /// the link, reported, round-trips the writer and the codec, and is
+    /// said in the basis.
+    @Test func conflictingLinkMetadataMergesDeterministicallyAndIsReported() throws {
+        let first = pedigreeTree.replacingOccurrences(of: "2 PEDI adopted\n2 STAT proven\n", with: "2 PEDI birth\n2 STAT proven\n")
+        let second = pedigreeTree
+            .replacingOccurrences(of: "2 PEDI adopted\n2 STAT proven\n", with: "2 PEDI adopted\n2 STAT disproven\n")
+            .replacingOccurrences(of: "@I1@", with: "@X1@").replacingOccurrences(of: "@I2@", with: "@X2@")
+            .replacingOccurrences(of: "@I4@", with: "@X4@").replacingOccurrences(of: "@I5@", with: "@X5@")
+            .replacingOccurrences(of: "@F-ADOPT@", with: "@FX-ADOPT@").replacingOccurrences(of: "@F-BIRTH@", with: "@FX-BIRTH@")
+        let a = GedcomFamilyGraph(gedcomText: first), b = GedcomFamilyGraph(gedcomText: second)
+        let ab = a.merge(with: b), ba = b.merge(with: a)
+        let conflict = "PEDI birth vs adopted (kept adopted); STAT proven vs disproven (kept disproven)"
+        for (outcome, pointer, adoptFamily) in [(ab, "@I1@", "@F-ADOPT@"), (ba, "@X1@", "@FX-ADOPT@")] {
+            let child = try #require(outcome.graph.people[pointer])
+            #expect(child.parentLinks[adoptFamily] == .init(pedigree: "adopted", status: "disproven", conflict: conflict),
+                    Comment(rawValue: "\(child.parentLinks)"))
+            // Both sources agree the birth family is "birth": no conflict there.
+            #expect(child.parentLinks.values.filter { $0.conflict != nil }.count == 1)
+            // The disproven adoptive link loses to the birth family either way.
+            #expect(outcome.graph.parentFamilyChoice(of: child)?.primaryFamilyID.hasSuffix("BIRTH@") == true)
+            #expect(outcome.conflicts.contains { $0.kind == .fieldDisagreement && $0.ids == [pointer] && $0.resolution == "KID1-001 FAMC \(adoptFamily): \(conflict)" },
+                    Comment(rawValue: "\(outcome.conflicts)"))
+            #expect(outcome.graph.parentFamilyBasisNote(for: child)?.contains(
+                "The sources disagree on the link to family FAMA-001 (\(conflict)).") == true,
+                    Comment(rawValue: outcome.graph.parentFamilyBasisNote(for: child) ?? "nil"))
+            // The writer keeps it, a re-read keeps it, the codec keeps it.
+            let written = outcome.graph.gedcomText()
+            #expect(written.contains("1 FAMC \(adoptFamily)\n2 PEDI adopted\n2 STAT disproven\n2 _VS_CONFLICT \(conflict)\n"), Comment(rawValue: written))
+            let reparsed = GedcomFamilyGraph(gedcomText: written)
+            #expect(reparsed.droppedLineCount == 0)
+            #expect(reparsed.people[pointer]?.parentLinks == child.parentLinks)
+            let decoded = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(outcome.graph))
+            #expect(decoded.people[pointer]?.parentLinks == child.parentLinks)
+            #expect(GedcomCompiledTree.verify(decoded: decoded, against: outcome.graph) == [])
+        }
+        // Agreement is not a conflict; a nil side is filled.
+        let same = a.merge(with: a)
+        #expect(same.graph.people["@I1@"]?.parentLinks.values.allSatisfy { $0.conflict == nil } == true)
+        #expect(same.conflicts.filter { $0.resolution.contains("FAMC") }.isEmpty)
     }
 
     // MARK: - Logic: single FAMC unchanged; the same record twice

@@ -77,7 +77,10 @@ public enum GedcomCompiledTree {
             // Codec 7: FAMC link metadata (PEDI / STAT), sorted by pointer.
             let links = p.parentLinks.keys.sorted()
             w.u32(UInt32(links.count))
-            for key in links { w.ref(key); w.ref(p.parentLinks[key]!.pedigree); w.ref(p.parentLinks[key]!.status) }
+            for key in links {
+                let link = p.parentLinks[key]!
+                w.ref(key); w.ref(link.pedigree); w.ref(link.status); w.ref(link.conflict)
+            }
         }
         // Families
         w.chunkedSection(count: families.count) { w, i in
@@ -250,7 +253,8 @@ public enum GedcomCompiledTree {
             for _ in 0..<linkCount {
                 let key = try r.string()
                 p.parentLinks[key] = GedcomFamilyGraph.ParentLink(
-                    pedigree: try r.optionalString(), status: try r.optionalString())
+                    pedigree: try r.optionalString(), status: try r.optionalString(),
+                    conflict: try r.optionalString())
             }
             return p
         }

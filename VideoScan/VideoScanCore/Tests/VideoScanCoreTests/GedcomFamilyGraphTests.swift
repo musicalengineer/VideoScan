@@ -198,9 +198,10 @@ struct GedcomFamilyGraphTests {
         // both fathers and both mothers). Two complete families with no
         // FamilySearch id and no facts tie down to GEDCOM order: the
         // birth family. The adoptive parents stay reachable through
-        // `parentFamilyChoice` / `allRecordedParents`; full siblings are
-        // the PRIMARY family's, the adoptive sibling is reachable through
-        // `alternateFamilySiblings` (codex #1011).
+        // `parentFamilyChoice` / `allRecordedParents`. The two "siblings"
+        // here are CHIL lines with NO FAMC back-link — a one-sided file —
+        // so neither is a full sibling on any surface; both are reachable
+        // through `oneSidedSiblings` and said in the basis (codex #1011).
         #expect(
             g.relatives(.father, of: child).map(\.id) == ["@I2@"]
         )
@@ -214,11 +215,16 @@ struct GedcomFamilyGraphTests {
             g.parentFamilyChoice(of: child)?.alternates.map(\.person.id) == ["@I4@", "@I5@"]
         )
         #expect(
-            g.relatives(.siblings, of: child).map(\.id) == ["@I6@"]
+            g.relatives(.siblings, of: child).isEmpty
         )
         #expect(
-            g.alternateFamilySiblings(of: child).map(\.id) == ["@I7@"]
+            g.alternateFamilySiblings(of: child).isEmpty
         )
+        #expect(
+            g.oneSidedSiblings(of: child).map(\.id) == ["@I6@", "@I7@"]
+        )
+        #expect(g.directRelation(between: "@I1@", and: "@I6@")?.kind == .oneSidedSiblings)
+        #expect(g.directRelation(between: "@I6@", and: "@I1@")?.kind == .oneSidedSiblings)
     }
 
     @Test func fileImportRequiresACompleteGEDCOMEnvelope() throws {

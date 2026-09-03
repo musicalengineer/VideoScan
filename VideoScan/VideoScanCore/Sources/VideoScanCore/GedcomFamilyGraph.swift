@@ -88,13 +88,19 @@ public struct GedcomFamilyGraph: Sendable {
     public struct ParentLink: Sendable, Equatable {
         public var pedigree: String?
         public var status: String?
+        /// Set by the merge when two sources disagree on this link's
+        /// PEDI or STAT ("STAT proven vs disproven (kept disproven)"):
+        /// written as `2 _VS_CONFLICT` under the FAMC so it survives a
+        /// re-read, and said in the basis. Nil for an agreed link.
+        public var conflict: String?
 
-        public init(pedigree: String? = nil, status: String? = nil) {
+        public init(pedigree: String? = nil, status: String? = nil, conflict: String? = nil) {
             self.pedigree = pedigree
             self.status = status
+            self.conflict = conflict
         }
 
-        public var isEmpty: Bool { pedigree == nil && status == nil }
+        public var isEmpty: Bool { pedigree == nil && status == nil && conflict == nil }
     }
 
     struct Family: Sendable {
@@ -861,10 +867,11 @@ public struct GedcomFamilyGraph: Sendable {
             guard let family = primaryParentFamily(of: person) else { return [] }
             return [family.husband.flatMap(lookup), family.wife.flatMap(lookup)].compactMap { $0 }
         case .brother, .sister, .siblings:
-            // Full siblings SHARE THE PRIMARY FAMILY (codex #1011: the
-            // old union of every FAMC called an adoptive sibling a full
-            // sibling). A person known only through a second family
-            // record is reachable through `alternateFamilySiblings(of:)`
+            // ONE symmetric verdict per pair (GedcomFamilyGraph+Siblings,
+            // codex #1011): full siblings share the PRIMARY family on
+            // BOTH sides (or both primary parents). Alternate-family and
+            // one-sided links are reachable through
+            // `alternateFamilySiblings(of:)` / `oneSidedSiblings(of:)`
             // and said in the basis, never here.
             let sibs = primarySiblings(of: person)
             switch relation {
@@ -1006,10 +1013,10 @@ public struct GedcomFamilyGraph: Sendable {
         return true
     }
 
-    /// `2 PEDI` / `2 STAT` under an open `1 FAMC` (codex #1011). The
-    /// first value per link wins; the raw text is kept lowercased and
-    /// trimmed, so "BIRTH", "birth" and "Birth" rank alike and the writer
-    /// emits one spelling.
+    /// `2 PEDI` / `2 STAT` / `2 _VS_CONFLICT` under an open `1 FAMC`
+    /// (codex #1011). The first value per link wins; PEDI/STAT are kept
+    /// lowercased and trimmed, so "BIRTH", "birth" and "Birth" rank alike
+    /// and the writer emits one spelling; the conflict note is verbatim.
     private static func applyParentLinkDetail(
         level: Int,
         tag: String,
@@ -1018,12 +1025,14 @@ public struct GedcomFamilyGraph: Sendable {
         familyLink: String?
     ) -> Bool {
         guard level == 2, let familyLink else { return false }
-        let text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.lowercased()
         guard !text.isEmpty else { return false }
         var link = person.parentLinks[familyLink] ?? ParentLink()
         switch tag {
         case "PEDI" where link.pedigree == nil: link.pedigree = text
         case "STAT" where link.status == nil: link.status = text
+        case "_VS_CONFLICT" where link.conflict == nil: link.conflict = raw
         default: return false
         }
         person.parentLinks[familyLink] = link

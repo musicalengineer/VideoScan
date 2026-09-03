@@ -3,11 +3,10 @@
 // (codex #776): "how are Rick and Dick related" is father and son, not
 // "1st cousins" through a shared grandparent. Precedence, first hit wins:
 //   same person → spouses → parent/child → direct ancestor/descendant
-//   (grandparent, great-grandparent, … any depth) → full siblings (the
-//   same PRIMARY family, or both primary parents) → half-siblings (one
-//   shared primary parent) → siblings through a second family record
-//   only → parent-in-law → sibling-in-law (spouse's sibling, or
-//   sibling's spouse).
+//   (grandparent, great-grandparent, … any depth) → the sibling verdict
+//   (GedcomFamilyGraph+Siblings: full → half → through a second family
+//   record only → on one side only) → parent-in-law → sibling-in-law
+//   (spouse's sibling, or sibling's spouse).
 // Only when none of these holds does the caller fall to
 // `commonAncestors(of:and:)`. Built from the single-hop relations the
 // graph records; pure, no I/O.
@@ -23,6 +22,9 @@ extension GedcomFamilyGraph {
             /// A FAMC shared only through a non-primary family record
             /// (adoptive / step / duplicate) — codex #1011.
             case alternateFamilySiblings
+            /// Listed as a CHIL beside the other person with no FAMC link
+            /// back from that record (a one-sided file) — codex #1011.
+            case oneSidedSiblings
         }
         public let kind: Kind
         /// "Richard Harding Breen Sr is Richard Harding Breen Jr’s father"
@@ -66,27 +68,31 @@ extension GedcomFamilyGraph {
                                   term: "\(b.name) is \(poss) \(Self.descendantLabel(generations: depth, sex: b.sex))",
                                   path: down)
         }
-        // Full siblings share the PRIMARY family (the one FAMC selection
-        // in GedcomFamilyGraph+ParentFamily — codex #1011), or both
-        // primary parents. Half-siblings share one primary parent. A
-        // FAMC shared only through a second family record is said as
-        // exactly that, never as full siblings.
-        let primaryA = primaryParentFamilyID(of: a), primaryB = primaryParentFamilyID(of: b)
-        let parentsA = relatives(.parents, of: a), parentsB = relatives(.parents, of: b)
-        let sharedParents = parentsA.filter { p in parentsB.contains(where: { $0.id == p.id }) }
-        if (primaryA != nil && primaryA == primaryB) || (sharedParents.count >= 2) {
-            return DirectRelation(kind: .siblings, term: "\(b.name) is \(poss) \(word(b, "brother", "sister", "sibling"))",
+        // ONE symmetric sibling verdict (GedcomFamilyGraph+Siblings, codex
+        // #1011) — the same one relatives(.siblings) and the biography
+        // read, so the three surfaces cannot disagree.
+        let sibling = word(b, "brother", "sister", "sibling")
+        switch siblingVerdict(a, b) {
+        case .full:
+            let parentsA = relatives(.parents, of: a), parentsB = relatives(.parents, of: b)
+            let sharedParents = parentsA.filter { p in parentsB.contains(where: { $0.id == p.id }) }
+            return DirectRelation(kind: .siblings, term: "\(b.name) is \(poss) \(sibling)",
                                   path: [a] + sharedParents.prefix(1) + [b])
-        }
-        if let shared = sharedParents.first {
-            return DirectRelation(kind: .halfSiblings, term: "\(b.name) is \(poss) half-\(word(b, "brother", "sister", "sibling")) (through \(shared.name))",
-                                  path: [a, shared, b])
-        }
-        let famcA = Set(parentFamilyIDs(of: a)), famcB = Set(parentFamilyIDs(of: b))
-        if !famcA.isEmpty, !famcA.isDisjoint(with: famcB) {
+        case .half(let through):
+            let shared = people[through]
+            return DirectRelation(kind: .halfSiblings,
+                                  term: "\(b.name) is \(poss) half-\(sibling) (through \(shared?.name ?? through))",
+                                  path: [a] + [shared].compactMap { $0 } + [b])
+        case .alternateFamily:
             return DirectRelation(kind: .alternateFamilySiblings,
-                                  term: "\(b.name) is recorded as \(poss) \(word(b, "brother", "sister", "sibling")) through a second family record",
+                                  term: "\(b.name) is recorded as \(poss) \(sibling) through a second family record",
                                   path: [a, b])
+        case .oneSided:
+            return DirectRelation(kind: .oneSidedSiblings,
+                                  term: "\(b.name) is recorded as \(poss) \(sibling) on one side only",
+                                  path: [a, b])
+        case nil:
+            break
         }
         for spouse in relatives(.spouse, of: a) {
             if relatives(.parents, of: spouse).contains(where: { $0.id == bID }) {

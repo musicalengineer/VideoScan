@@ -71,6 +71,7 @@ extension GedcomFamilyGraph {
                 if let link = p.parentLinks[f] {
                     if let pedigree = link.pedigree { lines.append("2 PEDI " + pedigree) }
                     if let status = link.status { lines.append("2 STAT " + status) }
+                    if let conflict = link.conflict { lines.append("2 _VS_CONFLICT " + conflict) }
                 }
             }
             for f in p.spouseOfFamilies { lines.append("1 FAMS " + f) }
