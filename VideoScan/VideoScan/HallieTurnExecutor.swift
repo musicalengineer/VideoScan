@@ -459,6 +459,9 @@ enum HallieTurnExecutor {
         case recompileFamilyTree
         /// Open the People tab (relationships overview, live miss #12).
         case openPeopleTab
+        /// Open one of the main app tabs. Explicit navigation asks carry
+        /// `performsFirstOfferedAction`; the same case also backs the chip.
+        case openAppDestination(HallieAppNavigation.Destination)
         /// Focus the Family Tree on the person whose record shows two
         /// mothers / fathers (live miss #16), so the duplicate can be seen
         /// and merged upstream on FamilySearch.
