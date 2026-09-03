@@ -102,14 +102,10 @@ enum RelaxedFacet: String, Sendable, Equatable, CaseIterable {
     case keywords
     case mediaKind
 
-    /// How the answer names what it set aside.
-    var phrase: String {
-        switch self {
-        case .years:     return "the years you asked for"
-        case .keywords:  return "that wording"
-        case .mediaKind: return "that kind of media"
-        }
-    }
+    // How an answer NAMES what it set aside now lives with the wording, in
+    // ArchivistPresenceAnswerComposer.relaxedOfferProse: the sentence needs
+    // the dropped facet's actual VALUES ("Christmas", "1991"), not a fixed
+    // label, so a vague "that wording" cannot come back (Rick 2026-09-03).
 }
 
 struct ArchivistPresenceResult: Sendable, Equatable {
@@ -932,11 +928,23 @@ enum ArchivistPresenceAnswerComposer {
         return nil
     }
 
-    static func noEvidenceAnswer(for interpretedQuery: String) -> String {
+    /// The facets of an executed query, read back from the query's own
+    /// description ("person=Donna year=1995 keyword=cape"). ONE parse feeds
+    /// both the honest decline and the relaxed offer, so the two sentences
+    /// can never disagree about what was asked. (C++ analogy: a small value
+    /// struct returned by value — no ownership question, no lifetime tie
+    /// back to the query that produced it.)
+    struct ParsedFacets: Equatable {
         var people: [String] = []
+        /// Display-formatted already ("1995", "1990–1994"); nil when the
+        /// query named no year.
         var years: String?
         var mediaKind: String?
         var keywords: [String] = []
+    }
+
+    static func parseFacets(_ interpretedQuery: String) -> ParsedFacets {
+        var facets = ParsedFacets()
         // "person=Richard Harding Breen Sr year=1995": a value runs until the
         // next key, so multi-word names survive.
         let pattern = #"(person|year|years|mediaKind|keyword)=(.*?)(?=\s+(?:person|year|years|mediaKind|keyword)=|$)"#
@@ -945,17 +953,27 @@ enum ArchivistPresenceAnswerComposer {
         for match in regex?.matches(in: interpretedQuery, range: whole) ?? [] {
             guard let keyRange = Range(match.range(at: 1), in: interpretedQuery),
                   let valueRange = Range(match.range(at: 2), in: interpretedQuery) else { continue }
-            let pair = [String(interpretedQuery[keyRange]),
-                        String(interpretedQuery[valueRange]).trimmingCharacters(in: .whitespaces)]
-            switch pair[0] {
-            case "person": people.append(pair[1])
-            case "year": years = "from \(pair[1])"
-            case "years": years = "from " + pair[1].replacingOccurrences(of: "...", with: "–")
-            case "mediaKind": mediaKind = pair[1]
-            case "keyword": keywords.append(pair[1])
+            let key = String(interpretedQuery[keyRange])
+            let value = String(interpretedQuery[valueRange])
+                .trimmingCharacters(in: .whitespaces)
+            switch key {
+            case "person": facets.people.append(value)
+            case "year": facets.years = value
+            case "years": facets.years = value.replacingOccurrences(of: "...", with: "–")
+            case "mediaKind": facets.mediaKind = value
+            case "keyword": facets.keywords.append(value)
             default: break
             }
         }
+        return facets
+    }
+
+    static func noEvidenceAnswer(for interpretedQuery: String) -> String {
+        let parsed = parseFacets(interpretedQuery)
+        let people = parsed.people
+        let years = parsed.years.map { "from \($0)" }
+        let mediaKind = parsed.mediaKind
+        let keywords = parsed.keywords
         var phrase = people.isEmpty
             ? (mediaKind.map { "\($0)s" } ?? "videos")
             : (mediaKind.map { "\($0)s" } ?? "videos") + " of " + joinNames(people)
@@ -976,6 +994,97 @@ enum ArchivistPresenceAnswerComposer {
             offer = "Want me to try without the \(keywords.isEmpty ? "year" : "words"), or with a different name?"
         }
         return "I looked for \(phrase) and found nothing in the catalog. " + offer
+    }
+
+    /// The relax-and-explain sentence.
+    ///
+    /// Rick, 2026-09-03, from the graded eval: the old wording — "Nothing
+    /// matches all of that. Setting aside that wording, I do have 148
+    /// items. Want those?" — failed three ways. It LED with failure while
+    /// about to offer something good; "that wording" never said WHICH
+    /// constraint was let go, so the listener could not tell whether
+    /// Christmas, the year, or a person had been dropped; and "items" is
+    /// inventory-speak for a family's home movies.
+    ///
+    /// The replacement states the miss first but SPECIFICALLY, then leads
+    /// with what exists and offers it: "I don't see “Christmas” mentioned
+    /// anywhere, but I have 148 videos from 1991 — want those?"
+    ///
+    /// Honesty is unchanged and arguably stronger: naming the dropped facet
+    /// is more informative than "that wording", and nothing in the sentence
+    /// implies the dropped constraint was matched. The offered records are
+    /// byte-for-byte the same set the old sentence offered — matching,
+    /// ranking and thresholds are untouched; only the prose differs.
+    static func relaxedOfferProse(
+        dropped: RelaxedFacet,
+        facets: ParsedFacets,
+        count: Int
+    ) -> String {
+        // What could NOT be honoured, named by its own value.
+        let miss: String
+        switch dropped {
+        case .keywords:
+            miss = facets.keywords.isEmpty
+                ? "I don't see those words mentioned anywhere"
+                : "I don't see " + orList(facets.keywords.map { "“\($0)”" })
+                    + " mentioned anywhere"
+        case .years:
+            miss = "I don't see anything from " + (facets.years ?? "those years")
+        case .mediaKind:
+            miss = "I don't see any " + pluralMediaKind(facets.mediaKind)
+        }
+        // What she DOES have, described by the facets she kept — never by
+        // the one she dropped.
+        var kept = ""
+        if !facets.people.isEmpty { kept += " of " + joinNames(facets.people) }
+        if dropped != .years, let years = facets.years { kept += " from " + years }
+        if dropped != .keywords, !facets.keywords.isEmpty {
+            kept += " with " + facets.keywords.map { "“\($0)”" }
+                .joined(separator: " and ")
+        }
+        // Dropping the media kind means the offer is deliberately mixed, so
+        // it cannot be called videos or photos: "files" is the only word
+        // that stays true of every record in it.
+        let noun = dropped == .mediaKind
+            ? (count == 1 ? "1 file" : "\(count) files")
+            : offerNoun(count: count, kind: facets.mediaKind)
+        return miss + ", but I have " + noun + kept + " — want those?"
+    }
+
+    /// How an offer counts what it has. Never "items": these are a family's
+    /// home movies, not inventory (Rick 2026-09-03).
+    static func offerNoun(count: Int, kind: String?) -> String {
+        let singular: String
+        switch kind {
+        case "photo":      singular = "photo"
+        case "audio":      singular = "audio file"
+        case "video-only": singular = "video-only file"
+        default:           singular = "video"
+        }
+        return count == 1 ? "1 " + singular : "\(count) " + singular + "s"
+    }
+
+    /// The plural a dropped media kind is named by ("I don't see any photos").
+    static func pluralMediaKind(_ kind: String?) -> String {
+        switch kind {
+        case "photo":      return "photos"
+        case "audio":      return "audio-only files"
+        case "video-only": return "video-only files"
+        case "both":       return "videos with sound"
+        default:           return "videos"
+        }
+    }
+
+    /// "“a”" · "“a” or “b”" · "“a”, “b”, or “c”" — the or-list a miss reads
+    /// as (joinNames is the and-list a possession reads as).
+    private static func orList(_ items: [String]) -> String {
+        switch items.count {
+        case 0: return ""
+        case 1: return items[0]
+        case 2: return items[0] + " or " + items[1]
+        default: return items.dropLast().joined(separator: ", ")
+            + ", or " + items[items.count - 1]
+        }
     }
 
     private static func joinNames(_ names: [String]) -> String {
@@ -1010,12 +1119,16 @@ enum ArchivistPresenceAnswerComposer {
                 evidence: result.evidence)
         case .noEvidenceButRelaxed(let dropped):
             // Honest shape: nothing for what was ASKED, here is the nearest
-            // thing I do have, and it is clearly labelled as the near miss.
+            // thing I do have, and it is clearly labelled as the near miss —
+            // now naming the dropped constraint by its own value rather than
+            // "that wording" (Rick 2026-09-03). Wording only: the evidence
+            // set below is exactly what the executor returned.
             let count = result.evidence.totalMatchCount
-            let items = count == 1 ? "1 item" : "\(count) items"
             return ArchivistFactualAnswer(
-                prose: "Nothing matches all of that. Setting aside \(dropped.phrase), "
-                    + "I do have \(items). Want those?",
+                prose: relaxedOfferProse(
+                    dropped: dropped,
+                    facets: parseFacets(result.interpretedQuery),
+                    count: count),
                 basisLine: "Basis: no evidence for the full request; "
                     + "\(result.evidence.citations.count) cited of \(count) "
                     + "after setting aside \(dropped.rawValue).",

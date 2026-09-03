@@ -842,9 +842,12 @@ struct HalliePresenceRelaxTests {
         #expect(result.conclusion == .noEvidenceButRelaxed(dropped: .years))
         #expect(result.evidence.totalMatchCount == 2)
         let answer = ArchivistPresenceAnswerComposer.compose(result)
-        #expect(answer.prose.contains("Nothing matches all of that"))
-        #expect(answer.prose.contains("the years you asked for"))
-        #expect(answer.prose.contains("2 items"))
+        // Wording rewritten 2026-09-03 (HallieRelaxedOfferWordingTests): the
+        // sentence names the years it could not honour and leads with what
+        // exists, instead of "Nothing matches all of that. Setting aside
+        // that wording, I do have 2 items."
+        #expect(answer.prose == "I don't see anything from 1990–1994, "
+                + "but I have 2 videos of Donna with “cape” — want those?")
         // The basis line names what was set aside — no silent substitution.
         #expect(answer.basisLine.contains("setting aside years"))
     }

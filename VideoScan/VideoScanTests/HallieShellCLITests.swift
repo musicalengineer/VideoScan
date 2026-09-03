@@ -2152,7 +2152,8 @@ struct HallieShellCLITests {
                 Comment(rawValue: transcript))
         // Q4: "my name" is the owner (harness speakers: Rick Breen → tag Rick).
         #expect(harness.output.contains("In New Hampshire.mov, Rick is tagged (confirmed by a person)."), Comment(rawValue: transcript))
-        for forbidden in ["29 videos", "9 videos", "3 videos", "Setting aside", "resolve the anchor", "Westford"] {
+        for forbidden in ["29 videos", "9 videos", "3 videos", "Setting aside",
+                          "want those?", "resolve the anchor", "Westford"] {
             #expect(!transcript.contains(forbidden), Comment(rawValue: "must not contain \(forbidden)"))
         }
     }
