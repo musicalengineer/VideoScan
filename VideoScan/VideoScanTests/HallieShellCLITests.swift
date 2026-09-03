@@ -2300,9 +2300,10 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         let transcript = harness.output.joined(separator: "\n")
-        // The real detectors carried the two kinship turns; the translator
-        // saw exactly the one biography sentence.
-        #expect(harness.translatedQuestions == ["tell me about ma"], Comment(rawValue: transcript))
+        // The real detectors carried the two kinship fragments; the
+        // translator saw exactly the two sentences that need it (the
+        // biography, and the two-parent fallback check from codex #973).
+        #expect(harness.translatedQuestions == ["tell me about ma", "tell me about rick's parents"], Comment(rawValue: transcript))
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
         #expect(answers.count == 4, Comment(rawValue: transcript))
         let rule = "derived from Rick's rows: full siblings share parents"
