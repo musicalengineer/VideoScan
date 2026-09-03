@@ -1822,4 +1822,113 @@ struct HallieShellCLITests {
         #expect(harness.output.contains { $0.hasPrefix("clip_73421.mov is a video with sound") })
         #expect(elapsed < .seconds(4), "two record turns over 100k records took \(elapsed)")
     }
+
+    // MARK: - Full siblings share parents (Rick's ruling 2026-09-02) — sensor
+
+    /// Rick's card as it stands today (child of Ma and Dad, sibling of
+    /// Tim, Ellen and Beth; the siblings' cards empty), Ma and Dad pinned
+    /// to Eileen Latta and Richard Sr in a three-person tree. Through the
+    /// shell: Eileen's children are all four, her biography says so with
+    /// the derived note in the basis, and Tim's parents come back from
+    /// the tree with their names. Read-time only — the fixture profiles
+    /// are never written.
+    @Test func eileensChildrenAndTimsParentsComeThroughRicksSiblingRows() async throws {
+        let tree = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 BIRT
+        2 DATE 4 MAR 1959
+        1 FAMC @F1@
+        1 _FSFTID GVQV-NW3
+        0 @I2@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 SEX M
+        1 FAMS @F1@
+        1 _FSFTID G2S4-JF4
+        0 @I3@ INDI
+        1 NAME Eileen /Latta/
+        1 SEX F
+        1 BIRT
+        2 DATE 31 AUG 1930
+        1 FAMS @F1@
+        1 _FSFTID G2CR-R4H
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 WIFE @I3@
+        1 CHIL @I1@
+        0 TRLR
+        """
+        func profile(_ name: String, aliases: [String] = [], sex: PersonSex,
+                     kinships: [Kinship] = [], pin: String? = nil) -> POIProfile {
+            POIProfile(name: name, referencePath: "/isolated/people/\(name.lowercased())",
+                       aliases: aliases, sex: sex, kinships: kinships,
+                       treeIdentity: pin.map { .familySearchID($0) })
+        }
+        func row(_ relation: KinshipRelation, _ name: String) -> Kinship {
+            Kinship(relation: relation, relativeTo: .profile(name: name))
+        }
+        let profiles = [
+            profile("Rick", aliases: ["Richard Harding Breen Jr"], sex: .male, kinships: [
+                row(.sibling, "Tim"), row(.sibling, "Ellen"), row(.sibling, "Beth"),
+                row(.child, "Ma"), row(.child, "Dad"),
+                row(.parent, "Dan"), row(.parent, "Mark"), row(.parent, "Matt"), row(.parent, "Timmy"),
+                row(.childInLaw, "Anna"), row(.grandparent, "Libby"),
+            ], pin: "GVQV-NW3"),
+            profile("Tim", sex: .male), profile("Ellen", sex: .female), profile("Beth", sex: .female),
+            profile("Ma", aliases: ["Eileen"], sex: .female, pin: "G2CR-R4H"),
+            profile("Dad", aliases: ["Richard Harding Breen Sr"], sex: .male, pin: "G2S4-JF4"),
+            profile("Dan", sex: .male), profile("Mark", sex: .male),
+            profile("Matt", sex: .male), profile("Timmy", sex: .male),
+            profile("Anna", sex: .female), profile("Libby", sex: .female),
+        ]
+        let harness = Harness(
+            inputs: ["who are eileen's children", "tell me about ma", "who are tim's parents", ":quit"],
+            profiles: profiles,
+            graph: GedcomFamilyGraph(gedcomText: tree),
+            translations: [
+                .graph(.init(people: ["Eileen"], operation: .kinship, relation: .children)),
+                .graph(.init(people: ["Ma"], operation: .biography)),
+                .graph(.init(people: ["Tim"], operation: .kinship, relation: .parents)),
+            ])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        let transcript = harness.output.joined(separator: "\n")
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(answers.count == 3, Comment(rawValue: transcript))
+        let rule = "derived from Rick's rows: full siblings share parents"
+
+        // 1. "who are eileen's children" — all four, three marked derived.
+        let children = try #require(answers.first)
+        for name in ["Rick", "Tim", "Ellen", "Beth"] {
+            #expect(children.text.contains(name), Comment(rawValue: children.text))
+        }
+        #expect((children.basisLine ?? "").contains("(stored on Rick's profile; Beth, Ellen and Tim \(rule));"),
+                Comment(rawValue: children.basisLine ?? ""))
+
+        // 2. "tell me about ma" — the tree's Rick, then the three from the
+        //    People tab, with the derived note in the basis.
+        let biography = answers[1]
+        #expect(biography.text.contains("1 recorded child, Richard Harding Breen Jr."), Comment(rawValue: biography.text))
+        #expect(biography.text.contains("In the People tab: Beth — daughter, Ellen — daughter and Tim — son."),
+                Comment(rawValue: biography.text))
+        #expect((biography.basisLine ?? "").contains("People tab relationships (stored on Rick's profile; Beth, Ellen and Tim \(rule)); local only, not from the family tree."),
+                Comment(rawValue: biography.basisLine ?? ""))
+
+        // 3. "who are tim's parents" — Eileen and Richard Sr by their tree names.
+        let parents = answers[2]
+        #expect(parents.text.contains("Eileen Latta"), Comment(rawValue: parents.text))
+        #expect(parents.text.contains("Richard Harding Breen Sr"), Comment(rawValue: parents.text))
+        #expect((parents.basisLine ?? "").contains("; Dad and Ma \(rule));"), Comment(rawValue: parents.basisLine ?? ""))
+        // Diagnostics mode prints the basis, so the marker is visible in the shell too.
+        #expect(harness.output.contains { $0.contains(rule) }, Comment(rawValue: transcript))
+        #expect(harness.mediaActions.isEmpty)
+    }
 }
