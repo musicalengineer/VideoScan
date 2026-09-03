@@ -642,7 +642,11 @@ struct FamilyTreeModelBehaviourTests {
         #expect(model.selectedID == nil)          // not Jr, not Sr, not previous
         #expect(model.selectedPerson == nil)
         #expect(model.searchText == "Dad")
-        #expect(model.focusMissNotice?.hasPrefix("More than one \u{201C}Dad\u{201D}") == true)
+        // AMENDED 2026-09-03: "Dad" is Rick's alias and the Dad profile's
+        // NAME, so it resolves to Dad instead of tying. Nothing on the tree
+        // carries that name, so the honest answer is a miss — still not a
+        // silent Rick, which is what this test exists to prevent.
+        #expect(model.focusMissNotice?.hasPrefix("No one named \u{201C}Dad\u{201D}") == true)
 
         model.select("@I3@")
         #expect(!model.focus(onName: "Rick", profiles: profiles))

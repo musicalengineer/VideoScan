@@ -1693,7 +1693,8 @@ enum HallieTurnExecutor {
                 return Result(
                     route: .graph,
                     outcome: .needsClarification,
-                    prose: "Which \(requestedName) do you mean?",
+                    prose: HallieProfileWhichOne.prose(
+                        typed: requestedName, labels: choices.map(\.label)),
                     basisLine: "Basis: Breen Family CyberBrain knows more than one person by that name; no family fact was selected.",
                     queryDescription: queryDescription,
                     citations: [],
@@ -1781,7 +1782,13 @@ enum HallieTurnExecutor {
             return Result(
                 route: .graph,
                 outcome: .needsClarification,
-                prose: "Which \(typed) do you mean?",
+                prose: HallieProfileWhichOne.prose(
+                    typed: typed,
+                    choices: profiles.map {
+                        .init(name: $0.canonicalName,
+                              birthdate: $0.birthdate,
+                              fallbackDetail: $0.stableID)
+                    }),
                 basisLine: "Checked: People profiles — more than one goes by “\(typed)”; no person was selected.",
                 queryDescription: queryDescription,
                 citations: [],

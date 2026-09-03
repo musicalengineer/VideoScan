@@ -145,12 +145,15 @@ struct HallieGroundedCompositionTests {
             #expect(!plan.isComposable, "\(outcome)")
         }
         // A real clarification result (needsClarification) from the executor.
+        // Genuinely ambiguous: NEITHER profile is named "bud", both alias
+        // it. (Before 2026-09-03 an alias could tie with a canonical name;
+        // exact name wins now, so "tim" would resolve and never clarify.)
         let profiles = [
-            HallieTurnExecutor.ProfileSnapshot(stableID: "a", canonicalName: "Tim"),
-            HallieTurnExecutor.ProfileSnapshot(stableID: "b", canonicalName: "Timmy", aliases: ["tim"]),
+            HallieTurnExecutor.ProfileSnapshot(stableID: "a", canonicalName: "Tim", aliases: ["bud"]),
+            HallieTurnExecutor.ProfileSnapshot(stableID: "b", canonicalName: "Timmy", aliases: ["bud"]),
         ]
         let result = try await HallieTurnExecutor.execute(
-            .temporal(.init(subject: "tim", operation: .age, reference: .currentSelection)),
+            .temporal(.init(subject: "bud", operation: .age, reference: .currentSelection)),
             context: .init(profiles: profiles))
         #expect(result.clarification != nil)
         #expect(!HallieAnswerPlan.derive(from: result).isComposable)

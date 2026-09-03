@@ -172,7 +172,7 @@
       "input": "who is rick's dad?",
       "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"rick\"],\"operation\":\"kinship\",\"relation\":\"father\"}}",
       "expectedOutcome": "needsClarification",
-      "expectedProseContains": "Which rick do you mean?",
+      "expectedProseContains": "Which Rick do you mean \u2014 Richard Harding Breen (b. 4 JUL 1962) or Richard Harding Breen (b. 12 MAR 1931)?",
       "expectedChipLabels": [
         "Richard Harding Breen (b. 4 JUL 1962)",
         "Richard Harding Breen (b. 12 MAR 1931)"
@@ -233,7 +233,7 @@
       "modelOutput": "{\"shape\":\"graph\",\"payload\":{\"people\":[\"ricks\"],\"operation\":\"familyTree\"}}",
       "expectedRoute": "graph",
       "expectedOutcome": "needsClarification",
-      "expectedProseContains": "Which rick do you mean?",
+      "expectedProseContains": "Which Rick do you mean \u2014 Richard Harding Breen (b. 4 JUL 1962) or Richard Harding Breen (b. 12 MAR 1931)?",
       "expectedChipLabels": [
         "Richard Harding Breen (b. 4 JUL 1962)",
         "Richard Harding Breen (b. 12 MAR 1931)"

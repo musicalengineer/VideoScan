@@ -183,8 +183,10 @@ struct HallieRelationshipsOverviewTests {
         #expect(unknown.prose.contains("I don't have a People-tab profile for “Zed”"))
         #expect(unknown.offeredActions == [.openPeopleTab])
 
-        // "Timmy" claimed by two profiles (the real gallery's shape) asks.
-        let crossed = Self.profiles + [Profile(stableID: "timmy", canonicalName: "Timmy", aliases: ["Tim"], sex: .male)]
+        // Two profiles genuinely NAMED Tim still ask. (A cross-alias pair
+        // — brother "Tim" aliasing "Timmy", son "Timmy" aliasing "Tim" —
+        // no longer does: exact name wins, 2026-09-03.)
+        let crossed = Self.profiles + [Profile(stableID: "tim-2", canonicalName: "Tim", sex: .male)]
         let context = HallieTurnExecutor.Context(
             profiles: crossed, speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
         let ambiguous = Overview.answer(.init(subject: .named("Tim")), context: context)

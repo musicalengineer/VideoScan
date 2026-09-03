@@ -5,11 +5,23 @@
 // without profiles on disk.
 //
 // Contract (design doc §deliverable 2): ambiguity is SURFACED, never
-// guessed. "Tim" and "Timmy" are distinct POIs in this family; a query
-// naming a shared alias returns .ambiguous and the chat asks — a family
-// archivist that guesses the wrong son is worse than one that asks.
-// Unknown names return .unknown so the answer layer can say "I don't
-// know anyone called X" instead of hallucinating a match.
+// guessed. A query naming a spelling that two identities own returns
+// .ambiguous and the chat asks — a family archivist that guesses the
+// wrong son is worse than one that asks. Unknown names return .unknown so
+// the answer layer can say "I don't know anyone called X" instead of
+// hallucinating a match.
+//
+// AMENDED 2026-09-03 (Director's rule, demo eval lv260902-023 / cj008):
+// EXACT NAME WINS, the same precedence the People tab adopted 2026-08-22.
+// "Tim" and "Timmy" are distinct POIs whose alias lists cross-contaminate
+// — Tim's profile lists "Timmy", Timmy's lists "Tim" — so under the old
+// "a name and an alias are equally strong" reading the bare term "tim"
+// owned two identities and EVERY question about either one asked which.
+// A candidate whose own name is the typed spelling now beats a candidate
+// that answers to it only through an alias, and .ambiguous is reserved for
+// what it was always for: two identities that genuinely share a name.
+// The rule itself lives in PersonNameClaim so the graph and temporal
+// routes decide identically.
 
 import Foundation
 
@@ -47,21 +59,47 @@ struct PersonResolver: Sendable {
     /// translator output reaches identity resolution before normalization.
     static let maxPeoplePerQuestion = 6
 
-    /// normalized token → canonical names it could mean (sorted, unique).
-    private let index: [String: [String]]
+    /// The identities that answer to one normalized spelling, split by HOW
+    /// they answer to it. `winners` applies the exact-name-wins rule.
+    private struct Claimants: Sendable {
+        var byName: [String] = []
+        var byAlias: [String] = []
+
+        /// Exact-name claimants if there are any, else the alias claimants.
+        /// Never empty for a key that exists in the index.
+        var winners: [String] { byName.isEmpty ? byAlias : byName }
+    }
+
+    /// normalized token → the canonical names it could mean, by claim kind.
+    private let index: [String: Claimants]
     private let spellingEntries: [SpellingEntry]
 
     init(people: [ResolvablePerson]) {
-        var idx: [String: Set<String>] = [:]
+        var names: [String: Set<String>] = [:]
+        var aliases: [String: Set<String>] = [:]
         for person in people {
             let canonical = person.canonicalName
-            for token in [person.canonicalName] + person.aliases {
-                let key = Self.normalize(token)
+            let nameKey = Self.normalize(canonical)
+            if !nameKey.isEmpty { names[nameKey, default: []].insert(canonical) }
+            for alias in person.aliases {
+                let key = Self.normalize(alias)
                 guard !key.isEmpty else { continue }
-                idx[key, default: []].insert(canonical)
+                aliases[key, default: []].insert(canonical)
             }
         }
-        index = idx.mapValues { $0.sorted() }
+        var idx: [String: Claimants] = [:]
+        for (key, owners) in names {
+            idx[key, default: Claimants()].byName = owners.sorted()
+        }
+        for (key, owners) in aliases {
+            // An identity that owns the spelling by NAME does not also
+            // claim it by alias (a profile may redundantly list its own
+            // name among its aliases).
+            let aliasOnly = owners.subtracting(names[key] ?? [])
+            guard !aliasOnly.isEmpty else { continue }
+            idx[key, default: Claimants()].byAlias = aliasOnly.sorted()
+        }
+        index = idx
         spellingEntries = people.map {
             SpellingEntry(
                 canonicalName: $0.canonicalName,
@@ -78,15 +116,19 @@ struct PersonResolver: Sendable {
         })
     }
 
-    /// Exact normalized match first. A narrowly bounded spelling recovery is
-    /// attempted only when exact lookup fails: short names are never guessed,
-    /// and tied nearest identities are surfaced as ambiguous.
+    /// Exact normalized match first, under the exact-name-wins rule (see
+    /// the file header and PersonNameClaim): an identity NAMED the typed
+    /// spelling beats one that merely lists it as an alias. A narrowly
+    /// bounded spelling recovery is attempted only when exact lookup
+    /// fails: short names are never guessed, and tied nearest identities
+    /// are surfaced as ambiguous.
     func resolve(_ typed: String) -> PersonResolution {
         let key = Self.normalize(typed)
         guard !key.isEmpty else { return .unknown }
-        if let hits = index[key] {
+        if let claimants = index[key] {
+            let hits = claimants.winners
             if hits.count == 1 { return .resolved(canonicalName: hits[0]) }
-            return .ambiguous(candidates: hits)
+            if hits.count > 1 { return .ambiguous(candidates: hits) }
         }
         let recovered = HallieSpellingRecovery.bestMatches(
             typed: typed,

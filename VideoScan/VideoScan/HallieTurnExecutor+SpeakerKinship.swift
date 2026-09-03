@@ -71,6 +71,33 @@ extension HallieTurnExecutor {
             }
         }
 
+        /// Put the resolved relative into the people list EXACTLY ONCE.
+        ///
+        /// The translator usually leaves the relative's own name in the
+        /// list — "find videos of my brother tim" arrives as people
+        /// ["tim"] — while the kinship binding produces the canonical
+        /// spelling "Tim". `slotIndex` only recognises a pronoun, the
+        /// phrase, the kin word or the owner's name, so a typed given name
+        /// found no slot and the canonical spelling was APPENDED: two
+        /// person terms for one person, which the presence decline then
+        /// said out loud — "I don't have any videos tagged with tim and
+        /// Tim yet" (demo eval lv260902-004, 2026-09-03).
+        ///
+        /// The canonical spelling replaces any entry that already names the
+        /// same person, and the result is deduped case-insensitively so no
+        /// later renderer can say one name in two casings.
+        private static func bind(
+            _ people: [String],
+            name: String,
+            slot: Int?,
+            namesSamePerson: (String) -> Bool
+        ) -> [String] {
+            var people = people
+            let target = slot ?? people.firstIndex(where: namesSamePerson)
+            if let target { people[target] = name } else { people.append(name) }
+            return PersonNameClaim.dedupe(people)
+        }
+
         /// Rebind the people list when the question names a relative of the
         /// speaker. Untouched (no notes, no failure) when it does not.
         static func rebind(
@@ -98,8 +125,15 @@ extension HallieTurnExecutor {
                         return result
                     }
                     if let hit = relatives.first {
-                        let slot = slotIndex(in: people, phrase: phrase, speakers: speakers)
-                        if let slot { result.people[slot] = hit.member.name } else { result.people.append(hit.member.name) }
+                        result.people = bind(
+                            people, name: hit.member.name,
+                            slot: slotIndex(in: people, phrase: phrase, speakers: speakers),
+                            namesSamePerson: { entry in
+                                PersonResolver.normalize(entry)
+                                    == PersonResolver.normalize(hit.member.name)
+                                    || overlay.nodes(claiming: entry, ownerName: owner)
+                                        .contains(hit.member.node)
+                            })
                         result.notes.append("'\(phrase)' = \(hit.member.displayName), \(relation.rawValue) of \(owner) in the People tab relationships")
                         return result
                     }
@@ -170,11 +204,14 @@ extension HallieTurnExecutor {
                 return result
             }
             let relative = relatives[0]
-            if let slot {
-                result.people[slot] = relative.name
-            } else {
-                result.people.append(relative.name)
-            }
+            result.people = bind(
+                people, name: relative.name, slot: slot,
+                namesSamePerson: { entry in
+                    PersonResolver.normalize(entry)
+                        == PersonResolver.normalize(relative.name)
+                        || graph.people(matching: entry)
+                            .contains { $0.id == relative.id }
+                })
             result.notes.append("'\(phrase)' = \(relative.name), \(relation.rawValue) of \(owners[0].name) in the family tree")
             return result
         }
