@@ -173,9 +173,14 @@ struct HallieGroundedComposer: Sendable {
                 "required person omitted: \(names, privacy: .public); template used")
             return .template(plan, note: "template: required person omitted")
         }
+        // Provenance is Swift's, not the model's: the plan's note (an
+        // assumed tree bridge) is appended AFTER verification, so it is
+        // never something the model must say, may reword, or can lose.
+        // The template path needs no append — `fallbackText` carries it.
+        let provenance = plan.provenanceNote ?? ""
         return Outcome(
-            displayText: covered.verification.displayText,
-            transcriptText: covered.verification.transcriptText,
+            displayText: covered.verification.displayText + provenance,
+            transcriptText: covered.verification.transcriptText + provenance,
             composedBy: .model,
             dropped: covered.verification.dropped,
             restored: covered.restored,

@@ -518,13 +518,25 @@ extension HallieTurnExecutor {
             }
             let claimsA = flattenedClaims(planA, offset: 0)
             let shifted = flattenedClaims(planB, offset: offset)
+            // Provenance survives the join. It carries no claim ID, so
+            // nothing about it shifts; an assumed tree bridge said by
+            // either half is still owed by the pair. Deduped, because both
+            // halves of one turn usually assume the same bridge. Not
+            // appended to `fallbackText` — each half's prose already ends
+            // with its own aside, and `prose` is those two halves.
+            var provenance: [String] = []
+            for note in [planA.provenanceNote, planB.provenanceNote].compactMap({ $0 })
+            where !provenance.contains(note) {
+                provenance.append(note)
+            }
             plan = HallieAnswerPlan(
                 route: b.route,
                 shape: (planA.shape == .fixed || planB.shape == .fixed) ? .fixed : planB.shape,
                 subject: b.catalogPersonName ?? a.catalogPersonName,
                 claims: claimsA + shifted,
                 counts: planA.counts + planB.counts,
-                fallbackText: prose)
+                fallbackText: prose,
+                provenanceNote: provenance.isEmpty ? nil : provenance.joined())
             if a.transcriptText != nil || b.transcriptText != nil {
                 transcript = (a.transcriptText ?? a.prose) + "\n\n"
                     + shiftClaimTags(in: b.transcriptText ?? b.prose, by: offset)

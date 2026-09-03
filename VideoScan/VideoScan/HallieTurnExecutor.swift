@@ -583,6 +583,42 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery)
         }
 
+        /// The same answer carrying a PROVENANCE note — how Hallie read the
+        /// question, not something she asserts about the family. The note is
+        /// appended to the prose (what a template answer shows) and carried
+        /// on the answer plan (so a model-phrased answer keeps it too, see
+        /// HallieGroundedComposer). A route that built no plan of its own
+        /// gets its derived plan pinned here, so the note can never end up
+        /// inside a claim and be checked as if it were a fact.
+        func carryingProvenance(_ note: String) -> Result {
+            // Idempotent: the plan remembers the note it already carries,
+            // so an answer wrapped twice never says the assumption twice.
+            guard !note.isEmpty, answerPlan?.provenanceNote != note else { return self }
+            let plan = (answerPlan ?? HallieAnswerPlan.derive(from: self))
+                .carrying(provenance: note)
+            return Result(
+                route: route,
+                outcome: outcome,
+                prose: prose + note,
+                basisLine: basisLine,
+                queryDescription: queryDescription,
+                citations: citations,
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: catalogPersonName,
+                clarification: clarification,
+                matchCount: matchCount,
+                mediaAction: mediaAction,
+                offeredActions: offeredActions,
+                answerPlan: plan,
+                composedBy: composedBy,
+                transcriptText: transcriptText,
+                attachments: attachments,
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery)
+        }
+
         /// The same answer with its prose replaced by a verified composition.
         /// Basis line, citations, chips, and every other field are untouched:
         /// only the wording changes, never the facts or their provenance.
@@ -1355,24 +1391,29 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil,
                 clarification: clarification)
         }
-        // An assumed bridge is said out loud: in the prose when the prose
-        // is what gets composed, in the basis when a claim plan is (the
-        // composer phrases the plan; an aside in the prose would be lost).
+        // An assumed bridge is ALWAYS said out loud, in the answer itself.
+        //
+        // It used to be moved to the basis whenever the route carried a
+        // claim plan, on the theory that an aside in the prose would be
+        // lost to the composer. That made the aside disappear from "who is
+        // Rick's dad?" the day the overlay kinship route gained a plan
+        // (35336f98). It is provenance, not a claim: `carryingProvenance`
+        // appends it to the prose and pins it on the plan, so the composer
+        // re-attaches it and the verifier is never asked to prove it.
         let taken = assumedBridges(result, context: context)
         let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
         let base = Result(
             route: .graph,
             outcome: result.conclusion == .answered ? .answered : .declined,
-            prose: result.prose + (result.answerPlan == nil ? aside : ""),
-            basisLine: result.basisLine
-                + (result.answerPlan != nil && !taken.isEmpty
-                    ? " Taking \(taken.joined(separator: "; "))." : ""),
+            prose: result.prose,
+            basisLine: result.basisLine,
             queryDescription: queryDescription,
             citations: [],
             catalogPersonName: result.catalogPersonName,
             offeredActions: graphOffers(result),
             answerPlan: result.answerPlan,
             subjectLifeStatus: result.subjectLifeStatus)
+            .carryingProvenance(aside)
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {

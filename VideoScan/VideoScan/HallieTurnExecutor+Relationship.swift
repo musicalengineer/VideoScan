@@ -119,6 +119,9 @@ extension HallieTurnExecutor {
             }
             // A bridge this turn only ASSUMED (derivable, not yet pinned)
             // is said out loud: "(taking Rick as Richard Harding Breen Jr)".
+            // Carried as provenance, the same way the single-subject graph
+            // route carries it, so appending it never turns the aside into
+            // a claim the verifier has to prove.
             let taken = [overlay.evidence?.subjectID, overlay.evidence?.counterpart?.id]
                 .compactMap { $0 }
                 .compactMap { context.assumedTreeBridges[$0] }
@@ -126,12 +129,14 @@ extension HallieTurnExecutor {
             return Result(
                 route: .graph,
                 outcome: .answered,
-                prose: overlay.prose + aside,
+                prose: overlay.prose,
                 basisLine: overlay.basisLine,
                 queryDescription: queryDescription,
                 citations: [],
                 catalogPersonName: nil,
-                offeredActions: offers)
+                offeredActions: offers,
+                answerPlan: overlay.answerPlan)
+                .carryingProvenance(aside)
         }
         guard graphIsInstalled else {
             return Result(
