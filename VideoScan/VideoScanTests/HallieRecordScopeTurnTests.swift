@@ -58,6 +58,49 @@ struct HallieRecordScopeTurnTests {
         #expect(result.queryDescription == "shape=record reference=file:Nothing.mov notFound")
     }
 
+    /// codex #1020 item 2: a name nobody has, whose shorter tail IS a file,
+    /// is declined by the TYPED name and the tail file is offered as a
+    /// did-you-mean under ITS OWN name — each chip asks about that exact
+    /// path. Never a silent resolution.
+    @Test func aMissWithATailFileOffersItByItsOwnNameNeverSilently() async throws {
+        let tape = ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Tape.mov", fullPath: "/Volumes/A/Tape.mov")
+        let one = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape], similarTotal: 1)))
+        #expect(one.route == .record)
+        #expect(one.outcome == .declined)
+        #expect(one.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean “Tape.mov” (/Volumes/A/Tape.mov)?")
+        #expect(one.offeredActions == [.ask(question: "who is in /Volumes/A/Tape.mov", label: "Tape.mov")])
+        #expect(one.citations.isEmpty)
+        #expect(one.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound similar=1")
+        #expect(one.basisLine.contains("1 catalog filename match a shorter tail of it (1 offered by their own names)"))
+
+        let second = ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Tape.mov", fullPath: "/Volumes/B/Tape.mov")
+        let two = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people], people: ["Donna"]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape, second], similarTotal: 2)))
+        #expect(two.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean one of these: Tape.mov (A), Tape.mov (B)?")
+        #expect(two.offeredActions == [
+            .ask(question: "is Donna in /Volumes/A/Tape.mov", label: "Tape.mov (A)"),
+            .ask(question: "is Donna in /Volumes/B/Tape.mov", label: "Tape.mov (B)"),
+        ])
+        #expect(two.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound similar=2")
+
+        let capped = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.about]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape, second], similarTotal: 7)))
+        #expect(capped.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean one of these 7 files (the first 2): Tape.mov (A), Tape.mov (B)?")
+        #expect(capped.offeredActions.first == .ask(question: "tell me about /Volumes/A/Tape.mov", label: "Tape.mov (A)"))
+
+        // No tail file: the plain decline, unchanged.
+        let none = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov")))
+        #expect(none.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Name it exactly as it appears in the Catalog, or select it there and ask me again.")
+        #expect(none.offeredActions.isEmpty)
+        #expect(none.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound")
+    }
+
     @Test func ambiguousScopeListsCandidatesWithOneChipEach() async throws {
         let candidates = [
             ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Christmas_1994.mov", fullPath: "/Volumes/A/Christmas_1994.mov"),

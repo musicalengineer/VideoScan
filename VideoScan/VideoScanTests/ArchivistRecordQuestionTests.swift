@@ -82,6 +82,20 @@ struct ArchivistRecordQuestionTests {
         // A file named beside a knowledge-lane phrase is still a file.
         ("who is in Breen surname origin.mov",
          Record(reference: .file(name: "Breen surname origin.mov"), operations: [.people])),
+        // codex #1020 item 3 (verbatim sentences): quotes take precedence
+        // and unquoted legal filenames survive in the referent slot.
+        ("who is in \"Who Is This.mov\"", Record(reference: .file(name: "Who Is This.mov"), operations: [.people])),
+        ("who is in Will and Grace.mov", Record(reference: .file(name: "Will and Grace.mov"), operations: [.people])),
+        ("is Donna in Who Is This.mov",
+         Record(reference: .file(name: "Who Is This.mov"), operations: [.people], people: ["Donna"])),
+        ("who is in 'Will and Grace.mov'?", Record(reference: .file(name: "Will and Grace.mov"), operations: [.people])),
+        ("tell me about [x.mov]", Record(reference: .file(name: "x.mov"), operations: [.about])),
+        ("who is in “Who Is This.mov”", Record(reference: .file(name: "Who Is This.mov"), operations: [.people])),
+        ("does Who Is This.mov have Donna in it",
+         Record(reference: .file(name: "Who Is This.mov"), operations: [.people], people: ["Donna"])),
+        // codex #1020 item 2 (verbatim): the name is handed over as typed;
+        // the resolver, not the recogniser, says whether it exists.
+        ("who is in Unknown Tape.mov", Record(reference: .file(name: "Unknown Tape.mov"), operations: [.people])),
         // Pronoun-only date / metadata asks with the noun BESIDE the
         // referent (codex #976 item 5).
         ("what is the date of it", Record(reference: .currentSelection, operations: [.date])),
@@ -134,8 +148,12 @@ struct ArchivistRecordQuestionTests {
         "can you change the date on things",
         "it would be nice to know the dates",
         // A pronoun plus a capitalised word is not a record question
-        // without a record verb (eval sm022 hit the record route).
+        // without a record verb (eval sm022 hit the record route; on
+        // d3725558 it then reached the model as a presence search — the
+        // small-talk table now answers it, and its siblings, first).
         "It's pouring rain here in the Berkshires today.",
+        "beautiful day out isn't it",
+        "Supposed to snow tonight. First one of the year.",
         "Donna and I loved it in the Berkshires",
         "that was the year Tim was born",
         // The surname lane's own shape, with no file in it.
@@ -220,10 +238,15 @@ struct ArchivistRecordQuestionTests {
     }
 
     /// codex #987 item 3: ordinary words are legal filename words and are
-    /// kept; the run stops at the first HARD boundary met walking left
-    /// from the extension ("is donna in rick and donna.mov" stops at the
-    /// "in" after donna); a swallowed sentence word is settled downstream
-    /// by the resolver, so the run here is the LONGEST legal one.
+    /// kept. codex #1020 item 3: the run is placed by SYNTAX POSITION —
+    /// everything after the last boundary phrase (a verb / preposition /
+    /// naming slot of the recogniser's own patterns, an opener at a clause
+    /// start, a punctuation break) that ends before the extension — never
+    /// by a word blacklist, so "Will and Grace.mov" and "Who Is This.mov"
+    /// survive in the referent slot; "is donna in rick and donna.mov"
+    /// starts after the "is … in" slot. A swallowed sentence word ("the
+    /// christmas tape.mov") is handed over as typed; the resolver reports
+    /// it not found and offers the tail file by its own name.
     @Test(arguments: [
         ("who is in rick and donna.mov", "rick and donna.mov"),
         ("is donna in rick and donna.mov", "rick and donna.mov"),
@@ -243,9 +266,58 @@ struct ArchivistRecordQuestionTests {
         ("what does rick and donna.mov show", "rick and donna.mov"),
         ("who is in it: rick and donna.mov", "rick and donna.mov"),
         ("tell me about this tape.mov", "tape.mov"),
+        // codex #1020 item 3 (verbatim): legal filenames made of sentence
+        // words survive when they sit in the referent slot.
+        ("who is in Will and Grace.mov", "Will and Grace.mov"),
+        ("is Donna in Who Is This.mov", "Who Is This.mov"),
+        ("does Who Is This.mov have Donna in it", "Who Is This.mov"),
+        ("who is in All About Eve.mov", "All About Eve.mov"),
+        ("who is in Trip to Maine and Back.mov", "Trip to Maine and Back.mov"),
+        ("is Rick and Donna in Who Is This.mov", "Who Is This.mov"),
+        ("what's in Will and Grace.mov", "Will and Grace.mov"),
+        ("when was Who Is This.mov filmed", "Who Is This.mov"),
+        ("hallie, please examine Will and Grace.mov", "Will and Grace.mov"),
+        ("the file called Who Is This.mov", "Who Is This.mov"),
+        // codex #1020 item 2 (verbatim): the run is as typed, never trimmed.
+        ("who is in Unknown Tape.mov", "Unknown Tape.mov"),
+        ("Will and Grace.mov", "Will and Grace.mov"),
     ])
-    func bareFilenamesStopOnlyAtHardBoundaries(question: String, name: String) {
+    func bareFilenamesArePlacedBySyntaxPosition(question: String, name: String) {
         #expect(ArchivistRecordQuestion.fileReference(in: question)?.name == name, Comment(rawValue: question))
+    }
+
+    /// codex #1020 item 3 (verbatim: "`who is in \"Who Is This.mov\"`
+    /// extracts This.mov"): a quoted or bracketed name is the text between
+    /// the delimiters, verbatim, whatever words it holds and whatever
+    /// sentence punctuation follows the closer; the reference's range
+    /// spans the delimiters so the masked sentence still reads as a record
+    /// question.
+    @Test(arguments: [
+        ("who is in \"Who Is This.mov\"", "Who Is This.mov"),
+        ("who is in \"Who Is This.mov\"?", "Who Is This.mov"),
+        ("who is in 'Will and Grace.mov'", "Will and Grace.mov"),
+        ("who is in “Who Is This.mov”", "Who Is This.mov"),
+        ("who is in ‘tell me about it.mov’!", "tell me about it.mov"),
+        ("tell me about [x.mov]", "x.mov"),
+        ("tell me about [who is in x.mov]", "who is in x.mov"),
+        ("is Donna in (Who Is This.mov)", "Who Is This.mov"),
+        ("the file \"New Hampshire.mov\" please", "New Hampshire.mov"),
+        ("\"tape.mov\"", "tape.mov"),
+        // A stray closer with no opener falls back to the syntax rule.
+        ("who is in Who Is This.mov\"", "Who Is This.mov"),
+    ])
+    func quotedNamesAreVerbatim(question: String, name: String) {
+        let reference = ArchivistRecordQuestion.fileReference(in: question)
+        #expect(reference?.name == name, Comment(rawValue: question))
+    }
+
+    @Test func aQuotedNameMasksItsDelimitersSoTheVerbStillSeesTheReferent() {
+        let reference = ArchivistRecordQuestion.fileReference(in: "who is in \"Who Is This.mov\"?")
+        #expect(reference.map { String("who is in \"Who Is This.mov\"?"[$0.range]) } == "\"Who Is This.mov\"")
+        let detected = ArchivistRecordQuestion.detect("who is in \"Who Is This.mov\"?")
+        #expect(detected?.reference == .file(name: "Who Is This.mov"))
+        #expect(detected?.operations == [.people])
+        #expect(detected?.people == nil)
     }
 
     /// codex #987 item 3: a path is verbatim from its leading "/" to the
@@ -279,6 +351,9 @@ struct ArchivistRecordQuestionTests {
         "/Volumes/A/Who is This/tape one.mov",
         "/Volumes/A/rick and donna.mov",
         "/Volumes/A/what does it show/who is in it.mov",
+        "/Volumes/A/Who Is This.mov",
+        "/Volumes/A/Will and Grace.mov",
+        "/Volumes/A/Café.mov",
     ])
     func chipQuestionsRoundTripThroughDetect(path: String) {
         let shapes: [(ArchivistQueryAST.Record, [Record.Operation], [String]?)] = [

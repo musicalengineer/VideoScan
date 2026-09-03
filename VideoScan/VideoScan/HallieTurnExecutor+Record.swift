@@ -13,7 +13,11 @@ extension HallieTurnExecutor {
     /// What the reference resolved to, captured with the Context.
     enum RecordScope: Sendable, Equatable {
         case resolved(ArchivistRecordDossierSnapshot)
-        case notFound(name: String)
+        /// Nothing is called `name`. `similar` = the files whose filename
+        /// or stem is a shorter tail of the name (codex #1020 item 2):
+        /// offered under their OWN names as did-you-mean chips, never
+        /// substituted.
+        case notFound(name: String, similar: [ArchivistRecordReferenceResolver.Candidate] = [], similarTotal: Int = 0)
         /// The first candidates and the TRUE number of files that fit.
         case ambiguous([ArchivistRecordReferenceResolver.Candidate], total: Int)
         /// An explicit path nobody has, with the files that share its
@@ -30,7 +34,8 @@ extension HallieTurnExecutor {
             switch resolution {
             case .resolved(let record): self = .resolved(ArchivistRecordDossierSnapshot(record: record))
             case .ambiguous(let candidates, let total): self = .ambiguous(candidates, total: total)
-            case .notFound(let name): self = .notFound(name: name)
+            case .notFound(let name, let similar, let total):
+                self = .notFound(name: name, similar: similar, similarTotal: total)
             case .pathNotFound(let path, let sameName, let total):
                 self = .pathNotFound(path: path, sameName: sameName, sameNameTotal: total)
             case .noSelection: self = .noSelection
@@ -83,17 +88,10 @@ extension HallieTurnExecutor {
                 path: path, sameName: sameName, total: total,
                 payload: payload, description: description)
 
-        case .notFound(let name):
-            return Result(
-                route: .record,
-                outcome: .declined,
-                prose: "I couldn't find a file called “\(name)” in the catalog. Name it exactly "
-                    + "as it appears in the Catalog, or select it there and ask me again.",
-                basisLine: "Basis: file reference “\(name)” matched no catalog path, filename, "
-                    + "or filename tokens; nothing was searched.",
-                queryDescription: description + " notFound",
-                citations: [],
-                catalogPersonName: nil)
+        case .notFound(let name, let similar, let total):
+            return notFoundResult(
+                name: name, similar: similar, total: total,
+                payload: payload, description: description)
 
         case .noSelection:
             return Result(
@@ -106,6 +104,57 @@ extension HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+    }
+
+    /// A name nobody has. With did-you-mean candidates (codex #1020 item
+    /// 2) the decline says so by the TYPED name and offers each candidate
+    /// by ITS OWN name, each chip asking about that exact path — never a
+    /// silent resolution to a file that merely ends the way the name does.
+    private static func notFoundResult(
+        name: String,
+        similar: [ArchivistRecordReferenceResolver.Candidate],
+        total: Int,
+        payload: ArchivistQueryAST.Record,
+        description: String
+    ) -> Result {
+        let couldNotFind = "I couldn't find a file called “\(name)” in the catalog."
+        guard !similar.isEmpty else {
+            return Result(
+                route: .record,
+                outcome: .declined,
+                prose: couldNotFind + " Name it exactly "
+                    + "as it appears in the Catalog, or select it there and ask me again.",
+                basisLine: "Basis: file reference “\(name)” matched no catalog path, filename, "
+                    + "or filename tokens; nothing was searched.",
+                queryDescription: description + " notFound",
+                citations: [],
+                catalogPersonName: nil)
+        }
+        let labels = ArchivistRecordReferenceResolver.chipLabels(for: similar)
+        let didYouMean: String
+        if similar.count == 1 {
+            didYouMean = "Did you mean “\(similar[0].filename)” (\(similar[0].fullPath))?"
+        } else if total > similar.count {
+            didYouMean = "Did you mean one of these \(total) files (the first \(similar.count)): "
+                + labels.joined(separator: ", ") + "?"
+        } else {
+            didYouMean = "Did you mean one of these: " + labels.joined(separator: ", ") + "?"
+        }
+        return Result(
+            route: .record,
+            outcome: .declined,
+            prose: couldNotFind + " " + didYouMean,
+            basisLine: "Basis: file reference “\(name)” matched no catalog path, filename, "
+                + "or filename tokens; \(total) catalog filename\(total == 1 ? "" : "s") "
+                + "match a shorter tail of it (\(similar.count) offered by their own names); "
+                + "nothing was searched.",
+            queryDescription: description + " notFound similar=\(total)",
+            citations: [],
+            catalogPersonName: nil,
+            offeredActions: zip(similar, labels).map { candidate, label in
+                .ask(question: ArchivistRecordExecutor.question(for: payload, path: candidate.fullPath),
+                     label: label)
+            })
     }
 
     /// An explicit path nobody has (codex #976 item 3): never a silent

@@ -960,6 +960,38 @@ struct HallieShellCLITests {
         #expect(answer.mediaEvidence.map(\.recordID) == [item.id])
     }
 
+    /// Eval sm022 on main d3725558: "It's pouring rain here in the
+    /// Berkshires today." ran a presence search for "berkshires" (5 videos).
+    /// The lane order is capability › help/small-talk › record › knowledge
+    /// › catalog › translator, and the sentence is small talk — so it is
+    /// answered by the deterministic table with NO translation call and no
+    /// media evidence, even with "Berkshires" files in the catalog.
+    @Test func aWeatherAsideIsSmallTalkBeforeAnyCatalogLaneOrTheTranslator() async throws {
+        let berkshires = VideoRecord()
+        berkshires.fullPath = "/isolated/Movies/New Home in the Berkshires.mp4"
+        berkshires.filename = "New Home in the Berkshires.mp4"
+        berkshires.directory = "/isolated/Movies"
+        let harness = Harness(records: [berkshires])
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--model", "fixture-model",
+            "--once", "It's pouring rain here in the Berkshires today.",
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty, "small talk must never reach the translator")
+        let answer = try #require(harness.transcriptEvents.last)
+        #expect(answer.kind == .assistant)
+        #expect(answer.route == "smalltalk")
+        #expect(answer.outcome == "answered")
+        #expect(answer.mediaEvidence.isEmpty)
+        #expect(answer.text == ArchivistConversationCommand.smalltalkReply(.weather))
+        #expect(!harness.output.contains { $0.contains("berkshires") || $0.contains("Berkshires.mp4") })
+    }
+
     @Test func translatorFailureAssertsNoFactAndPerformsNoMediaAction() async throws {
         let harness = Harness()
         harness.translationError = HarnessError.refusedByTranslator

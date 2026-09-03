@@ -8,27 +8,28 @@
 // text, which for "Christmas.mov" is whichever Christmas tape happens to
 // sort first. Tiers, each tried only when the previous found nothing:
 //
-//   1. exact full path (case-insensitive on the second pass). A path is
-//      EXACT OR NOTHING (codex #976 item 3): "/Volumes/B/tape.mov" never
-//      silently answers "/Volumes/A/tape.mov"; the miss carries the
-//      same-basename files so the caller can offer them as chips;
+//   1. exact full path, then case-folded. A path is EXACT OR NOTHING
+//      (codex #976 item 3): "/Volumes/B/tape.mov" never silently answers
+//      "/Volumes/A/tape.mov"; the miss carries the same-basename files so
+//      the caller can offer them as chips. The fold is canonical Unicode
+//      normalisation plus case folding ONLY (codex #1020 item 4): the
+//      diacritics stay, so "/A/Cafe.mov" never resolves "/A/Café.mov" —
+//      that file is OFFERED by its exact name instead;
 //   2. exact filename, case-insensitive ("new hampshire.mov");
 //   3. filename without its media extension ("New Hampshire" ↔
 //      "New Hampshire.mov"; "Christmas.mov" ↔ "Christmas.mkv");
 //   4. every whole token of the name is a token of the filename
 //      ("Hampshire" ↔ "New Hampshire.mov") — unique, or a which-one.
 //
-// Catalog-verified extraction (codex #987 item 3): the recogniser hands
-// over the LONGEST legal run of words before the extension ("the
-// christmas tape.mov"), so tiers 2–3 are tried for that run and then for
-// each shorter word-suffix of it ("christmas tape.mov", "tape.mov"), in
-// that order, and the first that resolves EXACTLY wins; only then does
-// the token tier run, and only for the longest run — a suffix is never
-// token-matched ("Old Name.mov" must not reach "New Name.mov" through
-// the tail "Name.mov"). A name that is really a file ("rick and
-// donna.mov") is therefore never truncated by the recogniser, and a run
-// that swallowed a sentence word ("the christmas tape.mov") still finds
-// "christmas tape.mov".
+// The name is taken AS TYPED (codex #1020 item 2): no leading word of it
+// is ever dropped to make it fit. "Unknown Tape.mov" with only "Tape.mov"
+// in the catalog is NOT FOUND — the answer says so by the typed name —
+// and "Tape.mov" travels with the miss as a did-you-mean candidate that
+// the caller offers under ITS OWN name. (The 2026-09-02 form tried each
+// word-suffix of the name and took the first that resolved, which is a
+// silent substitution.) Candidates are the files whose filename or stem
+// equals a shorter word-suffix of the name, longest suffix first, at most
+// `maxCandidates` with the true total.
 //
 // Two or more hits in a tier is an honest ambiguity: the TRUE count plus
 // the first `maxCandidates` in catalog order; zero in every tier is not
@@ -44,10 +45,13 @@
 // key is AUTHORITATIVE (codex #987 item 1): it includes
 // `VideoRecord.identityGeneration`, bumped by every filename / fullPath /
 // purgedAt write in the process, so a same-buffer, same-version mutation
-// rebuilds the table before it is read. Every hit is still REVALIDATED
-// against the live record (codex #976 item 1) as belt and braces; a
-// memo miss runs the linear tiers, which is the cost the token tier
-// already paid on every miss.
+// rebuilds the table before it is read; and `VideoScanModel.records`'
+// didSet invalidates the memo outright (codex #1020 item 1), which is the
+// only signal for a row replaced by a PREBUILT record — no field write,
+// same buffer, same version. Every hit is still REVALIDATED against the
+// live record (codex #976 item 1) as belt and braces; a memo miss runs
+// the linear tiers, which is the cost the token tier already paid on
+// every miss.
 // The linear form is nonisolated so the headless shell (no main actor,
 // no model) uses the same rules; only the memo is `@MainActor`.
 //
@@ -59,9 +63,10 @@ import VideoScanCore
 
 enum ArchivistRecordReferenceResolver {
     static let maxCandidates = 5
-    /// At most this many word-suffixes of a typed name are tried (the
-    /// full run and up to five shorter tails); longer runs are cut here.
-    static let maxNameCandidates = 6
+    /// At most this many shorter word-suffixes of a typed name are tried
+    /// for the did-you-meaned candidates of a miss ("a b c d e f g h.mov"
+    /// tries "b … h.mov" … "g h.mov"); longer runs are cut here.
+    static let maxSimilarSuffixes = 5
 
     /// One which-one choice for an ambiguous file name.
     struct Candidate: Sendable, Equatable {
@@ -75,7 +80,12 @@ enum ArchivistRecordReferenceResolver {
         /// Two or more files fit the name: the first `maxCandidates` in
         /// catalog order, and how many fit in all (`total ≥ count`).
         case ambiguous([Candidate], total: Int)
-        case notFound(name: String)
+        /// Nothing is called `name`. `similar` = live files whose filename
+        /// or stem is a shorter word-suffix of the name (≤ maxCandidates,
+        /// catalog order), `similarTotal` how many there are; both
+        /// empty/0 when no suffix fits either. They are OFFERED under
+        /// their own names, never substituted (codex #1020 item 2).
+        case notFound(name: String, similar: [Candidate] = [], similarTotal: Int = 0)
         /// An explicit path nobody has. `sameName` = live files whose
         /// filename is the path's basename (≤ maxCandidates, catalog
         /// order), `sameNameTotal` how many there are; both empty/0 when
@@ -126,8 +136,9 @@ enum ArchivistRecordReferenceResolver {
     }
 
     /// Tiers 1–4 for a file named in the question, linear: one pass over
-    /// the catalog collects the exact, stem and token hits for every name
-    /// candidate together, then the tiers settle in order.
+    /// the catalog collects the exact, stem and token hits for the name,
+    /// then the tiers settle in order; a miss collects the did-you-mean
+    /// candidates in one more pass.
     static func resolve(file rawName: String, in records: [VideoRecord], preferredID: UUID? = nil) -> Resolution {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return .notFound(name: rawName) }
@@ -138,8 +149,9 @@ enum ArchivistRecordReferenceResolver {
                 return records.filter { $0.purgedAt == nil && ArchivistKeywordText.normalizedPhrase($0.filename) == key }
             })
         }
-        return linearTiers(nameCandidates(needle), in: records, preferredID: preferredID)
-            ?? .notFound(name: name)
+        if let hit = linearTiers(needle, in: records, preferredID: preferredID) { return hit }
+        let (similar, total) = similarLinear(to: needle, in: records)
+        return .notFound(name: name, similar: similar, similarTotal: total)
     }
 
     /// Tiers 1–4 with tiers 2–3 served from the memo, every hit checked
@@ -164,36 +176,35 @@ enum ArchivistRecordReferenceResolver {
                     }
             })
         }
-        let candidates = nameCandidates(needle)
-        for candidate in candidates {
-            let nameKey = ArchivistKeywordText.normalizedPhrase(candidate)
-            if let hits = index.liveRecords(byFilename: nameKey, in: records, version: version),
-               let hit = settle(hits, preferredID: preferredID) {
-                return hit
-            }
-            if let hits = index.liveRecords(byStem: stemKey(candidate), in: records, version: version),
-               let hit = settle(hits, preferredID: preferredID) {
-                return hit
-            }
+        if let hits = index.liveRecords(byFilename: ArchivistKeywordText.normalizedPhrase(needle), in: records, version: version),
+           let hit = settle(hits, preferredID: preferredID) {
+            return hit
+        }
+        if let hits = index.liveRecords(byStem: stemKey(needle), in: records, version: version),
+           let hit = settle(hits, preferredID: preferredID) {
+            return hit
         }
         // A memo miss (or a table that was stale twice) is never trusted:
         // the linear tiers decide, at the cost the token tier already paid.
-        return linearTiers(candidates, in: records, preferredID: preferredID) ?? .notFound(name: name)
+        if let hit = linearTiers(needle, in: records, preferredID: preferredID) { return hit }
+        let (similar, total) = similarMemo(to: needle, in: records, index: index, version: version)
+            ?? similarLinear(to: needle, in: records)
+        return .notFound(name: name, similar: similar, similarTotal: total)
     }
 
-    /// The runs tried for a typed name, longest first: the name itself,
-    /// then each word-suffix of it down to the last word plus extension
-    /// ("the christmas tape.mov" → "christmas tape.mov" → "tape.mov"), at
-    /// most `maxNameCandidates` of them. A one-word name is its own only
-    /// candidate.
-    static func nameCandidates(_ needle: String) -> [String] {
+    /// The shorter word-suffixes of a typed name, longest first, down to
+    /// the last word plus extension ("the christmas tape.mov" →
+    /// ["christmas tape.mov", "tape.mov"]), at most `maxSimilarSuffixes`.
+    /// These are did-you-mean probes only (codex #1020 item 2) — a
+    /// one-word name has none.
+    static func similarSuffixes(of needle: String) -> [String] {
         let words = needle.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard words.count > 1 else { return [needle] }
-        var candidates: [String] = []
-        for start in 0..<min(words.count, maxNameCandidates) {
-            candidates.append(words[start...].joined(separator: " "))
+        guard words.count > 1 else { return [] }
+        var suffixes: [String] = []
+        for start in 1..<min(words.count, maxSimilarSuffixes + 1) {
+            suffixes.append(words[start...].joined(separator: " "))
         }
-        return candidates
+        return suffixes
     }
 
     // MARK: - Chip labels
@@ -247,7 +258,7 @@ enum ArchivistRecordReferenceResolver {
         return .resolved(record)
     }
 
-    /// Tier 1: a path, exact then case-insensitive; a miss is a miss
+    /// Tier 1: a path, exact then case-folded; a miss is a miss
     /// (`sameName` supplies the files called the path's basename).
     private static func pathTier(
         _ path: String,
@@ -258,9 +269,9 @@ enum ArchivistRecordReferenceResolver {
         if let hit = settle(records.filter { $0.purgedAt == nil && $0.fullPath == path }, preferredID: preferredID) {
             return hit
         }
-        let folded = ArchivistKeywordText.normalizedPhrase(path)
+        let folded = pathKey(path)
         if let hit = settle(records.filter {
-            $0.purgedAt == nil && ArchivistKeywordText.normalizedPhrase($0.fullPath) == folded
+            $0.purgedAt == nil && pathKey($0.fullPath) == folded
         }, preferredID: preferredID) {
             return hit
         }
@@ -270,48 +281,81 @@ enum ArchivistRecordReferenceResolver {
             sameNameTotal: alike.count)
     }
 
-    /// Tiers 2–4 in ONE pass over the catalog: exact and stem hits for
-    /// every name candidate, settled candidate-major (the longest run's,
-    /// then the next run's, …); the token tier last and for the LONGEST
-    /// run only. Nil when no tier has a hit.
+    /// Tiers 2–4 for ONE name in one pass over the catalog: exact and
+    /// stem hits settle first, the token tier last and only when no exact
+    /// tier had a hit. Nil when no tier has a hit.
     private static func linearTiers(
-        _ candidates: [String],
+        _ name: String,
         in records: [VideoRecord],
         preferredID: UUID?
     ) -> Resolution? {
-        guard !candidates.isEmpty else { return nil }
-        // Per-candidate keys, computed once. The first candidate owning a
-        // key wins the dictionary slot (a duplicated suffix is impossible
-        // for distinct word counts, but the rule is cheap to state).
-        var nameIndex: [String: Int] = [:]
-        var stemIndex: [String: Int] = [:]
-        for (position, candidate) in candidates.enumerated() {
-            if nameIndex[ArchivistKeywordText.normalizedPhrase(candidate)] == nil {
-                nameIndex[ArchivistKeywordText.normalizedPhrase(candidate)] = position
-            }
-            if stemIndex[stemKey(candidate)] == nil {
-                stemIndex[stemKey(candidate)] = position
-            }
-        }
-        let tokens = ArchivistKeywordText.tokens(stripMediaExtension(candidates[0]))
-        var byName = [[VideoRecord]](repeating: [], count: candidates.count)
-        var byStem = [[VideoRecord]](repeating: [], count: candidates.count)
+        let nameKey = ArchivistKeywordText.normalizedPhrase(name)
+        let stem = stemKey(name)
+        let tokens = ArchivistKeywordText.tokens(stripMediaExtension(name))
+        var byName: [VideoRecord] = []
+        var byStem: [VideoRecord] = []
         var byToken: [VideoRecord] = []
         var exactSeen = false
         for record in records where record.purgedAt == nil {
-            let key = ArchivistKeywordText.normalizedPhrase(record.filename)
-            if let position = nameIndex[key] { byName[position].append(record); exactSeen = true; continue }
-            if let position = stemIndex[stemKey(record.filename)] { byStem[position].append(record); exactSeen = true; continue }
+            if ArchivistKeywordText.normalizedPhrase(record.filename) == nameKey { byName.append(record); exactSeen = true; continue }
+            if stemKey(record.filename) == stem { byStem.append(record); exactSeen = true; continue }
             if !exactSeen, !tokens.isEmpty, ArchivistKeywordText.containsAllTokens(record.filename, tokens) {
                 byToken.append(record)
             }
         }
-        for position in candidates.indices {
-            if let hit = settle(byName[position], preferredID: preferredID) ?? settle(byStem[position], preferredID: preferredID) {
-                return hit
-            }
+        return settle(byName, preferredID: preferredID)
+            ?? settle(byStem, preferredID: preferredID)
+            ?? settle(byToken, preferredID: preferredID)
+    }
+
+    /// Did-you-mean candidates for a miss, linear: one pass collects the
+    /// exact and stem hits of every shorter suffix; the longest suffix
+    /// with any hit supplies them (exact before stem), in catalog order.
+    private static func similarLinear(to name: String, in records: [VideoRecord]) -> ([Candidate], Int) {
+        let suffixes = similarSuffixes(of: name)
+        guard !suffixes.isEmpty else { return ([], 0) }
+        var nameIndex: [String: Int] = [:]
+        var stemIndex: [String: Int] = [:]
+        for (position, suffix) in suffixes.enumerated() {
+            let key = ArchivistKeywordText.normalizedPhrase(suffix)
+            if nameIndex[key] == nil { nameIndex[key] = position }
+            let stem = stemKey(suffix)
+            if stemIndex[stem] == nil { stemIndex[stem] = position }
         }
-        return settle(byToken, preferredID: preferredID)
+        var byName = [[VideoRecord]](repeating: [], count: suffixes.count)
+        var byStem = [[VideoRecord]](repeating: [], count: suffixes.count)
+        for record in records where record.purgedAt == nil {
+            if let position = nameIndex[ArchivistKeywordText.normalizedPhrase(record.filename)] {
+                byName[position].append(record); continue
+            }
+            if let position = stemIndex[stemKey(record.filename)] { byStem[position].append(record) }
+        }
+        for position in suffixes.indices {
+            let hits = byName[position].isEmpty ? byStem[position] : byName[position]
+            if !hits.isEmpty { return (hits.prefix(maxCandidates).map(candidate), hits.count) }
+        }
+        return ([], 0)
+    }
+
+    /// The same candidates from the memo; nil when the memo was stale
+    /// twice (the caller falls back to the linear pass).
+    @MainActor
+    private static func similarMemo(
+        to name: String,
+        in records: [VideoRecord],
+        index: ArchivistRecordReferenceIndex,
+        version: RecordsVersion
+    ) -> ([Candidate], Int)? {
+        for suffix in similarSuffixes(of: name) {
+            guard let byName = index.liveRecords(
+                byFilename: ArchivistKeywordText.normalizedPhrase(suffix), in: records, version: version)
+            else { return nil }
+            if !byName.isEmpty { return (byName.prefix(maxCandidates).map(candidate), byName.count) }
+            guard let byStem = index.liveRecords(byStem: stemKey(suffix), in: records, version: version)
+            else { return nil }
+            if !byStem.isEmpty { return (byStem.prefix(maxCandidates).map(candidate), byStem.count) }
+        }
+        return ([], 0)
     }
 
     /// One hit resolves; two or more are a which-one — unless the selected
@@ -350,6 +394,21 @@ enum ArchivistRecordReferenceResolver {
         ArchivistKeywordText.normalizedPhrase(
             stripMediaExtension(name.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
+
+    private static let posix = Locale(identifier: "en_US_POSIX")
+
+    /// The comparison key of tier 1's second pass (codex #1020 item 4):
+    /// case folding and canonical composition ONLY — "/A/CAFÉ.MOV",
+    /// "/A/Café.mov" and its decomposed spelling (e + combining acute)
+    /// are one key; "/A/Cafe.mov" is another. Unlike
+    /// `ArchivistKeywordText.normalizedPhrase` this never strips a
+    /// diacritic. (For Rick: NFC — one code point per accented letter —
+    /// is what `precomposedStringWithCanonicalMapping` produces; HFS+
+    /// volumes hand back NFD names, APFS whatever was written.)
+    static func pathKey(_ path: String) -> String {
+        path.folding(options: [.caseInsensitive], locale: posix)
+            .precomposedStringWithCanonicalMapping
+    }
 }
 
 /// Memoised filename / stem tables for the resolver's exact tiers.
@@ -364,12 +423,17 @@ enum ArchivistRecordReferenceResolver {
 /// process, which is what makes the table COMPLETE: a rename that turns
 /// [foo, bar] into [foo, foo] at the same buffer and version is seen
 /// before the "foo" bucket is read, so the second foo is in it and the
-/// answer is a which-one, not the first foo. Per-hit revalidation (index
-/// in range, same id, not purged, same key) stays as belt and braces and
-/// rebuilds a stale table once. Memory: two dictionaries of String →
-/// [Entry] over the catalog — roughly 120 bytes per record, ~12 MB at
-/// 100k records, bounded by the catalog size. Purged records are left
-/// out of both tables.
+/// answer is a which-one, not the first foo. None of the three keys sees
+/// a row REPLACED by a prebuilt record (`records[1] = decodedFoo`: same
+/// buffer, same count, no field write — codex #1020 item 1), and a
+/// bucket whose every entry still validates cannot know it is short one
+/// member; that case is `VideoScanModel.records`' didSet calling
+/// `invalidate()`, the one signal that fires for every array mutation.
+/// Per-hit revalidation (index in range, same id, not purged, same key)
+/// stays as belt and braces and rebuilds a stale table once. Memory: two
+/// dictionaries of String → [Entry] over the catalog — roughly 120 bytes
+/// per record, ~12 MB at 100k records, bounded by the catalog size.
+/// Purged records are left out of both tables.
 ///
 /// The generation is read through `identityGeneration` (default: the
 /// live counter) so a test can pin it and exercise the revalidation path
@@ -405,6 +469,10 @@ final class ArchivistRecordReferenceIndex {
     init(identityGeneration: @escaping () -> UInt64 = { VideoRecord.identityGeneration }) {
         self.identityGeneration = identityGeneration
     }
+
+    /// True while a table is held; false after `invalidate()` until the
+    /// next lookup rebuilds. For the model's didSet sensor.
+    var isBuilt: Bool { cached != nil }
 
     /// Forget the tables; the next lookup rebuilds.
     func invalidate() {
