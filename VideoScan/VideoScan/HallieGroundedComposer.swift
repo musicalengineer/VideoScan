@@ -230,9 +230,16 @@ struct HallieGroundedComposer: Sendable {
         let leaked = Set(verification.dropped
             .filter { leakReasons.contains($0.reason) }
             .flatMap { HallieCompositionVerifier.claimTags(in: $0.text) })
+        // Once any source segment has attached claim-local coverage, that
+        // metadata is authoritative for the flattened plan. In particular,
+        // a list followed by a biography inherits `.biography` as the joined
+        // shape, but its optional list examples must not thereby become
+        // mandatory biography claims.
+        let usesClaimLocalCoverage = plan.claims.contains(where: { $0.requiresCoverage })
         var restored: [Restored] = []
         for (index, claim) in plan.claims.enumerated()
-        where (plan.shape == .biography || claim.requiresCoverage)
+        where (claim.requiresCoverage
+            || (!usesClaimLocalCoverage && plan.shape == .biography))
             && !cited.contains(claim.id) && !leaked.contains(claim.id) {
             let sentence = Sentence(
                 display: claim.text,
