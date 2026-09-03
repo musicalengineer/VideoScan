@@ -167,7 +167,9 @@ public enum FamilyTreeVerification {
         var out: [Finding] = []
         for person in people {
             guard let childBirth = person.birthYear else { continue }
-            for parent in graph.relatives(.parents, of: person) {
+            // Every recorded parent, not just the primary family's: an
+            // audit must still see the second FAMC that prose leaves out.
+            for parent in graph.allRecordedParents(of: person) {
                 guard let parentBirth = parent.birthYear else { continue }
                 let gap = childBirth - parentBirth
                 guard gap < youngestPlausibleParentYears else { continue }
@@ -212,7 +214,7 @@ public enum FamilyTreeVerification {
         in graph: GedcomFamilyGraph) -> [Finding] {
         var buckets: [String: [GedcomFamilyGraph.Person]] = [:]
         for person in people {
-            let parentIDs = graph.relatives(.parents, of: person).map(\.id).sorted()
+            let parentIDs = graph.allRecordedParents(of: person).map(\.id).sorted()
             guard !parentIDs.isEmpty, let given = firstGivenName(person.name) else { continue }
             buckets["\(parentIDs.joined(separator: "+"))|\(given)", default: []].append(person)
         }
@@ -246,7 +248,7 @@ public enum FamilyTreeVerification {
 
         func walk(_ person: GedcomFamilyGraph.Person) {
             colour[person.id] = 1
-            for parent in graph.relatives(.parents, of: person) {
+            for parent in graph.allRecordedParents(of: person) {
                 switch colour[parent.id] ?? 0 {
                 case 0: walk(parent)
                 case 1:

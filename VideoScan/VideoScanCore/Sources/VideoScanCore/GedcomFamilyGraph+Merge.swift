@@ -168,7 +168,8 @@ extension GedcomFamilyGraph {
                 husband: theirs.husband.flatMap { personMap[$0] },
                 wife: theirs.wife.flatMap { personMap[$0] },
                 children: theirs.children.compactMap { personMap[$0] },
-                marriageDate: theirs.marriageDate)
+                marriageDate: theirs.marriageDate,
+                familySearchID: theirs.familySearchID)
             let key = Self.familyKey(mapped, people: people)
             if let existing = familyByKey[key.key] {
                 familyMap[fid] = existing
@@ -176,6 +177,8 @@ extension GedcomFamilyGraph {
                 for child in mapped.children where !merged.children.contains(child) {
                     merged.children.append(child)
                 }
+                // First source's family id wins; the second fills a blank.
+                if merged.familySearchID == nil { merged.familySearchID = mapped.familySearchID }
                 if let mine = merged.marriageDate, !mine.isEmpty {
                     if let theirDate = mapped.marriageDate, !theirDate.isEmpty, theirDate != mine {
                         let who = key.parents.compactMap { people[$0]?.name }.joined(separator: " & ")

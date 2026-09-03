@@ -33,7 +33,11 @@ public enum GedcomCompiledTree {
     /// offset table so they decode in parallel (one chunk per core), and
     /// TreeIndex formatVersion 2 adds the launch tables. Older blobs are
     /// refused with `versionMismatch` and the store recompiles.
-    public static let codecVersion: UInt32 = 5
+    /// 6 (2026-09-02, Rick's one-primary-parent-family ruling): the family
+    /// section carries the FAM `_FSFTID`, and the persisted parent table
+    /// now lists ONE father and ONE mother per person (the primary
+    /// family's) — a codec-5 blob would keep serving both mothers.
+    public static let codecVersion: UInt32 = 6
     static let magic: [UInt8] = Array("VSFT".utf8)
     /// Records per parallel decode chunk (written into the section header;
     /// the reader honours whatever the file says). 39k people → 39
@@ -75,6 +79,7 @@ public enum GedcomCompiledTree {
         w.chunkedSection(count: families.count) { w, i in
             let f = families[i]
             w.ref(familyIDs[i]); w.ref(f.husband); w.ref(f.wife); w.ref(f.marriageDate); w.refs(f.children)
+            w.ref(f.familySearchID)   // codec 6
         }
         // Roots (a list, so a merged two-root tree fits the same layout)
         w.refs(graph.rootPersonIDs)
@@ -256,6 +261,7 @@ public enum GedcomCompiledTree {
             var f = GedcomFamilyGraph.Family()
             f.husband = try r.optionalString(); f.wife = try r.optionalString()
             f.marriageDate = try r.optionalString(); f.children = try r.stringArray()
+            f.familySearchID = try r.optionalString()   // codec 6
             return (id, f)
         }
         clock.lap("families parse")
