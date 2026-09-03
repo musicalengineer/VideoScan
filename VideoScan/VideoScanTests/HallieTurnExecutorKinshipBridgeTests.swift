@@ -164,7 +164,12 @@ struct HallieTurnExecutorKinshipBridgeTests {
         let pending = try #require(first.clarification)
 
         #expect(first.outcome == .needsClarification)
-        #expect(first.prose == "Which rick do you mean?")
+        // The sentence carries the choice — chips are UI-only, and voice,
+        // the CLI and the eval transcripts see nothing else (2026-09-03).
+        // The typed "rick" is echoed in the casing a person would write.
+        #expect(first.prose == "Which Rick do you mean — "
+                + "Richard Harding Breen (b. 4 JUL 1962) or "
+                + "Richard Harding Breen (b. 12 MAR 1931)?")
         #expect(pending.stage == .cyberBrainPerson)
         #expect(pending.candidates.map(\.id) == [
             .cyberBrainPersonID("person.rick.jr"),

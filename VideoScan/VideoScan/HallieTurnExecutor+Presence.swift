@@ -370,11 +370,13 @@ extension HallieTurnExecutor {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
 
         if let profiles = context.profiles {
-            let matches = profiles.filter {
-                ([$0.canonicalName] + $0.aliases).contains {
-                    PersonResolver.normalize($0) == key
-                }
-            }
+            // Exact name wins here too (2026-09-03). Before, "Tim" matched
+            // both the brother NAMED Tim and the son who ALIASES Tim, so
+            // this returned nil and "Tim in the 70s" lost its era anchor —
+            // the same collision as the which-Tim question.
+            let matches = PersonNameClaim.narrow(
+                profiles, typed: typedName,
+                name: { $0.canonicalName }, aliases: { $0.aliases })
             let ids = Set(matches.map(\.stableID))
             if ids.count == 1, let profile = matches.first,
                let birthdate = profile.birthdate {

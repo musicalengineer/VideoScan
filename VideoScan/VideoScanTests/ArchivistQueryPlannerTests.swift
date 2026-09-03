@@ -71,22 +71,34 @@ struct ArchivistQueryPlannerTests {
             preface: nil, playAfterAnswer: true))
     }
 
+    /// AMENDED 2026-09-03: reciprocal aliases no longer tie — "Timmy" is
+    /// the son's NAME and only the brother's alias, so exact name wins and
+    /// the planner searches instead of asking. The clarification path this
+    /// test covers is driven by a spelling NEITHER profile is named
+    /// ("Bud"), which is still genuinely ambiguous.
     @Test func reciprocalAliasesContinueWithoutReenteringResolver() {
         let reciprocal = [
             POIProfile(name: "Tim", referencePath: "/synthetic/tim",
-                       aliases: ["Timmy"]),
+                       aliases: ["Timmy", "Bud"]),
             POIProfile(name: "Timmy", referencePath: "/synthetic/timmy",
-                       aliases: ["Tim"]),
+                       aliases: ["Tim", "Bud"]),
         ]
-        let spec = NLQuerySpec(people: ["Timmy"])
+        // The reciprocal pair itself is decided, not asked about.
         #expect(ArchivistQueryPlanner.plan(
-            question: "videos of Timmy", spec: spec, profiles: reciprocal,
+            question: "videos of Timmy", spec: NLQuerySpec(people: ["Timmy"]),
+            profiles: reciprocal, playAfterAnswer: false) == .search(
+                query: "people:timmy", isCount: false, preface: nil,
+                playAfterAnswer: false))
+
+        let spec = NLQuerySpec(people: ["Bud"])
+        #expect(ArchivistQueryPlanner.plan(
+            question: "videos of Bud", spec: spec, profiles: reciprocal,
             playAfterAnswer: false) == .personAmbiguity(
-                typedName: "Timmy", candidates: ["Tim", "Timmy"],
+                typedName: "Bud", candidates: ["Tim", "Timmy"],
                 playAfterAnswer: false))
 
         let pending = ArchivistPersonClarification(
-            question: "videos of Timmy", spec: spec,
+            question: "videos of Bud", spec: spec,
             candidates: ["Tim", "Timmy"], playAfterAnswer: false)
         #expect(pending.classify("Timmy") == .select("Timmy"))
         #expect(ArchivistQueryPlanner.plan(

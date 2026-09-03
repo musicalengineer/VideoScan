@@ -184,7 +184,10 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
 
     init(_ payload: ArchivistQueryAST.Presence, citationOffset: Int = 0) {
         self.citationOffset = max(0, citationOffset)
-        people = (payload.people ?? []).map(Identity.init)
+        // Case-only / diacritic-only duplicates are ONE person term, never
+        // two (2026-09-03). Two spellings of one person also doubled the
+        // per-record tag scan for no additional matches.
+        people = PersonNameClaim.dedupe(payload.people ?? []).map(Identity.init)
         if let start = payload.yearStart ?? payload.yearEnd,
            let end = payload.yearEnd ?? payload.yearStart {
             if start <= end {
@@ -956,6 +959,10 @@ enum ArchivistPresenceAnswerComposer {
             default: break
             }
         }
+        // Last guard before prose: whatever built the interpreted query, a
+        // name is never said twice in two casings (demo eval lv260902-004
+        // — "videos tagged with tim and Tim").
+        people = PersonNameClaim.dedupe(people)
         var phrase = people.isEmpty
             ? (mediaKind.map { "\($0)s" } ?? "videos")
             : (mediaKind.map { "\($0)s" } ?? "videos") + " of " + joinNames(people)

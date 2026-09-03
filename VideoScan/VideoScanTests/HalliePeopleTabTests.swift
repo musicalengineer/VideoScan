@@ -68,14 +68,18 @@ struct HalliePeopleTabTests {
 
     // MARK: Spelling → profile
 
-    /// Rule #778: a spelling claimed by two profiles is ambiguous even when
-    /// it is one of them's canonical name — no silent canonical-wins pick.
-    @Test func aCrossClaimedSpellingIsAmbiguousNotCanonicalWins() {
+    /// Rule #778 AMENDED 2026-09-03 (Director — exact name wins, the People
+    /// tab's own rule from 2026-08-22): a spelling claimed by two profiles
+    /// belongs to the one NAMED it. Before this, "tim" was ambiguous
+    /// because the brother is named Tim and the son aliases Tim, so every
+    /// question about either brother or son asked which one.
+    @Test func aCrossClaimedSpellingGoesToTheProfileNamedIt() {
         let profiles = [crossTim, crossTimmy, dad]
-        #expect(Tab.claim("Timmy", in: profiles) == .ambiguous([crossTim, crossTimmy]))
-        #expect(Tab.claim("tim", in: profiles) == .ambiguous([crossTim, crossTimmy]))
-        #expect(Tab.profile(claiming: "Timmy", in: profiles) == nil)
-        #expect(Tab.profile(claiming: "Tim", in: profiles) == nil)
+        #expect(Tab.claim("Timmy", in: profiles) == .one(crossTimmy))
+        #expect(Tab.claim("tim", in: profiles) == .one(crossTim))
+        #expect(Tab.claim("TIM", in: profiles) == .one(crossTim))
+        #expect(Tab.profile(claiming: "Timmy", in: profiles)?.stableID == "timmy")
+        #expect(Tab.profile(claiming: "Tim", in: profiles)?.stableID == "tim")
         // Unique spellings still resolve.
         #expect(Tab.profile(claiming: "Mimmy", in: profiles)?.stableID == "tim")
         #expect(Tab.profile(claiming: "Tim Jr", in: profiles)?.stableID == "timmy")
@@ -108,7 +112,12 @@ struct HalliePeopleTabTests {
                 switch resolver.resolve(spelling) {
                 case .ambiguous(let candidates):
                     #expect(result.outcome == .needsClarification, label)
-                    #expect(result.prose == "Which \(spelling) do you mean?", label)
+                    // The question names the candidates: a which-one the
+                    // listener cannot answer is itself a bug (2026-09-03).
+                    #expect(result.prose == HallieProfileWhichOne.prose(
+                        typed: spelling,
+                        choices: candidates.map { .init(name: $0) }), label)
+                    #expect(result.prose.contains(" or "), label)
                     #expect(result.clarification?.stage == .profileIdentity, label)
                     #expect(result.clarification?.candidates.map(\.id)
                             == candidates.map { .profileStableID(stableID[$0]!) }, label)
@@ -127,23 +136,34 @@ struct HalliePeopleTabTests {
 
     /// Picking a chip after "which one?" finishes the turn from that
     /// profile — with no tree (People-tab path) and with one (graph path).
+    ///
+    /// The ask is now driven by a spelling BOTH profiles only alias
+    /// ("Bud"): since 2026-09-03 "Timmy" belongs outright to the profile
+    /// named Timmy, so it no longer asks. Chip selection itself is
+    /// unchanged, and still has to work.
     @Test func choosingAChipAfterWhichOneAnswersFromThatProfile() async throws {
+        let brother = Profile(stableID: "tim", canonicalName: "Tim",
+                              aliases: ["Timmy", "Mimmy", "Bud"], note: "Brother Tim")
+        let son = Profile(stableID: "timmy", canonicalName: "Timmy",
+                          aliases: ["Tim", "Tim Jr", "Bud"],
+                          birthdate: Self.date(1965, 4, 22))
         for graph in [nil, tree] as [GedcomFamilyGraph?] {
-            let context = HallieTurnExecutor.Context(profiles: [crossTim, crossTimmy], graph: graph)
+            let context = HallieTurnExecutor.Context(profiles: [brother, son], graph: graph)
             let asked = try await HallieTurnExecutor.execute(
-                .init(intent: intent("who is Timmy?", people: ["Timmy"], operation: .biography)),
+                .init(intent: intent("who is Bud?", people: ["Bud"], operation: .biography)),
                 context: context)
             let pending = try #require(asked.clarification)
+            #expect(asked.prose == "Which Bud do you mean — Tim or Timmy?")
             #expect(pending.candidates.map(\.label) == ["Tim", "Timmy"])
             let son = try await HallieTurnExecutor.continue(
                 pending: pending, selecting: .profileStableID("timmy"), context: context)
             #expect(son.outcome == .answered)
-            #expect(son.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim, Tim Jr."))
+            #expect(son.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim, Tim Jr, Bud."))
             #expect(son.prose.contains("was born 22 Apr 1965, according to the People profile"))
-            let brother = try await HallieTurnExecutor.continue(
+            let chosenBrother = try await HallieTurnExecutor.continue(
                 pending: pending, selecting: .profileStableID("tim"), context: context)
-            #expect(brother.outcome == .answered)
-            #expect(brother.prose.hasPrefix("Tim is one of the people in the People tab — also known as Timmy, Mimmy."))
+            #expect(chosenBrother.outcome == .answered)
+            #expect(chosenBrother.prose.hasPrefix("Tim is one of the people in the People tab — also known as Timmy, Mimmy, Bud."))
         }
     }
 

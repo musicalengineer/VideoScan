@@ -571,7 +571,16 @@ enum ArchivistGraphExecutor {
             }.mapValues { $0.count }
             return .result(ArchivistGraphResult(
                 conclusion: .profileAmbiguous,
-                prose: "Which \(typedName) do you mean?",
+                // The question has to carry the choice: chips exist only
+                // in the UI, and voice / CLI / eval see the sentence alone
+                // (2026-09-03). A shared name is separated by birth year.
+                prose: HallieProfileWhichOne.prose(
+                    typed: typedName,
+                    choices: profiles.map {
+                        .init(name: $0.canonicalName,
+                              birthdate: $0.birthdate,
+                              fallbackDetail: $0.stableID)
+                    }),
                 basisLine: "Checked: People profiles.",
                 evidence: nil,
                 candidates: [],
@@ -714,13 +723,24 @@ enum ArchivistGraphExecutor {
                 stableID: stableID, definitions: definitions))
         }
 
-        let identities = matchingProfiles.sorted(by: profileOrder)
-        // ONE spelling verdict, PersonResolver's (codex #778 / #795, Director-
-        // approved): a spelling claimed by more than one profile — canonical
-        // on one, alias on another ("Dad" on the Dad profile and as Rick's
-        // alias; "Timmy" on the son and as the brother's alias) — is
-        // AMBIGUOUS and asks. The former canonical-wins shortcut made this
-        // route answer where the overlay and presence routes clarified.
+        // ONE spelling verdict, PersonResolver's (codex #778 / #795), now
+        // under the exact-name-wins rule (Director, 2026-09-03): a spelling
+        // claimed by one profile's NAME and another's ALIAS belongs to the
+        // named profile ("Tim" is the brother's name and the son's alias).
+        // Only a spelling that two profiles both NAME is ambiguous, and
+        // that still asks. PersonNameClaim holds the rule so this route,
+        // PersonResolver and the temporal route cannot drift apart —
+        // drifting apart is exactly what #778 was filed about.
+        let claimants = matchingProfiles.sorted(by: profileOrder)
+        let narrowed = PersonNameClaim.narrow(
+            claimants,
+            typed: typedName,
+            name: { $0.canonicalName },
+            aliases: { $0.aliases })
+        // A group qualified on a definition whose merged snapshot no longer
+        // shows the spelling would narrow to nothing; keep every claimant
+        // rather than silently falling through to spelling recovery.
+        let identities = narrowed.isEmpty ? claimants : narrowed
         guard identities.count <= 1 else {
             return .profileAmbiguous(identities)
         }
@@ -1423,6 +1443,13 @@ enum ArchivistGraphExecutor {
             stableID: stableID,
             canonicalName: canonicalName,
             aliases: aliases,
+            // Birth/death are carried from 2026-09-03 so a which-one about
+            // two people of the SAME name can separate them by year
+            // ("John (born 1931) or John (born 1967)?"). `profileMeaning`
+            // does not compare dates, so the representative — picked by
+            // `profileOrder` — is the deterministic choice, not "any".
+            birthdate: representative.birthdate,
+            deathdate: representative.deathdate,
             treeIdentity: representative.treeIdentity,
             treeIdentityUnreadable: representative.treeIdentityUnreadable)
     }

@@ -290,11 +290,16 @@ struct ArchivistGraphExecutorTests {
     }
 
     /// Rick 2026-08-22: the gallery's "Tim" (brother) lists "Timmy" as an
-    /// alias and "Timmy" (son) lists "Tim". Codex #795 A (rule #778): a
-    /// spelling two profiles claim — even when one claims it as its
-    /// canonical name — is AMBIGUOUS, the same verdict PersonResolver, the
-    /// overlay and the presence routes give. No silent canonical pick.
-    @Test func crossClaimedSpellingIsAmbiguousEvenWhenOneClaimIsCanonical() {
+    /// alias and "Timmy" (son) lists "Tim".
+    ///
+    /// AMENDED 2026-09-03 (Director's rule — exact name wins). Codex #795 A
+    /// made a cross-claimed spelling ambiguous even when one profile was
+    /// NAMED it, which meant every question about either Tim asked which
+    /// one (demo eval lv260902-023). The verdict is still ONE verdict,
+    /// shared with PersonResolver and the overlay — the rule underneath it
+    /// changed: a NAME claim beats an ALIAS claim, and only an unbroken tie
+    /// asks. That tie is still exercised below, twice.
+    @Test func exactNameBeatsAliasAndOnlyRealTiesAsk() {
         let brother = ArchivistGraphProfileSnapshot(
             stableID: "tim", canonicalName: "Tim", aliases: ["Timmy", "Mimmy"])
         // (The real gallery also gives the son "Tim" as an alias — that alias
@@ -315,13 +320,16 @@ struct ArchivistGraphExecutorTests {
         #expect(typedTim.conclusion == .answered)
         #expect(typedTim.evidence?.subjectID == "@T@")
 
+        // "Timmy" is the son's NAME and only the brother's ALIAS, so the son
+        // wins outright — no which-one. This tree has no Timmy record and
+        // the son is unpinned, so the graph executor honestly reports
+        // person-not-found; answering him from his People profile is the
+        // turn executor's job (HalliePeopleTabTests), not the graph's.
         let typedTimmy = execute(people: ["Timmy"], operation: .biography,
                                  graph: tree, profiles: [brother, son])
-        #expect(typedTimmy.conclusion == .profileAmbiguous,
-                "the brother's alias and the son's canonical name tie — ask")
-        #expect(typedTimmy.profileCandidates == ["Tim", "Timmy"])
-        #expect(typedTimmy.ambiguityCandidates.map(\.id)
-                == [.profileStableID("tim"), .profileStableID("timmy")])
+        #expect(typedTimmy.conclusion == .personNotFound)
+        #expect(typedTimmy.profileCandidates.isEmpty)
+        #expect(typedTimmy.ambiguityCandidates.isEmpty)
         #expect(typedTimmy.evidence == nil)
 
         let aliasOnly = execute(people: ["Mimmy"], operation: .biography,
@@ -332,7 +340,30 @@ struct ArchivistGraphExecutorTests {
             stableID: "other", canonicalName: "Timothy", aliases: ["Mimmy"])
         let tied = execute(people: ["Mimmy"], operation: .biography,
                            graph: tree, profiles: [brother, son, shared])
-        #expect(tied.conclusion == .profileAmbiguous)
+        #expect(tied.conclusion == .profileAmbiguous,
+                "two profiles claim Mimmy and neither is NAMED it — ask")
+
+        // Tie two: two profiles genuinely NAMED the same thing. This is the
+        // case disambiguation exists for, and it must survive the rule
+        // change — with a question that tells them apart.
+        let johnA = ArchivistGraphProfileSnapshot(
+            stableID: "john-a", canonicalName: "John",
+            birthdate: Self.date(1940, 5, 1))
+        let johnB = ArchivistGraphProfileSnapshot(
+            stableID: "john-b", canonicalName: "John",
+            birthdate: Self.date(1978, 9, 12))
+        let namesakes = execute(people: ["John"], operation: .biography,
+                                graph: tree, profiles: [johnA, johnB])
+        #expect(namesakes.conclusion == .profileAmbiguous)
+        #expect(namesakes.ambiguityCandidates.map(\.id)
+                == [.profileStableID("john-a"), .profileStableID("john-b")])
+        #expect(namesakes.prose
+                == "Which John do you mean — John (born 1940) or John (born 1978)?")
+    }
+
+    private static func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        Calendar(identifier: .gregorian)
+            .date(from: DateComponents(year: y, month: m, day: d))!
     }
 
     /// Sensor for codex #795 A: for every spelling, the executor's verdict

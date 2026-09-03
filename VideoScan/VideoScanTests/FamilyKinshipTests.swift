@@ -723,12 +723,18 @@ struct FamilyKinshipTests {
         #expect(mirrored.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab).")
     }
 
-    @Test func uncorrectedLiveShapesReportDadAsAmbiguousNeverRick() {
+    /// AMENDED 2026-09-03 (Director — exact name wins): "Dad" is Rick's
+    /// ALIAS and the Dad profile's NAME, so it now resolves to Dad instead
+    /// of asking. The property this test exists for is unchanged and still
+    /// asserted: asking about "Dad" never produces an answer about Rick.
+    /// The hygiene warning about the relational alias also still fires.
+    @Test func uncorrectedLiveShapesResolveDadToDadNeverRick() {
         let overlay = inputs(Self.uncorrected).kinshipOverlay
-        // "Dad" is claimed by Rick (alias) and Dad (canonical): a relational
-        // word shared by two profiles is reported, never resolved to Rick.
+        // "Dad" is claimed by Rick (alias) and Dad (canonical); the profile
+        // NAMED Dad wins, and Rick is not a claimant at all.
         let claimants = overlay.nodes(claiming: "Dad")
-        #expect(claimants.count == 2)
+        #expect(claimants.count == 1)
+        #expect(claimants.compactMap { overlay.member($0)?.name } == ["Dad"])
         #expect(overlay.warnings == [
             "Alias 'Dad' on Rick looks relational — use a Relationship row instead",
             "Alias 'Mom' on Donna looks relational — use a Relationship row instead",
@@ -736,14 +742,13 @@ struct FamilyKinshipTests {
         #expect(overlay.warnings(forProfileNamed: "Rick").count == 1)
         #expect(overlay.warnings(forProfileNamed: "Dad").isEmpty)
 
-        // Asking about "Dad" never yields an answer about Rick: the ONE
-        // verdict (PersonResolver's, codex #795 A) is ambiguous, so the
-        // executor asks — it no longer picks the canonical Dad profile.
+        // Asking about "Dad" never yields an answer about Rick's OWN
+        // children: the one verdict (PersonResolver's) is now the Dad
+        // profile, so the question is answered from Dad's relationships.
         let son = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(Self.uncorrected))
-        #expect(son.conclusion == .profileAmbiguous)
-        #expect(son.profileCandidates == ["Dad", "Rick"])
-        #expect(!son.prose.contains("Rick's"))
-        #expect(!son.basisLine.contains("People tab relationship"))
+        #expect(son.conclusion == .answered)
+        #expect(son.profileCandidates.isEmpty)
+        #expect(!son.prose.hasPrefix("Rick's"))
         // No formal aliases → the tree cannot tell Jr from Sr → unbridged.
         #expect(overlay.node(profileStableID: "rick") == .profile(stableID: "rick"))
         #expect(overlay.node(profileStableID: "dad") == .profile(stableID: "dad"))
@@ -791,18 +796,11 @@ struct FamilyKinshipTests {
             // Asking about "Dad" never produces an answer about Rick's own children.
             let dadSon = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(profiles))
             #expect(!dadSon.prose.hasPrefix("Rick's"), Comment(rawValue: label))
-            // Corrected: "Dad" is unambiguous → answered. Live: "Dad" is
-            // shared with Rick's alias, so overlay AND executor give the
-            // resolver's verdict — a clarification (codex #795 A), never an
-            // answer, never Rick, never a tree not-found for a silent pick.
-            if label == "corrected" {
-                #expect(dadSon.conclusion == .answered, Comment(rawValue: label))
-            } else {
-                #expect(dadSon.conclusion == .profileAmbiguous, Comment(rawValue: label))
-                #expect(dadSon.profileCandidates == ["Dad", "Rick"], Comment(rawValue: label))
-                #expect(Set(overlay.nodes(claiming: "Dad").compactMap { overlay.member($0)?.name })
-                        == ["Dad", "Rick"], Comment(rawValue: label))
-            }
+            // Since 2026-09-03 both shapes agree completely: exact name
+            // wins, so "Dad" is the Dad profile in the live shape too.
+            #expect(dadSon.conclusion == .answered, Comment(rawValue: label))
+            #expect(Set(overlay.nodes(claiming: "Dad").compactMap { overlay.member($0)?.name })
+                    == ["Dad"], Comment(rawValue: label))
         }
     }
 

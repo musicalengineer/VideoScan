@@ -258,9 +258,16 @@ struct PersonResolverTests {
     }
 
     /// Live 2026-08-27 shape: "Dad" is an alias of Rick AND a profile of its
-    /// own → ambiguous, never silently Rick. Without a formal alias, "Rick"
-    /// resolves as a profile but finds nobody in a tree of two Richards.
-    @Test func uncorrectedLiveProfilesSurfaceDadAsAmbiguous() {
+    /// own.
+    ///
+    /// AMENDED 2026-09-03 (Director's rule — exact name wins): this used to
+    /// be `.ambiguous(["Dad", "Rick"])`, so every "who is Dad" asked which
+    /// one. A profile NAMED "Dad" beats a profile that merely lists "Dad"
+    /// among its aliases, so the typed spelling now resolves — with no
+    /// change to the aliases Rick actually stored. Without a formal alias,
+    /// "Rick" resolves as a profile but finds nobody in a tree of two
+    /// Richards.
+    @Test func exactNameBeatsAnotherProfilesAliasForTheSameSpelling() {
         let profiles = [
             POIProfile(name: "Rick", referencePath: "/synthetic",
                        aliases: ["Dicky", "Dad"]),
@@ -268,15 +275,47 @@ struct PersonResolverTests {
                        aliases: ["Grampa Breen", "Dick", "Dad Breen"]),
         ]
         let people = PersonResolver(profiles: profiles)
-        #expect(people.resolve("Dad") == .ambiguous(candidates: ["Dad", "Rick"]))
-        #expect(people.resolve("dad") == .ambiguous(candidates: ["Dad", "Rick"]))
-        #expect(people.resolveAll(["Dad"])
-                == .ambiguous(typedName: "Dad", candidates: ["Dad", "Rick"]))
+        #expect(people.resolve("Dad") == .resolved(canonicalName: "Dad"))
+        #expect(people.resolve("dad") == .resolved(canonicalName: "Dad"))
+        #expect(people.resolve("DAD") == .resolved(canonicalName: "Dad"))
+        #expect(people.resolveAll(["Dad"]) == .resolved(canonicalNames: ["Dad"]))
+        // Rick keeps every spelling nobody else is NAMED.
+        #expect(people.resolve("Dicky") == .resolved(canonicalName: "Rick"))
+        #expect(people.resolve("Dad Breen") == .resolved(canonicalName: "Dad"))
 
         let tree = FamilyTreeIdentityResolver(
             graph: Self.juniorSeniorGraph, profiles: profiles)
-        #expect(tree.resolve("Dad") == .profileAmbiguous(candidates: ["Dad", "Rick"]))
+        // "Dad" is now one identity; the tree has no such NAME record, so the
+        // honest answer is nobody — not a which-one about Rick.
+        #expect(tree.resolve("Dad") == .people([]))
         // No formal alias → the tree cannot tell Jr from Sr → empty, not a guess.
         #expect(tree.resolve("Rick") == .people([]))
+    }
+
+    /// The other half of the amended rule, and the regression risk: when NO
+    /// identity is NAMED the typed spelling, two alias claimants are still
+    /// ambiguous. Disambiguation was narrowed, not removed.
+    ///
+    /// (Two identities that share a canonical NAME are one entry at this
+    /// layer — the resolver speaks in canonical names — so that case is
+    /// pinned where it is decided, over profiles, in
+    /// HallieTimDisambiguationTests.twoProfilesTrulyNamedJohnStillAsk.)
+    @Test func genuineAliasAmbiguityStillAsks() {
+        let aliasOnly = PersonResolver(people: [
+            ResolvablePerson(canonicalName: "Tim", aliases: ["Bud"]),
+            ResolvablePerson(canonicalName: "Timmy", aliases: ["Bud"]),
+        ])
+        #expect(aliasOnly.resolve("Bud")
+                == .ambiguous(candidates: ["Tim", "Timmy"]))
+        #expect(aliasOnly.resolveAll(["Bud"])
+                == .ambiguous(typedName: "Bud", candidates: ["Tim", "Timmy"]))
+
+        // One NAME claimant among alias claimants ends the tie.
+        let named = PersonResolver(people: [
+            ResolvablePerson(canonicalName: "Tim", aliases: ["Bud"]),
+            ResolvablePerson(canonicalName: "Timmy", aliases: ["Bud"]),
+            ResolvablePerson(canonicalName: "Bud", aliases: []),
+        ])
+        #expect(named.resolve("Bud") == .resolved(canonicalName: "Bud"))
     }
 }

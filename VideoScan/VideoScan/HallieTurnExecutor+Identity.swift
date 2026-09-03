@@ -176,6 +176,16 @@ extension HallieTurnExecutor {
         }
         matches.sort(by: profileOrder)
         if matches.isEmpty { return .missing(requested: requested) }
+        // Exact name wins (Director, 2026-09-03 — see PersonNameClaim):
+        // "how old is Tim" is about the profile NAMED Tim, not also about
+        // the profile that lists "Tim" among its aliases. Two profiles that
+        // both bear the name still ask.
+        let narrowed = PersonNameClaim.narrow(
+            matches,
+            typed: requested,
+            name: { $0.canonicalName },
+            aliases: { $0.aliases })
+        if !narrowed.isEmpty { matches = narrowed }
         if matches.count > 1 {
             return .ambiguous(
                 requested: requested,

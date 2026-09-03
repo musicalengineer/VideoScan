@@ -443,9 +443,12 @@ struct HalliePronunciationPickerTests {
         #expect(replaced.loadPronunciationGold().phonemes(for: "data") == "dˈAɾə")
         try replaced.excludePhoto(URL(fileURLWithPath: "/probe.jpg"), "@I1@", nil, nil)
         #expect(replaced.loadSpeakers().ownerName == "Donna Breen")
+        // Two profiles genuinely NAMED Tim — real ambiguity, so the turn
+        // still needs a clarification (exact name wins since 2026-09-03,
+        // so a name-versus-alias pair no longer ties).
         let context = HallieTurnExecutor.Context(profiles: [
             .init(stableID: "tim-a", canonicalName: "Tim"),
-            .init(stableID: "tim-b", canonicalName: "Timmy", aliases: ["Tim"]),
+            .init(stableID: "tim-b", canonicalName: "Tim"),
         ])
         let request = HallieTurnExecutor.Request(intent: .init(
             originalQuestion: "How old was Tim?", ast: ast, playAfterAnswer: false))
