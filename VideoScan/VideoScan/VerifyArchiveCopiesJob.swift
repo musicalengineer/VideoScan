@@ -433,12 +433,15 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             if row == nil { row = manifest.byRecordID[rec.id] }
             if row == nil, let src = rec.derivedFrom { row = manifest.bySourceID[src] }
             if let claimed = row?.relPath { claimedRelPaths.insert(claimed) }
-            // Prefer hashing the path the MANIFEST names when the record
-            // sits elsewhere — the manifest is the recovery ground truth.
-            let hashRel = rel ?? row?.relPath
+            // The manifest digest is the expected REFERENCE, never a path
+            // redirect. A promoted catalog record may have been moved
+            // outside the designated archive root; Verify must read that
+            // record's own fullPath. Otherwise bytes still sitting at the
+            // old manifest path could falsely bless different bytes at the
+            // catalog path (codex #985 cycle 4).
             let bytes = row?.sizeBytes ?? rec.sizeBytes
             items.append(.init(recordID: rec.id,
-                               relPath: hashRel,
+                               relPath: rel,
                                fullPath: rec.fullPath,
                                filename: rec.filename,
                                manifestSHA: row?.sha256,
@@ -553,10 +556,11 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                 actualOrNil = nil
             }
         } catch {
-            // A read error from a root that is no longer there is the
-            // volume going away, not a verdict on this file: stop the run.
-            guard Self.archiveRootIsReachable(root) else {
-                return abortRootUnreachable(name: name)
+            // A read error from a volume that is no longer there is not a
+            // verdict on this file. In-root items use the archive root;
+            // off-root promoted records use THEIR OWN path's volume.
+            guard Self.itemVolumeIsReachable(item, archiveRoot: root) else {
+                return abortRootUnreachable(name: name, item: item)
             }
             tally.failed += 1
             record(.failed, name, PromoteToArchiveJob.describe(error))
@@ -574,8 +578,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             // Absent — but absent from WHAT? If the archive root itself is
             // gone (volume yanked mid-run), no file under it can be judged
             // and nothing may be cleared: stop here, no verdict.
-            guard Self.archiveRootIsReachable(root) else {
-                return abortRootUnreachable(name: name)
+            guard Self.itemVolumeIsReachable(item, archiveRoot: root) else {
+                return abortRootUnreachable(name: name, item: item)
             }
             flagMissing(item: item, name: name, model: model)
             return true
@@ -621,12 +625,32 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     /// The archive root vanished mid-run (volume yanked): this item gets
     /// no verdict, nothing is written, and the loop stops. Returns false
     /// for the loop.
-    private func abortRootUnreachable(name: String) -> Bool {
+    private func abortRootUnreachable(name: String, item: VerifyArchivePlan.Item? = nil) -> Bool {
         abortedRootUnreachable = true
         tally.failed += 1
-        record(.failed, name, "the Master Archive became unreachable while verifying — no verdict for this file (nothing written); reconnect the archive volume and re-run")
-        verifyArchiveLog.error("verify archive ABORT: root unreachable mid-run at \(name, privacy: .public)")
+        let subject = item?.relPath == nil ? "the volume containing this catalog path" : "the Master Archive"
+        record(.failed, name, "\(subject) became unreachable while verifying — no verdict for this file (nothing written); reconnect the volume and re-run")
+        verifyArchiveLog.error("verify archive ABORT: item volume unreachable mid-run at \(name, privacy: .public)")
         return false
+    }
+
+    /// Direct, no-cache volume reachability for a verdict. The designated
+    /// archive gets its stronger root+manifest check. A promoted record that
+    /// lives elsewhere is judged against the volume containing `fullPath`,
+    /// never against the still-mounted archive volume.
+    nonisolated static func itemVolumeIsReachable(
+        _ item: VerifyArchivePlan.Item,
+        archiveRoot: String
+    ) -> Bool {
+        if item.relPath != nil { return archiveRootIsReachable(archiveRoot) }
+        let comps = (item.fullPath as NSString).pathComponents
+        if comps.count >= 3, comps[1] == "Volumes" {
+            return VolumeReachability.currentMountedRoots().contains("/Volumes/\(comps[2])")
+        }
+        // Internal paths all reside on the root filesystem. File/directory
+        // absence is a MISSING verdict; only loss of the owning volume is
+        // "unreachable".
+        return VolumeReachability.currentMountedRoots().contains("/")
     }
 
     private func applyMatch(item: VerifyArchivePlan.Item, digest: String,
@@ -755,10 +779,10 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             return
         }
         model.log("Verify Archive: \(summary).")
-        if tally.mismatch > 0 || tally.missing > 0 {
-            // A mismatch or a missing file is a completed run with an
-            // alarming verdict — the row goes red so it cannot be skimmed
-            // past.
+        if tally.mismatch > 0 || tally.missing > 0 || tally.failed > 0 {
+            // A mismatch, missing file, or read refusal is a completed run
+            // with an alarming verdict — the row goes red so it cannot be
+            // skimmed past.
             finish(failed: summary)
         } else {
             finish(success: summary)

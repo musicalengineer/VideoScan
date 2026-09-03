@@ -892,6 +892,90 @@ struct RescanPreservationTests {
         #expect(other.archiveFixity != nil, "the other volume's record is untouched")
     }
 
+    // (b8) RACE — the preservation pass completed, then the complete merge
+    // suspended for its existence sweep. Verify CLEARS the old live record
+    // in that exact window. The atomic post-await reconciliation must clear
+    // the already-carried value on the fresh instance before replacement.
+    @Test func verifyClearBetweenPreservationAndCommit_isNotReplayed() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs_fixity_commit_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let old = archiveCopyRecord(path: root.appendingPathComponent("copy.mov").path,
+                                    partialMD5: "same")
+        model.records = [old]
+        model.scanTargets = [target]
+        model.snapshotPreservedFieldsForRescan(of: target)
+
+        let fresh = freshlyScannedRecord(path: old.fullPath, sizeBytes: 4_242,
+                                         partialMD5: "same")
+        _ = model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(fresh.archiveFixity != nil, "precondition: preservation carried the scan-start value")
+
+        model.scanMergeDuringExistenceChecksForTesting = { @MainActor in
+            old.archiveFixity = nil       // Verify MISMATCH/MISSING verdict
+        }
+        defer { model.scanMergeDuringExistenceChecksForTesting = nil }
+        _ = await model.commitScanResults(root: root.path, volName: "Fixity",
+                                          targetRecords: [fresh], scanWasComplete: true)
+
+        let live = try #require(model.records.first { $0.fullPath == old.fullPath })
+        #expect(live === fresh)
+        #expect(live.archiveFixity == nil,
+                "a Verify clear during commit's await must win over the stale fresh record")
+    }
+
+    // (b9) UPDATE CATALOG — a preview parks a fresh instance with nil, then
+    // Verify RESTORES the old live record while Apply's commit is suspended.
+    // Apply must reconcile again; a parked preview is never a fixity snapshot.
+    @Test func verifyRestoreBetweenPreviewAndDeferredApply_isCarried() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs_fixity_preview_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let old = archiveCopyRecord(path: root.appendingPathComponent("copy.mov").path,
+                                    partialMD5: "same")
+        old.archiveFixity = nil
+        model.records = [old]
+        model.scanTargets = [target]
+
+        let parked = freshlyScannedRecord(path: old.fullPath, sizeBytes: 4_242,
+                                          partialMD5: "same")
+        let preview = await model.previewScanMerge(root: root.path,
+                                                   targetRecords: [parked],
+                                                   scanWasComplete: true)
+        let key = PathScope.normalize(root.path)
+        model.updateCatalogRows = [UpdateCatalogRow(
+            id: target.id, targetPath: root.path, displayName: "Fixity",
+            isSelected: true, missingCount: 0, phase: .previewed(preview))]
+        model.updateCatalogPendingMerges[key] = UpdateCatalogPendingMerge(
+            targetID: target.id, root: root.path, volName: "Fixity",
+            targetRecords: [parked], scanWasComplete: true, preview: preview)
+        model.updateCatalogDeferredRoots.insert(key)
+
+        let restoredByVerify = ArchiveFixity(
+            digest: String(repeating: "e", count: 64),
+            verifiedAt: Date(timeIntervalSince1970: 1_756_100_000),
+            sizeBytes: 4_242)
+        model.scanMergeDuringExistenceChecksForTesting = { @MainActor in
+            old.archiveFixity = restoredByVerify
+        }
+        defer { model.scanMergeDuringExistenceChecksForTesting = nil }
+        await model.applyUpdateCatalog()
+
+        let live = try #require(model.records.first { $0.fullPath == old.fullPath })
+        #expect(live === parked)
+        #expect(live.archiveFixity == restoredByVerify,
+                "Update Catalog Apply must carry Verify's post-preview live verdict")
+        #expect(model.updateCatalogPendingMerges.isEmpty)
+    }
+
     // (d) SCALE — snapshot + restore + re-link over 100k archive copies,
     // identity-matching (every fresh probe reports the verified size).
     // Real catalog is ~103k records; the pipeline applies the snapshot
