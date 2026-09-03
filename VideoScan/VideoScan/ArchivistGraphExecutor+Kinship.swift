@@ -38,8 +38,9 @@ extension ArchivistGraphExecutor {
             route: .graph, shape: .fact,
             claims: [.init(
                 id: "c1", text: prose,
-                evidenceIDs: [person.id] + relatives.map(\.id))],
-            requiredPersonNames: relatives.map(\.name),
+                evidenceIDs: [person.id] + relatives.map(\.id),
+                requiredPersonNames: relatives.map(\.name),
+                requiresCoverage: true)],
             fallbackText: prose)
         return ArchivistGraphResult(
             conclusion: .answered,
@@ -97,8 +98,9 @@ extension ArchivistGraphExecutor {
                 route: .graph, shape: .fact,
                 claims: [.init(
                     id: "c1", text: prose,
-                    evidenceIDs: [person.id] + paths.flatMap { $0.hops.map(\.person.id) })],
-                requiredPersonNames: required,
+                    evidenceIDs: [person.id] + paths.flatMap { $0.hops.map(\.person.id) },
+                    requiredPersonNames: required,
+                    requiresCoverage: true)],
                 fallbackText: prose)
             return ArchivistGraphResult(
                 conclusion: .answered,

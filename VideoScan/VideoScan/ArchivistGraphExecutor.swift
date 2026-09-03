@@ -397,7 +397,6 @@ struct ArchivistGraphResult: Sendable, Equatable {
             HallieAnswerPlan(
                 route: plan.route, shape: plan.shape, subject: plan.subject,
                 claims: plan.claims, counts: plan.counts,
-                requiredPersonNames: plan.requiredPersonNames,
                 fallbackText: plan.fallbackText,
                 subjectLifeStatus: status)
         }

@@ -481,19 +481,30 @@ extension HallieTurnExecutor {
             let planA = HallieAnswerPlan.derive(from: a)
             let planB = HallieAnswerPlan.derive(from: b)
             let offset = planA.claims.count
-            let shifted = planB.claims.map { claim in
-                HallieAnswerPlan.Claim(
-                    id: shiftClaimID(claim.id, by: offset), text: claim.text,
-                    evidenceIDs: claim.evidenceIDs, attribution: claim.attribution)
+            func flattenedClaims(
+                _ source: HallieAnswerPlan, offset: Int
+            ) -> [HallieAnswerPlan.Claim] {
+                source.claims.map { claim in
+                    HallieAnswerPlan.Claim(
+                        id: shiftClaimID(claim.id, by: offset), text: claim.text,
+                        evidenceIDs: claim.evidenceIDs, attribution: claim.attribution,
+                        requiredPersonNames: claim.requiredPersonNames,
+                        // Biography semantics belong to the source segment,
+                        // not whichever answer happens to be second.
+                        requiresCoverage: claim.requiresCoverage
+                            || source.shape == .biography,
+                        isListCountClaim: claim.isListCountClaim
+                            || (source.shape == .list && claim.id == "c1"))
+                }
             }
+            let claimsA = flattenedClaims(planA, offset: 0)
+            let shifted = flattenedClaims(planB, offset: offset)
             plan = HallieAnswerPlan(
                 route: b.route,
                 shape: (planA.shape == .fixed || planB.shape == .fixed) ? .fixed : planB.shape,
                 subject: b.catalogPersonName ?? a.catalogPersonName,
-                claims: planA.claims + shifted,
+                claims: claimsA + shifted,
                 counts: planA.counts + planB.counts,
-                requiredPersonNames: planA.requiredPersonNames
-                    + planB.requiredPersonNames,
                 fallbackText: prose)
             if a.transcriptText != nil || b.transcriptText != nil {
                 transcript = (a.transcriptText ?? a.prose) + "\n\n"

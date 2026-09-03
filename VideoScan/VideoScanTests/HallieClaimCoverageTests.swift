@@ -15,6 +15,7 @@
 
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 struct HallieClaimCoverageTests {
@@ -190,9 +191,28 @@ struct HallieClaimCoverageTests {
             claims: [.init(
                 id: "c1", text: fallback,
                 // @I9@ is supporting provenance, not an answer person.
-                evidenceIDs: ["@I2@", "@I3@", "@I9@"])],
-            requiredPersonNames: required,
+                evidenceIDs: ["@I2@", "@I3@", "@I9@"],
+                requiredPersonNames: required,
+                requiresCoverage: true)],
             fallbackText: fallback)
+    }
+
+    private func result(plan: HallieAnswerPlan) -> HallieTurnExecutor.Result {
+        HallieTurnExecutor.Result(
+            route: plan.route, outcome: .answered,
+            prose: plan.fallbackText, basisLine: "Basis: fixture.",
+            queryDescription: "fixture", citations: [],
+            catalogPersonName: nil, answerPlan: plan)
+    }
+
+    private func listPlan() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .presence, shape: .list,
+            claims: [
+                .init(id: "c1", text: "I found 2 catalog items matching that."),
+                .init(id: "c2", text: "One of them is Cape.mov."),
+            ],
+            fallbackText: "I found 2 catalog items matching that.")
     }
 
     /// Exact live failure: the model cited the compound parents claim but
@@ -222,10 +242,13 @@ struct HallieClaimCoverageTests {
         let plan = HallieAnswerPlan(
             route: .graph, shape: .fact,
             claims: [
-                .init(id: "c1", text: "Rick's parents are Richard Harding Breen Sr and Eileen Latta."),
+                .init(
+                    id: "c1",
+                    text: "Rick's parents are Richard Harding Breen Sr and Eileen Latta.",
+                    requiredPersonNames: ["Richard Harding Breen Sr", "Eileen Latta"],
+                    requiresCoverage: true),
                 .init(id: "c2", text: "The family tree records that relationship."),
             ],
-            requiredPersonNames: ["Richard Harding Breen Sr", "Eileen Latta"],
             fallbackText: "Rick's parents are Richard Harding Breen Sr and Eileen Latta.")
         let outcome = await compose(plan, "The family tree records that relationship [c2].")
         #expect(outcome.composedBy == .model)
@@ -257,5 +280,119 @@ struct HallieClaimCoverageTests {
         #expect(first.composedBy == .template)
         #expect(second.composedBy == .model)
         #expect(second.note == "model")
+    }
+
+    /// A flattened graph answer keeps its mandatory claim even when the
+    /// following list lends the combined plan its `.list` shape. The list's
+    /// omitted example is not restored.
+    @Test func graphThenListRestoresOnlyTheGraphSegment() async {
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(
+            result(plan: parentsPlan()), result(plan: listPlan()))
+        let plan = HallieAnswerPlan.derive(from: joined)
+        let outcome = await compose(plan, "I found 2 catalog items matching that [c2].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.restored.map(\.claimID) == ["c1"])
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        #expect(outcome.displayText.contains("Eileen Latta"))
+        #expect(!outcome.displayText.contains("Cape.mov"))
+    }
+
+    /// Reversing the segments shifts the mandatory graph claim to c3 but
+    /// does not change policy: c3 returns; list example c2 does not.
+    @Test func listThenGraphRestoresOnlyTheGraphSegment() async {
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(
+            result(plan: listPlan()), result(plan: parentsPlan()))
+        let plan = HallieAnswerPlan.derive(from: joined)
+        let outcome = await compose(plan, "I found 2 catalog items matching that [c1].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.restored.map(\.claimID) == ["c3"])
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        #expect(outcome.displayText.contains("Eileen Latta"))
+        #expect(!outcome.displayText.contains("Cape.mov"))
+    }
+
+    /// A partial compound graph claim remains partial even beside a valid
+    /// list segment. The whole joined deterministic answer is the safe
+    /// fallback; changing the final route to `.presence` cannot bypass it.
+    @Test func partialCitedGraphClaimInsideCombinedAnswerFallsBack() async {
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(
+            result(plan: parentsPlan()), result(plan: listPlan()))
+        let plan = HallieAnswerPlan.derive(from: joined)
+        let outcome = await compose(
+            plan,
+            "Eileen Latta was one of them [c1]. "
+                + "I found 2 catalog items matching that [c2].")
+        #expect(outcome.composedBy == .template)
+        #expect(outcome.note == "template: required person omitted")
+        #expect(outcome.displayText == joined.prose)
+    }
+
+    /// Full canonical names are the auditable contract. A model may not
+    /// shorten "Eileen Latta" to "Eileen" and accidentally satisfy it;
+    /// exact deterministic fallback is intentionally the safe policy.
+    @Test func shortenedRequiredNameUsesSafeFallback() async {
+        let plan = parentsPlan(required: ["Eileen Latta"])
+        let outcome = await compose(plan, "Rick's mother is Eileen [c1].")
+        #expect(outcome.composedBy == .template)
+        #expect(outcome.note == "template: required person omitted")
+        #expect(outcome.displayText == plan.fallbackText)
+    }
+
+    @Test func normalizedDuplicateRequiredNamesCollapseStably() {
+        let plan = parentsPlan(required: [
+            "Eileen Latta", "EILEEN LATTA", "  Eileen   Latta  ",
+        ])
+        #expect(plan.requiredPersonNames == ["Eileen Latta"])
+    }
+
+    /// The card says only twelve grandparent names and "1 more". The hidden
+    /// thirteenth record supports the summary but is not a rendered-person
+    /// obligation.
+    @Test func biographyRequiredNamesStopAtTheRenderedGrandparentLimit() throws {
+        let grandNames = [
+            "Able", "Baker", "Charlie", "Dog", "Easy", "Fox", "George",
+            "How", "Item", "Jig", "King", "Love", "Mike",
+        ]
+        let parentFamilies = grandNames.indices
+            .map { "1 FAMC @FG\($0)@" }.joined(separator: "\n")
+        var gedcom = """
+        0 HEAD
+        0 @I0@ INDI
+        1 NAME Subject /Person/
+        1 FAMC @FS@
+        0 @IP@ INDI
+        1 NAME Parent /Person/
+        \(parentFamilies)
+        1 FAMS @FS@
+        0 @FS@ FAM
+        1 HUSB @IP@
+        1 CHIL @I0@
+        """
+        for (index, name) in grandNames.enumerated() {
+            gedcom += """
+
+            0 @IG\(index)@ INDI
+            1 NAME \(name) /Family/
+            1 FAMS @FG\(index)@
+            0 @FG\(index)@ FAM
+            1 HUSB @IG\(index)@
+            1 CHIL @IP@
+            """
+        }
+        gedcom += "\n0 TRLR\n"
+        let graph = GedcomFamilyGraph(gedcomText: gedcom)
+        let subject = try #require(graph.people["@I0@"])
+        let parent = try #require(graph.people["@IP@"])
+        let grandparents = ArchivistBiographyPolicy.orderedPeople(
+            graph.relatives(.parents, of: parent))
+        #expect(grandparents.count == 13)
+        let plan = HallieBiographyCard.card(for: subject, in: graph).plan
+        let claim = try #require(plan.claims.first)
+        let expected = [subject.name, parent.name]
+            + Array(grandparents.prefix(HallieBiographyCard.maxListedNames)).map(\.name)
+        #expect(claim.requiredPersonNames == expected)
+        #expect(claim.text.contains("and 1 more"))
+        let hidden = try #require(grandparents.last)
+        #expect(!HallieAnswerPlan.names(hidden.name, in: claim.text))
     }
 }

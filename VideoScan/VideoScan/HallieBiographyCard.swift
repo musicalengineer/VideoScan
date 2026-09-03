@@ -94,10 +94,11 @@ enum HallieBiographyCard {
                 claims: sentences.enumerated().map { index, sentence in
                     HallieAnswerPlan.Claim(
                         id: "c\(index + 1)", text: sentence.text,
-                        evidenceIDs: sentence.evidenceIDs)
+                        evidenceIDs: sentence.evidenceIDs,
+                        requiredPersonNames: (index == 0 ? [subject.name] : [])
+                            + sentence.requiredPersonNames,
+                        requiresCoverage: true)
                 },
-                requiredPersonNames: [subject.name]
-                    + sentences.flatMap(\.requiredPersonNames),
                 fallbackText: prose,
                 subjectLifeStatus: lifeStatus)
         }
@@ -257,7 +258,8 @@ enum HallieBiographyCard {
             sentences.append(.init(
                 text: text + ".",
                 evidenceIDs: [person.id] + summary.parents.map(\.id) + summary.grandparents.map(\.id),
-                requiredPersonNames: (summary.parents + summary.grandparents).map(\.name)))
+                requiredPersonNames: summary.parents.map(\.name)
+                    + Array(summary.grandparents.prefix(maxListedNames)).map(\.name)))
         }
         // 2b. Data quality: a duplicated parent on the subject or on a
         //     parent (the reason a card can list five grandparents).

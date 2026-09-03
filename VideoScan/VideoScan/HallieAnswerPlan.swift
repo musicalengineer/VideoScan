@@ -32,6 +32,16 @@ struct HallieAnswerPlan: Sendable, Equatable {
         let id: String
         let text: String
         let evidenceIDs: [String]
+        /// People this claim's rendered prose must name. Kept on the claim
+        /// (rather than the whole plan) so a joined graph+list answer cannot
+        /// accidentally make list examples mandatory.
+        let requiredPersonNames: [String]
+        /// This claim must reach the reader even when its enclosing plan was
+        /// flattened with another answer whose shape differs.
+        let requiresCoverage: Bool
+        /// This is the count sentence of a list segment. Segment-local so a
+        /// graph claim at combined-plan c1 is never mistaken for the count.
+        let isListCountClaim: Bool
         /// Who vouches for this claim when it is a family member's account
         /// rather than a document ("Rick Breen"). The composer must voice
         /// such claims as attributed testimony — "According to Rick, …" —
@@ -40,11 +50,21 @@ struct HallieAnswerPlan: Sendable, Equatable {
         let attribution: String?
 
         init(id: String, text: String, evidenceIDs: [String] = [],
-             attribution: String? = nil) {
+             attribution: String? = nil,
+             requiredPersonNames: [String] = [],
+             requiresCoverage: Bool = false,
+             isListCountClaim: Bool = false) {
             self.id = id
             self.text = text
             self.evidenceIDs = evidenceIDs
             self.attribution = attribution
+            var seen = Set<String>()
+            self.requiredPersonNames = requiredPersonNames.filter {
+                let normalized = FamilyIdentityText.tokens($0).joined(separator: " ")
+                return !normalized.isEmpty && seen.insert(normalized).inserted
+            }
+            self.requiresCoverage = requiresCoverage
+            self.isListCountClaim = isListCountClaim
         }
     }
 
@@ -63,12 +83,6 @@ struct HallieAnswerPlan: Sendable, Equatable {
     let subject: String?
     let claims: [Claim]
     let counts: [Count]
-    /// People the deterministic answer contract explicitly promises to
-    /// name. This is deliberately separate from `evidenceIDs`: a GEDCOM
-    /// pointer may support a claim without making that person part of the
-    /// requested answer (for example, an intermediate ancestor in a
-    /// kinship path). The composer verifies this list after claim coverage.
-    let requiredPersonNames: [String]
     /// The deterministic prose the route already produces. Shown verbatim
     /// whenever composition is off, unavailable, slow, or fails verification.
     let fallbackText: String
@@ -85,7 +99,6 @@ struct HallieAnswerPlan: Sendable, Equatable {
         subject: String? = nil,
         claims: [Claim] = [],
         counts: [Count] = [],
-        requiredPersonNames: [String] = [],
         fallbackText: String,
         subjectLifeStatus: LifeStatus? = nil
     ) {
@@ -94,12 +107,6 @@ struct HallieAnswerPlan: Sendable, Equatable {
         self.subject = subject
         self.claims = claims
         self.counts = counts
-        // Stable order makes diagnostics and tests deterministic; matching
-        // itself remains case/punctuation insensitive through `names`.
-        var seen = Set<String>()
-        self.requiredPersonNames = requiredPersonNames.filter {
-            seen.insert(FamilyIdentityText.normalized($0)).inserted
-        }
         self.fallbackText = fallbackText
         self.subjectLifeStatus = subjectLifeStatus
     }
@@ -124,6 +131,16 @@ struct HallieAnswerPlan: Sendable, Equatable {
 
     /// The claim IDs, in order, for prompt building and verification.
     var claimIDs: [String] { claims.map(\.id) }
+
+    /// Stable, normalized-deduplicated union of the names explicitly owed by
+    /// claims. Evidence IDs never participate in this set.
+    var requiredPersonNames: [String] {
+        var seen = Set<String>()
+        return claims.flatMap(\.requiredPersonNames).filter {
+            let normalized = FamilyIdentityText.tokens($0).joined(separator: " ")
+            return seen.insert(normalized).inserted
+        }
+    }
 
     /// The bound on how many cited items are turned into per-item claims.
     /// The exact count is always its own claim; a long list is a prompt-size
@@ -186,7 +203,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         shownCount: Int,
         citations: [HallieTurnExecutor.Citation]
     ) -> HallieAnswerPlan {
-        var claims = [Claim(id: "c1", text: prose)]
+        var claims = [Claim(id: "c1", text: prose, isListCountClaim: true)]
         // Facts the reader actually cares about, derived from the SAME
         // citations already approved — a span and the people in them. Without
         // these the composer can only re-say "I found 21 catalog items
@@ -292,10 +309,14 @@ struct HallieAnswerPlan: Sendable, Equatable {
                 id: "c\(claims.count + 1)",
                 text: claim.text,
                 evidenceIDs: claim.evidenceIDs,
-                attribution: attribution))
+                attribution: attribution,
+                requiredPersonNames: claims.isEmpty ? [plan.subject] : [],
+                requiresCoverage: true))
         }
         for statement in plan.uncertaintyStatements {
-            claims.append(Claim(id: "c\(claims.count + 1)", text: statement))
+            claims.append(Claim(
+                id: "c\(claims.count + 1)", text: statement,
+                requiresCoverage: true))
         }
         return HallieAnswerPlan(
             route: .graph,
@@ -303,7 +324,6 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subject: plan.subject,
             claims: claims,
             counts: [Count(label: "supporting sources", value: plan.sourceCitations.count)],
-            requiredPersonNames: [plan.subject],
             fallbackText: fallbackText,
             subjectLifeStatus: subjectLifeStatus)
     }
