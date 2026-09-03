@@ -11,19 +11,22 @@
 //     pin (identity ≠ relationship — no name matching anywhere in here);
 //   • the GEDCOM's parent / child / spouse links, read through the
 //     compiled `TreeIndex` (integer CSR) — never `Person` copies;
-//   • ATTESTED sibling rows: `.attestedFull` lets the sibling's recorded
-//     parents flow through the row (merged per parent with whatever is
-//     already recorded); `.attestedHalf(sharedParent:)` lets only that
-//     parent through. An `.unspecified` sibling row supports sibling /
-//     uncle / niece / in-law composition only — it never copies parents;
-//     the engine PROPOSES them (`proposals(for:)`) for the review sheet,
-//     and a lineal question through such a row answers honestly with a
-//     "not attested" note instead of a word.
+//   • the overlay's DERIVED edges (`derivedEdges(from:)`): FULL SIBLINGS
+//     SHARE PARENTS (Rick, 2026-09-02; one policy for every reader after
+//     codex #984). An `.unspecified` or `.attestedFull` sibling row copies
+//     the set's parents per parent; `.attestedHalf(sharedParent:)` copies
+//     only that parent and dominates for its pair; a contradictory set
+//     fails closed in the overlay and is reported here as
+//     `derivationProblems`. The engine no longer keeps a policy of its
+//     own — a derived parent is a `.derivedSibling` hop, cited to the
+//     profile whose row was copied, and `proposals(for:)` offers those
+//     derivations to the review sheet as facts to ATTEST (make stored),
+//     never as facts to create.
 //
 // Query = two tiers, both bounded:
 //   Tier A — breadth-first over the canonical adjacency (built and sorted
 //            ONCE per engine: hop kind parent < child < spouse < sibling,
-//            explicit before attested, then identity key), ≤ maxHops (4)
+//            explicit before derived, then identity key), ≤ maxHops (4)
 //            and ≤ `expansionBudget` vertex expansions. Only HELD vertices
 //            (profiles, pinned people, tree people carrying rows) and the
 //            start vertex are expanded; a pure-tree vertex met on the way
@@ -71,14 +74,23 @@ struct FamilyKinshipInference: Sendable {
         case profileRow(profileIdentity: String)
         /// A FAM link in the installed GEDCOM.
         case tree
-        /// A parent inherited through a sibling row Rick ATTESTED (full, or
-        /// half with that shared parent named), cited by the sibling's
-        /// durable identity ("uuid:…" / "fsid:…").
-        case attestedSibling(viaIdentity: String)
+        /// A parent derived across a sibling row (full siblings share
+        /// parents; a half row shares its named parent), cited by the
+        /// durable identity ("uuid:…" / "fsid:…") of the profile whose
+        /// stored row was copied — the SOURCE, never the sibling or the
+        /// parent it points at (codex #984 item 4).
+        case derivedSibling(sourceIdentity: String, half: Bool)
 
         var isExplicit: Bool {
-            if case .attestedSibling = self { return false }
+            if case .derivedSibling = self { return false }
             return true
+        }
+
+        /// The derivation rule this hop rests on, as the basis states it.
+        var derivationRule: String? {
+            guard case .derivedSibling(_, let half) = self else { return nil }
+            return half ? FamilyKinshipOverlay.Derivation.halfSiblingRule
+                        : FamilyKinshipOverlay.Derivation.fullSiblingRule
         }
     }
 
@@ -103,7 +115,7 @@ struct FamilyKinshipInference: Sendable {
         /// Named hop by hop, with in-law prefixes folded when that leaves at
         /// least two segments: "sister-in-law Ann → husband Bob".
         let routeText: String
-        /// Human caveats: "Tim's sibling link to Rick is not attested …".
+        /// Human caveats: "full or half not established — …".
         let caveats: [String]
         /// Every source the route touched.
         let provenance: Set<Provenance>
@@ -112,8 +124,19 @@ struct FamilyKinshipInference: Sendable {
         let pathHash: String
 
         var usesTree: Bool { provenance.contains(.tree) }
-        var usesAttestation: Bool {
-            provenance.contains { if case .attestedSibling = $0 { return true } else { return false } }
+        /// Some hop is a parent derived across a sibling row.
+        var usesDerivation: Bool {
+            provenance.contains { if case .derivedSibling = $0 { return true } else { return false } }
+        }
+        /// The derivation rules the route rests on ("full siblings share
+        /// parents"), first-seen order — what the overview and the basis
+        /// line quote next to a derived word.
+        var derivationRules: [String] {
+            var out: [String] = []
+            for hop in route {
+                if let rule = hop.provenance.derivationRule, !out.contains(rule) { out.append(rule) }
+            }
+            return out
         }
 
         /// Rough footprint for the memo's byte budget.
@@ -122,11 +145,13 @@ struct FamilyKinshipInference: Sendable {
         }
     }
 
-    /// Something the review sheet should ask Rick to confirm — never a fact.
+    /// Something the review sheet can ask Rick to make a STORED fact. The
+    /// derivation already answers questions (one policy, codex #984);
+    /// attesting it only moves the parents onto the sibling's own card.
     struct Proposal: Sendable, Equatable {
         enum Kind: Sendable, Equatable {
-            /// "Tim shares Rick's parents" (assumed full) — accepting sets the
-            /// sibling row's basis to `.attestedFull`.
+            /// "Tim shares Rick's parents" (derived: full siblings share
+            /// parents) — accepting records the parents on Tim's card.
             case sharedParents(via: Node, parents: [Node])
         }
         let subject: Node
@@ -164,14 +189,17 @@ struct FamilyKinshipInference: Sendable {
 
     private let treeIndex: GedcomFamilyGraph.TreeIndex?
     /// Canonical adjacency for every overlay vertex (profiles, pinned tree
-    /// people, placeholders) including attested inheritance — built once.
+    /// people, placeholders) including the overlay's derived parent /
+    /// child edges — built once.
     private let adjacency: [Node: [Hop]]
-    /// Ordinals of tree vertices that carry People-tab rows or attested
-    /// inheritance — the only tree vertices a row-climb can continue from.
+    /// Ordinals of tree vertices that carry People-tab rows or derived
+    /// parents — the only tree vertices a row-climb can continue from.
     private let rowBearingTreeOrdinals: Set<Int32>
-    /// Attestations that contradict each other (attested-full sibling rows
-    /// implying > 2 parents): NOTHING is inherited for that vertex.
-    private(set) var attestationProblems: [Node: String] = [:]
+    /// Sibling sets that failed closed in the overlay (full-vs-half rows,
+    /// > 2 parents, two mothers, a cycle): the first warning per involved
+    /// vertex. NOTHING is derived for those vertices; the overlay's
+    /// `derivationWarnings(touching:)` carries every line.
+    private(set) var derivationProblems: [Node: String] = [:]
     private let cache = KinshipQueryCache()
 
     init(profiles: [POIProfile], graph: GedcomFamilyGraph? = nil, maxHops: Int = 4, expansionBudget: Int = 4_000) {
@@ -200,7 +228,7 @@ struct FamilyKinshipInference: Sendable {
             }
         }
         self.rowBearingTreeOrdinals = rowBearing
-        self.attestationProblems = built.problems
+        self.derivationProblems = overlay.derivationProblems.compactMapValues(\.first)
         self.adjacency = built.adjacency
         cache.recordSorts(built.sorts)
     }
@@ -209,57 +237,28 @@ struct FamilyKinshipInference: Sendable {
 
     private struct Built {
         var adjacency: [Node: [Hop]]
-        var problems: [Node: String]
         var sorts: Int
     }
 
     private static func buildAdjacency(overlay: FamilyKinshipOverlay, index: GedcomFamilyGraph.TreeIndex?) -> Built {
-        var rows: [Node: [Hop]] = [:]
-        for node in overlay.allNodes {
-            rows[node] = rowHops(from: node, overlay: overlay)
-        }
-        // Attested inheritance, merged PER PARENT with what is recorded.
-        var inherited: [Node: [Hop]] = [:]
-        var problems: [Node: String] = [:]
-        for (node, mine) in rows {
-            let explicit = explicitParents(mine, node: node, index: index)
-            var extra: [Hop] = []
-            for sibling in mine where sibling.relation == .sibling {
-                let candidates: [Node]
-                switch sibling.basis {
-                case .unspecified:
-                    continue
-                case .attestedFull:
-                    candidates = explicitParents(rows[sibling.to] ?? [], node: sibling.to, index: index)
-                case .attestedHalf(let shared):
-                    guard let parent = overlay.node(for: shared), !overlay.isPlaceholder(parent) else { continue }
-                    candidates = [parent]
-                }
-                let via = identity(of: sibling.to, overlay: overlay)
-                for parent in candidates where parent != node && !explicit.contains(parent)
-                    && !extra.contains(where: { $0.to == parent }) {
-                    extra.append(Hop(relation: .parent, from: node, to: parent,
-                                     provenance: .attestedSibling(viaIdentity: via)))
-                }
-            }
-            guard !extra.isEmpty else { continue }
-            if explicit.count + extra.count > 2 {
-                let names = (explicit + extra.map(\.to))
-                    .map { name(of: $0, overlay: overlay) }.joined(separator: ", ")
-                problems[node] = "\(name(of: node, overlay: overlay))'s attested sibling rows imply more than two parents (\(names)) — nothing inherited until one is corrected"
-                continue
-            }
-            inherited[node] = extra
-        }
         var adjacency: [Node: [Hop]] = [:]
-        for (node, mine) in rows {
-            adjacency[node] = mine + (inherited[node] ?? [])
-        }
-        for (child, hops) in inherited {
-            for hop in hops {
-                adjacency[hop.to, default: rows[hop.to] ?? []].append(
-                    Hop(relation: .child, from: hop.to, to: child, provenance: hop.provenance))
+        for node in overlay.allNodes {
+            // Stored rows + inverses, then the overlay's derived parent /
+            // child edges (ONE policy — the overlay's; codex #984). A
+            // derived hop cites the profile whose row was copied, and a
+            // tree parent already recorded for a pinned vertex is not
+            // repeated as a derived one.
+            var hops = rowHops(from: node, overlay: overlay)
+            let explicit = explicitParents(hops, node: node, index: index)
+            for edge in overlay.derivedEdges(from: node) where primitives.contains(edge.relation) {
+                if edge.relation == .parent, explicit.contains(edge.to) { continue }
+                if hops.contains(where: { $0.relation == edge.relation && $0.to == edge.to }) { continue }
+                let half: Bool
+                if case .siblingsShareParents(_, _, let isHalf)? = edge.derivation { half = isHalf } else { half = false }
+                hops.append(Hop(relation: edge.relation, from: node, to: edge.to,
+                                provenance: .derivedSibling(sourceIdentity: edge.storedOnIdentity, half: half)))
             }
+            adjacency[node] = hops
         }
         // Tree links for every tree vertex we hold, then ONE canonical sort.
         var sorts = 0
@@ -271,7 +270,7 @@ struct FamilyKinshipInference: Sendable {
             adjacency[node]?.sort(by: canonicalOrder)
             sorts += 1
         }
-        return Built(adjacency: adjacency, problems: problems, sorts: sorts)
+        return Built(adjacency: adjacency, sorts: sorts)
     }
 
     /// Row-derived hops (profile rows + inverses). Duplicate legacy rows for
@@ -433,7 +432,7 @@ struct FamilyKinshipInference: Sendable {
         return out
     }
 
-    /// Explicit parents plus those inherited through attested sibling rows.
+    /// Explicit parents plus those derived across sibling rows.
     func parents(of node: Node) -> [(node: Node, provenance: Provenance)] {
         hops(from: node).filter { $0.relation == .parent }.map { ($0.to, $0.provenance) }
     }
@@ -442,7 +441,7 @@ struct FamilyKinshipInference: Sendable {
     func spouses(of node: Node) -> [Node] { hops(from: node).filter { $0.relation == .spouse }.map(\.to) }
 
     /// Is `ancestor` above `node` on any recorded parent line (rows,
-    /// attested siblings, AND tree ancestry through pins)? Rows are walked
+    /// derived parents, AND tree ancestry through pins)? Rows are walked
     /// hop by hop; a tree vertex's ancestry is one upward walk on ordinals
     /// with early exit, continuing through tree ancestors that carry rows.
     /// Nothing is materialised or sorted; a corrupt cycle terminates.
@@ -489,7 +488,6 @@ struct FamilyKinshipInference: Sendable {
         return cache.result(for: KinshipQueryCache.Key(from: from, to: to)) {
             if let route = shortestRoute(from: from, to: to) { return describe(route, from: from, to: to) }
             if let route = treeRoute(from: from, to: to) { return describe(route, from: from, to: to) }
-            if let honest = unattestedSiblingRoute(from: from, to: to) { return honest }
             return nil
         }
     }
@@ -520,20 +518,29 @@ struct FamilyKinshipInference: Sendable {
             }
     }
 
-    /// What the review sheet should ask about `node`: for every
-    /// `.unspecified` sibling row where `node` has no recorded parents and
-    /// the sibling does — "Tim shares Rick's parents (Dad and Eileen)".
+    /// What the review sheet can offer to make STORED for `node`: the
+    /// parents the overlay derived across its sibling rows, grouped by the
+    /// sibling whose recorded parents they are — "Tim shares Rick's parents
+    /// (Dad and Eileen) — derived: full siblings share parents". One
+    /// policy (codex #984): the derivation already answers questions; a
+    /// proposal only asks whether to write it down. Empty when nothing was
+    /// derived for `node` (no sibling rows, parents already recorded, or
+    /// the set failed closed).
     func proposals(for node: Node) -> [Proposal] {
-        guard parents(of: node).isEmpty else { return [] }
+        let derived = parents(of: node).filter { !$0.provenance.isExplicit }.map(\.node)
+        guard !derived.isEmpty else { return [] }
         var out: [Proposal] = []
-        for hop in hops(from: node) where hop.relation == .sibling && hop.basis == .unspecified {
-            let theirs = explicitParents(of: hop.to)
+        for hop in hops(from: node) where hop.relation == .sibling {
+            let theirs = explicitParents(of: hop.to).filter(derived.contains)
             guard !theirs.isEmpty else { continue }
+            let rule: String
+            if case .attestedHalf = hop.basis { rule = FamilyKinshipOverlay.Derivation.halfSiblingRule }
+            else { rule = FamilyKinshipOverlay.Derivation.fullSiblingRule }
             let list = theirs.map(name(of:)).joined(separator: " and ")
             out.append(Proposal(
                 subject: node,
                 kind: .sharedParents(via: hop.to, parents: theirs),
-                text: "\(name(of: node)) shares \(name(of: hop.to))'s parents (\(list)) — assumed full; confirm to inherit \(name(of: hop.to))'s ancestry"))
+                text: "\(name(of: node)) shares \(name(of: hop.to))'s parents (\(list)) — derived: \(rule); confirm to record them on \(KinshipDisplay.possessive(name(of: node))) card"))
         }
         return out
     }
@@ -710,48 +717,6 @@ struct FamilyKinshipInference: Sendable {
         var estimatedBytes: Int { depth.count * 6 + 64 }
     }
 
-    // MARK: Honest answer through an unattested sibling row
-
-    /// Tim (sibling of Rick, basis unspecified, no parents of his own) →
-    /// Martha Lamson: no fact links them, so the route stops at Rick and
-    /// says why — never a word, never a silent nil.
-    private func unattestedSiblingRoute(from a: Node, to b: Node) -> Derived? {
-        if parents(of: a).isEmpty {
-            for hop in hops(from: a) where hop.relation == .sibling && hop.basis == .unspecified {
-                guard let inner = shortestRoute(from: hop.to, to: b) ?? treeRoute(from: hop.to, to: b),
-                      inner.first?.relation == .parent else { continue }
-                return honest(route: [hop] + inner, lineal: inner, linealFrom: hop.to, linealTo: b,
-                              unattested: a, sibling: hop.to, from: a, to: b)
-            }
-        }
-        if parents(of: b).isEmpty {
-            for hop in hops(from: b) where hop.relation == .sibling && hop.basis == .unspecified {
-                guard let inner = shortestRoute(from: a, to: hop.to) ?? treeRoute(from: a, to: hop.to),
-                      inner.last?.relation == .child else { continue }
-                let back = Hop(relation: .sibling, from: hop.to, to: b,
-                               provenance: hop.provenance, basis: hop.basis)
-                return honest(route: inner + [back], lineal: inner, linealFrom: a, linealTo: hop.to,
-                              unattested: b, sibling: hop.to, from: a, to: b)
-            }
-        }
-        return nil
-    }
-
-    /// `lineal` is the factual part of the route (sibling → target, or
-    /// source → sibling); its own word goes into the note so Rick sees
-    /// what WOULD follow from attesting.
-    private func honest(route: [Hop], lineal: [Hop], linealFrom: Node, linealTo: Node,
-                        unattested: Node, sibling: Node, from: Node, to: Node) -> Derived {
-        let viaWord = describe(lineal, from: linealFrom, to: linealTo).term
-        var caveat = "\(name(of: unattested))'s sibling link to \(name(of: sibling)) is not attested as full, so \(name(of: sibling))'s parents are not treated as \(name(of: unattested))'s"
-        if let viaWord {
-            caveat += " — \(name(of: linealTo)) is \(KinshipDisplay.possessive(name(of: linealFrom))) \(viaWord)"
-        }
-        caveat += " (confirm the shared parents to inherit this)"
-        return Derived(from: from, to: to, term: nil, route: route, routeText: routeText(route),
-                       caveats: [caveat], provenance: Set(route.map(\.provenance)), pathHash: pathHash(route))
-    }
-
     // MARK: Description
 
     private func describe(_ route: [Hop], from: Node, to: Node) -> Derived {
@@ -767,13 +732,6 @@ struct FamilyKinshipInference: Sendable {
                 age = BirthKnowledge.ageWord(subject: birth(of: to), anchor: birth(of: from))
             }
             term = named.term(sex: sex(of: to), half: half, age: age)
-        }
-        // A lineal step taken right after an unattested sibling hop is a
-        // route, not a fact — say so (Tier A can reach "brother Rick →
-        // father Dad" within 4 hops).
-        for (i, hop) in route.enumerated().dropLast()
-            where hop.relation == .sibling && hop.basis == .unspecified && route[i + 1].relation == .parent {
-            caveats.append("\(name(of: hop.from))'s sibling link to \(name(of: hop.to)) is not attested as full, so \(name(of: hop.to))'s parents are not treated as \(name(of: hop.from))'s")
         }
         return Derived(from: from, to: to, term: term, route: route,
                        routeText: routeText(route), caveats: caveats,

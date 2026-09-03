@@ -38,6 +38,15 @@ extension ArchivistGraphExecutor {
         return clause + ")"
     }
 
+    /// " Relationship warning: Sibling rows on … imply more than two
+    /// parents (…) — nothing derived until one is corrected." — one clause
+    /// per conflict the question touched (codex #984 item 5: a set that
+    /// failed closed must be visible from every side, Hallie included).
+    static func overlayWarningClause(_ warnings: [String]) -> String {
+        guard !warnings.isEmpty else { return "" }
+        return " Relationship warning: " + warnings.joined(separator: " · ") + "."
+    }
+
     /// Group hits by their derivation note, in first-seen order; hits
     /// without a derived hop are skipped.
     static func derivedNamesByNote(
@@ -93,6 +102,9 @@ extension ArchivistGraphExecutor {
         //
         // Say what is actually missing, and name the people, so the gap is
         // one edit away from closed instead of invisible.
+        // Conflicts touching the anchor or anyone answered: the basis
+        // carries them (nothing was derived for that set).
+        let conflicts = overlay.derivationWarnings(touching: anchors + hits.map(\.member.node))
         guard !hits.isEmpty else {
             guard let wantedSex = wanted.sex else { return nil }
             var unknown: [String] = []
@@ -119,7 +131,8 @@ extension ArchivistGraphExecutor {
                     + "\(unknown.count == 1 ? "that person" : "them"), so I can't say "
                     + "which of \(possessive) \(neutral) are \(relation.rawValue)s. "
                     + "Recording it in the People tab would answer this.",
-                basisLine: "\(overlayBasisPrefix): the relationship is stored, the sex is not.",
+                basisLine: "\(overlayBasisPrefix): the relationship is stored, the sex is not."
+                    + overlayWarningClause(conflicts),
                 evidence: nil,
                 candidates: [], profileCandidates: [], ambiguityCandidates: [],
                 catalogPersonName: nil)
@@ -190,7 +203,8 @@ extension ArchivistGraphExecutor {
                 + (treeCited.isEmpty
                     ? "; local only, not from the family tree."
                     : "; name and dates from the imported family tree (GEDCOM: "
-                        + treeCited.joined(separator: ", ") + ")."),
+                        + treeCited.joined(separator: ", ") + ").")
+                + overlayWarningClause(conflicts),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil,
@@ -256,7 +270,8 @@ extension ArchivistGraphExecutor {
             prose: prose,
             basisLine: "\(overlayBasisPrefix) "
                 + overlayStoredOnClause(storedOn: storedOn, namesByNote: derived)
-                + "; path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree.",
+                + "; path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree."
+                + overlayWarningClause(overlay.derivationWarnings(touching: [a, b])),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil)

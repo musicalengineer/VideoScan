@@ -76,6 +76,9 @@ enum HallieBiographyCard {
         /// share parents"), grouped under the overlay's derivation note.
         /// The basis line states them; the prose stays plain.
         var peopleTabDerived: [DerivedNote] = []
+        /// Derivation conflicts involving the subject (see
+        /// `PeopleTabKin.warnings`); the basis line states them.
+        var peopleTabWarnings: [String] = []
 
         struct DerivedNote: Sendable, Equatable {
             /// "derived from Rick's rows: full siblings share parents".
@@ -141,13 +144,19 @@ enum HallieBiographyCard {
         /// Profiles whose rows produced the relatives above.
         let storedOn: [String]
 
+        /// Derivation conflicts the subject's sibling set is part of (the
+        /// overlay failed closed — nothing derived for it); stated in the
+        /// basis so a silent gap is never mistaken for "no siblings".
+        var warnings: [String] = []
+
         init(profileName: String, siblings: [Relative] = [], children: [Relative] = [],
-             spouses: [Relative] = [], storedOn: [String] = []) {
+             spouses: [Relative] = [], storedOn: [String] = [], warnings: [String] = []) {
             self.profileName = profileName
             self.siblings = siblings
             self.children = children
             self.spouses = spouses
             self.storedOn = storedOn
+            self.warnings = warnings
         }
     }
 
@@ -234,8 +243,11 @@ enum HallieBiographyCard {
                 derivedNames[note, default: []].append(relative.name)
             }
             let listed = extra.map { "\($0.name) — \($0.term)" }
+            // Three siblings derived from one card cite that card once.
+            var evidence = [person.id]
+            for id in extra.map(\.evidenceID) where !evidence.contains(id) { evidence.append(id) }
             return .init(text: "In the People tab: " + joined(listed) + ".",
-                         evidenceIDs: [person.id] + extra.map(\.evidenceID),
+                         evidenceIDs: evidence,
                          requiredPersonNames: extra.map(\.name))
         }
 
@@ -323,7 +335,8 @@ enum HallieBiographyCard {
                     lifeStatus: life,
                     peopleTabDerived: derivedOrder.map {
                         .init(note: $0, names: derivedNames[$0] ?? [])
-                    })
+                    },
+                    peopleTabWarnings: peopleTab?.warnings ?? [])
     }
 
     /// The policy-shaped answer both graph operations return.
@@ -350,15 +363,24 @@ enum HallieBiographyCard {
     /// the executor after whatever basis the bridge produced. Empty when
     /// the card used none.
     static func peopleTabBasis(_ card: Card) -> String {
-        guard !card.peopleTabStoredOn.isEmpty else { return "" }
-        // "(stored on Rick's profile; Tim, Ellen and Beth derived from
-        // Rick's rows: full siblings share parents)" — same clause shape as
-        // the kinship route, so the two read alike.
-        return " People tab relationships "
-            + ArchivistGraphExecutor.overlayStoredOnClause(
-                storedOn: card.peopleTabStoredOn,
-                namesByNote: card.peopleTabDerived.map { (note: $0.note, names: $0.names) })
-            + "; local only, not from the family tree."
+        var basis = ""
+        if !card.peopleTabStoredOn.isEmpty {
+            // "(stored on Rick's profile; Tim, Ellen and Beth derived from
+            // Rick's rows: full siblings share parents)" — same clause shape
+            // as the kinship route, so the two read alike.
+            basis += " People tab relationships "
+                + ArchivistGraphExecutor.overlayStoredOnClause(
+                    storedOn: card.peopleTabStoredOn,
+                    namesByNote: card.peopleTabDerived.map { (note: $0.note, names: $0.names) })
+                + "; local only, not from the family tree."
+        }
+        // A sibling set that failed closed is said here, whether or not
+        // any row was used: the People tab may look empty for this person
+        // only because its rows contradict each other.
+        if !card.peopleTabWarnings.isEmpty {
+            basis += ArchivistGraphExecutor.overlayWarningClause(card.peopleTabWarnings)
+        }
+        return basis
     }
 
     // MARK: - Data quality

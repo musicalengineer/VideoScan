@@ -182,31 +182,34 @@ enum KinshipValidation {
                         message: "\(up ? c.anchorName : c.subjectName) is an ancestor of \(up ? c.subjectName : c.anchorName) — they can't be siblings.")]
     }
 
-    /// An attested sibling basis must be consistent: a half row's shared
-    /// parent must resolve, and the parents the row would inherit (merged
-    /// with what the subject already has, including other attested rows)
-    /// must not exceed two.
+    /// A sibling row must be consistent with the ONE derivation policy
+    /// (full siblings share parents — codex #984): an `.unspecified` row
+    /// is a full sibling exactly like `.attestedFull`, so the parents the
+    /// row would share (the anchor's recorded AND derived parents, merged
+    /// with what the subject already has) must not exceed two; a half
+    /// row's shared parent must resolve and is the only one it shares.
     private static func checkAttestation(_ c: Context) -> [Finding] {
         guard c.candidate.relation == .sibling else { return [] }
-        let inherited: [Node]
+        let shared: [Node]
+        let verb: String
         switch c.candidate.basis {
-        case .unspecified:
-            return []
-        case .attestedFull:
-            inherited = c.inference.explicitParents(of: c.anchor)
-        case .attestedHalf(let shared):
-            guard let parent = c.inference.overlay.node(for: shared), !c.inference.overlay.isPlaceholder(parent) else {
+        case .unspecified, .attestedFull:
+            shared = c.inference.parents(of: c.anchor).map(\.node)
+            verb = c.candidate.basis == .attestedFull ? "Attesting this sibling link" : "This sibling link"
+        case .attestedHalf(let named):
+            guard let parent = c.inference.overlay.node(for: named), !c.inference.overlay.isPlaceholder(parent) else {
                 return [Finding(severity: .error, rule: .unresolvedAnchor,
                                 message: "The shared parent named on this half-sibling row could not be found — pick them again.")]
             }
-            inherited = [parent]
+            shared = [parent]
+            verb = "This half-sibling link"
         }
         var merged = c.inference.parents(of: c.subject).map(\.node)
-        for parent in inherited where !merged.contains(parent) && parent != c.subject { merged.append(parent) }
+        for parent in shared where !merged.contains(parent) && parent != c.subject { merged.append(parent) }
         guard merged.count > 2 else { return [] }
         let names = merged.map(c.inference.name(of:)).joined(separator: ", ")
         return [Finding(severity: .error, rule: .attestationConflict,
-                        message: "Attesting this sibling link would give \(c.subjectName) more than two parents (\(names)) — correct the other rows first.")]
+                        message: "\(verb) would give \(c.subjectName) more than two parents (\(names)) — full siblings share parents; correct the other rows first.")]
     }
 
     // MARK: Warnings

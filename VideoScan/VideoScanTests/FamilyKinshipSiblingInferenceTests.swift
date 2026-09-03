@@ -5,17 +5,29 @@
 // child of Ma and Dad and sibling of Tim, Ellen and Beth, and the siblings'
 // cards carry no rows — so "who are Eileen's children" listed only Rick.
 //
-// FamilyKinshipOverlay now derives, at read time and never stored: FULL
-// SIBLINGS SHARE PARENTS. Dimensions (docs/testing_retrospective):
-//   LOGIC     — Rick's exact row set; explicit rows win; a contradicting
-//               sibling gets nothing; transitivity; no rows → nothing; the
-//               derived marker is on derived edges only; half rows share
-//               only the named parent; the graph route and the biography
-//               carry the marker in their basis lines.
-//   SCALE     — 100k profiles with a 1,000-long sibling chain: the
-//               derivation pass is budgeted separately from the build.
-//   ISOLATION — poisoned UserDefaults + 60 unrelated families: no leakage
-//               either way, no warnings.
+// FamilyKinshipOverlay derives, at read time and never stored: FULL
+// SIBLINGS SHARE PARENTS. After codex #984 (2026-09-02) it is the ONE
+// policy for every reader — the inference engine, validation, the
+// Relationships overview, the biography and the kinship route all consume
+// the overlay's derived edges:
+//   • `.unspecified` = full; `.attestedFull` = full; `.attestedHalf` shares
+//     only its named parent and DOMINATES for its unordered pair;
+//   • full-vs-half for one pair, > 2 parents, two mothers, or a cycle
+//     FAILS CLOSED with one warning on every involved profile;
+//   • a sibling with one stored parent receives the missing one;
+//   • a derived edge cites the profile whose row was copied.
+// Dimensions (docs/testing_retrospective):
+//   LOGIC     — Rick's exact row set; cross-surface agreement; mixed bases;
+//               partial explicit parent; half dominates unspecified;
+//               full-vs-half conflict; populated 3- and 4-parent conflicts;
+//               two mothers; provenance; self-cycle guard; bridge blast
+//               radius; markers in the basis lines.
+//   SCALE     — 100k profiles / 1,000-sibling chain: the derivation pass
+//               alone (`derivationDuration`) < 200 ms; fixtures built
+//               outside the timed region.
+//   ISOLATION — poisoned owner / host defaults + a real on-disk profile
+//               store with contradicting rows: neither reaches an overlay
+//               built from the given profiles.
 // The end-to-end shell sensor lives in HallieShellCLITests.
 
 import Foundation
@@ -29,6 +41,10 @@ private typealias Overlay = FamilyKinshipOverlay
 private func row(_ relation: KinshipRelation, _ name: String,
                  basis: SiblingBasis = .unspecified) -> Kinship {
     Kinship(relation: relation, relativeTo: .profile(name: name), basis: basis)
+}
+
+private func half(_ name: String, via parent: String) -> Kinship {
+    row(.sibling, name, basis: .attestedHalf(sharedParent: .profile(name: parent)))
 }
 
 private func snapshot(_ name: String, aliases: [String] = [], sex: PersonSex? = nil,
@@ -51,6 +67,7 @@ private func ricksRows(siblingBasis: SiblingBasis = .unspecified) -> [Kinship] {
 
 private func family(rick: [Kinship] = ricksRows(),
                     tim: [Kinship] = [], ellen: [Kinship] = [], beth: [Kinship] = [],
+                    ma: [Kinship] = [],
                     maPin: String? = nil, dadPin: String? = nil, rickPin: String? = nil,
                     extra: [Snapshot] = []) -> [Snapshot] {
     [
@@ -58,7 +75,7 @@ private func family(rick: [Kinship] = ricksRows(),
         snapshot("Tim", sex: .male, kinships: tim),
         snapshot("Ellen", sex: .female, kinships: ellen),
         snapshot("Beth", sex: .female, kinships: beth),
-        snapshot("Ma", aliases: ["Eileen", "Eileen Latta"], sex: .female, pin: maPin),
+        snapshot("Ma", aliases: ["Eileen", "Eileen Latta"], sex: .female, kinships: ma, pin: maPin),
         snapshot("Dad", aliases: ["Richard Harding Breen Sr"], sex: .male, pin: dadPin),
         snapshot("Dan", sex: .male), snapshot("Mark", sex: .male),
         snapshot("Matt", sex: .male), snapshot("Timmy", sex: .male),
@@ -102,6 +119,22 @@ private func node(_ name: String) -> Overlay.Node { .profile(stableID: name.lowe
 
 private let fullRule = "derived from Rick's rows: full siblings share parents"
 
+/// Every one of `people` sees exactly `line` through the card-badge
+/// route, and nobody else does.
+private func expectWarning(_ line: String, on people: [String], notOn others: [String],
+                           overlay: Overlay, _ location: SourceLocation = #_sourceLocation) {
+    for name in people {
+        #expect(overlay.warnings(forProfileNamed: name) == [line], Comment(rawValue: name),
+                sourceLocation: location)
+        #expect(overlay.derivationWarnings(touching: [node(name)]) == [line], Comment(rawValue: name),
+                sourceLocation: location)
+    }
+    for name in others {
+        #expect(overlay.warnings(forProfileNamed: name).isEmpty, Comment(rawValue: name),
+                sourceLocation: location)
+    }
+}
+
 // MARK: - Logic
 
 @Suite("Full siblings share parents — overlay logic")
@@ -122,6 +155,46 @@ struct FamilyKinshipSiblingInferenceTests {
         // 3 orphans × 2 parents × 2 directions.
         #expect(overlay.derivedEdgeCount == 12)
         #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        #expect(overlay.derivationProblems.isEmpty)
+    }
+
+    /// ONE policy (codex #984 item 1): the overlay, the inference engine
+    /// and the Relationships overview give the same parents for the same
+    /// rows, with the same wording, and no surface says "not attested".
+    @Test func overlayEngineAndOverviewAgreeOnTimsParents() {
+        let people = family()
+        let overlay = Overlay(snapshots: people, graph: nil)
+        let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+        let fromOverlay = names(overlay.relatives(of: node("Tim"), relation: .parent))
+        let fromEngine = engine.parents(of: node("Tim")).map { engine.name(of: $0.node) }.sorted()
+        #expect(fromOverlay == ["Dad", "Ma"])
+        #expect(fromEngine == fromOverlay)
+        #expect(engine.parents(of: node("Tim")).allSatisfy { !$0.provenance.isExplicit })
+        #expect(engine.explicitParents(of: node("Tim")).isEmpty)   // still not a stored row
+        let dad = engine.relation(from: node("Tim"), to: node("Dad"))
+        #expect(dad?.term == "father")
+        #expect(dad?.caveats.isEmpty == true)
+        #expect(dad?.usesDerivation == true)
+        #expect(dad?.derivationRules == ["full siblings share parents"])
+        #expect(engine.relation(from: node("Dad"), to: node("Tim"))?.term == "son")
+        // The engine's proposal only offers to WRITE the derivation down.
+        #expect(engine.proposals(for: node("Tim")).map(\.text)
+                == ["Tim shares Rick's parents (Dad and Ma) — derived: full siblings share parents; confirm to record them on Tim's card"])
+
+        let context = HallieTurnExecutor.Context(
+            profiles: people.map(turnSnapshot), graph: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"))
+        let overview = HallieRelationshipsOverview.answer(.init(subject: .named("Tim")), context: context)
+        #expect(overview.outcome == .answered, Comment(rawValue: overview.prose))
+        #expect(overview.prose.contains("Dad, Ma — Tim's parents (derived: full siblings share parents)"),
+                Comment(rawValue: overview.prose))
+        #expect(overview.prose.contains("Beth, Ellen — Tim's sisters (derived: full siblings share parents)"),
+                Comment(rawValue: overview.prose))
+        #expect(!overview.prose.contains("not attested"), Comment(rawValue: overview.prose))
+        #expect(!overview.prose.contains("assumed"), Comment(rawValue: overview.prose))
+        #expect(overview.basisLine.contains("derived: full siblings share parents"), Comment(rawValue: overview.basisLine))
+        #expect(!overview.basisLine.contains("unattested"), Comment(rawValue: overview.basisLine))
+        #expect(!overview.basisLine.contains("Relationship warning"), Comment(rawValue: overview.basisLine))
     }
 
     @Test func explicitParentRowsOnASiblingWinOverTheDerivation() {
@@ -139,27 +212,171 @@ struct FamilyKinshipSiblingInferenceTests {
                 == "derived from Rick's and Tim's rows: full siblings share parents")
     }
 
-    @Test func aSiblingWithADifferentExplicitParentIsNeverGivenRicksParents() {
+    /// Codex #984 item 3: a full sibling with ONE stored parent receives
+    /// the missing one (per-parent merge); the stored one stays a stored
+    /// fact.
+    @Test func aSiblingWithOneStoredParentReceivesTheOther() throws {
+        let overlay = Overlay(snapshots: family(tim: [row(.child, "Dad")]), graph: nil)
+        let tim = overlay.relatives(of: node("Tim"), relation: .parent)
+        #expect(names(tim) == ["Dad", "Ma"])
+        let dad = try #require(tim.first { $0.member.name == "Dad" })
+        let ma = try #require(tim.first { $0.member.name == "Ma" })
+        #expect(dad.hops.allSatisfy { !$0.isDerived })
+        #expect(ma.hops.allSatisfy { $0.isDerived })
+        #expect(overlay.derivationNote(for: ma.hops) == fullRule)
+        #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
+        #expect(names(overlay.relatives(of: node("Beth"), relation: .parent)) == ["Dad", "Ma"])
+        // Tim: 1 derived parent; Ellen, Beth: 2 each — × 2 directions.
+        #expect(overlay.derivedEdgeCount == 10)
+        #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        // The engine sees the same: Dad explicit, Ma derived.
+        let engine = FamilyKinshipInference(snapshots: family(tim: [row(.child, "Dad")]), graph: nil)
+        #expect(engine.parents(of: node("Tim")).map { $0.provenance.isExplicit } == [true, false])
+        #expect(engine.relation(from: node("Tim"), to: node("Ma"))?.term == "mother")
+    }
+
+    /// Codex #984 item 2: rows are coalesced per unordered pair, and a half
+    /// row DOMINATES a reciprocal legacy unspecified row — Tim never
+    /// receives Ma through Rick's "sibling Tim".
+    @Test func halfDominatesAReciprocalUnspecifiedRow() {
+        let overlay = Overlay(snapshots: family(tim: [half("Rick", via: "Dad")]), graph: nil)
+        let tim = overlay.relatives(of: node("Tim"), relation: .parent)
+        #expect(names(tim) == ["Dad"])
+        #expect(overlay.derivationNote(for: tim[0].hops)
+                == "derived from Rick's rows: half siblings share the named parent (sibling rows on Tim)")
+        #expect(!names(overlay.relatives(of: node("Ma"), relation: .child)).contains("Tim"))
+        #expect(names(overlay.relatives(of: node("Dad"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
+        // Ellen and Beth (unspecified rows on Rick) are still full.
+        #expect(names(overlay.relatives(of: node("Ellen"), relation: .parent)) == ["Dad", "Ma"])
+        #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        // Same verdict in the engine: Tim ↔ Rick is half, Tim → Ma is no fact.
+        let engine = FamilyKinshipInference(snapshots: family(tim: [half("Rick", via: "Dad")]), graph: nil)
+        #expect(engine.parents(of: node("Tim")).map { engine.name(of: $0.node) } == ["Dad"])
+        #expect(engine.relation(from: node("Rick"), to: node("Tim"))?.term == "half-brother")
+        #expect(engine.relation(from: node("Tim"), to: node("Ma"))?.term == nil)
+    }
+
+    /// Codex #984 item 2: an explicit full row against an explicit half row
+    /// for the same pair is a CONFLICT — nothing derived for the whole
+    /// set, one warning on every involved profile.
+    @Test func explicitFullVersusExplicitHalfFailsClosedForTheSet() {
+        let overlay = Overlay(
+            snapshots: family(rick: ricksRows(siblingBasis: .attestedFull), tim: [half("Rick", via: "Dad")]),
+            graph: nil)
+        let line = "Sibling rows between Rick and Tim disagree — one says full sibling, one says half sibling through Dad — nothing derived for their sibling set until one is corrected"
+        #expect(overlay.derivedEdgeCount == 0)
+        #expect(overlay.relatives(of: node("Tim"), relation: .parent).isEmpty)
+        #expect(overlay.relatives(of: node("Ellen"), relation: .parent).isEmpty)   // same set: fails too
+        #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Rick"])
+        #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        expectWarning(line, on: ["Rick", "Tim", "Ellen", "Beth", "Ma", "Dad"],
+                      notOn: ["Dan", "Anna", "Libby"], overlay: overlay)
+        // The engine reports the same problem for every one of them.
+        let engine = FamilyKinshipInference(
+            snapshots: family(rick: ricksRows(siblingBasis: .attestedFull), tim: [half("Rick", via: "Dad")]),
+            graph: nil)
+        for name in ["Rick", "Tim", "Ellen", "Beth", "Ma", "Dad"] {
+            #expect(engine.derivationProblems[node(name)] == line, Comment(rawValue: name))
+        }
+        #expect(engine.parents(of: node("Tim")).isEmpty)
+        #expect(engine.relation(from: node("Tim"), to: node("Dad"))?.term == nil)
+    }
+
+    /// Mixed bases in ONE set: an attested-full row, a legacy unspecified
+    /// row and a half row. Full ones share both parents; the half one
+    /// shares only Dad; nothing conflicts.
+    @Test func mixedBasesInOneSet() {
+        let rick = [row(.sibling, "Tim", basis: .attestedFull), row(.sibling, "Ellen"),
+                    row(.child, "Ma"), row(.child, "Dad")]
+        let overlay = Overlay(snapshots: family(rick: rick, beth: [half("Rick", via: "Dad")]), graph: nil)
+        #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Dad", "Ma"])
+        #expect(names(overlay.relatives(of: node("Ellen"), relation: .parent)) == ["Dad", "Ma"])
+        #expect(names(overlay.relatives(of: node("Beth"), relation: .parent)) == ["Dad"])
+        #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Ellen", "Rick", "Tim"])
+        #expect(names(overlay.relatives(of: node("Dad"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
+        #expect(overlay.derivedEdgeCount == 10)
+        #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        let engine = FamilyKinshipInference(snapshots: family(rick: rick, beth: [half("Rick", via: "Dad")]), graph: nil)
+        #expect(engine.relation(from: node("Rick"), to: node("Beth"))?.term == "half-sister")
+        #expect(engine.relation(from: node("Rick"), to: node("Ellen"))?.term == "sister")
+        #expect(engine.relation(from: node("Beth"), to: node("Ma"))?.term == nil)
+    }
+
+    @Test func aSiblingWithADifferentExplicitParentFailsClosedAndWarnsEveryone() {
         // Tim says "child of Other" — under the full-sibling reading that is
         // a THIRD parent for the set. Tim keeps exactly his row, nothing is
-        // derived for anyone in that set, and a warning names the problem.
+        // derived for anyone in that set, and every involved profile —
+        // the four siblings and all three parents — sees the one warning.
         let other = snapshot("Other", sex: .male)
-        let overlay = Overlay(snapshots: family(tim: [row(.child, "Other")], extra: [other]), graph: nil)
+        let people = family(tim: [row(.child, "Other")], extra: [other])
+        let overlay = Overlay(snapshots: people, graph: nil)
+        let line = "Sibling rows on Beth, Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected"
         #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Other"])
         #expect(!names(overlay.relatives(of: node("Ma"), relation: .child)).contains("Tim"))
         #expect(overlay.derivedEdgeCount == 0)
-        #expect(overlay.warnings == [
-            "Sibling rows on Beth, Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected",
-        ], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        expectWarning(line, on: ["Beth", "Ellen", "Rick", "Tim", "Ma", "Dad", "Other"],
+                      notOn: ["Dan", "Mark", "Anna"], overlay: overlay)
+        #expect(FamilyKinshipInference(snapshots: people, graph: nil).derivationProblems[node("Other")] == line)
     }
 
-    @Test func aSiblingWithOneOfTheSameParentsKeepsOnlyThatRow() {
-        // Tim records only Dad: he is not given Ma (his rows stand as they
-        // are — conservative), while Ellen and Beth still get both.
-        let overlay = Overlay(snapshots: family(tim: [row(.child, "Dad")]), graph: nil)
-        #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Dad"])
-        #expect(names(overlay.relatives(of: node("Beth"), relation: .parent)) == ["Dad", "Ma"])
-        #expect(overlay.warnings.isEmpty)
+    /// Codex #984 item 5: the conflict check no longer hides behind the
+    /// orphan check — a set where EVERY sibling has stored parents, adding
+    /// up to three or four people, is reported and derives nothing.
+    @Test func populatedThreeAndFourParentConflictsAreReportedNotSilent() {
+        let other = snapshot("Other", sex: .male)
+        let p3 = snapshot("P3", sex: .male), p4 = snapshot("P4", sex: .female)
+        // Three parents, nobody an orphan: Rick (Ma, Dad), Tim (Ma, Other),
+        // Ellen (Ma, Dad), Beth (Ma, Dad).
+        let three = Overlay(snapshots: family(
+            tim: [row(.child, "Ma"), row(.child, "Other")],
+            ellen: [row(.child, "Ma"), row(.child, "Dad")],
+            beth: [row(.child, "Ma"), row(.child, "Dad")],
+            extra: [other]), graph: nil)
+        let threeLine = "Sibling rows on Beth, Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected"
+        #expect(three.derivedEdgeCount == 0)
+        #expect(three.warnings == [threeLine], Comment(rawValue: three.warnings.joined(separator: " | ")))
+        expectWarning(threeLine, on: ["Beth", "Ellen", "Rick", "Tim", "Ma", "Dad", "Other"],
+                      notOn: ["Dan", "Anna"], overlay: three)
+        // Stored facts stand exactly as recorded.
+        #expect(names(three.relatives(of: node("Tim"), relation: .parent)) == ["Ma", "Other"])
+        #expect(names(three.relatives(of: node("Ma"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
+
+        // Four parents: Tim (P3, P4) against Rick / Ellen / Beth (Ma, Dad).
+        let four = Overlay(snapshots: family(
+            tim: [row(.child, "P3"), row(.child, "P4")],
+            ellen: [row(.child, "Ma"), row(.child, "Dad")],
+            beth: [row(.child, "Ma"), row(.child, "Dad")],
+            extra: [p3, p4]), graph: nil)
+        let fourLine = "Sibling rows on Beth, Ellen, Rick and Tim imply more than two parents (Dad, Ma, P3, P4) — nothing derived until one is corrected"
+        #expect(four.derivedEdgeCount == 0)
+        #expect(four.warnings == [fourLine], Comment(rawValue: four.warnings.joined(separator: " | ")))
+        expectWarning(fourLine, on: ["Beth", "Ellen", "Rick", "Tim", "Ma", "Dad", "P3", "P4"],
+                      notOn: ["Dan", "Anna"], overlay: four)
+        // Hallie's basis carries it when the question touches the set.
+        let engine = FamilyKinshipInference(snapshots: family(
+            tim: [row(.child, "P3"), row(.child, "P4")],
+            ellen: [row(.child, "Ma"), row(.child, "Dad")],
+            beth: [row(.child, "Ma"), row(.child, "Dad")],
+            extra: [p3, p4]), graph: nil)
+        #expect(engine.derivationProblems[node("P4")] == fourLine)
+        #expect(engine.relation(from: node("Tim"), to: node("Ma"))?.term == nil)
+    }
+
+    /// Codex #984 item 3: a stored parent that contradicts the set's parent
+    /// of the same role (two mothers) is a conflict, not a merge — the
+    /// stored one is kept, nothing is added.
+    @Test func twoMothersForOneSetIsAConflict() {
+        let other = snapshot("Other", sex: .female)
+        let overlay = Overlay(snapshots: family(
+            rick: [row(.sibling, "Tim"), row(.child, "Ma")],
+            tim: [row(.child, "Other")], extra: [other]), graph: nil)
+        let line = "Sibling rows on Rick and Tim imply two mothers (Ma, Other) — nothing derived until one is corrected"
+        #expect(overlay.derivedEdgeCount == 0)
+        #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Other"])
+        #expect(names(overlay.relatives(of: node("Rick"), relation: .parent)) == ["Ma"])
+        #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        expectWarning(line, on: ["Rick", "Tim", "Ma", "Other"], notOn: ["Ellen", "Dad"], overlay: overlay)
     }
 
     @Test func transitivityOverTheSiblingSet() {
@@ -186,6 +403,7 @@ struct FamilyKinshipSiblingInferenceTests {
             snapshots: family(rick: [row(.sibling, "Tim"), row(.sibling, "Ellen")]), graph: nil)
         #expect(siblingsOnly.derivedEdgeCount == 0)
         #expect(siblingsOnly.relatives(of: node("Tim"), relation: .parent).isEmpty)
+        #expect(siblingsOnly.warnings.isEmpty)
         // Parents without a sibling row: nothing to share them with.
         let parentsOnly = Overlay(snapshots: family(rick: [row(.child, "Ma")]), graph: nil)
         #expect(parentsOnly.derivedEdgeCount == 0)
@@ -194,8 +412,8 @@ struct FamilyKinshipSiblingInferenceTests {
 
     @Test func derivedFactsCarryTheMarkerAndStoredOnesDoNot() {
         let overlay = Overlay(snapshots: family(), graph: nil)
-        // Stored rows: never marked; `edges(from:)` (the engine's view) is
-        // stored-only and unchanged by the derivation.
+        // Stored rows: never marked; `edges(from:)` is stored-only and
+        // unchanged by the derivation.
         #expect(overlay.edges(from: node("Rick")).allSatisfy { !$0.isDerived })
         #expect(overlay.edges(from: node("Tim")).map(\.relation) == [.sibling])
         #expect(overlay.edgeCount == 22)
@@ -214,6 +432,63 @@ struct FamilyKinshipSiblingInferenceTests {
         #expect(Overlay.Derivation.fullSiblingRule == "full siblings share parents")
         #expect(Overlay.Derivation.siblingsShareParents(parentRowsOn: ["Rick"], siblingRowsOn: ["Rick"], half: false).note
                 == fullRule)
+    }
+
+    /// Codex #984 item 4: a derived edge cites the profile whose row was
+    /// COPIED. When Ma's card says "parent of Rick" (Rick's card only says
+    /// "sibling of Tim"), Tim's derived mother comes from Ma's rows — never
+    /// from Tim (the child) or Rick (the sibling the row points at).
+    @Test func provenanceCitesTheSourceProfileNeverTheTarget() throws {
+        let people = family(rick: [row(.sibling, "Tim"), row(.child, "Dad")], ma: [row(.parent, "Rick")])
+        let overlay = Overlay(snapshots: people, graph: nil)
+        let tim = overlay.relatives(of: node("Tim"), relation: .parent)
+        #expect(names(tim) == ["Dad", "Ma"])
+        let ma = try #require(tim.first { $0.member.name == "Ma" })
+        let dad = try #require(tim.first { $0.member.name == "Dad" })
+        #expect(ma.hops[0].storedOn == "Ma")
+        #expect(dad.hops[0].storedOn == "Rick")
+        let identity = { (name: String) in overlay.member(node(name))?.identity ?? "" }
+        #expect(ma.hops[0].storedOnIdentity == identity("Ma"))
+        #expect(dad.hops[0].storedOnIdentity == identity("Rick"))
+        #expect(ma.hops[0].storedOnIdentity != identity("Tim"))
+        #expect(overlay.derivationNote(for: ma.hops)
+                == "derived from Ma's rows: full siblings share parents (sibling rows on Rick)")
+        #expect(overlay.derivationNote(for: dad.hops) == fullRule)
+        // The engine's hop cites the same source identity.
+        let engine = FamilyKinshipInference(snapshots: people, graph: nil)
+        let parents = engine.parents(of: node("Tim"))
+        #expect(parents.map { $0.provenance } == [
+            .derivedSibling(sourceIdentity: identity("Rick"), half: false),
+            .derivedSibling(sourceIdentity: identity("Ma"), half: false),
+        ])
+        // Ma's card: her own children include Tim, and the basis names HER rows.
+        #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Rick", "Tim"])
+    }
+
+    /// Codex #984 minor: a malformed sibling / parent cycle never yields
+    /// "P child of P" or "P sibling of P"; it warns and derives nothing.
+    @Test func aSiblingWhoIsAlsoAParentNeverBecomesTheirOwnParent() {
+        // Rick: sibling Tim, child of Ma. Tim: child of Rick. Rick is both a
+        // set member and an implied parent of the set.
+        let overlay = Overlay(snapshots: family(
+            rick: [row(.sibling, "Tim"), row(.child, "Ma")],
+            tim: [row(.child, "Rick")]), graph: nil)
+        let line = "Rick is recorded both as a sibling and as a parent among Rick and Tim — a person can't be their own sibling's parent; nothing derived until one row is corrected"
+        #expect(overlay.derivedEdgeCount == 0)
+        for name in ["Rick", "Tim", "Ma"] {
+            #expect(overlay.derivedEdges(from: node(name)).allSatisfy { $0.from != $0.to }, Comment(rawValue: name))
+        }
+        #expect(!names(overlay.relatives(of: node("Rick"), relation: .parent)).contains("Rick"))
+        #expect(!names(overlay.relatives(of: node("Rick"), relation: .sibling)).contains("Rick"))
+        #expect(overlay.warnings == [line], Comment(rawValue: overlay.warnings.joined(separator: " | ")))
+        expectWarning(line, on: ["Rick", "Tim", "Ma"], notOn: ["Ellen", "Dad"], overlay: overlay)
+        // A half row naming one of the pair as the shared parent: same guard.
+        let selfHalf = Overlay(snapshots: family(
+            rick: [row(.child, "Ma")], tim: [half("Rick", via: "Rick")]), graph: nil)
+        #expect(selfHalf.derivedEdgeCount == 0)
+        #expect(selfHalf.warnings == [
+            "The half-sibling row between Rick and Tim names Rick as the shared parent — a person can't be their own sibling's parent; nothing derived until it is corrected",
+        ], Comment(rawValue: selfHalf.warnings.joined(separator: " | ")))
     }
 
     @Test func attestedFullReadsTheSameAndAttestedHalfSharesOnlyTheNamedParent() {
@@ -249,13 +524,43 @@ struct FamilyKinshipSiblingInferenceTests {
         #expect(overlay.pinProblems.isEmpty)
     }
 
-    // MARK: Graph route + biography basis wording
-
-    /// The executor's own snapshot type (same fields, carried separately).
-    private func turnSnapshot(_ s: Snapshot) -> HallieTurnExecutor.ProfileSnapshot {
-        .init(stableID: s.stableID, canonicalName: s.canonicalName, aliases: s.aliases,
-              kinships: s.kinships, sex: s.sex, uuid: s.uuid, treeIdentity: s.treeIdentity)
+    /// Bridge blast radius: a derived parent that maps to a GEDCOM person
+    /// through the identity bridge adds the derived CHILDREN to that vertex
+    /// and nothing else — the tree's own links, and every tree-side
+    /// answer, are exactly what they were.
+    @Test func derivedChildrenOnABridgedVertexDoNotAlterTheTreeSide() {
+        let graph = GedcomFamilyGraph(gedcomText: treeText)
+        let people = family(maPin: "G2CR-R4H", dadPin: "G2S4-JF4", rickPin: "GVQV-NW3")
+        let engine = FamilyKinshipInference(snapshots: people, graph: graph)
+        let eileen = Overlay.Node.tree(gedcomID: "@I3@")
+        let richardSr = Overlay.Node.tree(gedcomID: "@I2@")
+        let rick = Overlay.Node.tree(gedcomID: "@I1@")
+        // The graph itself: one child, one spouse, as exported.
+        #expect(graph.relatives(.children, of: graph.people["@I3@"]!).map(\.id) == ["@I1@"])
+        // Hops on the bridged vertex: the spouse from the FAM link, Rick as
+        // a recorded child (his row and the tree agree on one vertex); the
+        // three others are derived — nothing else is added.
+        let hops = engine.hops(from: eileen)
+        #expect(hops.filter { $0.relation == .spouse }.map(\.to) == [richardSr])
+        #expect(hops.filter { $0.relation == .spouse }.allSatisfy { $0.provenance == .tree })
+        #expect(hops.filter { $0.relation == .child && $0.provenance.isExplicit }.map(\.to) == [rick])
+        #expect(hops.filter { $0.relation == .child && !$0.provenance.isExplicit }.count == 3)
+        #expect(hops.count == 5)
+        #expect(hops.filter { $0.relation == .parent }.isEmpty)
+        // Rick's own vertex: tree parents only, nothing derived onto him.
+        #expect(engine.parents(of: rick).allSatisfy { $0.provenance.isExplicit })
+        #expect(engine.parents(of: rick).map(\.node).sorted { $0.identityKey < $1.identityKey } == [richardSr, eileen])
+        // Tree-side answers are unchanged.
+        #expect(engine.relation(from: eileen, to: richardSr)?.term == "husband")
+        #expect(engine.relation(from: rick, to: eileen)?.term == "mother")
+        #expect(engine.relation(from: rick, to: eileen)?.usesDerivation == false)
+        // The derived side reads through the same vertex.
+        #expect(engine.relation(from: node("Tim"), to: eileen)?.term == "mother")
+        #expect(engine.relation(from: node("Tim"), to: eileen)?.usesDerivation == true)
+        #expect(engine.relation(from: node("Tim"), to: rick)?.term == "brother")
     }
+
+    // MARK: Graph route + biography basis wording
 
     private func context(ownerFSID: String? = "GVQV-NW3") -> HallieTurnExecutor.Context {
         HallieTurnExecutor.Context(
@@ -277,6 +582,7 @@ struct FamilyKinshipSiblingInferenceTests {
                 Comment(rawValue: r.basisLine))
         #expect(r.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile;"),
                 Comment(rawValue: r.basisLine))
+        #expect(!r.basisLine.contains("Relationship warning"), Comment(rawValue: r.basisLine))
     }
 
     @Test func whoAreTimsParentsAnswersEileenAndRichardSrFromTheTree() async throws {
@@ -312,12 +618,12 @@ struct FamilyKinshipSiblingInferenceTests {
                     Comment(rawValue: r.prose))
             #expect(r.basisLine.contains("People tab relationships (stored on Rick's profile; Beth, Ellen and Tim \(fullRule)); local only, not from the family tree."),
                     Comment(rawValue: r.basisLine))
-            // Each People-tab claim cites the subject's record and the
-            // three profiles' durable identities.
+            // The derived claim cites the subject's record and the SOURCE
+            // of the derivation — Rick's pinned identity, once — never the
+            // three children's own profiles (codex #984 item 4).
             let plan = try #require(r.answerPlan)
             let claim = try #require(plan.claims.first { $0.text.hasPrefix("In the People tab: Beth") })
-            #expect(claim.evidenceIDs.first == "@I3@")
-            #expect(claim.evidenceIDs.count == 4)
+            #expect(claim.evidenceIDs == ["@I3@", "fsid:GVQV-NW3"], Comment(rawValue: claim.evidenceIDs.joined(separator: ",")))
         }
     }
 
@@ -328,6 +634,50 @@ struct FamilyKinshipSiblingInferenceTests {
         #expect(r.basisLine.hasSuffix("People tab relationships (stored on Rick's profile); local only, not from the family tree."),
                 Comment(rawValue: r.basisLine))
     }
+
+    /// Codex #984 item 5: a set that failed closed reaches Hallie's basis
+    /// from every side — the kinship route, the two-person route, the
+    /// biography and the Relationships overview.
+    @Test func aConflictReachesEveryHallieSurface() async throws {
+        let other = snapshot("Other", sex: .male)
+        let people = family(tim: [row(.child, "Other")], maPin: "G2CR-R4H", dadPin: "G2S4-JF4",
+                            rickPin: "GVQV-NW3", extra: [other])
+        let graph = GedcomFamilyGraph(gedcomText: treeText)
+        let context = HallieTurnExecutor.Context(
+            profiles: people.map(turnSnapshot), graph: graph,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae", ownerFamilySearchID: "GVQV-NW3"))
+        let line = "Sibling rows on Beth, Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected"
+        // Kinship: Eileen's children are the tree's Rick only, and the basis says why.
+        let children = try await HallieTurnExecutor.execute(
+            .graph(.init(people: ["Eileen"], operation: .kinship, relation: .children)), context: context)
+        #expect(!children.prose.contains("Tim"), Comment(rawValue: children.prose))
+        #expect(children.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: children.basisLine))
+        // Tim's parents: Other, with the warning.
+        let parents = try await HallieTurnExecutor.execute(
+            .graph(.init(people: ["Tim"], operation: .kinship, relation: .parents)), context: context)
+        #expect(parents.prose.contains("Other"), Comment(rawValue: parents.prose))
+        #expect(parents.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: parents.basisLine))
+        // Biography of Ma: no derived children, the warning in the basis.
+        let bio = try await HallieTurnExecutor.execute(
+            .graph(.init(people: ["Ma"], operation: .biography)), context: context)
+        #expect(!bio.prose.contains("Tim — son"), Comment(rawValue: bio.prose))
+        #expect(bio.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: bio.basisLine))
+        // Overview for Tim: Rick is his brother, Dad / Ma are not his parents.
+        let overview = HallieRelationshipsOverview.answer(.init(subject: .named("Tim")), context: context)
+        #expect(!overview.prose.contains("Tim's parents"), Comment(rawValue: overview.prose))
+        #expect(overview.basisLine.contains("Relationship warning: \(line)."), Comment(rawValue: overview.basisLine))
+        // Every involved card badge shows it.
+        let overlay = Overlay(snapshots: people, graph: graph)
+        for name in ["Beth", "Ellen", "Rick", "Tim", "Ma", "Dad", "Other"] {
+            #expect(overlay.warnings(forProfileNamed: name) == [line], Comment(rawValue: name))
+        }
+    }
+}
+
+/// The executor's own snapshot type (same fields, carried separately).
+private func turnSnapshot(_ s: Snapshot) -> HallieTurnExecutor.ProfileSnapshot {
+    .init(stableID: s.stableID, canonicalName: s.canonicalName, aliases: s.aliases,
+          kinships: s.kinships, sex: s.sex, uuid: s.uuid, treeIdentity: s.treeIdentity)
 }
 
 // MARK: - Scale
@@ -336,10 +686,11 @@ struct FamilyKinshipSiblingInferenceTests {
 struct FamilyKinshipSiblingInferenceScaleTests {
 
     /// 100k profiles; 1,000 of them form one sibling chain (S_i sibling of
-    /// S_{i-1}) whose head alone records two parents. The derivation pass
-    /// is budgeted as the DIFFERENCE between that build and the same 100k
-    /// with no rows at all, so the resolver/pass-1 cost of 100k names does
-    /// not hide (or inflate) the number.
+    /// S_{i-1}) whose head alone records two parents. The fixture is built
+    /// OUTSIDE the timed region and the budget is on the derivation pass
+    /// alone (`derivationDuration`, measured around pass 3 of the build),
+    /// so neither fixture construction nor the resolver / vertex cost of
+    /// 100k names hides or inflates the number.
     @Test func hundredThousandProfilesWithAThousandSiblingChainDerivesUnder200ms() {
         func profiles(withChain: Bool) -> [Snapshot] {
             var out: [Snapshot] = []
@@ -359,19 +710,20 @@ struct FamilyKinshipSiblingInferenceScaleTests {
             }
             return out
         }
-        let clock = ContinuousClock()
-        var baseline: Overlay?
-        let base = clock.measure { baseline = Overlay(snapshots: profiles(withChain: false), graph: nil) }
-        var chained: Overlay?
-        let full = clock.measure { chained = Overlay(snapshots: profiles(withChain: true), graph: nil) }
-        #expect(baseline?.derivedEdgeCount == 0)
+        let plain = profiles(withChain: false)
+        let withChain = profiles(withChain: true)
+        let baseline = Overlay(snapshots: plain, graph: nil)
+        let chained = Overlay(snapshots: withChain, graph: nil)
+        #expect(baseline.derivedEdgeCount == 0)
         // 999 orphans × 2 parents × 2 directions.
-        #expect(chained?.derivedEdgeCount == 3_996)
-        #expect(names(chained?.relatives(of: node("S999"), relation: .parent) ?? []) == ["PA", "PB"])
-        #expect(chained?.relatives(of: node("PA"), relation: .child).count == 1_000)
-        let delta = full - base
-        #expect(delta < .milliseconds(200),
-                "rows + derivation over 100k profiles took \(delta) (build with chain \(full), without \(base))")
+        #expect(chained.derivedEdgeCount == 3_996)
+        #expect(names(chained.relatives(of: node("S999"), relation: .parent)) == ["PA", "PB"])
+        #expect(chained.relatives(of: node("PA"), relation: .child).count == 1_000)
+        #expect(chained.warnings.isEmpty)
+        #expect(chained.derivationDuration < .milliseconds(200),
+                "derivation over a 1,000-sibling chain in 100k profiles took \(chained.derivationDuration)")
+        #expect(baseline.derivationDuration < .milliseconds(50),
+                "derivation with no sibling rows took \(baseline.derivationDuration)")
     }
 }
 
@@ -380,37 +732,80 @@ struct FamilyKinshipSiblingInferenceScaleTests {
 @Suite("Full siblings share parents — isolation")
 struct FamilyKinshipSiblingInferenceIsolationTests {
 
-    /// The overlay reads the snapshots it is given and nothing else: a
-    /// poisoned preference and sixty unrelated families with their own
-    /// sibling chains change nothing about Eileen's children, and Rick's
-    /// parents never reach a stranger.
-    @Test func poisonedDefaultsAndUnrelatedFamiliesDoNotLeak() {
-        let poisonKey = OllamaEndpoints.hostsKey
-        let prior = UserDefaults.standard.object(forKey: poisonKey)
-        UserDefaults.standard.set("poison.invalid", forKey: poisonKey)
+    /// The overlay reads the profiles it is given and nothing else. Two
+    /// poisons that the kinship display path DOES read elsewhere — the
+    /// owner / owner-pin defaults (KinshipDisplayCenter's default anchor)
+    /// and a real on-disk People-tab store (the shell's read-only loader)
+    /// holding a CONTRADICTING Tim — change nothing about Eileen's
+    /// children, and the store's conflict never shows up as a warning.
+    @MainActor
+    @Test func poisonedDefaultsAndAContradictingProfileStoreDoNotLeak() throws {
+        let defaults = UserDefaults.standard
+        let keys = [HallieTurnExecutor.Speakers.ownerDefaultsKey,
+                    HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey,
+                    OllamaEndpoints.hostsKey]
+        let priors = keys.map { defaults.object(forKey: $0) }
         defer {
-            if let prior { UserDefaults.standard.set(prior, forKey: poisonKey) }
-            else { UserDefaults.standard.removeObject(forKey: poisonKey) }
-        }
-        var strangers: [Snapshot] = []
-        for f in 0..<60 {
-            strangers.append(snapshot("Parent\(f)A", sex: .male))
-            strangers.append(snapshot("Parent\(f)B", sex: .female))
-            strangers.append(snapshot("Kid\(f)-0", sex: .male,
-                                      kinships: [row(.child, "Parent\(f)A"), row(.child, "Parent\(f)B")]))
-            for k in 1..<4 {
-                strangers.append(snapshot("Kid\(f)-\(k)", sex: .female, kinships: [row(.sibling, "Kid\(f)-\(k - 1)")]))
+            for (key, prior) in zip(keys, priors) {
+                if let prior { defaults.set(prior, forKey: key) } else { defaults.removeObject(forKey: key) }
             }
         }
-        let overlay = Overlay(snapshots: family(extra: strangers), graph: nil)
+        defaults.set("Tim", forKey: keys[0])                 // the owner is a SIBLING, not Rick
+        defaults.set("G2CR-R4H", forKey: keys[1])            // the owner pin is Ma's
+        defaults.set("poison.invalid", forKey: keys[2])
+
+        // A real store on disk (temp dir only): Rick's rows plus a Tim who
+        // says "child of Other" — the three-parent conflict.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kinship-isolation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let poi = root.appendingPathComponent("VideoScan/POI", isDirectory: true)
+        func stored(_ name: String, sex: PersonSex, kinships: [Kinship] = []) throws {
+            let folder = poi.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let profile = POIProfile(name: name, referencePath: folder.path, sex: sex, kinships: kinships)
+            try JSONEncoder().encode(profile).write(to: folder.appendingPathComponent("profile.json"))
+        }
+        try stored("Rick", sex: .male, kinships: [row(.sibling, "Tim"), row(.child, "Ma"), row(.child, "Dad")])
+        try stored("Tim", sex: .male, kinships: [row(.child, "Other")])
+        for name in ["Ma", "Other"] { try stored(name, sex: name == "Ma" ? .female : .male) }
+        try stored("Dad", sex: .male)
+        guard case .loaded(let onDisk) = HallieShellCLI.loadProfilesReadOnly(applicationSupportURL: root) else {
+            Issue.record("the poison store did not load")
+            return
+        }
+        #expect(onDisk.count == 5)
+        // Read on its own, the store DOES conflict — so a leak would be visible.
+        let poisonOverlay = Overlay(profiles: onDisk, graph: nil)
+        #expect(poisonOverlay.warnings.count == 1)
+        #expect(poisonOverlay.derivedEdgeCount == 0)
+
+        // The center and the overlay, built from the in-memory family only.
+        func inMemory(_ s: Snapshot) -> POIProfile {
+            POIProfile(name: s.canonicalName, referencePath: "/isolated/people/\(s.stableID)",
+                       aliases: s.aliases, sex: s.sex, kinships: s.kinships)
+        }
+        let profiles = family().map(inMemory)
+        let center = KinshipDisplayCenter()
+        let overlay = center.overlay(for: profiles)
         #expect(names(overlay.relatives(of: node("Ma"), relation: .child)) == ["Beth", "Ellen", "Rick", "Tim"])
         #expect(names(overlay.relatives(of: node("Tim"), relation: .parent)) == ["Dad", "Ma"])
-        #expect(names(overlay.relatives(of: node("Kid7-3"), relation: .parent)) == ["Parent7A", "Parent7B"])
-        #expect(overlay.derivationNote(for: overlay.relatives(of: node("Kid7-3"), relation: .parent)[0].hops)
-                == "derived from Kid7-0's rows: full siblings share parents (sibling rows on Kid7-1, Kid7-2 and Kid7-3)")
-        // 12 for Rick's family + 60 × (3 orphans × 2 parents × 2 directions).
-        #expect(overlay.derivedEdgeCount == 12 + 60 * 12)
+        #expect(overlay.derivedEdgeCount == 12)
         #expect(overlay.warnings.isEmpty, Comment(rawValue: overlay.warnings.joined(separator: " | ")))
-        #expect(UserDefaults.standard.string(forKey: poisonKey) == "poison.invalid")
+        for name in ["Tim", "Ma", "Rick", "Other"] {
+            #expect(overlay.warnings(forProfileNamed: name).isEmpty, Comment(rawValue: name))
+        }
+        #expect(center.aliasWarning(for: profiles[1], among: profiles) == nil)   // Tim
+        // The poisoned owner only changes the display anchor, never a fact:
+        // Rick's line still names his stored rows; Beth (no rows) has none.
+        let rickLine = center.relationshipsLine(for: profiles[0], among: profiles) ?? ""
+        #expect(rickLine.hasPrefix("Tim's brother"), Comment(rawValue: rickLine))
+        #expect(!rickLine.contains("Other"), Comment(rawValue: rickLine))
+        #expect(center.relationshipsLine(for: profiles[3], among: profiles) == nil)
+        // The engine agrees, from the same profiles.
+        let engine = center.inference(for: profiles)
+        #expect(engine.parents(of: node("Tim")).map { engine.name(of: $0.node) }.sorted() == ["Dad", "Ma"])
+        #expect(engine.derivationProblems.isEmpty)
+        #expect(defaults.string(forKey: keys[2]) == "poison.invalid")
     }
 }
