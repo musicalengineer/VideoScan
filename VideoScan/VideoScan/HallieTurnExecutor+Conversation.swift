@@ -764,6 +764,31 @@ extension HallieTurnExecutor {
         if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
             return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
         }
+        // Capability first (codex #976 item 5): "how do i change donna's
+        // bio" / "what can you do with it" are questions about Hallie, not
+        // about a video that happens to be selected — and only then is
+        // "how do i …" a how-to for the help card, small talk, or reset.
+        if let capability = ArchivistCapabilityQuestion.detect(question) {
+            return .answer(capabilityResult(capability))
+        }
+        if let command = ArchivistConversationCommand.detect(question) {
+            return .answer(commandResult(command))
+        }
+        // "who is in New Hampshire.mov" / "does it have my name in it" /
+        // "tell me about this video" (2026-09-02): ONE record, answered
+        // from its own fields by the record route — never a catalog-wide
+        // sweep. The client resolves the reference (selection or named
+        // file) when it captures the context. The record recogniser runs
+        // BEFORE the knowledge lanes (codex #987 item 4, the order before
+        // 4f74d809): a file named in the question is a record question
+        // whatever else the sentence says — "who is in Breen surname
+        // origin.mov" is about that file, not about the Breen surname.
+        if let record = ArchivistRecordQuestion.detect(question) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .record(record),
+                playAfterAnswer: playAfterAnswer))
+        }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
@@ -780,15 +805,11 @@ extension HallieTurnExecutor {
             memory: memory, isKnownPerson: isKnownPerson)
     }
 
-    /// The model-free lanes that read the family knowledge or the ONE
-    /// record: surname history, a property of a known person, lineage
-    /// shapes, capability and help/small-talk/reset, then the record
-    /// recogniser. Nil when none of them claims the question.
-    ///
-    /// Capability and the help card run BEFORE the record recogniser
-    /// (codex #976 item 5): "what can you do with it" / "can you tell me
-    /// the date on things" are questions about Hallie, not about a video
-    /// that happens to be selected.
+    /// The model-free lanes that read the family knowledge: surname
+    /// history, a property of a known person, lineage shapes. Nil when
+    /// none of them claims the question. Capability, help/small-talk/reset
+    /// and the record recogniser all run before this in
+    /// `preTranslationSingle` (codex #976 item 5, codex #987 item 4).
     private static func knowledgeLaneTurn(
         question: String,
         playAfterAnswer: Bool,
@@ -840,25 +861,6 @@ extension HallieTurnExecutor {
            let turn = lineageTurn(lineage, question: question, playAfterAnswer: playAfterAnswer,
                                   memory: memory, lineageAnswer: lineageAnswer) {
             return turn
-        }
-        // Capability first: "how do i change donna's bio" is a capability
-        // question, and only then is "how do i …" a how-to for the help card.
-        if let capability = ArchivistCapabilityQuestion.detect(question) {
-            return .answer(capabilityResult(capability))
-        }
-        if let command = ArchivistConversationCommand.detect(question) {
-            return .answer(commandResult(command))
-        }
-        // "who is in New Hampshire.mov" / "does it have my name in it" /
-        // "tell me about this video" (2026-09-02): ONE record, answered
-        // from its own fields by the record route — never a catalog-wide
-        // sweep. The client resolves the reference (selection or named
-        // file) when it captures the context.
-        if let record = ArchivistRecordQuestion.detect(question) {
-            return .run(Intent(
-                originalQuestion: question,
-                ast: .record(record),
-                playAfterAnswer: playAfterAnswer))
         }
         return nil
     }

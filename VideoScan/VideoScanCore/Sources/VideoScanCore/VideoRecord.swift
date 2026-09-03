@@ -12,10 +12,39 @@
 // share the same `self`.)
 
 import Foundation
+import os
 
 // MARK: - Video Record
 
 public class VideoRecord: Identifiable, Decodable {
+    // MARK: Identity generation (2026-09-02, codex #987 item 1)
+    //
+    // A process-wide, monotonic count of IDENTITY writes — every set of
+    // `filename`, `fullPath` or `purgedAt` on ANY record bumps it. Memo
+    // tables keyed on a record's name (ArchivistRecordReferenceIndex)
+    // include this in their key, so a same-buffer, same-version mutation
+    // ([foo, bar] → [foo, foo]) invalidates the table authoritatively
+    // instead of relying on per-hit revalidation, which can only see the
+    // entries a bucket already holds. O(1) per write behind an unfair
+    // lock; reads are one locked load. Decoding (init(from:)) does not
+    // bump — Swift runs no property observers inside a type's own init,
+    // and a freshly decoded catalog is a new array anyway.
+    //
+    // (For Rick: `OSAllocatedUnfairLock<UInt64>` ≈ a `std::mutex` wrapping
+    // one counter; `didSet` ≈ a setter hook that runs after the store.)
+    private static let identityGenerationLock = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+
+    /// The current identity generation; compare two reads to learn whether
+    /// any record's filename / fullPath / purgedAt changed in between.
+    public static var identityGeneration: UInt64 {
+        identityGenerationLock.withLock { $0 }
+    }
+
+    @inline(__always)
+    private static func bumpIdentityGeneration() {
+        identityGenerationLock.withLock { $0 &+= 1 }
+    }
+
     // `nonisolated let`: the identity is immutable and isolation-independent,
     // so it satisfies Identifiable without crossing the (future) MainActor
     // boundary. Injected at construction; decode sets it from JSON below.
@@ -23,7 +52,9 @@ public class VideoRecord: Identifiable, Decodable {
     // initializer list — never reassigned afterward.`
     public nonisolated let id: UUID
 
-    public var filename: String = ""
+    public var filename: String = "" {
+        didSet { Self.bumpIdentityGeneration() }
+    }
     public var ext: String = ""
     public var streamTypeRaw: String = ""
     public var size: String = ""
@@ -89,7 +120,9 @@ public class VideoRecord: Identifiable, Decodable {
     public var originMake: String?
     public var originModel: String?
     public var originEncoder: String?
-    public var fullPath: String = ""
+    public var fullPath: String = "" {
+        didSet { Self.bumpIdentityGeneration() }
+    }
     public var directory: String = ""
     public var notes: String = ""
 
@@ -282,7 +315,11 @@ public class VideoRecord: Identifiable, Decodable {
     /// so pre-feature catalog.json files (where the key is absent) come back
     /// as active records, not as decode failures.
     /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil/empty means "no value".
-    public var purgedAt: Date?
+    /// A purge / restore is an identity write too (it changes which
+    /// records a name resolves to), so it bumps `identityGeneration`.
+    public var purgedAt: Date? {
+        didSet { Self.bumpIdentityGeneration() }
+    }
 
     /// Catalog-scope set-aside marker (video-only catalog, 2026-07-15).
     /// nil = record is in scope (the normal state); non-nil = the record

@@ -18,18 +18,36 @@
 //   4. every whole token of the name is a token of the filename
 //      ("Hampshire" ↔ "New Hampshire.mov") — unique, or a which-one.
 //
+// Catalog-verified extraction (codex #987 item 3): the recogniser hands
+// over the LONGEST legal run of words before the extension ("the
+// christmas tape.mov"), so tiers 2–3 are tried for that run and then for
+// each shorter word-suffix of it ("christmas tape.mov", "tape.mov"), in
+// that order, and the first that resolves EXACTLY wins; only then does
+// the token tier run, and only for the longest run — a suffix is never
+// token-matched ("Old Name.mov" must not reach "New Name.mov" through
+// the tail "Name.mov"). A name that is really a file ("rick and
+// donna.mov") is therefore never truncated by the recogniser, and a run
+// that swallowed a sentence word ("the christmas tape.mov") still finds
+// "christmas tape.mov".
+//
 // Two or more hits in a tier is an honest ambiguity: the TRUE count plus
 // the first `maxCandidates` in catalog order; zero in every tier is not
-// found. Purged records never match.
+// found. Purged records never match. The one tie-break (codex #987 item
+// 5): when the question said "this video" AND a row is selected AND that
+// row is one of the tied files, the selection is the answer — `preferredID`
+// is that row, and it is consulted only against a real tie.
 //
 // Cost: O(records) per call, at most once per turn (the capture site
 // resolves once and hands a snapshot to the executor); never from a view
 // body. The optional index memoises tiers 2–3 for the app path so a
 // 100k-record catalog pays the table once per catalog change. The memo
-// is never trusted blind (codex #976 item 1): every hit is REVALIDATED
-// against the live record — same index, same id, same key — and a stale
-// hit rebuilds the table and retries once; a memo miss runs the linear
-// tiers, which is the cost the token tier already paid on every miss.
+// key is AUTHORITATIVE (codex #987 item 1): it includes
+// `VideoRecord.identityGeneration`, bumped by every filename / fullPath /
+// purgedAt write in the process, so a same-buffer, same-version mutation
+// rebuilds the table before it is read. Every hit is still REVALIDATED
+// against the live record (codex #976 item 1) as belt and braces; a
+// memo miss runs the linear tiers, which is the cost the token tier
+// already paid on every miss.
 // The linear form is nonisolated so the headless shell (no main actor,
 // no model) uses the same rules; only the memo is `@MainActor`.
 //
@@ -41,6 +59,9 @@ import VideoScanCore
 
 enum ArchivistRecordReferenceResolver {
     static let maxCandidates = 5
+    /// At most this many word-suffixes of a typed name are tried (the
+    /// full run and up to five shorter tails); longer runs are cut here.
+    static let maxNameCandidates = 6
 
     /// One which-one choice for an ambiguous file name.
     struct Candidate: Sendable, Equatable {
@@ -66,17 +87,21 @@ enum ArchivistRecordReferenceResolver {
 
     /// The record a reference means. `recordForID` is the model's O(1)
     /// lookup (`VideoScanModel.record(forID:)`) or the shell's scan.
+    /// `deictic` is true when the question itself said "this video" (or
+    /// another selection noun) beside the file name: the selected row then
+    /// breaks a tie among the files that fit, and nothing else.
     static func resolve(
         _ reference: ArchivistQueryAST.Record.Reference,
         selectedRecordID: UUID?,
         records: [VideoRecord],
-        recordForID: (UUID) -> VideoRecord?
+        recordForID: (UUID) -> VideoRecord?,
+        deictic: Bool = false
     ) -> Resolution {
         switch reference {
         case .currentSelection:
             return selection(selectedRecordID, recordForID: recordForID)
         case .file(let name):
-            return resolve(file: name, in: records)
+            return resolve(file: name, in: records, preferredID: deictic ? selectedRecordID : nil)
         }
     }
 
@@ -88,30 +113,33 @@ enum ArchivistRecordReferenceResolver {
         records: [VideoRecord],
         recordForID: (UUID) -> VideoRecord?,
         index: ArchivistRecordReferenceIndex,
-        version: RecordsVersion
+        version: RecordsVersion,
+        deictic: Bool = false
     ) -> Resolution {
         switch reference {
         case .currentSelection:
             return selection(selectedRecordID, recordForID: recordForID)
         case .file(let name):
-            return resolve(file: name, in: records, index: index, version: version)
+            return resolve(file: name, in: records, index: index, version: version,
+                           preferredID: deictic ? selectedRecordID : nil)
         }
     }
 
     /// Tiers 1–4 for a file named in the question, linear: one pass over
-    /// the catalog collects the exact, stem and token hits together, then
-    /// the tiers settle in order.
-    static func resolve(file rawName: String, in records: [VideoRecord]) -> Resolution {
+    /// the catalog collects the exact, stem and token hits for every name
+    /// candidate together, then the tiers settle in order.
+    static func resolve(file rawName: String, in records: [VideoRecord], preferredID: UUID? = nil) -> Resolution {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return .notFound(name: rawName) }
         let needle = filenamePart(of: name)
         if name.contains("/") {
-            return pathTier(name, in: records, sameName: {
+            return pathTier(name, in: records, preferredID: preferredID, sameName: {
                 let key = ArchivistKeywordText.normalizedPhrase(needle)
                 return records.filter { $0.purgedAt == nil && ArchivistKeywordText.normalizedPhrase($0.filename) == key }
             })
         }
-        return linearTiers(needle, in: records) ?? .notFound(name: name)
+        return linearTiers(nameCandidates(needle), in: records, preferredID: preferredID)
+            ?? .notFound(name: name)
     }
 
     /// Tiers 1–4 with tiers 2–3 served from the memo, every hit checked
@@ -121,31 +149,51 @@ enum ArchivistRecordReferenceResolver {
         file rawName: String,
         in records: [VideoRecord],
         index: ArchivistRecordReferenceIndex,
-        version: RecordsVersion
+        version: RecordsVersion,
+        preferredID: UUID? = nil
     ) -> Resolution {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return .notFound(name: rawName) }
         let needle = filenamePart(of: name)
-        let nameKey = ArchivistKeywordText.normalizedPhrase(needle)
         if name.contains("/") {
-            return pathTier(name, in: records, sameName: {
+            let nameKey = ArchivistKeywordText.normalizedPhrase(needle)
+            return pathTier(name, in: records, preferredID: preferredID, sameName: {
                 index.liveRecords(byFilename: nameKey, in: records, version: version)
                     ?? records.filter {
                         $0.purgedAt == nil && ArchivistKeywordText.normalizedPhrase($0.filename) == nameKey
                     }
             })
         }
-        if let hits = index.liveRecords(byFilename: nameKey, in: records, version: version),
-           let hit = settle(hits) {
-            return hit
-        }
-        if let hits = index.liveRecords(byStem: stemKey(needle), in: records, version: version),
-           let hit = settle(hits) {
-            return hit
+        let candidates = nameCandidates(needle)
+        for candidate in candidates {
+            let nameKey = ArchivistKeywordText.normalizedPhrase(candidate)
+            if let hits = index.liveRecords(byFilename: nameKey, in: records, version: version),
+               let hit = settle(hits, preferredID: preferredID) {
+                return hit
+            }
+            if let hits = index.liveRecords(byStem: stemKey(candidate), in: records, version: version),
+               let hit = settle(hits, preferredID: preferredID) {
+                return hit
+            }
         }
         // A memo miss (or a table that was stale twice) is never trusted:
         // the linear tiers decide, at the cost the token tier already paid.
-        return linearTiers(needle, in: records) ?? .notFound(name: name)
+        return linearTiers(candidates, in: records, preferredID: preferredID) ?? .notFound(name: name)
+    }
+
+    /// The runs tried for a typed name, longest first: the name itself,
+    /// then each word-suffix of it down to the last word plus extension
+    /// ("the christmas tape.mov" → "christmas tape.mov" → "tape.mov"), at
+    /// most `maxNameCandidates` of them. A one-word name is its own only
+    /// candidate.
+    static func nameCandidates(_ needle: String) -> [String] {
+        let words = needle.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard words.count > 1 else { return [needle] }
+        var candidates: [String] = []
+        for start in 0..<min(words.count, maxNameCandidates) {
+            candidates.append(words[start...].joined(separator: " "))
+        }
+        return candidates
     }
 
     // MARK: - Chip labels
@@ -204,15 +252,16 @@ enum ArchivistRecordReferenceResolver {
     private static func pathTier(
         _ path: String,
         in records: [VideoRecord],
+        preferredID: UUID?,
         sameName: () -> [VideoRecord]
     ) -> Resolution {
-        if let hit = settle(records.filter { $0.purgedAt == nil && $0.fullPath == path }) {
+        if let hit = settle(records.filter { $0.purgedAt == nil && $0.fullPath == path }, preferredID: preferredID) {
             return hit
         }
         let folded = ArchivistKeywordText.normalizedPhrase(path)
         if let hit = settle(records.filter {
             $0.purgedAt == nil && ArchivistKeywordText.normalizedPhrase($0.fullPath) == folded
-        }) {
+        }, preferredID: preferredID) {
             return hit
         }
         let alike = sameName()
@@ -221,32 +270,60 @@ enum ArchivistRecordReferenceResolver {
             sameNameTotal: alike.count)
     }
 
-    /// Tiers 2–4 in ONE pass over the catalog, settled in tier order. Nil
-    /// when no tier has a hit.
-    private static func linearTiers(_ needle: String, in records: [VideoRecord]) -> Resolution? {
-        let nameKey = ArchivistKeywordText.normalizedPhrase(needle)
-        let needleStem = stemKey(needle)
-        let tokens = ArchivistKeywordText.tokens(stripMediaExtension(needle))
-        var byName: [VideoRecord] = []
-        var byStem: [VideoRecord] = []
+    /// Tiers 2–4 in ONE pass over the catalog: exact and stem hits for
+    /// every name candidate, settled candidate-major (the longest run's,
+    /// then the next run's, …); the token tier last and for the LONGEST
+    /// run only. Nil when no tier has a hit.
+    private static func linearTiers(
+        _ candidates: [String],
+        in records: [VideoRecord],
+        preferredID: UUID?
+    ) -> Resolution? {
+        guard !candidates.isEmpty else { return nil }
+        // Per-candidate keys, computed once. The first candidate owning a
+        // key wins the dictionary slot (a duplicated suffix is impossible
+        // for distinct word counts, but the rule is cheap to state).
+        var nameIndex: [String: Int] = [:]
+        var stemIndex: [String: Int] = [:]
+        for (position, candidate) in candidates.enumerated() {
+            if nameIndex[ArchivistKeywordText.normalizedPhrase(candidate)] == nil {
+                nameIndex[ArchivistKeywordText.normalizedPhrase(candidate)] = position
+            }
+            if stemIndex[stemKey(candidate)] == nil {
+                stemIndex[stemKey(candidate)] = position
+            }
+        }
+        let tokens = ArchivistKeywordText.tokens(stripMediaExtension(candidates[0]))
+        var byName = [[VideoRecord]](repeating: [], count: candidates.count)
+        var byStem = [[VideoRecord]](repeating: [], count: candidates.count)
         var byToken: [VideoRecord] = []
+        var exactSeen = false
         for record in records where record.purgedAt == nil {
             let key = ArchivistKeywordText.normalizedPhrase(record.filename)
-            if key == nameKey { byName.append(record); continue }
-            if byName.isEmpty, stemKey(record.filename) == needleStem { byStem.append(record); continue }
-            if byName.isEmpty, byStem.isEmpty, !tokens.isEmpty,
-               ArchivistKeywordText.containsAllTokens(record.filename, tokens) {
+            if let position = nameIndex[key] { byName[position].append(record); exactSeen = true; continue }
+            if let position = stemIndex[stemKey(record.filename)] { byStem[position].append(record); exactSeen = true; continue }
+            if !exactSeen, !tokens.isEmpty, ArchivistKeywordText.containsAllTokens(record.filename, tokens) {
                 byToken.append(record)
             }
         }
-        return settle(byName) ?? settle(byStem) ?? settle(byToken)
+        for position in candidates.indices {
+            if let hit = settle(byName[position], preferredID: preferredID) ?? settle(byStem[position], preferredID: preferredID) {
+                return hit
+            }
+        }
+        return settle(byToken, preferredID: preferredID)
     }
 
-    private static func settle(_ hits: [VideoRecord]) -> Resolution? {
+    /// One hit resolves; two or more are a which-one — unless the selected
+    /// row (`preferredID`, set only for a deictic question) is among them.
+    private static func settle(_ hits: [VideoRecord], preferredID: UUID?) -> Resolution? {
         switch hits.count {
         case 0: return nil
         case 1: return .resolved(hits[0])
         default:
+            if let preferredID, let chosen = hits.first(where: { $0.id == preferredID }) {
+                return .resolved(chosen)
+            }
             return .ambiguous(hits.prefix(maxCandidates).map(candidate), total: hits.count)
         }
     }
@@ -277,17 +354,26 @@ enum ArchivistRecordReferenceResolver {
 
 /// Memoised filename / stem tables for the resolver's exact tiers.
 ///
-/// Rebuilt when the `RecordsVersion` changes (count catches add/remove,
-/// `volumeAggregatesRevision` catches bulk in-place rewrites and, since
-/// codex #976, a Catalog rename) OR when the records array's storage is
-/// not the one the table was built from (a same-count replacement of
-/// `VideoScanModel.records` — the array is copy-on-write, so a new array
-/// is a new buffer even at the same count). Neither key is trusted on its
-/// own: every entry read back is checked against the live record (index
-/// in range, same id, not purged, same key) and a stale table is rebuilt
-/// once. Memory: two dictionaries of String → [Entry] over the catalog —
-/// roughly 120 bytes per record, ~12 MB at 100k records, bounded by the
-/// catalog size. Purged records are left out of both tables.
+/// Rebuilt when ANY of three keys changes: the `RecordsVersion` (count
+/// catches add/remove, `volumeAggregatesRevision` catches bulk in-place
+/// rewrites and, since codex #976, a Catalog rename); the records array's
+/// storage identity (a same-count replacement of `VideoScanModel.records`
+/// — the array is copy-on-write, so a new array is a new buffer even at
+/// the same count); and `VideoRecord.identityGeneration` (codex #987 item
+/// 1), bumped by every filename / fullPath / purgedAt write in the
+/// process, which is what makes the table COMPLETE: a rename that turns
+/// [foo, bar] into [foo, foo] at the same buffer and version is seen
+/// before the "foo" bucket is read, so the second foo is in it and the
+/// answer is a which-one, not the first foo. Per-hit revalidation (index
+/// in range, same id, not purged, same key) stays as belt and braces and
+/// rebuilds a stale table once. Memory: two dictionaries of String →
+/// [Entry] over the catalog — roughly 120 bytes per record, ~12 MB at
+/// 100k records, bounded by the catalog size. Purged records are left
+/// out of both tables.
+///
+/// The generation is read through `identityGeneration` (default: the
+/// live counter) so a test can pin it and exercise the revalidation path
+/// on its own while other suites build records in the same process.
 ///
 /// (For Rick: the buffer identity is `withUnsafeBufferPointer`'s base
 /// address — the array's `data()` pointer; equal pointers mean the same
@@ -307,26 +393,34 @@ final class ArchivistRecordReferenceIndex {
         let byStem: [String: [Entry]]
     }
 
+    private let identityGeneration: () -> UInt64
     private var builtFor: RecordsVersion?
     private var builtStorage: UnsafeRawPointer?
+    private var builtGeneration: UInt64?
     private var cached: Tables?
     /// Rebuild counter, exposed for the scale test ("did N lookups do
     /// ONE rebuild?") and the staleness tests.
     private(set) var rebuildCount = 0
+
+    init(identityGeneration: @escaping () -> UInt64 = { VideoRecord.identityGeneration }) {
+        self.identityGeneration = identityGeneration
+    }
 
     /// Forget the tables; the next lookup rebuilds.
     func invalidate() {
         cached = nil
         builtFor = nil
         builtStorage = nil
+        builtGeneration = nil
     }
 
-    /// The tables for `records`, rebuilt when the version or the storage
-    /// differs from what they were built for.
+    /// The tables for `records`, rebuilt when the version, the storage or
+    /// the identity generation differs from what they were built for.
     func tables(for records: [VideoRecord], version: RecordsVersion) -> Tables {
         let storage = Self.storageIdentity(of: records)
-        if let cached, builtFor == version, builtStorage == storage { return cached }
-        return rebuild(records, version: version, storage: storage)
+        let generation = identityGeneration()
+        if let cached, builtFor == version, builtStorage == storage, builtGeneration == generation { return cached }
+        return rebuild(records, version: version, storage: storage, generation: generation)
     }
 
     /// The live records filed under `key` in the filename table, each one
@@ -353,14 +447,14 @@ final class ArchivistRecordReferenceIndex {
         entries: (Tables) -> [Entry],
         stillMatches: (VideoRecord) -> Bool
     ) -> [VideoRecord]? {
-        let storage = Self.storageIdentity(of: records)
         var tables = tables(for: records, version: version)
         for attempt in 0..<2 {
             if let live = Self.validated(entries(tables), in: records, stillMatches: stillMatches) {
                 return live
             }
             guard attempt == 0 else { break }
-            tables = rebuild(records, version: version, storage: storage)
+            tables = rebuild(records, version: version,
+                             storage: Self.storageIdentity(of: records), generation: identityGeneration())
         }
         return nil
     }
@@ -383,7 +477,15 @@ final class ArchivistRecordReferenceIndex {
         return live
     }
 
-    private func rebuild(_ records: [VideoRecord], version: RecordsVersion, storage: UnsafeRawPointer?) -> Tables {
+    /// Build the tables. `generation` is the counter as read BEFORE the
+    /// walk, so an identity write that lands during the walk invalidates
+    /// the next lookup instead of hiding behind a later read.
+    private func rebuild(
+        _ records: [VideoRecord],
+        version: RecordsVersion,
+        storage: UnsafeRawPointer?,
+        generation: UInt64
+    ) -> Tables {
         var byFilename: [String: [Entry]] = [:]
         var byStem: [String: [Entry]] = [:]
         byFilename.reserveCapacity(records.count)
@@ -397,11 +499,14 @@ final class ArchivistRecordReferenceIndex {
         cached = built
         builtFor = version
         builtStorage = storage
+        builtGeneration = generation
         rebuildCount += 1
         return built
     }
 
-    private static func storageIdentity(of records: [VideoRecord]) -> UnsafeRawPointer? {
+    /// The array's backing-store address (internal so a test can prove an
+    /// in-place element write kept the buffer).
+    static func storageIdentity(of records: [VideoRecord]) -> UnsafeRawPointer? {
         records.withUnsafeBufferPointer { buffer in
             buffer.baseAddress.map { UnsafeRawPointer($0) }
         }
