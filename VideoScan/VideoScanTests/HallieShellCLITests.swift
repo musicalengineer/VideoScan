@@ -1969,10 +1969,19 @@ struct HallieShellCLITests {
     /// Rick's card as it stands today (child of Ma and Dad, sibling of
     /// Tim, Ellen and Beth; the siblings' cards empty), Ma and Dad pinned
     /// to Eileen Latta and Richard Sr in a three-person tree. Through the
-    /// shell: Eileen's children are all four, her biography says so with
-    /// the derived note in the basis, and Tim's parents come back from
-    /// the tree with their names. Read-time only — the fixture profiles
-    /// are never written.
+    /// shell, with the REAL detectors (codex #984: the earlier sensor fed
+    /// prepared translations for every turn):
+    ///   • "eileen's children" and "tim's parents" are the bare possessive
+    ///     fragments HallieLineageQuestion.kinFragmentQuestion owns — they
+    ///     reach the graph kinship route with no translator at all;
+    ///   • "tell me about ma" has no deterministic shape in the shell (the
+    ///     biography is the translator's, as "tell me about thankful pratt"
+    ///     is above), so that ONE turn carries a prepared translation and
+    ///     the sensor pins that it is the only one.
+    /// Eileen's children are all four, her biography says so with the
+    /// derived note in the basis, and Tim's parents come back from the
+    /// tree with their names. Read-time only — the fixture profiles are
+    /// never written.
     @Test func eileensChildrenAndTimsParentsComeThroughRicksSiblingRows() async throws {
         let tree = """
         0 HEAD
@@ -2024,14 +2033,19 @@ struct HallieShellCLITests {
             profile("Matt", sex: .male), profile("Timmy", sex: .male),
             profile("Anna", sex: .female), profile("Libby", sex: .female),
         ]
+        // The two kinship fragments are detected locally (asserted below);
+        // only the biography sentence needs the translator.
+        #expect(HallieLineageQuestion.detect("eileen's children")
+                == .kinship(person: "Eileen", relation: .children, side: nil))
+        #expect(HallieLineageQuestion.detect("tim's parents")
+                == .kinship(person: "Tim", relation: .parents, side: nil))
+        #expect(HallieLineageQuestion.detect("tell me about ma") == nil)
         let harness = Harness(
-            inputs: ["who are eileen's children", "tell me about ma", "who are tim's parents", ":quit"],
+            inputs: ["eileen's children", "tell me about ma", "tim's parents", ":quit"],
             profiles: profiles,
             graph: GedcomFamilyGraph(gedcomText: tree),
             translations: [
-                .graph(.init(people: ["Eileen"], operation: .kinship, relation: .children)),
                 .graph(.init(people: ["Ma"], operation: .biography)),
-                .graph(.init(people: ["Tim"], operation: .kinship, relation: .parents)),
             ])
         let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
 
@@ -2042,17 +2056,21 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         let transcript = harness.output.joined(separator: "\n")
+        // The real detectors carried the two kinship turns; the translator
+        // saw exactly the one biography sentence.
+        #expect(harness.translatedQuestions == ["tell me about ma"], Comment(rawValue: transcript))
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
         #expect(answers.count == 3, Comment(rawValue: transcript))
         let rule = "derived from Rick's rows: full siblings share parents"
 
-        // 1. "who are eileen's children" — all four, three marked derived.
+        // 1. "eileen's children" — all four, three marked derived.
         let children = try #require(answers.first)
         for name in ["Rick", "Tim", "Ellen", "Beth"] {
             #expect(children.text.contains(name), Comment(rawValue: children.text))
         }
         #expect((children.basisLine ?? "").contains("(stored on Rick's profile; Beth, Ellen and Tim \(rule));"),
                 Comment(rawValue: children.basisLine ?? ""))
+        #expect(!(children.basisLine ?? "").contains("Relationship warning"), Comment(rawValue: children.basisLine ?? ""))
 
         // 2. "tell me about ma" — the tree's Rick, then the three from the
         //    People tab, with the derived note in the basis.
@@ -2063,7 +2081,7 @@ struct HallieShellCLITests {
         #expect((biography.basisLine ?? "").contains("People tab relationships (stored on Rick's profile; Beth, Ellen and Tim \(rule)); local only, not from the family tree."),
                 Comment(rawValue: biography.basisLine ?? ""))
 
-        // 3. "who are tim's parents" — Eileen and Richard Sr by their tree names.
+        // 3. "tim's parents" — Eileen and Richard Sr by their tree names.
         let parents = answers[2]
         #expect(parents.text.contains("Eileen Latta"), Comment(rawValue: parents.text))
         #expect(parents.text.contains("Richard Harding Breen Sr"), Comment(rawValue: parents.text))
@@ -2071,5 +2089,82 @@ struct HallieShellCLITests {
         // Diagnostics mode prints the basis, so the marker is visible in the shell too.
         #expect(harness.output.contains { $0.contains(rule) }, Comment(rawValue: transcript))
         #expect(harness.mediaActions.isEmpty)
+    }
+
+    /// The same shell, with Tim's card saying "child of Other": the sibling
+    /// set fails closed (three parents), Eileen's children are the tree's
+    /// Rick alone, and the warning reaches the shell's basis for both the
+    /// kinship turn and the biography — through the real detector for the
+    /// fragment, the translator for the biography sentence.
+    @Test func aContradictingTimReachesTheShellBasisAsAWarning() async throws {
+        let tree = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 FAMC @F1@
+        1 _FSFTID GVQV-NW3
+        0 @I2@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 SEX M
+        1 FAMS @F1@
+        1 _FSFTID G2S4-JF4
+        0 @I3@ INDI
+        1 NAME Eileen /Latta/
+        1 SEX F
+        1 FAMS @F1@
+        1 _FSFTID G2CR-R4H
+        0 @F1@ FAM
+        1 HUSB @I2@
+        1 WIFE @I3@
+        1 CHIL @I1@
+        0 TRLR
+        """
+        func profile(_ name: String, aliases: [String] = [], sex: PersonSex,
+                     kinships: [Kinship] = [], pin: String? = nil) -> POIProfile {
+            POIProfile(name: name, referencePath: "/isolated/people/\(name.lowercased())",
+                       aliases: aliases, sex: sex, kinships: kinships,
+                       treeIdentity: pin.map { .familySearchID($0) })
+        }
+        func row(_ relation: KinshipRelation, _ name: String) -> Kinship {
+            Kinship(relation: relation, relativeTo: .profile(name: name))
+        }
+        let profiles = [
+            profile("Rick", sex: .male, kinships: [
+                row(.sibling, "Tim"), row(.sibling, "Ellen"), row(.child, "Ma"), row(.child, "Dad"),
+            ], pin: "GVQV-NW3"),
+            profile("Tim", sex: .male, kinships: [row(.child, "Other")]),
+            profile("Ellen", sex: .female),
+            profile("Ma", aliases: ["Eileen"], sex: .female, pin: "G2CR-R4H"),
+            profile("Dad", sex: .male, pin: "G2S4-JF4"),
+            profile("Other", sex: .male),
+        ]
+        let harness = Harness(
+            inputs: ["eileen's children", "tell me about ma", ":quit"],
+            profiles: profiles,
+            graph: GedcomFamilyGraph(gedcomText: tree),
+            translations: [.graph(.init(people: ["Ma"], operation: .biography))])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions == ["tell me about ma"], Comment(rawValue: transcript))
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(answers.count == 2, Comment(rawValue: transcript))
+        let warning = "Relationship warning: Sibling rows on Ellen, Rick and Tim imply more than two parents (Dad, Ma, Other) — nothing derived until one is corrected."
+        let children = try #require(answers.first)
+        #expect(children.text.contains("Richard Harding Breen Jr"), Comment(rawValue: children.text))
+        #expect(!children.text.contains("Tim"), Comment(rawValue: children.text))
+        #expect(!children.text.contains("Ellen"), Comment(rawValue: children.text))
+        #expect((children.basisLine ?? "").contains(warning), Comment(rawValue: children.basisLine ?? ""))
+        let biography = answers[1]
+        #expect(!biography.text.contains("In the People tab"), Comment(rawValue: biography.text))
+        #expect((biography.basisLine ?? "").contains(warning), Comment(rawValue: biography.basisLine ?? ""))
+        #expect(harness.output.contains { $0.contains("Relationship warning") }, Comment(rawValue: transcript))
     }
 }

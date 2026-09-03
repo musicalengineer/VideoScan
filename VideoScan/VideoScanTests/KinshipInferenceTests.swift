@@ -245,7 +245,7 @@ struct KinshipInferenceTests {
         #expect(d?.term == "brother-in-law")
         #expect(d?.routeText == "husband Rick → brother Tim")
         #expect(inf.relation(from: n("Tim"), to: n("Donna"))?.term == "sister-in-law")
-        #expect(d?.usesAttestation == false)
+        #expect(d?.usesDerivation == false)
     }
 
     @Test func rickIsTimsOlderBrotherByBirthYear() {
@@ -262,70 +262,75 @@ struct KinshipInferenceTests {
         #expect(inf.relation(from: n("Bob"), to: n("Rick"))?.term == "brother-in-law")
     }
 
-    // MARK: Sibling basis (amendment 2) — both outcomes pinned
+    // MARK: Sibling basis — ONE policy (codex #984): unspecified = full
 
-    @Test func unspecifiedSiblingNeverInheritsParentsButProposesThem() {
-        #expect(inf.parents(of: n("Tim")).isEmpty)
-        #expect(inf.explicitParents(of: n("Tim")).isEmpty)
+    /// The durable identities the derivation cites: Dad came from Rick's
+    /// own row (Rick is pinned → his tree identity); Eileen from HER card's
+    /// "parent of Rick" row — never from Tim, the profile that receives them.
+    private static let dadSource = FamilyKinshipInference.Provenance.derivedSibling(sourceIdentity: "fsid:GVQV-NW3", half: false)
+    private static func eileenSource(_ engine: FamilyKinshipInference) -> FamilyKinshipInference.Provenance {
+        let id = engine.identity(of: KinshipFixture.node("Eileen", in: engine))
+        #expect(id.hasPrefix("uuid:"), Comment(rawValue: id))
+        return .derivedSibling(sourceIdentity: id, half: false)
+    }
+
+    @Test func unspecifiedSiblingSharesParentsAsDerivedFacts() {
+        let parents = inf.parents(of: n("Tim"))
+        #expect(parents.map(\.node) == [n("Dad"), n("Eileen")])
+        #expect(parents.map(\.provenance) == [Self.dadSource, Self.eileenSource(inf)])
+        #expect(inf.explicitParents(of: n("Tim")).isEmpty)      // still not a stored row
+        // "Tim → Dad" is "father", one derived hop, no caveat.
+        let dad = inf.relation(from: n("Tim"), to: n("Dad"))
+        #expect(dad?.term == "father")
+        #expect(dad?.routeText == "father Dad")
+        #expect(dad?.caveats.isEmpty == true)
+        #expect(dad?.usesDerivation == true)
+        #expect(dad?.derivationRules == ["full siblings share parents"])
+        #expect(inf.relation(from: n("Dad"), to: n("Tim"))?.term == "son")
+        #expect(inf.relation(from: n("Tim"), to: n("Eileen"))?.term == "mother")
+        // The proposal only offers to WRITE the derivation onto Tim's card.
         let proposals = inf.proposals(for: n("Tim"))
         #expect(proposals.count == 1)
         #expect(proposals.first?.kind == .sharedParents(via: n("Rick"), parents: [n("Dad"), n("Eileen")]))
-        #expect(proposals.first?.text == "Tim shares Rick's parents (Dad and Eileen) — assumed full; confirm to inherit Rick's ancestry")
-        // "Tim → Dad" is a route with a note, not "father".
-        let dad = inf.relation(from: n("Tim"), to: n("Dad"))
-        #expect(dad?.term == nil)
-        #expect(dad?.routeText == "brother Rick → father Dad")
-        #expect(dad?.caveats == ["Tim's sibling link to Rick is not attested as full, so Rick's parents are not treated as Tim's"])
-        #expect(inf.relation(from: n("Dad"), to: n("Tim"))?.term == nil)
-        #expect(inf.relation(from: n("Dad"), to: n("Tim"))?.routeText == "son Rick → brother Tim")
-        // Rick has parents: nothing to propose for him.
+        #expect(proposals.first?.text == "Tim shares Rick's parents (Dad and Eileen) — derived: full siblings share parents; confirm to record them on Tim's card")
+        // Rick has parents of his own: nothing to propose for him.
         #expect(inf.proposals(for: n("Rick")).isEmpty)
+        #expect(inf.derivationProblems.isEmpty)
     }
 
-    @Test func attestedFullSiblingInheritsParentsAsAttestedFacts() {
+    @Test func attestedFullReadsExactlyLikeUnspecified() {
         func a(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: attested) }
         let parents = attested.parents(of: a("Tim"))
         #expect(parents.map(\.node) == [a("Dad"), a("Eileen")])
-        #expect(parents.allSatisfy { $0.provenance == .attestedSibling(viaIdentity: "fsid:GVQV-NW3") })
+        #expect(parents.map(\.provenance) == [Self.dadSource, Self.eileenSource(attested)])
         #expect(attested.explicitParents(of: a("Tim")).isEmpty)      // still not a stored row
-        #expect(attested.proposals(for: a("Tim")).isEmpty)
+        #expect(attested.proposals(for: a("Tim")).map(\.text) == inf.proposals(for: n("Tim")).map(\.text))
         let father = attested.relation(from: a("Tim"), to: a("Dad"))
         #expect(father?.term == "father")
-        #expect(father?.usesAttestation == true)
+        #expect(father?.usesDerivation == true)
         #expect(father?.caveats.isEmpty == true)
         #expect(attested.relation(from: a("Tim"), to: a("Eileen"))?.term == "mother")
         #expect(attested.relation(from: a("Dad"), to: a("Tim"))?.term == "son")
     }
 
-    /// SENSOR: Tim ↔ Martha Lamson in both outcomes.
-    @Test func timToMarthaLamsonDependsOnTheSiblingBasis() {
-        // Unspecified: the route stops at Rick and says why.
-        let honest = inf.relation(from: n("Tim"), to: Self.martha)
-        #expect(honest?.term == nil)
-        #expect(honest?.route.count == 11)
-        #expect(honest?.route.first?.relation == .sibling)
-        #expect(honest?.routeText.hasPrefix("brother Rick → father Dad → father Ancestor1 Breen") == true)
-        #expect(honest?.caveats == ["Tim's sibling link to Rick is not attested as full, so Rick's parents are not treated as Tim's — Martha Lamson is Rick's 8th-great-grandmother (confirm the shared parents to inherit this)"])
-        let honestBack = inf.relation(from: Self.martha, to: n("Tim"))
-        #expect(honestBack?.term == nil)
-        #expect(honestBack?.route.last?.relation == .sibling)
-        #expect(honestBack?.caveats.first?.contains("Rick is Martha Lamson's 8th-great-grandson") == true)
-
-        // Attested full: a word, through Rick's parents.
+    /// SENSOR: Tim ↔ Martha Lamson — the SAME word in both sibling bases.
+    @Test func timToMarthaLamsonIsTheSameInBothSiblingBases() {
         func a(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: attested) }
-        let d = attested.relation(from: a("Tim"), to: Self.martha)
-        #expect(d?.term == "8th-great-grandmother")
-        #expect(d?.route.count == 10)
-        #expect(d?.route.first?.provenance == .attestedSibling(viaIdentity: "fsid:GVQV-NW3"))
-        #expect(d?.usesTree == true)
-        #expect(d?.routeText.hasPrefix("father Dad → father Ancestor1 Breen → mother Ancestor2 Breen") == true)
-        #expect(d?.routeText.hasSuffix("→ mother Martha Lamson") == true)
-        #expect(attested.relation(from: Self.martha, to: a("Tim"))?.term == "8th-great-grandson")
-        // Rick reaches her without any attestation, in both engines.
-        for engine in [inf, attested] {
+        for (engine, tim) in [(inf, n("Tim")), (attested, a("Tim"))] {
+            let d = engine.relation(from: tim, to: Self.martha)
+            #expect(d?.term == "8th-great-grandmother")
+            #expect(d?.route.count == 10)
+            #expect(d?.route.first?.provenance == Self.dadSource)
+            #expect(d?.usesTree == true)
+            #expect(d?.usesDerivation == true)
+            #expect(d?.caveats.isEmpty == true)
+            #expect(d?.routeText.hasPrefix("father Dad → father Ancestor1 Breen → mother Ancestor2 Breen") == true)
+            #expect(d?.routeText.hasSuffix("→ mother Martha Lamson") == true)
+            #expect(engine.relation(from: Self.martha, to: tim)?.term == "8th-great-grandson")
+            // Rick reaches her without any derivation, in both engines.
             let r = engine.relation(from: KinshipFixture.node("Rick", in: engine), to: Self.martha)
             #expect(r?.term == "8th-great-grandmother")
-            #expect(r?.usesAttestation == false)
+            #expect(r?.usesDerivation == false)
             #expect(engine.relation(from: Self.martha, to: KinshipFixture.node("Rick", in: engine))?.term == "8th-great-grandson")
         }
     }
@@ -389,10 +394,9 @@ struct KinshipInferenceTests {
         #expect(inf.relation(from: n("Rick"), to: .tree(gedcomID: "@X2@"))?.term == "1st cousin once removed")
         #expect(inf.relation(from: n("Michael"), to: .tree(gedcomID: "@X2@"))?.term == "1st cousin twice removed")
         #expect(inf.relation(from: .tree(gedcomID: "@X1@"), to: n("Rick"))?.term == "great-nephew")
-        // Through the attested sibling row, Tim gets the same reckoning.
+        // Through the sibling row — attested or not — Tim gets the same reckoning.
         #expect(attested.relation(from: KinshipFixture.node("Tim", in: attested), to: .tree(gedcomID: "@X2@"))?.term == "1st cousin once removed")
-        // Unattested: no word, honest route.
-        #expect(inf.relation(from: n("Tim"), to: .tree(gedcomID: "@X2@"))?.term == nil)
+        #expect(inf.relation(from: n("Tim"), to: .tree(gedcomID: "@X2@"))?.term == "1st cousin once removed")
     }
 
     @Test func grandparentsInLawsAndSonsInLawCompose() {
@@ -441,8 +445,8 @@ struct KinshipInferenceTests {
         var byName: [String: String?] = [:]
         for d in all { byName[inf.name(of: d.to)] = d.term }
         #expect(byName["Rick"] == "older brother")
-        #expect(byName["Dad"] == .some(nil))          // route + note, not a fact
-        #expect(byName["Eileen"] == .some(nil))
+        #expect(byName["Dad"] == "father")            // derived: full siblings share parents
+        #expect(byName["Eileen"] == "mother")
         #expect(byName["Donna"] == "sister-in-law")
         for son in KinshipFixture.sons { #expect(byName[son] == "nephew", Comment(rawValue: son)) }
         #expect(byName["Nana"] == nil)                // unreachable
@@ -560,7 +564,7 @@ struct KinshipInferenceTests {
         // Canonical order: explicit (Eileen, a row) before attested (Dad).
         #expect(parents.map(\.node) == [KinshipFixture.node("Eileen", in: inf), KinshipFixture.node("Dad", in: inf)])
         #expect(parents.map { $0.provenance.isExplicit } == [true, false])
-        #expect(inf.attestationProblems.isEmpty)
+        #expect(inf.derivationProblems.isEmpty)
         #expect(inf.relation(from: tim, to: Self.martha)?.term == "8th-great-grandmother")
         // attestedHalf with an explicit NON-shared parent inherits the shared one.
         let half = KinshipFixture.inference([
@@ -848,8 +852,9 @@ struct KinshipInferenceTests {
 
     // MARK: Acceptance (codex #835 a, c, d, e)
 
-    @Test func proposalsNeverBecomeFactsUntilAttested() {
-        // (i) one-parent evidence: proposed, not inherited.
+    @Test func derivedParentsAreFactsAndConflictsFailClosedInBothBases() {
+        // (i) one-parent evidence: derived (per parent), and the proposal
+        // only offers to record it.
         let one = KinshipFixture.inference([
             KinshipFixture.profile("P1", sex: .male),
             KinshipFixture.profile("Cal", sex: .male, kinships: [KinshipFixture.row(.child, of: "P1")]),
@@ -857,13 +862,17 @@ struct KinshipInferenceTests {
         ], graph: nil)
         func o(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: one) }
         #expect(one.proposals(for: o("Kid")) == [.init(subject: o("Kid"), kind: .sharedParents(via: o("Cal"), parents: [o("P1")]),
-                                                        text: "Kid shares Cal's parents (P1) — assumed full; confirm to inherit Cal's ancestry")])
-        #expect(one.parents(of: o("Kid")).isEmpty)
-        #expect(one.relation(from: o("Kid"), to: o("P1"))?.term == nil)
+                                                        text: "Kid shares Cal's parents (P1) — derived: full siblings share parents; confirm to record them on Kid's card")])
+        #expect(one.parents(of: o("Kid")).map(\.node) == [o("P1")])
+        #expect(one.explicitParents(of: o("Kid")).isEmpty)
+        #expect(one.relation(from: o("Kid"), to: o("P1"))?.term == "father")
         #expect(one.relation(from: o("Kid"), to: o("Cal"))?.term == "brother")
+        #expect(one.derivationProblems.isEmpty)
 
-        // (ii) disjoint recorded parent sets under a sibling row: no proposal,
-        // no bridge, the word stands with a caveat.
+        // (ii) disjoint recorded parent sets under a sibling row: four
+        // implied parents — the set fails closed, both keep exactly their
+        // rows, the word stands with the overlap caveat, and the conflict
+        // is reported on both.
         let disjoint = KinshipFixture.inference([
             KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female),
             KinshipFixture.profile("P3", sex: .male), KinshipFixture.profile("P4", sex: .female),
@@ -874,13 +883,20 @@ struct KinshipInferenceTests {
         func d(_ s: String) -> FamilyKinshipInference.Node { KinshipFixture.node(s, in: disjoint) }
         #expect(disjoint.proposals(for: d("B")).isEmpty)
         #expect(disjoint.parents(of: d("B")).map(\.node) == [d("P3"), d("P4")])
+        #expect(disjoint.parents(of: d("A")).map(\.node) == [d("P1"), d("P2")])
         let ab = disjoint.relation(from: d("A"), to: d("B"))
         #expect(ab?.term == "brother")
         #expect(ab?.caveats == ["recorded parents don't overlap (P1 and P2 vs P3 and P4) — check the rows"])
         #expect(disjoint.relation(from: d("A"), to: d("P3"))?.term == nil)
+        let disjointLine = "Sibling rows on A and B imply more than two parents (P1, P2, P3, P4) — nothing derived until one is corrected"
+        for name in ["A", "B", "P1", "P2", "P3", "P4"] {
+            #expect(disjoint.derivationProblems[d(name)] == disjointLine, Comment(rawValue: name))
+            #expect(disjoint.overlay.warnings(forProfileNamed: name) == [disjointLine], Comment(rawValue: name))
+        }
 
-        // (iii) two sibling rows proposing four parents: two proposals, no
-        // facts; attesting BOTH is contradictory and inherits nothing.
+        // (iii) two sibling rows implying four parents: the SAME verdict in
+        // both bases (one policy) — nothing derived, the conflict reported
+        // on everyone in the set and on all four parents.
         func fourParents(_ basis: SiblingBasis) -> FamilyKinshipInference {
             KinshipFixture.inference([
                 KinshipFixture.profile("P1", sex: .male), KinshipFixture.profile("P2", sex: .female),
@@ -891,15 +907,17 @@ struct KinshipInferenceTests {
                                                                        KinshipFixture.row(.sibling, of: "Z", basis: basis)]),
             ], graph: nil)
         }
-        let four = fourParents(.unspecified)
-        #expect(four.proposals(for: KinshipFixture.node("Kid", in: four)).count == 2)
-        #expect(four.parents(of: KinshipFixture.node("Kid", in: four)).isEmpty)
-        let both = fourParents(.attestedFull)
-        let kid = KinshipFixture.node("Kid", in: both)
-        #expect(both.parents(of: kid).isEmpty)
-        #expect(both.attestationProblems[kid] == "Kid's attested sibling rows imply more than two parents (P1, P2, P3, P4) — nothing inherited until one is corrected")
-        #expect(both.relation(from: kid, to: KinshipFixture.node("P1", in: both))?.term == nil)
-        #expect(both.relation(from: kid, to: KinshipFixture.node("A", in: both))?.term == "brother")
+        let fourLine = "Sibling rows on A, Kid and Z imply more than two parents (P1, P2, P3, P4) — nothing derived until one is corrected"
+        for engine in [fourParents(.unspecified), fourParents(.attestedFull)] {
+            let kid = KinshipFixture.node("Kid", in: engine)
+            #expect(engine.proposals(for: kid).isEmpty)
+            #expect(engine.parents(of: kid).isEmpty)
+            for name in ["A", "Z", "Kid", "P1", "P2", "P3", "P4"] {
+                #expect(engine.derivationProblems[KinshipFixture.node(name, in: engine)] == fourLine, Comment(rawValue: name))
+            }
+            #expect(engine.relation(from: kid, to: KinshipFixture.node("P1", in: engine))?.term == nil)
+            #expect(engine.relation(from: kid, to: KinshipFixture.node("A", in: engine))?.term == "brother")
+        }
     }
 
     @Test func provenanceCarriesDurableIdentitiesOnly() {
@@ -912,9 +930,9 @@ struct KinshipInferenceTests {
         let d = attested.relation(from: a("Tim"), to: Self.martha)
         for p in d?.provenance ?? [] {
             switch p {
-            case .profileRow(let id):       #expect(id.hasPrefix("uuid:"), Comment(rawValue: id))
-            case .attestedSibling(let id):  #expect(id.hasPrefix("fsid:") || id.hasPrefix("uuid:"), Comment(rawValue: id))
-            case .tree:                     break
+            case .profileRow(let id):          #expect(id.hasPrefix("uuid:"), Comment(rawValue: id))
+            case .derivedSibling(let id, _):   #expect(id.hasPrefix("fsid:") || id.hasPrefix("uuid:"), Comment(rawValue: id))
+            case .tree:                        break
             }
         }
         #expect(d?.pathHash.count == 16)
@@ -1092,10 +1110,10 @@ struct KinshipValidationTests {
         #expect(rules(viaTree).contains(.parentChildCycle))
         #expect(viaTree.blocksSave)
         #expect(rules(validate("Martha", .child, of: "Kevin", inference: inf2, profiles: profiles)).contains(.parentChildCycle))
-        // Unattested sibling: Tim is NOT below Dad, so "Dad child of Tim" is a
-        // conflict-free (if odd) row — no cycle claimed from an assumption.
-        #expect(!rules(validate("Dad", .child, of: "Tim")).contains(.parentChildCycle))
-        // Attested: now it is a cycle.
+        // Tim is below Dad through his sibling row to Rick — full siblings
+        // share parents, attested or not (one policy, codex #984) — so
+        // "Dad child of Tim" is a cycle in both bases.
+        #expect(rules(validate("Dad", .child, of: "Tim")).contains(.parentChildCycle))
         let att = KinshipFixture.inference(KinshipFixture.family(timBasis: .attestedFull))
         #expect(rules(validate("Dad", .child, of: "Tim", inference: att)).contains(.parentChildCycle))
     }
@@ -1203,25 +1221,32 @@ struct KinshipValidationTests {
         #expect(rules(validate("Kevin", .child, of: "Donna", inference: offline)) == [.treePinProblem])
     }
 
-    @Test func attestingASiblingThatWouldGiveThreeParentsIsAnError() {
-        // Tim already has Dad + Eileen through his attested row to Rick; a
-        // second attested-full row to Zoe (parents Q1, Q2) is a conflict.
-        let profiles = KinshipFixture.family(timBasis: .attestedFull) + [
-            KinshipFixture.profile("Q1", sex: .male), KinshipFixture.profile("Q2", sex: .female),
-            KinshipFixture.profile("Zoe", sex: .female, kinships: [KinshipFixture.row(.child, of: "Q1"), KinshipFixture.row(.child, of: "Q2")]),
-        ]
-        let inf = KinshipFixture.inference(profiles)
-        let timRows = profiles.first { $0.name == "Tim" }?.kinships ?? []
-        let f = KinshipValidation.validate(
-            candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedFull),
-            subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
-        #expect(rules(f).contains(.attestationConflict))
-        #expect(f.first { $0.rule == .attestationConflict }?.message
-                == "Attesting this sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — correct the other rows first.")
-        // Unspecified: fine (a proposal, not a fact).
-        #expect(!KinshipValidation.validate(
-            candidate: KinshipFixture.row(.sibling, of: "Zoe"),
-            subjectProfileStableID: "tim", existingRows: timRows, inference: inf).blocksSave)
+    @Test func aSiblingRowThatWouldGiveThreeParentsIsAnErrorInEveryBasis() {
+        // Tim already has Dad + Eileen through his row to Rick (derived —
+        // one policy, attested or not); a second full row to Zoe (parents
+        // Q1, Q2) is a conflict whichever basis it carries.
+        for basis in [SiblingBasis.attestedFull, .unspecified] {
+            let profiles = KinshipFixture.family(timBasis: basis) + [
+                KinshipFixture.profile("Q1", sex: .male), KinshipFixture.profile("Q2", sex: .female),
+                KinshipFixture.profile("Zoe", sex: .female, kinships: [KinshipFixture.row(.child, of: "Q1"), KinshipFixture.row(.child, of: "Q2")]),
+            ]
+            let inf = KinshipFixture.inference(profiles)
+            let timRows = profiles.first { $0.name == "Tim" }?.kinships ?? []
+            let attested = KinshipValidation.validate(
+                candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedFull),
+                subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
+            #expect(rules(attested).contains(.attestationConflict))
+            #expect(attested.first { $0.rule == .attestationConflict }?.message
+                    == "Attesting this sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
+            // Unspecified is FULL too (codex #984): the same conflict, the same block.
+            let unspecified = KinshipValidation.validate(
+                candidate: KinshipFixture.row(.sibling, of: "Zoe"),
+                subjectProfileStableID: "tim", existingRows: timRows, inference: inf)
+            #expect(unspecified.blocksSave)
+            #expect(unspecified.first { $0.rule == .attestationConflict }?.message
+                    == "This sibling link would give Tim more than two parents (Dad, Eileen, Q1, Q2) — full siblings share parents; correct the other rows first.")
+        }
+        let inf = KinshipFixture.inference(KinshipFixture.family)
         // A half row naming a parent that does not exist: unresolved.
         let stale = KinshipValidation.validate(
             candidate: KinshipFixture.row(.sibling, of: "Zoe", basis: .attestedHalf(sharedParent: .profile(id: UUID()))),

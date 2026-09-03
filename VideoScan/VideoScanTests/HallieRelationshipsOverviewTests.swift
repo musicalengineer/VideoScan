@@ -156,18 +156,24 @@ struct HallieRelationshipsOverviewTests {
     @Test func timsPerspectiveIsDerivedFromRicksRows() {
         let result = Overview.answer(.init(subject: .named("Tim")), context: Self.context())
         #expect(result.outcome == .answered)
-        #expect(result.prose.hasPrefix("Tim is related to 8 of the 9 other people in the People tab. Nearest first: Rick — Tim's brother · "))
+        // Derived parents rank as one-hop rows (parent < sibling), the same
+        // order Rick's own overview uses.
+        #expect(result.prose.hasPrefix("Tim is related to 8 of the 9 other people in the People tab. Nearest first: Dad, Ma — Tim's parents (derived: full siblings share parents) · Rick — Tim's brother · "),
+                Comment(rawValue: result.prose))
         #expect(result.prose.contains("Beth, Dan, Mark, Matt — Tim's nieces and nephews (derived)"))
         #expect(result.prose.contains("Donna — Tim's sister-in-law (derived)"))
-        // Rick's parents are reached only through the unattested sibling
-        // row: a route with the honest note, never "father"/"mother".
-        #expect(result.prose.contains("Dad — brother Rick → father Dad (not attested — confirm the shared parents in the review sheet)"))
-        #expect(result.prose.contains("Ma — brother Rick → mother Ma (not attested — confirm the shared parents in the review sheet)"))
-        #expect(!result.prose.contains("Tim's father"))
+        // Rick's parents are Tim's: FULL SIBLINGS SHARE PARENTS (one policy,
+        // codex #984) — the word, marked with the SAME rule the kinship
+        // route and the biography quote; never "not attested".
+        #expect(result.prose.contains("Dad, Ma — Tim's parents (derived: full siblings share parents)"),
+                Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("not attested"), Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("assumed"), Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("Tim shares Rick's parents"), Comment(rawValue: result.prose))
         #expect(result.prose.contains("Anna — no relationship recorded yet"))
-        // The review sheet's own ask rides along.
-        #expect(result.prose.contains("Tim shares Rick's parents"))
-        #expect(result.basisLine.contains("2 resting on an unattested sibling row"))
+        #expect(result.basisLine.contains("2 derived: full siblings share parents"), Comment(rawValue: result.basisLine))
+        #expect(!result.basisLine.contains("unattested"), Comment(rawValue: result.basisLine))
+        #expect(!result.basisLine.contains("Relationship warning"), Comment(rawValue: result.basisLine))
         #expect(result.queryDescription == "shape=relationships-overview subject=Tim")
     }
 
