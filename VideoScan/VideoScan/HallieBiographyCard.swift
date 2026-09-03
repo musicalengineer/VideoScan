@@ -46,6 +46,17 @@ enum HallieBiographyCard {
         struct Sentence: Sendable, Equatable {
             let text: String
             let evidenceIDs: [String]
+            /// People this sentence promises to name. Evidence may contain
+            /// additional people whose records only support the sentence;
+            /// those are intentionally not included here.
+            let requiredPersonNames: [String]
+
+            init(text: String, evidenceIDs: [String],
+                 requiredPersonNames: [String] = []) {
+                self.text = text
+                self.evidenceIDs = evidenceIDs
+                self.requiredPersonNames = requiredPersonNames
+            }
         }
         let subject: GedcomFamilyGraph.Person
         let sentences: [Sentence]
@@ -85,6 +96,8 @@ enum HallieBiographyCard {
                         id: "c\(index + 1)", text: sentence.text,
                         evidenceIDs: sentence.evidenceIDs)
                 },
+                requiredPersonNames: [subject.name]
+                    + sentences.flatMap(\.requiredPersonNames),
                 fallbackText: prose,
                 subjectLifeStatus: lifeStatus)
         }
@@ -224,7 +237,8 @@ enum HallieBiographyCard {
             }
             let listed = extra.map { "\($0.name) — \($0.term)" }
             return .init(text: "In the People tab: " + joined(listed) + ".",
-                         evidenceIDs: [person.id] + extra.map(\.evidenceID))
+                         evidenceIDs: [person.id] + extra.map(\.evidenceID),
+                         requiredPersonNames: extra.map(\.name))
         }
 
         // 1. Vitals with places, as recorded.
@@ -242,13 +256,16 @@ enum HallieBiographyCard {
             }
             sentences.append(.init(
                 text: text + ".",
-                evidenceIDs: [person.id] + summary.parents.map(\.id) + summary.grandparents.map(\.id)))
+                evidenceIDs: [person.id] + summary.parents.map(\.id) + summary.grandparents.map(\.id),
+                requiredPersonNames: (summary.parents + summary.grandparents).map(\.name)))
         }
         // 2b. Data quality: a duplicated parent on the subject or on a
         //     parent (the reason a card can list five grandparents).
         let flags = dataQualityFlags(for: person, in: graph)
         for flag in flags {
-            sentences.append(.init(text: flag.text, evidenceIDs: flag.evidenceIDs))
+            sentences.append(.init(
+                text: flag.text, evidenceIDs: flag.evidenceIDs,
+                requiredPersonNames: [flag.child.name] + flag.parents.map(\.name)))
         }
         // 3. Siblings — the tree's, then the People tab's (the living are
         //    not on FamilySearch; Tim is a People-tab sibling row).
@@ -257,7 +274,8 @@ enum HallieBiographyCard {
             sentences.append(.init(
                 text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "sibling" : "siblings"), "
                     + listedNames(summary.siblings) + ".",
-                evidenceIDs: [person.id] + summary.siblings.map(\.id)))
+                evidenceIDs: [person.id] + summary.siblings.map(\.id),
+                requiredPersonNames: Array(summary.siblings.prefix(maxListedNames)).map(\.name)))
         }
         if let peopleTab,
            let extra = peopleTabSentence(peopleTab.siblings, treeIDs: Set(summary.siblings.map(\.id))) {
@@ -276,7 +294,8 @@ enum HallieBiographyCard {
                                        spouseLiving: { LifeStatus.of($0, in: graph).isLiving }) {
             sentences.append(.init(
                 text: "\(lead()) \(clause).",
-                evidenceIDs: [person.id] + marriages.compactMap(\.spouse?.id)))
+                evidenceIDs: [person.id] + marriages.compactMap(\.spouse?.id),
+                requiredPersonNames: marriages.compactMap(\.spouse?.name)))
         } else if let peopleTab, let extra = peopleTabSentence(peopleTab.spouses, treeIDs: []) {
             sentences.append(extra)
             peopleTab.storedOn.forEach { storedOn.insert($0) }
@@ -289,7 +308,8 @@ enum HallieBiographyCard {
             sentences.append(.init(
                 text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "child" : "children"), "
                     + listedNames(summary.children) + ".",
-                evidenceIDs: [person.id] + summary.children.map(\.id)))
+                evidenceIDs: [person.id] + summary.children.map(\.id),
+                requiredPersonNames: Array(summary.children.prefix(maxListedNames)).map(\.name)))
         }
         if let peopleTab,
            let extra = peopleTabSentence(peopleTab.children, treeIDs: Set(summary.children.map(\.id))) {

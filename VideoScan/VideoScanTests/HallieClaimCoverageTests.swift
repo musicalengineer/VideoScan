@@ -175,4 +175,87 @@ struct HallieClaimCoverageTests {
         #expect(HallieGroundedComposer.verifyLogLines(shell, plan: plan())
                 == HallieGroundedComposer.verifyLogLines(app, plan: plan()))
     }
+
+    // MARK: - Required-person coverage (live 2026-09-02)
+
+    private func parentsPlan(
+        required: [String] = ["Richard Harding Breen Sr", "Eileen Latta"]
+    ) -> HallieAnswerPlan {
+        let fallback = "Rick's parents: Richard Harding Breen Sr, "
+            + "born February 22 1929 in Boston, died June 22 2008 in Brockton, "
+            + "and Eileen Latta, born August 31 1930 in Chelsea, "
+            + "died March 3 2023 in Stoughton."
+        return HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [.init(
+                id: "c1", text: fallback,
+                // @I9@ is supporting provenance, not an answer person.
+                evidenceIDs: ["@I2@", "@I3@", "@I9@"])],
+            requiredPersonNames: required,
+            fallbackText: fallback)
+    }
+
+    /// Exact live failure: the model cited the compound parents claim but
+    /// rendered only Eileen's half. A tag is not person coverage; the safe
+    /// deterministic answer replaces it and names both parents.
+    @Test func citedTwoParentClaimThatOmitsRichardFallsBackToExactPlan() async {
+        let plan = parentsPlan()
+        let live = "His mother, Eileen Latta, was born on August 31, 1930, "
+            + "in Chelsea, and passed away on March 3, 2023, in Stoughton [c1]."
+        let verified = HallieCompositionVerifier.verify(
+            live, plan: plan, personaName: "Hallie Mae")
+        #expect(HallieCompositionVerifier.missingRequiredPersonNames(
+            in: verified, plan: plan) == ["Richard Harding Breen Sr"])
+
+        let outcome = await compose(plan, live)
+        #expect(outcome.composedBy == .template)
+        #expect(outcome.note == "template: required person omitted")
+        #expect(outcome.displayText == plan.fallbackText)
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        #expect(outcome.displayText.contains("Eileen Latta"))
+    }
+
+    /// If the model omitted the whole relationship claim, the existing
+    /// deterministic missing-claim repair is sufficient; no full fallback
+    /// is needed after the restored sentence covers both people.
+    @Test func whollyOmittedKinshipClaimIsRestoredBeforePersonCoverage() async {
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [
+                .init(id: "c1", text: "Rick's parents are Richard Harding Breen Sr and Eileen Latta."),
+                .init(id: "c2", text: "The family tree records that relationship."),
+            ],
+            requiredPersonNames: ["Richard Harding Breen Sr", "Eileen Latta"],
+            fallbackText: "Rick's parents are Richard Harding Breen Sr and Eileen Latta.")
+        let outcome = await compose(plan, "The family tree records that relationship [c2].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.restored == [.init(claimID: "c1", reason: .missing)])
+        #expect(outcome.displayText.hasPrefix(
+            "Rick's parents are Richard Harding Breen Sr and Eileen Latta."))
+        #expect(outcome.note == "model (claims restored: c1)")
+    }
+
+    /// One required person is ordinary, and an extra provenance pointer is
+    /// not silently promoted into a second required person.
+    @Test func onePersonContractIgnoresIncidentalEvidencePeople() async {
+        let plan = parentsPlan(required: ["Eileen Latta"])
+        let reply = "Rick's mother is Eileen Latta [c1]."
+        let outcome = await compose(plan, reply)
+        #expect(outcome.composedBy == .model, Comment(rawValue: outcome.note))
+        #expect(outcome.displayText == "Rick's mother is Eileen Latta.")
+    }
+
+    /// Isolation sensor: a missing name in one plan must not poison the next
+    /// turn. Required names are immutable plan data, not shared verifier
+    /// state or preferences.
+    @Test func requiredPersonCoverageIsIsolatedPerPlan() async {
+        let first = await compose(
+            parentsPlan(), "Rick's mother is Eileen Latta [c1].")
+        let second = await compose(
+            parentsPlan(required: ["Eileen Latta"]),
+            "Rick's mother is Eileen Latta [c1].")
+        #expect(first.composedBy == .template)
+        #expect(second.composedBy == .model)
+        #expect(second.note == "model")
+    }
 }

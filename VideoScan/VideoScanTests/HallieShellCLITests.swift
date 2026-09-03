@@ -14,6 +14,8 @@ struct HallieShellCLITests {
         var translationOptions: [HallieShellCLI.Options] = []
         var mediaActions: [HallieShellCLI.MediaAction] = []
         var transcriptEvents: [HallieTranscriptEvent] = []
+        var composedPlans: [HallieAnswerPlan] = []
+        var compositionReply: (@Sendable (HallieAnswerPlan) -> String)?
         var readCount = 0
         var records: [VideoRecord]
         var profiles: [POIProfile]
@@ -86,6 +88,16 @@ struct HallieShellCLITests {
                 performMediaAction: { _ in },
                 recordTranscript: { [self] events in
                     transcriptEvents.append(contentsOf: events)
+                },
+                composeAnswer: { [self] plan, history, _ in
+                    composedPlans.append(plan)
+                    guard let compositionReply else {
+                        return .template(plan, note: "template: no composer configured")
+                    }
+                    return await HallieGroundedComposer(
+                        personaName: "Hallie Mae",
+                        modelCall: { _, _ in compositionReply(plan) })
+                        .compose(plan: plan, history: history)
                 },
                 speakers: { [self] in speakers })
         }
@@ -2025,15 +2037,34 @@ struct HallieShellCLITests {
             profile("Anna", sex: .female), profile("Libby", sex: .female),
         ]
         let harness = Harness(
-            inputs: ["who are eileen's children", "tell me about ma", "who are tim's parents", ":quit"],
+            inputs: [
+                "who are eileen's children", "tell me about ma",
+                "who are tim's parents", "tell me about rick's parents", ":quit",
+            ],
             profiles: profiles,
             graph: GedcomFamilyGraph(gedcomText: tree),
             translations: [
                 .graph(.init(people: ["Eileen"], operation: .kinship, relation: .children)),
                 .graph(.init(people: ["Ma"], operation: .biography)),
                 .graph(.init(people: ["Tim"], operation: .kinship, relation: .parents)),
+                .graph(.init(people: ["Rick"], operation: .kinship, relation: .parents)),
             ])
-        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+        // Feed valid claim-for-claim prose except for the two-parent plans:
+        // there the model cites c1 but repeats only Eileen, reproducing the
+        // live 9/02 omission. Required-person verification must select the
+        // deterministic two-parent fallback on the shell surface.
+        harness.compositionReply = { plan in
+            if Set(plan.requiredPersonNames) == Set([
+                "Eileen Latta", "Richard Harding Breen Sr",
+            ]) {
+                return "Eileen Latta was one of them [c1]."
+            }
+            return plan.claims.map { "\($0.text) [\($0.id)]" }
+                .joined(separator: " ")
+        }
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--diagnostics", "--compose",
+        ])
 
         let code = await HallieShellCLI.run(
             options: options, input: harness.nextInput,
@@ -2043,7 +2074,7 @@ struct HallieShellCLITests {
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         let transcript = harness.output.joined(separator: "\n")
         let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
-        #expect(answers.count == 3, Comment(rawValue: transcript))
+        #expect(answers.count == 4, Comment(rawValue: transcript))
         let rule = "derived from Rick's rows: full siblings share parents"
 
         // 1. "who are eileen's children" — all four, three marked derived.
@@ -2071,5 +2102,18 @@ struct HallieShellCLITests {
         // Diagnostics mode prints the basis, so the marker is visible in the shell too.
         #expect(harness.output.contains { $0.contains(rule) }, Comment(rawValue: transcript))
         #expect(harness.mediaActions.isEmpty)
+
+        // 4. Exact live sensor: both are answer obligations even though a
+        // single c1 carries them. The partial model answer is never shown.
+        let ricksParents = answers[3]
+        #expect(ricksParents.composedBy == "template")
+        #expect(ricksParents.text.contains("Eileen Latta"), Comment(rawValue: ricksParents.text))
+        #expect(ricksParents.text.contains("Richard Harding Breen Sr"),
+                Comment(rawValue: ricksParents.text))
+        #expect(!ricksParents.text.contains("Eileen Latta was one of them"),
+                Comment(rawValue: ricksParents.text))
+        #expect(Set(harness.composedPlans.last?.requiredPersonNames ?? []) == Set([
+            "Eileen Latta", "Richard Harding Breen Sr",
+        ]))
     }
 }

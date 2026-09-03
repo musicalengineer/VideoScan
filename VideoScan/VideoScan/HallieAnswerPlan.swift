@@ -63,6 +63,12 @@ struct HallieAnswerPlan: Sendable, Equatable {
     let subject: String?
     let claims: [Claim]
     let counts: [Count]
+    /// People the deterministic answer contract explicitly promises to
+    /// name. This is deliberately separate from `evidenceIDs`: a GEDCOM
+    /// pointer may support a claim without making that person part of the
+    /// requested answer (for example, an intermediate ancestor in a
+    /// kinship path). The composer verifies this list after claim coverage.
+    let requiredPersonNames: [String]
     /// The deterministic prose the route already produces. Shown verbatim
     /// whenever composition is off, unavailable, slow, or fails verification.
     let fallbackText: String
@@ -79,6 +85,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
         subject: String? = nil,
         claims: [Claim] = [],
         counts: [Count] = [],
+        requiredPersonNames: [String] = [],
         fallbackText: String,
         subjectLifeStatus: LifeStatus? = nil
     ) {
@@ -87,6 +94,12 @@ struct HallieAnswerPlan: Sendable, Equatable {
         self.subject = subject
         self.claims = claims
         self.counts = counts
+        // Stable order makes diagnostics and tests deterministic; matching
+        // itself remains case/punctuation insensitive through `names`.
+        var seen = Set<String>()
+        self.requiredPersonNames = requiredPersonNames.filter {
+            seen.insert(FamilyIdentityText.normalized($0)).inserted
+        }
         self.fallbackText = fallbackText
         self.subjectLifeStatus = subjectLifeStatus
     }
@@ -290,6 +303,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subject: plan.subject,
             claims: claims,
             counts: [Count(label: "supporting sources", value: plan.sourceCitations.count)],
+            requiredPersonNames: [plan.subject],
             fallbackText: fallbackText,
             subjectLifeStatus: subjectLifeStatus)
     }

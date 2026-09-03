@@ -32,16 +32,25 @@ extension ArchivistGraphExecutor {
                 ambiguityCandidates: [],
                 catalogPersonName: nil)
         }
+        let prose = "\(person.name)'s \(graphRelation.rawValue): "
+            + relatives.map(\.name).joined(separator: ", ") + "."
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [.init(
+                id: "c1", text: prose,
+                evidenceIDs: [person.id] + relatives.map(\.id))],
+            requiredPersonNames: relatives.map(\.name),
+            fallbackText: prose)
         return ArchivistGraphResult(
             conclusion: .answered,
-            prose: "\(person.name)'s \(graphRelation.rawValue): "
-                + relatives.map(\.name).joined(separator: ", ") + ".",
+            prose: prose,
             basisLine: factualBasis(identityBridge),
             evidence: evidence,
             candidates: [],
             profileCandidates: [],
             ambiguityCandidates: [],
-            catalogPersonName: nil)
+            catalogPersonName: nil,
+            answerPlan: plan)
     }
 
     /// Multi-hop kinship: the answer names every relative reached AND the
@@ -78,16 +87,29 @@ extension ArchivistGraphExecutor {
                               person: .init(id: $0.person.id, name: $0.person.name))
                     })
                 })
+            let prose = "\(person.name)'s \(noun): "
+                + lines.joined(separator: "; ") + "."
+            // Only the requested endpoints are answer obligations. The
+            // intermediate hops support each route but are not blindly
+            // promoted from evidence into required prose.
+            let required = paths.map(\.relative.name)
+            let plan = HallieAnswerPlan(
+                route: .graph, shape: .fact,
+                claims: [.init(
+                    id: "c1", text: prose,
+                    evidenceIDs: [person.id] + paths.flatMap { $0.hops.map(\.person.id) })],
+                requiredPersonNames: required,
+                fallbackText: prose)
             return ArchivistGraphResult(
                 conclusion: .answered,
-                prose: "\(person.name)'s \(noun): "
-                    + lines.joined(separator: "; ") + ".",
+                prose: prose,
                 basisLine: factualBasis(identityBridge),
                 evidence: evidence,
                 candidates: [],
                 profileCandidates: [],
                 ambiguityCandidates: [],
-                catalogPersonName: nil)
+                catalogPersonName: nil,
+                answerPlan: plan)
 
         case .missingHop(let reached, let missing):
             let prose: String

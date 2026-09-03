@@ -165,6 +165,14 @@ struct HallieGroundedComposer: Sendable {
         if counted.kept.count != verification.kept.count { notes.append("count sentence restored") }
         let named = Self.restoringSubjectAndLifeDates(counted, plan: plan, notes: &notes)
         let covered = Self.restoringMissingClaims(named, plan: plan, notes: &notes)
+        let missingPeople = HallieCompositionVerifier.missingRequiredPersonNames(
+            in: covered.verification, plan: plan)
+        guard missingPeople.isEmpty else {
+            let names = missingPeople.joined(separator: ",")
+            composerLog.notice(
+                "required person omitted: \(names, privacy: .public); template used")
+            return .template(plan, note: "template: required person omitted")
+        }
         return Outcome(
             displayText: covered.verification.displayText,
             transcriptText: covered.verification.transcriptText,
@@ -201,17 +209,18 @@ struct HallieGroundedComposer: Sendable {
     /// claims land in plan order relative to each other. A model that merely
     /// REORDERED the claims cites all of them and nothing is restored.
     ///
-    /// Only `.biography` is governed: it is the one fixed plan whose claims
-    /// are all owed. List plans deliberately do not enumerate their item
-    /// claims (the count sentence has its own restore); `.fact` plans are
-    /// derived from templated prose under a 3-sentence budget and are left
-    /// as they are.
+    /// Biography plans are governed because every card claim is owed. A
+    /// graph fact that carries explicit required people is a structured
+    /// kinship answer and is governed for the same reason. List plans
+    /// deliberately do not enumerate their item claims (the count sentence
+    /// has its own restore); ordinary `.fact` plans remain untouched.
     static func restoringMissingClaims(
         _ verification: HallieCompositionVerifier.Verification,
         plan: HallieAnswerPlan,
         notes: inout [String]
     ) -> (verification: HallieCompositionVerifier.Verification, restored: [Restored]) {
-        guard plan.shape == .biography, !verification.kept.isEmpty else {
+        guard (plan.shape == .biography || !plan.requiredPersonNames.isEmpty),
+              !verification.kept.isEmpty else {
             return (verification, [])
         }
         typealias Sentence = HallieCompositionVerifier.Sentence
@@ -437,6 +446,8 @@ struct HallieGroundedComposer: Sendable {
         "They", or a surname alone.
         - Keep the subject's birth and death dates and birthplace from the \
         claims; they are the facts the reader wants first.
+        - When Required people are listed, name every one of them. A claim \
+        tag does not count as covering a person whose name you left out.
         - When a line says the Subject is living, speak of them in the present \
         tense ("is the child of", "is married to", "has four sons"); a living \
         person's life is not finished. Only "was born" is in the past. When the \
@@ -463,6 +474,10 @@ struct HallieGroundedComposer: Sendable {
         }
         if let life = plan.subjectLifeStatus {
             lines.append(life.composerInstruction)
+        }
+        if !plan.requiredPersonNames.isEmpty {
+            lines.append("Required people (name every one in the answer): "
+                         + plan.requiredPersonNames.joined(separator: "; "))
         }
         lines.append("Answer shape: \(plan.shape.rawValue) (at most \(plan.maxSentences) sentences)")
         if plan.shape == .list {
