@@ -282,7 +282,8 @@ final class HallieWebBridge {
         guard let last = responses.last else { return nil }
         if responses.count == 1 {
             return MergedReply(
-                prose: last.result.prose, basis: last.result.basisLine,
+                prose: HallieAppNavigation.webProse(for: last.result),
+                basis: last.result.basisLine,
                 citations: last.citations, knowledge: last.result.knowledgeCitations,
                 attachments: last.result.attachments, last: last)
         }
@@ -303,7 +304,8 @@ final class HallieWebBridge {
             }
         }
         return MergedReply(
-            prose: responses.map(\.result.prose).joined(separator: "\n\n"),
+            prose: responses.map { HallieAppNavigation.webProse(for: $0.result) }
+                .joined(separator: "\n\n"),
             basis: responses.map(\.result.basisLine).joined(separator: "\n"),
             citations: citations,
             knowledge: knowledge,
@@ -379,7 +381,7 @@ final class HallieWebBridge {
         }
         // The variations picker: the web client has no phoneme playback,
         // so the list rides in the prose and each chip replies by number.
-        var prose = merged?.prose ?? result.prose
+        var prose = merged?.prose ?? HallieAppNavigation.webProse(for: result)
         if let offer = response.picker {
             prose += "\n" + HalliePronunciationPicker.numberedList(offer)
             for (index, candidate) in offer.candidates.enumerated() {

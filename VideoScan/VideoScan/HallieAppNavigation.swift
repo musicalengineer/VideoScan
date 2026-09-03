@@ -80,6 +80,15 @@ enum HallieAppNavigation {
             performsFirstOfferedAction: true)
     }
 
+    /// The web bridge has no authority over the Mac's main window. Replace
+    /// the app client's execution promise with an honest capability answer;
+    /// the bridge also omits the Mac-only chip.
+    static func webProse(for result: HallieTurnExecutor.Result) -> String {
+        guard case .openAppDestination(let destination)? =
+            result.immediateOfferedAction else { return result.prose }
+        return "The \(destination.title) tab can only be opened in the VideoScan app on the Mac; this web chat can't control that window."
+    }
+
     /// Accept a chip through the app's established AppStorage + main-window
     /// handoff. The injected closure makes the state transition testable
     /// without opening a window in unit tests.
@@ -93,9 +102,23 @@ enum HallieAppNavigation {
         openMainWindow()
     }
 
-    /// Auto-accept only the first action on THIS result. No pending or
-    /// process-global offer is consulted, so an old transcript chip cannot
-    /// be resurrected by a later non-navigation answer.
+    /// Return the exact navigation the current result says was directly
+    /// requested. The action must still be present among the visible offers;
+    /// this refuses both stale state and malformed hidden actions while
+    /// remaining independent of offer-array ordering.
+    static func immediateDestination(
+        in result: HallieTurnExecutor.Result
+    ) -> Destination? {
+        guard let immediate = result.immediateOfferedAction,
+              result.offeredActions.contains(immediate),
+              case .openAppDestination(let destination) = immediate
+        else { return nil }
+        return destination
+    }
+
+    /// Auto-accept only the explicitly requested action on THIS result. No
+    /// pending or process-global offer is consulted, so an old transcript
+    /// chip cannot be resurrected by a later non-navigation answer.
     @MainActor
     @discardableResult
     static func acceptImmediateOffer(
@@ -103,9 +126,7 @@ enum HallieAppNavigation {
         defaults: UserDefaults = .standard,
         openMainWindow: @MainActor () -> Void
     ) -> Bool {
-        guard result.performsFirstOfferedAction,
-              case .openAppDestination(let destination)? = result.offeredActions.first
-        else { return false }
+        guard let destination = immediateDestination(in: result) else { return false }
         accept(destination, defaults: defaults, openMainWindow: openMainWindow)
         return true
     }

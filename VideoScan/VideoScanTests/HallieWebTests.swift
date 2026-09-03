@@ -169,6 +169,29 @@ struct HallieWebTests {
         #expect((citations.first?["url"] as? String)?.hasPrefix("/api/media/") == true)
     }
 
+    /// The browser cannot control the Mac's window. A direct navigation ask
+    /// must therefore be an honest app-only answer, not "Opening…" with the
+    /// native action silently discarded from the JSON payload.
+    @MainActor
+    @Test func webNavigationNeverClaimsTheMacActionOccurred() async throws {
+        let recorder = Recorder()
+        let response = await bridge(recorder).handle(
+            post("/api/ask", [
+                "session": "ipad-navigation", "who": "Donna Breen",
+                "text": "open the Archive tab",
+            ]),
+            peer: "192.168.1.40")
+        let body = json(response)
+        #expect(response.status == 200)
+        #expect(body["prose"] as? String ==
+            "The Archive tab can only be opened in the VideoScan app on the Mac; this web chat can't control that window.")
+        #expect(!(body["prose"] as? String ?? "").contains("Opening"))
+        #expect((body["chips"] as? [[String: Any]])?.isEmpty == true,
+                "the Mac-only action is not encoded as an executable web chip")
+        #expect(recorder.questions.isEmpty,
+                "the deterministic navigation request never reaches a model")
+    }
+
     @MainActor
     @Test func tellingWorksOverTheWebAndIsAttributedToTheDevicesPerson() async throws {
         let recorder = Recorder()
@@ -310,6 +333,16 @@ struct HallieWebMergeTests {
             executedIntent: nil)
     }
 
+    private func navigationResponse(
+        _ destination: HallieAppNavigation.Destination
+    ) -> HallieAppTurnCoordinator.Response {
+        HallieAppTurnCoordinator.Response(
+            result: HallieAppNavigation.answer(destination),
+            responderHost: "local (no model)", biographyPhoto: nil,
+            capturedReferentID: nil, citations: [], pendingClarification: nil,
+            playAfterAnswer: false, executedIntent: nil)
+    }
+
     @Test func oneResponseMergesToItselfFieldForField() throws {
         let id = UUID()
         let only = response(prose: "Born in Sudbury.", basis: "Basis: tree", citing: [(id, "/v/a.mp4")])
@@ -339,5 +372,19 @@ struct HallieWebMergeTests {
                 "first clause's evidence first; the repeat is dropped, not re-listed")
         #expect(merged.last.result.prose == "Born in 1712.",
                 "chips, play and the pending which-one come from the LAST piece")
+    }
+
+
+    @Test func mergedWebReplyQualifiesNavigationInEitherClauseOrder() throws {
+        let ordinary = response(prose: "I found Donna.", basis: "Basis: catalog", citing: [])
+        for responses in [
+            [navigationResponse(.people), ordinary],
+            [ordinary, navigationResponse(.archive)],
+        ] {
+            let merged = try #require(HallieWebBridge.merge(responses))
+            #expect(!merged.prose.contains("Opening"))
+            #expect(merged.prose.contains("can only be opened in the VideoScan app on the Mac"))
+            #expect(merged.prose.contains("I found Donna."))
+        }
     }
 }

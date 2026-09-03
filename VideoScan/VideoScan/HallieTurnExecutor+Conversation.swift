@@ -454,7 +454,9 @@ extension HallieTurnExecutor {
                 catalogPersonName: a.catalogPersonName, clarification: nil,
                 matchCount: a.matchCount, mediaAction: a.mediaAction,
                 offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
-                attachments: a.attachments))
+                attachments: a.attachments,
+                performsFirstOfferedAction: a.immediateOfferedAction != nil,
+                immediateOfferedAction: a.immediateOfferedAction))
         }
         return preTranslationSingle(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -522,6 +524,11 @@ extension HallieTurnExecutor {
         case (let x?, nil), (nil, let x?): matchCount = x
         default: matchCount = nil
         }
+        // Immediate actions are explicit identities, not positions in the
+        // concatenated offer array. If both clauses directly request an
+        // action, the later clause wins: it is the final state the user
+        // asked to see ("open People … open Archive" ends on Archive).
+        let immediateAction = b.immediateOfferedAction ?? a.immediateOfferedAction
         return Result(
             route: b.route, outcome: b.outcome,
             prose: prose,
@@ -533,7 +540,9 @@ extension HallieTurnExecutor {
             matchCount: matchCount, mediaAction: b.mediaAction ?? a.mediaAction,
             offeredActions: a.offeredActions + b.offeredActions,
             answerPlan: plan, composedBy: b.composedBy, transcriptText: transcript,
-            attachments: a.attachments + b.attachments)
+            attachments: a.attachments + b.attachments,
+            performsFirstOfferedAction: immediateAction != nil,
+            immediateOfferedAction: immediateAction)
     }
 
     /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
@@ -1295,6 +1304,7 @@ extension HallieTurnExecutor.Result {
             transcriptText: transcriptText,
             attachments: attachments,
             performsFirstOfferedAction: performsFirstOfferedAction,
+            immediateOfferedAction: immediateOfferedAction,
             refinableQuery: refinableQuery)
     }
 }

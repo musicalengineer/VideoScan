@@ -1362,8 +1362,8 @@ struct ArchivistChatWindow: View {
         // "center the family tree on Martha Lamson" (2026-08-29): the user
         // asked for the navigation, so the chip's own path runs without a
         // tap. The prose already says what is happening; no second line.
-        if response.result.performsFirstOfferedAction,
-           case .openFamilyTreePerson(let personID, let personName)? = response.result.offeredActions.first {
+        if case .openFamilyTreePerson(let personID, let personName)? =
+            response.result.immediateOfferedAction {
             openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
             // AppStorage is only a hand-off request. FamilyTreeLiveModel logs
             // whether the target was actually applied or rejected.
@@ -1371,8 +1371,7 @@ struct ArchivistChatWindow: View {
         }
         // "I can do that now" (live miss #8): the recompile runs without a
         // tap and the question that hit the refused tree is asked again.
-        if response.result.performsFirstOfferedAction,
-           case .recompileFamilyTree? = response.result.offeredActions.first {
+        if case .recompileFamilyTree? = response.result.immediateOfferedAction {
             recompileFamilyTree(thenAsk: question)
         }
         // Explicit "show/open the … tab/window" asks carry the same action

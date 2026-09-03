@@ -1642,7 +1642,8 @@ enum HallieLineageAnswer {
                offeredActions: r.offeredActions, answerPlan: r.answerPlan,
                composedBy: r.composedBy, transcriptText: r.transcriptText,
                attachments: r.attachments,
-               performsFirstOfferedAction: r.performsFirstOfferedAction)
+               performsFirstOfferedAction: r.performsFirstOfferedAction,
+               immediateOfferedAction: r.immediateOfferedAction)
     }
 
     // MARK: Deep ancestors (great × 3 and beyond)
