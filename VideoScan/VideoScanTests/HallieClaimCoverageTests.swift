@@ -215,6 +215,22 @@ struct HallieClaimCoverageTests {
             fallbackText: "I found 2 catalog items matching that.")
     }
 
+    private func biographyPlan() -> HallieAnswerPlan {
+        HallieAnswerPlan(
+            route: .graph, shape: .biography, subject: "Rick Breen",
+            claims: [
+                .init(
+                    id: "c1", text: "Rick Breen was born in Boston.",
+                    requiredPersonNames: ["Rick Breen"],
+                    requiresCoverage: true),
+                .init(
+                    id: "c2", text: "His parents were Richard Harding Breen Sr and Eileen Latta.",
+                    requiredPersonNames: ["Richard Harding Breen Sr", "Eileen Latta"],
+                    requiresCoverage: true),
+            ],
+            fallbackText: "Rick Breen was born in Boston. His parents were Richard Harding Breen Sr and Eileen Latta.")
+    }
+
     /// Exact live failure: the model cited the compound parents claim but
     /// rendered only Eileen's half. A tag is not person coverage; the safe
     /// deterministic answer replaces it and names both parents.
@@ -306,6 +322,42 @@ struct HallieClaimCoverageTests {
         let outcome = await compose(plan, "I found 2 catalog items matching that [c1].")
         #expect(outcome.composedBy == .model)
         #expect(outcome.restored.map(\.claimID) == ["c3"])
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        #expect(outcome.displayText.contains("Eileen Latta"))
+        #expect(!outcome.displayText.contains("Cape.mov"))
+    }
+
+    /// The combined plan inherits `.biography` from its second segment, but
+    /// that presentation shape must not promote optional list examples into
+    /// mandatory biography claims. This is the exact reverse-order hole that
+    /// a fact-shaped graph fixture cannot exercise.
+    @Test func listThenBiographyRestoresOnlyBiographyClaims() async {
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(
+            result(plan: listPlan()), result(plan: biographyPlan()))
+        let plan = HallieAnswerPlan.derive(from: joined)
+        #expect(plan.shape == .biography)
+        let outcome = await compose(
+            plan,
+            "I found 2 catalog items matching that [c1]. Rick Breen was born in Boston [c3].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.restored.map(\.claimID) == ["c4"])
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        #expect(outcome.displayText.contains("Eileen Latta"))
+        #expect(!outcome.displayText.contains("Cape.mov"))
+    }
+
+    /// The same claim-local policy holds when biography comes first and the
+    /// joined plan inherits `.list` from the second segment.
+    @Test func biographyThenListRestoresOnlyBiographyClaims() async {
+        let joined = HallieTurnExecutor.joinedTwoQuestionAnswer(
+            result(plan: biographyPlan()), result(plan: listPlan()))
+        let plan = HallieAnswerPlan.derive(from: joined)
+        #expect(plan.shape == .list)
+        let outcome = await compose(
+            plan,
+            "Rick Breen was born in Boston [c1]. I found 2 catalog items matching that [c3].")
+        #expect(outcome.composedBy == .model)
+        #expect(outcome.restored.map(\.claimID) == ["c2"])
         #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
         #expect(outcome.displayText.contains("Eileen Latta"))
         #expect(!outcome.displayText.contains("Cape.mov"))
