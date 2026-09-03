@@ -1082,6 +1082,9 @@ struct KinshipValidationTests {
         #expect(spouse[0].message == "Donna can't be their own wife.")
     }
 
+    /// Both situations still REPORT `.duplicateRow`; they differ in
+    /// severity, and only the row already on this card blocks the save
+    /// (2026-09-03 — see KinshipExplicitOverInferredTests for why).
     @Test func semanticDuplicatesAcrossInverseRowsAndProfiles() {
         #expect(rules(validate("Tim", .sibling, of: "Rick")) == [.duplicateRow, .siblingWithParentsRecorded])
         #expect(rules(validate("Rick", .sibling, of: "Tim")) == [.duplicateRow, .siblingWithParentsRecorded])   // inverse, other profile
@@ -1089,6 +1092,18 @@ struct KinshipValidationTests {
         #expect(rules(validate("Rick", .parent, of: "Michael")) == [.duplicateRow])   // Michael's "child of Rick"
         #expect(rules(validate("Rick", .child, of: "Eileen")) == [.duplicateRow])     // Eileen's "parent of Rick"
         #expect(rules(validate("Rick", .child, of: "Dad")) == [.duplicateRow])        // not a third parent
+
+        // On THIS card ⇒ error, blocks. Tim's own row is "sibling of Rick";
+        // Rick's own row is "child of Dad".
+        #expect(validate("Tim", .sibling, of: "Rick").blocksSave)
+        #expect(validate("Rick", .child, of: "Dad").blocksSave)
+
+        // Known only from the other card ⇒ warning, saves. Rick has no
+        // sibling/spouse/parent rows of his own for these four.
+        #expect(!validate("Rick", .sibling, of: "Tim").blocksSave)
+        #expect(!validate("Rick", .spouse, of: "Donna").blocksSave)
+        #expect(!validate("Rick", .parent, of: "Michael").blocksSave)
+        #expect(!validate("Rick", .child, of: "Eileen").blocksSave)
     }
 
     @Test func conflictingRelationsOnOnePair() {
