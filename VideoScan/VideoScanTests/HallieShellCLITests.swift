@@ -764,6 +764,99 @@ struct HallieShellCLITests {
         }
     }
 
+    /// lv260902-013 is intentionally synthetic: Rick's live "yes" came
+    /// after he had already corrected the name and received a biography.
+    /// The useful contract is immediate adjacency — one offered identity,
+    /// then an ordinary affirmative, resumes the exact original ask.
+    @Test func immediateThatOneAfterALoneDidYouMeanResumesTheOriginalAsk() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME William Love /Latta Sr./
+        1 BIRT
+        2 DATE 3 FEB 1875
+        2 PLAC Wilmington, North Carolina
+        0 TRLR
+        """)
+        let ast = ArchivistQueryAST.graph(.init(
+            people: ["william love latter"], operation: .biography))
+        let harness = Harness(
+            inputs: ["research william love latter", "that one", ":quit"],
+            graph: graph, translations: [ast])
+        let continuations = LockedCounter()
+        harness.continueTurn = { pending, selectedID, context in
+            continuations.increment()
+            return try await HallieTurnExecutor.continue(
+                pending: pending, selecting: selectedID, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions == ["research william love latter"])
+        #expect(continuations.value == 1)
+        #expect(transcript.contains("did you mean William Love Latta Sr.?"),
+                Comment(rawValue: transcript))
+        #expect(transcript.contains("William Love Latta Sr. was born"),
+                Comment(rawValue: transcript))
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(answers.map(\.route) == ["graph", "graph"])
+        #expect(answers.map(\.outcome) == ["needs-clarification", "answered"])
+    }
+
+    /// Isolation sensor: an answered intervening turn expires the old
+    /// clarification. A later "yes" may be handled or declined as its own
+    /// turn, but it must never resurrect William from poisoned old state.
+    @Test func answeredInterveningTurnExpiresTheOldDidYouMean() async throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME William Love /Latta Sr./
+        1 BIRT
+        2 DATE 1875
+        0 @I2@ INDI
+        1 NAME Donna /Breen/
+        1 BIRT
+        2 DATE 1959
+        0 TRLR
+        """)
+        let william = ArchivistQueryAST.graph(.init(
+            people: ["william love latter"], operation: .biography))
+        let donna = ArchivistQueryAST.graph(.init(
+            people: ["Donna Breen"], operation: .biography))
+        let harness = Harness(
+            inputs: [
+                "research william love latter",
+                "tell me about Donna Breen",
+                "yes",
+                ":quit",
+            ],
+            graph: graph, translations: [william, donna])
+        let continuations = LockedCounter()
+        harness.continueTurn = { pending, selectedID, context in
+            continuations.increment()
+            return try await HallieTurnExecutor.continue(
+                pending: pending, selecting: selectedID, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        _ = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(continuations.value == 0, "stale William offer must not resume")
+        #expect(answers.filter { $0.text.contains("William Love Latta Sr. was born") }.isEmpty)
+        #expect(answers.contains { $0.text.contains("Donna Breen") && $0.outcome == "answered" })
+        #expect(answers.last?.route != "graph" || answers.last?.text.contains("Donna Breen") == true,
+                "bare yes must not become the stale William biography")
+    }
+
     @Test func cancelAbandonsPendingClarificationWithoutContinuation() async throws {
         let profiles = [
             POIProfile(name: "Tim Breen", referencePath: "/isolated/tim-a",

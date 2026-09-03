@@ -116,11 +116,25 @@ struct HallieSuggestionYesTests {
     @Test func yesSelectsTheOnlyCandidate() {
         let only = [HallieTurnExecutor.Candidate(id: .gedcomPersonID("@I1@"),
                                                  canonicalName: "Judson Lamb", label: "Judson Lamb (born 1846)")]
-        if case .gedcomPersonID(let id)? = HallieTurnExecutor.clarificationSelection("yes", from: only) {
-            #expect(id == "@I1@")
-        } else { Issue.record("yes did not select the lone candidate") }
+        for reply in ["yes", "yes please", "that one", "this one", "yes, that one!", "that's the one"] {
+            if case .gedcomPersonID(let id)? = HallieTurnExecutor.clarificationSelection(reply, from: only) {
+                #expect(id == "@I1@", Comment(rawValue: reply))
+            } else { Issue.record("\(reply) did not select the lone candidate") }
+        }
         let two = only + [HallieTurnExecutor.Candidate(id: .gedcomPersonID("@I4@"),
                                                        canonicalName: "Judson Lamb", label: "Judson Lamb (born 1811)")]
-        #expect(HallieTurnExecutor.clarificationSelection("yes", from: two) == nil)
+        for reply in ["yes", "yes please", "that one", "this one", "yes, that one!", "that's the one"] {
+            #expect(HallieTurnExecutor.clarificationSelection(reply, from: two) == nil,
+                    Comment(rawValue: reply))
+        }
+    }
+
+    @Test func cancellationNeverConfirmsEvenOneCandidate() {
+        let only = [HallieTurnExecutor.Candidate(id: .gedcomPersonID("@I1@"),
+                                                 canonicalName: "Judson Lamb", label: "Judson Lamb (born 1846)")]
+        for reply in ["no", "cancel", "stop", "never mind", "not that one"] {
+            #expect(HallieTurnExecutor.clarificationSelection(reply, from: only) == nil,
+                    Comment(rawValue: reply))
+        }
     }
 }
