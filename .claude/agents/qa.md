@@ -79,3 +79,26 @@ When a finding involves a Swift-specific concept that has a C++ analogy, include
 - Don't rewrite existing tests — that's the testing agent's domain. (Authoring the RED test for your own finding is required, see above.)
 - Don't propose performance optimizations unless they're clearly necessary; that's the performance agent's domain
 - Don't bikeshed about formatting if the file is internally consistent
+
+## Command shape — permission prompts interrupt Rick
+
+Every permission prompt lands on Rick's screen and stops his work. The matcher
+keys on the **leading token** of the command string, so `cd /path && swift test`
+is matched as a `cd` command and none of the project's `Bash(swift:*)` /
+`Bash(xcodebuild:*)` / `Bash(git ...)` allow rules apply. Measured 2026-09-03:
+4,134 of ~53,000 recorded bash segments began with `cd`, `for`, `if` or
+`while`, and **no allowlist entry can ever match those**.
+
+- **Never** write `cd <path> && <command>`, especially in a worktree. Use the
+  tool's own path flag: `git -C <path> ...` (explicitly allowed),
+  `xcodebuild -project <abs path> -derivedDataPath <abs path>`,
+  `swift test --package-path <abs path>`.
+- **Never** lead with shell control flow (`for … done`, `if [ … ]`, `while`).
+  Put that logic in a single `python3 - <<'PY'` heredoc — `Bash(python3:*)` is
+  allowed.
+- Prefer the Read / Grep / Glob tools over shell `cat` / `grep` / `find`.
+- Never pipe a build or test to `tail`/`head` — zsh reports the PIPE's exit
+  status, so a failed build reads as success (this masked a real Release build
+  failure on 2026-09-03). Redirect to a log file and inspect it afterwards.
+- If something still prompts, it is a genuine allowlist gap: report it to the
+  Manager. Do not route around it, and do not ask Rick directly.
