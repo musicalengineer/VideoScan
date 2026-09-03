@@ -11,6 +11,16 @@
 // their own — unless three generations in a row record nothing, in which
 // case the trail is said to run out. Nothing walks past 20 generations.
 //
+// Ties (codex #1014 item 2): an all-ancestors walk stops at the FIRST
+// generation holding a match and returns EVERY match at that generation
+// (`matches`), ordered by line label (father-side hops before mother-side
+// hops, so "father → father" sorts before "father → mother") and then by
+// GEDCOM pointer. Full paths back down are materialised for the first
+// `maxTiePaths` only (`matchPaths`) — a synthetic 17-generation pedigree
+// ties 65,536 ways at its top, and the prose never names more than a few.
+// `steps` is the first path; the prose must not call it "the" first
+// ancestor when `matches` has more than one.
+//
 // Pure functions over an in-memory graph; no I/O. C++ readers: `enum
 // LineageTrail` with no cases is a namespace; the nested `enum Line` /
 // `enum Stop` ARE sum types (tagged unions with payloads).
@@ -27,7 +37,7 @@ public enum LineageTrail {
         case paternal
         /// Both parents at every step, one generation at a time (a
         /// breadth-first pedigree); stops at the FIRST generation holding
-        /// a match and reports that person with the path back down.
+        /// a match and reports every match there with its path back down.
         case allAncestors
     }
 
@@ -67,6 +77,19 @@ public enum LineageTrail {
         public let birthplace: BirthplaceClassifier.Place?
         /// True for the step that satisfied the stop rule.
         public let matchesStop: Bool
+        /// "father" / "mother" — which parent this step is of the step
+        /// below it; nil for the anchor. Together the labels of a path
+        /// name the line ("father → father → mother").
+        public let hop: String?
+
+        public init(generation: Int, person: GedcomFamilyGraph.Person,
+                    birthplace: BirthplaceClassifier.Place?, matchesStop: Bool, hop: String? = nil) {
+            self.generation = generation
+            self.person = person
+            self.birthplace = birthplace
+            self.matchesStop = matchesStop
+            self.hop = hop
+        }
 
         public var birthYear: Int? { person.birthYear }
         public var placeText: String? { birthplace?.raw }
@@ -77,8 +100,16 @@ public enum LineageTrail {
         public let stop: Stop
         /// The trail, starting from the person walked from (generation
         /// 0). For `.allAncestors` this is the PATH from that person up to
-        /// the match — empty except for the anchor when nothing matched.
+        /// the first match — empty except for the anchor when nothing
+        /// matched.
         public let steps: [Step]
+        /// EVERY match at the nearest matching generation, in tie order
+        /// (line label, then pointer). One on a single line; empty when
+        /// nothing matched. Each step carries its own last hop.
+        public let matches: [Step]
+        /// The paths to the first `maxTiePaths` matches, the first being
+        /// `steps`. `matches.count` says how many ties there are in all.
+        public let matchPaths: [[Step]]
         public let ending: Ending
         /// Generations actually walked (the deepest generation reached).
         public let generationsWalked: Int
@@ -86,6 +117,7 @@ public enum LineageTrail {
         /// ("the line ends at …"). One person on a single line.
         public let lastGeneration: [GedcomFamilyGraph.Person]
 
+        /// The first match (tie order).
         public var match: Step? { steps.last(where: { $0.matchesStop }) }
         /// Steps above the anchor.
         public var ancestors: [Step] { Array(steps.dropFirst()) }
@@ -95,6 +127,13 @@ public enum LineageTrail {
     /// Consecutive generations with no birthplace anywhere before the
     /// trail is said to run out.
     public static let unknownRunLimit = 3
+    /// Tie paths materialised in full; the rest are in `matches` only.
+    public static let maxTiePaths = 8
+
+    /// The line a path took, for ordering and prose: "father → mother".
+    public static func lineLabel(of path: [Step]) -> String {
+        path.compactMap(\.hop).joined(separator: " → ")
+    }
 
     // MARK: - Walk
 
@@ -118,8 +157,8 @@ public enum LineageTrail {
         return generationCap
     }
 
-    /// Does this birthplace satisfy the stop rule? Unknown / unrecorded
-    /// places never do.
+    /// Does this birthplace satisfy the stop rule? Unknown, unrecorded
+    /// and ambiguous places never do.
     static func satisfies(_ stop: Stop, _ place: BirthplaceClassifier.Place?) -> Bool {
         guard let place else { return false }
         switch stop {
@@ -144,6 +183,7 @@ public enum LineageTrail {
         let limit = bound(for: stop)
         var ending: Ending = .top
         var generation = 0
+        let hop = line == .maternal ? "mother" : "father"
         while generation < limit {
             // Swift's `guard let` ≈ C++ early-exit after a null check.
             let parent = line == .maternal ? graph.primaryMother(of: current) : graph.primaryFather(of: current)
@@ -152,7 +192,7 @@ public enum LineageTrail {
             generation += 1
             let place = classify(parent)
             let hit = satisfies(stop, place)
-            steps.append(Step(generation: generation, person: parent, birthplace: place, matchesStop: hit))
+            steps.append(Step(generation: generation, person: parent, birthplace: place, matchesStop: hit, hop: hop))
             current = parent
             if hit { ending = .stopped; break }
             unknownRun = place == nil ? unknownRun + 1 : 0
@@ -160,68 +200,102 @@ public enum LineageTrail {
             if generation == limit { ending = .generationCap }
         }
         if generation == 0 { ending = .top }
-        return Result(line: line, stop: stop, steps: steps, ending: ending,
-                      generationsWalked: generation, lastGeneration: [current])
+        let stopped = ending == .stopped
+        return Result(line: line, stop: stop, steps: steps,
+                      matches: stopped ? [steps[steps.count - 1]] : [],
+                      matchPaths: stopped ? [steps] : [],
+                      ending: ending, generationsWalked: generation, lastGeneration: [current])
     }
 
     private static func walkAllAncestors(from anchor: GedcomFamilyGraph.Person,
                                          stop: Stop,
                                          graph: GedcomFamilyGraph) -> Result {
-        // Breadth-first over primary parents. `parentOf[id]` remembers the
-        // CHILD each ancestor was reached through, so the path back to the
-        // anchor is a chain of dictionary lookups, not a second search.
+        // Breadth-first over primary parents. `reachedThrough[id]`
+        // remembers the CHILD each ancestor was reached through (and which
+        // parent of that child it is), so the path back to the anchor is a
+        // chain of dictionary lookups, not a second search.
         // Memory: one entry per ancestor visited (a 20-generation full
         // pedigree is at most 2^21 entries; real trees collapse far below).
-        var reachedThrough: [String: String] = [:]
+        var reachedThrough: [String: (child: String, hop: String)] = [:]
         var frontier: [GedcomFamilyGraph.Person] = [anchor]
         var seen: Set<String> = [anchor.id]
         let limit = bound(for: stop)
         var generation = 0
         var unknownRun = 0
         var ending: Ending = .top
-        var match: GedcomFamilyGraph.Person? = nil
+        /// Every match at the stopping generation, with the place already
+        /// classified during the walk (never classified twice).
+        var matched: [(person: GedcomFamilyGraph.Person, place: BirthplaceClassifier.Place?)] = []
         var lastFrontier = frontier
 
-        while generation < limit, match == nil {
+        while generation < limit, matched.isEmpty {
             var next: [GedcomFamilyGraph.Person] = []
             var anyPlace = false
+            // Father then mother, inline: this loop touches every person
+            // of a 131k-record pedigree, so no per-child array or closure.
             for child in frontier {
-                for parent in [graph.primaryFather(of: child), graph.primaryMother(of: child)].compactMap({ $0 })
-                where !seen.contains(parent.id) {
+                for side in 0..<2 {
+                    let parent = side == 0 ? graph.primaryFather(of: child) : graph.primaryMother(of: child)
+                    guard let parent, !seen.contains(parent.id) else { continue }
                     seen.insert(parent.id)
-                    reachedThrough[parent.id] = child.id
+                    reachedThrough[parent.id] = (child.id, side == 0 ? "father" : "mother")
                     next.append(parent)
                     let place = classify(parent)
                     if place != nil { anyPlace = true }
-                    if match == nil, satisfies(stop, place) { match = parent }
+                    if satisfies(stop, place) { matched.append((parent, place)) }
                 }
             }
             if next.isEmpty { ending = .top; break }
             generation += 1
             frontier = next
             lastFrontier = next
-            if match != nil { ending = .stopped; break }
+            if !matched.isEmpty { ending = .stopped; break }
             unknownRun = anyPlace ? 0 : unknownRun + 1
             if unknownRun >= unknownRunLimit { ending = .ranOut; break }
             if generation == limit { ending = .generationCap }
         }
 
-        // The path: anchor first, then each generation up to the match.
-        var chain: [GedcomFamilyGraph.Person] = []
-        if let match {
+        // The hops from the anchor up to `id`, bottom-up order.
+        func hops(to id: String) -> [String] {
+            var out: [String] = []
+            var cursor = id
+            while let via = reachedThrough[cursor] {
+                out.append(via.hop)
+                cursor = via.child
+            }
+            return out.reversed()
+        }
+        // Tie order: line label, then pointer. Labels are computed once
+        // per match, never inside the comparator.
+        let ordered = matched.indices.map { i -> (label: String, id: String, index: Int) in
+            (hops(to: matched[i].person.id).joined(separator: " → "), matched[i].person.id, i)
+        }.sorted { a, b in a.label != b.label ? a.label < b.label : a.id < b.id }
+
+        let matches: [Step] = ordered.map { entry in
+            let m = matched[entry.index]
+            return Step(generation: generation, person: m.person, birthplace: m.place, matchesStop: true,
+                        hop: reachedThrough[m.person.id]?.hop)
+        }
+        // One full path per leading match: anchor first, then each
+        // generation up to it (classified along the way, a handful only).
+        func path(to match: GedcomFamilyGraph.Person) -> [Step] {
+            var chain: [(GedcomFamilyGraph.Person, String?)] = []
             var cursor: GedcomFamilyGraph.Person? = match
             while let p = cursor {
-                chain.append(p)
-                cursor = reachedThrough[p.id].flatMap { graph.people[$0] }
+                let via = reachedThrough[p.id]
+                chain.append((p, via?.hop))
+                cursor = via.flatMap { graph.people[$0.child] }
             }
             chain.reverse()
-        } else {
-            chain = [anchor]
+            return chain.enumerated().map { g, entry in
+                Step(generation: g, person: entry.0, birthplace: classify(entry.0),
+                     matchesStop: match.id == entry.0.id, hop: entry.1)
+            }
         }
-        let steps = chain.enumerated().map { g, p in
-            Step(generation: g, person: p, birthplace: classify(p), matchesStop: match?.id == p.id)
-        }
-        return Result(line: .allAncestors, stop: stop, steps: steps, ending: ending,
-                      generationsWalked: generation, lastGeneration: lastFrontier)
+        let paths = matches.prefix(maxTiePaths).map { path(to: $0.person) }
+        let steps = paths.first
+            ?? [Step(generation: 0, person: anchor, birthplace: classify(anchor), matchesStop: false)]
+        return Result(line: .allAncestors, stop: stop, steps: steps, matches: matches, matchPaths: paths,
+                      ending: ending, generationsWalked: generation, lastGeneration: lastFrontier)
     }
 }
