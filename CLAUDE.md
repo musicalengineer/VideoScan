@@ -103,6 +103,27 @@ Rationale: escaped bugs are boundary bugs (environment, cost, capability) — th
 - macOS-native capabilities preferred (Vision, AVFoundation) over cross-platform alternatives
 - ffmpeg/ffprobe are required external dependencies
 
+## Command shape (agents and Manager alike)
+
+Every permission prompt interrupts Rick, and the matcher keys on the **leading
+token** of the command string. `cd /path && xcodebuild ...` is matched as a `cd`
+command, so none of the `Bash(xcodebuild:*)` rules apply and Rick gets asked —
+even though the allowlist already covers the real work. Measured 2026-09-03:
+4,134 of ~53,000 recorded bash segments began with `cd`, `for`, `if` or `while`,
+and **no allowlist entry can ever match those**.
+
+So:
+- **Never** write `cd <path> && <command>`. Use the tool's own path flag:
+  `git -C <path> ...` (explicitly allowed), `xcodebuild -project <abs path>
+  -derivedDataPath <abs path>`, `swift test --package-path <abs path>`.
+- **Never** lead with shell control flow (`for … done`, `if [ … ]`). Put the
+  logic in one `python3 - <<'PY'` heredoc; `Bash(python3:*)` is allowed.
+- Prefer the Grep/Read/Glob tools over shell `grep`/`cat`/`find`.
+- If something still prompts, it is a genuine allowlist gap — add the rule to
+  `.claude/settings.json`; don't route around it and don't ask Rick.
+- `deny` outranks `allow`: to permit something denied, the deny entry must be
+  removed, not merely added to `allow`.
+
 ## Build mode policy
 
 - **Debug** for rapid dev iteration — Rick's solo edit/build/run loops AND paired RD sessions with Claude. Incremental compiles are 5–15s instead of ~3 min. Default when in doubt.
