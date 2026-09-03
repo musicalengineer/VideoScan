@@ -28,10 +28,16 @@ import Foundation
 //                         mediaDisposition, lifecycleStage,
 //                         archiveStage, starRating, junkScore, notes,
 //                         tags, userNotes, userDate, userDateConfidence.
-//   Archive provenance  — archiveFixity, originalFullPath, originVolume,
-//                         masterLocation. Stamped by Promote / Verify
-//                         Archive Copies / move-adoption, never by a
-//                         scan, so a rescan can only ever lose them.
+//   Archive provenance  — originalFullPath, originVolume,
+//                         masterLocation. Stamped by Promote / move-
+//                         adoption / Relocate, never by a scan, so a
+//                         rescan can only ever lose them. Restored
+//                         unconditionally: they describe WHERE the file
+//                         came from / which archive it belongs to — a
+//                         location association, true regardless of what
+//                         the bytes look like today.
+//   Archive fixity      — archiveFixity, restored CONDITIONALLY (see
+//                         the identity guard below).
 //
 // 2026-09-02: archiveFixity was never in the list; a rescan of the
 // archive volume dropped 28 fixity records' worth of provenance in
@@ -42,8 +48,26 @@ import Foundation
 // (Promote's self-contained "where did this come from" provenance) and
 // userDate / userDateConfidence (Rick's hand-typed Estimated Date —
 // which the Update Catalog sheet promises "stays with the file") were
-// missing too. All six are additive here; the scan never writes any of
-// them, so restoring verbatim can never clobber a fresher value.
+// missing too.
+//
+// 2026-09-02 (codex #975, safety-critical): the first cut restored
+// archiveFixity VERBATIM. That broke the field's contract — every UI
+// reader (ArchiveView+Categories, InspectorPanel's Archived banner,
+// VolumeDashboard's fixityVerified) treats ANY non-nil archiveFixity as
+// "verified", so carrying it onto a fresh probe whose size or
+// fingerprint no longer matches would keep the badge green over changed
+// bytes. The contract now enforced here and in VerifyArchiveCopiesJob:
+//
+//     archiveFixity present  ⇒  verified for THESE bytes.
+//
+// So the fixity carries forward only while identity continuity holds:
+// the fresh probe's sizeBytes equals fixity.sizeBytes, and — when both
+// the pre-rescan record and the fresh probe carry a partialMD5 — the
+// fingerprints agree. Any definite disagreement DROPS the fixity (the
+// record goes honestly unverified; the 00_Index manifest still holds
+// the expected digest, so "Verify copies…" can re-establish it after a
+// full read-back). partialMD5 itself is snapshotted for COMPARISON ONLY
+// — it is scan-derived and is never restored.
 //
 // What we DON'T preserve (the scan re-derives these from disk):
 //   filename, ext, size, sizeBytes, duration, durationSeconds,
@@ -70,6 +94,19 @@ import Foundation
 // the struct itself stays a plain Sendable value (like a POD that's safe
 // to copy across threads — only these two accessors are pinned).
 struct RescanPreservedFields: Sendable {
+
+    /// What `apply(to:)` decided about the archive fixity record.
+    /// (For Rick: a three-state result code — the caller counts `.dropped`
+    /// so the merge can log ONE summary line instead of per-record spam.)
+    enum FixityCarry: Equatable, Sendable {
+        /// The snapshot carried no fixity — nothing to decide.
+        case notApplicable
+        /// Identity continuity held — the fixity was restored.
+        case carried
+        /// Definite size / fingerprint disagreement — NOT restored; the
+        /// record is now honestly unverified.
+        case dropped
+    }
 
     // Dossier channels
     let sceneCaptions: [SceneCaption]
@@ -135,22 +172,33 @@ struct RescanPreservedFields: Sendable {
     /// after re-reading every byte. A rescan of the archive volume
     /// produced fresh instances with archiveFixity == nil, so every
     /// verified copy silently became "unverified" (see header note).
-    /// Restored VERBATIM — if the file on disk has since changed, the
-    /// stale sizeBytes inside the record IS the tamper signal Verify
-    /// Copies looks for; dropping it would destroy the evidence.
+    ///
+    /// Restored CONDITIONALLY (codex #975): only when the fresh probe's
+    /// bytes still look like the bytes this digest covered — see
+    /// `fixityIdentityHolds`. Presence of this field MEANS verified, so
+    /// a fixity that no longer describes the file must not survive.
     let archiveFixity: ArchiveFixity?
+
+    /// The pre-rescan record's partialMD5, captured for COMPARISON ONLY
+    /// (the fixity identity guard). Never written back — partialMD5 is
+    /// scan-derived and the fresh probe's value always stands. Empty
+    /// when the previous scan skipped hashing.
+    let fixityIdentityMD5: String
 
     /// Promote's self-contained provenance on the archive copy (codex QA
     /// major b): where the file came from, so the copy can still say so
     /// after a retired-volume cleanup removes the source record. Also
     /// written by move-adoption and Relocate for renamed/moved files.
-    /// Never written by a scan.
+    /// Never written by a scan. Restored unconditionally — a history
+    /// fact, not a claim about the current bytes.
     let originalFullPath: String?
     let originVolume: String?
 
     /// Which Master Archive holds this record's master ("Mac Studio SSD",
     /// the archive target path). Stamped on BOTH the source and the copy
-    /// by Promote; "" = none.
+    /// by Promote; "" = none. Restored unconditionally: it is a LOCATION
+    /// ASSOCIATION (which archive this record belongs to), not a
+    /// verification claim — the verification claim is `archiveFixity`.
     let masterLocation: String
 
     /// Rick's hand-entered Estimated Date (GH #117) + its confidence.
@@ -229,6 +277,7 @@ struct RescanPreservedFields: Sendable {
         self.derivedFrom = rec.derivedFrom
         self.derivationKind = rec.derivationKind
         self.archiveFixity = rec.archiveFixity
+        self.fixityIdentityMD5 = rec.partialMD5
         self.originalFullPath = rec.originalFullPath
         self.originVolume = rec.originVolume
         self.masterLocation = rec.masterLocation
@@ -236,12 +285,58 @@ struct RescanPreservedFields: Sendable {
         self.userDateConfidence = rec.userDateConfidence
     }
 
+    // MARK: Fixity identity guard
+
+    /// The rule, as a pure function so tests can pin every branch:
+    /// a fixity record may follow a file across a rescan only while the
+    /// fresh probe still looks like the bytes the digest covered.
+    ///
+    ///   * `fixity.sizeBytes` must equal the fresh probe's size — a size
+    ///     change is a DEFINITE disagreement (truncation, re-encode,
+    ///     overwrite), no matter what else matches.
+    ///   * When BOTH the pre-rescan record and the fresh probe carry a
+    ///     partialMD5, they must agree. Either side empty (hashing
+    ///     skipped over SMB, or an older catalog) is "no evidence", not a
+    ///     disagreement — size alone decides.
+    ///
+    /// Passing this does NOT re-verify the digest (only Verify Archive
+    /// Copies reads every byte); it establishes that nothing observable
+    /// says the bytes changed. Failing it means something definite does.
+    static func fixityIdentityHolds(
+        fixity: ArchiveFixity,
+        freshSizeBytes: Int64,
+        snapshotPartialMD5: String,
+        freshPartialMD5: String
+    ) -> Bool {
+        guard fixity.sizeBytes == freshSizeBytes else { return false }
+        if !snapshotPartialMD5.isEmpty, !freshPartialMD5.isEmpty,
+           snapshotPartialMD5 != freshPartialMD5 {
+            return false
+        }
+        return true
+    }
+
+    /// The guard applied to a concrete fresh record.
+    @MainActor
+    func fixityCarry(onto rec: VideoRecord) -> FixityCarry {
+        guard let fixity = archiveFixity else { return .notApplicable }
+        return Self.fixityIdentityHolds(fixity: fixity,
+                                        freshSizeBytes: rec.sizeBytes,
+                                        snapshotPartialMD5: fixityIdentityMD5,
+                                        freshPartialMD5: rec.partialMD5)
+            ? .carried : .dropped
+    }
+
     /// Apply the snapshotted fields onto a freshly-scanned record.
     /// The new record's scan-derived fields (size, codec, etc.) are
     /// preserved as-is; only the dossier + user-edit fields are
-    /// restored.
+    /// restored. `archiveFixity` is restored only when
+    /// `fixityCarry(onto:)` says the bytes still match — otherwise the
+    /// record's fixity is left/set nil (unverified). Returns that
+    /// decision so the caller can count drops for ONE summary log line.
     @MainActor
-    func apply(to rec: VideoRecord) {
+    @discardableResult
+    func apply(to rec: VideoRecord) -> FixityCarry {
         rec.sceneCaptions = self.sceneCaptions
         rec.sceneCaptionModel = self.sceneCaptionModel
         rec.sceneCaptionDate = self.sceneCaptionDate
@@ -272,12 +367,18 @@ struct RescanPreservedFields: Sendable {
         rec.repairConfirmedDate = self.repairConfirmedDate
         rec.derivedFrom = self.derivedFrom
         rec.derivationKind = self.derivationKind
-        rec.archiveFixity = self.archiveFixity
+        // Conditional: present ⇒ verified for THESE bytes. A fresh probe
+        // arrives with nil; a move-adopted OLD instance still holds its
+        // previous fixity, so the nil assignment on drop is load-bearing.
+        let carry = fixityCarry(onto: rec)
+        rec.archiveFixity = (carry == .carried) ? self.archiveFixity : nil
+        // Unconditional: history + location association, not byte claims.
         rec.originalFullPath = self.originalFullPath
         rec.originVolume = self.originVolume
         rec.masterLocation = self.masterLocation
         rec.userDate = self.userDate
         rec.userDateConfidence = self.userDateConfidence
+        return carry
     }
 }
 
@@ -324,6 +425,11 @@ extension VideoScanModel {
     /// of records that had preserved fields restored, for logging.
     /// Side effect: clears the snapshot for this target (the data is
     /// no longer needed since it's been merged into the new records).
+    ///
+    /// Fixity drops (identity guard failed) are counted and reported as
+    /// ONE summary line per merge — never per-record spam (fa24921
+    /// console etiquette); the first few names ride along so Rick can
+    /// find them without grepping.
     @MainActor
     @discardableResult
     func applyPreservedFieldsAfterRescan(
@@ -333,10 +439,22 @@ extension VideoScanModel {
         let oldIDs = pendingRescanOldIDs.removeValue(forKey: target.searchPath) ?? [:]
         let map = pendingPreservedFields.removeValue(forKey: target.searchPath) ?? [:]
         var restored = 0
+        var fixityDropped = 0
+        var droppedSample: [String] = []
         for rec in targetRecords {
             guard let snap = map[rec.fullPath] else { continue }
-            snap.apply(to: rec)
+            if snap.apply(to: rec) == .dropped {
+                fixityDropped += 1
+                if droppedSample.count < 5 { droppedSample.append(rec.filename) }
+            }
             restored += 1
+        }
+        if fixityDropped > 0 {
+            let more = fixityDropped > droppedSample.count
+                ? " … and \(fixityDropped - droppedSample.count) more" : ""
+            let names = droppedSample.joined(separator: ", ") + more
+            log("  ⚠ \(fixityDropped) fixity record(s) dropped: bytes changed since verification (\(names)) — these archive copies are now unverified; run Verify copies… on the Master Archive to re-establish them.")
+            appLog.write("Rescan preservation: \(fixityDropped) archive fixity record(s) dropped under \(target.searchPath) — size/fingerprint changed since verification: \(names)")
         }
         // Re-link runs even when the preservation map is EMPTY (QA m1,
         // 2026-07-24): pendingRescanOldIDs was captured for exactly this

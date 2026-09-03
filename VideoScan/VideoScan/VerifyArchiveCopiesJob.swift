@@ -11,9 +11,14 @@
 //
 //   MATCH        → restore/refresh the record's `archiveFixity` (same
 //                  shape as PromoteToArchiveJob writes at promotion).
-//   MISMATCH     → NEVER touch fixity. Flagged loudly — this is the
+//   MISMATCH     → NEVER write fixity. Flagged loudly — this is the
 //                  potential-corruption signal, the one outcome this
-//                  tool exists to surface, never to paper over.
+//                  tool exists to surface, never to paper over. A STALE
+//                  fixity already on the record is CLEARED (codex #975,
+//                  2026-09-02): the field's presence means "verified for
+//                  these bytes", and these bytes just failed. The
+//                  manifest row keeps the expected digest, so no evidence
+//                  is lost — the record simply stops claiming verified.
 //   MISSING      → file absent from a reachable archive — flagged.
 //   ORPHAN       → manifest row with no catalog record — REPORT ONLY
 //                  (Promote's adopt path or a rescan restores it; this
@@ -168,7 +173,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             /// the GH #167 recovery case. Fixity written.
             case restored
             /// Digest does NOT match the reference — potential
-            /// corruption. Fixity untouched.
+            /// corruption. No fixity written; a stale one is cleared.
             case mismatch
             /// Reachable archive, file absent.
             case missing
@@ -194,6 +199,10 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         var bytesDone: Int64 = 0
     }
     private(set) var tally = Tally()
+    /// Mismatches that also CLEARED a stale fixity the record carried
+    /// (codex #975). Counted apart from `tally.mismatch` so the batch-end
+    /// save knows a catalog write happened even when nothing was restored.
+    private(set) var staleFixityCleared = 0
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
@@ -415,8 +424,11 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         }
 
         // Batch end: one durable save carrying every restored fixity —
-        // runs on cancel too (verified files STAY verified).
-        if tally.restored + tally.verified + tally.unmanifested > 0 {
+        // runs on cancel too (verified files STAY verified). A cleared
+        // stale fixity (mismatch) is a catalog write as well and must
+        // land for the same reason: an unverified record must not come
+        // back green on the next launch.
+        if tally.restored + tally.verified + tally.unmanifested + staleFixityCleared > 0 {
             if !model.saveCatalogNow() {
                 model.log("Verify Archive: the catalog could not be saved right now — restored fixity records are in memory and will persist with the next successful save.")
             }
@@ -478,7 +490,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                 applyMatch(item: item, digest: actual, model: model, name: name)
             } else {
                 flagMismatch(name: name, expected: expected, actual: actual,
-                             reference: "manifest", model: model)
+                             reference: "manifest", recordID: item.recordID, model: model)
             }
             return
         }
@@ -494,7 +506,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                 record(.unmanifested, name, "no manifest row, but the bytes match the catalog's fixity record — consider re-promoting so the manifest covers it")
             } else {
                 flagMismatch(name: name, expected: recorded, actual: actual,
-                             reference: "catalog fixity record", model: model)
+                             reference: "catalog fixity record", recordID: item.recordID, model: model)
             }
         } else {
             tally.unmanifested += 1
@@ -521,14 +533,25 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
 
     /// The loud path. Fixity is NEVER written here — a mismatch must
     /// stay visible until a human resolves it.
+    ///
+    /// A fixity the record ALREADY carries is cleared (codex #975): its
+    /// presence tells every UI reader "verified", and the bytes on disk
+    /// just proved otherwise. The expected digest survives in the
+    /// manifest row (and in this outcome's detail + the logs), so
+    /// clearing loses no evidence — it only stops a false green.
     private func flagMismatch(name: String, expected: String, actual: String,
-                              reference: String, model: VideoScanModel) {
+                              reference: String, recordID: UUID?, model: VideoScanModel) {
         tally.mismatch += 1
-        let detail = "POSSIBLE CORRUPTION — bytes on disk hash to \(actual.prefix(16))… but the \(reference) says \(expected.prefix(16))…. Fixity NOT restored; check this file by hand before trusting it."
+        let cleared = recordID.map { model.invalidateArchiveFixity(recordID: $0) } ?? false
+        if cleared { staleFixityCleared += 1 }
+        let fixityClause = cleared
+            ? "Stale fixity record CLEARED (it claimed these bytes were verified); nothing restored"
+            : "Fixity NOT restored"
+        let detail = "POSSIBLE CORRUPTION — bytes on disk hash to \(actual.prefix(16))… but the \(reference) says \(expected.prefix(16))…. \(fixityClause); check this file by hand before trusting it."
         record(.mismatch, name, detail)
         model.log("Verify Archive: MISMATCH \(name) — \(detail)")
-        appLog.write("verify archive MISMATCH: \(name) — expected \(expected) (\(reference)), got \(actual)")
-        verifyArchiveLog.error("verify archive MISMATCH: \(name, privacy: .public) expected \(expected, privacy: .public) actual \(actual, privacy: .public)")
+        appLog.write("verify archive MISMATCH: \(name) — expected \(expected) (\(reference)), got \(actual)\(cleared ? "; stale fixity record cleared" : "")")
+        verifyArchiveLog.error("verify archive MISMATCH: \(name, privacy: .public) expected \(expected, privacy: .public) actual \(actual, privacy: .public) staleFixityCleared=\(cleared)")
     }
 
     private func record(_ kind: FileOutcome.Kind, _ name: String, _ detail: String) {
@@ -653,6 +676,23 @@ extension VideoScanModel {
         guard !isReadOnly, let rec = record(forID: recordID) else { return false }
         rec.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: verifiedAt,
                                           sizeBytes: sizeBytes)
+        noteCatalogRecordsMutated()
+        saveCatalogDebounced()
+        return true
+    }
+
+    /// Clear a record's fixity after an end-to-end read-back proved the
+    /// bytes no longer match the reference (codex #975, 2026-09-02).
+    /// `archiveFixity` present ⇒ verified for THESE bytes — so a record
+    /// whose bytes just failed must stop carrying one. Nothing is written
+    /// in its place: only a byte-for-byte match ever writes fixity.
+    /// Returns true only when a fixity was actually removed (false on a
+    /// read-only viewer, an unknown id, or a record that had none).
+    @discardableResult
+    func invalidateArchiveFixity(recordID: UUID) -> Bool {
+        guard !isReadOnly, let rec = record(forID: recordID),
+              rec.archiveFixity != nil else { return false }
+        rec.archiveFixity = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
         return true
