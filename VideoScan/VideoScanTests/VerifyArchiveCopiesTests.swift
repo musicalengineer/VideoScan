@@ -168,7 +168,7 @@ struct VerifyArchiveCopiesLogicTests {
                 "the expected digest still lives in the manifest row")
     }
 
-    @Test("MISSING: archived file deleted → flagged, fixity untouched, run completes")
+    @Test("MISSING (no fixity to clear): archived file deleted → flagged, run goes RED, nothing cleared, sibling still restored")
     func missingFileFlagged() async throws {
         let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("missing", count: 2)
         defer { sb.cleanup() }
@@ -176,13 +176,114 @@ struct VerifyArchiveCopiesLogicTests {
         try FileManager.default.removeItem(atPath: copies[0].fullPath)
 
         let job = await VerifyTestSupport.run(model)
-        guard case .finished = job.state else {
-            Issue.record("verify did not finish: \(job.state)"); return
+        // codex #983: a missing archive file is an alarming verdict, same
+        // as a mismatch — the row must not read as a clean pass.
+        guard case .failed(let message) = job.state else {
+            Issue.record("a missing-file run must finish RED (.failed), got \(job.state)"); return
         }
+        #expect(message.contains("1 missing"))
         #expect(job.tally.missing == 1)
         #expect(job.tally.restored == 1)
+        #expect(job.staleFixityCleared == 0, "nothing to clear — the record had no fixity")
         #expect(copies[0].archiveFixity == nil)
         #expect(copies[1].archiveFixity != nil)
+    }
+
+    @Test("MISSING with a fixity PRESENT and the root reachable (codex #983 blocker 1): fixity CLEARED like a mismatch, durably saved, run red, manifest untouched")
+    func missingClearsFixityWhenRootReachable() async throws {
+        let (sb, model, sources, copies) = try await VerifyTestSupport.promotedSandbox("missfix", count: 2)
+        defer { sb.cleanup() }
+        // The dangerous shape: the copy record still says "verified"
+        // (Promote's fixity is in place) and the file is gone from the
+        // archive. Every UI reader would keep the badge green.
+        let victim = copies[0]
+        let expectedDigest = try #require(victim.archiveFixity?.digest)
+        let manifestRowsBefore = MasterArchiveTestSupport.manifestRows(sb)
+        try FileManager.default.removeItem(atPath: victim.fullPath)
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed(let message) = job.state else {
+            Issue.record("a missing-file run must finish RED (.failed), got \(job.state)"); return
+        }
+        #expect(message.contains("1 missing"))
+        #expect(job.tally.missing == 1)
+        #expect(job.staleFixityCleared == 1)
+        #expect(victim.archiveFixity == nil,
+                "present fixity means 'verified AND present' — the file is not there, so it must go")
+        // The intact sibling re-verifies normally.
+        #expect(job.tally.verified == 1 && job.tally.restored == 0)
+        #expect(copies[1].archiveFixity != nil)
+        // The UI test every reader applies now says NOT verified.
+        let banner = try #require(InspectorPanel.archivedBanner(
+            record: sources[0], masterCopy: victim, promotionSource: nil))
+        #expect(!banner.verified, "the Archived banner must go orange, not stay green")
+        // Evidence kept: the structured outcome row carries the expected digest…
+        let outcome = try #require(job.outcomes.first { $0.kind == .missing })
+        #expect(outcome.detail.contains("CLEARED"))
+        #expect(outcome.expectedDigest == expectedDigest)
+        #expect(outcome.actualDigest == nil)
+        // …and the manifest — the recovery ground truth — is untouched.
+        let manifestRowsAfter = MasterArchiveTestSupport.manifestRows(sb)
+        #expect(manifestRowsAfter == manifestRowsBefore, "verify never rewrites the manifest")
+        #expect(manifestRowsAfter.contains { $0.contains(expectedDigest) })
+        // DURABLE: the clear reached the sandbox catalog file — read it back.
+        let persisted = model.catalogStore.load()
+        let persistedVictim = try #require(persisted.first { $0.fullPath == victim.fullPath },
+                                           "the catalog was saved at batch end")
+        #expect(persistedVictim.archiveFixity == nil, "an unverified record must not come back green on relaunch")
+        let persistedSibling = try #require(persisted.first { $0.fullPath == copies[1].fullPath })
+        #expect(persistedSibling.archiveFixity?.digest == copies[1].archiveFixity?.digest)
+    }
+
+    @Test("UNREACHABLE root (archive volume gone) before the run: no verdict, no write — fixity untouched, no outcomes")
+    func unreachableRootIsNoVerdict() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("unreach", count: 2)
+        defer { sb.cleanup() }
+        let before = copies.map { $0.archiveFixity }
+        #expect(before.allSatisfy { $0 != nil }, "precondition: both copies verified")
+        // The volume "unmounts": the whole archive tree disappears.
+        try FileManager.default.removeItem(at: sb.archiveVolume)
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed(let message) = job.state else {
+            Issue.record("an unreachable root must refuse, got \(job.state)"); return
+        }
+        #expect(message.contains("not reachable"))
+        #expect(job.outcomes.isEmpty, "no per-file verdicts on an absent disk")
+        #expect(job.tally == VerifyArchiveCopiesJob.Tally())
+        #expect(job.staleFixityCleared == 0)
+        #expect(copies.map { $0.archiveFixity } == before, "nothing cleared — an absent disk is not MISSING")
+    }
+
+    @Test("UNREACHABLE root MID-RUN (volume yanked while hashing): the run stops, files not yet checked get no verdict, nothing is cleared")
+    func rootVanishingMidRunAbortsWithoutClearing() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("yank", count: 3)
+        defer { sb.cleanup() }
+        let before = copies.map { $0.archiveFixity }
+        #expect(before.allSatisfy { $0 != nil })
+
+        let job = VerifyArchiveCopiesJob(model: model)
+        var yanked = false
+        job.testHookAfterHash = { _ in
+            // After the FIRST file's bytes were read, the archive volume goes away.
+            guard !yanked else { return }
+            yanked = true
+            try? FileManager.default.removeItem(at: sb.archiveVolume)
+        }
+        job.start()
+        await job.task?.value
+
+        guard case .failed(let message) = job.state else {
+            Issue.record("a mid-run yank must end RED, got \(job.state)"); return
+        }
+        #expect(message.contains("unreachable"))
+        #expect(job.abortedRootUnreachable)
+        #expect(job.tally.missing == 0, "an absent DISK is never reported as missing FILES")
+        #expect(job.staleFixityCleared == 0)
+        #expect(copies.map { $0.archiveFixity?.digest } == before.map { $0?.digest },
+                "every fixity survives — the first file's verdict was a refresh, the rest got none")
+        #expect(job.outcomes.filter { $0.kind == .failed }.count == 1, "the file being checked when the root vanished, and it alone")
+        #expect(job.outcomes.count <= 2, "the loop stopped — no verdicts were manufactured for the remaining files")
     }
 
     @Test("ORPHAN: manifest row with no catalog record → reported only; no record is invented")
@@ -279,6 +380,227 @@ struct VerifyArchiveCopiesLogicTests {
         #expect(line.contains("5 verified"))
         #expect(line.contains("fixity restored on 2"))
         #expect(line.contains("2 in manifest only"))
+        t.changedUnderVerify = 4
+        #expect(VerifyArchiveCopiesJob.summaryLine(t).hasSuffix("4 changed under Verify — re-run to settle"))
+    }
+}
+
+// MARK: - Verify vs. rescan race (codex #983 blocker 2)
+
+@Suite("Verify Archive Copies — conditional writes under a concurrent rescan", .serialized)
+@MainActor
+struct VerifyArchiveCopiesRaceTests {
+
+    /// What commitScanResults does to a re-seen path: a FRESH instance
+    /// (new UUID) at the same path, with the fixity carried by rescan
+    /// preservation when identity held (or nil when it did not / the old
+    /// record had none). The old instance leaves `records`.
+    private func replaceWithRescanInstance(_ old: VideoRecord, in model: VideoScanModel,
+                                           carriedFixity: ArchiveFixity?) -> VideoRecord {
+        let fresh = MasterArchiveTestSupport.makeRecord(path: old.fullPath)
+        fresh.derivedFrom = old.derivedFrom
+        fresh.derivationKind = old.derivationKind
+        fresh.masterLocation = old.masterLocation
+        fresh.archiveStage = old.archiveStage
+        fresh.archiveFixity = carriedFixity
+        model.records = model.records.map { $0 === old ? fresh : $0 }
+        return fresh
+    }
+
+    private func corruptOneByte(_ path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        var bytes = try Data(contentsOf: url)
+        bytes[100] ^= 0xFF
+        try bytes.write(to: url)
+    }
+
+    @Test("a record whose fixity CHANGED between Verify's read and its write is skipped, counted, and reported in ONE console line — the mismatch alarm still stands")
+    func mismatchWriteSkippedWhenFixityMovedUnderVerify() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("race1", count: 2)
+        defer { sb.cleanup() }
+        let victim = copies[0]
+        try corruptOneByte(victim.fullPath)
+        // Someone else's fixity lands in the window (a re-Promote, say).
+        let foreign = ArchiveFixity(digest: String(repeating: "a", count: 64),
+                                    verifiedAt: Date(), sizeBytes: victim.sizeBytes)
+        let job = VerifyArchiveCopiesJob(model: model)
+        job.testHookAfterHash = { item in
+            if item.fullPath == victim.fullPath { victim.archiveFixity = foreign }
+        }
+        job.start()
+        await job.task?.value
+
+        guard case .failed(let message) = job.state else {
+            Issue.record("a mismatch run must finish RED, got \(job.state)"); return
+        }
+        #expect(job.tally.mismatch == 1, "the corruption verdict is real regardless of who owns the record now")
+        #expect(job.tally.changedUnderVerify == 1)
+        #expect(job.staleFixityCleared == 0)
+        #expect(victim.archiveFixity == foreign, "a fixity Verify did not observe is not Verify's to clear")
+        let outcome = try #require(job.outcomes.first { $0.kind == .mismatch })
+        #expect(outcome.writeSkipped)
+        #expect(outcome.detail.contains("changed under Verify"))
+        #expect(message.contains("1 changed under Verify"))
+        // The sibling is unaffected.
+        #expect(job.tally.verified == 1)
+        #expect(copies[1].archiveFixity != nil)
+
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("1 record(s) changed under Verify; re-run to settle them."), "console: \(console)")
+        #expect(console.components(separatedBy: "changed under Verify; re-run").count == 2, "ONE line per run")
+    }
+
+    @Test("a MATCH whose record gained a different fixity under Verify: restore skipped (kind .changedUnderVerify), nothing restored, counted")
+    func matchWriteSkippedWhenFixityMovedUnderVerify() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("race2", count: 1)
+        defer { sb.cleanup() }
+        let victim = copies[0]
+        victim.archiveFixity = nil   // GH #167 shape: Verify observes nil
+        let foreign = ArchiveFixity(digest: String(repeating: "b", count: 64),
+                                    verifiedAt: Date(), sizeBytes: victim.sizeBytes)
+        let job = VerifyArchiveCopiesJob(model: model)
+        job.testHookAfterHash = { _ in victim.archiveFixity = foreign }
+        job.start()
+        await job.task?.value
+
+        guard case .finished(let summary) = job.state else {
+            Issue.record("verify did not finish: \(job.state)"); return
+        }
+        #expect(job.tally.restored == 0 && job.tally.verified == 0)
+        #expect(job.tally.changedUnderVerify == 1)
+        #expect(victim.archiveFixity == foreign, "not overwritten with Verify's digest")
+        let outcome = try #require(job.outcomes.first { $0.kind == .changedUnderVerify })
+        #expect(outcome.writeSkipped)
+        #expect(outcome.actualDigest == outcome.expectedDigest, "the verdict itself was a match")
+        #expect(summary.contains("1 changed under Verify"))
+    }
+
+    @Test("same-path rescan REPLACED the record (fresh UUID) while Verify hashed — on MISMATCH the LIVE record is cleared, not the dead one")
+    func mismatchClearsLiveRecordAfterSamePathRescan() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("race3", count: 2)
+        defer { sb.cleanup() }
+        let victim = copies[0]
+        let deadID = victim.id
+        try corruptOneByte(victim.fullPath)
+        var replacement: VideoRecord?
+        let job = VerifyArchiveCopiesJob(model: model)
+        job.testHookAfterHash = { item in
+            guard item.fullPath == victim.fullPath else { return }
+            // Rescan preservation carried the fixity (size unchanged, one
+            // byte flipped: the identity guard cannot see it). So the fresh
+            // instance is GREEN and about to be missed by an id-based clear.
+            replacement = self.replaceWithRescanInstance(victim, in: model,
+                                                         carriedFixity: victim.archiveFixity)
+        }
+        job.start()
+        await job.task?.value
+
+        guard case .failed = job.state else {
+            Issue.record("a mismatch run must finish RED, got \(job.state)"); return
+        }
+        let live = try #require(replacement)
+        #expect(live.id != deadID)
+        #expect(model.record(forID: deadID) == nil, "the pre-rescan instance is gone from the catalog")
+        #expect(model.record(forPath: victim.fullPath) === live)
+        #expect(live.archiveFixity == nil, "the record that IS in the catalog was cleared (codex #983: clearing by the dead UUID would have missed it)")
+        #expect(job.staleFixityCleared == 1)
+        #expect(job.tally.changedUnderVerify == 0, "same fixity as observed — the write was allowed")
+        #expect(job.tally.mismatch == 1)
+        // The clear is durable on the LIVE record.
+        let persisted = model.catalogStore.load()
+        let persistedLive = try #require(persisted.first { $0.fullPath == victim.fullPath })
+        #expect(persistedLive.id == live.id)
+        #expect(persistedLive.archiveFixity == nil)
+    }
+
+    @Test("same-path rescan REPLACED the record while Verify hashed — on MATCH the LIVE record gets the restored fixity")
+    func matchRestoresOntoLiveRecordAfterSamePathRescan() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("race4", count: 1)
+        defer { sb.cleanup() }
+        let victim = copies[0]
+        let expected = try #require(victim.archiveFixity?.digest)
+        victim.archiveFixity = nil                       // the clobber
+        var replacement: VideoRecord?
+        let job = VerifyArchiveCopiesJob(model: model)
+        job.testHookAfterHash = { _ in
+            replacement = self.replaceWithRescanInstance(victim, in: model, carriedFixity: nil)
+        }
+        job.start()
+        await job.task?.value
+
+        guard case .finished = job.state else {
+            Issue.record("verify did not finish: \(job.state)"); return
+        }
+        let live = try #require(replacement)
+        #expect(job.tally.restored == 1)
+        #expect(live.archiveFixity?.digest == expected, "restored onto the record that is actually in the catalog")
+        #expect(victim.archiveFixity == nil, "the dead instance is not touched")
+        #expect(job.tally.changedUnderVerify == 0)
+    }
+
+    @Test("model surface: the path-conditional write results, branch by branch")
+    func conditionalWriteResults() {
+        let model = VideoScanModel()
+        let rec = VideoRecord()
+        rec.filename = "a.mov"
+        rec.fullPath = "/Volumes/FamilyArchive/BreenFamilyArchive/a.mov"
+        let fx = ArchiveFixity(digest: "AB" + String(repeating: "0", count: 62), verifiedAt: Date(), sizeBytes: 10)
+        rec.archiveFixity = fx
+        model.records = [rec]
+        typealias W = VideoScanModel.ArchiveFixityWrite
+
+        // Observed digest compared case-insensitively against the live one.
+        #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: fx.digest.lowercased()) == W.written)
+        #expect(rec.archiveFixity == nil)
+        // Clearing an already-nil record when nil was observed: not a write.
+        #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: nil) == W.nothingToClear)
+        // Observed a digest, live has none → moved under us.
+        #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: fx.digest) == W.changedUnderVerify)
+        // Restore when nil was observed and nil is live → written.
+        #expect(model.restoreArchiveFixity(path: rec.fullPath, observedDigest: nil,
+                                           digest: fx.digest, sizeBytes: 10) == W.written)
+        #expect(rec.archiveFixity?.digest == fx.digest)
+        // Restore when nil was observed but a fixity is live now → skipped.
+        #expect(model.restoreArchiveFixity(path: rec.fullPath, observedDigest: nil,
+                                           digest: fx.digest, sizeBytes: 10) == W.changedUnderVerify)
+        // No record at the path (renamed / pruned) → skipped, never a crash.
+        #expect(model.invalidateArchiveFixity(path: "/Volumes/FamilyArchive/gone.mov", observedDigest: fx.digest) == W.changedUnderVerify)
+        #expect(model.restoreArchiveFixity(path: "/Volumes/FamilyArchive/gone.mov", observedDigest: nil,
+                                           digest: fx.digest, sizeBytes: 10) == W.changedUnderVerify)
+        // Read-only viewer refuses both.
+        model.isReadOnly = true
+        #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: fx.digest) == W.refused)
+        #expect(model.restoreArchiveFixity(path: rec.fullPath, observedDigest: fx.digest,
+                                           digest: fx.digest, sizeBytes: 10) == W.refused)
+        #expect(rec.archiveFixity?.digest == fx.digest)
+    }
+
+    @Test("UNMANIFESTED mismatch keeps the expected digest in the structured outcome row after clearing it from the record (codex #983 minor)")
+    func unmanifestedMismatchKeepsExpectedDigestInReport() async throws {
+        let (sb, model, _, _) = try await VerifyTestSupport.promotedSandbox("unmani2", count: 1)
+        defer { sb.cleanup() }
+        let strayDir = sb.archiveRoot.appendingPathComponent("30_Video/Undated", isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        let stray = try MasterArchiveTestSupport.writeBlob(
+            at: strayDir.appendingPathComponent("xxxx-xx-xx_test_stray2.mov"), bytes: 32 * 1024, seed: 4242)
+        let strayRec = MasterArchiveTestSupport.makeRecord(path: stray.path)
+        strayRec.derivationKind = ArchivePromotion.derivationKind
+        // Its only reference is its own previous fixity — for OTHER bytes.
+        let previous = String(repeating: "c", count: 64)
+        strayRec.archiveFixity = ArchiveFixity(digest: previous, verifiedAt: Date(), sizeBytes: strayRec.sizeBytes)
+        model.records.append(strayRec)
+        let actual = try #require(MasterArchiveTestSupport.sha256(ofFile: stray.path))
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed = job.state else {
+            Issue.record("a mismatch run must finish RED, got \(job.state)"); return
+        }
+        #expect(strayRec.archiveFixity == nil, "the record never keeps a digest it failed")
+        let outcome = try #require(job.outcomes.first { $0.kind == .mismatch })
+        #expect(outcome.expectedDigest == previous, "the expected digest survives in the report row")
+        #expect(outcome.actualDigest == actual)
+        #expect(outcome.detail.contains("catalog fixity record"))
     }
 }
 

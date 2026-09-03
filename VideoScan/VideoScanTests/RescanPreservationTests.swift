@@ -771,6 +771,127 @@ struct RescanPreservationTests {
         #expect(!RescanPreservedFields(from: VideoRecord()).isWorthRestoring)
     }
 
+    // (b3) RACE (codex #983) — Verify CLEARED the fixity (mismatch /
+    // missing) AFTER the scan-start snapshot and BEFORE the merge applied
+    // it. The scan-start copy must NOT be resurrected: the merge re-reads
+    // the pre-rescan instance's LIVE value at apply time.
+    @Test func verifyClearedFixityDuringScan_isNotResurrectedByTheMerge() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let copy = archiveCopyRecord(partialMD5: "same")
+        model.records = [copy]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)          // scan starts: fixity present
+        copy.archiveFixity = nil                                     // Verify: bytes failed → cleared
+        // Identity WOULD hold — same size, same fingerprint — so the old
+        // code path would happily carry the snapshot's copy back.
+        let fresh = freshlyScannedRecord(path: copy.fullPath, sizeBytes: 4_242, partialMD5: "same")
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+
+        #expect(restored == 1, "the curated fields still come back")
+        #expect(fresh.archiveFixity == nil,
+                "a fixity Verify cleared mid-scan came back from the scan-start snapshot — false green (codex #983)")
+        expectProvenanceRestored(fresh, "the clear takes only the byte claim")
+        #expect(fresh.derivationKind == ArchivePromotion.derivationKind)
+    }
+
+    // (b4) RACE — Verify RESTORED a fixity (nil → digest, the GH #167
+    // recovery) after the snapshot: the LIVE value carries, subject to
+    // the identity guard exactly as a snapshotted one would be.
+    @Test func verifyRestoredFixityDuringScan_carriesTheLiveValue_subjectToIdentityGuard() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        // Two clobbered copies (fixity nil, provenance intact → still in the map).
+        let held = archiveCopyRecord(path: "/Volumes/FamilyArchive/1985/held.mov")
+        let grew = archiveCopyRecord(path: "/Volumes/FamilyArchive/1985/grew.mov")
+        held.archiveFixity = nil
+        grew.archiveFixity = nil
+        model.records = [held, grew]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)          // scan starts: both nil
+        let restoredByVerify = ArchiveFixity(digest: String(repeating: "d", count: 64),
+                                             verifiedAt: Date(timeIntervalSince1970: 1_756_000_000),
+                                             sizeBytes: 4_242)
+        held.archiveFixity = restoredByVerify                        // Verify: MATCH → restored
+        grew.archiveFixity = restoredByVerify
+
+        let freshHeld = freshlyScannedRecord(path: held.fullPath, sizeBytes: 4_242)
+        let freshGrew = freshlyScannedRecord(path: grew.fullPath, sizeBytes: 99_999)
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [freshHeld, freshGrew])
+
+        #expect(restored == 2)
+        #expect(freshHeld.archiveFixity == restoredByVerify,
+                "the fixity Verify wrote mid-scan is what the merged record carries — not the snapshot's nil")
+        #expect(freshGrew.archiveFixity == nil,
+                "the identity guard still runs on top of the live value: 4,242-byte digest, 99,999-byte file")
+        expectProvenanceRestored(freshGrew)
+    }
+
+    // (b5) RACE — a record that had NOTHING worth snapshotting at scan
+    // start (not in the map at all) gains a fixity from Verify mid-scan:
+    // the merge must still see it.
+    @Test func verifyRestoredFixityOnBareRecordDuringScan_carries() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let bare = VideoRecord()
+        bare.filename = "bare.mov"
+        bare.fullPath = "/Volumes/FamilyArchive/1985/bare.mov"
+        bare.sizeBytes = 64
+        #expect(!RescanPreservedFields(from: bare).isWorthRestoring, "precondition: not in the snapshot map")
+        model.records = [bare]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        let fx = ArchiveFixity(digest: String(repeating: "e", count: 64), verifiedAt: Date(), sizeBytes: 64)
+        bare.archiveFixity = fx                                      // Verify: restored mid-scan
+
+        let fresh = freshlyScannedRecord(path: bare.fullPath, sizeBytes: 64)
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(restored == 1)
+        #expect(fresh.archiveFixity == fx, "a fixity that arrived during the scan is not lost to the merge")
+    }
+
+    // (b6) FALLBACK — the old instance is already gone from `records`
+    // (nothing live to consult): the snapshot copy is what carries.
+    @Test func oldInstanceGone_snapshotFixityIsTheFallback() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let copy = archiveCopyRecord()
+        model.records = [copy]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        model.records.removeAll()                                    // old instance gone
+        copy.archiveFixity = nil                                     // …and whatever happens to it is irrelevant
+
+        let fresh = freshlyScannedRecord(path: copy.fullPath, sizeBytes: 4_242)
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(restored == 1)
+        #expect(fresh.archiveFixity?.digest == "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "with no live instance the scan-start snapshot is the only evidence, and it carries")
+    }
+
+    // (b7) SCOPE — the live re-read consults only records under THIS
+    // target: a record on another volume with the same fixity state is
+    // never mistaken for the pre-rescan instance (two concurrent rescans).
+    @Test func liveFixityReread_isScopedToTheRescannedTarget() {
+        let model = VideoScanModel()
+        let archive = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        let other = archiveCopyRecord(path: "/Volumes/Elsewhere/1985/reunion.mov")   // fixity present, other volume
+        let copy = archiveCopyRecord(path: "/Volumes/FamilyArchive/1985/reunion.mov")
+        model.records = [other, copy]
+        model.scanTargets = [archive]
+
+        model.snapshotPreservedFieldsForRescan(of: archive)
+        copy.archiveFixity = nil                                     // Verify cleared the archive copy
+        let fresh = freshlyScannedRecord(path: copy.fullPath, sizeBytes: 4_242)
+        _ = model.applyPreservedFieldsAfterRescan(of: archive, onto: [fresh])
+        #expect(fresh.archiveFixity == nil)
+        #expect(other.archiveFixity != nil, "the other volume's record is untouched")
+    }
+
     // (d) SCALE — snapshot + restore + re-link over 100k archive copies,
     // identity-matching (every fresh probe reports the verified size).
     // Real catalog is ~103k records; the pipeline applies the snapshot
