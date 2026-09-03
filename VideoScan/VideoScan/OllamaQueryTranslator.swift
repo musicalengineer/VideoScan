@@ -44,6 +44,23 @@ enum NLTranslatorError: LocalizedError {
     case serverError(status: Int, detail: String)
     /// The host is up and serving, but does not have the model loaded.
     case modelUnavailable(String)
+    /// The host is up, the model IS loaded and answering — but this
+    /// ollama BUILD cannot constrain generation to a JSON schema, so any
+    /// request carrying `format:` is refused (2026-09-03).
+    ///
+    /// Homebrew's ollama 0.33.2 ships its MLX runner WITHOUT
+    /// `libollama_xgrammar.dylib`; the server logs "Structured output is
+    /// unavailable — xgrammar library not found …" at startup and then
+    /// answers every `format:`-bearing `/api/chat` with HTTP 501. 0.33.2
+    /// is current stable, so upgrading is not the fix.
+    ///
+    /// This is a property of the BUILD, not of the host and not of the
+    /// model, which is why it gets its own case: it was landing in
+    /// `.modelUnavailable` (see `readsAsMissingModel` — the fleet's LAST
+    /// error won the report), so the log read "model-unavailable" while
+    /// the model sat there loaded and answering plain requests fine, and
+    /// the walk spent every host in the fleet to learn nothing.
+    case structuredOutputUnsupported(host: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -51,6 +68,8 @@ enum NLTranslatorError: LocalizedError {
         case .unreachable(let detail): return "translator unreachable: \(detail)"
         case .serverError(let status, let detail): return "translator HTTP \(status): \(detail)"
         case .modelUnavailable(let detail): return "model not available on host: \(detail)"
+        case .structuredOutputUnsupported(let host, let detail):
+            return "structured output unsupported by the ollama build on \(host): \(detail)"
         }
     }
 
@@ -84,6 +103,13 @@ enum NLTranslatorError: LocalizedError {
         case .unreachable, .modelUnavailable: return true
         case .serverError(let status, _): return (500...599).contains(status)
         case .badResponse: return false
+        // Never walk the fleet for this. The schema-constrained request
+        // is refused by a missing library in the RUNNER, so the next
+        // host — same Homebrew formula, same missing dylib — refuses it
+        // identically, and the turn pays a probe plus a generation
+        // timeout per host to find that out. The same-host retry WITHOUT
+        // `format:` is the recovery; see `requestContent`.
+        case .structuredOutputUnsupported: return false
         }
     }
 }
@@ -130,6 +156,12 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     var probeTimeoutSeconds: Double = 3
     var transport: Transport = .urlSession
 
+    /// Where "this host's build cannot do structured output" is
+    /// remembered for the rest of the process. Defaults to the shared
+    /// process-wide memo; tests inject their own so one test's discovery
+    /// cannot leak into another's.
+    var structuredOutputCapability: OllamaStructuredOutputCapability = .shared
+
     /// Repair retry (2026-08-25). Translation runs at temperature 0, so
     /// re-sending the identical prompt to the same host reproduces the
     /// identical rejected answer. Rick's "translator flaked 3× tonight"
@@ -166,12 +198,47 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     /// that had simply never pulled the model would NOT fail over
     /// (codex #320.2). A missing model is a property of the HOST, and
     /// the next host may well have it.
-    static func classify(status: Int, body: Data) -> NLTranslatorError {
+    ///
+    /// The structured-output test runs FIRST, and deliberately so. Ollama's
+    /// refusal reads "structured output is unavailable"; a build that also
+    /// names the model in that sentence would satisfy `readsAsMissingModel`
+    /// ("model" + "unavailable") and be misfiled as a missing model — which
+    /// is both the wrong log line and a pointless fleet walk. Order is the
+    /// fix, and `structuredOutputClaimNamingTheModelIsNotAMissingModel`
+    /// pins it.
+    static func classify(status: Int, body: Data, host: String = "") -> NLTranslatorError {
         let text = String(decoding: body.prefix(400), as: UTF8.self)
+        if Self.readsAsStructuredOutputUnsupported(text) {
+            return .structuredOutputUnsupported(
+                host: host, detail: "HTTP \(status): \(text.prefix(160))")
+        }
         if status == 404 || Self.readsAsMissingModel(text) {
             return .modelUnavailable("HTTP \(status): \(text.prefix(160))")
         }
         return .serverError(status: status, detail: String(text.prefix(200)))
+    }
+
+    /// Does this error text mean "this build cannot constrain output to a
+    /// schema"?
+    ///
+    /// Matched on WORDING rather than on HTTP 501 alone: 501 is what
+    /// 0.33.2's MLX runner returns today, but the same missing library has
+    /// surfaced as a 400 and as an HTTP-200 error string in other runners,
+    /// and the recovery (ask again without `format:`) is right for all
+    /// three. The predicate stays narrow — it must name structured output
+    /// or the grammar library — so an ordinary 501 keeps its own meaning.
+    static func readsAsStructuredOutputUnsupported(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        if lowered.contains("xgrammar") { return true }
+        let subject = lowered.contains("structured output")
+            || lowered.contains("structured outputs")
+            || lowered.contains("grammar")
+        guard subject else { return false }
+        return lowered.contains("unavailable")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("not implemented")
+            || lowered.contains("not available")
     }
 
     /// Shared wording test, so the 200-with-error path and the non-200
@@ -407,7 +474,83 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         return out
     }
 
+    /// Ask the host, and survive a build that cannot do structured output.
+    ///
+    /// THE FAILURE (Rick, 2026-09-03, live M4): Homebrew ollama 0.33.2's
+    /// MLX runner ships without `libollama_xgrammar.dylib`, so every
+    /// request carrying `format:` — i.e. every schema-constrained
+    /// translation, i.e. every question Hallie is asked — came back HTTP
+    /// 501 "structured output is unavailable". The model was loaded and
+    /// answering; only the constraint was impossible.
+    ///
+    /// THE RECOVERY, in order:
+    ///   1. If this endpoint has already refused a schema in this
+    ///      process, do not ask again — send the unconstrained request
+    ///      first and skip the ~700 ms doomed round trip entirely.
+    ///   2. Otherwise send the schema. On a structured-output refusal,
+    ///      remember it (logging once for this host) and retry the SAME
+    ///      host ONCE with `format:` omitted. `think:false` and every
+    ///      other option are unchanged, and the system prompt already
+    ///      spells out the envelope, the field names, and the legal
+    ///      values in prose — the schema was a belt over that brace.
+    ///   3. The caller's strict decoder still judges the reply, and the
+    ///      fleet's repair-retry loop still gets its turn if the model
+    ///      answers with something unusable. Nothing is loosened: an
+    ///      unconstrained reply that fails to decode still fails.
+    ///
+    /// Exactly one extra request, only on the first schema-bearing turn
+    /// per endpoint per process.
     private func requestContent(
+        _ text: String,
+        schema: [String: Any]?,
+        systemPrompt: String,
+        options: [String: Any] = ["temperature": 0, "num_predict": 512]
+    ) async throws -> (content: String, data: Data) {
+        let endpoint = OllamaEndpoints.chatURLString(for: host, defaultPort: port)
+        var schemaToSend = schema
+        if schema != nil,
+           await structuredOutputCapability.isUnsupported(endpoint) {
+            schemaToSend = nil
+        }
+        while true {
+            do {
+                return try await sendChatRequest(
+                    text, schema: schemaToSend,
+                    systemPrompt: systemPrompt, options: options)
+            } catch let error as NLTranslatorError {
+                // Only a request that ACTUALLY carried a schema can be
+                // recovered by dropping it. Once `schemaToSend` is nil the
+                // guard fails and the error propagates, so this loop can
+                // run at most twice — no chance of spinning.
+                guard case .structuredOutputUnsupported(_, let detail) = error,
+                      schemaToSend != nil else { throw error }
+                await noteStructuredOutputUnsupported(endpoint: endpoint, detail: detail)
+                schemaToSend = nil
+            }
+        }
+    }
+
+    /// Record the capability and log it ONCE per endpoint per process —
+    /// not once per turn, which at Rick's question rate would bury the
+    /// rest of the Hallie trail in the same sentence.
+    private func noteStructuredOutputUnsupported(endpoint: String, detail: String) async {
+        let isFirstTime = await structuredOutputCapability.recordUnsupported(endpoint)
+        guard isFirstTime else { return }
+        appLog.write(Self.structuredOutputUnsupportedLine(host: host, detail: detail))
+    }
+
+    /// Built here rather than inline so a test can assert the wording
+    /// without a log sink, and so the sentence says what is actually
+    /// wrong: the BUILD, named by host, with the schema dropped — never
+    /// "model unavailable", which sent Rick looking at a model that was
+    /// loaded and fine.
+    static func structuredOutputUnsupportedLine(host: String, detail: String) -> String {
+        "[hallie] structured output unsupported by the ollama build on \(host)"
+            + " — sending unconstrained requests for the rest of this run"
+            + " (\(detail.prefix(160)))"
+    }
+
+    private func sendChatRequest(
         _ text: String,
         schema: [String: Any]?,
         systemPrompt: String,
@@ -454,7 +597,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 // which reads as the model's fault and, worse, is NOT
                 // retryable. Classify it properly so failover can act.
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    throw Self.classify(status: http.statusCode, body: payload)
+                    throw Self.classify(status: http.statusCode, body: payload, host: host)
                 }
                 data = payload
             } catch let error as NLTranslatorError {
@@ -468,7 +611,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 throw NLTranslatorError.unreachable(transportError)
             }
             if let status = result.statusCode, status != 200 {
-                throw Self.classify(status: status, body: result.data ?? Data())
+                throw Self.classify(status: status, body: result.data ?? Data(), host: host)
             }
             data = result.data ?? Data()
         case .curl:
@@ -508,6 +651,14 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 "unparseable response envelope: \(String(decoding: data.prefix(160), as: UTF8.self))")
         }
         if let error = response.error {
+            // Same ordering rule as `classify`: a structured-output
+            // refusal that happens to name the model must not be read as
+            // a missing model. Some runners report this on the HTTP-200
+            // path, and the recovery is identical either way.
+            if Self.readsAsStructuredOutputUnsupported(error) {
+                throw NLTranslatorError.structuredOutputUnsupported(
+                    host: host, detail: String(error.prefix(160)))
+            }
             // ollama answers "model not found" with HTTP 200 and an
             // error string in the body, so the status tells us nothing
             // and the text is the only signal. A host that has not
