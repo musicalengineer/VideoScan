@@ -2320,12 +2320,12 @@
       "expect": "biography",
       "followsPrevious": false,
       "mustContain": [
-        "Rick",
+        "Richard Harding Breen Jr",
         "Tim",
         "Ellen",
         "Beth"
       ],
-      "notes": "Same ruling, biography shape: Eileen Latta's card lists the tree's child (Richard Harding Breen Jr / Rick) and then the People tab's three (Beth, Ellen, Tim) with the derived note in the basis. Ma bridges to Eileen Latta through the profile's tree pin / certain derivation, never by name."
+      "notes": "Same ruling, biography shape: Eileen Latta's card lists the tree's child (Richard Harding Breen Jr / Rick) and then the People tab's three (Beth, Ellen, Tim) with the derived note in the basis. Ma bridges to Eileen Latta through the profile's tree pin / certain derivation, never by name. 9/02 22:20 interim: PASSES in substance (tree child Richard Harding Breen Jr + People-tab Beth/Ellen/Tim, one-mother note in basis); expectation said 'Rick' but a biography names him in full."
     },
     {
       "id": "lv260902-023",
