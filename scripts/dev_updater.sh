@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# post_nightly_updates.sh — Refresh developer tools after nightly results are safe.
+# dev_updater.sh — Update the developer tools: Homebrew, Claude Code, Codex.
 #
-# This script is independently runnable, but nightly_local_tests.sh is responsible
-# for calling it only after its result row has either been published or queued.
-# Binary paths are injectable so regression tests never contact update services.
+# A plain utility, runnable by hand at any time. The nightly calls it too, but
+# only after its result row has been published or queued, so a tool update can
+# never be blamed for the night's verdict. Renamed from post_nightly_updates.sh
+# on 2026-09-03: the old name described one caller rather than what it does.
+# Binary paths stay injectable so a run can be pointed at fakes.
 
 set -u
 
@@ -161,16 +163,16 @@ case "$LOCK_RC" in
     *) exit 1 ;;
 esac
 
-log "=== Post-nightly developer-tool maintenance starting ==="
+log "=== Developer-tool update starting ==="
 FAILURES=0
 run_homebrew_maintenance || FAILURES=$((FAILURES + 1))
 run_update "Claude" "$CLAUDE_BIN" update || FAILURES=$((FAILURES + 1))
 run_update "Codex" "$CODEX_BIN" update || FAILURES=$((FAILURES + 1))
 
 if [ "$FAILURES" -gt 0 ]; then
-    log "=== Post-nightly maintenance completed with $FAILURES failure(s) ==="
+    log "=== Developer-tool update completed with $FAILURES failure(s) ==="
     exit 1
 fi
 
-log "=== Post-nightly maintenance completed successfully ==="
+log "=== Developer-tool update completed successfully ==="
 exit 0

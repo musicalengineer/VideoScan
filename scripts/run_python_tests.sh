@@ -16,7 +16,10 @@
 #
 #     416   a `pytest tests/` sweep of the working tree
 #   - 21    tests/test_post_nightly_updates.py, UNTRACKED and belonging to a
-#           person rather than to CI — hence git ls-files below
+#           person rather than to CI — hence git ls-files below. Retired
+#           2026-09-03 (Rick: dev_updater.sh is a utility and needs no
+#           tests); the count is kept here because the arithmetic below
+#           still has to reconcile against that history.
 #   = 395   tracked, under tests/ only
 #   +  5    tools/poi-c02/test_tools.py, tracked but outside tests/ and so
 #           missed until discovery was widened repo-wide

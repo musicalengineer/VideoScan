@@ -251,7 +251,7 @@ classify_nightly_test_result() {
 # means the result row is either on origin/metrics or in the durable local
 # pending queue. Its result is deliberately advisory: update failures are
 # logged here but never replace the night's recorded test verdict or exit code.
-run_post_nightly_updates_if_recorded() {
+run_dev_updater_if_recorded() {
     local publish_rc="$1"
     local rc
     if [ "$publish_rc" -ne 0 ] && [ "$publish_rc" -ne 1 ]; then
@@ -259,7 +259,7 @@ run_post_nightly_updates_if_recorded() {
         return 0
     fi
     log "Nightly result recorded; starting post-nightly developer-tool maintenance."
-    "$REPO/scripts/post_nightly_updates.sh"
+    "$REPO/scripts/dev_updater.sh"
     rc=$?
     if [ "$rc" -ne 0 ]; then
         log "WARNING: post-nightly developer-tool maintenance failed (rc=$rc); nightly verdict is unchanged."
@@ -660,7 +660,7 @@ if $BUILD_TIMED_OUT; then
     log "FATAL: build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
     publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 elif [ "$BUILD_RC" -ne 0 ]; then
     log "Build failed (rc=$BUILD_RC) — wiping DerivedData and retrying once (stale-module-cache guard)"
@@ -674,13 +674,13 @@ if $BUILD_TIMED_OUT; then
     log "FATAL: clean-retry build timed out after ${NIGHTLY_BUILD_TIMEOUT_SECONDS}s"
     publish_row "$(with_person_metrics "$(make_status_row failed "$(nightly_timeout_reason build "$NIGHTLY_BUILD_TIMEOUT_SECONDS")" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 elif [ "$BUILD_RC" -ne 0 ]; then
     log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
     publish_row "$(with_person_metrics "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 BUILD_END=$(date +%s)
@@ -803,7 +803,7 @@ classify_nightly_test_result \
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?
 if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then
-    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    run_dev_updater_if_recorded "$PUBLISH_RC"
     rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
     exit 1
 fi
@@ -812,7 +812,7 @@ if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
-    run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+    run_dev_updater_if_recorded "$PUBLISH_RC"
     exit 1
 fi
 
@@ -823,7 +823,7 @@ fi
 # "failed_names" is additive; make_current_test_result_row also includes
 # coverage only when the normal, non-timeout extraction produced it.
 publish_current_test_result
-run_post_nightly_updates_if_recorded "$PUBLISH_RC"
+run_dev_updater_if_recorded "$PUBLISH_RC"
 
 # ── Cleanup ─────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
