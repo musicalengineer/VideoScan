@@ -335,6 +335,9 @@ extension GedcomFamilyGraph {
             .compactMap { familyMap[$0] }
         out.childOfFamilies = famc
         out.childOfFamily = famc.first
+        for (family, link) in p.parentLinks {
+            if let mapped = familyMap[family] { out.parentLinks[mapped] = link }
+        }
         out.spouseOfFamilies = p.spouseOfFamilies.compactMap { familyMap[$0] }
         return out
     }
@@ -381,6 +384,15 @@ extension GedcomFamilyGraph {
         where !famc.contains(f) { famc.append(f) }
         out.childOfFamilies = famc
         out.childOfFamily = famc.first
+        // FAMC link metadata (PEDI/STAT): first source's link wins per
+        // family; the second fills only what the first left empty.
+        out.parentLinks = a.parentLinks
+        for (family, link) in b.parentLinks {
+            var merged = out.parentLinks[family] ?? ParentLink()
+            if merged.pedigree == nil { merged.pedigree = link.pedigree }
+            if merged.status == nil { merged.status = link.status }
+            if !merged.isEmpty { out.parentLinks[family] = merged }
+        }
         var fams = a.spouseOfFamilies
         for f in b.spouseOfFamilies where !fams.contains(f) { fams.append(f) }
         out.spouseOfFamilies = fams

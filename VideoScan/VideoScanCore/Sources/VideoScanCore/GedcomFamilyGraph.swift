@@ -39,6 +39,13 @@ public struct GedcomFamilyGraph: Sendable {
         /// all recorded birth/adoptive/step families instead of silently
         /// replacing one with another.
         public var childOfFamilies: [String] = []
+        /// Linkage metadata recorded UNDER a FAMC link (GEDCOM 5.5.1
+        /// `2 PEDI birth|adopted|foster|sealing`, `2 STAT
+        /// challenged|disproven|proven`), keyed by the FAMC pointer. Empty
+        /// for the ordinary link. The pedigree ranks parent families
+        /// FIRST (codex #1011: an explicit birth family must not lose to
+        /// a complete adoptive one); the status is carried verbatim.
+        public var parentLinks: [String: ParentLink] = [:]
         public var spouseOfFamilies: [String] = []
         /// Raw GEDCOM date strings ("4 Mar 1959") — displayed verbatim,
         /// never reinterpreted (honesty over formatting).
@@ -72,6 +79,22 @@ public struct GedcomFamilyGraph: Sendable {
         /// (codex #721/#723). Nil when the date has no year.
         public var birthYearInterval: GedcomYearInterval? { GedcomYearInterval.parse(birthDate) }
         public var deathYearInterval: GedcomYearInterval? { GedcomYearInterval.parse(deathDate) }
+    }
+
+    /// What one FAMC link says about ITSELF: the pedigree (how the child
+    /// belongs to that family) and the link's status. Both are the raw
+    /// GEDCOM values, lowercased and trimmed, never reinterpreted; the
+    /// ranking reads `pedigree` through `ParentPedigree(raw:)`.
+    public struct ParentLink: Sendable, Equatable {
+        public var pedigree: String?
+        public var status: String?
+
+        public init(pedigree: String? = nil, status: String? = nil) {
+            self.pedigree = pedigree
+            self.status = status
+        }
+
+        public var isEmpty: Bool { pedigree == nil && status == nil }
     }
 
     struct Family: Sendable {
@@ -424,6 +447,8 @@ public struct GedcomFamilyGraph: Sendable {
         var pendingEvent: String?
         /// Same for a family record: MARR.
         var pendingFamilyEvent: String?
+        /// The FAMC pointer a level-2 PEDI / STAT belongs to.
+        var pendingFamilyLink: String?
         let bom = CharacterSet(charactersIn: "\u{feff}")
 
         func flush() {
@@ -438,6 +463,7 @@ public struct GedcomFamilyGraph: Sendable {
             currentFam = nil
             pendingEvent = nil
             pendingFamilyEvent = nil
+            pendingFamilyLink = nil
         }
 
         for rawLine in gedcomText.split(whereSeparator: \.isNewline) {
@@ -522,7 +548,8 @@ public struct GedcomFamilyGraph: Sendable {
             if var person = currentIndi {
                 if level == 1 { openTagKept = Self.keptPersonTags.contains(tag) }
                 if !Self.applyPersonLine(level: level, tag: tag, value: value,
-                                         person: &person, pendingEvent: &pendingEvent)
+                                         person: &person, pendingEvent: &pendingEvent,
+                                         pendingFamilyLink: &pendingFamilyLink)
                     || (level >= 2 && !openTagKept) {
                     droppedLineCount += 1
                 }
@@ -834,10 +861,12 @@ public struct GedcomFamilyGraph: Sendable {
             guard let family = primaryParentFamily(of: person) else { return [] }
             return [family.husband.flatMap(lookup), family.wife.flatMap(lookup)].compactMap { $0 }
         case .brother, .sister, .siblings:
-            let sibs = uniquePeople(parentFamilies(of: person)
-                .flatMap(\.children)
-                .filter { $0 != person.id }
-                .compactMap { people[$0] })
+            // Full siblings SHARE THE PRIMARY FAMILY (codex #1011: the
+            // old union of every FAMC called an adoptive sibling a full
+            // sibling). A person known only through a second family
+            // record is reachable through `alternateFamilySiblings(of:)`
+            // and said in the basis, never here.
+            let sibs = primarySiblings(of: person)
             switch relation {
             case .brother: return sibs.filter { $0.sex == "M" }
             case .sister:  return sibs.filter { $0.sex == "F" }
@@ -915,11 +944,17 @@ public struct GedcomFamilyGraph: Sendable {
         tag: String,
         value: String,
         person: inout Person,
-        pendingEvent: inout String?
+        pendingEvent: inout String?,
+        pendingFamilyLink: inout String?
     ) -> Bool {
-        if level == 1 { pendingEvent = (tag == "BIRT" || tag == "DEAT") ? tag : nil }
+        if level == 1 {
+            pendingEvent = (tag == "BIRT" || tag == "DEAT") ? tag : nil
+            pendingFamilyLink = (tag == "FAMC" && !value.isEmpty) ? value : nil
+        }
         if applyPersonEventDetail(level: level, tag: tag, value: value,
                                   person: &person, event: pendingEvent) { return true }
+        if applyParentLinkDetail(level: level, tag: tag, value: value,
+                                 person: &person, familyLink: pendingFamilyLink) { return true }
         switch (level, tag) {
         case (1, "NAME"):
             applyName(value, to: &person)
@@ -968,6 +1003,30 @@ public struct GedcomFamilyGraph: Sendable {
         default:
             return false
         }
+        return true
+    }
+
+    /// `2 PEDI` / `2 STAT` under an open `1 FAMC` (codex #1011). The
+    /// first value per link wins; the raw text is kept lowercased and
+    /// trimmed, so "BIRTH", "birth" and "Birth" rank alike and the writer
+    /// emits one spelling.
+    private static func applyParentLinkDetail(
+        level: Int,
+        tag: String,
+        value: String,
+        person: inout Person,
+        familyLink: String?
+    ) -> Bool {
+        guard level == 2, let familyLink else { return false }
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !text.isEmpty else { return false }
+        var link = person.parentLinks[familyLink] ?? ParentLink()
+        switch tag {
+        case "PEDI" where link.pedigree == nil: link.pedigree = text
+        case "STAT" where link.status == nil: link.status = text
+        default: return false
+        }
+        person.parentLinks[familyLink] = link
         return true
     }
 

@@ -66,7 +66,13 @@ extension GedcomFamilyGraph {
                 if let pl = p.deathPlace { lines.append("2 PLAC " + pl) }
             }
             let famc = p.childOfFamilies.isEmpty ? [p.childOfFamily].compactMap { $0 } : p.childOfFamilies
-            for f in famc { lines.append("1 FAMC " + f) }
+            for f in famc {
+                lines.append("1 FAMC " + f)
+                if let link = p.parentLinks[f] {
+                    if let pedigree = link.pedigree { lines.append("2 PEDI " + pedigree) }
+                    if let status = link.status { lines.append("2 STAT " + status) }
+                }
+            }
             for f in p.spouseOfFamilies { lines.append("1 FAMS " + f) }
             if let fsid = p.familySearchID { lines.append("1 _FSFTID " + fsid) }
         }

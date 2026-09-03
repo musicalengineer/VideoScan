@@ -3,9 +3,11 @@
 // (codex #776): "how are Rick and Dick related" is father and son, not
 // "1st cousins" through a shared grandparent. Precedence, first hit wins:
 //   same person → spouses → parent/child → direct ancestor/descendant
-//   (grandparent, great-grandparent, … any depth) → full siblings (a
-//   shared FAMC) → half-siblings (one shared parent) → parent-in-law →
-//   sibling-in-law (spouse's sibling, or sibling's spouse).
+//   (grandparent, great-grandparent, … any depth) → full siblings (the
+//   same PRIMARY family, or both primary parents) → half-siblings (one
+//   shared primary parent) → siblings through a second family record
+//   only → parent-in-law → sibling-in-law (spouse's sibling, or
+//   sibling's spouse).
 // Only when none of these holds does the caller fall to
 // `commonAncestors(of:and:)`. Built from the single-hop relations the
 // graph records; pure, no I/O.
@@ -18,6 +20,9 @@ extension GedcomFamilyGraph {
         public enum Kind: String, Sendable {
             case samePerson, spouses, parentChild, ancestorDescendant
             case siblings, halfSiblings, parentInLaw, siblingInLaw
+            /// A FAMC shared only through a non-primary family record
+            /// (adoptive / step / duplicate) — codex #1011.
+            case alternateFamilySiblings
         }
         public let kind: Kind
         /// "Richard Harding Breen Sr is Richard Harding Breen Jr’s father"
@@ -61,17 +66,27 @@ extension GedcomFamilyGraph {
                                   term: "\(b.name) is \(poss) \(Self.descendantLabel(generations: depth, sex: b.sex))",
                                   path: down)
         }
-        let famcA = Set(a.childOfFamilies.isEmpty ? [a.childOfFamily].compactMap { $0 } : a.childOfFamilies)
-        let famcB = Set(b.childOfFamilies.isEmpty ? [b.childOfFamily].compactMap { $0 } : b.childOfFamilies)
+        // Full siblings share the PRIMARY family (the one FAMC selection
+        // in GedcomFamilyGraph+ParentFamily — codex #1011), or both
+        // primary parents. Half-siblings share one primary parent. A
+        // FAMC shared only through a second family record is said as
+        // exactly that, never as full siblings.
+        let primaryA = primaryParentFamilyID(of: a), primaryB = primaryParentFamilyID(of: b)
         let parentsA = relatives(.parents, of: a), parentsB = relatives(.parents, of: b)
         let sharedParents = parentsA.filter { p in parentsB.contains(where: { $0.id == p.id }) }
-        if !famcA.isDisjoint(with: famcB) || (sharedParents.count >= 2) {
+        if (primaryA != nil && primaryA == primaryB) || (sharedParents.count >= 2) {
             return DirectRelation(kind: .siblings, term: "\(b.name) is \(poss) \(word(b, "brother", "sister", "sibling"))",
                                   path: [a] + sharedParents.prefix(1) + [b])
         }
         if let shared = sharedParents.first {
             return DirectRelation(kind: .halfSiblings, term: "\(b.name) is \(poss) half-\(word(b, "brother", "sister", "sibling")) (through \(shared.name))",
                                   path: [a, shared, b])
+        }
+        let famcA = Set(parentFamilyIDs(of: a)), famcB = Set(parentFamilyIDs(of: b))
+        if !famcA.isEmpty, !famcA.isDisjoint(with: famcB) {
+            return DirectRelation(kind: .alternateFamilySiblings,
+                                  term: "\(b.name) is recorded as \(poss) \(word(b, "brother", "sister", "sibling")) through a second family record",
+                                  path: [a, b])
         }
         for spouse in relatives(.spouse, of: a) {
             if relatives(.parents, of: spouse).contains(where: { $0.id == bID }) {

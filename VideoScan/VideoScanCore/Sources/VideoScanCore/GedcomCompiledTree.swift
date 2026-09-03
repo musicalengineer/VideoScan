@@ -37,7 +37,7 @@ public enum GedcomCompiledTree {
     /// section carries the FAM `_FSFTID`, and the persisted parent table
     /// now lists ONE father and ONE mother per person (the primary
     /// family's) — a codec-5 blob would keep serving both mothers.
-    public static let codecVersion: UInt32 = 6
+    public static let codecVersion: UInt32 = 7
     static let magic: [UInt8] = Array("VSFT".utf8)
     /// Records per parallel decode chunk (written into the section header;
     /// the reader honours whatever the file says). 39k people → 39
@@ -74,6 +74,10 @@ public enum GedcomCompiledTree {
             w.ref(p.surname); w.ref(p.familySearchID)
             w.refs(p.alternateNames); w.refs(p.alternateSurnames)
             w.refs(p.childOfFamilies); w.refs(p.spouseOfFamilies)
+            // Codec 7: FAMC link metadata (PEDI / STAT), sorted by pointer.
+            let links = p.parentLinks.keys.sorted()
+            w.u32(UInt32(links.count))
+            for key in links { w.ref(key); w.ref(p.parentLinks[key]!.pedigree); w.ref(p.parentLinks[key]!.status) }
         }
         // Families
         w.chunkedSection(count: families.count) { w, i in
@@ -242,6 +246,12 @@ public enum GedcomCompiledTree {
             p.surname = try r.optionalString(); p.familySearchID = try r.optionalString()
             p.alternateNames = try r.stringArray(); p.alternateSurnames = try r.stringArray()
             p.childOfFamilies = try r.stringArray(); p.spouseOfFamilies = try r.stringArray()
+            let linkCount = Int(try r.u32())   // codec 7
+            for _ in 0..<linkCount {
+                let key = try r.string()
+                p.parentLinks[key] = GedcomFamilyGraph.ParentLink(
+                    pedigree: try r.optionalString(), status: try r.optionalString())
+            }
             return p
         }
         clock.lap("people parse")
@@ -506,6 +516,7 @@ public enum GedcomCompiledTree {
         if a.alternateSurnames != b.alternateSurnames { return "alternateSurnames" }
         if a.childOfFamilies != b.childOfFamilies { return "childOfFamilies" }
         if a.spouseOfFamilies != b.spouseOfFamilies { return "spouseOfFamilies" }
+        if a.parentLinks != b.parentLinks { return "parentLinks" }
         return "(unknown field)"
     }
 

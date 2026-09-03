@@ -1,15 +1,22 @@
 // GedcomParentFamilyTests.swift
 // Rick's 2026-09-02 ruling: ONE primary parent family per person, chosen
-// deterministically; never two mothers or two fathers in prose.
+// deterministically; never two mothers or two fathers in prose. Codex
+// adversarial review #1011 tightened it: folding is by IDENTITY (never
+// "they are sisters"), the FAMC pedigree (PEDI) ranks first, a missing
+// primary parent never hides a secondary one, and full siblings share
+// the PRIMARY family.
 //
 // Dimensions — LOGIC: the Eileen fixture (I3 with FAMC F3 + F4, the two
-// Marys both daughters of F6), the ranking table rule by rule, a genuine
-// second family (adoption) that is not folded, the single-FAMC person
-// unchanged, the same record listed twice, the codec and writer carrying
-// the FAM _FSFTID. SCALE: 100k synthetic people with 5% duplicated FAMC,
-// parents-of for everyone under a stated budget. ISOLATION: the rule
-// reads the graph and nothing else — two parses agree, and removing the
-// duplicate family changes nothing the prose sees.
+// Marys both daughters of F6), the ranking table rule by rule, PEDI
+// birth-vs-adopted, real sisters near in age NOT folded, name
+// compatibility, a genuine second family (adoption) that is not folded,
+// the single-FAMC person unchanged, the same record listed twice,
+// reversed FAMC order, siblings under the ruling, the codec / writer /
+// merge carrying the FAM _FSFTID and the FAMC PEDI/STAT. SCALE: 100k
+// synthetic people with 5% duplicated FAMC, parents-of and siblings-of
+// for everyone under a stated budget. ISOLATION: the rule reads the graph
+// and nothing else — two parses agree, and removing the duplicate family
+// changes nothing the prose sees.
 
 import Foundation
 import Testing
@@ -102,6 +109,8 @@ private let eileenTree = """
 0 TRLR
 """
 
+/// Two complete parent families, no PEDI, no ids, no facts: only GEDCOM
+/// order separates them. Each family has one more child.
 private let adoptionTree = """
 0 HEAD
 0 @I1@ INDI
@@ -125,18 +134,83 @@ private let adoptionTree = """
 1 NAME Adoptive /Mother/
 1 SEX F
 1 FAMS @F-ADOPT@
+0 @I6@ INDI
+1 NAME Birth /Sibling/
+1 SEX F
+1 FAMC @F-BIRTH@
+0 @I7@ INDI
+1 NAME Adoptive /Sibling/
+1 SEX M
+1 FAMC @F-ADOPT@
 0 @F-BIRTH@ FAM
 1 HUSB @I2@
 1 WIFE @I3@
+1 CHIL @I1@
+1 CHIL @I6@
+0 @F-ADOPT@ FAM
+1 HUSB @I4@
+1 WIFE @I5@
+1 CHIL @I1@
+1 CHIL @I7@
+0 TRLR
+"""
+
+/// The codex #1011 shape: an explicit BIRTH family with ONE parent and
+/// nothing else, listed AFTER a complete adoptive family that has a
+/// FamilySearch id and full facts. Completeness must not beat pedigree.
+private let pedigreeTree = """
+0 HEAD
+0 @I1@ INDI
+1 NAME Child /Stone/
+1 SEX F
+1 FAMC @F-ADOPT@
+2 PEDI adopted
+2 STAT proven
+1 FAMC @F-BIRTH@
+2 PEDI birth
+1 _FSFTID KID1-001
+0 @I2@ INDI
+1 NAME Birth /Mother/
+1 SEX F
+1 FAMS @F-BIRTH@
+1 _FSFTID BMOM-001
+0 @I4@ INDI
+1 NAME Adoptive /Father/
+1 SEX M
+1 BIRT
+2 DATE 1900
+2 PLAC Boston
+1 DEAT
+2 DATE 1980
+1 FAMS @F-ADOPT@
+1 _FSFTID ADAD-001
+0 @I5@ INDI
+1 NAME Adoptive /Mother/
+1 SEX F
+1 BIRT
+2 DATE 1902
+2 PLAC Boston
+1 DEAT
+2 DATE 1990
+1 FAMS @F-ADOPT@
+1 _FSFTID AMOM-001
+0 @F-BIRTH@ FAM
+1 WIFE @I2@
 1 CHIL @I1@
 0 @F-ADOPT@ FAM
 1 HUSB @I4@
 1 WIFE @I5@
 1 CHIL @I1@
+1 _FSFTID FAMA-001
 0 TRLR
 """
 
 private typealias Rank = GedcomFamilyGraph.ParentFamilyRank
+private typealias Pedigree = GedcomFamilyGraph.ParentPedigree
+
+/// Eileen's tree with the two FAMC lines on I3 in the other order.
+private let eileenTreeReversed = eileenTree.replacingOccurrences(
+    of: "1 FAMC @F3@\n1 FAMC @F4@\n", with: "1 FAMC @F4@\n1 FAMC @F3@\n")
 
 @Suite("GEDCOM — one primary parent family (Rick's 2026-09-02 ruling)")
 struct GedcomParentFamilyTests {
@@ -160,6 +234,8 @@ struct GedcomParentFamilyTests {
         #expect(choice.alternates.count == 1)
         #expect(choice.alternates[0].role == .mother)
         #expect(choice.alternates[0].person.id == "@I5@")
+        // "Mary" is a prefix of "Mary Catherine", same surname, shared
+        // FAMC @F6@ → the same woman.
         #expect(choice.alternates[0].fold == .sameParents)
         #expect(choice.unfoldedAlternates.isEmpty)
     }
@@ -185,7 +261,69 @@ struct GedcomParentFamilyTests {
         #expect(both.map { $0.people.map(\.name) } == [["Eileen Latta"], ["David McGill Latta Sr", "Mary Catherine O'Connor"]])
     }
 
+    /// `primaryMother/primaryFather` (the birthplace trail's accessor) and
+    /// the kinship route read the SAME selection — there is no second
+    /// FAMC-selection path.
+    @Test func trailAccessorAndKinshipRouteAgree() throws {
+        for text in [eileenTree, eileenTreeReversed, adoptionTree, pedigreeTree] {
+            let g = GedcomFamilyGraph(gedcomText: text)
+            for person in g.people.values {
+                #expect(g.primaryMother(of: person)?.id == g.relatives(.mother, of: person).first?.id)
+                #expect(g.primaryFather(of: person)?.id == g.relatives(.father, of: person).first?.id)
+                #expect(g.primaryParentFamilyID(of: person) == g.parentFamilyChoice(of: person)?.primaryFamilyID)
+            }
+        }
+    }
+
+    // MARK: - Logic: reversed FAMC order
+
+    @Test func reversedFAMCOrderPicksTheSamePrimaryForEileen() throws {
+        let g = GedcomFamilyGraph(gedcomText: eileenTreeReversed)
+        let eileen = try #require(g.people["@I3@"])
+        #expect(eileen.childOfFamilies == ["@F4@", "@F3@"])
+        let choice = try #require(g.parentFamilyChoice(of: eileen))
+        #expect(choice.primaryFamilyID == "@F3@")
+        #expect(choice.ranks.map(\.familyID) == ["@F3@", "@F4@"])
+        #expect(g.relatives(.mother, of: eileen).map(\.id) == ["@I7@"])
+        #expect(g.relatives(.father, of: eileen).map(\.id) == ["@I6@"])
+        #expect(choice.alternates.map { ($0.person.id, $0.fold) }.map { "\($0.0) \($0.1?.rawValue ?? "-")" } == ["@I5@ sameParents"])
+        #expect(g.parentFamilyBasisNote(for: eileen)
+                == "(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same parents; treated as the same person)")
+    }
+
+    @Test func reversedFAMCOrderPicksTheSamePrimaryWhenPedigreeDecides() throws {
+        // pedigreeTree already lists the adoptive family FIRST; swapping
+        // the two links must not move the primary.
+        let swapped = pedigreeTree.replacingOccurrences(
+            of: "1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n",
+            with: "1 FAMC @F-BIRTH@\n2 PEDI birth\n1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n")
+        for text in [pedigreeTree, swapped] {
+            let g = GedcomFamilyGraph(gedcomText: text)
+            let child = try #require(g.people["@I1@"])
+            #expect(g.parentFamilyChoice(of: child)?.primaryFamilyID == "@F-BIRTH@")
+            #expect(g.relatives(.mother, of: child).map(\.id) == ["@I2@"])
+        }
+    }
+
     // MARK: - Logic: the ranking table, one rule at a time
+
+    @Test("pedigree ranks first: an explicit birth family beats a complete adoptive one")
+    func pedigreeOutranksEverything() {
+        let adoptive = Rank(familyID: "A", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 0, pedigree: .adopted)
+        let birth = Rank(familyID: "B", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 1, pedigree: .birth)
+        let plain = Rank(familyID: "C", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 2)
+        let foster = Rank(familyID: "D", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 3, pedigree: .foster)
+        let sealing = Rank(familyID: "E", hasBothParents: true, hasFamilySearchID: true, factCount: 8, order: 4, pedigree: .sealing)
+        #expect(Rank.outranks(birth, adoptive))
+        #expect(!Rank.outranks(adoptive, birth))
+        #expect(Rank.ranked([sealing, foster, adoptive, plain, birth]).map(\.familyID) == ["B", "C", "A", "D", "E"])
+        #expect(Pedigree.birth < .unspecified && Pedigree.unspecified < .adopted
+                && Pedigree.adopted < .foster && Pedigree.foster < .sealing)
+        #expect(Pedigree(raw: "BIRTH") == .birth)
+        #expect(Pedigree(raw: " Adopted ") == .adopted)
+        #expect(Pedigree(raw: nil) == .unspecified)
+        #expect(Pedigree(raw: "stepchild") == .unspecified)
+    }
 
     @Test("both parents beats one, whatever else the other has")
     func bothParentsOutranksEverything() {
@@ -218,6 +356,92 @@ struct GedcomParentFamilyTests {
         #expect(!Rank.outranks(first, first))
     }
 
+    // MARK: - Logic: PEDI / STAT through parser, ranking and basis
+
+    @Test func explicitBirthFamilyWithOneParentOutranksACompleteAdoptiveFamily() throws {
+        let g = GedcomFamilyGraph(gedcomText: pedigreeTree)
+        #expect(g.droppedLineCount == 0, "PEDI and STAT are retained, not counted lost")
+        let child = try #require(g.people["@I1@"])
+        #expect(child.parentLinks["@F-ADOPT@"] == .init(pedigree: "adopted", status: "proven"))
+        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: nil))
+        #expect(g.pedigree(of: child, in: "@F-BIRTH@") == .birth)
+        #expect(g.pedigree(of: child, in: "@F-ADOPT@") == .adopted)
+        #expect(g.pedigree(of: child, in: "@F-NONE@") == .unspecified)
+
+        let choice = try #require(g.parentFamilyChoice(of: child))
+        #expect(choice.primaryFamilyID == "@F-BIRTH@")
+        #expect(choice.primaryPedigree == .birth)
+        #expect(choice.ranks[0] == Rank(familyID: "@F-BIRTH@", hasBothParents: false, hasFamilySearchID: false, factCount: 0, order: 1, pedigree: .birth))
+        #expect(choice.ranks[1] == Rank(familyID: "@F-ADOPT@", hasBothParents: true, hasFamilySearchID: true, factCount: 6, order: 0, pedigree: .adopted))
+        #expect(g.relatives(.mother, of: child).map(\.id) == ["@I2@"])
+        #expect(g.relatives(.father, of: child).isEmpty, "the birth family records no father; the adoptive one is not borrowed")
+        #expect(choice.alternates.map { "\($0.role.rawValue) \($0.person.id) \($0.pedigree)" } == ["father @I4@ adopted", "mother @I5@ adopted"])
+        #expect(choice.foldedAlternates.isEmpty)
+        #expect(g.parentFamilyBasisNote(for: child)
+                == "Also recorded: adoptive parents (father Adoptive Father, ADAD-001; mother Adoptive Mother, AMOM-001); ask about them by name.")
+    }
+
+    @Test func fosterAndSealingWordingAndSingularParent() throws {
+        let foster = pedigreeTree
+            .replacingOccurrences(of: "2 PEDI adopted", with: "2 PEDI foster")
+            .replacingOccurrences(of: "1 HUSB @I4@\n", with: "")
+        let g = GedcomFamilyGraph(gedcomText: foster)
+        let child = try #require(g.people["@I1@"])
+        #expect(g.parentFamilyBasisNote(for: child)
+                == "Also recorded: foster parent (mother Adoptive Mother, AMOM-001); ask about them by name.")
+        let sealing = GedcomFamilyGraph(gedcomText: pedigreeTree.replacingOccurrences(of: "2 PEDI adopted", with: "2 PEDI sealing"))
+        #expect(sealing.parentFamilyBasisNote(for: try #require(sealing.people["@I1@"]))
+                == "Also recorded: parents by sealing (father Adoptive Father, ADAD-001; mother Adoptive Mother, AMOM-001); ask about them by name.")
+    }
+
+    @Test func pediAndStatRoundTripTheCodecTheWriterAndAReparse() throws {
+        let g = GedcomFamilyGraph(gedcomText: pedigreeTree)
+        let decoded = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(g))
+        let child = try #require(decoded.people["@I1@"])
+        #expect(child.parentLinks == g.people["@I1@"]?.parentLinks)
+        #expect(decoded.parentFamilyChoice(of: child)?.primaryFamilyID == "@F-BIRTH@")
+        #expect(GedcomCompiledTree.verify(decoded: decoded, against: g) == [])
+        // A poisoned decode is caught by verify: the link is the first
+        // difference it names.
+        var poisoned = decoded.people["@I1@"]!
+        poisoned.parentLinks["@F-BIRTH@"] = nil
+        #expect(GedcomCompiledTree.firstDifference(child, poisoned) == "parentLinks")
+
+        let written = g.gedcomText()
+        #expect(written.contains("1 FAMC @F-ADOPT@\n2 PEDI adopted\n2 STAT proven\n1 FAMC @F-BIRTH@\n2 PEDI birth\n"), Comment(rawValue: written))
+        let reparsed = GedcomFamilyGraph(gedcomText: written)
+        #expect(reparsed.people["@I1@"]?.parentLinks == g.people["@I1@"]?.parentLinks)
+        #expect(reparsed.parentFamilyChoice(of: try #require(reparsed.people["@I1@"]))?.primaryFamilyID == "@F-BIRTH@")
+        // The codec version moved (6 → 7): an old artifact is refused and
+        // the store recompiles rather than reading a wrong layout.
+        #expect(GedcomCompiledTree.codecVersion == 7)
+    }
+
+    @Test func mergeCarriesPediAndFillsStatFromTheSecondSource() throws {
+        // Both pulls carry the couple's FSIDs, so the family matches; the
+        // first has the pedigree, the second only the status.
+        let first = pedigreeTree.replacingOccurrences(of: "2 PEDI adopted\n2 STAT proven\n", with: "2 PEDI adopted\n")
+        let second = pedigreeTree
+            .replacingOccurrences(of: "2 PEDI adopted\n2 STAT proven\n", with: "2 STAT proven\n")
+            .replacingOccurrences(of: "@I1@", with: "@X1@").replacingOccurrences(of: "@I2@", with: "@X2@")
+            .replacingOccurrences(of: "@I4@", with: "@X4@").replacingOccurrences(of: "@I5@", with: "@X5@")
+            .replacingOccurrences(of: "@F-ADOPT@", with: "@FX-ADOPT@").replacingOccurrences(of: "@F-BIRTH@", with: "@FX-BIRTH@")
+        let a = GedcomFamilyGraph(gedcomText: first), b = GedcomFamilyGraph(gedcomText: second)
+        let outcome = a.merge(with: b)
+        let child = try #require(outcome.graph.people["@I1@"])
+        #expect(outcome.sharedPeopleCount == 4)
+        #expect(child.parentLinks["@F-ADOPT@"] == .init(pedigree: "adopted", status: "proven"), Comment(rawValue: "\(child.parentLinks)"))
+        #expect(child.parentLinks["@F-BIRTH@"] == .init(pedigree: "birth", status: nil))
+        #expect(outcome.graph.parentFamilyChoice(of: child)?.primaryFamilyID == "@F-BIRTH@")
+        // A second-file-only person keeps its links under the new pointers.
+        let onlyB = GedcomFamilyGraph(gedcomText: pedigreeTree.replacingOccurrences(of: "1 _FSFTID KID1-001\n", with: ""))
+        let merged = GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR\n").merge(with: onlyB)
+        let added = try #require(merged.graph.people.values.first { $0.name == "Child Stone" })
+        #expect(added.parentLinks.count == 2)
+        #expect(added.childOfFamilies.allSatisfy { added.parentLinks[$0] != nil })
+        #expect(merged.graph.parentFamilyChoice(of: added)?.primaryPedigree == .birth)
+    }
+
     // MARK: - Logic: a genuine second family is not folded
 
     @Test func adoptionListsTheBirthParentsAndNotesTheSecondFamily() throws {
@@ -234,18 +458,37 @@ struct GedcomParentFamilyTests {
                 == "A second parent family is recorded (father Adoptive Father, @I4@; mother Adoptive Mother, @I5@); ask about it by name.")
     }
 
-    // MARK: - Logic: fold by surname + birth year, and its edges
+    // MARK: - Logic: fold on identity only
 
-    @Test func sameSurnameWithinTwoYearsFoldsWithoutSharedParents() throws {
-        // Mary b. 1905 no longer a daughter of F6 — the surname/year rule
-        // has to carry the fold on its own.
+    /// codex #1011: two sisters — Mary b. 1904 and Bridget b. 1905, both
+    /// daughters of @F6@, same surname, a year apart — must stay two
+    /// people. The old rule folded them twice over.
+    @Test func realSistersNearInAgeAreNotFolded() throws {
+        let text = eileenTree.replacingOccurrences(of: "1 NAME Mary /O'Connor/", with: "1 NAME Bridget /O'Connor/")
+        let g = GedcomFamilyGraph(gedcomText: text)
+        let eileen = try #require(g.people["@I3@"])
+        let choice = try #require(g.parentFamilyChoice(of: eileen))
+        #expect(choice.primaryFamilyID == "@F3@")
+        #expect(choice.alternates.map(\.fold) == [nil])
+        #expect(g.relatives(.mother, of: eileen).map(\.id) == ["@I7@"])
+        #expect(g.parentFamilyBasisNote(for: eileen)
+                == "A second parent family is recorded (mother Bridget O'Connor, GNZ5-428); ask about it by name.")
+        // Nor with reversed FAMC order.
+        let reversed = GedcomFamilyGraph(gedcomText: text.replacingOccurrences(of: "1 FAMC @F3@\n1 FAMC @F4@\n", with: "1 FAMC @F4@\n1 FAMC @F3@\n"))
+        #expect(reversed.parentFamilyChoice(of: try #require(reversed.people["@I3@"]))?.alternates.map(\.fold) == [nil])
+        #expect(reversed.relatives(.mother, of: try #require(reversed.people["@I3@"])).map(\.id) == ["@I7@"])
+    }
+
+    @Test func sameNameWithinTwoYearsFoldsWithoutSharedParents() throws {
+        // Mary b. 1905 no longer a daughter of F6 — the name + birth-year
+        // corroboration has to carry the fold on its own.
         let text = eileenTree.replacingOccurrences(of: "1 FAMS @F4@\n1 FAMC @F6@\n", with: "1 FAMS @F4@\n")
         let g = GedcomFamilyGraph(gedcomText: text)
         let eileen = try #require(g.people["@I3@"])
         let choice = try #require(g.parentFamilyChoice(of: eileen))
-        #expect(choice.alternates.map(\.fold) == [.sameSurnameCloseBirth])
+        #expect(choice.alternates.map(\.fold) == [.sameNameCloseBirth])
         #expect(g.parentFamilyBasisNote(for: eileen)
-                == "(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same surname, born within two years; treated as the same person)")
+                == "(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same name, born within two years; treated as the same person)")
         #expect(g.relatives(.mother, of: eileen).map(\.id) == ["@I7@"])
     }
 
@@ -263,19 +506,127 @@ struct GedcomParentFamilyTests {
         #expect(g.relatives(.mother, of: eileen).map(\.id) == ["@I7@"])
     }
 
-    @Test func aMissingBirthYearNeverFoldsBySurname() {
-        let a = GedcomFamilyGraph.Person(id: "@A@", name: "Mary O'Connor", sex: "F", childOfFamily: nil)
-        var b = GedcomFamilyGraph.Person(id: "@B@", name: "Mary Catherine O'Connor", sex: "F", childOfFamily: nil)
-        b.birthDate = "1904"
-        var aa = a; aa.surname = "O'Connor"
-        var bb = b; bb.surname = "O'Connor"
-        #expect(GedcomFamilyGraph.fold(aa, into: bb) == nil)
-        aa.birthDate = "1906"
-        #expect(GedcomFamilyGraph.fold(aa, into: bb) == .sameSurnameCloseBirth)
-        aa.birthDate = "1907"
-        #expect(GedcomFamilyGraph.fold(aa, into: bb) == nil)
-        aa.childOfFamilies = ["@F6@"]; bb.childOfFamilies = ["@F6@"]
-        #expect(GedcomFamilyGraph.fold(aa, into: bb) == .sameParents)
+    @Test func sameFamilySearchIDFoldsWhateverTheName() throws {
+        // The duplicate carries Mary Catherine's own FSID under a different
+        // spelling: identity by id, no name test needed.
+        let text = eileenTree
+            .replacingOccurrences(of: "1 NAME Mary /O'Connor/", with: "1 NAME Molly /Connor/")
+            .replacingOccurrences(of: "1 _FSFTID GNZ5-428", with: "1 _FSFTID G89Q-34N")
+        let g = GedcomFamilyGraph(gedcomText: text)
+        let eileen = try #require(g.people["@I3@"])
+        #expect(g.parentFamilyChoice(of: eileen)?.alternates.map(\.fold) == [.sameFamilySearchID])
+        #expect(g.parentFamilyBasisNote(for: eileen)
+                == "(another record for her mother, Molly Connor b. 1905, exists in the tree — same FamilySearch record; treated as the same person)")
+    }
+
+    @Test func sameSpouseCorroboratesACompatibleName() throws {
+        // Mary b. 1905: no shared FAMC, born 1925 (far apart), but married
+        // to David Latta as well (F4 gains HUSB @I6@).
+        let text = eileenTree
+            .replacingOccurrences(of: "1 FAMS @F4@\n1 FAMC @F6@\n", with: "1 FAMS @F4@\n")
+            .replacingOccurrences(of: "2 DATE 1905\n2 PLAC Ireland\n1 FAMS @F4@", with: "2 DATE 1925\n2 PLAC Ireland\n1 FAMS @F4@")
+            .replacingOccurrences(of: "1 FAMS @F3@\n1 _FSFTID LX9M-WJG", with: "1 FAMS @F3@\n1 FAMS @F4@\n1 _FSFTID LX9M-WJG")
+            .replacingOccurrences(of: "0 @F4@ FAM\n1 WIFE @I5@", with: "0 @F4@ FAM\n1 HUSB @I6@\n1 WIFE @I5@")
+        let g = GedcomFamilyGraph(gedcomText: text)
+        let eileen = try #require(g.people["@I3@"])
+        let choice = try #require(g.parentFamilyChoice(of: eileen))
+        #expect(choice.primaryFamilyID == "@F3@", "the FamilySearch id and the facts still pick F3")
+        #expect(choice.alternates.map(\.fold) == [.sameSpouse])
+        #expect(g.parentFamilyBasisNote(for: eileen)
+                == "(another record for her mother, Mary O'Connor b. 1925, exists in the tree — same spouse; treated as the same person)")
+    }
+
+    @Test func nameCompatibilityTable() {
+        func person(_ name: String, _ surname: String?) -> GedcomFamilyGraph.Person {
+            var p = GedcomFamilyGraph.Person(id: "@\(name)@", name: name, sex: "F", childOfFamily: nil)
+            p.surname = surname
+            return p
+        }
+        typealias G = GedcomFamilyGraph
+        #expect(G.namesCompatible(person("Mary O'Connor", "O'Connor"), person("Mary Catherine O'Connor", "O'Connor")))
+        #expect(G.namesCompatible(person("Mary Catherine O'Connor", "O'Connor"), person("Mary O'Connor", "O'Connor")))
+        #expect(G.namesCompatible(person("M O'Connor", "O'Connor"), person("Mary O'Connor", "O'Connor")), "an initial")
+        #expect(G.namesCompatible(person("Mary C. O'Connor", "O'Connor"), person("Mary Catherine O'Connor", "O'Connor")))
+        #expect(G.namesCompatible(person("mary o'connor", "o'connor"), person("MARY O'CONNOR", "O'Connor")), "case")
+        #expect(G.namesCompatible(person("David McGill Latta Sr", "Latta"), person("David Latta", "Latta")), "suffix after the surname is ignored")
+        #expect(!G.namesCompatible(person("Mary O'Connor", "O'Connor"), person("Bridget O'Connor", "O'Connor")), "sisters")
+        #expect(!G.namesCompatible(person("Mary Catherine O'Connor", "O'Connor"), person("Mary Ellen O'Connor", "O'Connor")), "second given name differs")
+        #expect(!G.namesCompatible(person("Mary O'Connor", "O'Connor"), person("Mary Connor", "Connor")), "surname differs")
+        #expect(!G.namesCompatible(person("O'Connor", "O'Connor"), person("Mary O'Connor", "O'Connor")), "no given name recorded")
+        #expect(!G.namesCompatible(person("Mary O'Connor", nil), person("Mary O'Connor", "O'Connor")), "no surname recorded")
+        #expect(G.givenNameTokens(person("David McGill Latta Sr", "Latta")) == ["david", "mcgill"])
+        #expect(G.givenNameTokens(person("Mary Catherine O'Connor", "O'Connor")) == ["mary", "catherine"])
+    }
+
+    @Test func aMissingBirthYearNeverFoldsByName() throws {
+        // Two Marys in the same tree with no shared FAMC and no spouse:
+        // only the birth years can corroborate.
+        func graph(candidateBirth: String?) -> GedcomFamilyGraph {
+            var text = eileenTree.replacingOccurrences(of: "1 FAMS @F4@\n1 FAMC @F6@\n", with: "1 FAMS @F4@\n")
+            text = text.replacingOccurrences(of: "1 BIRT\n2 DATE 1905\n2 PLAC Ireland\n",
+                                             with: candidateBirth.map { "1 BIRT\n2 DATE \($0)\n" } ?? "")
+            return GedcomFamilyGraph(gedcomText: text)
+        }
+        func fold(_ g: GedcomFamilyGraph) -> GedcomFamilyGraph.ParentFold? {
+            g.parentFamilyChoice(of: g.people["@I3@"]!)?.alternates.first?.fold
+        }
+        #expect(fold(graph(candidateBirth: nil)) == nil)
+        #expect(fold(graph(candidateBirth: "1906")) == .sameNameCloseBirth)
+        #expect(fold(graph(candidateBirth: "1907")) == nil)
+    }
+
+    // MARK: - Logic: siblings share the primary family
+
+    @Test func fullSiblingsSharePrimaryFamilyAndAlternatesGoToTheBasis() throws {
+        let g = GedcomFamilyGraph(gedcomText: adoptionTree)
+        let child = try #require(g.people["@I1@"])
+        let birthSibling = try #require(g.people["@I6@"]), adoptiveSibling = try #require(g.people["@I7@"])
+        #expect(g.relatives(.siblings, of: child).map(\.id) == ["@I6@"])
+        #expect(g.relatives(.sister, of: child).map(\.id) == ["@I6@"])
+        #expect(g.relatives(.brother, of: child).isEmpty)
+        #expect(g.alternateFamilySiblings(of: child).map(\.id) == ["@I7@"])
+        #expect(g.alternateSiblingBasisNote(for: child) == "Also recorded as a sibling through a second family record: Adoptive Sibling, @I7@.")
+        #expect(g.alternateSiblingBasisNote(for: child, sex: "F") == nil)
+        #expect(g.alternateSiblingBasisNote(for: child, sex: "M") == "Also recorded as a sibling through a second family record: Adoptive Sibling, @I7@.")
+        // Symmetric: the birth sibling lists the child; the adoptive
+        // sibling has the child only through the second record.
+        #expect(g.relatives(.siblings, of: birthSibling).map(\.id) == ["@I1@"])
+        #expect(g.alternateFamilySiblings(of: birthSibling).isEmpty)
+        #expect(g.relatives(.siblings, of: adoptiveSibling).isEmpty)
+        #expect(g.alternateFamilySiblings(of: adoptiveSibling).map(\.id) == ["@I1@"])
+        #expect(g.alternateSiblingBasisNote(for: adoptiveSibling) == "Also recorded as a sibling through a second family record: Child River, @I1@.")
+        // The family-tree summary the biography reads agrees with the kinship route.
+        #expect(ArchivistFamilyTreePolicy.summary(of: child, in: g).siblings.map(\.id) == g.relatives(.siblings, of: child).map(\.id))
+
+        // directRelation: full, then alternate — never full for the adoptive sibling.
+        #expect(g.directRelation(between: "@I1@", and: "@I6@")?.kind == .siblings)
+        #expect(g.directRelation(between: "@I1@", and: "@I6@")?.term == "Birth Sibling is Child River’s sister")
+        let alt = try #require(g.directRelation(between: "@I1@", and: "@I7@"))
+        #expect(alt.kind == .alternateFamilySiblings)
+        #expect(alt.term == "Adoptive Sibling is recorded as Child River’s brother through a second family record")
+        #expect(alt.path.map(\.id) == ["@I1@", "@I7@"])
+        #expect(g.directRelation(between: "@I7@", and: "@I1@")?.kind == .alternateFamilySiblings)
+        // Eileen: one FAMC each on her son; nothing changes for the ordinary person.
+        let e = GedcomFamilyGraph(gedcomText: eileenTree)
+        #expect(e.alternateFamilySiblings(of: try #require(e.people["@I3@"])).isEmpty)
+        #expect(e.alternateSiblingBasisNote(for: try #require(e.people["@I3@"])) == nil)
+        #expect(e.relatives(.siblings, of: try #require(e.people["@I7@"])).map(\.id) == ["@I5@"], "the two Marys are full siblings of each other")
+    }
+
+    /// Sibling consistency sensor: for every person in every fixture,
+    /// full siblings are symmetric, alternates are symmetric, and the two
+    /// sets never overlap.
+    @Test func siblingSetsAreSymmetricAndDisjoint() {
+        for text in [eileenTree, eileenTreeReversed, adoptionTree, pedigreeTree,
+                     GedcomSyntheticPedigree.gedcom(people: 2_000)] {
+            let g = GedcomFamilyGraph(gedcomText: text)
+            for person in g.people.values {
+                let full = g.relatives(.siblings, of: person), alt = g.alternateFamilySiblings(of: person)
+                #expect(Set(full.map(\.id)).isDisjoint(with: Set(alt.map(\.id))))
+                for s in full { #expect(g.relatives(.siblings, of: s).contains { $0.id == person.id }, "\(s.name) ↔ \(person.name)") }
+                for s in alt { #expect(g.alternateFamilySiblings(of: s).contains { $0.id == person.id }, "\(s.name) ↔ \(person.name)") }
+            }
+        }
     }
 
     // MARK: - Logic: single FAMC unchanged; the same record twice
@@ -350,14 +701,15 @@ struct GedcomParentFamilyTests {
     // MARK: - Scale: 100k people, 5% with a duplicated parent record
 
     /// Budget (Debug, M4 Max, 2026-09-02): parents-of for all 100k people
-    /// through the ruling in well under 2 s; the compiled parent table
-    /// carries one mother per person; the fold note is produced for every
-    /// duplicated child. Generation of the fixture is outside the clock.
+    /// through the ruling in well under 2 s; siblings-of for everyone in
+    /// under 3 s; the compiled parent table carries one mother per
+    /// person; the fold note is produced for every duplicated child.
+    /// Generation of the fixture is outside the clock.
     @Test func hundredThousandPeopleWithFivePercentDuplicateMothers() throws {
         let base = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         // Every 20th person who has a mother gets a second, wife-only
         // family whose wife is a fresh record of the same woman: same
-        // surname, born a year later, daughter of the same parents.
+        // name, born a year later, daughter of the same parents.
         var extraLines: [String] = []
         var duplicated: [String] = []
         var n = 0
@@ -414,6 +766,19 @@ struct GedcomParentFamilyTests {
         #expect(notes == duplicated.count)
         #expect(parentTotal > 100_000)
         #expect(elapsed < .seconds(2), "parents-of for \(graph.people.count) people took \(elapsed)")
+
+        // Siblings under the ruling for everyone, with the alternate note.
+        var siblingTotal = 0, alternateNotes = 0
+        let siblingElapsed = clock.measure {
+            for id in graph.people.keys {
+                let person = graph.people[id]!
+                siblingTotal += graph.relatives(.siblings, of: person).count
+                if graph.alternateSiblingBasisNote(for: person) != nil { alternateNotes += 1 }
+            }
+        }
+        #expect(siblingTotal > 0)
+        #expect(alternateNotes == 0, "a wife-only duplicate family adds no siblings")
+        #expect(siblingElapsed < .seconds(3), "siblings-of for \(graph.people.count) people took \(siblingElapsed)")
 
         // The compiled table agrees: one mother per person, no fork.
         let index = graph.index

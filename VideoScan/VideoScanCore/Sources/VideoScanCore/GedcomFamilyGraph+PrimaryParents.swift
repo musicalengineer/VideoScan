@@ -5,13 +5,11 @@
 // has to follow exactly one of them, and every walk must follow the SAME
 // one, or two answers about the same line would disagree.
 //
-// TODAY the choice is "the first recorded parent" — the order
-// `relatives(.mother/.father)` already returns. The
-// fix/gedcom-primary-parent-family branch replaces this choice with a
-// PRIMARY parent family per person; when it lands, only these two
-// functions change and every caller (LineageTrail and anything written
-// after it) follows automatically. Do not re-implement FAMC selection
-// elsewhere.
+// The choice is the PRIMARY parent family per person
+// (GedcomFamilyGraph+ParentFamily: `primaryParentFamilyID(of:)`), which
+// is exactly what `relatives(.mother/.father)` returns — so these two
+// accessors, the kinship routes, siblings and `directRelation` all read
+// the SAME selection. Do not re-implement FAMC selection elsewhere.
 
 import Foundation
 

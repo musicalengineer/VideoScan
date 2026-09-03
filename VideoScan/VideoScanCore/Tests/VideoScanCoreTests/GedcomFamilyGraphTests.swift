@@ -198,8 +198,9 @@ struct GedcomFamilyGraphTests {
         // both fathers and both mothers). Two complete families with no
         // FamilySearch id and no facts tie down to GEDCOM order: the
         // birth family. The adoptive parents stay reachable through
-        // `parentFamilyChoice` / `allRecordedParents`, and siblings from
-        // both families are still siblings.
+        // `parentFamilyChoice` / `allRecordedParents`; full siblings are
+        // the PRIMARY family's, the adoptive sibling is reachable through
+        // `alternateFamilySiblings` (codex #1011).
         #expect(
             g.relatives(.father, of: child).map(\.id) == ["@I2@"]
         )
@@ -213,7 +214,10 @@ struct GedcomFamilyGraphTests {
             g.parentFamilyChoice(of: child)?.alternates.map(\.person.id) == ["@I4@", "@I5@"]
         )
         #expect(
-            g.relatives(.siblings, of: child).map(\.id) == ["@I6@", "@I7@"]
+            g.relatives(.siblings, of: child).map(\.id) == ["@I6@"]
+        )
+        #expect(
+            g.alternateFamilySiblings(of: child).map(\.id) == ["@I7@"]
         )
     }
 

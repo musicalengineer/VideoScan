@@ -14,18 +14,30 @@
 // The rule is READ-TIME SELECTION ONLY: the GEDCOM, the compiled tree
 // and FamilySearch are never edited. Ranking (`ParentFamilyRank`) is one
 // pure comparator, table-tested in GedcomParentFamilyTests:
+//   (0) the link's PEDIGREE (`2 PEDI` under the FAMC — codex #1011):
+//       birth › unspecified › adopted › foster › sealing;
 //   (a) both HUSB and WIFE present beats one;
 //   (b) a FamilySearch family id (`_FSFTID`) beats none;
 //   (c) more recorded facts on the parents (birth/death date and place)
 //       beats fewer;
 //   (d) stable tie-break: GEDCOM (FAMC) order.
 // The top family is PRIMARY: its HUSB is the father, its WIFE the mother.
+//
 // A non-primary parent is FOLDED (treated as the same person, said only
-// in the basis) when it shares a FAMC with the primary parent of the
-// same role, or has the same surname and a birth year within two; an
-// unfoldable one (adoption, remarriage with children) is still kept out
-// of the prose — the basis says a second family is recorded and to ask
-// about it by name.
+// in the basis) on IDENTITY, never on relationship alone (codex #1011:
+// a shared FAMC proves siblings, not identity — two sisters "Mary
+// O'Connor b. 1904" and "Bridget O'Connor b. 1905" must stay two
+// people). Either the two records carry the same FamilySearch person id,
+// or their full names are compatible (same surname; given names equal,
+// or one a prefix / initial of the other — "Mary" ~ "Mary Catherine",
+// never "Mary" ~ "Bridget") AND one corroboration holds: a shared FAMC,
+// birth years within two, or the same spouse. Anything else (adoption,
+// remarriage with children, the two sisters) is kept out of the prose —
+// the basis says a second family is recorded and to ask about it by name.
+//
+// Full SIBLINGS follow the same rule: they share the PRIMARY family. A
+// person known only through a second family record is reachable through
+// `alternateFamilySiblings(of:)` and named in the basis, never in prose.
 
 import Foundation
 
@@ -36,28 +48,75 @@ extension GedcomFamilyGraph {
         case father, mother
     }
 
-    /// Why a non-primary parent is treated as the same person as the
-    /// primary parent of that role.
-    public enum ParentFold: String, Sendable, Equatable {
-        /// Both records are children of one family (share a FAMC).
-        case sameParents
-        /// Same surname, born within two years of each other.
-        case sameSurnameCloseBirth
+    /// How a child belongs to a parent family (`2 PEDI` under the FAMC),
+    /// in ranking order: an explicit birth family outranks everything, an
+    /// unlabelled link outranks an explicit adoptive / foster / sealing
+    /// one. (C++: an enum whose integer value IS the sort key.)
+    public enum ParentPedigree: Int, Sendable, Equatable, Comparable {
+        case birth = 0
+        case unspecified = 1
+        case adopted = 2
+        case foster = 3
+        case sealing = 4
 
-        /// The short reason the basis line quotes.
-        public var reason: String {
+        /// The raw PEDI text as the parser kept it (lowercased, trimmed).
+        /// Unknown or missing text is `unspecified`.
+        public init(raw: String?) {
+            switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "birth": self = .birth
+            case "adopted": self = .adopted
+            case "foster": self = .foster
+            case "sealing": self = .sealing
+            default: self = .unspecified
+            }
+        }
+
+        public static func < (a: ParentPedigree, b: ParentPedigree) -> Bool { a.rawValue < b.rawValue }
+
+        /// "adoptive parents" / "foster parent" / "parents by sealing" —
+        /// nil for birth and unspecified, which the basis does not label.
+        func parentsPhrase(count: Int) -> String? {
+            let noun = count == 1 ? "parent" : "parents"
             switch self {
-            case .sameParents: return "same parents"
-            case .sameSurnameCloseBirth: return "same surname, born within two years"
+            case .adopted: return "adoptive \(noun)"
+            case .foster: return "foster \(noun)"
+            case .sealing: return "\(noun) by sealing"
+            case .birth, .unspecified: return nil
             }
         }
     }
 
-    /// The four ranking facts about one candidate parent family, in
-    /// precedence order. A plain value type so the table test can build
-    /// one directly (C++: a POD with a strict-weak-ordering comparator).
+    /// Why a non-primary parent is treated as the same person as the
+    /// primary parent of that role. Every case except `sameFamilySearchID`
+    /// also required a compatible full name.
+    public enum ParentFold: String, Sendable, Equatable {
+        /// Both records carry the same FamilySearch person id.
+        case sameFamilySearchID
+        /// Compatible name, and both records are children of one family.
+        case sameParents
+        /// Compatible name, born within two years of each other.
+        case sameNameCloseBirth
+        /// Compatible name, married to the same person.
+        case sameSpouse
+
+        /// The short reason the basis line quotes.
+        public var reason: String {
+            switch self {
+            case .sameFamilySearchID: return "same FamilySearch record"
+            case .sameParents: return "same parents"
+            case .sameNameCloseBirth: return "same name, born within two years"
+            case .sameSpouse: return "same spouse"
+            }
+        }
+    }
+
+    /// The ranking facts about one candidate parent family, in precedence
+    /// order. A plain value type so the table test can build one directly
+    /// (C++: a POD with a strict-weak-ordering comparator).
     public struct ParentFamilyRank: Sendable, Equatable {
         public let familyID: String
+        /// Rule (0): the child's link pedigree for this family.
+        public let pedigree: ParentPedigree
         public let hasBothParents: Bool
         public let hasFamilySearchID: Bool
         /// Birth/death dates and places recorded on the parents (0…8).
@@ -66,17 +125,19 @@ extension GedcomFamilyGraph {
         public let order: Int
 
         public init(familyID: String, hasBothParents: Bool, hasFamilySearchID: Bool,
-                    factCount: Int, order: Int) {
+                    factCount: Int, order: Int, pedigree: ParentPedigree = .unspecified) {
             self.familyID = familyID
+            self.pedigree = pedigree
             self.hasBothParents = hasBothParents
             self.hasFamilySearchID = hasFamilySearchID
             self.factCount = factCount
             self.order = order
         }
 
-        /// True when `a` is the better primary family: rules (a)–(d) in
-        /// that order, each consulted only when every earlier one ties.
+        /// True when `a` is the better primary family: rules (0), (a)–(d)
+        /// in that order, each consulted only when every earlier one ties.
         public static func outranks(_ a: ParentFamilyRank, _ b: ParentFamilyRank) -> Bool {
+            if a.pedigree != b.pedigree { return a.pedigree < b.pedigree }
             if a.hasBothParents != b.hasBothParents { return a.hasBothParents }
             if a.hasFamilySearchID != b.hasFamilySearchID { return a.hasFamilySearchID }
             if a.factCount != b.factCount { return a.factCount > b.factCount }
@@ -94,6 +155,8 @@ extension GedcomFamilyGraph {
         public let role: ParentRole
         public let person: Person
         public let familyID: String
+        /// The child's link pedigree for `familyID` (adoptive, foster …).
+        public let pedigree: ParentPedigree
         /// Nil when this is a genuinely different person (a second
         /// family); otherwise why it is read as the primary parent again.
         public let fold: ParentFold?
@@ -118,6 +181,8 @@ extension GedcomFamilyGraph {
         public var parents: [Person] { [father, mother].compactMap { $0 } }
         public var foldedAlternates: [AlternateParent] { alternates.filter(\.isFolded) }
         public var unfoldedAlternates: [AlternateParent] { alternates.filter { !$0.isFolded } }
+        /// The primary link's pedigree (rule 0).
+        public var primaryPedigree: ParentPedigree { ranks.first?.pedigree ?? .unspecified }
     }
 
     /// The ruling applied to one person. Nil when no FAMC family resolves
@@ -129,13 +194,13 @@ extension GedcomFamilyGraph {
         guard let firstID = ids.first else { return nil }
         if ids.count == 1 {
             let family = families[firstID]!
-            let rank = rank(of: family, id: firstID, order: 0)
+            let rank = rank(of: family, id: firstID, order: 0, for: person)
             return ParentFamilyChoice(primaryFamilyID: firstID,
                                       father: family.husband.flatMap { people[$0] },
                                       mother: family.wife.flatMap { people[$0] },
                                       ranks: [rank], alternates: [])
         }
-        let ranks = rankedParentFamilies(ids)
+        let ranks = rankedParentFamilies(ids, for: person)
         let primaryID = ranks[0].familyID
         let primary = families[primaryID]!
         let father = primary.husband.flatMap { people[$0] }
@@ -143,44 +208,63 @@ extension GedcomFamilyGraph {
         var alternates: [AlternateParent] = []
         for id in ids where id != primaryID {
             let family = families[id]!
+            let pedigree = pedigree(of: person, in: id)
             for (role, pointer, primaryParent) in [(ParentRole.father, family.husband, father),
                                                     (ParentRole.mother, family.wife, mother)] {
                 guard let pointer, let person = people[pointer] else { continue }
                 if person.id == primaryParent?.id { continue }   // the same record listed twice
                 alternates.append(AlternateParent(
-                    role: role, person: person, familyID: id,
-                    fold: primaryParent.flatMap { Self.fold(person, into: $0) }))
+                    role: role, person: person, familyID: id, pedigree: pedigree,
+                    fold: primaryParent.flatMap { fold(person, into: $0) }))
             }
         }
         return ParentFamilyChoice(primaryFamilyID: primaryID, father: father, mother: mother,
                                   ranks: ranks, alternates: alternates)
     }
 
-    /// The primary family only — what `relatives(.father/.mother/.parents)`
-    /// needs. The one-FAMC case is a single dictionary lookup with no
-    /// ranking and no allocation; only a multi-FAMC person pays for the
-    /// rank table. (C++: the hot inline path; `parentFamilyChoice` is the
-    /// full report built on top of it.)
+    /// The PRIMARY parent family's pointer — the ONE FAMC selection every
+    /// reader shares (`relatives(.father/.mother/.parents)`,
+    /// `primaryMother/primaryFather`, siblings, `directRelation`). The
+    /// one-FAMC case is a single dictionary lookup with no ranking and no
+    /// allocation; only a multi-FAMC person pays for the rank table.
+    /// (C++: the hot inline path; `parentFamilyChoice` is the full report
+    /// built on top of it.)
+    public func primaryParentFamilyID(of person: Person) -> String? {
+        let ids = parentFamilyIDs(of: person)
+        switch ids.count {
+        case 0: return nil
+        case 1: return families[ids[0]] == nil ? nil : ids[0]
+        default:
+            let known = ids.filter { families[$0] != nil }
+            guard let first = known.first else { return nil }
+            if known.count == 1 { return first }
+            return rankedParentFamilies(known, for: person)[0].familyID
+        }
+    }
+
     func primaryParentFamily(of person: Person) -> Family? {
+        // One lookup on the hot path (the index builder calls this for
+        // every person in a 100k tree); the ranking only for multi-FAMC.
         let ids = parentFamilyIDs(of: person)
         switch ids.count {
         case 0: return nil
         case 1: return families[ids[0]]
-        default:
-            let known = ids.filter { families[$0] != nil }
-            guard let first = known.first else { return nil }
-            if known.count == 1 { return families[first] }
-            return families[rankedParentFamilies(known)[0].familyID]
+        default: return primaryParentFamilyID(of: person).flatMap { families[$0] }
         }
     }
 
-    private func rankedParentFamilies(_ ids: [String]) -> [ParentFamilyRank] {
+    /// The child's link pedigree for one FAMC family (rule 0).
+    public func pedigree(of person: Person, in familyID: String) -> ParentPedigree {
+        ParentPedigree(raw: person.parentLinks[familyID]?.pedigree)
+    }
+
+    private func rankedParentFamilies(_ ids: [String], for person: Person) -> [ParentFamilyRank] {
         ParentFamilyRank.ranked(ids.enumerated().map { order, id in
-            rank(of: families[id]!, id: id, order: order)
+            rank(of: families[id]!, id: id, order: order, for: person)
         })
     }
 
-    private func rank(of family: Family, id: String, order: Int) -> ParentFamilyRank {
+    private func rank(of family: Family, id: String, order: Int, for child: Person) -> ParentFamilyRank {
         let husband = family.husband.flatMap { people[$0] }
         let wife = family.wife.flatMap { people[$0] }
         return ParentFamilyRank(
@@ -188,7 +272,8 @@ extension GedcomFamilyGraph {
             hasBothParents: husband != nil && wife != nil,
             hasFamilySearchID: family.familySearchID != nil,
             factCount: Self.factCount(husband) + Self.factCount(wife),
-            order: order)
+            order: order,
+            pedigree: pedigree(of: child, in: id))
     }
 
     /// Recorded vital facts on one person: birth date, birth place, death
@@ -199,22 +284,102 @@ extension GedcomFamilyGraph {
             .filter { $0 != nil }.count
     }
 
+    // MARK: Siblings under the ruling
+
+    /// Full siblings: the other children of the person's PRIMARY family
+    /// whose own primary family is that same family. Symmetric when the
+    /// file is (A lists B exactly when B lists A). A CHIL with no FAMC
+    /// link at all (a one-sided file) has no competing family, so the
+    /// CHIL line is taken at face value.
+    public func primarySiblings(of person: Person) -> [Person] {
+        guard let familyID = primaryParentFamilyID(of: person), let family = families[familyID] else { return [] }
+        return uniquePeople(family.children
+            .filter { $0 != person.id }
+            .compactMap { people[$0] }
+            .filter { sibling in
+                let links = parentFamilyIDs(of: sibling)
+                return links.isEmpty || primaryParentFamilyID(of: sibling) == familyID
+            })
+    }
+
+    /// Everyone recorded as a sibling ONLY through a second family record:
+    /// children of the person's non-primary families, and children of the
+    /// primary family whose own primary family lies elsewhere. FAMC order,
+    /// no repeats, never a full sibling. Empty for the ordinary person.
+    public func alternateFamilySiblings(of person: Person) -> [Person] {
+        let ids = parentFamilyIDs(of: person)
+        guard !ids.isEmpty else { return [] }
+        let full = Set(primarySiblings(of: person).map(\.id))
+        return uniquePeople(ids
+            .compactMap { families[$0] }
+            .flatMap(\.children)
+            .filter { $0 != person.id && !full.contains($0) }
+            .compactMap { people[$0] })
+    }
+
+    // MARK: Identity fold
+
     /// Whether `candidate` (a non-primary parent) reads as the same person
-    /// as `primary` (the primary parent of the same role): they share a
-    /// FAMC — the same parents — or carry the same surname with birth
-    /// years within two of each other. Both records must actually carry
-    /// the evidence; a missing birth year never folds.
-    public static func fold(_ candidate: Person, into primary: Person) -> ParentFold? {
-        let famcA = Set(candidate.childOfFamilies.isEmpty
-                        ? [candidate.childOfFamily].compactMap { $0 } : candidate.childOfFamilies)
-        let famcB = Set(primary.childOfFamilies.isEmpty
-                        ? [primary.childOfFamily].compactMap { $0 } : primary.childOfFamilies)
+    /// as `primary` (the primary parent of the same role). Identity only:
+    /// the same FamilySearch person id, or a compatible full name plus one
+    /// corroboration (shared FAMC, birth years within two, same spouse).
+    /// Both records must actually carry the evidence; a missing birth
+    /// year, a missing given name or a missing surname never folds.
+    public func fold(_ candidate: Person, into primary: Person) -> ParentFold? {
+        if let a = candidate.familySearchID, let b = primary.familySearchID, !a.isEmpty, a == b {
+            return .sameFamilySearchID
+        }
+        guard Self.namesCompatible(candidate, primary) else { return nil }
+        let famcA = Set(parentFamilyIDs(of: candidate)), famcB = Set(parentFamilyIDs(of: primary))
         if !famcA.isEmpty, !famcA.isDisjoint(with: famcB) { return .sameParents }
-        guard let a = candidate.surname, let b = primary.surname,
-              FamilyIdentityText.normalized(a) == FamilyIdentityText.normalized(b),
-              let ya = candidate.birthYear, let yb = primary.birthYear,
-              abs(ya - yb) <= 2 else { return nil }
-        return .sameSurnameCloseBirth
+        if let ya = candidate.birthYear, let yb = primary.birthYear, abs(ya - yb) <= 2 {
+            return .sameNameCloseBirth
+        }
+        let spousesA = spouseIDs(of: candidate)
+        if !spousesA.isEmpty, !spousesA.isDisjoint(with: spouseIDs(of: primary)) { return .sameSpouse }
+        return nil
+    }
+
+    /// Same surname, and given names that are the same person's: equal,
+    /// or one list a prefix of the other token by token ("Mary" ~ "Mary
+    /// Catherine"), where a one-letter token matches the initial of the
+    /// other ("M" ~ "Mary"). "Mary" vs "Bridget" is never compatible, nor
+    /// is a record with no given name at all.
+    public static func namesCompatible(_ a: Person, _ b: Person) -> Bool {
+        guard let sa = a.surname, let sb = b.surname,
+              FamilyIdentityText.normalized(sa) == FamilyIdentityText.normalized(sb) else { return false }
+        let ga = givenNameTokens(a), gb = givenNameTokens(b)
+        guard !ga.isEmpty, !gb.isEmpty else { return false }
+        let (short, long) = ga.count <= gb.count ? (ga, gb) : (gb, ga)
+        for (s, l) in zip(short, long) {
+            if s == l { continue }
+            if s.count == 1, l.first == s.first { continue }
+            if l.count == 1, s.first == l.first { continue }
+            return false
+        }
+        return true
+    }
+
+    /// The normalized given-name tokens: the display name's tokens before
+    /// the surname run ("David McGill Latta Sr" / "Latta" → ["david",
+    /// "mcgill"]). When the surname is not found, everything but the last
+    /// token.
+    static func givenNameTokens(_ person: Person) -> [String] {
+        let tokens = FamilyIdentityText.tokens(person.name)
+        guard let surname = person.surname else { return Array(tokens.dropLast()) }
+        let run = FamilyIdentityText.tokens(surname)
+        guard !run.isEmpty, tokens.count >= run.count else { return Array(tokens.dropLast()) }
+        for start in 0...(tokens.count - run.count) where Array(tokens[start..<(start + run.count)]) == run {
+            return Array(tokens[..<start])
+        }
+        return Array(tokens.dropLast())
+    }
+
+    /// The other member of every FAMS family the person is in.
+    private func spouseIDs(of person: Person) -> Set<String> {
+        Set(person.spouseOfFamilies.compactMap { families[$0] }
+            .flatMap { [$0.husband, $0.wife].compactMap { $0 } }
+            .filter { $0 != person.id })
     }
 
     // MARK: Basis wording
@@ -223,10 +388,13 @@ extension GedcomFamilyGraph {
     /// person. Folded duplicates:
     ///   "(another record for her mother, Mary O'Connor b. 1905, exists in
     ///    the tree — same parents; treated as the same person)"
-    /// A genuine second family:
+    /// A genuine second family with a stated pedigree:
+    ///   "Also recorded: adoptive parents (father Adoptive Father, @I4@;
+    ///    mother Adoptive Mother, @I5@); ask about them by name."
+    /// A genuine second family with none:
     ///   "A second parent family is recorded (father Zeke Foster, @I32@);
     ///    ask about it by name."
-    /// Both, when a person has both kinds, joined by a space.
+    /// Several, when a person has more than one kind, joined by a space.
     public func parentFamilyBasisNote(for person: Person) -> String? {
         guard let choice = parentFamilyChoice(of: person), !choice.alternates.isEmpty else { return nil }
         var notes: [String] = []
@@ -242,13 +410,40 @@ extension GedcomFamilyGraph {
                 + "\(alternate.person.name)\(born), exists in the tree — "
                 + "\(alternate.fold!.reason); treated as the same person)")
         }
-        let second = choice.unfoldedAlternates
-        if !second.isEmpty {
-            let listed = second.map { "\($0.role.rawValue) \($0.person.name), \(Self.recordCode($0.person))" }
+        func listed(_ parents: [AlternateParent]) -> String {
+            parents.map { "\($0.role.rawValue) \($0.person.name), \(Self.recordCode($0.person))" }
                 .joined(separator: "; ")
-            notes.append("A second parent family is recorded (\(listed)); ask about it by name.")
+        }
+        // Families with a stated pedigree get their own sentence, FAMC
+        // order; the unlabelled remainder shares one.
+        var plain: [AlternateParent] = []
+        var seenFamilies: [String] = []
+        for alternate in choice.unfoldedAlternates where !seenFamilies.contains(alternate.familyID) {
+            seenFamilies.append(alternate.familyID)
+            let inFamily = choice.unfoldedAlternates.filter { $0.familyID == alternate.familyID }
+            if let phrase = alternate.pedigree.parentsPhrase(count: inFamily.count) {
+                notes.append("Also recorded: \(phrase) (\(listed(inFamily))); ask about them by name.")
+            } else {
+                plain += inFamily
+            }
+        }
+        if !plain.isEmpty {
+            notes.append("A second parent family is recorded (\(listed(plain))); ask about it by name.")
         }
         return notes.joined(separator: " ")
+    }
+
+    /// The basis note for people recorded as siblings only through a second
+    /// family record, or nil when there are none:
+    ///   "Also recorded as a sibling through a second family record:
+    ///    Adoptive Sibling, @I7@."
+    /// `sex` narrows the list for a brother / sister question.
+    public func alternateSiblingBasisNote(for person: Person, sex: String? = nil) -> String? {
+        let others = alternateFamilySiblings(of: person).filter { sex == nil || $0.sex == sex }
+        guard !others.isEmpty else { return nil }
+        let noun = others.count == 1 ? "a sibling" : "siblings"
+        return "Also recorded as \(noun) through a second family record: "
+            + others.map { "\($0.name), \(Self.recordCode($0))" }.joined(separator: "; ") + "."
     }
 
     /// The FamilySearch ID when the record has one, else the file-local
