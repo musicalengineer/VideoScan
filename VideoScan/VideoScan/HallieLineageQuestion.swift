@@ -135,7 +135,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     case birthplaceTrail(person: String?, line: LineageTrail.Line, stop: LineageTrail.Stop, ask: TrailAsk)
     /// "show more" after a trail longer than a page: the same walk, the
     /// next page, the person by GEDCOM pointer (from conversation memory).
-    case birthplaceTrailPage(personID: String, line: LineageTrail.Line, stop: LineageTrail.Stop, from: Int)
+    case birthplaceTrailPage(personID: String, personName: String, treeToken: String, line: LineageTrail.Line, stop: LineageTrail.Stop, from: Int)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -1184,8 +1184,9 @@ enum HallieLineageAnswer {
             }
         case .birthplaceTrail(let person, let line, let stop, let ask):
             return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
-        case .birthplaceTrailPage(let personID, let line, let stop, let from):
-            return birthplaceTrailPage(personID: personID, line: line, stop: stop, from: from, context: context)
+        case .birthplaceTrailPage(let personID, let personName, let treeToken, let line, let stop, let from):
+            return birthplaceTrailPage(personID: personID, personName: personName, treeToken: treeToken,
+                                       line: line, stop: stop, from: from, context: context)
         }
     }
 

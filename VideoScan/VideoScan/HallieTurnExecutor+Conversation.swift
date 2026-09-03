@@ -236,6 +236,12 @@ extension HallieTurnExecutor {
             let substantive: Bool
             if result.clarification != nil || intent != nil {
                 substantive = true
+            } else if result.offeredActions.contains(HallieLineageAnswer.trailShowMoreAction) {
+                // An answer that offers "show more" pages from THIS
+                // exchange; forgetting it would leave the chip empty — a
+                // paged trail joined with a capability answer took the
+                // capability's route (codex #1014 item 4).
+                substantive = true
             } else {
                 switch result.route {
                 case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent,
@@ -535,16 +541,28 @@ extension HallieTurnExecutor {
         // action, the later clause wins: it is the final state the user
         // asked to see ("open People … open Archive" ends on Archive).
         let immediateAction = b.immediateOfferedAction ?? a.immediateOfferedAction
+        // A paged birthplace trail keeps its "show more" through the join
+        // (the continuation finds its segment inside the joined query
+        // description) — unless BOTH halves are unfinished trails, when
+        // "show more" would be ambiguous and neither is offered (codex
+        // #1014 item 4). The same rule decides both the chip and the
+        // continuation, so a chip is never offered that will not work.
+        let joinedQuery = "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")"
+        var offered = a.offeredActions + b.offeredActions
+        if offered.contains(HallieLineageAnswer.trailShowMoreAction),
+           HallieLineageQuestion.trailContinuationSegment(in: joinedQuery) == nil {
+            offered.removeAll { $0 == HallieLineageAnswer.trailShowMoreAction }
+        }
         return Result(
             route: b.route, outcome: b.outcome,
             prose: prose,
             basisLine: a.basisLine + " " + b.basisLine,
-            queryDescription: "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")",
+            queryDescription: joinedQuery,
             citations: citations, knowledgeCitations: knowledge,
             catalogPersonName: b.catalogPersonName ?? a.catalogPersonName,
             clarification: b.clarification,
             matchCount: matchCount, mediaAction: b.mediaAction ?? a.mediaAction,
-            offeredActions: a.offeredActions + b.offeredActions,
+            offeredActions: offered,
             answerPlan: plan, composedBy: b.composedBy, transcriptText: transcript,
             attachments: a.attachments + b.attachments,
             performsFirstOfferedAction: immediateAction != nil,
