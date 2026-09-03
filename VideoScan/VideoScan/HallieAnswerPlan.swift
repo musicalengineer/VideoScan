@@ -92,6 +92,16 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// that speaks of a living subject's life as finished. Nil = the route
     /// has no subject or no verdict; nothing about tense is said or checked.
     let subjectLifeStatus: LifeStatus?
+    /// PROVENANCE the answer must carry verbatim — today, the tree bridge
+    /// this turn only ASSUMED: " (taking Dad as Richard Harding Breen Sr)".
+    ///
+    /// Deliberately NOT a claim (2026-09-03). A claim is something Hallie
+    /// asserts about the family and the verifier holds her to; this says
+    /// how she read the question, so there is nothing in the tree to prove
+    /// it against. Swift writes it, Swift appends it, the model never sees
+    /// it and never rephrases it — so it can never go missing and can never
+    /// be laundered into a fact. Nil = nothing was assumed.
+    let provenanceNote: String?
 
     init(
         route: HallieTurnExecutor.Route,
@@ -100,7 +110,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
         claims: [Claim] = [],
         counts: [Count] = [],
         fallbackText: String,
-        subjectLifeStatus: LifeStatus? = nil
+        subjectLifeStatus: LifeStatus? = nil,
+        provenanceNote: String? = nil
     ) {
         self.route = route
         self.shape = shape
@@ -109,6 +120,25 @@ struct HallieAnswerPlan: Sendable, Equatable {
         self.counts = counts
         self.fallbackText = fallbackText
         self.subjectLifeStatus = subjectLifeStatus
+        self.provenanceNote = provenanceNote
+    }
+
+    /// The same plan carrying `note` as provenance: appended to the
+    /// template wording AND kept aside so the composer appends it to a
+    /// model-phrased answer too. Idempotent — a plan that already carries
+    /// the note is returned unchanged, so a result passed through two
+    /// wrappers never says it twice.
+    func carrying(provenance note: String) -> HallieAnswerPlan {
+        guard !note.isEmpty, provenanceNote != note else { return self }
+        return HallieAnswerPlan(
+            route: route,
+            shape: shape,
+            subject: subject,
+            claims: claims,
+            counts: counts,
+            fallbackText: fallbackText + note,
+            subjectLifeStatus: subjectLifeStatus,
+            provenanceNote: note)
     }
 
     /// Whether a model may phrase this answer at all.
