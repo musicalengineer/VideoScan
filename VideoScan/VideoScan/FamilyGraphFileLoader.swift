@@ -181,32 +181,76 @@ struct FamilyGraphFileLoader {
         return Outcome(graph: nil, selectedURL: nil, rejectedURLs: [], candidateCount: 0)
     }
 
+    /// Where a refusal goes when there is no store to log through. The
+    /// no-store case used to `return nil` in total silence, which reads
+    /// exactly like success to every caller.
+    var log: (String) -> Void = { appLog.write($0) }
+
+    /// The marker every "the compile produced no generation" line carries.
+    /// The flat app log has no levels; this string is the error level.
+    static let noGenerationPrefix = "[family-tree] ERROR recompile produced no generation:"
+
     /// "Recompile" (codex #826): parse `sources` in order, merge left to
     /// right (first file is the authority, as the CLI does), ingest with
     /// the same physical sources, and return the promoted graph. Nil,
     /// logged by the store, when a file does not parse or the ingest is
     /// refused / fails verification. Refused outright on a viewer.
+    ///
+    /// 2026-09-03: every nil return is logged with `noGenerationPrefix`,
+    /// and each parse is timed. On Rick's real pulls this step is 20–25 s
+    /// (66 MB + 126 MB), and before today it wrote nothing at all while it
+    /// ran — so a compile killed by quitting the app left no trace that a
+    /// compile had ever been in flight.
     func recompile(sources: [URL]) -> GedcomFamilyGraph? {
-        guard let store = compiledStore, !sources.isEmpty else { return nil }
+        let report = compiledStore?.log ?? log
+        guard !sources.isEmpty else {
+            report("\(Self.noGenerationPrefix) no sources were named")
+            return nil
+        }
+        guard let store = compiledStore else {
+            report("\(Self.noGenerationPrefix) no compiled-tree store is attached to this loader")
+            return nil
+        }
         if readOnly {
             store.log("\(FamilyGraphCompiledStore.refusedWritePrefix) recompile — the tree is compiled on the master")
+            store.log("\(Self.noGenerationPrefix) this machine is a viewer")
             return nil
+        }
+        let clock = ContinuousClock()
+        let began = clock.now
+        func ms(_ from: ContinuousClock.Instant) -> Int {
+            Int(((clock.now - from) / .milliseconds(1)).rounded())
         }
         var graphs: [GedcomFamilyGraph] = []
         for url in sources {
             progress("Reading \(url.lastPathComponent)…")
+            let parseBegan = clock.now
             guard let graph = GedcomFamilyGraph(fileURL: url), !graph.people.isEmpty else {
                 store.log("[family-tree] recompile: \(url.lastPathComponent) is not a non-empty GEDCOM; nothing promoted")
+                store.log("\(Self.noGenerationPrefix) \(url.lastPathComponent) did not parse as a non-empty GEDCOM")
                 return nil
             }
+            store.log("[family-tree] recompile parsed \(url.lastPathComponent): "
+                      + "\(graph.people.count) people in \(ms(parseBegan)) ms")
             graphs.append(graph)
         }
         var merged = graphs[0]
         for (i, next) in graphs.dropFirst().enumerated() {
             progress("Merging \(sources[i + 1].lastPathComponent)…")
+            let mergeBegan = clock.now
             merged = merged.merged(with: next)
+            store.log("[family-tree] recompile merged \(sources[i + 1].lastPathComponent): "
+                      + "\(merged.people.count) people in \(ms(mergeBegan)) ms")
         }
-        return store.ingest(graph: merged, sources: sources, progress: progress)
+        guard let promoted = store.ingest(graph: merged, sources: sources, progress: progress) else {
+            // `ingest` has already logged WHICH check refused it; this line
+            // is the uniform error marker that says the recompile as a
+            // whole produced nothing.
+            store.log("\(Self.noGenerationPrefix) the ingest of \(merged.people.count) people "
+                      + "was refused after \(ms(began)) ms")
+            return nil
+        }
+        return promoted
     }
 
     /// Parse `url`; nil when it is not a non-empty GEDCOM (the caller

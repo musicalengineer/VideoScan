@@ -971,6 +971,11 @@ struct ArchivistChatWindow: View {
             case .nothingPending:
                 replaceMessageText(id: messageID, with: "The family tree is already compiled — nothing to do.")
                 if let question { ask(question) }
+            case .alreadyRunning:
+                // Never report this as "nothing to do": a compile IS running
+                // and takes about half a minute on the real pulls.
+                replaceMessageText(id: messageID,
+                                   with: "A recompile is already running — it takes about half a minute. I'll answer once it finishes.")
             case .failed:
                 replaceMessageText(id: messageID, with: "The recompile did not promote a tree — the log says why. The pull files are unchanged.")
                 appLog.write("[family-tree] Hallie recompile did not promote")

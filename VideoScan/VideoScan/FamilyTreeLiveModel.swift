@@ -565,44 +565,138 @@ final class FamilyTreeLiveModel: ObservableObject {
         install(outcome: loaded.0, bundle: loaded.1)
     }
 
+    /// Every recompile the tab starts writes this line first, so the log
+    /// can always answer "did the button do anything?". Test sensor.
+    static let recompileStartedPrefix = "[family-tree] recompile started"
+    /// Every path that ends a recompile WITHOUT a promoted generation
+    /// writes this line. It is the error marker the flat app log has
+    /// instead of levels — one greppable string for "the compile
+    /// produced nothing, and here is why". Test sensor.
+    static let recompileFailedPrefix = "[family-tree] ERROR recompile produced no generation:"
+
     /// The "Recompile" button (codex #826): parse + merge + ingest the
     /// pending sources off the main actor with the phase caption showing,
     /// then reload from disk so the promoted generation installs through
     /// the ordinary path. A refused ingest leaves `needsRecompile` set
     /// and a warning; the store log says why.
+    ///
+    /// 2026-09-03 (demo blocker — the Family Tree was dead in the running
+    /// app and this button reported nothing at all). Three defects lived
+    /// in the five lines below, and all three were SILENT:
+    ///
+    ///  1. `guard !sources.isEmpty, !isRecompiling, let store = …` — three
+    ///     different early exits sharing one `return`, none of them logged
+    ///     or shown. A press that landed on any of them was indistinguish-
+    ///     able from a press that was never registered.
+    ///  2. Nothing was logged when a recompile STARTED, so a compile that
+    ///     was still running (25 s on Rick's two real pulls: 66 MB + 126 MB
+    ///     parsed, merged, compiled and verified) left no trace whatever.
+    ///     Quitting the app during it lost the work with no record that
+    ///     any work had been in flight.
+    ///  3. `guard generation == loadGeneration else { … return }` compared
+    ///     the load generation AFTER the compile had finished and, if
+    ///     anything at all had reloaded meanwhile (a tab switch, a Hallie
+    ///     turn, the People tab, the directory watcher), returned without
+    ///     installing — THROWING AWAY a generation that was already
+    ///     durable on disk, leaving the orange "needs recompiling" banner
+    ///     up over a tree that had just been compiled successfully.
+    ///
+    /// And the operation was invisible: `loadPhase` is only rendered by
+    /// FamilyTreeDemoView while `loadState == .loading`, which this method
+    /// never set — so for 25 seconds the UI showed no spinner, no caption
+    /// and no message. "Pressing Recompile does nothing" was, from the
+    /// screen, exactly true.
     func recompile() async {
         let sources = needsRecompile
-        guard !sources.isEmpty, !isRecompiling, let store = compiledStore else { return }
+        guard !isRecompiling else {
+            report("[family-tree] recompile ignored: one is already running")
+            return
+        }
+        guard !sources.isEmpty else {
+            reportNoGeneration("nothing is waiting to be recompiled",
+                               warning: "There is nothing waiting to be recompiled.")
+            return
+        }
+        guard let store = compiledStore else {
+            reportNoGeneration("this Family Tree model has no compiled-tree store",
+                               warning: "Recompile is unavailable here — no compiled-tree store is attached.")
+            return
+        }
         // Remote viewer (Phase 1): the tree is compiled on the master. The
         // banner never offers this button there, but the Hallie chip path
         // reaches here too — refuse, log, and say where it happens.
         if ViewerWriteGuard.refuse("FamilyTreeLiveModel.recompile") {
-            loadWarning = "The family tree is compiled \(ViewerModeCenter.shared.masterOnlyHint); sync again after it updates."
+            reportNoGeneration("this machine is a viewer; the tree is compiled on the master",
+                               warning: "The family tree is compiled \(ViewerModeCenter.shared.masterOnlyHint); sync again after it updates.")
             return
         }
+
         isRecompiling = true
+        loadWarning = nil
+        // The caption is rendered only while `.loading`. Without this the
+        // whole compile is invisible (defect 3 above).
+        let stateBeforeCompile = loadState
+        loadState = .loading
+        loadPhase = "Reading \(sources.count) \(sources.count == 1 ? "pull" : "pulls")…"
+        report("\(Self.recompileStartedPrefix) \(sources.count) sources: "
+               + sources.map(\.lastPathComponent).joined(separator: ", "))
+        let clock = ContinuousClock()
+        let began = clock.now
+
         loadGeneration &+= 1
-        let generation = loadGeneration
+        // Captured ONLY so a superseded compile's captions cannot overwrite
+        // a newer load's. It must never decide whether the RESULT counts.
+        let captionGeneration = loadGeneration
         let directory = originalsDirectory
         let promoted = await Task.detached(priority: .userInitiated) { [weak self] () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = { phase in
                 Task { @MainActor [weak self] in
-                    guard let self, self.loadGeneration == generation else { return }
+                    guard let self, self.loadGeneration == captionGeneration else { return }
                     self.loadPhase = phase
                 }
             }
             return loader.recompile(sources: sources) != nil
         }.value
-        guard generation == loadGeneration else { isRecompiling = false; return }
+
         loadPhase = nil
         isRecompiling = false
-        if promoted {
-            await loadFromDisk()
-        } else {
-            loadWarning = "Recompile did not promote a tree (see the log); the \(sources.count) pulls are unchanged."
+        let elapsedMS = Int(((clock.now - began) / .milliseconds(1)).rounded())
+        guard promoted else {
+            loadState = stateBeforeCompile
+            reportNoGeneration(
+                "the compile of \(sources.count) sources ran for \(elapsedMS) ms and promoted nothing "
+                + "— the preceding [family-tree] line says which check refused it",
+                warning: "Recompile did not promote a tree (see the log); the \(sources.count) pulls are unchanged.")
+            return
         }
+
+        report("[family-tree] recompile promoted a generation in \(elapsedMS) ms; installing it")
+        // The generation is durable. Install it no matter what else
+        // reloaded while we were compiling — see defect 3.
+        if usesSharedCache { FamilyGraphSharedCache.shared.invalidate() }
+        await loadFromDisk()
+        if !needsRecompile.isEmpty {
+            reportNoGeneration(
+                "a generation was promoted but the reload still reports \(needsRecompile.count) sources pending",
+                warning: "The tree was recompiled but did not load; see the log.")
+        }
+    }
+
+    /// Recompile diagnostics go through the store's log when there is one
+    /// (production wires it to `appLog`; tests capture it), so a test can
+    /// assert on them without touching the real log file.
+    private func report(_ line: String) {
+        if let log = compiledStore?.log { log(line) } else { appLog.write(line) }
+    }
+
+    /// One choke point for "the recompile ended and there is no new
+    /// generation": an error-marked log line AND something on screen.
+    /// Never one without the other.
+    private func reportNoGeneration(_ reason: String, warning: String) {
+        report("\(Self.recompileFailedPrefix) \(reason)")
+        loadWarning = warning
     }
 
     /// Everyone's sidebar summary in sidebar order — O(people), pure,
