@@ -213,6 +213,7 @@ extension HallieTurnExecutor {
                 transcriptText: result.transcriptText,
                 attachments: result.attachments,
                 performsFirstOfferedAction: result.performsFirstOfferedAction,
+                immediateOfferedAction: result.immediateOfferedAction,
                 subjectLifeStatus: result.subjectLifeStatus,
                 refinableQuery: result.refinableQuery)
         }

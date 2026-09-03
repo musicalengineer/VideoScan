@@ -94,4 +94,91 @@ struct HallieAppNavigationTests {
         #expect(defaults.integer(forKey: "selectedTab") == 4)
         #expect(opens == 1)
     }
+
+    /// Cycle-2 sensor: joined answers concatenate chip arrays. The directly
+    /// requested navigation must survive on either side without turning an
+    /// unrelated first chip into an auto-run action.
+    @MainActor
+    @Test func answeredCompoundKeepsTheExplicitActionInBothOrders() {
+        let unrelated = HallieTurnExecutor.Result(
+            route: .capability, outcome: .answered, prose: "Other answer.",
+            basisLine: "Basis: fixture", queryDescription: nil, citations: [],
+            catalogPersonName: nil,
+            offeredActions: [.ask(question: "tell me more", label: "Tell me more")])
+        let navigation = Navigation.answer(.archive)
+        let joined = [
+            HallieTurnExecutor.joinedTwoQuestionAnswer(unrelated, navigation),
+            HallieTurnExecutor.joinedTwoQuestionAnswer(navigation, unrelated),
+        ]
+
+        for (index, result) in joined.enumerated() {
+            #expect(result.performsFirstOfferedAction, "order \(index)")
+            #expect(result.immediateOfferedAction == .openAppDestination(.archive),
+                    "order \(index)")
+            #expect(Navigation.immediateDestination(in: result) == .archive,
+                    "order \(index)")
+        }
+        #expect(joined[0].offeredActions.first ==
+                .ask(question: "tell me more", label: "Tell me more"),
+                "the safe result must not depend on moving navigation to index zero")
+    }
+
+    @MainActor
+    @Test func deferredCompoundKeepsTheRequestedNavigationAction() {
+        guard case .answer(let result) = pre(
+            "open the Archive tab? show me Donna in 1994") else {
+            Issue.record("expected the navigation answer plus a deferred translated ask")
+            return
+        }
+        #expect(result.offeredActions == [
+            .openAppDestination(.archive),
+            .ask(question: "show me Donna in 1994", label: "Show me Donna in 1994"),
+        ])
+        #expect(result.performsFirstOfferedAction)
+        #expect(result.immediateOfferedAction == .openAppDestination(.archive))
+
+        let defaults = UserDefaults(suiteName: "HallieAppNavigationTests.deferred")!
+        defaults.set(77, forKey: "selectedTab")
+        var opens = 0
+        #expect(Navigation.acceptImmediateOffer(
+            from: result, defaults: defaults, openMainWindow: { opens += 1 }))
+        #expect(defaults.integer(forKey: "selectedTab") == Destination.archive.selectedTab)
+        #expect(opens == 1)
+    }
+
+    /// Two direct tab requests cannot both be the final selected tab. The
+    /// later clause wins, matching the final state the user asked to see.
+    @Test func twoRequestedNavigationsSelectTheLaterClause() {
+        for (first, second) in [(Destination.people, Destination.archive),
+                                (Destination.archive, Destination.people)] {
+            let result = HallieTurnExecutor.joinedTwoQuestionAnswer(
+                Navigation.answer(first), Navigation.answer(second))
+            #expect(result.immediateOfferedAction == .openAppDestination(second))
+            #expect(Navigation.immediateDestination(in: result) == second)
+            #expect(result.offeredActions == [
+                .openAppDestination(first), .openAppDestination(second),
+            ])
+        }
+    }
+
+    @MainActor
+    @Test func explicitIdentitySurvivesAReorderedOfferArray() {
+        let result = HallieTurnExecutor.Result(
+            route: .capability, outcome: .answered, prose: "Opening the Storage tab.",
+            basisLine: "Basis: fixture", queryDescription: nil, citations: [],
+            catalogPersonName: nil,
+            offeredActions: [
+                .ask(question: "unrelated", label: "Unrelated"),
+                .openAppDestination(.storage),
+            ],
+            performsFirstOfferedAction: true,
+            immediateOfferedAction: .openAppDestination(.storage))
+        let defaults = UserDefaults(suiteName: "HallieAppNavigationTests.reordered")!
+        defaults.set(77, forKey: "selectedTab")
+        var opens = 0
+        #expect(Navigation.acceptImmediateOffer(
+            from: result, defaults: defaults, openMainWindow: { opens += 1 }))
+        #expect(defaults.integer(forKey: "selectedTab") == Destination.storage.selectedTab)
+        #expect(opens == 1)
+    }
 }
