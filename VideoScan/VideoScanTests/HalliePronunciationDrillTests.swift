@@ -10,6 +10,9 @@ import VideoScanCore
 @Suite("Hallie pronunciation drill", .serialized)
 struct HalliePronunciationDrillTests {
 
+    /// Opt-in for this suite's one wall-clock budget. See `PerformanceLane`.
+    static let performanceOptIn = "VIDEOSCAN_DRILL_PERF"
+
     // MARK: - Fixtures
 
     private static func scratch(_ name: String) -> URL {
@@ -568,7 +571,18 @@ struct HalliePronunciationDrillTests {
             list = PronunciationDrillList.build(
                 people: people, rootIDs: ["p0"], profiles: profiles, lexicon: lexicon, store: PronunciationDrillStore())
         }
-        #expect(elapsed < .milliseconds(200), "took \(elapsed)")
+        // A wall-clock budget is only authoritative in an optimized, opted-in,
+        // uninstrumented run (PerformanceLane, adopted 2026-08-30 — the build-mode
+        // policy in CLAUDE.md puts perf baselines in Release). This gate had no
+        // lane check and measured 205-232 ms in Debug against its 200 ms budget,
+        // so it sat red on main. The ordering and content assertions below are
+        // the real regression sensor and run in every configuration.
+        if PerformanceLane.isAuthoritative(optInKey: Self.performanceOptIn) {
+            #expect(elapsed < .milliseconds(200), "took \(elapsed)")
+        } else {
+            print("DRILL[\(PerformanceLane.configurationName)] 39k names ordered in \(elapsed); "
+                  + "200 ms budget not asserted — \(PerformanceLane.explanation(optInKey: Self.performanceOptIn))")
+        }
         #expect(list.items.count == 3 + 3_900 + 390 - 1)
         #expect(list.items.prefix(3).map(\.name) == ["Rick", "Breen", "Donna"])
         // The root's own name is next (near ancestry, generation 0).
@@ -576,7 +590,9 @@ struct HalliePronunciationDrillTests {
         #expect(!list.items.contains { $0.name == "Surname7" })
         // Finding the next pending name is cheap too.
         let hop = clock.measure { _ = list.nextPending(from: 0, store: PronunciationDrillStore()) }
-        #expect(hop < .milliseconds(20))
+        if PerformanceLane.isAuthoritative(optInKey: Self.performanceOptIn) {
+            #expect(hop < .milliseconds(20), "next-pending hop took \(hop)")
+        }
     }
 
     // MARK: - 9. Descriptive hints (live miss #14) and questions (#15)
