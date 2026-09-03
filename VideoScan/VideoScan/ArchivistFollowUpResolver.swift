@@ -244,6 +244,16 @@ enum ArchivistFollowUpResolver {
         "more results", "show more results", "show me more results",
     ]
 
+    /// "show more" / "next" / "the rest" — the paging vocabulary, for a
+    /// deterministic list answer that pages itself (the birthplace trail,
+    /// 2026-09-02). Same words as `pagingResolution`.
+    static func isPagingPhrase(_ text: String) -> Bool {
+        let words = normalizedWords(text)
+        guard !words.isEmpty else { return false }
+        let phrase = dropLead(words).joined(separator: " ")
+        return pagingPhrases.contains(phrase) || pagingPhrases.contains(words.joined(separator: " "))
+    }
+
     private static func pagingResolution(
         _ words: [String], snapshot: Snapshot?
     ) -> Resolution? {

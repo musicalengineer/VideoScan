@@ -448,46 +448,91 @@ struct HallieShellCLITests {
         })
     }
 
-    /// Live 2026-09-02 (lv260902-010): the requested-output phrase before
-    /// Donna's possessive was previously sent to the resolver as part of her
-    /// name. Pin the currently supported maternal-line answer through the
-    /// real shell boundary; stopping at the first non-US ancestor is a
-    /// separate lineage operation and deliberately is not simulated here.
-    @Test func maternalBirthLocationTraceResolvesDonnaThroughTheShell() async throws {
-        let graph = GedcomFamilyGraph(gedcomText: """
-        0 HEAD
-        0 @I1@ INDI
-        1 NAME Donna /Hudson/
-        1 SEX F
-        1 BIRT
-        2 DATE 4 APR 1958
-        2 PLAC Brockton, Massachusetts, USA
-        1 FAMC @F1@
-        0 @I2@ INDI
-        1 NAME Elaine /Bowser/
-        1 SEX F
-        1 BIRT
-        2 DATE 3 MAR 1934
-        2 PLAC Stoughton, Massachusetts, USA
-        1 FAMC @F2@
-        1 FAMS @F1@
-        0 @I3@ INDI
-        1 NAME Ethel /Cote/
-        1 SEX F
-        1 BIRT
-        2 DATE 2 FEB 1908
-        2 PLAC Quebec, Canada
-        1 FAMS @F2@
-        0 @F1@ FAM
-        1 WIFE @I2@
-        1 CHIL @I1@
-        0 @F2@ FAM
-        1 WIFE @I3@
-        1 CHIL @I2@
-        0 TRLR
-        """)
+    /// Rick (the shell's owner) married to Donna; Rick's maternal line
+    /// reaches Scotland at generation 2, Donna's maternal line leaves the
+    /// US in Canada at generation 2 (2026-09-02, the birthplace trail).
+    private static let trailTree = GedcomFamilyGraph(gedcomText: """
+    0 HEAD
+    0 @I20@ INDI
+    1 NAME Rick /Breen/
+    1 SEX M
+    1 BIRT
+    2 DATE 1959
+    2 PLAC Boston, Massachusetts, USA
+    1 FAMC @F20@
+    1 FAMS @F0@
+    0 @I21@ INDI
+    1 NAME Richard /Breen/ Sr
+    1 SEX M
+    1 BIRT
+    2 DATE 1929
+    2 PLAC Boston, Massachusetts, USA
+    1 FAMS @F20@
+    0 @I22@ INDI
+    1 NAME Eileen /Latta/
+    1 SEX F
+    1 BIRT
+    2 DATE 1930
+    2 PLAC Lowell, Massachusetts, USA
+    1 FAMC @F22@
+    1 FAMS @F20@
+    0 @I23@ INDI
+    1 NAME Mary /McGill/
+    1 SEX F
+    1 BIRT
+    2 DATE 1904
+    2 PLAC Glasgow, Scotland
+    1 FAMS @F22@
+    0 @I1@ INDI
+    1 NAME Donna /Hudson/
+    1 SEX F
+    1 BIRT
+    2 DATE 4 APR 1958
+    2 PLAC Brockton, Massachusetts, USA
+    1 FAMC @F1@
+    1 FAMS @F0@
+    0 @I2@ INDI
+    1 NAME Elaine /Bowser/
+    1 SEX F
+    1 BIRT
+    2 DATE 3 MAR 1934
+    2 PLAC Stoughton, Massachusetts, USA
+    1 FAMC @F2@
+    1 FAMS @F1@
+    0 @I3@ INDI
+    1 NAME Ethel /Cote/
+    1 SEX F
+    1 BIRT
+    2 DATE 2 FEB 1908
+    2 PLAC Quebec, Canada
+    1 FAMS @F2@
+    0 @F0@ FAM
+    1 HUSB @I20@
+    1 WIFE @I1@
+    0 @F20@ FAM
+    1 HUSB @I21@
+    1 WIFE @I22@
+    1 CHIL @I20@
+    0 @F22@ FAM
+    1 WIFE @I23@
+    1 CHIL @I22@
+    0 @F1@ FAM
+    1 WIFE @I2@
+    1 CHIL @I1@
+    0 @F2@ FAM
+    1 WIFE @I3@
+    1 CHIL @I2@
+    0 TRLR
+    """)
+
+    /// Live 2026-09-02 (lv260902-010, then Rick's demo ask): the requested-
+    /// output phrase before Donna's possessive is not part of her name, and
+    /// the sentence is the birthplace TRAIL — the maternal line read out,
+    /// stopping at the first birth outside the United States — pinned
+    /// through the real shell boundary, route and prose.
+    @Test func maternalBirthLocationTrailReadsDonnaOutThroughTheShell() async throws {
         let question = "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA"
-        let harness = Harness(graph: graph)
+        let harness = Harness(graph: Self.trailTree)
         let options = try HallieShellCLI.parse(arguments: [
             "--hallie", "--once", question,
         ])
@@ -498,14 +543,86 @@ struct HallieShellCLITests {
 
         #expect(code == HallieShellCLI.ExitCode.success.rawValue)
         #expect(harness.translatedQuestions.isEmpty)
-        #expect(harness.output.contains { $0.contains("Elaine Bowser")
-            && $0.contains("born Stoughton, Massachusetts, USA") })
-        #expect(harness.output.contains { $0.contains("Ethel Cote")
-            && $0.contains("born Quebec, Canada") })
+        #expect(harness.output.contains {
+            $0 == "Here are the birthplaces on Donna Hudson’s maternal line, 2 generations back: "
+                + "1. Donna Hudson — 1958, Brockton, Massachusetts, USA. "
+                + "2. Elaine Bowser — 1934, Stoughton, Massachusetts, USA. "
+                + "3. Ethel Cote — 1908, Quebec, Canada (first born outside the United States). "
+                + "Ethel Cote is the first on that line born outside the United States, so I stopped there."
+        }, Comment(rawValue: harness.output.joined(separator: " | ")))
         #expect(!harness.output.contains { $0.contains("The Birth Locations Of Donna") })
         #expect(!harness.output.contains { $0.contains("don't find") })
         #expect(harness.transcriptEvents.contains {
-            $0.queryDescription == "lineage maternal ×12: Donna Hudson"
+            $0.queryDescription == "birthplace trail maternal stop=outside:United_States list: Donna Hudson [@I1@] shown 1-3 of 3"
+        })
+    }
+
+    /// Rick's second demo ask (2026-09-02): the subject defaults to the
+    /// owner, every ancestor is walked one generation at a time, and the
+    /// answer counts the generations, names the person and the path, and
+    /// offers the Family Tree centered on that ancestor.
+    @Test func generationsToEuropeAnswersForTheOwnerThroughTheShell() async throws {
+        let question = "Tell me how many generations you need to go back to find someone born in europe then tell me who and where."
+        let harness = Harness(graph: Self.trailTree)
+        let options = try HallieShellCLI.parse(arguments: [
+            "--hallie", "--once", question,
+        ])
+
+        let code = await HallieShellCLI.run(
+            options: options, output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains {
+            $0 == "Two generations. Mary McGill, born 1904 in Glasgow, Scotland, is the first ancestor born in Europe on any line: you → Eileen Latta → Mary McGill."
+        }, Comment(rawValue: harness.output.joined(separator: " | ")))
+        #expect(harness.transcriptEvents.contains {
+            $0.queryDescription == "birthplace trail allAncestors stop=continent:Europe firstMatch: Rick Breen [@I20@] shown 1-3 of 3"
+        })
+        #expect(!harness.output.contains { $0.contains("people and") })
+    }
+
+    /// A trail longer than a page (16 lines) pages in the shell: "show
+    /// more" continues the SAME walk from conversation memory.
+    @Test func longTrailPagesWithShowMoreInTheShell() async throws {
+        var lines = ["0 HEAD"]
+        for g in 0...15 {
+            lines.append("0 @I\(g)@ INDI")
+            lines.append("1 NAME \(g == 0 ? "Anna" : "Gen\(g)") /Chain/")
+            lines.append("1 SEX F")
+            lines.append("1 BIRT")
+            lines.append("2 DATE \(2000 - 25 * g)")
+            lines.append("2 PLAC Town\(g), Massachusetts, USA")
+            if g < 15 { lines.append("1 FAMC @F\(g)@") }
+            if g > 0 { lines.append("1 FAMS @F\(g - 1)@") }
+        }
+        for g in 0..<15 {
+            lines.append("0 @F\(g)@ FAM")
+            lines.append("1 WIFE @I\(g + 1)@")
+            lines.append("1 CHIL @I\(g)@")
+        }
+        lines.append("0 TRLR")
+        let graph = GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
+        let harness = Harness(
+            inputs: ["trace the birth locations of anna chain's maternal line", "show more", "show more", ":quit"],
+            graph: graph)
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        #expect(harness.translatedQuestions.isEmpty)
+        #expect(harness.output.contains { $0.contains("12. Gen11 Chain — 1725, Town11, Massachusetts, USA.")
+            && $0.hasSuffix("4 more generations further back — say “show more” to continue.") })
+        #expect(harness.output.contains { $0.hasPrefix("Continuing Anna Chain’s maternal line birthplaces, 13 to 16 of 16:")
+            && $0.hasSuffix("The tree records no mother for Gen15 Chain, so that is where the line ends.") })
+        #expect(harness.output.contains { $0.hasPrefix("That was the whole trail — 15 generations back from Anna Chain.") })
+        #expect(harness.transcriptEvents.contains {
+            $0.queryDescription == "birthplace trail maternal stop=top list: Anna Chain [@I0@] shown 13-16 of 16"
         })
     }
 

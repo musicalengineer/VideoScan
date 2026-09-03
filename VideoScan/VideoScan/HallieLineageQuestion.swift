@@ -124,6 +124,18 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// other trailing words leave the sentence to the shapes below. `nil`
     /// = the owner.
     case personTree(person: String?)
+    /// "trace the birth locations of Donna's maternal line … until you
+    /// get outside the USA" / "how many generations back before you get
+    /// to European birthplaces" (Rick 2026-09-02, for his brother's
+    /// demo). A birthplace TRAIL: walk a line (or every ancestor, one
+    /// generation at a time) reporting each birthplace, and stop at the
+    /// first that satisfies the rule. Detection, the walk and the answer
+    /// live in HallieBirthplaceTrail.swift / LineageTrail (core). `nil` =
+    /// the owner.
+    case birthplaceTrail(person: String?, line: LineageTrail.Line, stop: LineageTrail.Stop, ask: TrailAsk)
+    /// "show more" after a trail longer than a page: the same walk, the
+    /// next page, the person by GEDCOM pointer (from conversation memory).
+    case birthplaceTrailPage(personID: String, line: LineageTrail.Line, stop: LineageTrail.Stop, from: Int)
 
     static let defaultGenerations = 5
     static let maxGenerations = 12
@@ -177,6 +189,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // "center the tree on martha lamson" — a navigation verb phrase
         // with a person; before every shape that could read the name.
         if let center = centerTreeQuestion(in: lower) { return center }
+        // "birthplaces on donna's mother's side" / "how many generations
+        // back to find someone born in europe" — before the superlatives
+        // ("first ancestor born outside america") and the trace shapes
+        // (which would read the same sentence as a plain line walk).
+        if let trail = birthplaceTrailQuestion(in: lower) { return trail }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person
         // in the tree" is a person to find first, not a person named "the
@@ -1165,6 +1182,10 @@ enum HallieLineageAnswer {
             case .success(let p, let note):
                 return originTrail(of: p, country: country, line: line, graph: graph, basisNote: note)
             }
+        case .birthplaceTrail(let person, let line, let stop, let ask):
+            return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
+        case .birthplaceTrailPage(let personID, let line, let stop, let from):
+            return birthplaceTrailPage(personID: personID, line: line, stop: stop, from: from, context: context)
         }
     }
 
