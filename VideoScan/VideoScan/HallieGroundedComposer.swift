@@ -219,8 +219,7 @@ struct HallieGroundedComposer: Sendable {
         plan: HallieAnswerPlan,
         notes: inout [String]
     ) -> (verification: HallieCompositionVerifier.Verification, restored: [Restored]) {
-        guard (plan.shape == .biography || !plan.requiredPersonNames.isEmpty),
-              !verification.kept.isEmpty else {
+        guard !verification.kept.isEmpty else {
             return (verification, [])
         }
         typealias Sentence = HallieCompositionVerifier.Sentence
@@ -233,7 +232,8 @@ struct HallieGroundedComposer: Sendable {
             .flatMap { HallieCompositionVerifier.claimTags(in: $0.text) })
         var restored: [Restored] = []
         for (index, claim) in plan.claims.enumerated()
-        where !cited.contains(claim.id) && !leaked.contains(claim.id) {
+        where (plan.shape == .biography || claim.requiresCoverage)
+            && !cited.contains(claim.id) && !leaked.contains(claim.id) {
             let sentence = Sentence(
                 display: claim.text,
                 tagged: claim.text + " [\(claim.id)]",
@@ -256,7 +256,10 @@ struct HallieGroundedComposer: Sendable {
     ///   `[hallie-verify] restored: cN — reason: missing — "<claim text>"`
     ///   `[hallie-verify] coverage: shape=biography plan=6 cited=5 restored=1 leaked=0 dropped=0`
     static func verifyLogLines(_ outcome: Outcome, plan: HallieAnswerPlan) -> [String] {
-        guard outcome.composedBy == .model, plan.shape == .biography else { return [] }
+        guard outcome.composedBy == .model,
+              plan.shape == .biography
+                || plan.claims.contains(where: { $0.requiresCoverage })
+        else { return [] }
         let byID = Dictionary(uniqueKeysWithValues: plan.claims.map { ($0.id, $0.text) })
         var lines = outcome.restored.map { item -> String in
             let line = "[hallie-verify] restored: \(item.claimID) — reason: \(item.reason.rawValue)"
@@ -396,13 +399,16 @@ struct HallieGroundedComposer: Sendable {
         _ verification: HallieCompositionVerifier.Verification,
         plan: HallieAnswerPlan
     ) -> HallieCompositionVerifier.Verification {
-        guard plan.shape == .list,
-              let count = plan.claims.first, count.id == "c1",
-              !verification.kept.contains(where: { $0.claimIDs.contains("c1") }) else {
+        let marked = plan.claims.first(where: { $0.isListCountClaim })
+        let legacy = plan.shape == .list && marked == nil
+            ? plan.claims.first(where: { $0.id == "c1" }) : nil
+        guard let count = marked ?? legacy,
+              !verification.kept.contains(where: { $0.claimIDs.contains(count.id) }) else {
             return verification
         }
         let sentence = HallieCompositionVerifier.Sentence(
-            display: count.text, tagged: count.text + " [c1]", claimIDs: ["c1"])
+            display: count.text, tagged: count.text + " [\(count.id)]",
+            claimIDs: [count.id])
         return HallieCompositionVerifier.Verification(
             kept: [sentence] + verification.kept, dropped: verification.dropped)
     }

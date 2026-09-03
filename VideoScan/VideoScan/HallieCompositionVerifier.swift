@@ -229,7 +229,7 @@ enum HallieCompositionVerifier {
         in verification: Verification,
         plan: HallieAnswerPlan
     ) -> [String] {
-        guard plan.route == .graph, !plan.requiredPersonNames.isEmpty else {
+        guard !plan.requiredPersonNames.isEmpty else {
             return []
         }
         return plan.requiredPersonNames.filter {

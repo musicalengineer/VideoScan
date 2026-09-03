@@ -174,8 +174,9 @@ extension ArchivistGraphExecutor {
             claims: [.init(
                 id: "c1", text: prose,
                 evidenceIDs: [anchors[0].auditID]
-                    + hits.flatMap { $0.hops.map { $0.to.auditID } })],
-            requiredPersonNames: requiredPersonNames,
+                    + hits.flatMap { $0.hops.map { $0.to.auditID } },
+                requiredPersonNames: requiredPersonNames,
+                requiresCoverage: true)],
             fallbackText: prose,
             subjectLifeStatus: subjectLifeStatus(
                 treePerson: anchorMember?.gedcomID.flatMap { inputs.graph.people[$0] },
