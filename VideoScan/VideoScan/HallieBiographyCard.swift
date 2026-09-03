@@ -151,33 +151,30 @@ enum HallieBiographyCard {
         }
     }
 
-    /// More than one recorded mother (or father) for one person. Either a
-    /// FamilySearch duplicate (the same woman entered twice — "Mary
-    /// Catherine O'Connor" and "Mary O'Connor") or a genuine second
-    /// parent; the sentence says which reading the names suggest and
-    /// never picks one.
+    /// A second recorded parent family for one person (Rick's 2026-09-02
+    /// ruling: the PRIMARY family's parents are the ones prose names —
+    /// GedcomFamilyGraph+ParentFamily — so this never reaches a sentence).
+    /// It survives as the BASIS note and as the "Show possible duplicate"
+    /// chip: either a FamilySearch duplicate folded into the primary
+    /// parent ("Mary Catherine O'Connor" / "Mary O'Connor", same parents)
+    /// or a genuine second family the reader can ask about by name.
     struct DataQualityFlag: Sendable, Equatable {
         let child: GedcomFamilyGraph.Person
-        /// "mothers" / "fathers".
+        /// "mothers" / "fathers" / "parents" — which role(s) carry a
+        /// non-primary record.
         let role: String
+        /// The primary parent(s) first, then the non-primary record(s).
         let parents: [GedcomFamilyGraph.Person]
-        /// The parents share a surname and a first given name — the
-        /// duplicate reading.
+        /// Every non-primary record folds into its primary parent (the
+        /// duplicate reading); false when a genuine second family exists.
         let looksLikeDuplicate: Bool
+        /// The graph's one short basis note for this child.
+        let note: String
 
         var evidenceIDs: [String] { [child.id] + parents.map(\.id) }
 
-        /// "The tree records two mothers for Eileen Latta — Mary Catherine
-        /// O'Connor (G89Q-34N) and Mary O'Connor (GNZ5-428) — probably a
-        /// duplicate on FamilySearch worth merging."
-        var text: String {
-            let labelled = parents.map { "\($0.name) (\(HallieBiographyCard.recordCode($0)))" }
-            let reading = looksLikeDuplicate
-                ? "probably a duplicate on FamilySearch worth merging"
-                : "possibly a second marriage, or a duplicate worth checking on FamilySearch"
-            return "The tree records \(HallieBiographyCard.countWord(parents.count)) \(role) for \(child.name) — "
-                + HallieBiographyCard.joined(labelled) + " — \(reading)."
-        }
+        /// The basis wording — what the card used to say in prose.
+        var text: String { note }
     }
 
     /// Names listed by name before "and N more" (the children sentence).
@@ -261,14 +258,11 @@ enum HallieBiographyCard {
                 requiredPersonNames: summary.parents.map(\.name)
                     + Array(summary.grandparents.prefix(maxListedNames)).map(\.name)))
         }
-        // 2b. Data quality: a duplicated parent on the subject or on a
-        //     parent (the reason a card can list five grandparents).
+        // 2b. Data quality: a second parent family on the subject or on a
+        //     parent. Since 2026-09-02 the prose lists the primary family
+        //     only; the flag goes to the basis line (dataQualityBasis) and
+        //     the "Show possible duplicate" chip, never to a sentence.
         let flags = dataQualityFlags(for: person, in: graph)
-        for flag in flags {
-            sentences.append(.init(
-                text: flag.text, evidenceIDs: flag.evidenceIDs,
-                requiredPersonNames: [flag.child.name] + flag.parents.map(\.name)))
-        }
         // 3. Siblings — the tree's, then the People tab's (the living are
         //    not on FamilySearch; Tim is a People-tab sibling row).
         if !summary.siblings.isEmpty {
@@ -370,46 +364,39 @@ enum HallieBiographyCard {
     // MARK: - Data quality
 
     /// Flags for the subject and each of the subject's parents: any of
-    /// them with more than one recorded mother or father. Deterministic
-    /// order: subject first, then parents in policy order; mothers before
-    /// fathers; parents in policy order. Two distinct records only — a
-    /// person listed as a child of the same family twice is one parent.
+    /// them with a second recorded parent family. Deterministic order:
+    /// subject first, then parents in policy order. One flag per person;
+    /// the same record listed under two families is not a second parent
+    /// (the graph already drops it).
     static func dataQualityFlags(for person: GedcomFamilyGraph.Person,
                                  in graph: GedcomFamilyGraph) -> [DataQualityFlag] {
         let subjects = [person] + ArchivistBiographyPolicy.orderedPeople(graph.relatives(.parents, of: person))
         var flags: [DataQualityFlag] = []
         for subject in subjects {
-            for (relation, role) in [(GedcomFamilyGraph.Relation.mother, "mothers"),
-                                     (GedcomFamilyGraph.Relation.father, "fathers")] {
-                let parents = ArchivistBiographyPolicy.orderedPeople(graph.relatives(relation, of: subject))
-                guard parents.count > 1 else { continue }
-                flags.append(DataQualityFlag(
-                    child: subject, role: role, parents: parents,
-                    looksLikeDuplicate: namesLookAlike(parents)))
-            }
+            guard let choice = graph.parentFamilyChoice(of: subject), !choice.alternates.isEmpty,
+                  let note = graph.parentFamilyBasisNote(for: subject) else { continue }
+            let roles = Set(choice.alternates.map(\.role))
+            let role = roles.count == 1 ? (roles.first == .mother ? "mothers" : "fathers") : "parents"
+            flags.append(DataQualityFlag(
+                child: subject, role: role,
+                parents: choice.parents + choice.alternates.map(\.person),
+                looksLikeDuplicate: choice.unfoldedAlternates.isEmpty,
+                note: note))
         }
         return flags
     }
 
-    /// Any two of them share a surname and a first given-name token
-    /// ("Mary Catherine O'Connor" / "Mary O'Connor").
-    static func namesLookAlike(_ people: [GedcomFamilyGraph.Person]) -> Bool {
-        func key(_ person: GedcomFamilyGraph.Person) -> (given: String, surname: String)? {
-            let suffixes = GedcomFamilyGraph.nameSuffixes
-            let tokens = FamilyIdentityText.tokens(person.name).filter { !suffixes.contains($0) }
-            guard let given = tokens.first else { return nil }
-            let surname = person.surname.map(FamilyIdentityText.normalized) ?? tokens.last ?? ""
-            return (given, surname)
-        }
-        let keys = people.compactMap(key)
-        guard keys.count >= 2 else { return false }
-        for i in keys.indices {
-            for j in keys.indices where j > i {
-                if keys[i].given == keys[j].given, keys[i].surname == keys[j].surname,
-                   !keys[i].surname.isEmpty { return true }
-            }
-        }
-        return false
+    /// The basis clause for the data-quality flags a card carries —
+    /// appended by the executor after the People-tab clause. Empty when
+    /// there are none. A flag on a PARENT of the subject is prefixed with
+    /// that parent's name so "her mother" cannot be misread:
+    /// " (another record for her mother, Mary O'Connor b. 1905, exists in
+    /// the tree — same parents; treated as the same person)" on Eileen's
+    /// card; " For Eileen Latta: (another record …)" on Rick's.
+    static func dataQualityBasis(_ card: Card) -> String {
+        card.dataQualityFlags.map { flag in
+            flag.child.id == card.subject.id ? " \(flag.note)" : " For \(flag.child.name): \(flag.note)"
+        }.joined()
     }
 
     /// The FamilySearch ID when the record has one, else the file-local

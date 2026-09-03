@@ -238,9 +238,12 @@ private func ask(_ name: String, _ operation: ArchivistQueryAST.Graph.Operation,
 private let liveSentence =
     "tell me about rick's family tree, his brothers, sisters, parents, and grandparents."
 
-private let flagSentence =
-    "The tree records two mothers for Eileen Latta — Mary Catherine O'Connor (G89Q-34N) "
-    + "and Mary O'Connor (GNZ5-428) — probably a duplicate on FamilySearch worth merging."
+/// Rick's 2026-09-02 ruling: the duplicate is never a SENTENCE any more —
+/// prose names the primary family's mother only; this is the basis note.
+/// (The fixture's two Marys carry no birth year, so no "b. 1905" here.)
+private let flagNote =
+    "(another record for her mother, Mary O'Connor, exists in the tree — same parents; treated as the same person)"
+private let retiredFlagSentence = "The tree records two mothers"
 
 // MARK: - Detector
 
@@ -347,11 +350,17 @@ struct HallieCrossWorldFamilyCardTests {
 @Suite("Cross-world family card — duplicate parent flag")
 struct HallieDuplicateParentFlagTests {
 
-    @Test func eileensTwoMothersAreFlaggedOnRicksCardWithTheChip() async throws {
+    /// Rick's 2026-09-02 ruling reversed the pre-ruling expectation here:
+    /// this test used to pin FIVE grandparents and a "two mothers"
+    /// sentence in the prose. Now: four grandparents, no such sentence,
+    /// the note in the basis, and the duplicate chip still offered.
+    @Test func eileensDuplicateMotherIsFoldedOnRicksCardAndTheChipStays() async throws {
         let r = try await ask("Rick", .familyTree, context: context(profiles()))
-        #expect(r.prose.contains("his recorded grandparents were David McGill Latta Sr, George Breen, Mary Catherine O'Connor, Mary O'Connor and Muriel Lamb."),
+        #expect(r.prose.contains("his recorded grandparents were David McGill Latta Sr, George Breen, Mary Catherine O'Connor and Muriel Lamb."),
                 Comment(rawValue: r.prose))
-        #expect(r.prose.contains(flagSentence), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("Mary O'Connor,"), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains(retiredFlagSentence), Comment(rawValue: r.prose))
+        #expect(r.basisLine.contains(" For Eileen Latta: \(flagNote)"), Comment(rawValue: r.basisLine))
         #expect(r.offeredActions == [
             .openFamilyTree(personName: "Richard Harding Breen Jr"),
             .showPossibleDuplicate(personID: "@I3@", personName: "Eileen Latta"),
@@ -359,18 +368,23 @@ struct HallieDuplicateParentFlagTests {
         #expect(Executor.offerLabel(.showPossibleDuplicate(personID: "@I3@", personName: "Eileen Latta"))
                 == "Show possible duplicate in Family Tree")
         let plan = try #require(r.answerPlan)
-        let flag = try #require(plan.claims.first { $0.text == flagSentence })
-        #expect(flag.evidenceIDs == ["@I3@", "@I7@", "@I5@"])
+        #expect(!plan.claims.contains { $0.text.contains(retiredFlagSentence) })
     }
 
-    @Test func theFlagIsOnEileensOwnCardToo() async throws {
+    @Test func theNoteIsInTheBasisOfEileensOwnCard() async throws {
         let r = try await ask("Eileen Latta", .biography, context: context(profiles()))
-        #expect(r.prose.contains(flagSentence), Comment(rawValue: r.prose))
+        #expect(r.prose.contains("child of David McGill Latta Sr and Mary Catherine O'Connor"), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains("Mary O'Connor,"), Comment(rawValue: r.prose))
+        #expect(!r.prose.contains(retiredFlagSentence), Comment(rawValue: r.prose))
+        #expect(r.basisLine.hasSuffix(" \(flagNote)"), Comment(rawValue: r.basisLine))
         #expect(r.offeredActions == [.showPossibleDuplicate(personID: "@I3@", personName: "Eileen Latta")])
         let flags = HallieBiographyCard.dataQualityFlags(for: graph.people["@I3@"]!, in: graph)
         #expect(flags.count == 1)
         #expect(flags[0].role == "mothers")
         #expect(flags[0].looksLikeDuplicate)
+        #expect(flags[0].parents.map(\.id) == ["@I6@", "@I7@", "@I5@"])
+        #expect(flags[0].evidenceIDs == ["@I3@", "@I6@", "@I7@", "@I5@"])
+        #expect(flags[0].text == flagNote)
     }
 
     @Test func twoParentsFourGrandparentsRaiseNothing() async throws {
@@ -378,17 +392,34 @@ struct HallieDuplicateParentFlagTests {
         #expect(HallieBiographyCard.dataQualityFlags(for: graph.people["@I2@"]!, in: graph).isEmpty)
         let r = try await ask("Isaac Rice", .familyTree, context: context(profiles()))
         #expect(!r.prose.contains("The tree records"))
+        #expect(!r.basisLine.contains("another record"), Comment(rawValue: r.basisLine))
         #expect(!r.offeredActions.contains { if case .showPossibleDuplicate = $0 { return true } else { return false } })
     }
 
-    /// Two fathers with unrelated names: still flagged, but the sentence
-    /// does not call it a duplicate.
-    @Test func unrelatedNamesAreFlaggedWithoutTheDuplicateReading() {
+    /// Two fathers with unrelated names: a genuine second family. Prose
+    /// names the first (GEDCOM order breaks the tie); the basis says a
+    /// second family is recorded and to ask about it by name.
+    @Test func unrelatedNamesAreFlaggedWithoutTheDuplicateReading() async throws {
         let flags = HallieBiographyCard.dataQualityFlags(for: graph.people["@I30@"]!, in: graph)
         #expect(flags.count == 1)
         #expect(!flags[0].looksLikeDuplicate)
-        #expect(flags[0].text == "The tree records two fathers for Step Child — Amos Child (@I31@) and Zeke Foster (@I32@) — "
-                + "possibly a second marriage, or a duplicate worth checking on FamilySearch.")
+        #expect(flags[0].role == "fathers")
+        #expect(flags[0].text == "A second parent family is recorded (father Zeke Foster, @I32@); ask about it by name.")
+        let r = try await ask("Step Child", .kinship, relation: .father, context: context(profiles()))
+        #expect(r.prose == "Step Child's father: Amos Child.", Comment(rawValue: r.prose))
+        #expect(r.basisLine.hasSuffix(" A second parent family is recorded (father Zeke Foster, @I32@); ask about it by name."),
+                Comment(rawValue: r.basisLine))
+    }
+
+    /// "who are eileen's parents" — two people, not three; the fold note
+    /// rides in the basis.
+    @Test func eileensParentsAreTwoPeople() async throws {
+        let r = try await ask("Eileen Latta", .kinship, relation: .parents, context: context(profiles()))
+        #expect(r.prose == "Eileen Latta's parents: David McGill Latta Sr, Mary Catherine O'Connor.", Comment(rawValue: r.prose))
+        #expect(r.basisLine.hasSuffix(" \(flagNote)"), Comment(rawValue: r.basisLine))
+        let m = try await ask("Eileen Latta", .kinship, relation: .mother, context: context(profiles()))
+        #expect(m.prose == "Eileen Latta's mother: Mary Catherine O'Connor.", Comment(rawValue: m.prose))
+        #expect(m.basisLine.hasSuffix(" \(flagNote)"), Comment(rawValue: m.basisLine))
     }
 }
 

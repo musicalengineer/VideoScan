@@ -42,10 +42,20 @@ extension ArchivistGraphExecutor {
                 requiredPersonNames: relatives.map(\.name),
                 requiresCoverage: true)],
             fallbackText: prose)
+        // A parent question names the PRIMARY family's parent only (Rick,
+        // 2026-09-02); a second recorded parent family is said in the
+        // basis, in the graph's one short note.
+        let parentNote: String
+        switch graphRelation {
+        case .father, .mother, .parents:
+            parentNote = graph.parentFamilyBasisNote(for: person).map { " " + $0 } ?? ""
+        default:
+            parentNote = ""
+        }
         return ArchivistGraphResult(
             conclusion: .answered,
             prose: prose,
-            basisLine: factualBasis(identityBridge),
+            basisLine: factualBasis(identityBridge) + parentNote,
             evidence: evidence,
             candidates: [],
             profileCandidates: [],

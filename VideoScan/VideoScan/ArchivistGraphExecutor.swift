@@ -994,7 +994,8 @@ enum ArchivistGraphExecutor {
             return ArchivistGraphResult(
                 conclusion: result.conclusion,
                 prose: result.prose,
-                basisLine: result.basisLine + HallieBiographyCard.peopleTabBasis(card),
+                basisLine: result.basisLine + HallieBiographyCard.peopleTabBasis(card)
+                    + HallieBiographyCard.dataQualityBasis(card),
                 evidence: result.evidence,
                 candidates: result.candidates,
                 profileCandidates: result.profileCandidates,

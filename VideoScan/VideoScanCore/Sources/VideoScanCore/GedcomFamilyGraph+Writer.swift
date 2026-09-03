@@ -80,6 +80,7 @@ extension GedcomFamilyGraph {
                 lines.append("1 MARR")
                 lines.append("2 DATE " + m)
             }
+            if let fsid = fam.familySearchID { lines.append("1 _FSFTID " + fsid) }
         }
         lines.append("0 TRLR")
         return lines.joined(separator: "\n") + "\n"

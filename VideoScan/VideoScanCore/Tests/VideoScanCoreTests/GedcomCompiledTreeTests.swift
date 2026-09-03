@@ -581,10 +581,11 @@ final class GedcomCompiledTreeTests: XCTestCase {
     /// `versionMismatch` and the store's `versionsMatch` rejects an older
     /// pointer ("schema changed" → recompile).
     func testOlderCodecArtifactAndPointerAreRejected() throws {
-        XCTAssertEqual(GedcomCompiledTree.codecVersion, 5)
+        // Codec 6 (2026-09-02): FAM _FSFTID + one-primary-parent table.
+        XCTAssertEqual(GedcomCompiledTree.codecVersion, 6)
         XCTAssertEqual(GedcomFamilyGraph.TreeIndex.formatVersion, 2)
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 30, generations: 3))
-        for older: UInt32 in [3, 4] {
+        for older: UInt32 in [3, 4, 5] {
             var blob = GedcomCompiledTree.encode(graph)
             // Header: "VSFT" | u32 codec | u32 index — patch the codec.
             blob.replaceSubrange(4..<8, with: GedcomCompiledTree.le(older))
@@ -599,11 +600,11 @@ final class GedcomCompiledTreeTests: XCTestCase {
             XCTAssertEqual(error as? GedcomCompiledTree.CodecError,
                            .versionMismatch(codec: GedcomCompiledTree.codecVersion, index: 1))
         }
-        let ok = FamilyGraphCompiledStore.Pointer(schema: FamilyGraphCompiledStore.schemaVersion, codec: 5,
+        let ok = FamilyGraphCompiledStore.Pointer(schema: FamilyGraphCompiledStore.schemaVersion, codec: 6,
                                                   index: GedcomFamilyGraph.TreeIndex.formatVersion,
                                                   current: "gen-x", previous: nil, sourceKeys: ["k"])
         XCTAssertTrue(FamilyGraphCompiledStore.versionsMatch(ok))
-        for older: UInt32 in [3, 4] {
+        for older: UInt32 in [3, 4, 5] {
             var old = ok; old.codec = older
             XCTAssertFalse(FamilyGraphCompiledStore.versionsMatch(old))
         }

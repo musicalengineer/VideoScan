@@ -419,7 +419,9 @@ struct FamilyGraphCompiledStoreTests {
     /// a pointer written by an older build is "schema changed" → miss →
     /// recompile through the loader; the new pointer carries the current
     /// codec and its manifest the loss figures.
-    @Test(arguments: [(codec: UInt32(3), index: UInt32(1)), (codec: 4, index: 1), (codec: 5, index: 1), (codec: 4, index: 2)])
+    /// 2026-09-02 (codec 5 → 6): the FAM _FSFTID and the one-primary-parent
+    /// table; a codec-5 pointer is refused the same way.
+    @Test(arguments: [(codec: UInt32(3), index: UInt32(1)), (codec: 4, index: 1), (codec: 5, index: 1), (codec: 4, index: 2), (codec: 5, index: 2)])
     func olderCodecPointerRecompiles(older: (codec: UInt32, index: UInt32)) throws {
         let box = try Sandbox(); defer { box.tearDown() }
         let source = try box.write(Self.tree)
@@ -427,7 +429,7 @@ struct FamilyGraphCompiledStoreTests {
         _ = box.loader(store).loadNewestOutcome()
         var pointer = try #require(store.readPointer())
         let gen1 = pointer.current
-        #expect(pointer.codec == 5)
+        #expect(pointer.codec == 6)
         #expect(pointer.index == 2)
         pointer.codec = older.codec
         pointer.index = older.index

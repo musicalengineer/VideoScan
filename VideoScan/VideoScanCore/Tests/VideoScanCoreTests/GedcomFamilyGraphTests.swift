@@ -193,11 +193,24 @@ struct GedcomFamilyGraphTests {
         #expect(
             child.childOfFamilies == ["@F-BIRTH@", "@F-ADOPT@"]
         )
+        // Both links are kept, but prose relations follow ONE primary
+        // family (Rick's 2026-09-02 ruling — this test used to expect
+        // both fathers and both mothers). Two complete families with no
+        // FamilySearch id and no facts tie down to GEDCOM order: the
+        // birth family. The adoptive parents stay reachable through
+        // `parentFamilyChoice` / `allRecordedParents`, and siblings from
+        // both families are still siblings.
         #expect(
-            g.relatives(.father, of: child).map(\.id) == ["@I2@", "@I4@"]
+            g.relatives(.father, of: child).map(\.id) == ["@I2@"]
         )
         #expect(
-            g.relatives(.mother, of: child).map(\.id) == ["@I3@", "@I5@"]
+            g.relatives(.mother, of: child).map(\.id) == ["@I3@"]
+        )
+        #expect(
+            g.allRecordedParents(of: child).map(\.id) == ["@I2@", "@I4@", "@I3@", "@I5@"]
+        )
+        #expect(
+            g.parentFamilyChoice(of: child)?.alternates.map(\.person.id) == ["@I4@", "@I5@"]
         )
         #expect(
             g.relatives(.siblings, of: child).map(\.id) == ["@I6@", "@I7@"]
