@@ -121,6 +121,53 @@ struct VerifyArchiveCopiesLogicTests {
         #expect(outcome.detail.contains("POSSIBLE CORRUPTION"))
     }
 
+    @Test("MISMATCH clears a STALE fixity the record already carried (codex #975): run finishes red, nothing written in its place, the manifest keeps the expected digest")
+    func mismatchClearsStaleFixity() async throws {
+        let (sb, model, sources, copies) = try await VerifyTestSupport.promotedSandbox("stale", count: 2)
+        defer { sb.cleanup() }
+        // Both copies are VERIFIED — Promote's fixity is in place. This is
+        // the shape a rescan-preserved catalog is in when the bytes rot
+        // underneath it: `archiveFixity != nil` is what every UI reader
+        // (sidebar, Archived banner, Volume dashboard) calls "verified".
+        let victim = copies[0]
+        let staleDigest = try #require(victim.archiveFixity?.digest)
+        let manifestRowsBefore = MasterArchiveTestSupport.manifestRows(sb)
+
+        // Corrupt ONE byte, size unchanged — a rescan's size check alone
+        // would never notice; only an end-to-end read-back does.
+        let victimURL = URL(fileURLWithPath: victim.fullPath)
+        var bytes = try Data(contentsOf: victimURL)
+        bytes[100] ^= 0xFF
+        try bytes.write(to: victimURL)
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed(let message) = job.state else {
+            Issue.record("a mismatch run must finish RED (.failed), got \(job.state)"); return
+        }
+        #expect(message.contains("MISMATCH"))
+        #expect(job.tally.mismatch == 1)
+        #expect(job.staleFixityCleared == 1)
+        #expect(victim.archiveFixity == nil,
+                "a present fixity means 'verified for these bytes' — these bytes just failed, so it must go")
+        // The intact sibling re-verifies normally.
+        #expect(job.tally.verified == 1 && job.tally.restored == 0)
+        #expect(copies[1].archiveFixity != nil)
+        // The UI test every reader applies now says NOT verified.
+        let banner = try #require(InspectorPanel.archivedBanner(
+            record: sources[0], masterCopy: victim, promotionSource: nil))
+        #expect(!banner.verified, "the Archived banner must go orange, not stay green")
+        // Evidence is not lost: the outcome carries the expected digest…
+        let outcome = try #require(job.outcomes.first { $0.kind == .mismatch })
+        #expect(outcome.detail.contains("POSSIBLE CORRUPTION"))
+        #expect(outcome.detail.contains("CLEARED"))
+        #expect(outcome.detail.contains(String(staleDigest.prefix(16))))
+        // …and the manifest — the recovery ground truth — is untouched.
+        let manifestRowsAfter = MasterArchiveTestSupport.manifestRows(sb)
+        #expect(manifestRowsAfter == manifestRowsBefore, "verify never rewrites the manifest")
+        #expect(manifestRowsAfter.contains { $0.contains(staleDigest) },
+                "the expected digest still lives in the manifest row")
+    }
+
     @Test("MISSING: archived file deleted → flagged, fixity untouched, run completes")
     func missingFileFlagged() async throws {
         let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("missing", count: 2)

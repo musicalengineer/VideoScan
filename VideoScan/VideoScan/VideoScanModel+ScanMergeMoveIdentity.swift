@@ -508,10 +508,19 @@ extension VideoScanModel {
             oldByPath[rec.fullPath] = rec
         }
         var applied = 0
+        var fixityDropped = 0
         for (newPath, oldPath) in adoptions {
             guard let old = oldByPath[oldPath], let fresh = freshByPath[newPath] else { continue }
-            adoptMovedRecord(old: old, fresh: fresh)
+            if adoptMovedRecord(old: old, fresh: fresh) == .dropped { fixityDropped += 1 }
             applied += 1
+        }
+        // ONE summary line per merge (fa24921) — never per-record spam.
+        // Adoption already required a viable size+partialMD5 match, so a
+        // drop here means the fixity's OWN sizeBytes disagreed with the
+        // file that moved (the copy changed before it was renamed).
+        if fixityDropped > 0 {
+            log("  ⚠ \(fixityDropped) fixity record(s) dropped on moved files: bytes changed since verification — run Verify copies… on the Master Archive to re-establish them.")
+            moveIdentityLog.warning("\(fixityDropped) archive fixity record(s) dropped during move adoption — size/fingerprint changed since verification")
         }
         return applied
     }
@@ -528,12 +537,18 @@ extension VideoScanModel {
     /// stamped on the FIRST move only (historical provenance — never
     /// overwritten), and one File Journey line is appended so the record's
     /// timeline shows the relink.
-    func adoptMovedRecord(old: VideoRecord, fresh: VideoRecord) {
+    ///
+    /// Returns the fixity decision (codex #975): `archiveFixity` follows
+    /// the moved file only while its sizeBytes / fingerprint still match
+    /// the fresh probe — `RescanPreservedFields.apply(to:)` nils it on the
+    /// OLD instance otherwise, because a present fixity MEANS verified.
+    @discardableResult
+    func adoptMovedRecord(old: VideoRecord, fresh: VideoRecord) -> RescanPreservedFields.FixityCarry {
         let oldPath = old.fullPath
         let oldVolume = old.volumeName
         let keep = RescanPreservedFields(from: old)
         old.apply(ProbeOutcome(scanDerivedFrom: fresh))
-        keep.apply(to: old)
+        let fixityCarry = keep.apply(to: old)
         if old.originalFullPath == nil {
             old.originalFullPath = oldPath
             old.originVolume = oldVolume
@@ -542,5 +557,6 @@ extension VideoScanModel {
         let line = "Reconcile \(stamp): Moved from \(oldPath) to \(old.fullPath) (relinked by Update Catalog)"
         old.notes = old.notes.isEmpty ? line : old.notes + "\n" + line
         moveIdentityLog.info("Relinked \(oldPath, privacy: .public) → \(old.fullPath, privacy: .public)")
+        return fixityCarry
     }
 }
