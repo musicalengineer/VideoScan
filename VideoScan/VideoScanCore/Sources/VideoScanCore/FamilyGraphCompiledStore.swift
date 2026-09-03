@@ -187,8 +187,18 @@ public struct FamilyGraphCompiledStore {
         case lockFailed(errno: Int32)
     }
 
+    /// Environment override for the compiled root (an eval or test may
+    /// point the shell at a tree compiled elsewhere — 2026-09-02, when
+    /// main's codec had moved past the installed artifact and an overnight
+    /// run must not write into Application Support). Unset in the app.
+    public static let compiledRootEnvironmentKey = "VIDEOSCAN_FAMILY_TREE_COMPILED_ROOT"
+
     public static var productionRoot: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        if let override = ProcessInfo.processInfo.environment[compiledRootEnvironmentKey],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("family-tree", isDirectory: true)
             .appendingPathComponent("compiled", isDirectory: true)
