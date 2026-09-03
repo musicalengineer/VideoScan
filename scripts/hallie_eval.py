@@ -352,6 +352,12 @@ def run(args):
         cmd += ["--host", args.host]
     if args.model:
         cmd += ["--model", args.model]
+    # An explicit tree (file or folder of pulls) bypasses the compiled
+    # artifact — measure a build whose compiled-tree codec has moved on
+    # from what is installed (9/02: codec 5 → 6) without writing into
+    # Application Support from an eval run.
+    if getattr(args, "gedcom", None):
+        cmd += ["--gedcom", args.gedcom]
 
     # PIN THE BINARY. The launcher otherwise picks the newest build it can
     # DISCOVER, which is not necessarily the one carrying the change under
@@ -687,6 +693,7 @@ def main():
                     help="default: Settings > Archivist Brain, else the shipped brain")
     pr.add_argument("--no-compose", action="store_true")
     pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
+    pr.add_argument("--gedcom", help="tree file or folder of .ged pulls to parse instead of the compiled artifact")
     pr.add_argument("--timeout", type=int, default=5400)
     pr.set_defaults(func=run)
 
