@@ -78,10 +78,11 @@ struct VerifyArchiveDetailView: View {
         case .mismatch: return 0
         case .failed: return 1
         case .missing: return 2
-        case .unmanifested: return 3
-        case .orphan: return 4
-        case .restored: return 5
-        case .verified: return 6
+        case .changedUnderVerify: return 3
+        case .unmanifested: return 4
+        case .orphan: return 5
+        case .restored: return 6
+        case .verified: return 7
         }
     }
 
@@ -94,6 +95,7 @@ struct VerifyArchiveDetailView: View {
         case .orphan: return "Manifest only"
         case .unmanifested: return "Unmanifested"
         case .failed: return "Failed"
+        case .changedUnderVerify: return "Changed under Verify"
         }
     }
 
@@ -106,6 +108,7 @@ struct VerifyArchiveDetailView: View {
         case .orphan: return "doc.badge.ellipsis"
         case .unmanifested: return "doc.badge.plus"
         case .failed: return "xmark.circle.fill"
+        case .changedUnderVerify: return "arrow.triangle.2.circlepath"
         }
     }
 
@@ -118,6 +121,7 @@ struct VerifyArchiveDetailView: View {
         case .orphan: return Color.gray
         case .unmanifested: return Color(red: 0.65, green: 0.50, blue: 0.05)
         case .failed: return Color(red: 0.70, green: 0.14, blue: 0.16)
+        case .changedUnderVerify: return Color(red: 0.55, green: 0.40, blue: 0.10)
         }
     }
 }

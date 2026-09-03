@@ -69,6 +69,19 @@ import Foundation
 // full read-back). partialMD5 itself is snapshotted for COMPARISON ONLY
 // — it is scan-derived and is never restored.
 //
+// 2026-09-02 (codex #983, the Verify-vs-rescan race): the snapshot is
+// taken at scan START; a scan of the archive volume can run for hours,
+// and Verify Archive Copies may clear a fixity (mismatch / missing) or
+// restore one (GH #167 recovery) in that window. Applying the
+// scan-start copy would RESURRECT a cleared fixity — a false green over
+// bytes Verify just failed. So `applyPreservedFieldsAfterRescan` re-reads
+// the pre-rescan record's LIVE archiveFixity at APPLY time (the old
+// instance is still in `records` — apply runs before commitScanResults'
+// sweep — found by path in one pass) and the identity guard runs on top
+// of whatever is live. The snapshot copy is the fallback only when the
+// old instance is already gone. Verify's half of the contract (path-
+// resolved, conditional writes) lives in VerifyArchiveCopiesJob.
+//
 // What we DON'T preserve (the scan re-derives these from disk):
 //   filename, ext, size, sizeBytes, duration, durationSeconds,
 //   container, videoCodec, resolution, frameRate, audioCodec,
@@ -177,7 +190,13 @@ struct RescanPreservedFields: Sendable {
     /// bytes still look like the bytes this digest covered — see
     /// `fixityIdentityHolds`. Presence of this field MEANS verified, so
     /// a fixity that no longer describes the file must not survive.
-    let archiveFixity: ArchiveFixity?
+    ///
+    /// `var`, not `let` (codex #983, 2026-09-02): the merge overrides
+    /// this with the pre-rescan record's LIVE value at apply time — a
+    /// Verify Archive Copies run that cleared (or restored) the fixity
+    /// while the scan was walking must not be undone by a snapshot taken
+    /// before it ran. See `applyPreservedFieldsAfterRescan`.
+    var archiveFixity: ArchiveFixity?
 
     /// The pre-rescan record's partialMD5, captured for COMPARISON ONLY
     /// (the fixity identity guard). Never written back — partialMD5 is
@@ -437,7 +456,28 @@ extension VideoScanModel {
         onto targetRecords: [VideoRecord]
     ) -> Int {
         let oldIDs = pendingRescanOldIDs.removeValue(forKey: target.searchPath) ?? [:]
-        let map = pendingPreservedFields.removeValue(forKey: target.searchPath) ?? [:]
+        var map = pendingPreservedFields.removeValue(forKey: target.searchPath) ?? [:]
+        // LIVE fixity re-read (codex #983): the pre-rescan instances are
+        // still in `records` here (apply precedes commitScanResults'
+        // sweep). One O(records) pass — never a per-record linear scan —
+        // collects the ones that matter: any record that has a snapshot,
+        // plus any that CARRIES a fixity now (Verify may have restored one
+        // onto a record that had nothing worth snapshotting at scan start).
+        // Whatever is live wins over the scan-start copy; a record whose
+        // old instance is already gone keeps the snapshot as the fallback.
+        var fixityMovedDuringScan = 0
+        for old in records where PathScope.contains(old.fullPath, within: target.searchPath) {
+            if var snap = map[old.fullPath] {
+                if snap.archiveFixity != old.archiveFixity {
+                    fixityMovedDuringScan += 1
+                    snap.archiveFixity = old.archiveFixity
+                    map[old.fullPath] = snap
+                }
+            } else if old.archiveFixity != nil {
+                fixityMovedDuringScan += 1
+                map[old.fullPath] = RescanPreservedFields(from: old)
+            }
+        }
         var restored = 0
         var fixityDropped = 0
         var droppedSample: [String] = []
@@ -455,6 +495,9 @@ extension VideoScanModel {
             let names = droppedSample.joined(separator: ", ") + more
             log("  ⚠ \(fixityDropped) fixity record(s) dropped: bytes changed since verification (\(names)) — these archive copies are now unverified; run Verify copies… on the Master Archive to re-establish them.")
             appLog.write("Rescan preservation: \(fixityDropped) archive fixity record(s) dropped under \(target.searchPath) — size/fingerprint changed since verification: \(names)")
+        }
+        if fixityMovedDuringScan > 0 {
+            appLog.write("Rescan preservation: \(fixityMovedDuringScan) record(s) had their archive fixity changed while the scan ran (Verify Archive Copies) under \(target.searchPath) — the live value was carried, not the scan-start snapshot")
         }
         // Re-link runs even when the preservation map is EMPTY (QA m1,
         // 2026-07-24): pendingRescanOldIDs was captured for exactly this

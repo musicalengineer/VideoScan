@@ -7,6 +7,13 @@
 // record on a match. It doubles as the periodic fixity audit the
 // MediaAngel roadmap wants.
 //
+// THE CONTRACT every reader of `archiveFixity` relies on (sidebar,
+// Archived banner, Volume dashboard, Hallie stats — all treat non-nil as
+// "verified"):
+//
+//     archiveFixity present  ⇒  these bytes verified
+//                               AND the file was present at the last Verify.
+//
 // Per-file semantics (the contract this tool must never soften):
 //
 //   MATCH        → restore/refresh the record's `archiveFixity` (same
@@ -19,19 +26,42 @@
 //                  these bytes", and these bytes just failed. The
 //                  manifest row keeps the expected digest, so no evidence
 //                  is lost — the record simply stops claiming verified.
-//   MISSING      → file absent from a reachable archive — flagged.
+//   MISSING      → file absent from a REACHABLE archive — flagged, and a
+//                  fixity the record carried is CLEARED exactly like a
+//                  mismatch (codex #983, 2026-09-02): "verified" cannot
+//                  describe a file that is not there. The run goes red.
+//                  An UNREACHABLE root (volume gone) is not a verdict:
+//                  preflight refuses before any I/O, and a root that
+//                  vanishes mid-run aborts the run — nothing is cleared
+//                  on the strength of an absent disk.
 //   ORPHAN       → manifest row with no catalog record — REPORT ONLY
 //                  (Promote's adopt path or a rescan restores it; this
 //                  job never invents catalog records).
 //   UNMANIFESTED → catalog archive copy with no manifest row — re-hash
 //                  if the file exists, report; never append a manifest
 //                  row (the manifest is Promote's to write, and a fresh
-//                  hash of unknown bytes is not ground truth).
+//                  hash of unknown bytes is not ground truth). On a
+//                  mismatch against the record's own previous fixity the
+//                  expected digest survives in this job's structured
+//                  outcome row (`expectedDigest`) — the record itself
+//                  never keeps a digest it failed.
+//
+// Verify vs. rescan (codex #983 blocker 2): a same-path rescan REPLACES
+// the record instance (fresh UUID) while Verify is hashing off-main. So
+// every catalog write here resolves its target BY PATH at write time and
+// is CONDITIONAL: it lands only when the live record at that path still
+// carries the fixity Verify observed when the plan was built (digest
+// equality, or both nil). Anything else — record gone from the path, or
+// a fixity that moved under us — is skipped, counted
+// (`tally.changedUnderVerify`), and reported in ONE line per run:
+// "re-run to settle them". The rescan side holds up its half in
+// VideoScanModel+RescanPreservation (live fixity re-read at apply time).
 //
 // Read-only on media throughout: the archive is only ever READ (through
 // ArchivePromoteEngine's contained dirfd/O_NOFOLLOW chain — this file
 // deliberately reuses `sha256(fd:)`, never a second hasher). Catalog
-// writes happen only on the main actor via `restoreArchiveFixity`.
+// writes happen only on the main actor via `restoreArchiveFixity` /
+// `invalidateArchiveFixity` (path-conditional, below).
 //
 // Cancellation is per-chunk (`sha256(fd:shouldCancel:)` polls every
 // 1 MB); files already verified keep their restored fixity — the
@@ -120,19 +150,25 @@ struct VerifyArchiveManifestIndex: Sendable {
 struct VerifyArchivePlan: Sendable {
     struct Item: Sendable {
         /// Catalog archive-copy record; nil ⇒ manifest-only orphan.
+        /// Display/lineage only — every WRITE resolves by `fullPath`
+        /// (the id may be dead by write time; see file header).
         let recordID: UUID?
         /// Archive-relative path (hash through the contained chain);
         /// nil ⇒ the record's path is outside the current root.
         let relPath: String?
-        /// Absolute path — display, and the hashing fallback for a
-        /// record that lives outside the root.
+        /// Absolute path — display, the hashing fallback for a record
+        /// that lives outside the root, AND the write-time identity of
+        /// the record (`VideoScanModel.record(forPath:)`).
         let fullPath: String
         let filename: String
         /// Manifest reference digest; nil ⇒ unmanifested.
         let manifestSHA: String?
         let manifestBytes: Int64?
-        /// The record's existing fixity digest (unmanifested compare)
-        /// — nil when GH #167-style stripping (or rescan) left none.
+        /// The record's fixity digest AS OBSERVED when the plan was built
+        /// (lowercased) — nil when GH #167-style stripping (or rescan)
+        /// left none. Doubles as the unmanifested reference and as the
+        /// conditional-write guard: a write lands only if the live
+        /// record still carries exactly this.
         let recordDigest: String?
         /// Bytes this item contributes to the progress denominator.
         let expectedBytes: Int64
@@ -175,7 +211,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             /// Digest does NOT match the reference — potential
             /// corruption. No fixity written; a stale one is cleared.
             case mismatch
-            /// Reachable archive, file absent.
+            /// Reachable archive, file absent. A fixity the record
+            /// carried is cleared.
             case missing
             /// Manifest row with no catalog record. Report only.
             case orphan
@@ -184,25 +221,50 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             case unmanifested
             /// The check itself errored (unreadable, symlink refusal…).
             case failed
+            /// Bytes matched, but the catalog record at this path changed
+            /// under Verify (replaced by a rescan, or its fixity moved) —
+            /// nothing written; re-run to settle. (Mismatch / missing
+            /// verdicts keep their own kind when the write is skipped —
+            /// the alarm stands regardless.)
+            case changedUnderVerify
         }
         let id = UUID()
         /// relpath when known, else filename.
         let name: String
         let kind: Kind
         let detail: String
+        /// The reference digest this file was checked against (manifest
+        /// row, or the record's own previous fixity for an unmanifested
+        /// copy). Structured so an unmanifested MISMATCH — whose only
+        /// reference was the fixity just cleared — keeps its expected
+        /// digest in the report row, not in the record (codex #983 minor).
+        var expectedDigest: String? = nil
+        /// What the bytes on disk actually hashed to (nil when absent).
+        var actualDigest: String? = nil
+        /// True when the catalog write this verdict called for was
+        /// skipped because the record changed under Verify.
+        var writeSkipped: Bool = false
     }
     @Published private(set) var outcomes: [FileOutcome] = []
 
     struct Tally: Equatable {
         var verified = 0, restored = 0, mismatch = 0, missing = 0
         var orphan = 0, unmanifested = 0, failed = 0
+        /// Catalog writes skipped because the record at the path changed
+        /// between plan and write (codex #983). Overlaps the verdict
+        /// counters: a skipped mismatch is in `mismatch` AND here.
+        var changedUnderVerify = 0
         var bytesDone: Int64 = 0
     }
     private(set) var tally = Tally()
-    /// Mismatches that also CLEARED a stale fixity the record carried
-    /// (codex #975). Counted apart from `tally.mismatch` so the batch-end
-    /// save knows a catalog write happened even when nothing was restored.
+    /// Verdicts (mismatch OR missing) that also CLEARED a fixity the
+    /// record carried (codex #975/#983). Counted apart from the verdict
+    /// tallies so the batch-end save knows a catalog write happened even
+    /// when nothing was restored.
     private(set) var staleFixityCleared = 0
+    /// Set when the archive root stopped being reachable mid-run: the
+    /// remaining items were NOT judged (an absent disk is not a verdict).
+    private(set) var abortedRootUnreachable = false
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
@@ -215,6 +277,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
 
     /// Internal so tests can `await job.task?.value`.
     private(set) var task: Task<Void, Never>?
+
+    /// TEST SEAM (codex #983 race tests): invoked on the main actor for
+    /// each item AFTER its bytes were hashed and BEFORE the verdict is
+    /// applied — the exact window a same-path rescan merge or another
+    /// fixity writer can land in. Production never sets it.
+    var testHookAfterHash: (@MainActor (VerifyArchivePlan.Item) -> Void)?
 
     var title: String { "Verify Archive Copies" }
     var subtitle: String {
@@ -313,8 +381,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             finish(failed: refusal)
             return nil
         }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: root, isDirectory: &isDir), isDir.boolValue else {
+        guard Self.archiveRootIsReachable(root) else {
             finish(failed: "The Master Archive folder is not reachable (\(root)). Connect the archive volume and try again.")
             return nil
         }
@@ -325,6 +392,19 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             return nil
         }
         return root
+    }
+
+    /// "Reachable" for the MISSING verdict: the root directory is there
+    /// AND the manifest is still inside it. A yanked volume fails both;
+    /// a stale mount point (empty directory left behind) fails the
+    /// second — either way no file under it can be judged absent.
+    nonisolated static func archiveRootIsReachable(_ root: String) -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root, isDirectory: &isDir), isDir.boolValue else {
+            return false
+        }
+        return FileManager.default.fileExists(
+            atPath: MasterArchiveLayout.manifestURL(rootPath: root).path)
     }
 
     // MARK: Plan collection (main actor — reads the live catalog)
@@ -409,23 +489,25 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         for row in plan.orphans {
             tally.orphan += 1
             record(.orphan, row.relPath,
-                   "in the manifest (sha256 \(row.sha256.prefix(12))…) but not in the catalog — a rescan or Promote's adopt path can restore the record")
+                   "in the manifest (sha256 \(row.sha256.prefix(12))…) but not in the catalog — a rescan or Promote's adopt path can restore the record",
+                   expected: row.sha256)
         }
 
         let total = plan.items.count
         for (index, item) in plan.items.enumerated() {
             if Task.isCancelled || state == .cancelling { break }
             subtitleText = "\(index + 1)/\(total) · \(item.filename)"
-            await verifyOne(item, model: model, root: root, totalBytes: plan.totalBytes)
+            let keepGoing = await verifyOne(item, model: model, root: root, totalBytes: plan.totalBytes)
             tally.bytesDone += item.expectedBytes
             fractionValue = plan.totalBytes > 0
                 ? min(1, Double(tally.bytesDone) / Double(plan.totalBytes))
                 : 1
+            if !keepGoing { break }
         }
 
         // Batch end: one durable save carrying every restored fixity —
         // runs on cancel too (verified files STAY verified). A cleared
-        // stale fixity (mismatch) is a catalog write as well and must
+        // fixity (mismatch OR missing) is a catalog write as well and must
         // land for the same reason: an unverified record must not come
         // back green on the next launch.
         if tally.restored + tally.verified + tally.unmanifested + staleFixityCleared > 0 {
@@ -437,11 +519,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     /// One item: hash (contained chain when the path is under the root,
-    /// plain O_NOFOLLOW read otherwise), then classify + apply.
+    /// plain O_NOFOLLOW read otherwise), then classify + apply. Returns
+    /// false when the run must stop (archive root vanished).
     private func verifyOne(_ item: VerifyArchivePlan.Item,
                            model: VideoScanModel,
                            root: String,
-                           totalBytes: Int64) async {
+                           totalBytes: Int64) async -> Bool {
         let name = item.relPath ?? item.filename
         let actualOrNil: String?
         do {
@@ -470,63 +553,102 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                 actualOrNil = nil
             }
         } catch {
+            // A read error from a root that is no longer there is the
+            // volume going away, not a verdict on this file: stop the run.
+            guard Self.archiveRootIsReachable(root) else {
+                return abortRootUnreachable(name: name)
+            }
             tally.failed += 1
             record(.failed, name, PromoteToArchiveJob.describe(error))
             verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(PromoteToArchiveJob.describe(error), privacy: .public)")
-            return
+            return true
         }
         // `sha256` returns nil on cancel as well as on absence.
-        if Task.isCancelled || state == .cancelling { return }
+        if Task.isCancelled || state == .cancelling { return false }
+
+        // The write-race window (see file header): the catalog may have
+        // changed while the bytes were being read.
+        testHookAfterHash?(item)
 
         guard let actual = actualOrNil?.lowercased() else {
-            tally.missing += 1
-            record(.missing, name, "listed in the \(item.manifestSHA != nil ? "manifest" : "catalog") but the file is not in the archive — check the archive by hand")
-            model.log("Verify Archive: MISSING \(name) — the archive volume is reachable but the file is not there.")
-            return
+            // Absent — but absent from WHAT? If the archive root itself is
+            // gone (volume yanked mid-run), no file under it can be judged
+            // and nothing may be cleared: stop here, no verdict.
+            guard Self.archiveRootIsReachable(root) else {
+                return abortRootUnreachable(name: name)
+            }
+            flagMissing(item: item, name: name, model: model)
+            return true
         }
 
         if let expected = item.manifestSHA {
             if actual == expected {
                 applyMatch(item: item, digest: actual, model: model, name: name)
             } else {
-                flagMismatch(name: name, expected: expected, actual: actual,
-                             reference: "manifest", recordID: item.recordID, model: model)
+                flagMismatch(item: item, name: name, expected: expected, actual: actual,
+                             reference: "manifest", model: model)
             }
-            return
+            return true
         }
 
         // Unmanifested: the only reference is the record's own fixity.
         if let recorded = item.recordDigest {
             if actual == recorded {
-                tally.unmanifested += 1
-                if let id = item.recordID {
-                    model.restoreArchiveFixity(recordID: id, digest: actual,
-                                               sizeBytes: item.expectedBytes)
+                let write = model.restoreArchiveFixity(path: item.fullPath,
+                                                       observedDigest: item.recordDigest,
+                                                       digest: actual,
+                                                       sizeBytes: item.expectedBytes)
+                if write == .changedUnderVerify {
+                    noteChangedUnderVerify(name: name, verdict: "bytes match the catalog's fixity record (no manifest row)",
+                                           expected: recorded, actual: actual)
+                } else {
+                    tally.unmanifested += 1
+                    record(.unmanifested, name, "no manifest row, but the bytes match the catalog's fixity record — consider re-promoting so the manifest covers it",
+                           expected: recorded, actual: actual)
                 }
-                record(.unmanifested, name, "no manifest row, but the bytes match the catalog's fixity record — consider re-promoting so the manifest covers it")
             } else {
-                flagMismatch(name: name, expected: recorded, actual: actual,
-                             reference: "catalog fixity record", recordID: item.recordID, model: model)
+                flagMismatch(item: item, name: name, expected: recorded, actual: actual,
+                             reference: "catalog fixity record", model: model)
             }
         } else {
             tally.unmanifested += 1
-            record(.unmanifested, name, "no manifest row and no fixity record — current bytes hash to \(actual.prefix(12))…; no reference to verify against (nothing was written)")
+            record(.unmanifested, name, "no manifest row and no fixity record — current bytes hash to \(actual.prefix(12))…; no reference to verify against (nothing was written)",
+                   actual: actual)
         }
+        return true
+    }
+
+    /// The archive root vanished mid-run (volume yanked): this item gets
+    /// no verdict, nothing is written, and the loop stops. Returns false
+    /// for the loop.
+    private func abortRootUnreachable(name: String) -> Bool {
+        abortedRootUnreachable = true
+        tally.failed += 1
+        record(.failed, name, "the Master Archive became unreachable while verifying — no verdict for this file (nothing written); reconnect the archive volume and re-run")
+        verifyArchiveLog.error("verify archive ABORT: root unreachable mid-run at \(name, privacy: .public)")
+        return false
     }
 
     private func applyMatch(item: VerifyArchivePlan.Item, digest: String,
                             model: VideoScanModel, name: String) {
         let hadFixity = item.recordDigest != nil
-        if let id = item.recordID {
-            model.restoreArchiveFixity(recordID: id, digest: digest,
-                                       sizeBytes: item.manifestBytes ?? item.expectedBytes)
+        let write = model.restoreArchiveFixity(path: item.fullPath,
+                                               observedDigest: item.recordDigest,
+                                               digest: digest,
+                                               sizeBytes: item.manifestBytes ?? item.expectedBytes)
+        if write == .changedUnderVerify {
+            noteChangedUnderVerify(name: name, verdict: "bytes match the manifest",
+                                   expected: digest, actual: digest)
+            return
         }
         if hadFixity {
             tally.verified += 1
-            record(.verified, name, "matches the manifest (sha256 \(digest.prefix(12))…)")
+            record(.verified, name, "matches the manifest (sha256 \(digest.prefix(12))…)",
+                   expected: digest, actual: digest)
         } else {
             tally.restored += 1
-            record(.restored, name, "matches the manifest — fixity record restored (sha256 \(digest.prefix(12))…)")
+            record(.restored, name, "matches the manifest — fixity record restored (sha256 \(digest.prefix(12))…)",
+                   expected: digest, actual: digest)
             model.log("Verify Archive: restored fixity on \(name) from the manifest.")
         }
     }
@@ -537,25 +659,79 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     /// A fixity the record ALREADY carries is cleared (codex #975): its
     /// presence tells every UI reader "verified", and the bytes on disk
     /// just proved otherwise. The expected digest survives in the
-    /// manifest row (and in this outcome's detail + the logs), so
-    /// clearing loses no evidence — it only stops a false green.
-    private func flagMismatch(name: String, expected: String, actual: String,
-                              reference: String, recordID: UUID?, model: VideoScanModel) {
+    /// manifest row (and in this outcome's structured row + the logs),
+    /// so clearing loses no evidence — it only stops a false green.
+    private func flagMismatch(item: VerifyArchivePlan.Item, name: String,
+                              expected: String, actual: String,
+                              reference: String, model: VideoScanModel) {
         tally.mismatch += 1
-        let cleared = recordID.map { model.invalidateArchiveFixity(recordID: $0) } ?? false
+        let write = model.invalidateArchiveFixity(path: item.fullPath, observedDigest: item.recordDigest)
+        let cleared = write == .written
         if cleared { staleFixityCleared += 1 }
-        let fixityClause = cleared
-            ? "Stale fixity record CLEARED (it claimed these bytes were verified); nothing restored"
-            : "Fixity NOT restored"
+        let skipped = write == .changedUnderVerify
+        if skipped { tally.changedUnderVerify += 1 }
+        let fixityClause: String
+        if cleared {
+            fixityClause = "Stale fixity record CLEARED (it claimed these bytes were verified); nothing restored"
+        } else if skipped {
+            fixityClause = "The catalog record changed under Verify, so its fixity was left alone — re-run Verify to settle it; nothing restored"
+        } else {
+            fixityClause = "Fixity NOT restored"
+        }
         let detail = "POSSIBLE CORRUPTION — bytes on disk hash to \(actual.prefix(16))… but the \(reference) says \(expected.prefix(16))…. \(fixityClause); check this file by hand before trusting it."
-        record(.mismatch, name, detail)
+        outcomes.append(FileOutcome(name: name, kind: .mismatch, detail: detail,
+                                    expectedDigest: expected, actualDigest: actual,
+                                    writeSkipped: skipped))
         model.log("Verify Archive: MISMATCH \(name) — \(detail)")
-        appLog.write("verify archive MISMATCH: \(name) — expected \(expected) (\(reference)), got \(actual)\(cleared ? "; stale fixity record cleared" : "")")
-        verifyArchiveLog.error("verify archive MISMATCH: \(name, privacy: .public) expected \(expected, privacy: .public) actual \(actual, privacy: .public) staleFixityCleared=\(cleared)")
+        appLog.write("verify archive MISMATCH: \(name) — expected \(expected) (\(reference)), got \(actual)\(cleared ? "; stale fixity record cleared" : "")\(skipped ? "; record changed under Verify, fixity untouched" : "")")
+        verifyArchiveLog.error("verify archive MISMATCH: \(name, privacy: .public) expected \(expected, privacy: .public) actual \(actual, privacy: .public) staleFixityCleared=\(cleared) changedUnderVerify=\(skipped)")
     }
 
-    private func record(_ kind: FileOutcome.Kind, _ name: String, _ detail: String) {
-        outcomes.append(FileOutcome(name: name, kind: kind, detail: detail))
+    /// File absent from a REACHABLE archive (caller checked). Same
+    /// catalog consequence as a mismatch (codex #983): a fixity the
+    /// record carries is cleared — "verified" cannot describe a file that
+    /// is not there. The manifest row (recovery ground truth) is untouched.
+    private func flagMissing(item: VerifyArchivePlan.Item, name: String, model: VideoScanModel) {
+        tally.missing += 1
+        let write = model.invalidateArchiveFixity(path: item.fullPath, observedDigest: item.recordDigest)
+        let cleared = write == .written
+        if cleared { staleFixityCleared += 1 }
+        let skipped = write == .changedUnderVerify
+        if skipped { tally.changedUnderVerify += 1 }
+        let listedIn = item.manifestSHA != nil ? "manifest" : "catalog"
+        let fixityClause: String
+        if cleared {
+            fixityClause = " Its fixity record was CLEARED (it claimed a verified file that is not there)."
+        } else if skipped {
+            fixityClause = " The catalog record changed under Verify, so its fixity was left alone — re-run Verify to settle it."
+        } else {
+            fixityClause = ""
+        }
+        let detail = "listed in the \(listedIn) but the file is not in the archive — check the archive by hand.\(fixityClause)"
+        outcomes.append(FileOutcome(name: name, kind: .missing, detail: detail,
+                                    expectedDigest: item.manifestSHA ?? item.recordDigest,
+                                    actualDigest: nil, writeSkipped: skipped))
+        model.log("Verify Archive: MISSING \(name) — the archive volume is reachable but the file is not there.\(fixityClause)")
+        appLog.write("verify archive MISSING: \(name)\(cleared ? " — fixity record cleared" : "")\(skipped ? " — record changed under Verify, fixity untouched" : "")")
+        verifyArchiveLog.error("verify archive MISSING: \(name, privacy: .public) fixityCleared=\(cleared) changedUnderVerify=\(skipped)")
+    }
+
+    /// A MATCH whose write was skipped: the verdict is good news but the
+    /// record it was for is not the record that is there now.
+    private func noteChangedUnderVerify(name: String, verdict: String,
+                                        expected: String, actual: String) {
+        tally.changedUnderVerify += 1
+        outcomes.append(FileOutcome(name: name, kind: .changedUnderVerify,
+                                    detail: "\(verdict), but the catalog record changed under Verify (replaced by a rescan, or its fixity moved) — nothing written; re-run Verify to settle it",
+                                    expectedDigest: expected, actualDigest: actual,
+                                    writeSkipped: true))
+        verifyArchiveLog.notice("verify archive: \(name, privacy: .public) changed under Verify — write skipped")
+    }
+
+    private func record(_ kind: FileOutcome.Kind, _ name: String, _ detail: String,
+                        expected: String? = nil, actual: String? = nil) {
+        outcomes.append(FileOutcome(name: name, kind: kind, detail: detail,
+                                    expectedDigest: expected, actualDigest: actual))
     }
 
     // MARK: Finish
@@ -568,10 +744,21 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             finishCancelled()
             return
         }
+        // ONE line per run for the race skips (never per-record spam).
+        if tally.changedUnderVerify > 0 {
+            model.log("Verify Archive: \(tally.changedUnderVerify) record(s) changed under Verify; re-run to settle them.")
+        }
+        if abortedRootUnreachable {
+            let message = "The Master Archive became unreachable during verification — stopped; files not yet checked were NOT judged (nothing cleared). \(summary)"
+            model.log("Verify Archive: \(message)")
+            finish(failed: message)
+            return
+        }
         model.log("Verify Archive: \(summary).")
-        if tally.mismatch > 0 {
-            // A mismatch is a completed run with an alarming verdict —
-            // the row goes red so it cannot be skimmed past.
+        if tally.mismatch > 0 || tally.missing > 0 {
+            // A mismatch or a missing file is a completed run with an
+            // alarming verdict — the row goes red so it cannot be skimmed
+            // past.
             finish(failed: summary)
         } else {
             finish(success: summary)
@@ -588,6 +775,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         if t.orphan > 0 { parts.append("\(t.orphan) in manifest only") }
         if t.unmanifested > 0 { parts.append("\(t.unmanifested) unmanifested") }
         if t.failed > 0 { parts.append("\(t.failed) failed") }
+        if t.changedUnderVerify > 0 { parts.append("\(t.changedUnderVerify) changed under Verify — re-run to settle") }
         return parts.joined(separator: " · ")
     }
 
@@ -660,42 +848,84 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 }
 
-// MARK: - Model surface (the ONLY catalog write this feature makes)
+// MARK: - Model surface (the ONLY catalog writes this feature makes)
 
 extension VideoScanModel {
+
+    /// What a path-conditional fixity write did. (For Rick: a result
+    /// code, not an error — every case is a legitimate outcome the job
+    /// counts differently.)
+    enum ArchiveFixityWrite: Equatable, Sendable {
+        /// The live record's fixity was set (restore) or removed (clear).
+        case written
+        /// A clear was asked for, but the live record carries no fixity
+        /// and none was observed — nothing to do, not a write.
+        case nothingToClear
+        /// No record lives at the path any more, or the one that does
+        /// carries a different fixity than Verify observed when it
+        /// started. Skipped: this verdict was for a record that is no
+        /// longer there. Re-run Verify to settle.
+        case changedUnderVerify
+        /// Read-only viewer.
+        case refused
+    }
+
+    /// The conditional-write guard shared by restore and clear (codex
+    /// #983 blocker 2). Resolves the LIVE record by path — a same-path
+    /// rescan replaces the instance (fresh UUID) but keeps the path, and
+    /// the path index is refreshed by `records.didSet` and the aggregates
+    /// revision (renames bump it, main 4f74d809). The write is allowed
+    /// only when that record still carries exactly the fixity the plan
+    /// observed: same digest, or both absent.
+    private func liveRecordForFixityWrite(path: String,
+                                          observedDigest: String?) -> VideoRecord? {
+        guard let rec = record(forPath: path) else { return nil }
+        let live = rec.archiveFixity?.digest.lowercased()
+        return live == observedDigest?.lowercased() ? rec : nil
+    }
+
     /// Restore (or refresh) an archive copy's full-file fixity record —
     /// same shape `registerPromotedCopy` writes at promotion time.
     /// Called by VerifyArchiveCopiesJob AFTER an end-to-end read-back
     /// matched the manifest digest (or, for an unmanifested copy, its
-    /// own previous fixity). Refused on a read-only viewer.
+    /// own previous fixity). Path-conditional (see
+    /// `liveRecordForFixityWrite`). Refused on a read-only viewer.
     @discardableResult
-    func restoreArchiveFixity(recordID: UUID,
+    func restoreArchiveFixity(path: String,
+                              observedDigest: String?,
                               digest: String,
                               sizeBytes: Int64,
-                              verifiedAt: Date = Date()) -> Bool {
-        guard !isReadOnly, let rec = record(forID: recordID) else { return false }
+                              verifiedAt: Date = Date()) -> ArchiveFixityWrite {
+        guard !isReadOnly else { return .refused }
+        guard let rec = liveRecordForFixityWrite(path: path, observedDigest: observedDigest) else {
+            return .changedUnderVerify
+        }
         rec.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: verifiedAt,
                                           sizeBytes: sizeBytes)
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
-        return true
+        return .written
     }
 
     /// Clear a record's fixity after an end-to-end read-back proved the
-    /// bytes no longer match the reference (codex #975, 2026-09-02).
-    /// `archiveFixity` present ⇒ verified for THESE bytes — so a record
-    /// whose bytes just failed must stop carrying one. Nothing is written
-    /// in its place: only a byte-for-byte match ever writes fixity.
-    /// Returns true only when a fixity was actually removed (false on a
-    /// read-only viewer, an unknown id, or a record that had none).
+    /// bytes no longer match the reference (codex #975), or the file is
+    /// absent from a reachable archive (codex #983). `archiveFixity`
+    /// present ⇒ verified for THESE bytes AND present — so a record that
+    /// just failed either must stop carrying one. Nothing is written in
+    /// its place: only a byte-for-byte match ever writes fixity.
+    /// Path-conditional (see `liveRecordForFixityWrite`).
     @discardableResult
-    func invalidateArchiveFixity(recordID: UUID) -> Bool {
-        guard !isReadOnly, let rec = record(forID: recordID),
-              rec.archiveFixity != nil else { return false }
+    func invalidateArchiveFixity(path: String,
+                                 observedDigest: String?) -> ArchiveFixityWrite {
+        guard !isReadOnly else { return .refused }
+        guard let rec = liveRecordForFixityWrite(path: path, observedDigest: observedDigest) else {
+            return .changedUnderVerify
+        }
+        guard rec.archiveFixity != nil else { return .nothingToClear }
         rec.archiveFixity = nil
         noteCatalogRecordsMutated()
         saveCatalogDebounced()
-        return true
+        return .written
     }
 }
 
