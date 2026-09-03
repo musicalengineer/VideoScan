@@ -6,6 +6,9 @@ import Testing
 /// four live New Hampshire questions from the 2026-09-02 transcript plus the
 /// selection forms; negative rows are the shapes that must keep their own
 /// lanes (selection date, person age, catalog search, media actions).
+/// codex #987: search openers are judged by their object (item 2), explicit
+/// paths are verbatim and bare filenames stop only at hard boundaries
+/// (item 3), and "this video" is the deictic hint (item 5).
 @Suite("Family Archivist record questions")
 struct ArchivistRecordQuestionTests {
     typealias Record = ArchivistQueryAST.Record
@@ -64,6 +67,21 @@ struct ArchivistRecordQuestionTests {
          Record(reference: .file(name: "christmas 1994 part 2.mkv"), operations: [.people], people: ["Donna"])),
         ("does new hampshire.mov have Nancy in it",
          Record(reference: .file(name: "new hampshire.mov"), operations: [.people], people: ["Nancy"])),
+        // Legal filenames with ordinary words are never truncated (codex
+        // #987 item 3); paths whose folders read like a sentence are
+        // verbatim.
+        ("who is in rick and donna.mov", Record(reference: .file(name: "rick and donna.mov"), operations: [.people])),
+        ("is donna in rick and donna.mov",
+         Record(reference: .file(name: "rick and donna.mov"), operations: [.people], people: ["donna"])),
+        ("who is in /Volumes/A/Who is This/tape.mov",
+         Record(reference: .file(name: "/Volumes/A/Who is This/tape.mov"), operations: [.people])),
+        ("tell me about /Volumes/A/Who is This/tape.mov",
+         Record(reference: .file(name: "/Volumes/A/Who is This/tape.mov"), operations: [.about])),
+        ("is Donna in /Volumes/A/Who is This/tape one.mov",
+         Record(reference: .file(name: "/Volumes/A/Who is This/tape one.mov"), operations: [.people], people: ["Donna"])),
+        // A file named beside a knowledge-lane phrase is still a file.
+        ("who is in Breen surname origin.mov",
+         Record(reference: .file(name: "Breen surname origin.mov"), operations: [.people])),
         // Pronoun-only date / metadata asks with the noun BESIDE the
         // referent (codex #976 item 5).
         ("what is the date of it", Record(reference: .currentSelection, operations: [.date])),
@@ -120,9 +138,53 @@ struct ArchivistRecordQuestionTests {
         "It's pouring rain here in the Berkshires today.",
         "Donna and I loved it in the Berkshires",
         "that was the year Tim was born",
+        // The surname lane's own shape, with no file in it.
+        "where does the Breen surname come from",
     ])
     func leavesOtherShapesAlone(question: String) {
         #expect(ArchivistRecordQuestion.detect(question) == nil, Comment(rawValue: question))
+    }
+
+    /// codex #987 item 2: a search opener followed by a GENERAL object —
+    /// plural media nouns, "everything", a person, a year, a decade — is a
+    /// search, not ours.
+    @Test(arguments: [
+        "show me videos of Donna",
+        "find clips from 1994",
+        "list the photos from the 90s",
+        "search for footage of the Cape",
+        "show me everything from 1994",
+        "find Donna at the Cape",
+        "show me all the files on LaCie",
+        "list videos with Tim in them",
+        "show me the movies from the 80s",
+        "find recordings of Dad",
+        "search for Christmas",
+        "hallie, show me pictures of the boys",
+        "please find everything with Donna in it",
+    ])
+    func searchOpenersWithAGeneralObjectStaySearches(question: String) {
+        #expect(ArchivistRecordQuestion.detect(question) == nil, Comment(rawValue: question))
+    }
+
+    /// … while the same openers followed by a record noun beside a
+    /// referent are record questions.
+    @Test(arguments: [
+        ("show me metadata for this video", Record(reference: .currentSelection, operations: [.about])),
+        ("find the date for this video", Record(reference: .currentSelection, operations: [.date])),
+        ("show me who is in it", Record(reference: .currentSelection, operations: [.people])),
+        ("list the names in this video", Record(reference: .currentSelection, operations: [.people])),
+        ("show me the details on this one", Record(reference: .currentSelection, operations: [.about])),
+        ("search for the date in it", Record(reference: .currentSelection, operations: [.date])),
+        ("show me everything about this video", Record(reference: .currentSelection, operations: [.about])),
+        ("find out who is in New Hampshire.mov", Record(reference: .file(name: "New Hampshire.mov"), operations: [.people])),
+        ("find the metadata for New Hampshire.mov", Record(reference: .file(name: "New Hampshire.mov"), operations: [.about])),
+        ("show me the people in this one", Record(reference: .currentSelection, operations: [.people])),
+        ("hallie, show me the metadata for this clip", Record(reference: .currentSelection, operations: [.about])),
+    ] as [(String, Record)])
+    func searchOpenersWithARecordObjectAreRecordQuestions(question: String, expected: Record) {
+        let detected = ArchivistRecordQuestion.detect(question)
+        #expect(detected == expected, Comment(rawValue: "\(question) → \(String(describing: detected))"))
     }
 
     @Test func fileReferenceIsExtractedExactlyIncludingSpacesAndPaths() {
@@ -130,7 +192,7 @@ struct ArchivistRecordQuestionTests {
         #expect(ArchivistRecordQuestion.fileReference(in: "the file \"New Hampshire.mov\" please")?.name == "New Hampshire.mov")
         #expect(ArchivistRecordQuestion.fileReference(in: "look at \(Self.path) for me")?.name == Self.path)
         #expect(ArchivistRecordQuestion.fileReference(in: "who is in Christmas 1994 Part 2.mkv")?.name == "Christmas 1994 Part 2.mkv")
-        // A stop word before the core is not part of the name; a plain
+        // A hard boundary before the core is not part of the name; a plain
         // lowercase word is (codex #976 item 4).
         #expect(ArchivistRecordQuestion.fileReference(in: "the video hampshire.mov")?.name == "hampshire.mov")
         #expect(ArchivistRecordQuestion.fileReference(in: "who is in new hampshire.mov")?.name == "new hampshire.mov")
@@ -157,10 +219,55 @@ struct ArchivistRecordQuestionTests {
         #expect(ArchivistRecordQuestion.fileReference(in: "who is in the picture") == nil)
     }
 
+    /// codex #987 item 3: ordinary words are legal filename words and are
+    /// kept; the run stops at the first HARD boundary met walking left
+    /// from the extension ("is donna in rick and donna.mov" stops at the
+    /// "in" after donna); a swallowed sentence word is settled downstream
+    /// by the resolver, so the run here is the LONGEST legal one.
+    @Test(arguments: [
+        ("who is in rick and donna.mov", "rick and donna.mov"),
+        ("is donna in rick and donna.mov", "rick and donna.mov"),
+        ("does rick and donna.mov have Tim in it", "rick and donna.mov"),
+        ("who is in trip to maine.mov", "trip to maine.mov"),
+        ("who is in christmas at the cape.mov", "christmas at the cape.mov"),
+        ("who is in my birthday.mov", "my birthday.mov"),
+        ("when was rick and donna.mov filmed", "rick and donna.mov"),
+        ("tell me about the christmas tape.mov", "the christmas tape.mov"),
+        ("who is in Breen surname origin.mov", "Breen surname origin.mov"),
+        // Hard boundaries: question words, auxiliaries, naming words,
+        // imperatives, punctuation.
+        ("examine rick and donna.mov", "rick and donna.mov"),
+        ("hallie, who's in rick and donna.mov", "rick and donna.mov"),
+        ("the file called rick and donna.mov", "rick and donna.mov"),
+        ("the video rick and donna.mov", "rick and donna.mov"),
+        ("what does rick and donna.mov show", "rick and donna.mov"),
+        ("who is in it: rick and donna.mov", "rick and donna.mov"),
+        ("tell me about this tape.mov", "tape.mov"),
+    ])
+    func bareFilenamesStopOnlyAtHardBoundaries(question: String, name: String) {
+        #expect(ArchivistRecordQuestion.fileReference(in: question)?.name == name, Comment(rawValue: question))
+    }
+
+    /// codex #987 item 3: a path is verbatim from its leading "/" to the
+    /// extension — sentence verbs and stop words inside its folders never
+    /// truncate it.
+    @Test(arguments: [
+        ("who is in /Volumes/A/Who is This/tape.mov", "/Volumes/A/Who is This/tape.mov"),
+        ("who is in /Volumes/A/Who is This/tape one.mov", "/Volumes/A/Who is This/tape one.mov"),
+        ("tell me about /Volumes/A/what does it show/tape.mov", "/Volumes/A/what does it show/tape.mov"),
+        ("is Donna in /Volumes/LaCie/tell me who/in the file/x.mov", "/Volumes/LaCie/tell me who/in the file/x.mov"),
+        ("/Volumes/A/Who is This/tape.mov", "/Volumes/A/Who is This/tape.mov"),
+        ("look at /Users/rick/Movies/is this it/tape.mov please", "/Users/rick/Movies/is this it/tape.mov"),
+    ])
+    func explicitPathsAreVerbatim(question: String, path: String) {
+        #expect(ArchivistRecordQuestion.fileReference(in: question)?.name == path, Comment(rawValue: question))
+    }
+
     /// A lowercase full path survives the trip through the recogniser,
     /// and every chip the ambiguity / missing-path declines generate
     /// (ArchivistRecordExecutor.question(for:path:)) detects as a record
-    /// question about exactly that path (codex #976 items 3, 4, 6).
+    /// question about exactly that path (codex #976 items 3, 4, 6; codex
+    /// #987 item 3 for the sentence-like folders and filenames).
     @Test(arguments: [
         "/volumes/archive/new hampshire.mov",
         "/Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
@@ -168,6 +275,10 @@ struct ArchivistRecordQuestionTests {
         "/Volumes/A/rick and donna/christmas 1994 part 2.mkv",
         "/Volumes/A/Long Sequence - New Hampshire Christmas .mov",
         "/Users/rick/Movies/tape.mov",
+        "/Volumes/A/Who is This/tape.mov",
+        "/Volumes/A/Who is This/tape one.mov",
+        "/Volumes/A/rick and donna.mov",
+        "/Volumes/A/what does it show/who is in it.mov",
     ])
     func chipQuestionsRoundTripThroughDetect(path: String) {
         let shapes: [(ArchivistQueryAST.Record, [Record.Operation], [String]?)] = [
@@ -183,6 +294,29 @@ struct ArchivistRecordQuestionTests {
             #expect(detected?.reference == .file(name: path), Comment(rawValue: chip))
             #expect(detected?.operations == operations, Comment(rawValue: chip))
             #expect(detected?.people == people, Comment(rawValue: chip))
+        }
+    }
+
+    /// codex #987 item 5: the deictic hint is a selection NOUN, never a
+    /// bare "it" or "this".
+    @Test func mentionsSelectionNeedsASelectionNoun() {
+        for question in [
+            "can you examine this video New Hampshire and see if it has a date",
+            "who is in this one, New Hampshire.mov",
+            "tell me about the selected video",
+            "is Donna in this clip",
+            "who is in that tape",
+        ] {
+            #expect(ArchivistRecordQuestion.mentionsSelection(question), Comment(rawValue: question))
+        }
+        for question in [
+            "who is in New Hampshire.mov",
+            "who is in it",
+            "is Donna in this?",
+            "who is in /Volumes/A/New Hampshire.mov",
+            "does it have a date",
+        ] {
+            #expect(!ArchivistRecordQuestion.mentionsSelection(question), Comment(rawValue: question))
         }
     }
 
