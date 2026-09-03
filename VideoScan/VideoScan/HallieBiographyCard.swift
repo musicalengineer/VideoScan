@@ -76,6 +76,12 @@ enum HallieBiographyCard {
         /// share parents"), grouped under the overlay's derivation note.
         /// The basis line states them; the prose stays plain.
         var peopleTabDerived: [DerivedNote] = []
+        /// People recorded as the subject's siblings only through a second
+        /// family record (codex #1011): the sibling sentence lists full
+        /// siblings — the primary family's — and this note carries the
+        /// rest to the basis line, in the same words the kinship route
+        /// uses, so the two never disagree.
+        var alternateSiblingNote: String? = nil
 
         struct DerivedNote: Sendable, Equatable {
             /// "derived from Rick's rows: full siblings share parents".
@@ -323,7 +329,8 @@ enum HallieBiographyCard {
                     lifeStatus: life,
                     peopleTabDerived: derivedOrder.map {
                         .init(note: $0, names: derivedNames[$0] ?? [])
-                    })
+                    },
+                    alternateSiblingNote: graph.alternateSiblingBasisNote(for: person))
     }
 
     /// The policy-shaped answer both graph operations return.
@@ -397,6 +404,7 @@ enum HallieBiographyCard {
         card.dataQualityFlags.map { flag in
             flag.child.id == card.subject.id ? " \(flag.note)" : " For \(flag.child.name): \(flag.note)"
         }.joined()
+            + (card.alternateSiblingNote.map { " \($0)" } ?? "")
     }
 
     /// The FamilySearch ID when the record has one, else the file-local

@@ -17,6 +17,26 @@ extension ArchivistGraphExecutor {
         let evidence = kinshipEvidence(
             for: person, relation: graphRelation, relatives: relatives,
             identityBridge: identityBridge)
+        // A parent question names the PRIMARY family's parent only (Rick,
+        // 2026-09-02); a second recorded parent family is said in the
+        // basis, in the graph's one short note — on the MISSING answer
+        // too (codex #1011: a father-only primary asked for the mother
+        // must not say "no mother" while hiding a secondary one). A
+        // sibling question likewise names full siblings only; people
+        // recorded through a second family record go to the basis.
+        let familyNote: String
+        switch graphRelation {
+        case .father, .mother, .parents:
+            familyNote = graph.parentFamilyBasisNote(for: person).map { " " + $0 } ?? ""
+        case .brother:
+            familyNote = graph.alternateSiblingBasisNote(for: person, sex: "M").map { " " + $0 } ?? ""
+        case .sister:
+            familyNote = graph.alternateSiblingBasisNote(for: person, sex: "F").map { " " + $0 } ?? ""
+        case .siblings:
+            familyNote = graph.alternateSiblingBasisNote(for: person).map { " " + $0 } ?? ""
+        default:
+            familyNote = ""
+        }
         guard !relatives.isEmpty else {
             let relation = graphRelation.rawValue
             let quantifier = ["parents", "siblings", "children"].contains(relation)
@@ -25,7 +45,7 @@ extension ArchivistGraphExecutor {
                 conclusion: .missingFact,
                 prose: "The family tree doesn't record \(quantifier) \(relation) for \(person.name). "
                     + "You can try another relationship or ask for the family tree.",
-                basisLine: factualBasis(identityBridge),
+                basisLine: factualBasis(identityBridge) + familyNote,
                 evidence: evidence,
                 candidates: [],
                 profileCandidates: [],
@@ -42,20 +62,10 @@ extension ArchivistGraphExecutor {
                 requiredPersonNames: relatives.map(\.name),
                 requiresCoverage: true)],
             fallbackText: prose)
-        // A parent question names the PRIMARY family's parent only (Rick,
-        // 2026-09-02); a second recorded parent family is said in the
-        // basis, in the graph's one short note.
-        let parentNote: String
-        switch graphRelation {
-        case .father, .mother, .parents:
-            parentNote = graph.parentFamilyBasisNote(for: person).map { " " + $0 } ?? ""
-        default:
-            parentNote = ""
-        }
         return ArchivistGraphResult(
             conclusion: .answered,
             prose: prose,
-            basisLine: factualBasis(identityBridge) + parentNote,
+            basisLine: factualBasis(identityBridge) + familyNote,
             evidence: evidence,
             candidates: [],
             profileCandidates: [],

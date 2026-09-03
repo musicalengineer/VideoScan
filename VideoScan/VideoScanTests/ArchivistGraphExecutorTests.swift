@@ -818,4 +818,113 @@ struct ArchivistGraphExecutorTests {
         #expect(!String(reflecting: snapshot).contains(profile.notes))
         #expect(!String(reflecting: snapshot).contains(profile.identityNotes!))
     }
+
+    // MARK: - codex #1011: a missing primary parent never hides a second
+    // family; siblings agree between the biography and the kinship route
+
+    /// An explicit BIRTH family with a father only (primary by pedigree),
+    /// and a complete ADOPTIVE family. Each has one more child.
+    private static let pedigreeTree = """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Child /Stone/
+    1 SEX F
+    1 FAMC @F-ADOPT@
+    2 PEDI adopted
+    1 FAMC @F-BIRTH@
+    2 PEDI birth
+    0 @I2@ INDI
+    1 NAME Birth /Father/
+    1 SEX M
+    1 FAMS @F-BIRTH@
+    0 @I4@ INDI
+    1 NAME Adoptive /Father/
+    1 SEX M
+    1 FAMS @F-ADOPT@
+    0 @I5@ INDI
+    1 NAME Adoptive /Mother/
+    1 SEX F
+    1 FAMS @F-ADOPT@
+    0 @I6@ INDI
+    1 NAME Birth /Sister/
+    1 SEX F
+    1 FAMC @F-BIRTH@
+    0 @I7@ INDI
+    1 NAME Adoptive /Brother/
+    1 SEX M
+    1 FAMC @F-ADOPT@
+    0 @F-BIRTH@ FAM
+    1 HUSB @I2@
+    1 CHIL @I1@
+    1 CHIL @I6@
+    0 @F-ADOPT@ FAM
+    1 HUSB @I4@
+    1 WIFE @I5@
+    1 CHIL @I1@
+    1 CHIL @I7@
+    0 TRLR
+    """
+
+    private static let adoptiveNote =
+        "Also recorded: adoptive parents (father Adoptive Father, @I4@; mother Adoptive Mother, @I5@); ask about them by name."
+    private static let alternateSiblingNote =
+        "Also recorded as a sibling through a second family record: Adoptive Brother, @I7@."
+
+    @Test func fatherOnlyPrimaryAskedForMotherStillNotesTheAdoptiveFamily() {
+        let g = GedcomFamilyGraph(gedcomText: Self.pedigreeTree)
+        let mother = execute(people: ["Child Stone"], operation: .kinship, relation: .mother, graph: g)
+        #expect(mother.conclusion == .missingFact)
+        #expect(mother.prose == "The family tree doesn't record a mother for Child Stone. "
+                + "You can try another relationship or ask for the family tree.", Comment(rawValue: mother.prose))
+        #expect(mother.basisLine.hasSuffix(" " + Self.adoptiveNote), Comment(rawValue: mother.basisLine))
+        let father = execute(people: ["Child Stone"], operation: .kinship, relation: .father, graph: g)
+        #expect(father.prose == "Child Stone's father: Birth Father.", Comment(rawValue: father.prose))
+        #expect(father.basisLine.hasSuffix(" " + Self.adoptiveNote), Comment(rawValue: father.basisLine))
+        let parents = execute(people: ["Child Stone"], operation: .kinship, relation: .parents, graph: g)
+        #expect(parents.prose == "Child Stone's parents: Birth Father.", Comment(rawValue: parents.prose))
+        #expect(parents.basisLine.hasSuffix(" " + Self.adoptiveNote), Comment(rawValue: parents.basisLine))
+        // The biography: one parent in prose, the note in the basis.
+        let bio = execute(people: ["Child Stone"], operation: .biography, graph: g)
+        #expect(bio.prose.contains("the child of Birth Father"), Comment(rawValue: bio.prose))
+        #expect(!bio.prose.contains("Adoptive"), Comment(rawValue: bio.prose))
+        #expect(bio.basisLine.contains(" " + Self.adoptiveNote), Comment(rawValue: bio.basisLine))
+        // A person with one family carries no note on the missing answer.
+        let plain = execute(people: ["Zoe River"], operation: .kinship, relation: .children)
+        #expect(plain.conclusion == .missingFact)
+        #expect(!plain.basisLine.contains("recorded"), Comment(rawValue: plain.basisLine))
+    }
+
+    /// Sibling-consistency sensor: the set the biography lists equals the
+    /// set the kinship route lists (full siblings = the primary family's),
+    /// and both carry the same alternate-family note in the basis.
+    @Test func siblingsAgreeBetweenBiographyAndKinshipRoute() throws {
+        let g = GedcomFamilyGraph(gedcomText: Self.pedigreeTree)
+        let child = try #require(g.people["@I1@"])
+        let siblings = execute(people: ["Child Stone"], operation: .kinship, relation: .siblings, graph: g)
+        #expect(siblings.prose == "Child Stone's siblings: Birth Sister.", Comment(rawValue: siblings.prose))
+        #expect(siblings.basisLine.hasSuffix(" " + Self.alternateSiblingNote), Comment(rawValue: siblings.basisLine))
+        let brother = execute(people: ["Child Stone"], operation: .kinship, relation: .brother, graph: g)
+        #expect(brother.conclusion == .missingFact)
+        #expect(brother.basisLine.hasSuffix(" " + Self.alternateSiblingNote), Comment(rawValue: brother.basisLine))
+        let sister = execute(people: ["Child Stone"], operation: .kinship, relation: .sister, graph: g)
+        #expect(sister.prose == "Child Stone's sister: Birth Sister.", Comment(rawValue: sister.prose))
+        #expect(!sister.basisLine.contains("second family record"), Comment(rawValue: sister.basisLine))
+
+        let bio = execute(people: ["Child Stone"], operation: .biography, graph: g)
+        #expect(bio.prose.contains("1 recorded sibling, Birth Sister."), Comment(rawValue: bio.prose))
+        #expect(!bio.prose.contains("Adoptive Brother"), Comment(rawValue: bio.prose))
+        #expect(bio.basisLine.contains(" " + Self.alternateSiblingNote), Comment(rawValue: bio.basisLine))
+
+        let card = HallieBiographyCard.card(for: child, in: g)
+        let listed = card.sentences.first { $0.text.contains("recorded sibling") }?.requiredPersonNames ?? []
+        #expect(listed == g.relatives(.siblings, of: child).map(\.name))
+        #expect(listed == ["Birth Sister"])
+        #expect(card.alternateSiblingNote == Self.alternateSiblingNote)
+        // And from the other side: the adoptive brother's biography does
+        // not call Child Stone a sibling; the note names her.
+        let brotherBio = execute(people: ["Adoptive Brother"], operation: .biography, graph: g)
+        #expect(!brotherBio.prose.contains("Child Stone"), Comment(rawValue: brotherBio.prose))
+        #expect(brotherBio.basisLine.contains("Also recorded as a sibling through a second family record: Child Stone, @I1@."),
+                Comment(rawValue: brotherBio.basisLine))
+    }
 }
