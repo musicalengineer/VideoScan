@@ -578,7 +578,9 @@ struct KinshipInferenceTests {
         let hal = KinshipFixture.node("Hal", in: half)
         #expect(half.parents(of: hal).map(\.node) == [KinshipFixture.node("P3", in: half), KinshipFixture.node("P1", in: half)])   // explicit first
         #expect(half.relation(from: KinshipFixture.node("Al", in: half), to: hal)?.term == "half-brother")
-        // A half row whose shared parent does not resolve is NOT half.
+        // A half row whose shared parent does not resolve is still HALF
+        // (the attestation stands — codex #1019 item 2: an unresolved half
+        // must never become full); nothing is derived across it.
         let stale = KinshipFixture.inference([
             KinshipFixture.profile("Al", sex: .male),
             KinshipFixture.profile("Hal", sex: .male, kinships: [
@@ -586,8 +588,9 @@ struct KinshipInferenceTests {
             ]),
         ], graph: nil)
         let d = stale.relation(from: KinshipFixture.node("Al", in: stale), to: KinshipFixture.node("Hal", in: stale))
-        #expect(d?.term == "brother")
-        #expect(d?.caveats == ["the shared parent named on the half-sibling row could not be found — treated as unspecified"])
+        #expect(d?.term == "half-brother")
+        #expect(d?.siblingVerdict == .unresolved)
+        #expect(d?.caveats == ["the shared parent named on the half-sibling row could not be found — pick them again"])
         #expect(stale.parents(of: KinshipFixture.node("Hal", in: stale)).isEmpty)
     }
 
