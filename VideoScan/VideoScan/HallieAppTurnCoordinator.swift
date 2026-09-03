@@ -646,6 +646,7 @@ enum HallieAppTurnCoordinator {
 
         let context = try await captureContext(
             ast: intent.ast,
+            question: intent.originalQuestion,
             records: records,
             referent: referent,
             dependencies: dependencies)
@@ -801,6 +802,7 @@ enum HallieAppTurnCoordinator {
     @MainActor
     private static func captureContext(
         ast: ArchivistQueryAST,
+        question: String,
         records: [VideoRecord],
         referent: CapturedReferent,
         dependencies: Dependencies
@@ -827,7 +829,7 @@ enum HallieAppTurnCoordinator {
             aggregateRecords = []
             if case .record(let payload) = ast {
                 recordScope = resolveRecordScope(
-                    for: payload.reference, referent: referent, records: records)
+                    for: payload.reference, question: question, referent: referent, records: records)
             }
         case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
              .help, .smalltalk, .conversation, .telling, .reset:
@@ -914,9 +916,15 @@ enum HallieAppTurnCoordinator {
     /// chat window captured with the referent (no lookup); a named file is
     /// resolved against the records — through the model's memo when the
     /// referent carries one, else linearly. Once per turn, on the main actor.
+    ///
+    /// A tie among same-named files is an honest which-one (codex #987),
+    /// with ONE exception: when the question itself said "this video" (a
+    /// selection noun, `ArchivistRecordQuestion.mentionsSelection`) and the
+    /// selected row is one of the tied files, the selection is the answer.
     @MainActor
     private static func resolveRecordScope(
         for reference: ArchivistQueryAST.Record.Reference,
+        question: String,
         referent: CapturedReferent,
         records: [VideoRecord]
     ) -> HallieTurnExecutor.RecordScope {
@@ -924,12 +932,14 @@ enum HallieAppTurnCoordinator {
         case .currentSelection:
             return referent.selectedDossier.map { .resolved($0) } ?? .noSelection
         case .file(let name):
+            let preferredID = ArchivistRecordQuestion.mentionsSelection(question) ? referent.recordID : nil
             let resolution: ArchivistRecordReferenceResolver.Resolution
             if let index = referent.recordIndex, let version = referent.recordsVersion {
                 resolution = ArchivistRecordReferenceResolver.resolve(
-                    file: name, in: records, index: index, version: version)
+                    file: name, in: records, index: index, version: version, preferredID: preferredID)
             } else {
-                resolution = ArchivistRecordReferenceResolver.resolve(file: name, in: records)
+                resolution = ArchivistRecordReferenceResolver.resolve(
+                    file: name, in: records, preferredID: preferredID)
             }
             return HallieTurnExecutor.RecordScope(resolution)
         }

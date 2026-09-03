@@ -1098,7 +1098,8 @@ enum HallieShellCLI {
             case .record:
                 // ONE record, resolved here (selection or named file); the
                 // executor never sees the catalog. No catalog-wide snapshot.
-                recordScope = await captureRecordScope(for: intent.ast, state: state)
+                recordScope = await captureRecordScope(
+                    for: intent.ast, question: intent.originalQuestion, state: state)
             case .temporal, .graph, .unsupportedEvent, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
@@ -1531,9 +1532,12 @@ enum HallieShellCLI {
     /// for a transcode is the transcode's date ("how old is Donna" → 66).
     /// The record scope for a `record` turn: the selection or the named file,
     /// resolved once against the session's records (2026-09-02).
-    /// `.noSelection` for every other shape.
+    /// `.noSelection` for every other shape. A named file that ties among
+    /// same-named files is a which-one unless the question said "this
+    /// video" and the `:select`ed row is one of them (codex #987 item 5).
     static func captureRecordScope(
         for ast: ArchivistQueryAST,
+        question: String,
         state: Session
     ) async -> HallieTurnExecutor.RecordScope {
         guard case .record(let payload) = ast else { return .noSelection }
@@ -1541,7 +1545,8 @@ enum HallieShellCLI {
             payload.reference,
             selectedRecordID: state.selectedRecordID,
             records: state.records,
-            recordForID: state.record)
+            recordForID: state.record,
+            deictic: ArchivistRecordQuestion.mentionsSelection(question))
         return await HallieTurnExecutor.RecordScope(resolution)
     }
 
