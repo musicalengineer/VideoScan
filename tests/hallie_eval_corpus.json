@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 290 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 293 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2297,6 +2297,46 @@
         "Richard"
       ],
       "notes": "observed live 2026-09-02 18:52 (codex #973 caught it): MISS — basis and evidence cited both Richard Harding Breen Sr and Eileen Latta; the model-composed prose described only Eileen. Wanted: both parents named. DISPATCH: composer completeness — a kinship answer must name every person in the evidence (verifier claim-coverage rule)."
+    },
+    {
+      "id": "lv260902-021",
+      "category": "live",
+      "text": "who are eileen's children",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "Rick",
+        "Tim",
+        "Ellen",
+        "Beth"
+      ],
+      "notes": "Rick's ruling 2026-09-02 19:20: 'children of' is inferred at read time (full siblings share parents), no GEDCOM edit. Rick's card says child of Ma (Eileen Latta) and Dad, sibling of Tim, Ellen and Beth; the siblings' cards carry no rows. Before: only Rick. The basis must carry the marker 'derived from Rick's rows: full siblings share parents'."
+    },
+    {
+      "id": "lv260902-022",
+      "category": "live",
+      "text": "tell me about ma",
+      "expect": "biography",
+      "followsPrevious": false,
+      "mustContain": [
+        "Rick",
+        "Tim",
+        "Ellen",
+        "Beth"
+      ],
+      "notes": "Same ruling, biography shape: Eileen Latta's card lists the tree's child (Richard Harding Breen Jr / Rick) and then the People tab's three (Beth, Ellen, Tim) with the derived note in the basis. Ma bridges to Eileen Latta through the profile's tree pin / certain derivation, never by name."
+    },
+    {
+      "id": "lv260902-023",
+      "category": "live",
+      "text": "who are tim's parents",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "Eileen",
+        "Richard"
+      ],
+      "notes": "Same ruling, the other direction: Tim's card has no rows; his parents are Rick's (Eileen Latta and Richard Harding Breen Sr, named from the tree with their vitals). Basis: 'Dad and Ma derived from Rick's rows: full siblings share parents'."
     }
   ]
 }
