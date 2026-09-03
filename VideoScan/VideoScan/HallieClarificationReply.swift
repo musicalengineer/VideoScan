@@ -61,11 +61,18 @@ extension HallieTurnExecutor {
         // A negated selector is not permission to guess. Re-ask rather than
         // treating "not the older one" as an affirmative "older" match.
         guard !words.contains("not"), !words.contains("neither") else { return .notASelection }
-        // "Did you mean Judson Lamb?" → "yes" is a complete answer when
-        // there is exactly one choice.
+        // "Did you mean Judson Lamb?" → an immediate "yes" / "that one"
+        // is a complete answer when there is exactly one choice. Build the
+        // key from words so ordinary dictation punctuation ("yes!", "yes,
+        // that one") cannot make a confirmation miss. This is deliberately
+        // count-gated: the same phrases never choose among two people.
+        let confirmationKey = folded
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "’", with: "")
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: " ")
         if candidates.count == 1,
-           ["yes", "y", "yeah", "yep", "yup", "correct", "right", "thats right",
-            "that's right", "sure", "please", "yes please", "exactly"].contains(folded) {
+           singleCandidateConfirmations.contains(confirmationKey) {
             return .selected(candidates[0].id)
         }
         let exact = candidates.filter {
@@ -169,6 +176,15 @@ extension HallieTurnExecutor {
     private static let replyFactMarkers: Set<String> = [
         "from", "born", "died", "married", "wife", "husband", "spouse", "mother",
         "father", "mom", "dad", "parent", "parents", "son", "daughter", "child", "lived",
+    ]
+
+    /// Affirmative replies that carry no discriminator of their own. They
+    /// are valid only for a one-candidate clarification (checked above).
+    /// The normalized keys intentionally omit apostrophes and punctuation.
+    private static let singleCandidateConfirmations: Set<String> = [
+        "yes", "y", "yeah", "yep", "yup", "correct", "right", "thats right",
+        "sure", "please", "yes please", "exactly", "that one", "this one",
+        "yes that one", "yes this one", "thats the one",
     ]
 
     /// "the one from Sudbury" / "Matthew Rice's wife" / "the one married to
