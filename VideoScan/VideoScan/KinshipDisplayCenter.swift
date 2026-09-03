@@ -225,9 +225,11 @@ final class KinshipDisplayCenter: ObservableObject {
     /// Data-hygiene nudge for the card badge: "Alias 'Dad' on Rick looks
     /// relational — use a Relationship row instead", plus any derivation
     /// conflict this profile's sibling set is part of (codex #984: the
-    /// same line Hallie's basis carries). nil when clean.
+    /// same line Hallie's basis carries). Looked up by the profile's
+    /// stable id, never its display name (codex #1019 item 4: a namesake
+    /// must not wear this card's badge). nil when clean.
     func aliasWarning(for profile: POIProfile, among profiles: [POIProfile]) -> String? {
-        let lines = overlay(for: profiles).warnings(forProfileNamed: profile.name)
+        let lines = overlay(for: profiles).warnings(forProfileStableID: profile.id)
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
