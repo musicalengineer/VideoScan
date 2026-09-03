@@ -219,6 +219,24 @@ enum HallieCompositionVerifier {
         return Verification(kept: kept, dropped: dropped)
     }
 
+    /// People promised by the structured answer contract but absent from
+    /// the surviving prose. Claim tags alone cannot prove this: the live
+    /// parents miss cited the one compound claim while saying only Eileen's
+    /// half. `requiredPersonNames` comes from kinship/card builders, never
+    /// from citation nodes, so an incidental supporting ancestor does not
+    /// become an answer obligation.
+    static func missingRequiredPersonNames(
+        in verification: Verification,
+        plan: HallieAnswerPlan
+    ) -> [String] {
+        guard plan.route == .graph, !plan.requiredPersonNames.isEmpty else {
+            return []
+        }
+        return plan.requiredPersonNames.filter {
+            !HallieAnswerPlan.names($0, in: verification.displayText)
+        }
+    }
+
     /// Remove every exact item filename vouched for by this sentence's
     /// claims, then reject any file-looking token left behind. This catches
     /// omission as well as invention: `2006-xx-xx_Rick.mov` may not become

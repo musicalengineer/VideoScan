@@ -131,6 +131,7 @@ extension ArchivistGraphExecutor {
             : KinshipDisplay.possessive(anchorName)
         let noun = hits.count == 1 ? relation.rawValue : pluralNoun(relation.rawValue)
         var treeCited: [String] = []
+        var requiredPersonNames: [String] = []
         let names = hits.map { hit -> String in
             // One hop with a plain word: just the name. Derived (composed)
             // relations show the route so the inference is checkable.
@@ -141,12 +142,15 @@ extension ArchivistGraphExecutor {
                 // "Rick's father is known as Dad" said nothing).
                 if let gedcomID = hit.member.gedcomID, let record = inputs.graph.people[gedcomID] {
                     treeCited.append("\(record.name) \(gedcomID)")
+                    requiredPersonNames.append(record.name)
                     let alias = PersonResolver.normalize(record.name) == PersonResolver.normalize(hit.member.name)
                         ? "" : " (\(hit.member.name) in the People tab)"
                     return record.name + alias + HallieBiographyCard.vitalsAside(record)
                 }
+                requiredPersonNames.append(hit.member.name)
                 return hit.member.displayName
             }
+            requiredPersonNames.append(hit.member.name)
             return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
         }
         let storedOn = Array(Set(hits.flatMap { $0.hops.map(\.storedOn) })).sorted()
@@ -164,9 +168,22 @@ extension ArchivistGraphExecutor {
                                         name: overlay.member($0.to)?.name ?? $0.to.auditID))
                 })
             })
+        let prose = "\(possessive) \(noun): " + names.joined(separator: ", ") + "."
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .fact,
+            claims: [.init(
+                id: "c1", text: prose,
+                evidenceIDs: [anchors[0].auditID]
+                    + hits.flatMap { $0.hops.map { $0.to.auditID } })],
+            requiredPersonNames: requiredPersonNames,
+            fallbackText: prose,
+            subjectLifeStatus: subjectLifeStatus(
+                treePerson: anchorMember?.gedcomID.flatMap { inputs.graph.people[$0] },
+                profileStableID: anchorMember?.profileStableID,
+                inputs: inputs))
         return ArchivistGraphResult(
             conclusion: .answered,
-            prose: "\(possessive) \(noun): " + names.joined(separator: ", ") + ".",
+            prose: prose,
             basisLine: "\(overlayBasisPrefix) "
                 + overlayStoredOnClause(storedOn: storedOn, namesByNote: derived)
                 + (treeCited.isEmpty
@@ -176,13 +193,11 @@ extension ArchivistGraphExecutor {
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil,
+            answerPlan: plan,
             // The anchor's own status (LifeStatus, 2026-09-01), so the
             // composer never turns "Rick's brothers: Tim" into "Rick had a
             // brother" for a living Rick.
-            subjectLifeStatus: subjectLifeStatus(
-                treePerson: anchorMember?.gedcomID.flatMap { inputs.graph.people[$0] },
-                profileStableID: anchorMember?.profileStableID,
-                inputs: inputs))
+            subjectLifeStatus: plan.subjectLifeStatus)
     }
 
     /// Two-person relationship from the overlay, or nil to fall through.

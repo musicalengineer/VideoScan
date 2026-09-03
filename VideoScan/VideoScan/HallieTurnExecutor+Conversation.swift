@@ -492,6 +492,8 @@ extension HallieTurnExecutor {
                 subject: b.catalogPersonName ?? a.catalogPersonName,
                 claims: planA.claims + shifted,
                 counts: planA.counts + planB.counts,
+                requiredPersonNames: planA.requiredPersonNames
+                    + planB.requiredPersonNames,
                 fallbackText: prose)
             if a.transcriptText != nil || b.transcriptText != nil {
                 transcript = (a.transcriptText ?? a.prose) + "\n\n"

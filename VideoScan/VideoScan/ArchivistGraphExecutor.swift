@@ -393,6 +393,14 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// decline about nobody in particular stays untagged.
     func withSubjectLifeStatus(_ status: LifeStatus?) -> ArchivistGraphResult {
         guard let status, conclusion == .answered || conclusion == .missingFact else { return self }
+        let statusAwarePlan = answerPlan.map { plan in
+            HallieAnswerPlan(
+                route: plan.route, shape: plan.shape, subject: plan.subject,
+                claims: plan.claims, counts: plan.counts,
+                requiredPersonNames: plan.requiredPersonNames,
+                fallbackText: plan.fallbackText,
+                subjectLifeStatus: status)
+        }
         return ArchivistGraphResult(
             conclusion: conclusion, prose: prose, basisLine: basisLine,
             evidence: evidence, candidates: candidates,
@@ -400,7 +408,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
             ambiguityCandidates: ambiguityCandidates,
             catalogPersonName: catalogPersonName,
             familyTreeFocus: familyTreeFocus, subjectIndex: subjectIndex,
-            answerPlan: answerPlan, possibleDuplicate: possibleDuplicate,
+            answerPlan: statusAwarePlan, possibleDuplicate: possibleDuplicate,
             subjectLifeStatus: status)
     }
 }
