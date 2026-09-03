@@ -92,6 +92,10 @@ extension HallieTurnExecutor {
             let answer: String
             /// The which-one offers, when the answer asked which; else [].
             let candidates: [Candidate]
+            /// The answer's own query description — how a deterministic
+            /// list answer (a birthplace trail) remembers its page, so
+            /// "show more" can continue it (2026-09-02).
+            let queryDescription: String?
         }
 
         init() {}
@@ -247,7 +251,8 @@ extension HallieTurnExecutor {
                 route: result.route,
                 outcome: result.outcome,
                 answer: result.prose,
-                candidates: result.clarification?.candidates ?? [])
+                candidates: result.clarification?.candidates ?? [],
+                queryDescription: result.queryDescription)
         }
 
         /// Who a bare "he" / "she" / "they" stands for right now: the
@@ -661,6 +666,20 @@ extension HallieTurnExecutor {
                                   relation: relation, side: side)),
                 playAfterAnswer: playAfterAnswer))
         }
+        // "read out her maternal line birthplaces" (2026-09-02): the
+        // possessor is a pronoun standing for the last answer's subject —
+        // the same rule as the kinship ask above.
+        if case .birthplaceTrail(let pronoun?, let line, let stop, let ask) = lineage,
+           HalliePronounContinuity.isThirdPersonPronoun(pronoun) {
+            switch mediaAskPronounSubject(
+                pronoun, memory: memory, ask: "birthplace trail",
+                pluralProse: "I can trace one person's line at a time — who do you mean?") {
+            case .subject(let name):
+                lineage = .birthplaceTrail(person: name, line: line, stop: stop, ask: ask)
+            case .ask(let result):
+                return .answer(result)
+            }
+        }
         // "tell me about rick's family tree, his brothers, sisters, parents,
         // and grandparents" (live miss #16): the person card, by the
         // ordinary family-tree route (owner chain, People-tab bridge,
@@ -793,6 +812,15 @@ extension HallieTurnExecutor {
         // graph with a card attached (2026-08-22). A nil answer means the
         // shape was not really ours (e.g. "family tree for Donna" is a
         // person, not a surname) and the question continues as typed.
+        // "show more" right after a birthplace trail that ran past a page
+        // (2026-09-02): the next page of the SAME walk, from memory. Any
+        // other "show more" goes on to the follow-up lane as before.
+        if let lineageAnswer, ArchivistFollowUpResolver.isPagingPhrase(question),
+           let page = HallieLineageQuestion.birthplaceTrailContinuation(
+               queryDescription: memory.lastExchange?.queryDescription),
+           let answer = lineageAnswer(page) {
+            return .answer(answer)
+        }
         if let lineage = HallieLineageQuestion.detect(question),
            let turn = lineageTurn(lineage, question: question, playAfterAnswer: playAfterAnswer,
                                   memory: memory, lineageAnswer: lineageAnswer) {

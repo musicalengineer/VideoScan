@@ -369,14 +369,19 @@ struct HallieLineageDetectTests {
     /// description of the requested output, not part of the possessive
     /// person's name. Keep real multi-word names containing "of", and do
     /// not collapse ambiguous or differently-shaped phrases to Donna.
+    /// 2026-09-02: a birthplace ask on a line is the birthplace TRAIL
+    /// (HallieBirthplaceTrail.swift), not the plain line card; the subject
+    /// is still only the possessive person.
     @Test func birthLocationTraceExtractsOnlyThePossessivePerson() {
         let deep = HallieLineageQuestion.maxGenerations
         let cases: [(question: String, expected: Q?)] = [
             ("can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
-             .ancestorLine(person: "Donna", line: .maternal, generations: deep)),
+             .birthplaceTrail(person: "Donna", line: .maternal,
+                              stop: .outsideCountry(BirthplaceClassifier.unitedStates), ask: .list)),
             ("trace the birthplaces of john of gaunt's paternal line",
-             .ancestorLine(person: "John Of Gaunt", line: .paternal, generations: deep)),
+             .birthplaceTrail(person: "John Of Gaunt", line: .paternal, stop: .top, ask: .list)),
         ]
+        _ = deep
         for item in cases {
             #expect(Q.detect(item.question) == item.expected,
                     Comment(rawValue: item.question))

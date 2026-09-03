@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 297 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 302 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2403,6 +2403,64 @@
         "O'Connor (1904–1985), born Ireland; Mary O'Connor"
       ],
       "notes": "Same ruling, the walks: the compiled parent table lists one mother per person, so a maternal line never forks at the duplicate — Mother: Mary Catherine O'Connor (1904–1985); Grandmother: Ellen Ronan (b. 1883). Before: 'Grandmother: Mary Catherine O'Connor (1904–1985), born Ireland; Mary O'Connor (b. 1905), born Ireland' on Rick's maternal line (live shell 2026-09-02T23:40)."
+    },
+    {
+      "id": "lv260902-041",
+      "category": "live",
+      "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
+      "expect": "lineage",
+      "followsPrevious": false,
+      "mustContain": [
+        "Brockton"
+      ],
+      "notes": "Rick 2026-09-02 (brother's demo). The birthplace TRAIL: Donna's maternal line read out as a numbered list, one generation per line, stopping at the first birth outside the United States (colonial-era names count as home). Route 'birthplace trail maternal stop=outside:United_States list: …'."
+    },
+    {
+      "id": "lv260902-042",
+      "category": "live",
+      "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
+      "expect": "lineage",
+      "followsPrevious": false,
+      "mustNotContain": [
+        "39,250"
+      ],
+      "notes": "Rick 2026-09-02. Subject defaults to the owner; every ancestor walked one generation at a time; the answer is 'N generations. <name>, born <year> in <place>, is the first ancestor born in Europe on any line: you → … → <name>.' with a Family Tree chip on that ancestor. Never the tree summary."
+    },
+    {
+      "id": "lv260902-043",
+      "category": "live",
+      "text": "birthplaces on donna's mother's side",
+      "expect": "lineage",
+      "followsPrevious": false,
+      "mustContain": [
+        "Brockton"
+      ],
+      "notes": "Paraphrase of -041 with no stop rule: the whole maternal line read out to where the tree ends (or 20 generations, or three unrecorded generations in a row)."
+    },
+    {
+      "id": "lv260902-044",
+      "category": "live",
+      "text": "how far back until donna's ancestors were born in europe",
+      "expect": "lineage",
+      "followsPrevious": false,
+      "mustContain": [
+        "generation"
+      ],
+      "mustNotContain": [
+        "39,250"
+      ],
+      "notes": "Paraphrase of -042 with a named subject: all of Donna's ancestors, breadth-first, the first generation with a European birth."
+    },
+    {
+      "id": "lv260902-045",
+      "category": "live",
+      "text": "where did rick's paternal line come from",
+      "expect": "lineage",
+      "followsPrevious": false,
+      "mustContain": [
+        "1."
+      ],
+      "notes": "Origin phrasing on a named line is the read-out trail (paternal, to the top), not the catalog-wide 'where does the family come from' summary."
     }
   ]
 }
