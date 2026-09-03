@@ -508,6 +508,16 @@ extension VideoScanModel {
                 partner.pairConfidence = nil
             }
         }
+        // FINAL fixity reconciliation (codex #985 cycle 4):
+        // `applyPreservedFieldsAfterRescan` ran before this complete merge's
+        // detached existence sweep. Verify Archive Copies can therefore
+        // restore or clear the OLD live record while this method is
+        // suspended. Re-read that live value now, after the final await and
+        // immediately before replacement. There is no suspension between
+        // this pass and removeAll/append, so stale scan/preview instances can
+        // no longer replay an earlier fixity value over Verify's verdict.
+        reconcileLiveArchiveFixityBeforeReplacement(
+            root: root, targetRecords: targetRecords)
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
         // stay untouched (original instances, so their dossier/user fields
@@ -638,6 +648,10 @@ extension VideoScanModel {
         // path too (no pruning here, so no partner-clearing needed).
         let pairCarry = capturePairCarryover(existingUnderRoot: existingUnderRoot,
                                              newPaths: newPaths)
+        // Partial merges do not suspend, but use the same last-moment rule so
+        // every replacement door has one fixity contract.
+        reconcileLiveArchiveFixityBeforeReplacement(
+            root: root, targetRecords: targetRecords)
         records.removeAll {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
         }
@@ -656,6 +670,55 @@ extension VideoScanModel {
         scanMergeLog.notice("Partial-scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted, \(vanished.count) stale retained under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName), PARTIAL): \(targetRecords.count) upserted, \(vanished.count) stale retained, 0 pruned")
         return outcome
+    }
+
+    /// Copy the CURRENT same-path record's fixity verdict onto the fresh scan
+    /// instance at the last possible moment before replacement.
+    ///
+    /// A nil live value is meaningful (Verify cleared a mismatch/missing
+    /// file), so it explicitly clears a stale carried value. A non-nil value
+    /// still passes the ordinary size/partial-MD5 identity guard; Verify may
+    /// have validated the old bytes while the freshly probed file already
+    /// proves a different identity.
+    ///
+    /// O(records + targetRecords), no I/O and no await. This is the atomic
+    /// compare/copy section in C++ terms: once it starts on the MainActor,
+    /// another actor task cannot interleave before the array replacement.
+    @discardableResult
+    func reconcileLiveArchiveFixityBeforeReplacement(
+        root: String,
+        targetRecords: [VideoRecord]
+    ) -> Int {
+        let wantedPaths = Set(targetRecords.map(\.fullPath))
+        var liveByPath: [String: VideoRecord] = [:]
+        liveByPath.reserveCapacity(wantedPaths.count)
+        for old in records where PathScope.contains(old.fullPath, within: root)
+            && wantedPaths.contains(old.fullPath)
+        {
+            liveByPath[old.fullPath] = old
+        }
+
+        var changed = 0
+        for fresh in targetRecords {
+            guard let live = liveByPath[fresh.fullPath] else { continue }
+            let reconciled: ArchiveFixity?
+            if let fixity = live.archiveFixity,
+               RescanPreservedFields.fixityIdentityHolds(
+                   fixity: fixity,
+                   freshSizeBytes: fresh.sizeBytes,
+                   snapshotPartialMD5: live.partialMD5,
+                   freshPartialMD5: fresh.partialMD5)
+            {
+                reconciled = fixity
+            } else {
+                reconciled = nil
+            }
+            if fresh.archiveFixity != reconciled {
+                fresh.archiveFixity = reconciled
+                changed += 1
+            }
+        }
+        return changed
     }
 
     /// Mass-deletion tripwire for a complete-scan merge: snapshot first,

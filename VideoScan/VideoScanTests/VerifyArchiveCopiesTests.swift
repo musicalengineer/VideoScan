@@ -602,6 +602,63 @@ struct VerifyArchiveCopiesRaceTests {
         #expect(outcome.actualDigest == actual)
         #expect(outcome.detail.contains("catalog fixity record"))
     }
+
+    @Test("moved archivePromotion outside the designated root hashes its catalog path — old correct archive bytes cannot bless different moved bytes")
+    func offRootPromotedRecordHashesItsOwnPath() async throws {
+        let (sb, model, _, copies) = try await VerifyTestSupport.promotedSandbox("offroot", count: 1)
+        defer { sb.cleanup() }
+        let copy = copies[0]
+        let oldArchivePath = copy.fullPath
+        let manifestDigest = try #require(copy.archiveFixity?.digest)
+        let moved = sb.sources.appendingPathComponent("moved_archive_copy.mov")
+        try MasterArchiveTestSupport.writeBlob(at: moved, bytes: Int(copy.sizeBytes), seed: 9_999)
+        let movedDigest = try #require(MasterArchiveTestSupport.sha256(ofFile: moved.path))
+        #expect(movedDigest != manifestDigest)
+
+        // The manifest row still resolves through this record's stable id,
+        // and the original archive path still contains the correct bytes.
+        // The regression hashed that old manifest path and restored green
+        // fixity onto the different bytes at `fullPath`.
+        copy.fullPath = moved.path
+        copy.filename = moved.lastPathComponent
+        copy.directory = moved.deletingLastPathComponent().path
+        model.records = model.records       // invalidate the path index
+        #expect(FileManager.default.fileExists(atPath: oldArchivePath))
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed(let message) = job.state else {
+            Issue.record("different moved bytes must fail Verify, got \(job.state)"); return
+        }
+        #expect(message.contains("MISMATCH"))
+        #expect(job.tally.mismatch == 1)
+        #expect(copy.archiveFixity == nil, "wrong bytes at the catalog path must never be blessed")
+        let outcome = try #require(job.outcomes.first { $0.kind == .mismatch })
+        #expect(outcome.expectedDigest == manifestDigest)
+        #expect(outcome.actualDigest == movedDigest,
+                "Verify must hash the off-root catalog fullPath, not the manifest's old relpath")
+    }
+
+    @Test("a symlink/read refusal counts failed and makes the whole run red")
+    func symlinkReadFailureMakesRunFail() async throws {
+        let (sb, model, sources, copies) = try await VerifyTestSupport.promotedSandbox("readfail", count: 1)
+        defer { sb.cleanup() }
+        let copy = copies[0]
+        let before = copy.archiveFixity
+        try FileManager.default.removeItem(atPath: copy.fullPath)
+        try FileManager.default.createSymbolicLink(
+            atPath: copy.fullPath, withDestinationPath: sources[0].fullPath)
+
+        let job = await VerifyTestSupport.run(model)
+        guard case .failed(let message) = job.state else {
+            Issue.record("an I/O refusal must make the Verify row red, got \(job.state)"); return
+        }
+        #expect(job.tally.failed == 1)
+        #expect(job.tally.mismatch == 0 && job.tally.missing == 0)
+        #expect(message.contains("1 failed"))
+        #expect(job.outcomes.contains { $0.kind == .failed && $0.detail.contains("symlink") })
+        #expect(copy.archiveFixity == before,
+                "an unreadable path is no byte verdict; keep the prior claim for explicit follow-up")
+    }
 }
 
 // MARK: - Media matrix (byte-level hashing across containers)
