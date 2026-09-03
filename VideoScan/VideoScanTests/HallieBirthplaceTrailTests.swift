@@ -403,27 +403,41 @@ struct HallieBirthplaceTrailAnswerTests {
 
     // MARK: Paging
 
-    /// A 15-generation maternal chain: 16 lines, so the read-out pages.
-    static let longChain: GedcomFamilyGraph = {
+    /// A maternal chain `depth` generations deep (depth + 1 lines).
+    static func chain(_ depth: Int) -> GedcomFamilyGraph {
         var lines = ["0 HEAD"]
-        for g in 0...15 {
+        for g in 0...depth {
             lines.append("0 @I\(g)@ INDI")
             lines.append("1 NAME Gen\(g) /Chain/")
             lines.append("1 SEX F")
             lines.append("1 BIRT")
             lines.append("2 DATE \(2000 - 25 * g)")
             lines.append("2 PLAC Town\(g), Massachusetts, USA")
-            if g < 15 { lines.append("1 FAMC @F\(g)@") }
+            if g < depth { lines.append("1 FAMC @F\(g)@") }
             if g > 0 { lines.append("1 FAMS @F\(g - 1)@") }
         }
-        for g in 0..<15 {
+        for g in 0..<depth {
             lines.append("0 @F\(g)@ FAM")
             lines.append("1 WIFE @I\(g + 1)@")
             lines.append("1 CHIL @I\(g)@")
         }
         lines.append("0 TRLR")
         return GedcomFamilyGraph(gedcomText: lines.joined(separator: "\n"))
-    }()
+    }
+    /// 15 generations: 16 lines, so the read-out pages.
+    static let longChain = chain(15)
+
+    /// 13 and 14 lines fit one page (the slack); 15 lines page at twelve.
+    @Test func aTrailJustOverAPageIsReadInOneBreath() {
+        for (depth, onePage) in [(12, true), (13, true), (14, false)] {
+            let g = Self.chain(depth)
+            let r = HallieLineageAnswer.trailAnswer(of: g.people["@I0@"]!, isOwner: false, line: .maternal, stop: .top,
+                                                    ask: .list, from: 1, graph: g, basisNote: nil)
+            #expect(r.prose.contains("\(depth + 1). Gen\(depth) Chain") == onePage, Comment(rawValue: "depth \(depth)"))
+            #expect(r.prose.contains("say “show more” to continue") == !onePage, Comment(rawValue: "depth \(depth)"))
+            #expect(r.queryDescription?.hasSuffix(onePage ? "shown 1-\(depth + 1) of \(depth + 1)" : "shown 1-12 of \(depth + 1)") == true)
+        }
+    }
 
     @Test func longTrailPagesThroughConversationMemory() throws {
         let long = Self.longChain

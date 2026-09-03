@@ -28,6 +28,11 @@ extension HallieLineageQuestion {
 
     /// Lines per page of a read-out trail; the rest is "show more".
     static let trailPageSize = 12
+    /// A last page may run this many lines over, so a 13-line trail is
+    /// not a page of twelve and a page of one — on Rick's real tree
+    /// Donna's maternal line leaves the United States on line 13, and
+    /// the punchline belongs in the same breath (2026-09-02).
+    static let trailPageSlack = 2
 
     /// The subject of a trail sentence: the owner ("my", nothing named), a
     /// pronoun (resolved from conversation memory by the executor), a
@@ -436,7 +441,9 @@ extension HallieLineageAnswer {
                 answerPlan: HallieAnswerPlan(route: .graph, shape: .fixed, fallbackText: prose))
         }
 
-        let end = min(total, start + pageSize - 1)
+        let remaining = total - start + 1
+        let end = remaining <= pageSize + HallieLineageQuestion.trailPageSlack
+            ? total : min(total, start + pageSize - 1)
         var sentences: [String] = []
         if start == 1 {
             let gens = walk.generationsWalked
