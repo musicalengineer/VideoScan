@@ -81,7 +81,7 @@ struct HallieRepairTurnTests {
         return Exec.preTranslation(
             question: q, playAfterAnswer: false, memory: memory,
             isKnownPerson: { _ in false },
-            rosterAnswer: { Exec.PeopleTab.rosterAnswer(context: context) },
+            rosterAnswer: { scope in Exec.PeopleTab.rosterAnswer(context: context, scope: scope) },
             lineageAnswer: { HallieLineageAnswer.answer($0, context: context) })
     }
 

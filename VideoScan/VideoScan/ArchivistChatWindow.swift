@@ -102,6 +102,8 @@ struct ArchivistMessage: Identifiable, Equatable {
             case recompileFamilyTree(thenAsk: String?)
             /// Open the People tab (relationships overview, live miss #12).
             case openPeopleTab
+            /// Open one of the main app tabs through selectedTab.
+            case openAppDestination(HallieAppNavigation.Destination)
             /// Remote viewer: continue the MASTER's pending which-one by
             /// stable identity (HallieRemoteClient.select).
             case remoteSelect(HallieTurnExecutor.CandidateID)
@@ -887,6 +889,12 @@ struct ArchivistChatWindow: View {
             MainWindowHelper.shared.openMainWindow()
             messages.append(ArchivistMessage(
                 role: .assistant, text: "Opening the People tab."))
+        case .openAppDestination(let destination):
+            HallieAppNavigation.accept(destination) {
+                MainWindowHelper.shared.openMainWindow()
+            }
+            messages.append(ArchivistMessage(
+                role: .assistant, text: "Opening the \(destination.title) tab."))
         case .hearVariant(let word, let number, let phonemes, let respelling):
             hearVariant(word: word, number: number, phonemes: phonemes, respelling: respelling, chipID: chip.id)
         case .pickVariant(let word, let number):
@@ -1316,6 +1324,9 @@ struct ArchivistChatWindow: View {
                     label: label, action: .recompileFamilyTree(thenAsk: question))
             case .openPeopleTab:
                 return ArchivistMessage.Chip(label: label, action: .openPeopleTab)
+            case .openAppDestination(let destination):
+                return ArchivistMessage.Chip(
+                    label: label, action: .openAppDestination(destination))
             case .showPossibleDuplicate(let id, let name):
                 // Same navigation as a person focus: the record with both
                 // parents is what Rick needs to see.
@@ -1351,8 +1362,8 @@ struct ArchivistChatWindow: View {
         // "center the family tree on Martha Lamson" (2026-08-29): the user
         // asked for the navigation, so the chip's own path runs without a
         // tap. The prose already says what is happening; no second line.
-        if response.result.performsFirstOfferedAction,
-           case .openFamilyTreePerson(let personID, let personName)? = response.result.offeredActions.first {
+        if case .openFamilyTreePerson(let personID, let personName)? =
+            response.result.immediateOfferedAction {
             openFamilyTreeTab(focus: personName, personID: personID, surname: nil, announce: false)
             // AppStorage is only a hand-off request. FamilyTreeLiveModel logs
             // whether the target was actually applied or rejected.
@@ -1360,9 +1371,14 @@ struct ArchivistChatWindow: View {
         }
         // "I can do that now" (live miss #8): the recompile runs without a
         // tap and the question that hit the refused tree is asked again.
-        if response.result.performsFirstOfferedAction,
-           case .recompileFamilyTree? = response.result.offeredActions.first {
+        if case .recompileFamilyTree? = response.result.immediateOfferedAction {
             recompileFamilyTree(thenAsk: question)
+        }
+        // Explicit "show/open the … tab/window" asks carry the same action
+        // as their chip. Accept only this response's first offer; no old
+        // transcript state participates in the decision.
+        HallieAppNavigation.acceptImmediateOffer(from: response.result) {
+            MainWindowHelper.shared.openMainWindow()
         }
     }
 

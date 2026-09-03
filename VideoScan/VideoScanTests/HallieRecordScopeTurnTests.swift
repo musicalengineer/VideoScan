@@ -58,6 +58,49 @@ struct HallieRecordScopeTurnTests {
         #expect(result.queryDescription == "shape=record reference=file:Nothing.mov notFound")
     }
 
+    /// codex #1020 item 2: a name nobody has, whose shorter tail IS a file,
+    /// is declined by the TYPED name and the tail file is offered as a
+    /// did-you-mean under ITS OWN name — each chip asks about that exact
+    /// path. Never a silent resolution.
+    @Test func aMissWithATailFileOffersItByItsOwnNameNeverSilently() async throws {
+        let tape = ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Tape.mov", fullPath: "/Volumes/A/Tape.mov")
+        let one = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape], similarTotal: 1)))
+        #expect(one.route == .record)
+        #expect(one.outcome == .declined)
+        #expect(one.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean “Tape.mov” (/Volumes/A/Tape.mov)?")
+        #expect(one.offeredActions == [.ask(question: "who is in /Volumes/A/Tape.mov", label: "Tape.mov")])
+        #expect(one.citations.isEmpty)
+        #expect(one.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound similar=1")
+        #expect(one.basisLine.contains("1 catalog filename match a shorter tail of it (1 offered by their own names)"))
+
+        let second = ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Tape.mov", fullPath: "/Volumes/B/Tape.mov")
+        let two = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people], people: ["Donna"]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape, second], similarTotal: 2)))
+        #expect(two.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean one of these: Tape.mov (A), Tape.mov (B)?")
+        #expect(two.offeredActions == [
+            .ask(question: "is Donna in /Volumes/A/Tape.mov", label: "Tape.mov (A)"),
+            .ask(question: "is Donna in /Volumes/B/Tape.mov", label: "Tape.mov (B)"),
+        ])
+        #expect(two.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound similar=2")
+
+        let capped = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.about]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov", similar: [tape, second], similarTotal: 7)))
+        #expect(capped.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Did you mean one of these 7 files (the first 2): Tape.mov (A), Tape.mov (B)?")
+        #expect(capped.offeredActions.first == .ask(question: "tell me about /Volumes/A/Tape.mov", label: "Tape.mov (A)"))
+
+        // No tail file: the plain decline, unchanged.
+        let none = try await HallieTurnExecutor.execute(
+            ast(.file(name: "Unknown Tape.mov"), [.people]),
+            context: .init(recordScope: .notFound(name: "Unknown Tape.mov")))
+        #expect(none.prose == "I couldn't find a file called “Unknown Tape.mov” in the catalog. Name it exactly as it appears in the Catalog, or select it there and ask me again.")
+        #expect(none.offeredActions.isEmpty)
+        #expect(none.queryDescription == "shape=record reference=file:Unknown Tape.mov notFound")
+    }
+
     @Test func ambiguousScopeListsCandidatesWithOneChipEach() async throws {
         let candidates = [
             ArchivistRecordReferenceResolver.Candidate(id: UUID(), filename: "Christmas_1994.mov", fullPath: "/Volumes/A/Christmas_1994.mov"),
@@ -290,6 +333,110 @@ struct HallieRecordScopeTurnTests {
             question: "it would be nice to know the dates", playAfterAnswer: false, memory: .init(),
             isKnownPerson: { _ in false }) {} else {
             Issue.record("a date word away from the pronoun is not a record question")
+        }
+    }
+
+    // MARK: - Route order (codex #987 item 4)
+
+    /// Capability / help / small-talk / reset first; then the RECORD
+    /// recogniser whenever a filename or path is in the question — ahead
+    /// of the surname, property and lineage lanes ("who is in Breen
+    /// surname origin.mov" is about that file); the surname lane keeps its
+    /// own shape; a pronoun-only record reference sits where it did
+    /// before 4f74d809, ahead of the knowledge lanes.
+    @Test func aFileNamedInTheQuestionIsARecordTurnAheadOfTheKnowledgeLanes() {
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "who is in Breen surname origin.mov", playAfterAnswer: false,
+            memory: .init(), isKnownPerson: { _ in false })
+        guard case .run(let intent) = pre else { Issue.record("expected .run, got \(pre)"); return }
+        #expect(intent.ast == ast(.file(name: "Breen surname origin.mov"), [.people]))
+
+        let surname = HallieTurnExecutor.preTranslation(
+            question: "where does the Breen surname come from", playAfterAnswer: false,
+            memory: .init(), isKnownPerson: { _ in false })
+        guard case .answer(let answer) = surname else { Issue.record("expected the surname lane, got \(surname)"); return }
+        #expect(answer.route != .record)
+        #expect(answer.prose.contains("Breen"), Comment(rawValue: answer.prose))
+    }
+
+    @Test func whoIsInItAfterASearchIsStillARecordTurn() {
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let earlier = HallieTurnExecutor.Intent(
+            originalQuestion: "videos of Donna", ast: .presence(.init(people: ["Donna"])))
+        memory.record(intent: earlier, result: HallieTurnExecutor.Result(
+            route: .presence, outcome: .answered, prose: "1 video", basisLine: "fixture",
+            queryDescription: "shape=presence",
+            citations: [.init(recordID: recordID, fullPath: path, filename: "New Hampshire.mov", playbackSeconds: nil, bases: [])],
+            catalogPersonName: nil, matchCount: 1))
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "who is in it", playAfterAnswer: false, memory: memory, isKnownPerson: { _ in false })
+        guard case .run(let intent) = pre else { Issue.record("expected .run, got \(pre)"); return }
+        #expect(intent.ast == ast(.currentSelection, [.people]))
+        // Capability still outranks a record reference (codex #976 item 5).
+        if case .answer(let result) = HallieTurnExecutor.preTranslation(
+            question: "can you change the date on it", playAfterAnswer: false, memory: memory,
+            isKnownPerson: { _ in false }) {
+            #expect(result.route == .capability)
+        } else {
+            Issue.record("capability must run before the record recogniser")
+        }
+    }
+
+    // MARK: - Deictic tie-break at the capture site (codex #987 item 5)
+
+    /// Two "New Hampshire.mov" files: the shell's capture is an honest
+    /// which-one — unless the question said "this video" AND the selected
+    /// row is one of the two, in which case the selection is the record.
+    @Test func thisVideoLetsTheShellSelectionBreakATieOnlyAmongTheCandidates() async {
+        func record(_ path: String) -> VideoRecord {
+            let value = VideoRecord()
+            value.fullPath = path
+            value.directory = (path as NSString).deletingLastPathComponent
+            value.filename = (path as NSString).lastPathComponent
+            value.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            return value
+        }
+        let a = record("/Volumes/A/New Hampshire.mov")
+        let b = record("/Volumes/B/New Hampshire.mov")
+        let other = record("/Volumes/B/Other.mov")
+        var state = HallieShellCLI.Session(
+            records: [a, b, other], profiles: [], graph: nil, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            model: "fixture-model", runID: "deictic-run")
+
+        let deictic = "can you examine this video New Hampshire and see who is in it"
+        let plain = "who is in New Hampshire.mov"
+        let deicticAST = HallieTurnExecutor.preTranslation(
+            question: deictic, playAfterAnswer: false, memory: .init(), isKnownPerson: { _ in false })
+        guard case .run(let deicticIntent) = deicticAST else { Issue.record("expected .run, got \(deicticAST)"); return }
+        #expect(deicticIntent.ast == ast(.file(name: "New Hampshire"), [.people]))
+        let plainAST = ArchivistQueryAST.record(.init(reference: .file(name: "New Hampshire.mov"), operations: [.people]))
+
+        // b selected, deictic question: b.
+        state.selectedRecordID = b.id
+        let chosen = await HallieShellCLI.captureRecordScope(for: deicticIntent.ast, question: deictic, state: state)
+        guard case .resolved(let snapshot) = chosen else { Issue.record("expected b, got \(chosen)"); return }
+        #expect(snapshot.presence.id == b.id)
+        // b selected, no deictic noun: which-one.
+        let honest = await HallieShellCLI.captureRecordScope(for: plainAST, question: plain, state: state)
+        guard case .ambiguous(let candidates, let total) = honest else { Issue.record("expected a which-one, got \(honest)"); return }
+        #expect(candidates.map(\.id) == [a.id, b.id])
+        #expect(total == 2)
+        // A selection outside the tie, deictic question: still a which-one.
+        state.selectedRecordID = other.id
+        if case .ambiguous(_, let outsideTotal) = await HallieShellCLI.captureRecordScope(
+            for: deicticIntent.ast, question: deictic, state: state) {
+            #expect(outsideTotal == 2)
+        } else {
+            Issue.record("a selection outside the tie must not break it")
+        }
+        // Nothing selected, deictic question: still a which-one.
+        state.selectedRecordID = nil
+        if case .ambiguous(_, let noneTotal) = await HallieShellCLI.captureRecordScope(
+            for: deicticIntent.ast, question: deictic, state: state) {
+            #expect(noneTotal == 2)
+        } else {
+            Issue.record("no selection cannot break a tie")
         }
     }
 }

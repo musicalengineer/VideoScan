@@ -459,6 +459,9 @@ enum HallieTurnExecutor {
         case recompileFamilyTree
         /// Open the People tab (relationships overview, live miss #12).
         case openPeopleTab
+        /// Open one of the main app tabs. Explicit navigation asks carry
+        /// `performsFirstOfferedAction`; the same case also backs the chip.
+        case openAppDestination(HallieAppNavigation.Destination)
         /// Focus the Family Tree on the person whose record shows two
         /// mothers / fathers (live miss #16), so the duplicate can be seen
         /// and merged upstream on FamilySearch.
@@ -498,7 +501,16 @@ enum HallieTurnExecutor {
         /// The user ASKED for the first offered action ("center the tree
         /// on X"): a client with that surface performs it without a tap;
         /// a client without one (shell, web) just lists it. Off by default.
+        ///
+        /// This Boolean is retained for source compatibility. Compound
+        /// answers may reorder/concatenate offers, so clients must execute
+        /// `immediateOfferedAction`, not assume array element zero is still
+        /// the action the user requested.
         let performsFirstOfferedAction: Bool
+        /// The exact offered action the user directly requested. Keeping its
+        /// identity separate from `offeredActions` makes compound turns safe:
+        /// an unrelated chip can precede this action without being run.
+        let immediateOfferedAction: OfferedAction?
         /// Living or passed on for the person the answer is about
         /// (LifeStatus, 2026-09-01). Read by HallieAnswerPlan.derive when
         /// the route built no plan of its own, so the composer is told the
@@ -527,6 +539,7 @@ enum HallieTurnExecutor {
             transcriptText: String? = nil,
             attachments: [HallieAttachment] = [],
             performsFirstOfferedAction: Bool = false,
+            immediateOfferedAction: OfferedAction? = nil,
             subjectLifeStatus: LifeStatus? = nil,
             refinableQuery: RefinableQuery? = nil
         ) {
@@ -546,7 +559,10 @@ enum HallieTurnExecutor {
             self.composedBy = composedBy
             self.transcriptText = transcriptText
             self.attachments = attachments
-            self.performsFirstOfferedAction = performsFirstOfferedAction
+            let immediate = immediateOfferedAction
+                ?? (performsFirstOfferedAction ? offeredActions.first : nil)
+            self.immediateOfferedAction = immediate
+            self.performsFirstOfferedAction = immediate != nil
             self.subjectLifeStatus = subjectLifeStatus
             self.refinableQuery = refinableQuery
         }
@@ -562,6 +578,7 @@ enum HallieTurnExecutor {
                 offeredActions: offeredActions, answerPlan: answerPlan, composedBy: composedBy,
                 transcriptText: transcriptText, attachments: attachments + extra,
                 performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery)
         }
@@ -589,6 +606,7 @@ enum HallieTurnExecutor {
                     ? composition.transcriptText : nil,
                 attachments: attachments,
                 performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
                 refinableQuery: refinableQuery)
         }

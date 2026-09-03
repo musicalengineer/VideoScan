@@ -20,6 +20,13 @@
 // this one") — a noun anywhere in the sentence is not a record question
 // (codex #976 item 5: "can you tell me the date on things").
 //
+// A search opener ("show me", "find", "list", "search for") is judged by
+// its OBJECT, not by the opener (codex #987 item 2): "show me videos of
+// Donna" / "find clips from 1994" are searches and not ours; "show me
+// metadata for this video" / "find the date for this video" / "show me
+// who is in it" name a record noun beside a referent and are record
+// questions. Media actions ("play it", "open this one") are never ours.
+//
 // (For Rick: a handful of NSRegularExpression literals compiled once,
 // like static `std::regex` members; `detect` is a pure function.)
 
@@ -36,8 +43,10 @@ enum ArchivistRecordQuestion {
             .joined(separator: " ")
         guard !text.isEmpty else { return nil }
         let lower = text.lowercased()
-        // Never a media action, never an age question.
-        if matches(openerGuard, lower) || matches(ageGuard, lower) { return nil }
+        // Never a media action, never an age question, never a GENERAL
+        // search (an opener whose object is not a record noun).
+        if matches(mediaActionGuard, lower) || matches(ageGuard, lower) { return nil }
+        if matches(searchOpener, lower), !matches(searchOpenerRecordObject, lower) { return nil }
 
         // 1. The reference: a named file, else a selection pronoun.
         let file = fileReference(in: text)
@@ -96,6 +105,19 @@ enum ArchivistRecordQuestion {
                       people: peopleList.isEmpty ? nil : peopleList)
     }
 
+    /// True when the question points at the selected row by a selection
+    /// NOUN ("this video", "this one", "the selected video") — the deictic
+    /// hint that lets the selection break a tie among same-named files
+    /// (codex #987 item 5). A bare "it" / "this" is not enough.
+    static func mentionsSelection(_ question: String) -> Bool {
+        let lower = question
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+        return matches(selectionNoun, lower)
+    }
+
     // MARK: - File reference
 
     struct FileReference: Equatable {
@@ -105,18 +127,41 @@ enum ArchivistRecordQuestion {
     }
 
     /// A media filename or path in the text, extracted exactly. The first
-    /// non-space run ending in a media extension is the core. A word
-    /// before it that begins with "/" is the path's head and the name is
-    /// taken verbatim from there ("/Volumes/X/QuicktimeMovies/New
-    /// Hampshire.mov", "/volumes/a/new hampshire.mov"); otherwise the
-    /// name is the longest run of words ending at the core that does not
-    /// cross a stop word ("file", "video", "in", "who", "does" …) or a
-    /// punctuation break, case-insensitive ("new hampshire.mov",
-    /// "Christmas 1994 Part 2.mkv"; codex #976 item 4 — the old rule kept
-    /// only capitalised words and read "new hampshire.mov" as
-    /// "hampshire.mov"). Nil when no word ends in a media extension; a
-    /// bare stem after "this video" ("this video New Hampshire") is taken
-    /// as a file name too, resolved by stem downstream.
+    /// non-space run ending in a media extension is the core.
+    ///
+    /// A PATH is verbatim from its leading "/" to the extension (codex
+    /// #987 item 3): the head is the nearest word before the core that
+    /// begins with "/", and once the walk back is inside a path (the core
+    /// or a crossed word contains "/") nothing stops it — not a sentence
+    /// verb, not a stop word — so "/Volumes/A/Who is This/tape.mov"
+    /// round-trips. Outside a path the walk still refuses to cross a
+    /// sentence verb or a punctuation break to reach a "/" word: "check
+    /// /Volumes/A and tell me who is in new hampshire.mov" names "new
+    /// hampshire.mov", not one long path.
+    ///
+    /// A QUOTED or bracketed name takes precedence over everything (codex
+    /// #1020 item 3): when the core closes a quote or bracket, the name is
+    /// the text between that closer and its opener, verbatim — `"Who Is
+    /// This.mov"`, `'Will and Grace.mov'`, `[x.mov]`, `“…”` — and the
+    /// reference's range covers the delimiters so the masked sentence
+    /// reads "who is in fileref".
+    ///
+    /// A bare FILENAME is placed by SYNTAX POSITION (codex #1020 item 3),
+    /// never by a word blacklist: the run is everything after the last
+    /// BOUNDARY PHRASE that ends before the core — the verb / preposition
+    /// slots of this recogniser's own patterns ("who is in", "is Donna
+    /// in", "what's in", "does", "tell me about", "the file called", "the
+    /// video", "when was", an imperative at a clause start) or a
+    /// punctuation break. Ordinary words are kept, so "who is in Will and
+    /// Grace.mov" names "Will and Grace.mov", "is Donna in Who Is This.mov"
+    /// names "Who Is This.mov" (the "is … in" slot ends after "in"), and
+    /// "is donna in rick and donna.mov" names "rick and donna.mov". The
+    /// run is handed over as typed; the resolver never trims it (a miss
+    /// may OFFER a file whose name is a shorter tail, by its own name).
+    ///
+    /// Nil when no word ends in a media extension; a bare stem after "this
+    /// video" ("this video New Hampshire") is taken as a file name too,
+    /// resolved by stem downstream.
     static func fileReference(in text: String) -> FileReference? {
         let words = wordRanges(in: text)
         // The core is a word ending in a media extension — or a bare
@@ -130,6 +175,9 @@ enum ArchivistRecordQuestion {
                     && Record.endsWithMediaExtension("x" + word))
         }) else {
             return stemAfterMediaNoun(in: text, words: words)
+        }
+        if let quoted = quotedName(closingAt: coreIndex, words: words, text: text) {
+            return quoted
         }
         let start: Int
         if cleanedWord(text[words[coreIndex]]).hasPrefix("/") {
@@ -153,11 +201,29 @@ enum ArchivistRecordQuestion {
 
     /// The nearest word before the core that begins with "/" — the head of
     /// a path whose components may contain spaces and ordinary words
-    /// ("/Volumes/A/the new hampshire.mov"). The scan crosses stop words
-    /// but not a punctuation break or a sentence verb ("is", "who",
-    /// "tell"), so "check /Volumes/A and tell me who is in new
-    /// hampshire.mov" names "new hampshire.mov", not one long path.
+    /// ("/Volumes/A/the new hampshire.mov"). Outside a path the scan
+    /// crosses stop words but not a punctuation break or a sentence verb
+    /// ("is", "who", "tell"); INSIDE one — the core or a crossed word
+    /// carries a "/" — it crosses everything up to the head, so a folder
+    /// called "Who is This" is not a sentence.
     private static func pathHead(before coreIndex: Int, words: [Range<String.Index>], text: String) -> Int? {
+        // Pass 1 — inside a path: a folder separator ("/") in the core or
+        // in any word between it and the nearest "/"-headed word means
+        // that word IS the head, whatever sits between ("/Volumes/A/what
+        // does it show/who is in it.mov").
+        var separatorSeen = cleanedWord(text[words[coreIndex]]).contains("/")
+        var probe = coreIndex
+        while probe > 0 {
+            let cleaned = cleanedWord(text[words[probe - 1]])
+            if cleaned.hasPrefix("/") {
+                if separatorSeen { return probe - 1 }
+                break
+            }
+            if cleaned.contains("/") { separatorSeen = true }
+            probe -= 1
+        }
+        // Pass 2 — outside a path: reach a "/" word only across ordinary
+        // words, never a sentence verb or a punctuation break.
         var index = coreIndex
         while index > 0 {
             let raw = String(text[words[index - 1]])
@@ -172,27 +238,62 @@ enum ArchivistRecordQuestion {
         return nil
     }
 
-    /// The first word of a spaced filename ending at the core: walk back
-    /// while the previous word is not a stop word and no punctuation
-    /// break sits between ("who is in New Hampshire.mov" → "New"; "the
-    /// video hampshire.mov" → the core itself). A word that opens with a
-    /// quote or bracket is the name's first word.
+    /// The name between a quote / bracket pair whose closer ends the core
+    /// word (after any sentence punctuation: `"Who Is This.mov"?`). The
+    /// opener is the nearest earlier word — or the core itself — that
+    /// begins with the matching delimiter; without one the syntax rule
+    /// decides instead. The range spans the delimiters.
+    private static func quotedName(closingAt coreIndex: Int, words: [Range<String.Index>], text: String) -> FileReference? {
+        let core = text[words[coreIndex]]
+        var closerEnd = core.endIndex
+        while closerEnd > core.startIndex, sentencePunctuation.contains(core[core.index(before: closerEnd)]) {
+            closerEnd = core.index(before: closerEnd)
+        }
+        guard closerEnd > core.startIndex else { return nil }
+        let closerIndex = core.index(before: closerEnd)
+        guard let opener = openerForCloser[core[closerIndex]] else { return nil }
+        for index in stride(from: coreIndex, through: 0, by: -1) {
+            let word = text[words[index]]
+            guard word.first == opener, words[index].lowerBound < closerIndex else { continue }
+            let nameStart = text.index(after: words[index].lowerBound)
+            guard nameStart < closerIndex else { return nil }
+            let name = String(text[nameStart..<closerIndex])
+            guard Record.endsWithMediaExtension(name) else { return nil }
+            return FileReference(name: name, range: words[index].lowerBound..<closerEnd)
+        }
+        return nil
+    }
+
+    /// The first word of a spaced filename ending at the core, by syntax
+    /// position: the first word after the last boundary phrase (or
+    /// punctuation break) that ends before the core — "who is in rick
+    /// and donna.mov" → "rick"; "the video hampshire.mov" → the core
+    /// itself; "New Hampshire.mov" alone → the first word. A boundary
+    /// match that ends after the core began (a later clause) is not
+    /// before the name and is ignored.
     private static func nameStart(before coreIndex: Int, words: [Range<String.Index>], text: String) -> Int {
         // A core that itself opens a quote is the whole name.
         if let first = text[words[coreIndex]].first, leadingPunctuation.contains(first) { return coreIndex }
-        var start = coreIndex
-        var index = coreIndex
-        while index > 0 {
-            let previousRange = words[index - 1]
-            let previous = String(text[previousRange])
-            let cleaned = cleanedWord(text[previousRange])
-            guard !cleaned.isEmpty,
-                  !filenameStopWords.contains(cleaned.lowercased()),
-                  !previous.hasSuffix(":"), !previous.hasSuffix(","), !previous.hasSuffix(";"),
-                  !previous.hasSuffix("?"), !previous.hasSuffix("!"), !previous.hasSuffix(".") else { break }
-            start = index - 1
-            index -= 1
-            if let first = previous.first, leadingPunctuation.contains(first) { break }
+        let coreStart = words[coreIndex].lowerBound
+        // Punctuation break: the run never crosses a word ending in one.
+        var floor = 0
+        for index in stride(from: coreIndex - 1, through: 0, by: -1)
+        where text[words[index]].last.map({ breakPunctuation.contains($0) }) == true {
+            floor = index + 1
+            break
+        }
+        // The last boundary phrase ending before the core.
+        var boundaryEnd: String.Index?
+        let whole = NSRange(text.startIndex..., in: text)
+        for regex in boundaryPhrases {
+            for match in regex.matches(in: text, options: [], range: whole) {
+                guard let range = Range(match.range, in: text), range.upperBound <= coreStart else { continue }
+                if boundaryEnd.map({ range.upperBound > $0 }) ?? true { boundaryEnd = range.upperBound }
+            }
+        }
+        var start = floor
+        if let boundaryEnd, let first = words.firstIndex(where: { $0.lowerBound >= boundaryEnd }) {
+            start = max(start, min(first, coreIndex))
         }
         return start
     }
@@ -308,7 +409,22 @@ enum ArchivistRecordQuestion {
         #"(?:fileref|this video|this one|this clip|this tape|this file|this recording|this movie|the selected video|the selection|this|that|it|there)"#
     private static let selectionPronoun = rx(
         #"\b(?:this video|this one|this clip|this tape|this file|this recording|this movie|the selected video|the selection|this|that|it)\b"#)
-    private static let openerGuard = rx(#"^(?:hallie[, ]+)?(?:please )?(?:play|open|reveal|show me|find|list|search for) "#)
+    /// The selection NOUNS only (no bare "it" / "this"): the deictic hint.
+    private static let selectionNoun = rx(
+        #"\b(?:this|that) (?:video|one|clip|tape|file|recording|movie)\b|\bthe selected (?:video|one|row|file|clip)\b|\bthe selection\b"#)
+    /// Media actions are never record questions.
+    private static let mediaActionGuard = rx(#"^(?:hallie[, ]+)?(?:please )?(?:can you |could you |would you )?(?:play|open|reveal) "#)
+    /// A search opener …
+    private static let searchOpener = rx(
+        #"^(?:hallie[, ]+)?(?:please )?(?:can you |could you |would you )?(?:show me|find|list|search for) "#)
+    /// … whose OBJECT is a record noun (metadata / date / details / names
+    /// / people) or a "who / what / whether / when / about" clause. Any
+    /// other object — "videos", "clips", "photos", "footage", "files",
+    /// "everything", a person, a year, "from the 90s" — is a search.
+    private static let searchOpenerRecordObject = rx(
+        #"^(?:hallie[, ]+)?(?:please )?(?:can you |could you |would you )?(?:show me|find|list|search for) "#
+        + #"(?:me )?(?:out )?(?:the |its |all |all the |all of the |any |some |every |everything |whatever )?"#
+        + #"(?:metadata|dates?|details|info|information|names?|people|who|what|whether|if|when|about)\b"#)
     private static let ageGuard = rx(#"\bhow old\b|\bwhat age\b|\bborn yet\b|\bwould have been\b"#)
     private static let peopleVerb = rx(
         #"\bwho(?:'s| is| are| was| were| else is| else was| all is)?(?: all| else)? (?:in|on|appears in|appear in|shows up in|is in|are in) \#(referent)\b"#
@@ -319,6 +435,8 @@ enum ArchivistRecordQuestion {
         + #"|\b(?:does|did|do) \#(referent) (?:have|has|contain|include|feature|show)\b"#
         + #"|\b(?:has|have|contains?|includes?|features?) .+? in (?:it|this|that|there|fileref)\b"#
         + #"|\bis .+? in \#(referent)\b"#
+        // "the people in this one" / "show me the people in it".
+        + #"|\b(?:the |all the |all |which )?people (?:in|on|of|from) \#(referent)\b"#
         // "names" / "my name" need the record nearby: a file reference in
         // front, or "in <this/it/that>" after. A bare "it" elsewhere in the
         // sentence is not a selection (live 9/02: "I know it is confusing …
@@ -372,28 +490,51 @@ enum ArchivistRecordQuestion {
         "that", "is", "for", "and", "with", "from", "at", "to", "a", "an", "it",
         "into", "check", "search", "inspect", "open", "play", "select",
     ]
-    /// Words a spaced filename never crosses when read backwards from its
-    /// extension: the lead words plus question words, auxiliaries,
-    /// pronouns and conjunctions ("does New Hampshire.mov have…" stops at
-    /// "does"; "who is in new hampshire.mov" stops at "in").
-    private static let filenameStopWords: Set<String> = leadWords.union([
-        "who", "whom", "whose", "what", "when", "where", "which", "why", "how",
-        "does", "do", "did", "is", "are", "was", "were", "has", "have", "had",
-        "can", "could", "would", "will", "should", "shall", "may", "might", "must",
-        "tell", "show", "see", "look", "find", "get", "give", "read", "describe",
-        "analyze", "analyse", "watch", "reveal", "list",
-        "me", "you", "i", "we", "us", "my", "your", "our", "his", "her", "their", "its",
-        "please", "hallie", "or", "but", "if", "whether", "not", "no", "yes", "so",
-        "then", "than", "also", "too", "again", "like", "such", "as", "e.g.", "eg",
-        "by", "up", "out", "over", "there", "here", "these", "those", "some", "any",
-        "all", "both", "each", "every", "either", "neither", "one", "ones",
-        "files", "clips", "tapes", "movies", "recordings", "metadata", "people",
-        "person", "everyone", "anybody", "anyone", "someone", "including", "whats",
-        "what's", "who's", "where's", "when's", "it's", "that's", "there's",
-    ])
-    /// Words a path scan (looking backwards for the "/" head) will not
-    /// cross: a sentence verb between the core and a "/" word means the
-    /// "/" word is not this file's head.
+    /// The BOUNDARY PHRASES a bare filename sits after (codex #1020 item
+    /// 3): the referent-introducing slots of this recogniser's own
+    /// patterns, matched by position in the sentence, never single words
+    /// looked up in a list. A file name that contains one of these words
+    /// in its own right ("Will and Grace.mov", "Who Is This.mov") survives
+    /// because the slot needs its whole shape — "who … in", "is <names>
+    /// in", an imperative AT A CLAUSE START — not the word alone.
+    private static let mediaNoun = #"(?:file|video|clip|tape|movie|recording|footage)s?"#
+    private static let nameWord = #"[\p{L}\p{N}'’\-]+"#
+    private static let nameList = "\(nameWord)(?:(?:,| and| or| &|, and| , or) \(nameWord)){0,7}"
+    /// Where a clause begins: the sentence start, after a break, or after
+    /// a joining word — the only places an imperative or auxiliary opens a
+    /// question rather than continuing a name.
+    private static let clauseStart = #"(?:^|[,;:?!.] |\b(?:and|then|so|now|also|please|hallie|you|just) )"#
+    private static let boundaryPhrases: [NSRegularExpression] = [
+        // The people-verb slots: "who is in", "who's in", "who else is
+        // in", "what's in", "is Donna in", "has Rick in".
+        rx(#"\bwho(?:'s| is| are| was| were| else is| else was| all is)?(?: all| else)? (?:in|on|appears in|appear in|shows up in|is in|are in)\b"#),
+        rx(#"\bwhat(?:'s| is| was)? (?:in|on)\b"#),
+        rx(#"\bis (?:\#(nameList) )?in\b"#),
+        rx(#"\b(?:has|have|contains?|includes?|features?) \#(nameList) in\b"#),
+        // The naming slots: "the file called", "the video", "this tape"
+        // before a media-noun core ("tell me about this tape.mov").
+        rx(#"\b(?:the |this |that |a |an |which |your |my |our )?\#(mediaNoun) (?:called|named|titled|entitled)\b"#),
+        rx(#"\b(?:the|this|that|a|an|which|your|my|our) \#(mediaNoun)\b"#),
+        rx(#"\b(?:called|named|titled|entitled)\b"#),
+        rx(#"\b(?:this|that|these|those) (?=\#(mediaNoun)\b)"#),
+        // The dossier / metadata slots: "tell me (all) about", "what do
+        // you know about", "the metadata for", "the people in".
+        rx(#"\b(?:tell|show) (?:me|us) (?:all |everything |more |anything |a bit )?about\b"#),
+        rx(#"\bwhat (?:do you know|can you tell me|do you have|have you got) about\b"#),
+        rx(#"\b(?:metadata|details|info|information|dates?|names?|people) (?:of|on|for|in|from|about|behind)\b"#),
+        rx(#"\#(clauseStart)(?:can you |could you |would you )?(?:all |everything |more |anything )?about\b"#),
+        // Openers at a clause start: imperatives, auxiliaries, "when was".
+        rx(#"\#(clauseStart)(?:can you |could you |would you |can u )?(?:examine|inspect|look at|analy[sz]e|check(?: out)?|show (?:me|us)|show|find out about|find out|find|list|search for|search|open|play|reveal|describe|see|get|give (?:me|us)|read|watch|select|scan|pull up|look up)\b"#),
+        // Only the auxiliaries this recogniser's own patterns open with
+        // ("does it have", "is X in", "is it dated"): "will" / "would" /
+        // "can" open no record pattern and are legal name words ("Will
+        // and Grace.mov" as the whole question).
+        rx(#"\#(clauseStart)(?:what |so )?(?:does|did|do|is|was|are|were|has|have|had|isn't|doesn't|wasn't)\b"#),
+        rx(#"\b(?:when|what year|which year|what date|how old) (?:was|is|were|did|does|do)\b"#),
+    ]
+    /// Words a path scan (looking backwards for the "/" head from OUTSIDE
+    /// a path) will not cross: a sentence verb between the core and a "/"
+    /// word means the "/" word is not this file's head.
     private static let sentenceVerbs: Set<String> = [
         "who", "whom", "what", "when", "where", "which", "why", "how",
         "is", "are", "was", "were", "does", "do", "did", "has", "have", "had",
@@ -433,6 +574,14 @@ enum ArchivistRecordQuestion {
     ]
     private static let leadingPunctuation: Set<Character> = ["(", "[", "\"", "'", "“", "‘", "<", "«"]
     private static let trailingPunctuation: Set<Character> = [")", "]", "\"", "'", "”", "’", ">", "»", ",", ";", ":", "?", "!", "."]
+    /// Sentence punctuation that may follow a closing quote (`…mov"?`).
+    private static let sentencePunctuation: Set<Character> = [",", ";", ":", "?", "!", "."]
+    /// A word ending in one of these breaks a bare-filename run.
+    private static let breakPunctuation: Set<Character> = [",", ";", ":", "?", "!", "."]
+    /// Closing delimiter → its opener, for the quoted-name rule.
+    private static let openerForCloser: [Character: Character] = [
+        "\"": "\"", "'": "'", "”": "“", "’": "‘", "]": "[", ")": "(", ">": "<", "»": "«",
+    ]
 
     // MARK: - Helpers
 

@@ -308,6 +308,132 @@ struct LineageTrailTests {
         #expect(r.generationsWalked == 2)
     }
 
+    // MARK: Ties at the nearest generation (codex #1014 item 2)
+
+    /// Three generations: anchor @I1@, father @I2@ / mother @I3@, and the
+    /// four grandparents @I4@ (father's father), @I5@ (father's mother),
+    /// @I6@ (mother's father), @I7@ (mother's mother), each with the
+    /// PLAC given (nil = none).
+    static func pedigree(_ place: [String: String?]) -> GedcomFamilyGraph {
+        func indi(_ id: String, _ name: String, _ sex: String, famc: String?, fams: String?) -> String {
+            var s = "0 @\(id)@ INDI\n1 NAME \(name)\n1 SEX \(sex)\n1 BIRT\n2 DATE 1900\n"
+            if let p = place[id] ?? "Boston, Massachusetts, USA" { s += "2 PLAC \(p)\n" }
+            if let famc { s += "1 FAMC @\(famc)@\n" }
+            if let fams { s += "1 FAMS @\(fams)@\n" }
+            return s
+        }
+        let text = "0 HEAD\n"
+            + indi("I1", "Anchor /Person/", "F", famc: "F1", fams: nil)
+            + indi("I2", "Father /Person/", "M", famc: "F2", fams: "F1")
+            + indi("I3", "Mother /Person/", "F", famc: "F3", fams: "F1")
+            + indi("I4", "FF /Person/", "M", famc: nil, fams: "F2")
+            + indi("I5", "FM /Person/", "F", famc: nil, fams: "F2")
+            + indi("I6", "MF /Person/", "M", famc: nil, fams: "F3")
+            + indi("I7", "MM /Person/", "F", famc: nil, fams: "F3")
+            + "0 @F1@ FAM\n1 HUSB @I2@\n1 WIFE @I3@\n1 CHIL @I1@\n"
+            + "0 @F2@ FAM\n1 HUSB @I4@\n1 WIFE @I5@\n1 CHIL @I2@\n"
+            + "0 @F3@ FAM\n1 HUSB @I6@\n1 WIFE @I7@\n1 CHIL @I3@\n"
+            + "0 TRLR"
+        return GedcomFamilyGraph(gedcomText: text)
+    }
+
+    @Test func oneMatchAtTheNearestGenerationIsOnePath() {
+        let g = Self.pedigree(["I7": "Normandy, France"])
+        let r = T.walk(line: .allAncestors, from: g.people["@I1@"]!, stop: .continent(.europe), graph: g)
+        #expect(r.ending == .stopped)
+        #expect(r.matchPaths.count == 1)
+        #expect(r.matches.map(\.person.name) == ["MM Person"])
+        #expect(r.steps.map(\.person.name) == ["Anchor Person", "Mother Person", "MM Person"])
+        #expect(T.lineLabel(of: r.steps) == "mother → mother")
+        #expect(r.steps.map(\.hop) == [nil, "mother", "mother"])
+    }
+
+    @Test func twoMatchesAtTheNearestGenerationAreBothReturnedFatherSideFirst() {
+        // Mother's mother is listed first in the GEDCOM order of nothing;
+        // the order is by line label, so the father's father comes first.
+        let g = Self.pedigree(["I7": "Normandy, France", "I4": "County Antrim, Ireland"])
+        let r = T.walk(line: .allAncestors, from: g.people["@I1@"]!, stop: .continent(.europe), graph: g)
+        #expect(r.ending == .stopped)
+        #expect(r.generationsWalked == 2)
+        #expect(r.matchPaths.count == 2)
+        #expect(r.matches.map(\.person.name) == ["FF Person", "MM Person"])
+        #expect(r.matchPaths.map { T.lineLabel(of: $0) } == ["father → father", "mother → mother"])
+        #expect(r.match?.person.name == "FF Person")
+        #expect(r.steps == r.matchPaths[0])
+        #expect(r.matchPaths[1].map(\.person.name) == ["Anchor Person", "Mother Person", "MM Person"])
+        #expect(r.matchPaths.allSatisfy { $0.last?.matchesStop == true && $0.dropLast().allSatisfy { !$0.matchesStop } })
+    }
+
+    @Test func fourMatchesAtTheNearestGenerationAreOrderedByLineLabel() {
+        let g = Self.pedigree(["I4": "Cork, Ireland", "I5": "Glasgow, Scotland",
+                               "I6": "Berlin, Prussia", "I7": "Normandy, France"])
+        let r = T.walk(line: .allAncestors, from: g.people["@I1@"]!, stop: .continent(.europe), graph: g)
+        #expect(r.matchPaths.count == 4)
+        #expect(r.matches.map(\.person.name) == ["FF Person", "FM Person", "MF Person", "MM Person"])
+        #expect(r.matchPaths.map { T.lineLabel(of: $0) }
+                == ["father → father", "father → mother", "mother → father", "mother → mother"])
+        // The parents (gen 1, both US-born) are not matches: the nearest
+        // matching generation is 2 and nothing nearer is hidden.
+        #expect(r.matchPaths.allSatisfy { $0.count == 3 })
+        // Outside the US: the same four.
+        let outside = T.walk(line: .allAncestors, from: g.people["@I1@"]!,
+                             stop: .outsideCountry(BirthplaceClassifier.unitedStates), graph: g)
+        #expect(outside.matches.count == 4)
+    }
+
+    @Test func aNearerMatchHidesNothingAtDeeperGenerations() {
+        // Father born in Ireland (gen 1) — the grandparents' European
+        // births are further and are not ties.
+        let g = Self.pedigree(["I2": "Cork, Ireland", "I4": "Glasgow, Scotland", "I7": "Normandy, France"])
+        let r = T.walk(line: .allAncestors, from: g.people["@I1@"]!, stop: .continent(.europe), graph: g)
+        #expect(r.matchPaths.count == 1)
+        #expect(r.match?.person.name == "Father Person")
+        #expect(r.match?.generation == 1)
+    }
+
+    @Test func singleLineWalksCarryOnePathAndHopLabels() {
+        let r = T.walk(line: .maternal, from: Self.donnaPerson, stop: .continent(.europe), graph: Self.donna)
+        #expect(r.matchPaths.count == 1)
+        #expect(r.matchPaths[0] == r.steps)
+        #expect(T.lineLabel(of: r.steps) == "mother → mother → mother → mother")
+        let none = T.walk(line: .maternal, from: Self.donnaPerson, stop: .top, graph: Self.donna)
+        #expect(none.matchPaths.isEmpty)
+        #expect(none.matches.isEmpty)
+    }
+
+    // MARK: Ambiguous historical names (codex #1014 item 1)
+
+    /// "New France" is recognised but spans today's US/Canada border: it
+    /// never satisfies "outside the United States", and the walk goes on
+    /// to the first birth that does. It is not an unrecorded place, so
+    /// it does not count towards the three-unknown run-out either.
+    @Test func anAmbiguousBirthplaceNeverStopsTheWalkAndDoesNotRunItOut() {
+        let g = Self.chain(5) { gen in
+            switch gen {
+            case 0: return "Boston, Massachusetts, USA"
+            case 1: return "Montreal, New France"
+            case 2: return "Grand-Pré, Acadia"
+            case 3: return "Halifax, British North America"
+            default: return "Cork, Ireland"
+            }
+        }
+        let anchor = g.people["@I0@"]!
+        let r = T.walk(line: .maternal, from: anchor, stop: .outsideCountry(BirthplaceClassifier.unitedStates), graph: g)
+        #expect(r.ending == .stopped)
+        #expect(r.match?.generation == 4)
+        #expect(r.steps[1].birthplace?.isAmbiguous == true)
+        #expect(r.steps[1].matchesStop == false)
+        #expect(r.steps[2].birthplace?.isAmbiguous == true)
+        #expect(r.steps[3].birthplace?.isAmbiguous == true)
+        let europe = T.walk(line: .allAncestors, from: anchor, stop: .continent(.europe), graph: g)
+        #expect(europe.match?.generation == 4)
+        // Russia never counts as a European birth either.
+        let russia = Self.chain(2) { gen in gen == 0 ? "Boston, Massachusetts, USA" : "Minsk, Russia" }
+        let none = T.walk(line: .maternal, from: russia.people["@I0@"]!, stop: .continent(.europe), graph: russia)
+        #expect(none.ending == .top)
+        #expect(none.match == nil)
+    }
+
     // MARK: SCALE
 
     /// A full binary pedigree 17 generations deep (2^17 − 1 = 131,071
@@ -349,6 +475,10 @@ struct LineageTrailTests {
         #expect(r.match?.generation == generations - 1)
         #expect(r.steps.count == generations)
         #expect(r.lastGeneration.count == topStart)
+        // 65,536 ties at the top: every match is returned, paths for a few.
+        #expect(r.matches.count == topStart)
+        #expect(r.matchPaths.count == T.maxTiePaths)
+        #expect(r.matches.first?.person.id == "@I\(topStart)@")
         #expect(elapsed < 5.0, Comment(rawValue: "all-ancestors walk over \(n) people took \(elapsed) s"))
 
         // The single line is O(depth) regardless of tree size.

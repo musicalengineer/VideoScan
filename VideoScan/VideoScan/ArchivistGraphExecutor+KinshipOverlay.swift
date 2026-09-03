@@ -38,6 +38,15 @@ extension ArchivistGraphExecutor {
         return clause + ")"
     }
 
+    /// " Relationship warning: Sibling rows on … imply more than two
+    /// parents (…) — nothing derived until one is corrected." — one clause
+    /// per conflict the question touched (codex #984 item 5: a set that
+    /// failed closed must be visible from every side, Hallie included).
+    static func overlayWarningClause(_ warnings: [String]) -> String {
+        guard !warnings.isEmpty else { return "" }
+        return " Relationship warning: " + warnings.joined(separator: " · ") + "."
+    }
+
     /// Group hits by their derivation note, in first-seen order; hits
     /// without a derived hop are skipped.
     static func derivedNamesByNote(
@@ -93,6 +102,9 @@ extension ArchivistGraphExecutor {
         //
         // Say what is actually missing, and name the people, so the gap is
         // one edit away from closed instead of invisible.
+        // Conflicts touching the anchor or anyone answered: the basis
+        // carries them (nothing was derived for that set).
+        let conflicts = overlay.derivationWarnings(touching: anchors + hits.map(\.member.node))
         guard !hits.isEmpty else {
             guard let wantedSex = wanted.sex else { return nil }
             var unknown: [String] = []
@@ -119,7 +131,8 @@ extension ArchivistGraphExecutor {
                     + "\(unknown.count == 1 ? "that person" : "them"), so I can't say "
                     + "which of \(possessive) \(neutral) are \(relation.rawValue)s. "
                     + "Recording it in the People tab would answer this.",
-                basisLine: "\(overlayBasisPrefix): the relationship is stored, the sex is not.",
+                basisLine: "\(overlayBasisPrefix): the relationship is stored, the sex is not."
+                    + overlayWarningClause(conflicts),
                 evidence: nil,
                 candidates: [], profileCandidates: [], ambiguityCandidates: [],
                 catalogPersonName: nil)
@@ -136,6 +149,10 @@ extension ArchivistGraphExecutor {
             // One hop with a plain word: just the name. Derived (composed)
             // relations show the route so the inference is checkable.
             if hit.hops.count == 1 {
+                // A stored sibling row: the pair's ONE verdict (codex #1019
+                // item 2) — "Tim (half-brother)"; a conflict says so
+                // instead of picking a word.
+                let aside = siblingAside(hit, overlay: overlay)
                 // A relative bridged to a tree record (pin / certain
                 // derivation) answers with the tree's name and vitals, and
                 // the People-tab name as the alias (Rick 2026-08-29:
@@ -145,10 +162,10 @@ extension ArchivistGraphExecutor {
                     requiredPersonNames.append(record.name)
                     let alias = PersonResolver.normalize(record.name) == PersonResolver.normalize(hit.member.name)
                         ? "" : " (\(hit.member.name) in the People tab)"
-                    return record.name + alias + HallieBiographyCard.vitalsAside(record)
+                    return record.name + alias + HallieBiographyCard.vitalsAside(record) + aside
                 }
                 requiredPersonNames.append(hit.member.name)
-                return hit.member.displayName
+                return hit.member.displayName + aside
             }
             requiredPersonNames.append(hit.member.name)
             return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
@@ -190,7 +207,8 @@ extension ArchivistGraphExecutor {
                 + (treeCited.isEmpty
                     ? "; local only, not from the family tree."
                     : "; name and dates from the imported family tree (GEDCOM: "
-                        + treeCited.joined(separator: ", ") + ")."),
+                        + treeCited.joined(separator: ", ") + ").")
+                + overlayWarningClause(conflicts),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil,
@@ -256,10 +274,24 @@ extension ArchivistGraphExecutor {
             prose: prose,
             basisLine: "\(overlayBasisPrefix) "
                 + overlayStoredOnClause(storedOn: storedOn, namesByNote: derived)
-                + "; path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree.",
+                + "; path: \(memberA.name) → \(overlay.route(for: hops)); local only, not from the family tree."
+                + overlayWarningClause(overlay.derivationWarnings(touching: [a, b])),
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil)
+    }
+
+    /// " (half-brother)" for a one-hop stored sibling row whose pair
+    /// verdict is half; " (sibling rows disagree — full or half unknown)"
+    /// for a conflict; empty for full and for every other relation.
+    static func siblingAside(_ hit: FamilyKinshipOverlay.Hit, overlay: FamilyKinshipOverlay) -> String {
+        guard hit.hops.count == 1, hit.hops[0].relation == .sibling, !hit.hops[0].isDerived,
+              let verdict = overlay.siblingVerdict(hit.hops[0].from, hit.hops[0].to) else { return "" }
+        switch verdict {
+        case .full:              return ""
+        case .half, .unresolved: return " (" + FamilyKinshipOverlay.siblingTerm(verdict, sex: hit.member.sex) + ")"
+        case .conflict:          return " (sibling rows disagree — full or half unknown)"
+        }
     }
 
     /// `pluralize` for the graph vocabulary, which already contains plural

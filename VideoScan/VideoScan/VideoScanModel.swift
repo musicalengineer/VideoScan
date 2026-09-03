@@ -26,6 +26,11 @@ final class VideoScanModel: ObservableObject {
             // un-latch; cheap enough for per-file live-reload appends.
             recordIndex.invalidate()
             recordPathIndex.invalidate()
+            // Hallie's filename memo too (codex #1020 item 1): a row
+            // replaced by a PREBUILT record (`records[i] = decoded`) keeps
+            // the buffer, the version and the identity generation — no
+            // field write happens — so only this un-latch sees it.
+            hallieRecordIndex.invalidate()
             // Background preview sweep (2026-07-27): re-diff against the
             // disk cache once records settle. Debounced inside the
             // service; no-op while the checkbox is off.

@@ -106,9 +106,10 @@ extension HallieTurnExecutor {
         }
 
         /// Record an executed turn. Follow-up media actions, help, small
-        /// talk and capability answers carry no AST and leave memory
-        /// untouched; a reset clears it; a refined or paged query replaces
-        /// it like any other.
+        /// talk and ordinary capability answers carry no AST and leave
+        /// memory untouched; a roster answer is retained only to scope a
+        /// later name pronoun. A reset clears it; a refined or paged query
+        /// replaces it like any other.
         mutating func record(intent: Intent?, result: Result, question: String? = nil) {
             if result.route == .reset {
                 reset()
@@ -235,12 +236,23 @@ extension HallieTurnExecutor {
             let substantive: Bool
             if result.clarification != nil || intent != nil {
                 substantive = true
+            } else if result.offeredActions.contains(HallieLineageAnswer.trailShowMoreAction) {
+                // An answer that offers "show more" pages from THIS
+                // exchange; forgetting it would leave the chip empty — a
+                // paged trail joined with a capability answer took the
+                // capability's route (codex #1014 item 4).
+                substantive = true
             } else {
                 switch result.route {
                 case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent,
                      .record:
                     substantive = result.outcome == .answered || result.outcome == .needsClarification
-                case .followUp, .capability, .help, .smalltalk, .conversation, .reset:
+                case .capability:
+                    // Most capability cards are not conversational facts,
+                    // but roster pronouns need to distinguish a prior roster
+                    // from a prior siblings/search list.
+                    substantive = result.queryDescription == "shape=roster"
+                case .followUp, .help, .smalltalk, .conversation, .reset:
                     substantive = false
                 }
             }
@@ -421,7 +433,7 @@ extension HallieTurnExecutor {
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats? = nil,
-        rosterAnswer: (() -> Result)? = nil,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
@@ -454,7 +466,9 @@ extension HallieTurnExecutor {
                 catalogPersonName: a.catalogPersonName, clarification: nil,
                 matchCount: a.matchCount, mediaAction: a.mediaAction,
                 offeredActions: a.offeredActions + [.ask(question: second, label: String(label))],
-                attachments: a.attachments))
+                attachments: a.attachments,
+                performsFirstOfferedAction: a.immediateOfferedAction != nil,
+                immediateOfferedAction: a.immediateOfferedAction))
         }
         return preTranslationSingle(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
@@ -522,18 +536,37 @@ extension HallieTurnExecutor {
         case (let x?, nil), (nil, let x?): matchCount = x
         default: matchCount = nil
         }
+        // Immediate actions are explicit identities, not positions in the
+        // concatenated offer array. If both clauses directly request an
+        // action, the later clause wins: it is the final state the user
+        // asked to see ("open People … open Archive" ends on Archive).
+        let immediateAction = b.immediateOfferedAction ?? a.immediateOfferedAction
+        // A paged birthplace trail keeps its "show more" through the join
+        // (the continuation finds its segment inside the joined query
+        // description) — unless BOTH halves are unfinished trails, when
+        // "show more" would be ambiguous and neither is offered (codex
+        // #1014 item 4). The same rule decides both the chip and the
+        // continuation, so a chip is never offered that will not work.
+        let joinedQuery = "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")"
+        var offered = a.offeredActions + b.offeredActions
+        if offered.contains(HallieLineageAnswer.trailShowMoreAction),
+           HallieLineageQuestion.trailContinuationSegment(in: joinedQuery) == nil {
+            offered.removeAll { $0 == HallieLineageAnswer.trailShowMoreAction }
+        }
         return Result(
             route: b.route, outcome: b.outcome,
             prose: prose,
             basisLine: a.basisLine + " " + b.basisLine,
-            queryDescription: "two questions: \(a.queryDescription ?? "?") + \(b.queryDescription ?? "?")",
+            queryDescription: joinedQuery,
             citations: citations, knowledgeCitations: knowledge,
             catalogPersonName: b.catalogPersonName ?? a.catalogPersonName,
             clarification: b.clarification,
             matchCount: matchCount, mediaAction: b.mediaAction ?? a.mediaAction,
-            offeredActions: a.offeredActions + b.offeredActions,
+            offeredActions: offered,
             answerPlan: plan, composedBy: b.composedBy, transcriptText: transcript,
-            attachments: a.attachments + b.attachments)
+            attachments: a.attachments + b.attachments,
+            performsFirstOfferedAction: immediateAction != nil,
+            immediateOfferedAction: immediateAction)
     }
 
     /// "c3" → "c7" for offset 4; anything that is not a claim ID is returned
@@ -735,7 +768,7 @@ extension HallieTurnExecutor {
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
         catalogStats: HallieCatalogStats?,
-        rosterAnswer: (() -> Result)?,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)? = nil,
         researchAnswer: ((HallieResearchQuestion) -> Result)? = nil,
@@ -755,6 +788,31 @@ extension HallieTurnExecutor {
         if let selectedRecord, let ask = ArchivistSelectionDateQuestion.detect(question) {
             return .answer(ArchivistSelectionDateQuestion.answer(ask, selection: selectedRecord.date))
         }
+        // Capability first (codex #976 item 5): "how do i change donna's
+        // bio" / "what can you do with it" are questions about Hallie, not
+        // about a video that happens to be selected — and only then is
+        // "how do i …" a how-to for the help card, small talk, or reset.
+        if let capability = ArchivistCapabilityQuestion.detect(question) {
+            return .answer(capabilityResult(capability))
+        }
+        if let command = ArchivistConversationCommand.detect(question) {
+            return .answer(commandResult(command))
+        }
+        // "who is in New Hampshire.mov" / "does it have my name in it" /
+        // "tell me about this video" (2026-09-02): ONE record, answered
+        // from its own fields by the record route — never a catalog-wide
+        // sweep. The client resolves the reference (selection or named
+        // file) when it captures the context. The record recogniser runs
+        // BEFORE the knowledge lanes (codex #987 item 4, the order before
+        // 4f74d809): a file named in the question is a record question
+        // whatever else the sentence says — "who is in Breen surname
+        // origin.mov" is about that file, not about the Breen surname.
+        if let record = ArchivistRecordQuestion.detect(question) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .record(record),
+                playAfterAnswer: playAfterAnswer))
+        }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
             isKnownPerson: isKnownPerson, lineageAnswer: lineageAnswer) {
@@ -771,15 +829,11 @@ extension HallieTurnExecutor {
             memory: memory, isKnownPerson: isKnownPerson)
     }
 
-    /// The model-free lanes that read the family knowledge or the ONE
-    /// record: surname history, a property of a known person, lineage
-    /// shapes, capability and help/small-talk/reset, then the record
-    /// recogniser. Nil when none of them claims the question.
-    ///
-    /// Capability and the help card run BEFORE the record recogniser
-    /// (codex #976 item 5): "what can you do with it" / "can you tell me
-    /// the date on things" are questions about Hallie, not about a video
-    /// that happens to be selected.
+    /// The model-free lanes that read the family knowledge: surname
+    /// history, a property of a known person, lineage shapes. Nil when
+    /// none of them claims the question. Capability, help/small-talk/reset
+    /// and the record recogniser all run before this in
+    /// `preTranslationSingle` (codex #976 item 5, codex #987 item 4).
     private static func knowledgeLaneTurn(
         question: String,
         playAfterAnswer: Bool,
@@ -787,6 +841,12 @@ extension HallieTurnExecutor {
         isKnownPerson: (String) -> Bool,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?
     ) -> PreTranslation? {
+        // An explicit app-navigation command outranks lineage and roster
+        // questions. The recogniser requires "tab" or "window", so ordinary
+        // asks such as "show Donna in the archive" never land here.
+        if let destination = HallieAppNavigation.detect(question) {
+            return .answer(HallieAppNavigation.answer(destination))
+        }
         // Public surname history is not an archive assertion. Keep this
         // narrow and sourced so a question such as "Breen surname origin"
         // does not become either an invented family-tree fact or a catalog
@@ -826,25 +886,6 @@ extension HallieTurnExecutor {
                                   memory: memory, lineageAnswer: lineageAnswer) {
             return turn
         }
-        // Capability first: "how do i change donna's bio" is a capability
-        // question, and only then is "how do i …" a how-to for the help card.
-        if let capability = ArchivistCapabilityQuestion.detect(question) {
-            return .answer(capabilityResult(capability))
-        }
-        if let command = ArchivistConversationCommand.detect(question) {
-            return .answer(commandResult(command))
-        }
-        // "who is in New Hampshire.mov" / "does it have my name in it" /
-        // "tell me about this video" (2026-09-02): ONE record, answered
-        // from its own fields by the record route — never a catalog-wide
-        // sweep. The client resolves the reference (selection or named
-        // file) when it captures the context.
-        if let record = ArchivistRecordQuestion.detect(question) {
-            return .run(Intent(
-                originalQuestion: question,
-                ast: .record(record),
-                playAfterAnswer: playAfterAnswer))
-        }
         return nil
     }
 
@@ -856,7 +897,7 @@ extension HallieTurnExecutor {
         question: String,
         memory: ConversationMemory,
         catalogStats: HallieCatalogStats?,
-        rosterAnswer: (() -> Result)?,
+        rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
         relationshipsOverview: ((HallieRelationshipsOverview.Ask) -> Result)?,
         researchAnswer: ((HallieResearchQuestion) -> Result)?
     ) -> PreTranslation? {
@@ -872,10 +913,12 @@ extension HallieTurnExecutor {
         if let researchAnswer, let ask = HallieResearchQuestion.detect(question) {
             return .answer(researchAnswer(ask))
         }
-        // "who do you know?" — the People tab, the tree, and what the family
-        // has told her; answered locally (PeopleTab), never by the model.
-        if let rosterAnswer, PeopleTab.isRosterQuestion(question) {
-            return .answer(rosterAnswer())
+        // "who do you know?" is the wider knowledge summary; "people in
+        // the catalog" is the People-tab roster only. Both are answered
+        // locally, and the explicit scope prevents catalog wording from
+        // leaking tree-only or family-told names.
+        if let rosterAnswer, let scope = PeopleTab.rosterScope(for: question, memory: memory) {
+            return .answer(rosterAnswer(scope))
         }
         // "Where did that come from?" — answered from the last answer's own
         // trail, never by the model.
@@ -1243,6 +1286,7 @@ extension HallieTurnExecutor {
         case .ask(_, let label): return label
         case .recompileFamilyTree: return "Recompile the family tree"
         case .openPeopleTab: return "Open the People tab"
+        case .openAppDestination(let destination): return "Open the \(destination.title) tab"
         case .showPossibleDuplicate: return "Show possible duplicate in Family Tree"
         }
     }
@@ -1288,6 +1332,7 @@ extension HallieTurnExecutor.Result {
             transcriptText: transcriptText,
             attachments: attachments,
             performsFirstOfferedAction: performsFirstOfferedAction,
+            immediateOfferedAction: immediateOfferedAction,
             refinableQuery: refinableQuery)
     }
 }

@@ -72,6 +72,15 @@ struct ArchivistConversationCommandTests {
         ("see ya", .farewell),
         ("thanks, talk to you later", .farewell),
         ("take care hallie", .farewell),
+        // Weather asides (eval sm022 / sm023 / sm024, verbatim): answered
+        // here so the model never turns "Berkshires" into a catalog search
+        // (full eval on d3725558: route=presence, 5 videos).
+        ("It's pouring rain here in the Berkshires today.", .weather),
+        ("beautiful day out isn't it", .weather),
+        ("Supposed to snow tonight. First one of the year.", .weather),
+        ("hallie, it's snowing up in Vermont again", .weather),
+        ("raining again", .weather),
+        ("such a gorgeous morning", .weather),
     ])
     func everydaySocialLinesGetAFriendlyReply(text: String, kind: Command.Smalltalk) {
         #expect(Command.detect(text) == .smalltalk(kind), Comment(rawValue: text))
@@ -84,10 +93,21 @@ struct ArchivistConversationCommandTests {
         "hold on, show me the second one",
         "thanks for the videos",
         "one moment, what year was that",
-        "It's pouring rain here in the Berkshires today.",
         "that was terrible lol",
         "gotta go find the 1994 tape",
         "thanks, now play the first one",
+        // Weather words inside a family fact, a question, or a search are
+        // not an aside: an unlisted word, a possessive, a digit, a "?", or
+        // a name with no preposition rejects the line.
+        "it rained on our wedding day",
+        "it snowed at Donna's wedding",
+        "did it snow in 1994",
+        "is it raining in the Berkshires?",
+        "show me the snow video",
+        "the 1994 snow storm",
+        "Tim is cold",
+        "snow",
+        "it was cold the winter we moved to Westford",
     ])
     func socialLinesWithRealContentStayOnThePipeline(text: String) {
         #expect(Command.detect(text) == nil, Comment(rawValue: text))
