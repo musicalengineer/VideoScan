@@ -245,6 +245,12 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
                 throw NLTranslatorError.modelUnavailable(summary)
             case .serverError(let status, _):
                 throw NLTranslatorError.serverError(status: status, detail: summary)
+            case .structuredOutputUnsupported:
+                // Rethrown verbatim: this one already names the host and
+                // the build, and it is not retryable, so there is no walk
+                // to summarize. (In practice it never reaches here — the
+                // translator's own unconstrained retry recovers it.)
+                throw nl
             default:
                 throw NLTranslatorError.unreachable(summary)
             }
@@ -274,6 +280,7 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
             case .serverError(let s, _): return "HTTP \(s)"
             case .modelUnavailable: return "model not loaded"
             case .badResponse(let d): return "bad response (\(d.prefix(60)))"
+            case .structuredOutputUnsupported: return "no structured output in this build"
             }
         }
         return String(error.localizedDescription.prefix(60))

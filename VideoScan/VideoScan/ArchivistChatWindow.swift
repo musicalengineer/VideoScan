@@ -42,6 +42,13 @@ enum ArchivistDiagnosticLine {
             return prefix + " reason=server-error http_status=\(status)"
         case .modelUnavailable:
             return prefix + " reason=model-unavailable"
+        case .structuredOutputUnsupported(let host, _):
+            // NOT model-unavailable, which is where this used to land and
+            // what Rick's 2026-09-03 log said while the model was loaded
+            // and answering. The host is configuration metadata, not
+            // content, so naming it here is within this enum's contract —
+            // and it is the one thing that makes the line actionable.
+            return prefix + " reason=structured-output-unsupported host=\(host)"
         }
     }
 }

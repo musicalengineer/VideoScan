@@ -25,6 +25,13 @@ enum HallieHelperFailure {
         /// a model-name / endpoint / configuration problem, not the network
         /// and not something a moment's wait fixes (codex #671).
         case badRequest(status: Int)
+        /// The helper is up and the model is loaded, but its ollama build
+        /// cannot constrain output to a schema AND the unconstrained
+        /// retry did not save the turn either (2026-09-03). Rare — the
+        /// fallback normally makes this invisible — but if it does surface
+        /// it must not read as "unreachable", which is what sent Rick to
+        /// check a host that was answering.
+        case helperCannotConstrainOutput(host: String)
     }
 
     static func kind(of error: Error) -> Kind {
@@ -33,6 +40,8 @@ enum HallieHelperFailure {
             case .badResponse: return .unusableAnswer
             case .serverError(let status, _) where (400...499).contains(status):
                 return .badRequest(status: status)
+            case .structuredOutputUnsupported(let host, _):
+                return .helperCannotConstrainOutput(host: host)
             default: break
             }
         }
@@ -50,6 +59,11 @@ enum HallieHelperFailure {
         case .unusableAnswer:
             return "I heard you, but I couldn't turn that into a search I trust, "
                 + "even on a second try. I didn't search the archive or open anything; "
+                + "could you say it another way?"
+        case .helperCannotConstrainOutput(let host):
+            return "My language helper on \(host) is running, but its build can't hold "
+                + "an answer to a fixed format, and the plain retry didn't come back in a "
+                + "shape I trust. I didn't search the archive or open anything; "
                 + "could you say it another way?"
         case .badRequest(let status):
             return "My language helper answered, but refused the request (HTTP \(status)) — "
