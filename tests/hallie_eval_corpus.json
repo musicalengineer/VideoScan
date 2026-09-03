@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 293 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 297 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2337,6 +2337,71 @@
         "Richard"
       ],
       "notes": "Same ruling, the other direction: Tim's card has no rows; his parents are Rick's (Eileen Latta and Richard Harding Breen Sr, named from the tree with their vitals). Basis: 'Dad and Ma derived from Rick's rows: full siblings share parents'."
+    },
+    {
+      "id": "lv260902-030",
+      "category": "live",
+      "text": "who is eileen latta's mother",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "Mary Catherine O'Connor"
+      ],
+      "mustNotContain": [
+        "Mary O'Connor,",
+        "Mary O'Connor (b.",
+        "two mothers"
+      ],
+      "notes": "Rick's ruling 2026-09-02 19:55: Hallie read out TWO mothers for Eileen Latta (FAMC @F3@ David Latta Sr + Mary Catherine O'Connor, FamilySearch MT64-4HP; FAMC @F4@ wife-only Mary O'Connor b. 1905 — the same woman, both daughters of @F6@). One primary parent family per person, ranked both-parents > FamilySearch family id > parent facts > GEDCOM order; the duplicate is folded and appears only as the basis note '(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same parents; treated as the same person)'. Read-time selection only; no GEDCOM or FamilySearch edits."
+    },
+    {
+      "id": "lv260902-031",
+      "category": "live",
+      "text": "tell me about eileen latta",
+      "expect": "biography",
+      "followsPrevious": false,
+      "mustContain": [
+        "Mary Catherine O'Connor",
+        "David McGill Latta Sr"
+      ],
+      "mustNotContain": [
+        "Mary O'Connor,",
+        "two mothers",
+        "The tree records two"
+      ],
+      "notes": "Same ruling, biography shape: 'child of David McGill Latta Sr and Mary Catherine O'Connor' — one mother in prose. The old 'The tree records two mothers for Eileen Latta …' sentence is retired; its content is the basis note. The 'Show possible duplicate in Family Tree' chip stays."
+    },
+    {
+      "id": "lv260902-032",
+      "category": "live",
+      "text": "who are eileen's parents",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "David McGill Latta Sr",
+        "Mary Catherine O'Connor"
+      ],
+      "mustNotContain": [
+        "Mary O'Connor,",
+        "Mary O'Connor."
+      ],
+      "notes": "Same ruling: two people, not three. 'Eileen Latta's parents: David McGill Latta Sr, Mary Catherine O'Connor.' with the fold note in the basis."
+    },
+    {
+      "id": "lv260902-033",
+      "category": "live",
+      "text": "show eileen latta's maternal line back 3 generations",
+      "expect": "kinship",
+      "followsPrevious": false,
+      "mustContain": [
+        "Mother: Mary Catherine O'Connor",
+        "Ellen Ronan"
+      ],
+      "mustNotContain": [
+        "Mary O'Connor (b. 1905)",
+        "O'Connor (1904–1985), born Ireland; Mary O'Connor"
+      ],
+      "notes": "Same ruling, the walks: the compiled parent table lists one mother per person, so a maternal line never forks at the duplicate — Mother: Mary Catherine O'Connor (1904–1985); Grandmother: Ellen Ronan (b. 1883). Before: 'Grandmother: Mary Catherine O'Connor (1904–1985), born Ireland; Mary O'Connor (b. 1905), born Ireland' on Rick's maternal line (live shell 2026-09-02T23:40)."
     }
   ]
 }

@@ -2072,4 +2072,149 @@ struct HallieShellCLITests {
         #expect(harness.output.contains { $0.contains(rule) }, Comment(rawValue: transcript))
         #expect(harness.mediaActions.isEmpty)
     }
+
+    // MARK: - One primary parent family (Rick's ruling 2026-09-02 19:55) — sensor
+
+    /// LIVE MISS (shell, 2026-09-02T23:40): Eileen Latta carries two FAMC
+    /// lines on FamilySearch — F3 (David Latta Sr + Mary Catherine
+    /// O'Connor, family MT64-4HP) and F4 (wife-only "Mary O'Connor" b.
+    /// 1905, the same woman, both daughters of F6) — and Hallie read out
+    /// two mothers, five grandparents and a forked maternal line. Through
+    /// the shell, with the real shape of the records: one mother, one
+    /// biography mother, two parents, an unforked maternal line, and the
+    /// fold note in the basis. Read-time only.
+    @Test func eileenHasOneMotherThroughTheShell() async throws {
+        let tree = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Jr
+        1 SEX M
+        1 BIRT
+        2 DATE 4 MAR 1959
+        1 FAMC @F1@
+        1 _FSFTID GVQV-NW3
+        0 @I3@ INDI
+        1 NAME Eileen /Latta/
+        1 SEX F
+        1 BIRT
+        2 DATE 31 AUG 1930
+        2 PLAC Chelsea, Suffolk, Massachusetts, United States
+        1 DEAT
+        2 DATE 2023
+        1 FAMS @F1@
+        1 FAMC @F3@
+        1 FAMC @F4@
+        1 _FSFTID G2CR-R4H
+        0 @I5@ INDI
+        1 NAME Mary /O'Connor/
+        1 SEX F
+        1 BIRT
+        2 DATE 1905
+        2 PLAC Ireland
+        1 FAMS @F4@
+        1 FAMC @F6@
+        1 _FSFTID GNZ5-428
+        0 @I6@ INDI
+        1 NAME David McGill /Latta/ Sr
+        1 SEX M
+        1 BIRT
+        2 DATE 1902
+        2 PLAC Wilmington, New Hanover, North Carolina, United States
+        1 DEAT
+        2 DATE 1983
+        1 FAMS @F3@
+        1 _FSFTID LX9M-WJG
+        0 @I7@ INDI
+        1 NAME Mary Catherine /O'Connor/
+        1 SEX F
+        1 BIRT
+        2 DATE 23 DEC 1904
+        2 PLAC Ireland
+        1 DEAT
+        2 DATE 16 JUL 1985
+        2 PLAC Brockton, Plymouth, Massachusetts, United States
+        1 FAMS @F3@
+        1 FAMC @F6@
+        1 _FSFTID G89Q-34N
+        0 @I14@ INDI
+        1 NAME Christopher Dennis /O'Connor/
+        1 SEX M
+        1 BIRT
+        2 DATE 1883
+        2 PLAC Ireland
+        1 FAMS @F6@
+        0 @I15@ INDI
+        1 NAME Ellen /Ronan/
+        1 SEX F
+        1 BIRT
+        2 DATE 1883
+        2 PLAC Ireland
+        1 FAMS @F6@
+        0 @F1@ FAM
+        1 WIFE @I3@
+        1 CHIL @I1@
+        0 @F3@ FAM
+        1 HUSB @I6@
+        1 WIFE @I7@
+        1 CHIL @I3@
+        1 _FSFTID MT64-4HP
+        0 @F4@ FAM
+        1 WIFE @I5@
+        1 CHIL @I3@
+        0 @F6@ FAM
+        1 HUSB @I14@
+        1 WIFE @I15@
+        1 CHIL @I5@
+        1 CHIL @I7@
+        0 TRLR
+        """
+        let harness = Harness(
+            inputs: ["who is eileen latta's mother", "tell me about eileen latta",
+                     "who are eileen's parents", "show eileen latta's maternal line back 3 generations", ":quit"],
+            graph: GedcomFamilyGraph(gedcomText: tree),
+            translations: [
+                .graph(.init(people: ["Eileen Latta"], operation: .kinship, relation: .mother)),
+                .graph(.init(people: ["Eileen Latta"], operation: .biography)),
+                .graph(.init(people: ["Eileen"], operation: .kinship, relation: .parents)),
+            ])
+        let options = try HallieShellCLI.parse(arguments: ["--hallie", "--diagnostics"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        let transcript = harness.output.joined(separator: "\n")
+        let answers = harness.transcriptEvents.filter { $0.kind == .assistant }
+        #expect(answers.count == 4, Comment(rawValue: transcript))
+        let note = "(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same parents; treated as the same person)"
+
+        // 1. One mother, the note in the basis.
+        let mother = try #require(answers.first)
+        #expect(mother.text == "Eileen Latta's mother: Mary Catherine O'Connor.", Comment(rawValue: mother.text))
+        #expect((mother.basisLine ?? "").hasSuffix(" \(note)"), Comment(rawValue: mother.basisLine ?? ""))
+
+        // 2. Biography: child of two people; no "two mothers" sentence.
+        let biography = answers[1]
+        #expect(biography.text.contains("child of David McGill Latta Sr and Mary Catherine O'Connor"), Comment(rawValue: biography.text))
+        #expect(!biography.text.contains("Mary O'Connor,"), Comment(rawValue: biography.text))
+        #expect(!biography.text.contains("two mothers"), Comment(rawValue: biography.text))
+        #expect((biography.basisLine ?? "").contains(note), Comment(rawValue: biography.basisLine ?? ""))
+
+        // 3. Parents: two people, not three.
+        let parents = answers[2]
+        #expect(parents.text == "Eileen Latta's parents: David McGill Latta Sr, Mary Catherine O'Connor.", Comment(rawValue: parents.text))
+
+        // 4. The maternal line does not fork at the duplicate.
+        let line = answers[3]
+        #expect(line.text.contains("Mother: Mary Catherine O'Connor"), Comment(rawValue: line.text))
+        #expect(line.text.contains("Grandmother: Ellen Ronan"), Comment(rawValue: line.text))
+        #expect(!line.text.contains("Mary O'Connor (b. 1905)"), Comment(rawValue: line.text))
+        #expect(harness.transcriptEvents.contains { $0.queryDescription == "lineage maternal ×3: Eileen Latta" },
+                Comment(rawValue: transcript))
+        // Every answer that named a parent carries the note; nothing else prints "Mary O'Connor" alone.
+        #expect(!harness.output.contains { $0.contains("Mary O'Connor,") || $0.contains("Mary O'Connor (b.") }, Comment(rawValue: transcript))
+        #expect(harness.mediaActions.isEmpty)
+    }
 }

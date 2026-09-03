@@ -825,11 +825,14 @@ public struct GedcomFamilyGraph: Sendable {
         // step family) is reachable through `parentFamilyChoice(of:)` and
         // `allRecordedParents(of:)`, never through these three cases.
         case .father:
-            return [parentFamilyChoice(of: person)?.father].compactMap { $0 }
+            return [primaryParentFamily(of: person)?.husband.flatMap(lookup)].compactMap { $0 }
         case .mother:
-            return [parentFamilyChoice(of: person)?.mother].compactMap { $0 }
+            return [primaryParentFamily(of: person)?.wife.flatMap(lookup)].compactMap { $0 }
         case .parents:
-            return relatives(.father, of: person) + relatives(.mother, of: person)
+            // One ranking for both slots (the index builder and the
+            // pronunciation drill call this for every person in the tree).
+            guard let family = primaryParentFamily(of: person) else { return [] }
+            return [family.husband.flatMap(lookup), family.wife.flatMap(lookup)].compactMap { $0 }
         case .brother, .sister, .siblings:
             let sibs = uniquePeople(parentFamilies(of: person)
                 .flatMap(\.children)

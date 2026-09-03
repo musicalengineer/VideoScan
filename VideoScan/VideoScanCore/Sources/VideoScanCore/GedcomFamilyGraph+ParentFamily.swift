@@ -135,9 +135,7 @@ extension GedcomFamilyGraph {
                                       mother: family.wife.flatMap { people[$0] },
                                       ranks: [rank], alternates: [])
         }
-        let ranks = ParentFamilyRank.ranked(ids.enumerated().map { order, id in
-            rank(of: families[id]!, id: id, order: order)
-        })
+        let ranks = rankedParentFamilies(ids)
         let primaryID = ranks[0].familyID
         let primary = families[primaryID]!
         let father = primary.husband.flatMap { people[$0] }
@@ -156,6 +154,30 @@ extension GedcomFamilyGraph {
         }
         return ParentFamilyChoice(primaryFamilyID: primaryID, father: father, mother: mother,
                                   ranks: ranks, alternates: alternates)
+    }
+
+    /// The primary family only — what `relatives(.father/.mother/.parents)`
+    /// needs. The one-FAMC case is a single dictionary lookup with no
+    /// ranking and no allocation; only a multi-FAMC person pays for the
+    /// rank table. (C++: the hot inline path; `parentFamilyChoice` is the
+    /// full report built on top of it.)
+    func primaryParentFamily(of person: Person) -> Family? {
+        let ids = parentFamilyIDs(of: person)
+        switch ids.count {
+        case 0: return nil
+        case 1: return families[ids[0]]
+        default:
+            let known = ids.filter { families[$0] != nil }
+            guard let first = known.first else { return nil }
+            if known.count == 1 { return families[first] }
+            return families[rankedParentFamilies(known)[0].familyID]
+        }
+    }
+
+    private func rankedParentFamilies(_ ids: [String]) -> [ParentFamilyRank] {
+        ParentFamilyRank.ranked(ids.enumerated().map { order, id in
+            rank(of: families[id]!, id: id, order: order)
+        })
     }
 
     private func rank(of family: Family, id: String, order: Int) -> ParentFamilyRank {

@@ -179,9 +179,13 @@ final class GedcomCommonAncestorsBruteForceTests: XCTestCase {
 
     func testPedigreeCollapseTreeAllPairs() {
         // @I1@ has two FAMC: F1 (parents @I2@ × @I3@, themselves full
-        // siblings — children of @I4@ × @I5@) and F3 (father @I4@). So @I4@
-        // is @I1@'s parent (depth 1) AND grandparent (depth 2): the minimum
-        // must win, and @I5@ stays at 2 while @I4@ is 1.
+        // siblings — children of @I4@ × @I5@) and F3 (father @I4@ alone).
+        // Before Rick's 2026-09-02 one-primary-parent-family ruling this
+        // test expected @I4@ at depth 1 (a parent through F3) AND 2. Now
+        // F1 is the primary family (both parents beat one), F3's father is
+        // a non-primary, unfoldable second family (basis note only), and
+        // every walk — brute force and index alike — puts @I4@ at depth 2
+        // beside @I5@. The two still agree pair for pair.
         let text = """
         0 HEAD
         0 @I1@ INDI
@@ -232,7 +236,10 @@ final class GedcomCommonAncestorsBruteForceTests: XCTestCase {
         XCTAssertEqual(r.mismatches, [])
         XCTAssertEqual(r.pairs, 30)
         XCTAssertEqual(g.commonAncestors(of: "@I1@", and: "@I6@").map { "\($0.person.id) \($0.depthA)+\($0.depthB)" },
-                       ["@I4@ 1+1", "@I5@ 2+1"])
+                       ["@I5@ 2+1", "@I4@ 2+1"])
+        // The second family is still recorded — for the basis, not the walk.
+        XCTAssertEqual(g.parentFamilyChoice(of: g.people["@I1@"]!)?.unfoldedAlternates.map(\.person.id), ["@I4@"])
+        XCTAssertEqual(g.allRecordedParents(of: g.people["@I1@"]!).map(\.id), ["@I2@", "@I4@", "@I3@"])
         XCTAssertEqual(g.commonAncestors(of: "@I2@", and: "@I3@").first?.kinshipTerm, "siblings")
     }
 
@@ -265,7 +272,15 @@ final class GedcomCommonAncestorsBruteForceTests: XCTestCase {
         guard let url = Self.newestArtifact, FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("no compiled family tree installed")
         }
-        let g = try GedcomCompiledTree.decode(Data(contentsOf: url))
+        let g: GedcomFamilyGraph
+        do {
+            g = try GedcomCompiledTree.decode(Data(contentsOf: url))
+        } catch let error as GedcomCompiledTree.CodecError {
+            // An artifact compiled by an older build is not "installed"
+            // for this one — the app recompiles it on next launch.
+            guard case .versionMismatch = error else { throw error }
+            throw XCTSkip("installed family tree was compiled with an older codec (\(error)); recompile in the app")
+        }
         let rick = g.people(matching: "GVQV-NW3").map(\.id), donna = g.people(matching: "G2CL-86B").map(\.id)
         try XCTSkipUnless(!rick.isEmpty && !donna.isEmpty, "artifact is not the two-root Rick/Donna tree")
         var r = Report()
