@@ -82,11 +82,18 @@ enum HallieAppNavigation {
 
     /// The web bridge has no authority over the Mac's main window. Replace
     /// the app client's execution promise with an honest capability answer;
-    /// the bridge also omits the Mac-only chip.
+    /// the bridge also omits the Mac-only chip. Replace only exact promise
+    /// sentences: a coordinator may have already joined this navigation
+    /// result with an unrelated answer whose prose must survive intact.
     static func webProse(for result: HallieTurnExecutor.Result) -> String {
-        guard case .openAppDestination(let destination)? =
-            result.immediateOfferedAction else { return result.prose }
-        return "The \(destination.title) tab can only be opened in the VideoScan app on the Mac; this web chat can't control that window."
+        var prose = result.prose
+        for offer in result.offeredActions {
+            guard case .openAppDestination(let destination) = offer else { continue }
+            prose = prose.replacingOccurrences(
+                of: "Opening the \(destination.title) tab.",
+                with: "The \(destination.title) tab can only be opened in the VideoScan app on the Mac; this web chat can't control that window.")
+        }
+        return prose
     }
 
     /// Accept a chip through the app's established AppStorage + main-window
