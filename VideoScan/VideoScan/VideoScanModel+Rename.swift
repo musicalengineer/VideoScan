@@ -128,6 +128,12 @@ extension VideoScanModel {
         // see the cross-reference audit at the top of this file.
         record.filename = newFilename
         record.fullPath = newPath
+        // An in-place path rewrite with no count change: bump the
+        // revision every RecordsVersion memo keys on, or the path index
+        // (`record(forPath:)`) and Hallie's filename memo
+        // (ArchivistRecordReferenceIndex) would keep answering for the
+        // OLD name and miss the new one (codex #976 item 1).
+        notifyVolumeAggregatesStale()
 
         // Invalidate the thumbnail cache entry under the old path so the
         // next preview generation rebuilds under the new key. The cache

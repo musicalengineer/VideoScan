@@ -14,7 +14,11 @@ extension HallieTurnExecutor {
     enum RecordScope: Sendable, Equatable {
         case resolved(ArchivistRecordDossierSnapshot)
         case notFound(name: String)
-        case ambiguous([ArchivistRecordReferenceResolver.Candidate])
+        /// The first candidates and the TRUE number of files that fit.
+        case ambiguous([ArchivistRecordReferenceResolver.Candidate], total: Int)
+        /// An explicit path nobody has, with the files that share its
+        /// basename (codex #976 item 3: never a silent substitute).
+        case pathNotFound(path: String, sameName: [ArchivistRecordReferenceResolver.Candidate], sameNameTotal: Int)
         /// Nothing selected (the default for a Context built without a
         /// record capture).
         case noSelection
@@ -25,8 +29,10 @@ extension HallieTurnExecutor {
         init(_ resolution: ArchivistRecordReferenceResolver.Resolution) {
             switch resolution {
             case .resolved(let record): self = .resolved(ArchivistRecordDossierSnapshot(record: record))
-            case .ambiguous(let candidates): self = .ambiguous(candidates)
+            case .ambiguous(let candidates, let total): self = .ambiguous(candidates, total: total)
             case .notFound(let name): self = .notFound(name: name)
+            case .pathNotFound(let path, let sameName, let total):
+                self = .pathNotFound(path: path, sameName: sameName, sameNameTotal: total)
             case .noSelection: self = .noSelection
             }
         }
@@ -48,25 +54,34 @@ extension HallieTurnExecutor {
             return ArchivistRecordExecutor.execute(
                 payload, snapshot: snapshot, ownerName: context.speakers.ownerName)
 
-        case .ambiguous(let candidates):
+        case .ambiguous(let candidates, let total):
             let name: String
             if case .file(let typed) = payload.reference { name = typed } else { name = "that" }
-            let listed = candidates.map(\.filename)
+            let labels = ArchivistRecordReferenceResolver.chipLabels(for: candidates)
+            let listed = labels.joined(separator: ", ")
+            let prose = total > candidates.count
+                ? "I found \(total) files that could be “\(name)”; here are the first \(candidates.count): "
+                    + listed + ". Which one do you mean?"
+                : "I found \(total) files that could be “\(name)”: " + listed + ". Which one do you mean?"
             return Result(
                 route: .record,
                 outcome: .declined,
-                prose: "I found \(candidates.count) files that could be “\(name)”: "
-                    + listed.joined(separator: ", ") + ". Which one do you mean?",
-                basisLine: "Basis: file reference “\(name)” matched \(candidates.count) catalog "
-                    + "filenames (\(ArchivistRecordReferenceResolver.maxCandidates) at most are offered); "
+                prose: prose,
+                basisLine: "Basis: file reference “\(name)” matched \(total) catalog "
+                    + "filenames (\(candidates.count) offered, \(ArchivistRecordReferenceResolver.maxCandidates) at most); "
                     + "nothing was searched.",
-                queryDescription: description + " ambiguous=\(candidates.count)",
+                queryDescription: description + " ambiguous=\(total)",
                 citations: [],
                 catalogPersonName: nil,
-                offeredActions: candidates.map { candidate in
+                offeredActions: zip(candidates, labels).map { candidate, label in
                     .ask(question: ArchivistRecordExecutor.question(for: payload, path: candidate.fullPath),
-                         label: candidate.filename)
+                         label: label)
                 })
+
+        case .pathNotFound(let path, let sameName, let total):
+            return pathNotFoundResult(
+                path: path, sameName: sameName, total: total,
+                payload: payload, description: description)
 
         case .notFound(let name):
             return Result(
@@ -91,5 +106,55 @@ extension HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
+    }
+
+    /// An explicit path nobody has (codex #976 item 3): never a silent
+    /// substitute — the files that share its basename are OFFERED, each
+    /// chip asking about that exact path.
+    private static func pathNotFoundResult(
+        path: String,
+        sameName: [ArchivistRecordReferenceResolver.Candidate],
+        total: Int,
+        payload: ArchivistQueryAST.Record,
+        description: String
+    ) -> Result {
+        let basename = (path as NSString).lastPathComponent
+        guard !sameName.isEmpty else {
+            return Result(
+                route: .record,
+                outcome: .declined,
+                prose: "I don't have \(path), and nothing in the catalog is called “\(basename)”. "
+                    + "Name the file as it appears in the Catalog, or select it there and ask me again.",
+                basisLine: "Basis: path “\(path)” matched no catalog path and its filename matched "
+                    + "no catalog filename; nothing was searched.",
+                queryDescription: description + " pathNotFound sameName=0",
+                citations: [],
+                catalogPersonName: nil)
+        }
+        let labels = ArchivistRecordReferenceResolver.chipLabels(for: sameName)
+        let have: String
+        if sameName.count == 1 {
+            have = "I do have \(sameName[0].fullPath) — that one?"
+        } else if total > sameName.count {
+            have = "I do have \(total) files called “\(basename)”; the first \(sameName.count): "
+                + labels.joined(separator: ", ") + ". One of those?"
+        } else {
+            have = "I do have \(total) files called “\(basename)”: "
+                + labels.joined(separator: ", ") + ". One of those?"
+        }
+        return Result(
+            route: .record,
+            outcome: .declined,
+            prose: "I don't have \(path). " + have,
+            basisLine: "Basis: path “\(path)” matched no catalog path; \(total) catalog "
+                + "filename\(total == 1 ? "" : "s") match its basename (\(sameName.count) offered); "
+                + "nothing was searched.",
+            queryDescription: description + " pathNotFound sameName=\(total)",
+            citations: [],
+            catalogPersonName: nil,
+            offeredActions: zip(sameName, labels).map { candidate, label in
+                .ask(question: ArchivistRecordExecutor.question(for: payload, path: candidate.fullPath),
+                     label: label)
+            })
     }
 }
