@@ -36,6 +36,10 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         case apology
         /// "hold on a sec" / "one moment please" — wait, say so.
         case holdOn
+        /// "It's pouring rain here in the Berkshires today." (eval sm022)
+        /// — a weather aside, answered here so it never reaches the model,
+        /// which on 2026-09-02 turned "Berkshires" into a catalog search.
+        case weather
     }
 
     /// A topic the help card can be scoped to. Deterministic: "help with
@@ -185,6 +189,14 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         if let social = detectSocialLine(words: words, raw: lowered) {
             return .smalltalk(social)
         }
+        // A weather aside ("It's pouring rain here in the Berkshires
+        // today.") — a statement built from weather words and everyday
+        // glue, with at most a place name after a preposition. Bounded by
+        // a closed vocabulary so "it rained on our wedding day" (a family
+        // fact) and "did it snow in 1994" (a question) stay on the pipeline.
+        if isWeatherAside(text) {
+            return .smalltalk(.weather)
+        }
 
         // "how do i …" / "how can we …" is a how-to question about Hallie
         // herself; the help card answers it with worked examples. Capability
@@ -326,6 +338,114 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         }
         return nil
     }
+
+    /// A weather aside (eval sm022 "It's pouring rain here in the
+    /// Berkshires today.", sm023 "beautiful day out isn't it", sm024
+    /// "Supposed to snow tonight. First one of the year."): a STATEMENT of
+    /// two to twelve words with one weather cue — a weather word, or a
+    /// day-adjective beside a time word ("beautiful day") — in which every
+    /// other word is everyday glue from a closed vocabulary; the one
+    /// opening is a run of up to three Capitalised words right after a
+    /// preposition, which is a place ("in the Berkshires", "up in
+    /// Vermont"). No question mark, no search verb or media noun
+    /// (`socialBlockWords`), no digit, no possessive, no unlisted word:
+    /// "it rained on our wedding day" (wedding), "it snowed at Donna's
+    /// wedding" (a possessive), "did it snow in 1994" (a digit, "did"),
+    /// "Tim is cold" (a name with no preposition) all stay on the pipeline.
+    ///
+    /// (For Rick: a whitelist grammar — the sentence is accepted only if
+    /// every token is explained; anything unexplained rejects the line.)
+    static func isWeatherAside(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasSuffix("?") else { return false }
+        let rawTokens = trimmed
+            .replacingOccurrences(of: "’", with: "'")
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+            .map(String.init)
+        var tokens = rawTokens.filter { !["hallie", "please"].contains($0.lowercased()) }
+        while let first = tokens.first, leadingAddressWords.contains(first.lowercased()) {
+            tokens.removeFirst()
+        }
+        guard tokens.count >= 2, tokens.count <= 12 else { return false }
+        let lowered = tokens.map { $0.lowercased() }
+        let wordSet = Set(lowered)
+        guard wordSet.isDisjoint(with: socialBlockWords) else { return false }
+        guard !lowered.contains(where: { $0.contains(where: \.isNumber) }) else { return false }
+        guard !lowered.contains(where: { $0.hasSuffix("'s") && !weatherContractions.contains($0) }) else { return false }
+
+        var cue = false
+        var placeRemaining = 0
+        for (index, word) in lowered.enumerated() {
+            if weatherWords.contains(word) { cue = true; continue }
+            if weatherDayAdjectives.contains(word),
+               lowered.contains(where: { weatherTimeWords.contains($0) }) { cue = true; continue }
+            if weatherGlue.contains(word) || weatherTimeWords.contains(word) {
+                // "in the Berkshires": an article keeps the place window open.
+                if weatherPlacePrepositions.contains(word) {
+                    placeRemaining = 3
+                } else if !["the", "a", "an"].contains(word) {
+                    placeRemaining = 0
+                }
+                continue
+            }
+            // An unlisted word is accepted only as a Capitalised place word
+            // in a run of at most three right after a preposition.
+            let original = tokens[index]
+            guard placeRemaining > 0, original.first?.isUppercase == true else { return false }
+            placeRemaining -= 1
+        }
+        return cue
+    }
+
+    private static let weatherWords: Set<String> = [
+        "rain", "rains", "raining", "rained", "rainy", "pouring", "pours", "poured",
+        "drizzle", "drizzling", "shower", "showers", "downpour", "rainstorm",
+        "snow", "snows", "snowing", "snowed", "snowy", "snowstorm", "flurries",
+        "blizzard", "sleet", "sleeting", "hail", "hailing", "slush", "slushy",
+        "ice", "icy", "frost", "frosty", "freezing", "frigid", "thaw", "thawing",
+        "melting", "storm", "storms", "storming", "stormy", "thunder",
+        "thunderstorm", "thunderstorms", "lightning", "nor'easter", "noreaster",
+        "hurricane", "tornado", "wind", "winds", "windy", "gusty", "breeze",
+        "breezy", "sun", "sunny", "sunshine", "cloudy", "clouds", "overcast",
+        "grey", "gray", "fog", "foggy", "misty", "mist", "humid", "humidity",
+        "muggy", "sticky", "chilly", "cold", "hot", "warm", "cool", "mild",
+        "balmy", "brisk", "crisp", "raw", "damp", "soggy", "dry", "drought",
+        "heat", "heatwave", "scorching", "sweltering", "wintry", "temperature",
+        "degrees", "weather", "forecast",
+    ]
+    private static let weatherDayAdjectives: Set<String> = [
+        "beautiful", "gorgeous", "lovely", "nice", "nasty", "miserable",
+        "dreary", "gloomy", "rotten", "awful", "terrible", "perfect", "glorious",
+    ]
+    private static let weatherTimeWords: Set<String> = [
+        "today", "tonight", "tomorrow", "yesterday", "morning", "afternoon",
+        "evening", "night", "day", "week", "weekend", "month", "year", "out",
+        "outside", "now",
+    ]
+    private static let weatherPlacePrepositions: Set<String> = [
+        "in", "at", "up", "down", "over", "near", "around", "across", "to", "on", "from",
+    ]
+    private static let weatherContractions: Set<String> = [
+        "it's", "that's", "there's", "here's", "everything's", "what's",
+    ]
+    private static let weatherGlue: Set<String> = [
+        "it", "it's", "its", "is", "was", "were", "be", "been", "being", "has",
+        "have", "had", "here", "there", "here's", "there's", "that's", "in",
+        "at", "on", "up", "down", "over", "near", "around", "across", "to",
+        "from", "of", "the", "a", "an", "and", "but", "so", "really", "pretty",
+        "very", "quite", "too", "still", "again", "finally", "all", "this",
+        "that", "these", "those", "first", "last", "one", "supposed", "going",
+        "gonna", "get", "getting", "got", "like", "looks", "feels", "seems",
+        "feel", "look", "isn't", "wasn't", "ain't", "hasn't", "we", "we're",
+        "we've", "i", "i'm", "i've", "my", "our", "me", "us", "lol", "haha",
+        "wow", "ugh", "brr", "oh", "well", "ok", "okay", "another", "big",
+        "little", "bit", "lot", "lots", "much", "more", "than", "ever", "good",
+        "great", "bad", "dark", "bright", "early", "late", "already", "yet",
+        "just", "about", "some", "no", "not", "off", "back", "for", "with",
+        "by", "way", "kind", "sort", "what", "such", "real", "sure", "though",
+        "out", "outside", "coming", "came", "come", "stopped", "started",
+        "starting", "supposedly", "apparently", "they", "say", "said", "says",
+    ]
 
     private static let addressWords: Set<String> = [
         "hallie", "please", "hey", "ok", "okay", "oh", "well",
@@ -637,6 +757,8 @@ enum ArchivistConversationCommand: Equatable, Sendable {
             return "Bye for now — I'll be right here when you want to look through more."
         case .affirmation:
             return "Glad that helped! Ask me another one whenever you're ready."
+        case .weather:
+            return "Thank you for the weather report — I'm glad of the company. What would you like to look at when you're ready?"
         }
     }
 
