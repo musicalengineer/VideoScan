@@ -38,6 +38,13 @@ extension HallieTurnExecutor {
         /// A spoken roster must remain useful and bounded even if a damaged
         /// or synthetic profile store contains thousands of entries.
         static let maxRosterEntries = 24
+        /// This is the name-list portion, not the fixed explanation around
+        /// it. Field caps below guarantee one corrupt profile cannot consume
+        /// the whole allowance. `String.prefix` counts extended grapheme
+        /// clusters, so truncation never cuts a displayed character in half.
+        static let maxRosterListCharacters = 1_200
+        private static let maxRosterNameCharacters = 80
+        private static let maxRosterAliasCharacters = 60
 
         private static let rosterPhrases: Set<String> = [
             "who do you know", "who do you know about", "who all do you know",
@@ -70,7 +77,8 @@ extension HallieTurnExecutor {
             return words.joined(separator: " ")
         }
 
-        static func rosterScope(for text: String) -> RosterScope? {
+        static func rosterScope(for text: String,
+                                memory: ConversationMemory? = nil) -> RosterScope? {
             // "how is rick related to the people in the people tab" is an
             // overview of relationships, never the name list (live miss #12).
             if HallieRelationshipsOverview.detect(text) != nil { return nil }
@@ -134,14 +142,23 @@ extension HallieTurnExecutor {
             // Close follow-ups from the live conversation. These remain
             // intentionally exact so "read their names in these videos"
             // stays a media question.
-            let nameFollowUps: Set<String> = [
+            let readNameFollowUps: Set<String> = [
                 "read their names", "read their names for me",
                 "can you read their names", "can you read their names for me",
                 "could you read their names", "read me their names",
-                "list their names", "can you list their names", "tell me their names",
-                "what are their names", "name them",
             ]
-            if nameFollowUps.contains(question) { return .catalog }
+            if readNameFollowUps.contains(question) {
+                // Fresh, this is Rick's explicit shorthand for reading the
+                // People-tab roster. In a conversation it is a pronoun
+                // follow-up: never steal the siblings, children, or search
+                // result the preceding answer just established. A previous
+                // roster may repeat the roster safely.
+                if let exchange = memory?.lastExchange,
+                   exchange.queryDescription != "shape=roster" {
+                    return nil
+                }
+                return .catalog
+            }
 
             // "who is in the people tab", "which people are in the people tab",
             // "show me the people tab" …
@@ -184,17 +201,31 @@ extension HallieTurnExecutor {
                               basis: "Basis: People profiles (0); no model call.",
                               offers: scope == .catalog ? [.openPeopleTab] : [])
             }
-            let shownPeople = people.prefix(maxRosterEntries)
-            let entries = shownPeople.map { profile -> String in
+            var entries: [String] = []
+            var listCharacters = 0
+            for profile in people.prefix(maxRosterEntries) {
                 let aliases = Self.alternateNames(profile)
-                guard !aliases.isEmpty else { return profile.canonicalName }
-                let shown = aliases.prefix(3).joined(separator: ", ")
-                let more = aliases.count > 3 ? " and \(aliases.count - 3) more" : ""
-                return "\(profile.canonicalName) (also \(shown)\(more))"
+                let canonical = Self.boundedRosterField(
+                    profile.canonicalName, maximum: maxRosterNameCharacters)
+                let entry: String
+                if aliases.isEmpty {
+                    entry = canonical
+                } else {
+                    let shown = aliases.prefix(3).map {
+                        Self.boundedRosterField($0, maximum: maxRosterAliasCharacters)
+                    }.joined(separator: ", ")
+                    let more = aliases.count > 3 ? " and \(aliases.count - 3) more" : ""
+                    entry = "\(canonical) (also \(shown)\(more))"
+                }
+                let separatorCharacters = entries.isEmpty ? 0 : 2
+                guard listCharacters + separatorCharacters + entry.count
+                        <= maxRosterListCharacters else { break }
+                entries.append(entry)
+                listCharacters += separatorCharacters + entry.count
             }
-            let omitted = people.count - shownPeople.count
+            let omitted = people.count - entries.count
             let boundedTail = omitted > 0
-                ? " I read the first \(shownPeople.count) alphabetically; \(omitted) more are in the People tab."
+                ? " I read the first \(entries.count) alphabetically; \(omitted) more are in the People tab."
                 : ""
             let lead = scope == .catalog
                 ? "The People-tab catalog roster has \(people.count) \(people.count == 1 ? "person" : "people"): "
@@ -374,29 +405,80 @@ extension HallieTurnExecutor {
             PersonResolver.normalize(value)
         }
 
+        private static func boundedRosterField(_ value: String, maximum: Int) -> String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count > maximum else { return trimmed }
+            return String(trimmed.prefix(maximum - 1)) + "…"
+        }
+
         /// One entry per stable ID, aliases merged and de-duplicated.
         static func merged(_ profiles: [ProfileSnapshot]) -> [ProfileSnapshot] {
             var byID: [String: ProfileSnapshot] = [:]
             var order: [String] = []
+            var countsByID: [String: Int] = [:]
+            countsByID.reserveCapacity(profiles.count)
+            for profile in profiles {
+                countsByID[profile.stableID, default: 0] += 1
+            }
+            // Corrupt stores can repeat a stable ID with conflicting names.
+            // Pick the same canonical snapshot and sort its combined aliases
+            // no matter which duplicate the decoder emitted first.
+            func precedes(_ lhs: ProfileSnapshot, _ rhs: ProfileSnapshot) -> Bool {
+                let lhsName = normalizeName(lhs.canonicalName)
+                let rhsName = normalizeName(rhs.canonicalName)
+                if lhsName != rhsName { return lhsName < rhsName }
+                if lhs.canonicalName != rhs.canonicalName {
+                    return lhs.canonicalName < rhs.canonicalName
+                }
+                let lhsAliases = lhs.aliases.map(normalizeName).sorted()
+                let rhsAliases = rhs.aliases.map(normalizeName).sorted()
+                return lhsAliases.lexicographicallyPrecedes(rhsAliases)
+            }
             for profile in profiles {
                 if let existing = byID[profile.stableID] {
+                    let preferred = precedes(profile, existing) ? profile : existing
+                    let fallback = preferred == profile ? existing : profile
                     byID[profile.stableID] = ProfileSnapshot(
-                        stableID: existing.stableID,
-                        canonicalName: existing.canonicalName,
+                        stableID: preferred.stableID,
+                        canonicalName: preferred.canonicalName,
                         aliases: existing.aliases + profile.aliases,
-                        birthdate: existing.birthdate ?? profile.birthdate,
-                        note: existing.note.isEmpty ? profile.note : existing.note,
-                        kinships: existing.kinships + profile.kinships,
-                        sex: existing.sex ?? profile.sex,
-                        uuid: existing.uuid ?? profile.uuid,
-                        treeIdentity: existing.treeIdentity ?? profile.treeIdentity,
-                        deathdate: existing.deathdate ?? profile.deathdate)
+                        birthdate: preferred.birthdate ?? fallback.birthdate,
+                        note: preferred.note.isEmpty ? fallback.note : preferred.note,
+                        kinships: preferred.kinships + fallback.kinships,
+                        sex: preferred.sex ?? fallback.sex,
+                        uuid: preferred.uuid ?? fallback.uuid,
+                        treeIdentity: preferred.treeIdentity ?? fallback.treeIdentity,
+                        deathdate: preferred.deathdate ?? fallback.deathdate)
                 } else {
                     byID[profile.stableID] = profile
                     order.append(profile.stableID)
                 }
             }
-            return order.compactMap { byID[$0] }
+            return order.compactMap { byID[$0] }.map { profile in
+                let aliases: [String]
+                if countsByID[profile.stableID, default: 0] > 1 {
+                    aliases = profile.aliases.sorted {
+                        let lhs = normalizeName($0)
+                        let rhs = normalizeName($1)
+                        return lhs == rhs ? $0 < $1 : lhs < rhs
+                    }
+                } else {
+                    // A real profile's alias order is user-authored display
+                    // order. Only corrupt duplicate snapshots lose it.
+                    aliases = profile.aliases
+                }
+                return ProfileSnapshot(
+                    stableID: profile.stableID,
+                    canonicalName: profile.canonicalName,
+                    aliases: aliases,
+                    birthdate: profile.birthdate,
+                    note: profile.note,
+                    kinships: profile.kinships,
+                    sex: profile.sex,
+                    uuid: profile.uuid,
+                    treeIdentity: profile.treeIdentity,
+                    deathdate: profile.deathdate)
+            }
                 .sorted {
                     let lhs = normalizeName($0.canonicalName)
                     let rhs = normalizeName($1.canonicalName)

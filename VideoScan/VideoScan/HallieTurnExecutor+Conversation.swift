@@ -106,9 +106,10 @@ extension HallieTurnExecutor {
         }
 
         /// Record an executed turn. Follow-up media actions, help, small
-        /// talk and capability answers carry no AST and leave memory
-        /// untouched; a reset clears it; a refined or paged query replaces
-        /// it like any other.
+        /// talk and ordinary capability answers carry no AST and leave
+        /// memory untouched; a roster answer is retained only to scope a
+        /// later name pronoun. A reset clears it; a refined or paged query
+        /// replaces it like any other.
         mutating func record(intent: Intent?, result: Result, question: String? = nil) {
             if result.route == .reset {
                 reset()
@@ -240,7 +241,12 @@ extension HallieTurnExecutor {
                 case .presence, .cross, .aggregate, .temporal, .graph, .telling, .unsupportedEvent,
                      .record:
                     substantive = result.outcome == .answered || result.outcome == .needsClarification
-                case .followUp, .capability, .help, .smalltalk, .conversation, .reset:
+                case .capability:
+                    // Most capability cards are not conversational facts,
+                    // but roster pronouns need to distinguish a prior roster
+                    // from a prior siblings/search list.
+                    substantive = result.queryDescription == "shape=roster"
+                case .followUp, .help, .smalltalk, .conversation, .reset:
                     substantive = false
                 }
             }
@@ -893,7 +899,7 @@ extension HallieTurnExecutor {
         // the catalog" is the People-tab roster only. Both are answered
         // locally, and the explicit scope prevents catalog wording from
         // leaking tree-only or family-told names.
-        if let rosterAnswer, let scope = PeopleTab.rosterScope(for: question) {
+        if let rosterAnswer, let scope = PeopleTab.rosterScope(for: question, memory: memory) {
             return .answer(rosterAnswer(scope))
         }
         // "Where did that come from?" — answered from the last answer's own

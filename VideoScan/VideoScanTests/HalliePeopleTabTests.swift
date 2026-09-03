@@ -277,8 +277,6 @@ struct HalliePeopleTabTests {
             "do you know the people in the people tab and can you read their names for me?",
             "Matt is my son. Tim is my brother. Do you know the people in the people tab and can you read their names for me?",
             "read their names",
-            "can you list their names?",
-            "what are their names?",
         ] {
             #expect(Tab.rosterScope(for: question) == .catalog, Comment(rawValue: question))
         }
@@ -294,6 +292,11 @@ struct HalliePeopleTabTests {
             "which people in the catalog were at the Cape",
             "which people in the catalog were at the wedding in 1994",
             "who is in New Hampshire.mov",
+            "list their names",
+            "can you list their names",
+            "tell me their names",
+            "what are their names",
+            "name them",
         ] {
             #expect(Tab.rosterScope(for: question) == nil, Comment(rawValue: question))
         }
@@ -357,6 +360,22 @@ struct HalliePeopleTabTests {
         #expect(firstStableIDRange.lowerBound < lastStableIDRange.lowerBound)
     }
 
+    @Test func duplicateStableIDsProduceTheSameRosterInEitherInputOrder() {
+        let first = Profile(
+            stableID: "duplicate", canonicalName: "Zed",
+            aliases: ["Third", "First"])
+        let second = Profile(
+            stableID: "duplicate", canonicalName: "Alpha",
+            aliases: ["Second", "Fourth"])
+        let forward = Tab.rosterAnswer(
+            profiles: [first, second], graph: nil, cyberBrain: nil, scope: .catalog)
+        let reverse = Tab.rosterAnswer(
+            profiles: [second, first], graph: nil, cyberBrain: nil, scope: .catalog)
+
+        #expect(forward.prose == reverse.prose)
+        #expect(forward.prose.contains("Alpha (also First, Fourth, Second and 1 more)"))
+    }
+
     @Test(.timeLimit(.minutes(1))) func hundredThousandProfileRosterIsBoundedAndDeterministic() {
         var profiles: [Profile] = []
         profiles.reserveCapacity(100_000)
@@ -396,6 +415,97 @@ struct HalliePeopleTabTests {
                 "pure roster code must neither read nor mutate global preferences")
     }
 
+    @Test func corruptHugeNamesAndAliasesStayInsideTheGraphemeSafeBudget() {
+        let grapheme = "👨‍👩‍👧‍👦"
+        let hugeName = String(repeating: grapheme, count: 20_000)
+        let hugeAlias = String(repeating: "e\u{301}", count: 20_000)
+        let profiles = (0..<24).map { index in
+            Profile(
+                stableID: String(format: "id-%02d", index),
+                canonicalName: hugeName + String(format: "%02d", index),
+                aliases: [hugeAlias + String(index)])
+        }
+
+        let result = Tab.rosterAnswer(
+            profiles: profiles, graph: nil, cyberBrain: nil, scope: .catalog)
+
+        #expect(result.prose.count < 1_600)
+        #expect(result.prose.contains(String(repeating: grapheme, count: 79) + "…"))
+        #expect(result.prose.contains("I read the first 8 alphabetically; 16 more are in the People tab."))
+        #expect(!result.prose.contains(String(repeating: grapheme, count: 80)))
+    }
+
+    @Test func pronounNameFollowUpsDoNotStealSiblingOrPresenceMemory() {
+        var siblingMemory = HallieTurnExecutor.ConversationMemory()
+        let siblingIntent = intent(
+            "who are Rick's siblings", people: ["Rick"],
+            operation: .kinship, relation: .siblings)
+        let siblingAnswer = HallieTurnExecutor.Result(
+            route: .graph, outcome: .answered,
+            prose: "Rick's siblings are Eileen and Tim.",
+            basisLine: "Basis: family tree.",
+            queryDescription: "shape=graph operation=kinship relation=siblings",
+            citations: [], catalogPersonName: "Rick")
+        siblingMemory.record(intent: siblingIntent, result: siblingAnswer)
+
+        let afterSiblings = HallieTurnExecutor.preTranslation(
+            question: "read their names", playAfterAnswer: false,
+            memory: siblingMemory, isKnownPerson: { _ in false },
+            rosterAnswer: { _ in self.rosterSentinel })
+        guard case .translate = afterSiblings else {
+            Issue.record("sibling pronoun should remain an ordinary follow-up, got \(afterSiblings)")
+            return
+        }
+
+        var presenceMemory = HallieTurnExecutor.ConversationMemory()
+        let presenceIntent = HallieTurnExecutor.Intent(
+            originalQuestion: "show videos with Rick and Donna",
+            ast: .presence(.init(people: ["Rick", "Donna"])))
+        let presenceAnswer = HallieTurnExecutor.Result(
+            route: .presence, outcome: .answered,
+            prose: "I found one video.", basisLine: "Basis: catalog.",
+            queryDescription: "shape=presence", citations: [
+                .init(recordID: UUID(), fullPath: "/fixture/family.mov",
+                      filename: "family.mov", playbackSeconds: nil, bases: []),
+            ], catalogPersonName: nil, matchCount: 1)
+        presenceMemory.record(intent: presenceIntent, result: presenceAnswer)
+
+        for phrase in ["what are their names", "name them", "list their names"] {
+            let afterPresence = HallieTurnExecutor.preTranslation(
+                question: phrase, playAfterAnswer: false,
+                memory: presenceMemory, isKnownPerson: { _ in false },
+                rosterAnswer: { _ in self.rosterSentinel })
+            guard case .translate = afterPresence else {
+                Issue.record("\(phrase) should remain a presence/list follow-up, got \(afterPresence)")
+                return
+            }
+        }
+    }
+
+    @Test func exactReadTheirNamesIsFreshOrMayRepeatAPriorRoster() {
+        let fresh = HallieTurnExecutor.preTranslation(
+            question: "read their names for me", playAfterAnswer: false,
+            memory: .init(), isKnownPerson: { _ in false },
+            rosterAnswer: { _ in self.rosterSentinel })
+        guard case .answer(let freshAnswer) = fresh else {
+            Issue.record("fresh exact phrase should be the catalog roster"); return
+        }
+        #expect(freshAnswer.prose == rosterSentinel.prose)
+
+        var rosterMemory = HallieTurnExecutor.ConversationMemory()
+        rosterMemory.record(
+            intent: nil, result: rosterSentinel,
+            question: "tell me about the people in the catalog")
+        let repeated = HallieTurnExecutor.preTranslation(
+            question: "read their names", playAfterAnswer: false,
+            memory: rosterMemory, isKnownPerson: { _ in false },
+            rosterAnswer: { _ in self.rosterSentinel })
+        guard case .answer(let repeatedAnswer) = repeated else {
+            Issue.record("exact phrase may repeat a prior roster"); return
+        }
+        #expect(repeatedAnswer.prose == rosterSentinel.prose)
+    }
+
     @Test func rosterIsAnsweredBeforeTranslation() {
         let pre = HallieTurnExecutor.preTranslation(
             question: "tell me about the people in the catalog", playAfterAnswer: false,
@@ -414,5 +524,9 @@ struct HalliePeopleTabTests {
             question: "tell me about the people in the catalog", playAfterAnswer: false,
             memory: .init(), isKnownPerson: { _ in false })
         guard case .translate = none else { Issue.record("expected translate"); return }
+    }
+
+    private var rosterSentinel: HallieTurnExecutor.Result {
+        Tab.rosterAnswer(profiles: [dad], graph: nil, cyberBrain: nil, scope: .catalog)
     }
 }
