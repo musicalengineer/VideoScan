@@ -130,18 +130,49 @@ enum KinshipValidation {
         return Finding(severity: .error, rule: rule, message: "\(c.subjectName) can't be their own \(c.word).")
     }
 
-    /// Same fact already stored — on this profile, or as the inverse row
-    /// on the other profile (the overlay carries both directions).
+    /// Same fact already known. TWO different situations, and only the
+    /// first one is the user's mistake (2026-09-03, after Rick was refused
+    /// on his own family — see KinshipExplicitOverInferredTests):
+    ///
+    ///   • `onSubject` — the identical row is already on THIS card. The
+    ///     user typed the same thing twice; there is nothing to gain by
+    ///     storing it again. ERROR, blocks, unchanged.
+    ///
+    ///   • otherwise — the fact is known only because the app worked it
+    ///     out: the IMPLIED INVERSE of a row stored on the other person's
+    ///     card ("Ada: sibling of Ben" answers Ben's card too). The row
+    ///     the user is typing is NOT on the card they are editing, and
+    ///     that card may well look empty to them. Refusing it told Rick a
+    ///     fact was "already recorded" on a card showing nothing, and left
+    ///     him unable to state what he knows about his own family.
+    ///     WARNING, never blocks.
+    ///
+    /// Explicit user knowledge outranks anything the app derived. Storing
+    /// the restatement is cheap and strictly better evidence: the engine
+    /// folds the two directions into one hop (`rowHops` keys on
+    /// relation+target) and the sibling derivation coalesces per unordered
+    /// pair, so nothing double-counts — but the fact now survives the
+    /// other card being edited or removed.
+    ///
+    /// Note there is deliberately NO check against derived edges here
+    /// (`overlay.derivedEdges(from:)`). `edges(from:)` is stored rows +
+    /// inverses only, and a purely derived fact — a parent copied across
+    /// sibling rows — must not even warn: recording it is exactly how a
+    /// derivation gets promoted to a stated fact.
     private static func checkDuplicate(_ c: Context) -> [Finding] {
         let onSubject = c.existingRows.contains {
             $0.relation == c.candidate.relation && $0.relativeTo.key == c.candidate.relativeTo.key
         }
-        let inGraph = c.inference.overlay.edges(from: c.anchor).contains {
+        if onSubject {
+            return [Finding(severity: .error, rule: .duplicateRow,
+                            message: "This card already records \(c.subjectName) as \(c.anchorName)'s \(c.word) — remove the repeated row.")]
+        }
+        let storedOnTheOtherCard = c.inference.overlay.edges(from: c.anchor).contains {
             $0.relation == c.candidate.relation && $0.to == c.subject
         }
-        guard onSubject || inGraph else { return [] }
-        return [Finding(severity: .error, rule: .duplicateRow,
-                        message: "\(c.subjectName) is already recorded as \(c.anchorName)'s \(c.word).")]
+        guard storedOnTheOtherCard else { return [] }
+        return [Finding(severity: .warning, rule: .duplicateRow,
+                        message: "\(c.anchorName)'s card already records \(c.subjectName) as their \(c.word) — keeping this row states the same fact on \(c.subjectName)'s card as well.")]
     }
 
     /// A different primitive already links the same two people
