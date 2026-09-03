@@ -330,7 +330,10 @@ enum HallieRelationshipsOverview {
             let relations = route.map(\.relation)
             let rules = entry.derived.derivationRules
             if let term = entry.derived.term {
-                let named = KinshipChainNamer.name(relations)
+                // A conflicting sibling pair keeps the engine's neutral
+                // "sibling" (codex #1019 item 2): no `named`, so a group of
+                // them is never re-gendered into "brothers".
+                let named = entry.derived.siblingVerdict == .conflict ? nil : KinshipChainNamer.name(relations)
                 let half = term.contains("half-")
                 let age = ["older ", "younger "].first { term.hasPrefix($0) }.map { String($0.dropLast()) }
                 let neutral = named?.term(sex: nil, half: half, age: age) ?? term

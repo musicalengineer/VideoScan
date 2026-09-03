@@ -1311,9 +1311,15 @@ enum ArchivistGraphExecutor {
                     let evidence = hop.isDerived
                         ? (hop.storedOnIdentity.isEmpty ? hop.storedOn : hop.storedOnIdentity)
                         : (hit.member.identity.isEmpty ? hit.member.node.auditID : hit.member.identity)
+                    // A stored sibling row takes the pair's ONE verdict
+                    // (codex #1019 item 2): "half-brother", or the neutral
+                    // "sibling" for a conflict the warning explains.
+                    let term = relation == .sibling && !hop.isDerived
+                        ? FamilyKinshipOverlay.siblingTerm(overlay.siblingVerdict(node, hit.member.node), sex: hit.member.sex)
+                        : relation.term(sex: hit.member.sex)
                     return .init(
                         name: hit.member.name,
-                        term: relation.term(sex: hit.member.sex),
+                        term: term,
                         evidenceID: evidence,
                         gedcomID: hit.member.gedcomID,
                         derivation: overlay.derivationNote(for: hit.hops))

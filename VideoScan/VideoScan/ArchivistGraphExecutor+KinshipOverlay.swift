@@ -149,6 +149,10 @@ extension ArchivistGraphExecutor {
             // One hop with a plain word: just the name. Derived (composed)
             // relations show the route so the inference is checkable.
             if hit.hops.count == 1 {
+                // A stored sibling row: the pair's ONE verdict (codex #1019
+                // item 2) — "Tim (half-brother)"; a conflict says so
+                // instead of picking a word.
+                let aside = siblingAside(hit, overlay: overlay)
                 // A relative bridged to a tree record (pin / certain
                 // derivation) answers with the tree's name and vitals, and
                 // the People-tab name as the alias (Rick 2026-08-29:
@@ -158,10 +162,10 @@ extension ArchivistGraphExecutor {
                     requiredPersonNames.append(record.name)
                     let alias = PersonResolver.normalize(record.name) == PersonResolver.normalize(hit.member.name)
                         ? "" : " (\(hit.member.name) in the People tab)"
-                    return record.name + alias + HallieBiographyCard.vitalsAside(record)
+                    return record.name + alias + HallieBiographyCard.vitalsAside(record) + aside
                 }
                 requiredPersonNames.append(hit.member.name)
-                return hit.member.displayName
+                return hit.member.displayName + aside
             }
             requiredPersonNames.append(hit.member.name)
             return "\(hit.member.displayName) (\(overlay.route(for: hit.hops)))"
@@ -275,6 +279,19 @@ extension ArchivistGraphExecutor {
             evidence: evidence,
             candidates: [], profileCandidates: [], ambiguityCandidates: [],
             catalogPersonName: nil)
+    }
+
+    /// " (half-brother)" for a one-hop stored sibling row whose pair
+    /// verdict is half; " (sibling rows disagree — full or half unknown)"
+    /// for a conflict; empty for full and for every other relation.
+    static func siblingAside(_ hit: FamilyKinshipOverlay.Hit, overlay: FamilyKinshipOverlay) -> String {
+        guard hit.hops.count == 1, hit.hops[0].relation == .sibling, !hit.hops[0].isDerived,
+              let verdict = overlay.siblingVerdict(hit.hops[0].from, hit.hops[0].to) else { return "" }
+        switch verdict {
+        case .full:              return ""
+        case .half, .unresolved: return " (" + FamilyKinshipOverlay.siblingTerm(verdict, sex: hit.member.sex) + ")"
+        case .conflict:          return " (sibling rows disagree — full or half unknown)"
+        }
     }
 
     /// `pluralize` for the graph vocabulary, which already contains plural
