@@ -211,6 +211,105 @@ struct ArchivistQueryASTTranslatorTests {
         #expect(responder.get() == "healthy.local")
     }
 
+    // MARK: - Defaulted temporal reference vs. an explicit year in the question
+    //
+    // Review finding on top of 828e00da: Homebrew ollama 0.33.2 returns HTTP
+    // 501 for structured output, the fallback retry drops `format:`, and the
+    // unconstrained model may omit a temporal payload's `reference` entirely
+    // — `ArchivistQueryAST.Temporal.init` then defaults it to
+    // `.currentSelection` so the turn can decode at all. That default is
+    // right for "how old is Tim" but was silently WRONG for "how old was
+    // Tim in 1995": the decoder never sees the original question, so it
+    // cannot tell the two apart. `OllamaQueryTranslator.repairDefaultedTemporalReference`
+    // does that disambiguation after decoding, gated on
+    // `ArchivistQueryAST.temporalReferenceDefaultedNote` — which is emitted
+    // ONLY when the key was truly absent, never when the model supplied any
+    // reference, so a model-supplied answer always wins.
+
+    @Test func unconstrainedTemporalOmissionStaysCurrentSelectionWithNoYearInQuestion() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#)
+        }
+        let result = try await translator.translateAST("how old is Tim")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .currentSelection)))
+    }
+
+    /// THE REVIEW FINDING: 828e00da's default silently changed the meaning
+    /// of a question that states a year. "how old was Tim in 1995" must
+    /// resolve to explicitYear(1995), never currentSelection.
+    @Test func aDefaultedTemporalReferenceAdoptsTheSingleYearStatedInTheQuestion() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#)
+        }
+        let result = try await translator.translateAST("how old was Tim in 1995")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .explicitYear(1995))))
+    }
+
+    @Test func aDefaultedTemporalReferenceStaysDefaultedWhenTheQuestionNamesTwoYears() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#)
+        }
+        let result = try await translator.translateAST(
+            "how old were the boys in 1995 and 2001")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .currentSelection)),
+            "ambiguous between two stated years — an 'as of now' answer beats a guess")
+    }
+
+    @Test func modelSuppliedCurrentSelectionIsNeverSecondGuessedByAYearInTheQuestion() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"currentSelection"}}}"#)
+        }
+        let result = try await translator.translateAST("how old was Tim in 1995, here")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .currentSelection)),
+            "the model DID supply a reference — its answer wins even though the text names a year")
+    }
+
+    @Test func modelSuppliedExplicitYearIsNeverOverriddenByADifferentYearInTheQuestion() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"explicitYear","year":1990}}}"#)
+        }
+        let result = try await translator.translateAST(
+            "how old was Tim in 1990, and how old was he in 2001")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .explicitYear(1990))))
+    }
+
+    @Test func aYearOutsideTheContractsRangeIsNotAdoptedByTheRepair() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#)
+        }
+        let result = try await translator.translateAST("how old was Tim in 3025")
+        #expect(result == .temporal(.init(
+            subject: "tim", operation: .age, reference: .currentSelection)))
+    }
+
+    /// SENSOR pinning the fixed behavior at the exact boundary the review
+    /// flagged: Homebrew ollama 0.33.2 returns HTTP 501 for structured
+    /// output, so the fallback retry drops `format:` and the unconstrained
+    /// model may omit `reference` entirely (828e00da). The resulting
+    /// `.currentSelection` default must never stand in for a year the user
+    /// actually said.
+    @Test func aDefaultedTemporalReferenceNeverOverridesAYearTheUserSaid() async throws {
+        var translator = OllamaQueryTranslator()
+        translator.transport = .fake { _, _ in
+            astReply(#"{"shape":"temporal","payload":{"subject":"donna","operation":"age"}}"#)
+        }
+        let result = try await translator.translateAST("how old was Donna in 2005")
+        #expect(result == .temporal(.init(
+            subject: "donna", operation: .age, reference: .explicitYear(2005))),
+            "regression: the 828e00da default must not eat an explicit year")
+    }
+
     @Test func existingV1EntryPointStillAcceptsMinimalLegacyReply() async throws {
         let recorder = ASTRequestRecorder()
         var translator = OllamaQueryTranslator()

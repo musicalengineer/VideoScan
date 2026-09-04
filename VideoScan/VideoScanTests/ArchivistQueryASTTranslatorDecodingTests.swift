@@ -139,6 +139,27 @@ struct ArchivistQueryASTTranslatorDecodingTests {
         assertRejected(#"{"shape":"temporal","payload":{"subject":"timmy","operation":"age","reference":"yesterday"}}"#)
     }
 
+    // MARK: Defaulted temporal reference note (seam for OllamaQueryTranslator's
+    // post-decode year repair — see ArchivistQueryASTTranslatorTests.swift)
+
+    @Test func absentTemporalReferenceRecordsTheDefaultedNote() throws {
+        let decoded = try decode(
+            #"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#)
+        #expect(decoded.ast == .temporal(.init(
+            subject: "tim", operation: .age, reference: .currentSelection)))
+        #expect(decoded.notes == [ArchivistQueryAST.temporalReferenceDefaultedNote])
+    }
+
+    @Test func modelSuppliedReferenceNeverRecordsTheDefaultedNote() throws {
+        let current = try decode(
+            #"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"currentSelection"}}}"#)
+        #expect(!current.notes.contains(ArchivistQueryAST.temporalReferenceDefaultedNote))
+
+        let explicit = try decode(
+            #"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"explicitYear","year":1990}}}"#)
+        #expect(!explicit.notes.contains(ArchivistQueryAST.temporalReferenceDefaultedNote))
+    }
+
     // MARK: Still rejected
 
     @Test func misplacedKnownConstraintFieldsAreStillRejected() {

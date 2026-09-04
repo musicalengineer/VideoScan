@@ -349,8 +349,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 translatorLog.notice(
                     "translator output normalized: \(notes, privacy: .public)")
             }
+            let repairedReference = Self.repairDefaultedTemporalReference(
+                in: decoded.ast, notes: decoded.notes, originalQuestion: text)
             return Self.repairPossessiveSpeakerPronoun(
-                in: decoded.ast, originalQuestion: text)
+                in: repairedReference, originalQuestion: text)
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict ArchivistQueryAST "
@@ -377,8 +379,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 translatorLog.notice(
                     "turn interpretation normalized: \(decoded.notes.joined(separator: "; "), privacy: .public)")
             }
+            let repairedReference = Self.repairDefaultedTemporalReference(
+                in: decoded.ast, notes: decoded.notes, originalQuestion: text)
             return .archive(Self.repairPossessiveSpeakerPronoun(
-                in: decoded.ast, originalQuestion: text))
+                in: repairedReference, originalQuestion: text))
         } catch let error as NLTranslatorError {
             throw error
         } catch {
@@ -386,6 +390,75 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 "content is not a strict Hallie turn interpretation "
                     + "(\(error.localizedDescription)): \(content.prefix(120))")
         }
+    }
+
+    /// See `ArchivistQueryAST.temporalReferenceDefaultedNote`'s doc comment:
+    /// when the unconstrained model omits a temporal payload's `reference`,
+    /// the decoder defaults it to `.currentSelection` so the turn can
+    /// decode at all — but that silently changes the meaning of a question
+    /// that STATES a year ("how old was Tim in 1995"). The decoder never
+    /// sees the original text, so it cannot make that call; this repair
+    /// runs AFTER decoding, with the text in hand, and ONLY when the note
+    /// says the default actually fired (an explicit model reference,
+    /// `{"kind":"currentSelection"}` or `{"kind":"explicitYear",…}`, never
+    /// produces the note and is never second-guessed here — review finding
+    /// 2026-09-03, on top of 828e00da).
+    ///
+    ///   - exactly one year in `originalQuestion` -> rewrite to that
+    ///     `.explicitYear`.
+    ///   - no year -> leave `.currentSelection` (exactly what "how old is
+    ///     Tim" needs).
+    ///   - more than one distinct year -> leave the default alone and log
+    ///     it; a wrong guess is worse than an "as of now" answer.
+    static func repairDefaultedTemporalReference(
+        in ast: ArchivistQueryAST,
+        notes: [String],
+        originalQuestion: String
+    ) -> ArchivistQueryAST {
+        guard notes.contains(ArchivistQueryAST.temporalReferenceDefaultedNote),
+              case .temporal(var temporal) = ast,
+              temporal.reference == .currentSelection else { return ast }
+
+        let years = distinctYears(in: originalQuestion)
+        guard years.count == 1, let year = years.first else {
+            if years.count > 1 {
+                let yearList = years.map(String.init).joined(separator: ", ")
+                translatorLog.notice(
+                    "defaulted temporal reference left as currentSelection — question names multiple years: \(yearList, privacy: .public)")
+            }
+            return ast
+        }
+        temporal.reference = .explicitYear(year)
+        translatorLog.notice(
+            "repaired defaulted temporal reference to explicitYear \(year, privacy: .public)")
+        return .temporal(temporal)
+    }
+
+    /// Every distinct 4-digit run of digits in `text` that falls inside
+    /// `ArchivistQueryAST.yearRange`, in first-seen order. Deliberately not
+    /// a date parser — a plain digit scan is all the repair above needs.
+    private static func distinctYears(in text: String) -> [Int] {
+        var seen = Set<Int>()
+        var years: [Int] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard text[index].isNumber else {
+                index = text.index(after: index)
+                continue
+            }
+            var end = index
+            while end < text.endIndex, text[end].isNumber {
+                end = text.index(after: end)
+            }
+            let token = text[index..<end]
+            if token.count == 4, let year = Int(token),
+               ArchivistQueryAST.yearRange.contains(year), !seen.contains(year) {
+                seen.insert(year)
+                years.append(year)
+            }
+            index = end
+        }
+        return years
     }
 
     /// Structured output prevents malformed fields, but it cannot prevent a

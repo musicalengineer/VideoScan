@@ -773,6 +773,24 @@ extension ArchivistQueryAST {
         let notes: [String]
     }
 
+    /// Emitted in `TranslatorDecoding.notes` when a temporal payload's
+    /// `reference` key was absent (or present-but-null, which sanitize
+    /// drops like any other null) so `Temporal.init` fell back to its
+    /// `.currentSelection` default (see that initializer's doc comment —
+    /// Homebrew ollama 0.33.2's HTTP 501 on structured output leaves the
+    /// schema unenforced, so the model may simply omit the key).
+    ///
+    /// That default is right for "how old is Tim" but wrong for "how old
+    /// was Tim in 1995" — the decoder has no access to the original
+    /// question, so it cannot tell the two apart. This note is the seam:
+    /// OllamaQueryTranslator's post-decode repair looks for it and, ONLY
+    /// then, consults the original text for a year to recover
+    /// (repairDefaultedTemporalReference). A reference the model actually
+    /// supplied never produces this note and is therefore never
+    /// second-guessed here.
+    static let temporalReferenceDefaultedNote =
+        "temporal reference defaulted to currentSelection"
+
     /// Every field name the contract knows, at any level. Anything else on a
     /// known object is a benign extra.
     static let knownFieldNames: Set<String> = [
@@ -813,6 +831,9 @@ extension ArchivistQueryAST {
         if var payload = top["payload"] as? [String: Any] {
             payload = try sanitize(payload, path: "payload.", shape: shape,
                                    notes: &notes)
+            if shape == "temporal", payload["reference"] == nil {
+                notes.append(temporalReferenceDefaultedNote)
+            }
             if shape == "temporal", let reference = payload["reference"],
                let rewritten = canonicalReference(reference) {
                 payload["reference"] = rewritten
