@@ -1024,8 +1024,22 @@ enum ArchivistGraphExecutor {
                       let id = peopleTab?.profileStableID, !id.isEmpty else { return nil }
                 return id
             }()
+            // The shared vital-date seam both Hallie routes read
+            // (HallieVitalDates, 2026-09-04). Rick's ruling: for a person
+            // who has a People profile, the profile's birth/death dates are
+            // the true ones and the tree's are wrong. `.none` — nobody's
+            // profile owns this tree record, or ownership is contested —
+            // leaves every date exactly as the tree records it, which is the
+            // case for the ~39,237 people who are only in the tree.
+            let vitals = HallieVitalDates.resolve(
+                treePerson: person,
+                profiles: inputs.profiles.map(HallieVitalProfile.init),
+                graph: graph,
+                throughProfileStableID: profileStableID)
             let (answer, plan, card) = HallieBiographyCard.answer(
-                for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
+                for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus,
+                profileBirthdate: vitals.profileBirthdate,
+                profileDeathdate: vitals.profileDeathdate)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(
@@ -1036,7 +1050,10 @@ enum ArchivistGraphExecutor {
                 conclusion: result.conclusion,
                 prose: result.prose,
                 basisLine: result.basisLine + HallieBiographyCard.peopleTabBasis(card)
-                    + HallieBiographyCard.dataQualityBasis(card),
+                    + HallieBiographyCard.dataQualityBasis(card)
+                    + HallieBiographyCard.vitalDatesBasis(
+                        profileName: vitals.profileName,
+                        birth: vitals.profileBirthdate, death: vitals.profileDeathdate),
                 evidence: result.evidence,
                 candidates: result.candidates,
                 profileCandidates: result.profileCandidates,

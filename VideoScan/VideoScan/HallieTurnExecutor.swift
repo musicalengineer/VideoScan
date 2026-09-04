@@ -905,7 +905,7 @@ enum HallieTurnExecutor {
             }
             let resolution = temporalResolution(
                 payload.subject, profiles: profiles,
-                selectedIdentity: request.selectedIdentity)
+                selectedIdentity: request.selectedIdentity, graph: context.graph)
             // A born-yet / would-have-been ask, or a person who had passed
             // on before the record was made, is phrased by the group
             // composer even for one person ("Dad would have been 58 in

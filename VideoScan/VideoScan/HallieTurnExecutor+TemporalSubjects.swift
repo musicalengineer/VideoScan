@@ -72,10 +72,12 @@ extension HallieTurnExecutor {
             let profiles = context.profiles ?? []
             let typed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
             let subjectIsKnown: Bool = {
-                if case .resolved = temporalResolution(typed, profiles: profiles, selectedIdentity: nil) {
+                if case .resolved = temporalResolution(
+                    typed, profiles: profiles, selectedIdentity: nil, graph: context.graph) {
                     return true
                 }
-                if case .ambiguous = temporalResolution(typed, profiles: profiles, selectedIdentity: nil) {
+                if case .ambiguous = temporalResolution(
+                    typed, profiles: profiles, selectedIdentity: nil, graph: context.graph) {
                     return true
                 }
                 return false
@@ -158,7 +160,7 @@ extension HallieTurnExecutor {
                 if let id = entry.member.profileStableID,
                    case .resolved(_, let snapshot) = temporalResolution(
                        entry.member.name, profiles: context.profiles ?? [],
-                       selectedIdentity: .profileStableID(id)) {
+                       selectedIdentity: .profileStableID(id), graph: context.graph) {
                     subjects.append(snapshot)
                 } else {
                     subjects.append(.init(
@@ -202,7 +204,9 @@ extension HallieTurnExecutor {
                     basis: "Basis: the question names a relative of the speaker that the People tab and family tree could not resolve.")
             }
             guard !kin.notes.isEmpty, let name = kin.people.first else { return .notApplicable }
-            switch temporalResolution(name, profiles: context.profiles ?? [], selectedIdentity: nil) {
+            switch temporalResolution(
+                name, profiles: context.profiles ?? [], selectedIdentity: nil,
+                graph: context.graph) {
             case .resolved(_, let snapshot):
                 return .resolved(Resolved(phrase: "'\(phrase)'", subjects: [snapshot], note: kin.notes.joined(separator: "; ")))
             case .ambiguous(_, let candidates):

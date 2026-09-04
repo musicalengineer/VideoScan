@@ -3,6 +3,21 @@ import VideoScanCore
 
 enum ArchivistTemporalBirthdateProvenance: Sendable, Equatable {
     case poiProfile(profileID: String)
+    /// The family-tree record the date came from instead (HallieVitalDates,
+    /// 2026-09-04). Rick's ruling is that a People profile's own date always
+    /// wins; this case is reached only for a field the profile leaves empty
+    /// and the tree records, on a tree person the profile uniquely owns.
+    case gedcomTree(personID: String)
+
+    /// "Ma's People profile" / "the family tree" — the noun the basis lines
+    /// use so a reader can tell WHICH store an age was counted from. Rick,
+    /// 2026-09-04: the two stores must never again disagree silently.
+    func basisNoun(canonicalName: String) -> String {
+        switch self {
+        case .poiProfile: return "\(canonicalName)'s People profile"
+        case .gedcomTree: return "the family tree"
+        }
+    }
 }
 
 /// Immutable canonical identity resolved before temporal execution.
@@ -15,6 +30,11 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
     /// present-tense path reads it: "how old is X" for someone who has
     /// passed on is answered as the age at death, never an age today.
     let deathdate: Date?
+    /// Which store `deathdate` came from (HallieVitalDates, 2026-09-04).
+    /// Independent of `birthdateProvenance`: precedence is per field, so a
+    /// person's birth date and death date can legitimately come from
+    /// different stores.
+    let deathdateProvenance: ArchivistTemporalBirthdateProvenance
     /// The profile's recorded sex, for the pronoun in "(he passed on in
     /// 1977)". Nil = no pronoun is used. Additive (2026-09-02).
     let sex: PersonSex?
@@ -25,6 +45,7 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
         birthdate: Date?,
         birthdateProvenance: ArchivistTemporalBirthdateProvenance? = nil,
         deathdate: Date? = nil,
+        deathdateProvenance: ArchivistTemporalBirthdateProvenance? = nil,
         sex: PersonSex? = nil
     ) {
         self.stableID = stableID
@@ -33,6 +54,8 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
         self.birthdateProvenance = birthdateProvenance
             ?? .poiProfile(profileID: stableID)
         self.deathdate = deathdate
+        self.deathdateProvenance = deathdateProvenance
+            ?? .poiProfile(profileID: stableID)
         self.sex = sex
     }
 
@@ -46,6 +69,7 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
             birthdate: profile.birthdate,
             birthdateProvenance: .poiProfile(profileID: profile.id),
             deathdate: profile.deathdate,
+            deathdateProvenance: .poiProfile(profileID: profile.id),
             sex: profile.sex)
     }
 }
@@ -342,7 +366,8 @@ enum ArchivistTemporalExecutor {
             }
             return ArchivistTemporalResult(
                 value: .ageRange(range), decline: nil, prose: prose,
-                basisLine: "Basis: POI profile birthdate \(dayString(birthdate)); "
+                basisLine: "Basis: \(subject.birthdateProvenance.basisNoun(canonicalName: subject.canonicalName)) "
+                    + "birthdate \(dayString(birthdate)); "
                     + "the question supplied year \(year) without a month/day.",
                 evidence: evidence)
 
@@ -361,7 +386,8 @@ enum ArchivistTemporalExecutor {
                 reference: .currentSelection(selection))
             let birthYear = calendar.component(.year, from: birthdate)
             let referenceYear = calendar.component(.year, from: referenceDate)
-            let basis = "Basis: POI profile birthdate \(dayString(birthdate)); "
+            let basis = "Basis: \(subject.birthdateProvenance.basisNoun(canonicalName: subject.canonicalName)) "
+                + "birthdate \(dayString(birthdate)); "
                 + referenceBasis(selection, date: referenceDate) + "."
 
             // A year-only date ("1994" typed by Rick, or a bare year in the
@@ -503,8 +529,10 @@ enum ArchivistTemporalExecutor {
                 return ArchivistTemporalResult(
                     value: .exactAge(age), decline: nil,
                     prose: "\(name) passed on in \(deathYear) at \(age).",
-                    basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)) "
-                        + "and recorded death \(dayString(deathDay)); no video selected.",
+                    basisLine: "Basis: from \(subject.birthdateProvenance.basisNoun(canonicalName: name)) "
+                        + "birthdate \(dayString(birthdate)) and recorded death \(dayString(deathDay))"
+                        + otherStore(subject.deathdateProvenance, name: name)
+                        + "; no video selected.",
                     evidence: ArchivistTemporalEvidence(
                         subjectID: subject.stableID, canonicalName: name,
                         birthdate: birthdate, birthdateProvenance: subject.birthdateProvenance,
@@ -518,7 +546,8 @@ enum ArchivistTemporalExecutor {
             return ArchivistTemporalResult(
                 value: .exactAge(age), decline: nil,
                 prose: "\(name) is \(age) today — born \(longDayString(birthdate)).",
-                basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)), "
+                basisLine: "Basis: from \(subject.birthdateProvenance.basisNoun(canonicalName: name)) "
+                    + "birthdate \(dayString(birthdate)), "
                     + "counted to today (\(dayString(today))); no video selected.",
                 evidence: ArchivistTemporalEvidence(
                     subjectID: subject.stableID, canonicalName: name,
@@ -571,7 +600,49 @@ enum ArchivistTemporalExecutor {
         return value
     }
 
-    private static func canonicalDay(_ date: Date) -> Date? {
+    /// Did every date in the group come from a People profile? Then the
+    /// basis line's shared prefix may say so once, exactly as it always
+    /// has, and no line needs its own attribution.
+    private static func everyDateCameFromAProfile(
+        _ subjects: [ArchivistTemporalSubjectSnapshot]
+    ) -> Bool {
+        subjects.allSatisfy {
+            if case .poiProfile = $0.birthdateProvenance,
+               case .poiProfile = $0.deathdateProvenance { return true }
+            return false
+        }
+    }
+
+    /// " from Ma's People profile" / " from the family tree" for one line of
+    /// a MIXED group's basis; "" when the prefix already covers the whole
+    /// group. Review finding 2026-09-04: one store's dates must never be
+    /// shown under the other store's name.
+    private static func storeClause(
+        _ provenance: ArchivistTemporalBirthdateProvenance,
+        _ name: String,
+        silent: Bool
+    ) -> String {
+        silent ? "" : " from " + provenance.basisNoun(canonicalName: name)
+    }
+
+    /// "" for a date the People profile supplied — the surrounding wording
+    /// already says so — and " from the family tree" for one that came from
+    /// the tree instead (HallieVitalDates rule 2, for a field the profile
+    /// leaves empty). Review finding 2026-09-04: a basis line must never
+    /// name a store the date did not come from.
+    private static func otherStore(
+        _ provenance: ArchivistTemporalBirthdateProvenance, name: String
+    ) -> String {
+        switch provenance {
+        case .poiProfile: return ""
+        case .gedcomTree: return " from the family tree"
+        }
+    }
+
+    /// Not `private`: `HallieVitalDates` canonicalises a family-tree date
+    /// through this exact function too, so a tree date and a People profile
+    /// date compare fairly with `==`/`!=` — one definition of "same day".
+    static func canonicalDay(_ date: Date) -> Date? {
         guard date.timeIntervalSinceReferenceDate.isFinite else { return nil }
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         guard let year = components.year, let month = components.month,
@@ -860,6 +931,19 @@ extension ArchivistTemporalExecutor {
             referenceBasisText = "counted to today (\(dayString(day))); no video selected"
         }
 
+        // Per-subject provenance (review finding, 2026-09-04): the group
+        // basis used to assert "People profile birthdates" for everyone
+        // unconditionally, so one store's dates could be shown with the
+        // other store's provenance. When every date in the group really did
+        // come from a People profile the wording is exactly what it always
+        // was and the prefix says it once; the moment ONE date comes from
+        // the family tree, every line names its own store.
+        let allFromProfiles = everyDateCameFromAProfile(subjects)
+        // (Hoisted out of this function rather than written as a local
+        // closure: SwiftLint counts a nested function's branches against
+        // the enclosing one, and executeGroup is already at the project's
+        // complexity ceiling.)
+
         // One single-person computation per subject; the verdict is read
         // from the result's value / decline, never recomputed here.
         var verdicts: [(name: String, verdict: GroupVerdict)] = []
@@ -873,7 +957,12 @@ extension ArchivistTemporalExecutor {
             }
             let birthYear = calendar.component(.year, from: birthdate)
             birthLines.append("\(name) \(dayString(birthdate))"
-                + (subject.deathdate.flatMap(canonicalDay).map { " (died \(dayString($0)))" } ?? ""))
+                + storeClause(subject.birthdateProvenance, name, silent: allFromProfiles)
+                + (subject.deathdate.flatMap(canonicalDay).map {
+                    " (died \(dayString($0))"
+                        + storeClause(subject.deathdateProvenance, name, silent: allFromProfiles)
+                        + ")"
+                } ?? ""))
 
             if ask == .bornYet {
                 let born: Bool
@@ -968,7 +1057,7 @@ extension ArchivistTemporalExecutor {
         }.count
         // The caller prefixes how the people were found ("'the boys' =
         // Dan, Mark (children of Rick) …"); this line carries the facts.
-        let basis = "Basis: People profile birthdates "
+        let basis = (allFromProfiles ? "Basis: People profile birthdates " : "Basis: birthdates ")
             + birthLines.joined(separator: ", ") + "; " + referenceBasisText + "."
         return ArchivistTemporalResult(
             value: answered > 0 ? .group(answered: answered, of: subjects.count) : nil,
