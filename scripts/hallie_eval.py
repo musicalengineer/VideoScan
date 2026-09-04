@@ -454,7 +454,17 @@ RAW_INTERNAL_PAT = re.compile(
     re.I,
 )
 # The relax-and-explain shape: names what it set aside, then offers what exists.
-RELAXED_PAT = re.compile(r"setting aside .*(i do have|want those)|want me to try (without|with a different)", re.I | re.S)
+# The current wording (2026-09-03) names the dropped constraint by its own
+# value and leads with what exists: "I don't see “Christmas” mentioned
+# anywhere, but I have 148 videos from 1991 — want those?". The older
+# "Setting aside … I do have N items" alternative is kept so previously
+# graded transcripts still classify the same way.
+RELAXED_PAT = re.compile(
+    r"i don'?t see .*?, but i have .*?want those"
+    r"|setting aside .*(i do have|want those)"
+    r"|want me to try (without|with a different)",
+    re.I | re.S,
+)
 
 
 MATCHING_PAT = re.compile(r"(\d+)\s+cited\s+of\s+(\d+)\s+matching", re.I)
@@ -482,12 +492,12 @@ def grade_record(r):
     if r.get("route") in (None, "") and outcome is None:
         flags.append("no_route")
 
-    # A relax-and-explain offer ("Nothing matches all of that. Setting aside
-    # the years you asked for, I do have 34 items. Want those?") IS the
-    # intended good answer for a near miss — it names what it set aside and
-    # offers what exists. Grading it as a failed answer would penalise the
-    # very behaviour the feature adds, so it counts as helpful and is
-    # reported separately.
+    # A relax-and-explain offer ("I don't see “Christmas” mentioned
+    # anywhere, but I have 148 videos from 1991 — want those?") IS the
+    # intended good answer for a near miss — it names the constraint it
+    # could not honour and offers what exists. Grading it as a failed answer
+    # would penalise the very behaviour the feature adds, so it counts as
+    # helpful and is reported separately.
     relaxed_offer = bool(RELAXED_PAT.search(a))
     persona_decline = bool(PERSONA_DECLINE_PAT.search(a))
     declined = (
