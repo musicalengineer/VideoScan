@@ -103,11 +103,17 @@ enum HallieGeneralAnswerBoundary {
         if let phrase = archivePossessionPhrase(in: inspected) {
             return .archivePossession(phrase)
         }
-        if let name = familyNameMentioned(in: inspected, isFamilyName: isFamilyName) {
-            return .familyName(name)
+        let clauses = sentences(of: inspected)
+        // Name adjacency cannot cross sentence punctuation. Tokenizing the
+        // whole reply would turn `grandmother: What ...` into an invented
+        // relative named "What" after punctuation was discarded.
+        for clause in clauses {
+            if let name = familyNameMentioned(in: clause, isFamilyName: isFamilyName) {
+                return .familyName(name)
+            }
         }
         // Sentence-scoped checks: a family referent plus an assertion.
-        for sentence in sentences(of: inspected) {
+        for sentence in clauses {
             if let violation = sentenceViolation(sentence) { return violation }
         }
         return nil
@@ -545,9 +551,7 @@ enum HallieGeneralAnswerBoundary {
     ) -> Bool {
         let prefix = String(sentence[..<referentRange.lowerBound])
         let suffix = String(sentence[referentRange.upperBound...])
-        let trimmedSuffix = suffix.trimmingCharacters(in: .whitespaces)
-        guard (!suffix.contains(where: { [",", ":", "—", "–"].contains($0) })
-                || trimmedSuffix == ":"),
+        guard !suffix.contains(where: { [",", "—", "–"].contains($0) }),
               familyReferent(in: suffix) == nil
         else { return false }
         let suffixWords = HallieGeneralKnowledgeLane.words(suffix)
@@ -558,15 +562,32 @@ enum HallieGeneralAnswerBoundary {
         guard suffixWords.first.map(adviceComplements.contains) ?? true else {
             return false
         }
-        let assertiveConnectors: Set<String> = [
-            "because", "since", "as", "and", "but",
+        let causalConnectors: Set<String> = ["because", "since"]
+        let coordinatingConnectors: Set<String> = ["and", "but", "as"]
+        let subjectPronouns: Set<String> = ["she", "he", "they"]
+        let possessivePronouns: Set<String> = ["her", "his", "their"]
+        let finitePredicates: Set<String> = [
+            "was", "were", "is", "are", "has", "had", "grew", "lived",
+            "worked", "served", "moved", "came", "settled", "used", "loved",
+            "liked", "preferred", "enjoyed",
         ]
-        let familyPronouns: Set<String> = ["she", "he", "they", "her", "his", "their"]
-        if suffixWords.indices.dropLast().contains(where: { index in
-            assertiveConnectors.contains(suffixWords[index])
-                && familyPronouns.contains(suffixWords[index + 1])
-        }) {
-            return false
+        for index in suffixWords.indices.dropLast() {
+            let connector = suffixWords[index]
+            let pronoun = suffixWords[index + 1]
+            if causalConnectors.contains(connector),
+               subjectPronouns.contains(pronoun) || possessivePronouns.contains(pronoun) {
+                return false
+            }
+            guard coordinatingConnectors.contains(connector) else { continue }
+            if subjectPronouns.contains(pronoun) { return false }
+            if possessivePronouns.contains(pronoun) {
+                let predicateStart = index + 2
+                let predicateEnd = min(suffixWords.count, predicateStart + 8)
+                if suffixWords[predicateStart..<predicateEnd]
+                    .contains(where: finitePredicates.contains) {
+                    return false
+                }
+            }
         }
         var words = HallieGeneralKnowledgeLane.words(prefix)
         let adviceLeads: Set<String> = [
@@ -649,7 +670,7 @@ enum HallieGeneralAnswerBoundary {
     /// grows with the catalog.
     static func sentences(of text: String) -> [String] {
         text.split(whereSeparator: {
-            $0 == "." || $0 == "?" || $0 == "!" || $0 == ";"
+            $0 == "." || $0 == "?" || $0 == "!" || $0 == ";" || $0 == ":"
                 || $0 == "\u{2026}" || $0.isNewline
         })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
