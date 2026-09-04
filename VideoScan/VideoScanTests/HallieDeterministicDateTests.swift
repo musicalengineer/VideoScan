@@ -96,6 +96,9 @@ struct HallieDeterministicDateTests {
         #expect(HallieDateStyle.spoken("22 FEB 1929") == "22 February 1929")
         #expect(HallieDateStyle.spoken("BEF 29 NOV 1717") == "before 29 November 1717")
         #expect(HallieDateStyle.spoken("ABT 1633") == "about 1633")
+        // Ancestry's spelling, straight out of Rick's tree (George Breen).
+        #expect(HallieDateStyle.spoken("Abt. 10 Aug 1898") == "about 10 August 1898")
+        #expect(HallieDateStyle.spoken("Abt 1464") == "about 1464")
         #expect(HallieDateStyle.spoken("BET 1700 AND 1710") == "between 1700 and 1710")
         // No readable year is not a date we may state.
         #expect(HallieDateStyle.spoken("sometime in the war") == nil)
@@ -345,6 +348,159 @@ struct HallieDeterministicDateTests {
     @Test func anOrdinaryWordInTheMonthSlotIsNotAMisspelledMonth() {
         #expect(HallieDateStyle.occurrences(in: "he was born 22 1929").isEmpty)
         #expect(HallieDateStyle.occurrences(in: "there were 12 of them in 1994").isEmpty)
+    }
+
+    // MARK: - The biography route (live 2026-09-03 evening)
+
+    /// "tell me about Dad" — the 6-claim `HallieBiographyCard` plan, with
+    /// the People-tab alias in the lead name exactly as `leadName` builds
+    /// it, and the live corrupted sentence.
+    private func dadBiographyPlan() -> HallieAnswerPlan {
+        let vitals = "Richard Harding Breen Sr (Dad in the People tab) was born "
+            + "22 February 1929 in Boston, Suffolk, Massachusetts, United States and died "
+            + "22 June 2008 in Brockton, Plymouth, Massachusetts, United States."
+        let texts = [
+            vitals,
+            "He was the child of George Breen and Muriel Lamb; his recorded grandparents were Edith Lucy Parker and Frederick Burton Lamb.",
+            "He had 1 recorded sibling, Beth Breen.",
+            "He was married to Eileen Latta (married 14 June 1952).",
+            "He had 4 recorded children, Richard Harding Breen Jr, Tim Breen, Dan Breen and Mark Breen.",
+            "His family tree includes 12578 recorded ancestors across 18 generations and 2 recorded descendants across 2 generations.",
+        ]
+        return HallieAnswerPlan(
+            route: .graph, shape: .biography,
+            subject: "Richard Harding Breen Sr",
+            claims: texts.enumerated().map {
+                .init(id: "c\($0 + 1)", text: $1, evidenceIDs: ["@I2@"],
+                      requiredPersonNames: $0 == 0 ? ["Richard Harding Breen Sr"] : [],
+                      requiresCoverage: true)
+            },
+            fallbackText: texts.joined(separator: " "))
+    }
+
+    /// THE LIVE BIOGRAPHY SENTENCE, verbatim. Reported 2026-09-03 evening as
+    /// reaching the reader with no drop line at all.
+    @Test func liveBiographyVitalsSentenceIsRejected() async {
+        let plan = dadBiographyPlan()
+        let live = "Richard Harding Breen Sr (Dad in the People tab) was born "
+            + "feberuary 22 1929 in Boston, Suffolk, Massachusetts, United States and died "
+            + "June 22 2008 in Brockton, Plymouth, Massachusetts, United States. [c1]"
+        let verified = verify(live, plan)
+        #expect(verified.dropped.map(\.reason) == [.alteredDate],
+                Comment(rawValue: "kept=\(verified.kept.map(\.display)) dropped=\(verified.dropped)"))
+    }
+
+    /// The whole turn, through the composer, with the other five claims
+    /// phrased faithfully — the shape the live answer actually had.
+    @Test func liveBiographyTurnShipsTheHouseFormatDates() async {
+        let plan = dadBiographyPlan()
+        let live = "Richard Harding Breen Sr (Dad in the People tab) was born "
+            + "feberuary 22 1929 in Boston, Suffolk, Massachusetts, United States and died "
+            + "June 22 2008 in Brockton, Plymouth, Massachusetts, United States. [c1] "
+            + "He was the child of George Breen and Muriel Lamb; his recorded grandparents were Edith Lucy Parker and Frederick Burton Lamb. [c2] "
+            + "He had 1 recorded sibling, Beth Breen. [c3] "
+            + "He was married to Eileen Latta (married 14 June 1952). [c4] "
+            + "He had 4 recorded children, Richard Harding Breen Jr, Tim Breen, Dan Breen and Mark Breen. [c5] "
+            + "His family tree includes 12578 recorded ancestors across 18 generations and 2 recorded descendants across 2 generations. [c6]"
+        let outcome = await compose(plan, live)
+        #expect(!outcome.displayText.lowercased().contains("feberuary"),
+                Comment(rawValue: outcome.displayText))
+        #expect(!outcome.displayText.contains("June 22 2008"))
+        #expect(outcome.displayText.contains("22 February 1929"))
+        #expect(outcome.displayText.contains("22 June 2008"))
+    }
+
+    // MARK: - Free-text dates STORED IN THE TREE (live 2026-09-03 evening)
+
+    /// THE VISIBLE HALF OF THE DEMO BUG, and it was never the model.
+    ///
+    /// The compiled tree stores Rick's father's dates as the literal
+    /// strings "feberuary 22 1929" and "june 22 2008" (verified in
+    /// tree.vsft: `@I2@Richard Harding Breen Sr@F2@feberuary 22 1929june
+    /// 22 2008`), and Eileen Latta's as "Aug 31 1930" and "March 3, 2023".
+    /// The turn is recorded `composedBy: template`, so no model and no
+    /// verifier was ever in that sentence's path — `spoken` simply handed
+    /// unrecognised text straight through. Four stored shapes became four
+    /// shapes on the page.
+    @Test func freeTextDatesStoredInTheTreeAreSpokenInTheHouseFormat() {
+        // Rick's father, exactly as the tree stores him.
+        #expect(HallieDateStyle.spoken("feberuary 22 1929") == "22 February 1929")
+        #expect(HallieDateStyle.spoken("june 22 2008") == "22 June 2008")
+        // Eileen Latta, exactly as the tree stores her.
+        #expect(HallieDateStyle.spoken("Aug 31 1930") == "31 August 1930")
+        #expect(HallieDateStyle.spoken("March 3, 2023") == "3 March 2023")
+    }
+
+    /// All four, in one card, now read the same way — the complaint that
+    /// started this, measured on the real stored values.
+    @Test func theParentsCardsFourStoredDatesRenderIdentically() {
+        let stored = ["feberuary 22 1929", "june 22 2008", "Aug 31 1930", "March 3, 2023"]
+        let spoken = stored.compactMap { HallieDateStyle.spoken($0) }
+        #expect(spoken == ["22 February 1929", "22 June 2008", "31 August 1930", "3 March 2023"])
+        let shapes = spoken.map { text -> String in
+            text.split(separator: " ").map { part -> String in
+                if part.allSatisfy(\.isNumber) { return part.count == 4 ? "YEAR" : "DAY" }
+                return HallieDateStyle.longMonths.contains(String(part)) ? "MONTH" : "?\(part)"
+            }.joined(separator: " ")
+        }
+        #expect(Set(shapes) == ["DAY MONTH YEAR"], Comment(rawValue: "\(shapes)"))
+    }
+
+    /// A misspelled month is re-spelled only when exactly ONE month is
+    /// within a two-character slip. Day, month and year VALUES are never
+    /// altered — this is spelling, not correction of the record.
+    @Test func onlyAnUnambiguousMonthMisspellingIsRespelled() {
+        #expect(HallieDateStyle.monthNamed("feberuary") == "February")
+        #expect(HallieDateStyle.monthNamed("feburary") == "February")
+        #expect(HallieDateStyle.monthNamed("septmber") == "September")
+        #expect(HallieDateStyle.monthNamed("march") == "March")
+        #expect(HallieDateStyle.monthNamed("sept") == "September")
+        // Not a month, and not close enough to guess at.
+        #expect(HallieDateStyle.monthNamed("boston") == nil)
+        #expect(HallieDateStyle.monthNamed("tuesday") == nil)
+        // The values themselves are untouched.
+        #expect(HallieDateStyle.spoken("feberuary 22 1929") == "22 February 1929")
+        #expect(HallieDateStyle.spoken("feberuary 23 1929") == "23 February 1929")
+    }
+
+    /// NEGATIVES — everything that is not one unambiguous date is left
+    /// exactly as it was. These are all real shapes from Rick's tree.
+    @Test func rangesAndUnreadableDatesAreLeftAlone() {
+        // Ranges are two dates; the word-by-word path still owns them.
+        #expect(HallieDateStyle.spoken("BET 1700 AND 1710") == "between 1700 and 1710")
+        #expect(HallieDateStyle.spoken("from 26 March 1574 to 13 May 1574")
+            == "from 26 March 1574 to 13 May 1574")
+        #expect(HallieDateStyle.spoken("before 26 May 1580 or arround 1584")
+            == "before 26 May 1580 or arround 1584")
+        #expect(HallieDateStyle.spoken("ABT 1445       1496") == "about 1445 1496")
+        // Precision is preserved, never invented.
+        #expect(HallieDateStyle.spoken("ABT 1633") == "about 1633")
+        // Ancestry's spelling, straight out of Rick's tree (George Breen).
+        #expect(HallieDateStyle.spoken("Abt. 10 Aug 1898") == "about 10 August 1898")
+        #expect(HallieDateStyle.spoken("Abt 1464") == "about 1464")
+        #expect(HallieDateStyle.spoken("Oct 1621") == "October 1621")
+        #expect(HallieDateStyle.spoken("1824") == "1824")
+        #expect(HallieDateStyle.spoken("BEF 29 NOV 1717") == "before 29 November 1717")
+        #expect(HallieDateStyle.spoken("28 FEB 1629") == "28 February 1629")
+        #expect(HallieDateStyle.spoken("10 December 1553") == "10 December 1553")
+        // No readable year is still not a date.
+        #expect(HallieDateStyle.spoken("sometime in the war") == nil)
+    }
+
+    /// The verifier and the renderer must agree: a house-format date the
+    /// renderer now produces is one the scanner recognises, so a claim
+    /// built from a normalised free-text date still vouches for itself.
+    @Test func normalizedStoredDatesStillVouchForTheirOwnClaim() {
+        let vitals = "Richard Harding Breen Sr was born "
+            + (HallieDateStyle.spoken("feberuary 22 1929") ?? "?")
+            + " in Boston and died " + (HallieDateStyle.spoken("june 22 2008") ?? "?")
+            + " in Brockton."
+        let plan = HallieAnswerPlan(
+            route: .graph, shape: .biography, subject: "Richard Harding Breen Sr",
+            claims: [.init(id: "c1", text: vitals)], fallbackText: vitals)
+        #expect(verify(vitals + " [c1]", plan).dropped.isEmpty)
+        #expect(vitals.contains("22 February 1929"))
+        #expect(vitals.contains("22 June 2008"))
     }
 
     // MARK: - Evidence for a SEPARATE bug (not fixed here)

@@ -86,6 +86,7 @@ enum HallieDateStyle {
         if text.hasPrefix("@#"), let close = text.firstIndex(of: " ") {
             text = String(text[text.index(after: close)...])
         }
+        if let normalized = normalizingSingleDate(text) { return normalized }
         let words = text.split(separator: " ").map { word -> String in
             let lower = word.lowercased()
             if let month = monthByToken[lower] { return month }
@@ -93,6 +94,112 @@ enum HallieDateStyle {
             return String(word)
         }
         return words.joined(separator: " ")
+    }
+
+    /// Qualifiers that may lead a SINGLE date. "BET"/"AND"/"FROM"/"TO" are
+    /// deliberately absent: they introduce a RANGE, which is two dates and
+    /// must be left to the word-by-word path above.
+    private static let singleDateQualifiers: [String: String] = [
+        "bef": "before", "before": "before",
+        "aft": "after", "after": "after",
+        "abt": "about", "about": "about", "cal": "about", "est": "about",
+        "int": "about", "cir": "about", "circa": "about",
+    ]
+
+    /// One free-text date, re-stated in the house format — or nil when the
+    /// text is not unambiguously a single date, in which case the caller
+    /// leaves it alone.
+    ///
+    /// WHY THIS EXISTS (live 2026-09-03, and the visible half of the demo
+    /// bug). Hallie was reading Rick's late father's card as
+    ///
+    ///     "was born feberuary 22 1929 … and died june 22 2008"
+    ///
+    /// and that was NOT the model. The compiled tree stores those strings
+    /// literally — `@I2@Richard Harding Breen Sr@F2@feberuary 22 1929june
+    /// 22 2008` — and this function used to hand anything it could not
+    /// recognise straight through. The transcript records the turn as
+    /// `composedBy: template`, so no model and no verifier was ever in that
+    /// sentence's path. Eileen Latta's card is stored as "Aug 31 1930" and
+    /// "March 3, 2023", which is exactly why one answer showed four dates
+    /// in four different shapes.
+    ///
+    /// WHAT IS AND IS NOT CHANGED. Day, month and year values are never
+    /// altered, and a date that is not a single unambiguous date is not
+    /// touched at all. Only PRESENTATION is normalised: word order, the
+    /// comma, and the month's spelling — and a month is only re-spelled
+    /// when exactly one month name is within a two-character slip of it,
+    /// which is the same kind of expansion "FEB" → "February" already was.
+    /// The underlying record is not corrected; that is Rick's to fix, and
+    /// it should be surfaced to him rather than silently papered over.
+    static func normalizingSingleDate(_ text: String) -> String? {
+        var qualifier: String?
+        var tokens = text.split(whereSeparator: { $0 == " " || $0 == "," })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return nil }
+        // "Abt. 10 Aug 1898" — Ancestry writes the qualifier with a full
+        // stop, and Rick's tree carries both spellings.
+        let lead = tokens[0].lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if let named = singleDateQualifiers[lead] {
+            qualifier = named
+            tokens.removeFirst()
+        }
+        guard !tokens.isEmpty, tokens.count <= 3 else { return nil }
+
+        var day: Int?
+        var month: String?
+        var year: Int?
+        for token in tokens {
+            let bare = token.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+            let ordinal = bare.replacingOccurrences(
+                of: #"(st|nd|rd|th)$"#, with: "", options: .regularExpression)
+            if let number = Int(ordinal), ordinal.allSatisfy(\.isNumber) {
+                if ordinal.count >= 3 {
+                    guard year == nil else { return nil }
+                    year = number
+                } else {
+                    guard day == nil, number >= 1, number <= 31 else { return nil }
+                    day = number
+                }
+                continue
+            }
+            guard month == nil, let named = monthNamed(bare) else { return nil }
+            month = named
+        }
+        // A year is the one part a date cannot do without, and a bare day
+        // with no month is not a date at all.
+        guard let year, day == nil || month != nil else { return nil }
+
+        var out = ""
+        if let day { out += "\(day) " }
+        if let month { out += month + " " }
+        out += String(year)
+        return qualifier.map { $0 + " " + out } ?? out
+    }
+
+    /// The month a lowercased word names: exactly, or — for a word no
+    /// further than two characters from exactly one month — that month.
+    /// "feberuary" → February. "march"/"mar"/"sept" → themselves. A word
+    /// near two months, or near none, is not a month.
+    static func monthNamed(_ lowercased: String) -> String? {
+        if let exact = monthByToken[lowercased] { return exact }
+        guard lowercased.count >= 4, lowercased.allSatisfy(\.isLetter) else { return nil }
+        var best: (name: String, distance: Int)?
+        var tied = false
+        for name in longMonths {
+            let distance = editDistance(lowercased, name.lowercased(), cap: 2)
+            guard distance <= 2 else { continue }
+            if let current = best {
+                if distance < current.distance { best = (name, distance); tied = false }
+                else if distance == current.distance, name != current.name { tied = true }
+            } else {
+                best = (name, distance)
+            }
+        }
+        guard let best, !tied else { return nil }
+        return best.name
     }
 
     private static let qualifierWords: [String: String] = [
