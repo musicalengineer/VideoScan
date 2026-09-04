@@ -131,11 +131,22 @@ extension HallieTurnExecutor {
         }
     }
 
+    /// `graph`: the installed family tree, so a profile that leaves a birth
+    /// or death date empty can still fall back to the tree record it
+    /// uniquely owns (HallieVitalDates rule 2). The profile's own date
+    /// always wins when it has one — Rick's ruling, 2026-09-04.
     static func temporalResolution(
         _ requested: String,
         profiles: [ProfileSnapshot],
-        selectedIdentity: CandidateID?
+        selectedIdentity: CandidateID?,
+        graph: GedcomFamilyGraph? = nil
     ) -> ArchivistTemporalSubjectResolution {
+        // Ownership is resolved over the WHOLE profile set once per call: a
+        // tree person two profiles both pin to belongs to neither, and that
+        // can only be seen from the whole set.
+        let vitalProfiles = profiles.map(HallieVitalProfile.init)
+        let ownership = HallieVitalDates.pinOwnership(profiles: vitalProfiles, graph: graph)
+
         if let selectedIdentity {
             guard case .profileStableID(let rawID) = selectedIdentity else {
                 return .missing(requested: requested)
@@ -150,12 +161,7 @@ extension HallieTurnExecutor {
             let profile = deterministicProfile(definitions)
             return .resolved(
                 requested: requested,
-                subject: .init(
-                    stableID: profile.stableID,
-                    canonicalName: profile.canonicalName,
-                    birthdate: profile.birthdate,
-                    deathdate: profile.deathdate,
-                    sex: profile.sex))
+                subject: vitalSubject(profile, graph: graph, ownership: ownership))
         }
 
         let key = PersonResolver.normalize(requested)
@@ -197,12 +203,29 @@ extension HallieTurnExecutor {
         let profile = matches[0]
         return .resolved(
             requested: requested,
-            subject: .init(
-                stableID: profile.stableID,
-                canonicalName: profile.canonicalName,
-                birthdate: profile.birthdate,
-                deathdate: profile.deathdate,
-                    sex: profile.sex))
+            subject: vitalSubject(profile, graph: graph, ownership: ownership))
+    }
+
+    /// The one seam the age route's vital dates go through
+    /// (HallieVitalDates, 2026-09-04). `ArchivistGraphExecutor`'s
+    /// biography/family-tree case calls the same type for the same person,
+    /// which is what stops "how old is Ma" and "tell me about Ma" from
+    /// answering with two different sets of dates.
+    private static func vitalSubject(
+        _ profile: ProfileSnapshot,
+        graph: GedcomFamilyGraph?,
+        ownership: HallieVitalDates.PinOwnership
+    ) -> ArchivistTemporalSubjectSnapshot {
+        let vitals = HallieVitalDates.resolve(
+            profile: HallieVitalProfile(profile), graph: graph, ownership: ownership)
+        return ArchivistTemporalSubjectSnapshot(
+            stableID: profile.stableID,
+            canonicalName: profile.canonicalName,
+            birthdate: vitals.birthdate?.date,
+            birthdateProvenance: vitals.birthdate?.provenance,
+            deathdate: vitals.deathdate?.date,
+            deathdateProvenance: vitals.deathdate?.provenance,
+            sex: profile.sex)
     }
 
     static func profileCandidates(
@@ -227,6 +250,23 @@ extension HallieTurnExecutor {
         }
     }
 
+    /// Do two snapshots of ONE stable ID mean the same person?
+    ///
+    /// Review finding, 2026-09-04: this used to compare only the name, the
+    /// aliases and the birthdate, so two snapshots differing in `deathdate`
+    /// or `treeIdentity` passed the consistency guard — and then
+    /// `deterministicProfile` picked between them by name and stable ID,
+    /// which are identical, so WHICH one won depended on the order the
+    /// profiles happened to arrive in. A profile's tree pin and its death
+    /// date are now both factual inputs to an answer (HallieVitalDates), so
+    /// every field the executor consumes factually is compared here and a
+    /// disagreement fails closed — order-independently.
+    ///
+    /// WHEN YOU ADD A FIELD to `ProfileSnapshot`, add it here too, and add a
+    /// row to `everyFactualFieldSplitsTheMeaning` in HallieVitalDatesTests,
+    /// which walks the fields one at a time. (`note` is included: Hallie
+    /// quotes it with attribution, so two different notes are two different
+    /// answers. `uuid` is included: kinship anchors resolve through it.)
     static func sameProfileMeaning(
         _ lhs: ProfileSnapshot,
         _ rhs: ProfileSnapshot
@@ -236,6 +276,12 @@ extension HallieTurnExecutor {
             && Set(lhs.aliases.map { PersonResolver.normalize($0) })
                 == Set(rhs.aliases.map { PersonResolver.normalize($0) })
             && lhs.birthdate == rhs.birthdate
+            && lhs.deathdate == rhs.deathdate
+            && lhs.treeIdentity == rhs.treeIdentity
+            && lhs.sex == rhs.sex
+            && lhs.uuid == rhs.uuid
+            && lhs.kinships == rhs.kinships
+            && lhs.note == rhs.note
     }
 
     static func deterministicProfile(

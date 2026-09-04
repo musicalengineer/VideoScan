@@ -202,10 +202,20 @@ enum HallieBiographyCard {
     /// `lifeStatus` nil ⇒ decided from the tree record and the family around
     /// it (LifeStatus.of); the executor passes the People-tab verdict when
     /// the subject is a profile, whose recorded death the tree may lack.
+    ///
+    /// `profileBirthdate`/`profileDeathdate` (HallieVitalDates, 2026-09-04 —
+    /// Rick's ruling: for a person who has a People profile, the profile's
+    /// date is the true one and the tree's is wrong): the owning profile's
+    /// date, which REPLACES the tree's own recorded date for that field.
+    /// Nil means the profile holds nothing for that field, and then the
+    /// tree's date stands exactly as written. Places, parents, spouses and
+    /// every other sentence still come from the tree.
     static func card(for person: GedcomFamilyGraph.Person,
                      in graph: GedcomFamilyGraph,
                      peopleTab: PeopleTabKin? = nil,
-                     lifeStatus: LifeStatus? = nil) -> Card {
+                     lifeStatus: LifeStatus? = nil,
+                     profileBirthdate: Date? = nil,
+                     profileDeathdate: Date? = nil) -> Card {
         let summary = ArchivistFamilyTreePolicy.summary(of: person, in: graph)
         let name = person.name
         let pronoun = Pronoun(sex: person.sex)
@@ -275,7 +285,8 @@ enum HallieBiographyCard {
         }
 
         // 1. Vitals with places, as recorded.
-        if let vitals = vitalsClause(person) {
+        if let vitals = vitalsClause(
+            person, profileBirthdate: profileBirthdate, profileDeathdate: profileDeathdate) {
             sentences.append(.init(text: "\(leadName) \(vitals).", evidenceIDs: [person.id]))
         }
         // 2. Parents, with grandparents folded in (the family-tree summary
@@ -388,8 +399,11 @@ enum HallieBiographyCard {
     static func answer(for person: GedcomFamilyGraph.Person,
                        in graph: GedcomFamilyGraph,
                        peopleTab: PeopleTabKin? = nil,
-                       lifeStatus: LifeStatus? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
-        let card = card(for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
+                       lifeStatus: LifeStatus? = nil,
+                       profileBirthdate: Date? = nil,
+                       profileDeathdate: Date? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
+        let card = card(for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus,
+                        profileBirthdate: profileBirthdate, profileDeathdate: profileDeathdate)
         guard !card.sentences.isEmpty else {
             return (ArchivistBiographyAnswer(
                 state: .missingFact,
@@ -466,6 +480,25 @@ enum HallieBiographyCard {
         }.joined()
     }
 
+    /// " Birth and death dates are from Ma's People profile." — the basis
+    /// clause naming WHICH store a spoken vital date came from
+    /// (HallieVitalDates rule 6, 2026-09-04), appended by the executor next
+    /// to the People-tab and data-quality clauses. Empty when the tree's own
+    /// dates were spoken. It deliberately does NOT say the two stores
+    /// disagree: that goes to the log for Rick, never into the answer.
+    static func vitalDatesBasis(
+        profileName: String?, birth: Date?, death: Date?
+    ) -> String {
+        guard let profileName, birth != nil || death != nil else { return "" }
+        let fields: String
+        switch (birth != nil, death != nil) {
+        case (true, true): fields = "Birth and death dates are"
+        case (true, false): fields = "The birth date is"
+        default: fields = "The death date is"
+        }
+        return " \(fields) from \(profileName)'s People profile."
+    }
+
     /// The FamilySearch ID when the record has one, else the file-local
     /// pointer — whatever lets Rick find the record upstream.
     static func recordCode(_ person: GedcomFamilyGraph.Person) -> String {
@@ -535,13 +568,31 @@ enum HallieBiographyCard {
     /// 29 November 1717 in Sudbury, Middlesex" — either half may be absent;
     /// a place with no date still stands on its own ("was born in Boston").
     /// Nil when the record has neither a date nor a place for either event.
-    static func vitalsClause(_ person: GedcomFamilyGraph.Person) -> String? {
-        let birth = eventClause("was born", date: person.birthDate, place: person.birthPlace)
-        let death = eventClause("died", date: person.deathDate, place: person.deathPlace)
+    /// `profileBirthdate`/`profileDeathdate`: the owning People profile's
+    /// date, spoken INSTEAD of the tree's own recorded date for that field
+    /// (HallieVitalDates rule 1). Nil ⇒ the tree's date, unchanged.
+    static func vitalsClause(
+        _ person: GedcomFamilyGraph.Person,
+        profileBirthdate: Date? = nil,
+        profileDeathdate: Date? = nil
+    ) -> String? {
+        let birth = eventClause("was born", date: person.birthDate, place: person.birthPlace,
+                                profileDate: profileBirthdate)
+        let death = eventClause("died", date: person.deathDate, place: person.deathPlace,
+                                profileDate: profileDeathdate)
         let parts = [birth, death].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " and ")
     }
 
+    /// KNOWN GAP, 2026-09-04 (reported to the Manager, not fixed here):
+    /// this aside still reads the TREE's dates directly, so "who are Tim's
+    /// parents" states Ma's death as 3 March 2023 while "tell me about Ma"
+    /// and "how old is Ma" both state 1 June 2023 (HallieVitalDates).
+    /// Routing it through the same seam is a two-line change at
+    /// ArchivistGraphExecutor+KinshipOverlay.swift:165, but it also makes
+    /// the aside state a profile date where the tree records none, which
+    /// changes four existing FamilyKinshipTests expectations — out of scope
+    /// for the demo-eve fix, and Rick's call.
     /// ", born 22 February 1929 in Albany, died 1 July 2008" — the vitals
     /// as a trailing aside for a relative named inside another sentence
     /// (the kinship overlay's bridged answers). Empty when nothing is
@@ -553,8 +604,18 @@ enum HallieBiographyCard {
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
     }
 
-    private static func eventClause(_ verb: String, date: String?, place: String?) -> String? {
-        let spoken = spokenDate(date)
+    private static func eventClause(
+        _ verb: String, date: String?, place: String?, profileDate: Date? = nil
+    ) -> String? {
+        // A People profile's date is a `Date`, not a GEDCOM string. It is
+        // canonicalised and rendered through exactly the same UTC calendar
+        // and house format the age route uses (HallieVitalDates), so the two
+        // routes cannot render the same day as two different sentences.
+        let spoken = profileDate.map {
+            HallieDateStyle.spoken(
+                ArchivistTemporalExecutor.canonicalDay($0) ?? $0,
+                calendar: HallieVitalDates.utcCalendar)
+        } ?? spokenDate(date)
         let trimmedPlace = place?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard spoken != nil || !trimmedPlace.isEmpty else { return nil }
         var text = verb
