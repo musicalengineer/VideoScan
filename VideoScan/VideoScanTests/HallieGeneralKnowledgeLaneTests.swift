@@ -469,6 +469,8 @@ struct HallieGeneralAnswerBoundaryTests {
         "I **remember** your father loved jazz.",
         "You could begin gently… Your father served in the Marines.",
         "You could begin gently; Your father served in the Marines.",
+        "The doctor will ask your grandmother about her childhood.",
+        "I can ask your grandmother about that.",
     ])
     func aFamilyDateOrSpeculationIsBlocked(answer: String) {
         #expect(Self.enforce(answer).text == HallieGeneralAnswerBoundary.replacement,
@@ -494,6 +496,8 @@ struct HallieGeneralAnswerBoundaryTests {
         "Start by asking open-ended questions about specific memories rather than broad topics.",
         "Consider inviting your relatives to record short audio clips; it feels less formal.",
         "Use a soft pencil to mark the back of each photograph.",
+        "Many people enjoy films.",
+        "Many families preserve photographs.",
         "How about \"Threads of Time\" or \"Our Shared Story\"?",
         "A star makes its own light through fusion, while a planet reflects it.",
     ])
@@ -509,6 +513,9 @@ struct HallieGeneralAnswerBoundaryTests {
         "Dr. Muriel Lamb lived in Boston.",
         "donna was born in 1959.",
         "mark was born in 1987.",
+        "According to donna, she was born in 1959.",
+        "Give this to mark.",
+        "to mark was born in 1987.",
         "Muriel lamb was born in 1918.",
         "D**onna** moved to Boston.",
         "Donnaʼs birthday is June 21.",

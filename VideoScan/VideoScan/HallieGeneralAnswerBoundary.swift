@@ -140,9 +140,11 @@ enum HallieGeneralAnswerBoundary {
         let numberWord = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)"
         let count = "(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*[km]?|(?:a\\s+)?\(numberWord)(?:[ -]+\(numberWord))*|a\\s+couple|a\\s+few|few|several|many|dozens|hundreds|thousands|lots\\s+of|plenty\\s+of)"
         let nouns = countedMediaNouns.joined(separator: "|")
-        // Bound the gap so natural qualifiers such as "family" and "old" are
-        // accepted without letting a count match an arbitrarily distant noun.
-        let pattern = "\\b\(count)(?:\\s+of)?(?:\\s+[a-z]+){0,2}\\s+(?:\(nouns))\\b"
+        let descriptor = "(?:family|home|old|new|short|long|personal|digital|archived|archive|historic|historical|original|duplicate|silent|favorite|favourite)"
+        // Only known media descriptors may bridge the count and noun. This
+        // catches "2,064 family videos" without treating "Many people enjoy
+        // films" as a count belonging to Rick's archive.
+        let pattern = "\\b\(count)(?:\\s+of)?(?:\\s+\(descriptor)){0,2}\\s+(?:\(nouns))\\b"
         guard let expression = try? NSRegularExpression(
             pattern: pattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(
@@ -300,13 +302,19 @@ enum HallieGeneralAnswerBoundary {
             // curated inner circle. This catches lowercase `donna` without
             // asking the 39k GEDCOM whether `old`, `star`, or `bread` is a
             // surname.
-            // An inner-circle given name can also be an ordinary verb
-            // (notably "mark"). The infinitive shape is unambiguously the
-            // verb; keep the exemption this narrow so "mark was born ..."
-            // still fails closed.
-            let isInfinitiveVerb = index > 0 && words[index - 1].lowercased() == "to"
+            // The lowercase name `mark` can be an infinitive verb. Exempt it
+            // only when an object determiner proves that shape; `to donna`,
+            // `to mark.` and `to mark was born` remain name candidates.
+            let objectDeterminers: Set<String> = [
+                "the", "a", "an", "this", "that", "your", "each", "every",
+            ]
+            let isMarkingVerb = word == "mark"
+                && index > 0
+                && words[index - 1].lowercased() == "to"
+                && index + 1 < words.count
+                && objectDeterminers.contains(words[index + 1].lowercased())
             if word.first?.isLowercase == true,
-               !isInfinitiveVerb,
+               !isMarkingVerb,
                isFamilyName(word) {
                 return word
             }
@@ -459,11 +467,48 @@ enum HallieGeneralAnswerBoundary {
         guard suffixWords.first.map(adviceComplements.contains) ?? true else {
             return false
         }
-        let words = HallieGeneralKnowledgeLane.words(prefix)
+        var words = HallieGeneralKnowledgeLane.words(prefix)
+        if words.first == "perhaps" || words.first == "maybe" {
+            words.removeFirst()
+        }
         let adviceActions: Set<String> = [
             "ask", "asking", "invite", "inviting", "encourage", "encouraging",
         ]
-        return words.last.map(adviceActions.contains) ?? false
+        guard let action = words.last, adviceActions.contains(action) else {
+            return false
+        }
+
+        if words.count == 1 { return true }
+        if words.count == 2,
+           ["consider", "try"].contains(words[0]) {
+            return true
+        }
+        if words.count == 3,
+           ["start", "begin"].contains(words[0]),
+           words[1] == "by" {
+            return true
+        }
+
+        let modals: Set<String> = ["could", "might", "may", "can", "should", "would"]
+        guard words.count >= 3,
+              words.count <= 6,
+              words[0] == "you",
+              modals.contains(words[1])
+        else { return false }
+
+        var bridge = Array(words.dropFirst(2).dropLast())
+        let adviceAdverbs: Set<String> = [
+            "gently", "kindly", "carefully", "privately", "directly",
+            "simply", "first", "perhaps", "maybe", "quietly", "very",
+        ]
+        while bridge.first.map(adviceAdverbs.contains) == true {
+            bridge.removeFirst()
+        }
+        return bridge.isEmpty
+            || bridge == ["consider"]
+            || bridge == ["try"]
+            || bridge == ["start", "by"]
+            || bridge == ["begin", "by"]
     }
 
     private static func isArchiveAdvice(
