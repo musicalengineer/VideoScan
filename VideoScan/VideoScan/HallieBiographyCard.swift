@@ -587,36 +587,13 @@ enum HallieBiographyCard {
 
     // MARK: - Dates
 
-    private static let monthNames: [String: String] = [
-        "JAN": "January", "FEB": "February", "MAR": "March", "APR": "April",
-        "MAY": "May", "JUN": "June", "JUL": "July", "AUG": "August",
-        "SEP": "September", "OCT": "October", "NOV": "November", "DEC": "December",
-    ]
-    private static let qualifierWords: [String: String] = [
-        "BEF": "before", "AFT": "after", "ABT": "about", "CAL": "about",
-        "EST": "about", "INT": "about", "BET": "between", "AND": "and",
-        "FROM": "from", "TO": "to",
-    ]
-
-    /// The recorded GEDCOM date read aloud at its own precision and with
-    /// its own qualifier: "28 FEB 1629" → "28 February 1629", "BEF 29 NOV
-    /// 1717" → "before 29 November 1717", "ABT 1633" → "about 1633",
-    /// "BET 1700 AND 1710" → "between 1700 and 1710". Anything else with a
-    /// four-digit year passes through as written; no year → nil (a date
-    /// we cannot read is not a date we can state).
+    /// The recorded GEDCOM date read aloud in the house format
+    /// (`HallieDateStyle`, 2026-09-03): "28 FEB 1629" → "28 February
+    /// 1629", "BEF 29 NOV 1717" → "before 29 November 1717". The month
+    /// table, the qualifier table, and the rendering now live in one place
+    /// that the composition verifier also reads, so a date Swift wrote and
+    /// a date the verifier recognises can never drift apart.
     static func spokenDate(_ raw: String?) -> String? {
-        guard let raw, GedcomYearInterval.parse(raw) != nil else { return nil }
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Drop a calendar escape ("@#DJULIAN@ 1700").
-        if text.hasPrefix("@#") , let close = text.firstIndex(of: " ") {
-            text = String(text[text.index(after: close)...])
-        }
-        let words = text.split(separator: " ").map { word -> String in
-            let upper = word.uppercased()
-            if let month = monthNames[upper] { return month }
-            if let qualifier = qualifierWords[upper] { return qualifier }
-            return String(word)
-        }
-        return words.joined(separator: " ")
+        HallieDateStyle.spoken(raw)
     }
 }

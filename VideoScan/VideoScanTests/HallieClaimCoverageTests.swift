@@ -182,10 +182,14 @@ struct HallieClaimCoverageTests {
     private func parentsPlan(
         required: [String] = ["Richard Harding Breen Sr", "Eileen Latta"]
     ) -> HallieAnswerPlan {
+        // House format (`HallieDateStyle`, 2026-09-03) — this fixture is a
+        // mirror of what `HallieBiographyCard.vitalsAside` actually builds,
+        // and it had drifted to "February 22 1929" while production emitted
+        // "22 February 1929".
         let fallback = "Rick's parents: Richard Harding Breen Sr, "
-            + "born February 22 1929 in Boston, died June 22 2008 in Brockton, "
-            + "and Eileen Latta, born August 31 1930 in Chelsea, "
-            + "died March 3 2023 in Stoughton."
+            + "born 22 February 1929 in Boston, died 22 June 2008 in Brockton, "
+            + "and Eileen Latta, born 31 August 1930 in Chelsea, "
+            + "died 3 March 2023 in Stoughton."
         return HallieAnswerPlan(
             route: .graph, shape: .fact,
             claims: [.init(
@@ -236,8 +240,12 @@ struct HallieClaimCoverageTests {
     /// deterministic answer replaces it and names both parents.
     @Test func citedTwoParentClaimThatOmitsRichardFallsBackToExactPlan() async {
         let plan = parentsPlan()
-        let live = "His mother, Eileen Latta, was born on August 31, 1930, "
-            + "in Chelsea, and passed away on March 3, 2023, in Stoughton [c1]."
+        // The live reply, with its dates copied verbatim from the claim so
+        // this case still isolates PERSON coverage. (The date corruption
+        // that rode along in the original live text is now its own drop
+        // reason and its own suite — HallieDeterministicDateTests.)
+        let live = "His mother, Eileen Latta, was born on 31 August 1930, "
+            + "in Chelsea, and passed away on 3 March 2023, in Stoughton [c1]."
         let verified = HallieCompositionVerifier.verify(
             live, plan: plan, personaName: "Hallie Mae")
         #expect(HallieCompositionVerifier.missingRequiredPersonNames(

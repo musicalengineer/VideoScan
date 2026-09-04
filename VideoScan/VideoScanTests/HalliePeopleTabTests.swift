@@ -159,7 +159,11 @@ struct HalliePeopleTabTests {
                 pending: pending, selecting: .profileStableID("timmy"), context: context)
             #expect(son.outcome == .answered)
             #expect(son.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim, Tim Jr, Bud."))
-            #expect(son.prose.contains("was born 22 Apr 1965, according to the People profile"))
+            // House format (`HallieDateStyle`, 2026-09-03). These pinned
+            // "22 Apr 1965" — the People tab's own abbreviated month, a
+            // second date format in Hallie's answers and the reason "when
+            // was Tim born" came back two different ways on two runs.
+            #expect(son.prose.contains("was born 22 April 1965, according to the People profile"))
             let chosenBrother = try await HallieTurnExecutor.continue(
                 pending: pending, selecting: .profileStableID("tim"), context: context)
             #expect(chosenBrother.outcome == .answered)
@@ -186,7 +190,7 @@ struct HalliePeopleTabTests {
         #expect(result.outcome == .answered)
         #expect(result.clarification == nil)
         #expect(result.prose.hasPrefix("Timmy is one of the people in the People tab — also known as Tim Jr."))
-        #expect(result.prose.contains("was born 22 Apr 1965, according to the People profile"))
+        #expect(result.prose.contains("was born 22 April 1965, according to the People profile"))
         // Tags under any of the profile's own names count.
         #expect(result.prose.contains("tagged in 3 catalog videos"))
         #expect(result.prose.contains("The note on the profile says: “Number four son, sometimes wears glasses” — that's a note, not something I've verified."))
@@ -226,7 +230,7 @@ struct HalliePeopleTabTests {
             .init(intent: intent("when was Dad born?", people: ["Dad"], operation: .birth)),
             context: context)
         #expect(born.outcome == .answered)
-        #expect(born.prose.hasPrefix("Dad was born 19 Feb 1898, according to the People profile."))
+        #expect(born.prose.hasPrefix("Dad was born 19 February 1898, according to the People profile."))
 
         let unknown = try await HallieTurnExecutor.execute(
             .init(intent: intent("when was Tim born?", people: ["Tim"], operation: .birth)),

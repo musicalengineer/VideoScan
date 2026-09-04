@@ -198,6 +198,14 @@ struct HallieGroundedComposer: Sendable {
     static let leakReasons: Set<HallieCompositionVerifier.Dropped.Reason> = [
         .leakedYear, .leakedNumber, .leakedName, .alteredFilename,
     ]
+    // `.alteredDate` is deliberately NOT in that set (2026-09-03). A leak
+    // is a fact we never had; an altered date is a fact we DO have, typed
+    // wrong. Withholding it would punish the reader for the model's
+    // spelling, so the claim stays owed and the coverage rule puts the
+    // claim's OWN text back — Swift's rendering, never the model's. There
+    // is no laundering risk: what is restored is the plan, verbatim.
+    // A single-claim answer (the parents card) keeps nothing, and the
+    // composer then ships `fallbackText`, which is the same correct prose.
 
     /// Every claim of a biography plan must reach the reader, cited. The
     /// verifier only removes; `restoringSubjectAndLifeDates` only knows about
@@ -440,6 +448,10 @@ struct HallieGroundedComposer: Sendable {
         HARD RULES:
         - Use ONLY the given claims. Never add a date, name, place, number, \
         relationship, or event that is not in a claim.
+        - Copy every DATE character for character, exactly as the claim \
+        writes it ("22 February 1929"). Do not reorder it, do not add a \
+        comma, do not shorten or lower-case the month. A sentence whose date \
+        does not match its claim will be discarded.
         - Every sentence must end with the claim IDs it rests on, in square \
         brackets, like [c1] or [c2][c3]. A sentence with no tag will be discarded.
         - Do not mention the IDs any other way; the bracket tags are enough.

@@ -242,13 +242,11 @@ enum ArchivistSelectionDateQuestion: String, Sendable, Equatable, CaseIterable {
         ArchivistTemporalExecutor.periodString(date, precision: precision)
     }
 
+    /// The house format, through the one formatter (`HallieDateStyle`).
+    /// Unchanged output — this renderer was already right; it now shares
+    /// the definition instead of restating it.
     private static func longDay(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "d MMMM yyyy"
-        return formatter.string(from: date)
+        HallieDateStyle.spoken(date, calendar: calendar)
     }
 
     private static var calendar: Calendar {
