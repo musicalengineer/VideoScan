@@ -187,6 +187,66 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         """
     }
 
+    /// Render a decode failure into a short, model-readable sentence that
+    /// names the offending field — the text a temperature-0 repair retry
+    /// (`repairHint` / `repairSuffix`) actually has to act on.
+    ///
+    /// WHY THIS EXISTS: with `format:` dropped (the 501/no-schema recovery
+    /// above), the strict Swift decoder is the ONLY thing judging the
+    /// model's answer, and `DecodingError.localizedDescription` throws away
+    /// `debugDescription` and the `codingPath` — Foundation's canned text is
+    /// "the data couldn't be read because it is missing" / "…because it
+    /// isn't in the correct format", which says nothing a retry can change.
+    /// Two live captures, Rick, 2026-09-03, in this exact fallback:
+    ///   "how old is Tim" → keyNotFound(.reference, path: ["payload"]);
+    ///     the bare localizedDescription read "…is missing", no field name.
+    ///   "show me videos of my mother" → dataCorrupted from
+    ///     `rejectUnknownKeys` (ArchivistQueryAST.swift), debugDescription
+    ///     "unknown field(s): relation"; the bare localizedDescription read
+    ///     "…isn't in the correct format", no field name either.
+    /// Both DecodingErrors already carry the real field name; only the
+    /// canned wording was being sent back to the model. This renders the
+    /// coding path plus the specific complaint instead.
+    static func decodeFailureDetail(_ error: Error) -> String {
+        func component(_ key: CodingKey) -> String {
+            if let intValue = key.intValue { return "[\(intValue)]" }
+            return key.stringValue
+        }
+        func path(_ codingPath: [CodingKey], appending key: CodingKey? = nil) -> String {
+            var parts = codingPath.map(component)
+            if let key { parts.append(component(key)) }
+            return parts.joined(separator: ".")
+        }
+        func located(_ codingPath: [CodingKey], _ debugDescription: String) -> String {
+            let location = path(codingPath)
+            return location.isEmpty ? debugDescription : "\(location): \(debugDescription)"
+        }
+
+        let detail: String
+        switch error {
+        case DecodingError.keyNotFound(let key, let context):
+            detail = "missing required field '\(path(context.codingPath, appending: key))'"
+        case DecodingError.typeMismatch(_, let context),
+             DecodingError.valueNotFound(_, let context):
+            detail = located(context.codingPath, context.debugDescription)
+        case DecodingError.dataCorrupted(let context):
+            detail = located(context.codingPath, context.debugDescription)
+        default:
+            detail = error.localizedDescription
+        }
+        return String(detail.prefix(200))
+    }
+
+    /// Appended to the AST/interpretation system prompt ONLY on a turn where
+    /// a schema was wanted but had to be dropped (structured output
+    /// unsupported by this ollama build — see `structuredOutputUnsupported`
+    /// and `requestContent` below). Without `format:` nothing enforces the
+    /// JSON schema's `required` arrays, so the model has no signal that,
+    /// say, `payload.reference` is mandatory for a temporal question — the
+    /// prose prompt alone was silent on that. Never appended on the
+    /// schema-constrained path.
+    static let unconstrainedRequiredFieldsSuffix = "\n\nEvery example below shows the complete set of keys for its shape. Emit every key an example shows, invent no other keys, and use only the values the examples use."
+
     var displayName: String { "\(model) @ \(host)" }
 
     /// Classify a non-200 reply.
@@ -328,7 +388,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             return try NLQuerySpec.decodeStrictWire(specData)
         } catch {
             throw NLTranslatorError.badResponse(
-                "content is not a strict NLQuerySpec (\(error.localizedDescription)): "
+                "content is not a strict NLQuerySpec (\(Self.decodeFailureDetail(error))): "
                     + String(content.prefix(120)))
         }
     }
@@ -354,7 +414,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict ArchivistQueryAST "
-                    + "(\(error.localizedDescription)): \(content.prefix(120))")
+                    + "(\(Self.decodeFailureDetail(error))): \(content.prefix(120))")
         }
     }
 
@@ -384,7 +444,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict Hallie turn interpretation "
-                    + "(\(error.localizedDescription)): \(content.prefix(120))")
+                    + "(\(Self.decodeFailureDetail(error))): \(content.prefix(120))")
         }
     }
 
@@ -513,10 +573,19 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             schemaToSend = nil
         }
         while true {
+            // A schema was WANTED (`schema != nil`) but is not going out on
+            // this attempt: the model loses the JSON schema's `required`
+            // enforcement, so tell it in prose instead. Recomputed each
+            // pass so the retry below (schema refused mid-loop) picks it up
+            // too, and never applied when the caller never wanted a schema
+            // (`composePlainText`, `warmUp`).
+            let effectiveSystemPrompt = (schema != nil && schemaToSend == nil)
+                ? systemPrompt + Self.unconstrainedRequiredFieldsSuffix
+                : systemPrompt
             do {
                 return try await sendChatRequest(
                     text, schema: schemaToSend,
-                    systemPrompt: systemPrompt, options: options)
+                    systemPrompt: effectiveSystemPrompt, options: options)
             } catch let error as NLTranslatorError {
                 // Only a request that ACTUALLY carried a schema can be
                 // recovered by dropping it. Once `schemaToSend` is nil the
