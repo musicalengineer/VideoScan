@@ -188,6 +188,16 @@ extension HallieTurnExecutor {
 
         /// A not-found answer that explains the tree's reach and offers the
         /// one thing that would fix it: telling Hallie about the person.
+        ///
+        /// This is the ONE place that means "no real family member could be
+        /// identified for this name at all" — the People tab, near-miss
+        /// spelling suggestions, and the surname roster have all already had
+        /// their turn by the time a caller reaches here (HallieTurnExecutor,
+        /// HallieTurnExecutor+Relationship). `noReferentDecline` marks that
+        /// for `HallieCapabilityDeclineFallback` (2026-09-04): a bare kinship
+        /// word ("grandmother") or an unknown name may retry once through
+        /// general knowledge; a decline about a real, identified person
+        /// never goes through this function and is never retried.
         static func notFoundOffer(_ result: Result, typed: String,
                                   graph: GedcomFamilyGraph?) -> Result {
             // No "covers people born up to YYYY" here either (see
@@ -215,7 +225,8 @@ extension HallieTurnExecutor {
                 performsFirstOfferedAction: result.performsFirstOfferedAction,
                 immediateOfferedAction: result.immediateOfferedAction,
                 subjectLifeStatus: result.subjectLifeStatus,
-                refinableQuery: result.refinableQuery)
+                refinableQuery: result.refinableQuery,
+                noReferentDecline: result.outcome == .declined)
         }
     }
 }

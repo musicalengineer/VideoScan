@@ -666,7 +666,7 @@ enum HallieAppTurnCoordinator {
             referent: referent,
             dependencies: dependencies)
         let request = HallieTurnExecutor.Request(intent: intent)
-        return try await runOffMain(
+        let response = try await runOffMain(
             intent: intent,
             responderHost: responderHost,
             capturedReferentID: referent.recordID,
@@ -676,6 +676,65 @@ enum HallieAppTurnCoordinator {
             dependencies: dependencies) {
                 try await dependencies.executeRequest(request, context)
             }
+        // A narrow second chance, taken only after the archive route has
+        // already given up (HallieCapabilityDeclineFallback, 2026-09-04):
+        // an app-capability decline or a bare-name/unknown-name tree lookup
+        // retries once through the general-knowledge lane instead of
+        // dead-ending. Every other decline — one that reports a real
+        // archive fact — is returned exactly as the executor built it.
+        guard HallieCapabilityDeclineFallback.qualifies(response.result) else {
+            return response
+        }
+        return try await deadEndGeneralKnowledgeFallback(
+            response,
+            question: routingQuestion,
+            hosts: composeHosts,
+            modelName: modelName,
+            history: history,
+            referent: referent,
+            dependencies: dependencies)
+    }
+
+    /// Retry a dead-end decline through the same general-knowledge lane an
+    /// ordinary conversational turn uses, including the same hard boundary.
+    /// Never on the composing task's off-main worker: this runs after
+    /// `runOffMain` has already returned, on whatever actor called
+    /// `execute`, exactly like the ordinary `.conversation` branch above.
+    private static func deadEndGeneralKnowledgeFallback(
+        _ declined: Response,
+        question: String,
+        hosts: [String],
+        modelName: String,
+        history: [HallieGroundedComposer.HistoryTurn],
+        referent: CapturedReferent,
+        dependencies: Dependencies
+    ) async throws -> Response {
+        appLog.write(HallieCapabilityDeclineFallback.logLine(
+            for: declined.result, question: question))
+        let social = await dependencies.composeConversation(
+            .generalKnowledge, question, history, hosts, modelName)
+        try Task.checkCancellation()
+        // THE BOUNDARY. Unweakened, unbypassed: a general answer may not
+        // assert anything about Rick's family, his media, or his archive.
+        let bounded = try await enforceGeneralBoundaryOffMain(
+            social.value, kind: .generalKnowledge, dependencies: dependencies)
+        if HallieCapabilityDeclineFallback.isBoundaryRefusal(bounded) {
+            // The user must see ONE answer, not a boundary refusal stacked
+            // on top of a decline. The original decline is already honest.
+            appLog.write(HallieCapabilityDeclineFallback.boundaryKeptOriginalLogLine)
+            return declined
+        }
+        let result = HallieCapabilityDeclineFallback.result(
+            for: bounded, queryDescription: declined.result.queryDescription)
+        return Response(
+            result: result,
+            responderHost: bounded.composedByModel ? social.responderHost : localResponder,
+            biographyPhoto: nil,
+            capturedReferentID: referent.recordID,
+            citations: [],
+            pendingClarification: nil,
+            playAfterAnswer: false,
+            executedIntent: nil)
     }
 
     /// Continue a typed ambiguity with the stable ID offered by the shared

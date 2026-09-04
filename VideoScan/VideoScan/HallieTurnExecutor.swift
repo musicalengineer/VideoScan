@@ -520,6 +520,17 @@ enum HallieTurnExecutor {
         /// for "and the newest?" — conversation memory keeps it. Nil = the
         /// memory derives it (list answers) or forgets it (2026-09-02).
         let refinableQuery: RefinableQuery?
+        /// True for a `.declined` graph/relationship answer where the typed
+        /// name never resolved to any real family member at all, even after
+        /// the People tab, near-miss suggestions and the surname roster all
+        /// had a turn (`FamilyKnowledgeSupplement.notFoundOffer` sets this —
+        /// see that file). Distinct from a decline that reports a genuine
+        /// archive fact ("the family tree doesn't record a mother for X",
+        /// "his siblings are A and B — I don't find C there"): those name a
+        /// REAL person and a real absence, and must never be second-guessed.
+        /// Read by `HallieCapabilityDeclineFallback` (2026-09-04) to decide
+        /// whether a dead end may retry once through general knowledge.
+        let noReferentDecline: Bool
 
         init(
             route: Route,
@@ -541,7 +552,8 @@ enum HallieTurnExecutor {
             performsFirstOfferedAction: Bool = false,
             immediateOfferedAction: OfferedAction? = nil,
             subjectLifeStatus: LifeStatus? = nil,
-            refinableQuery: RefinableQuery? = nil
+            refinableQuery: RefinableQuery? = nil,
+            noReferentDecline: Bool = false
         ) {
             self.route = route
             self.outcome = outcome
@@ -565,6 +577,7 @@ enum HallieTurnExecutor {
             self.performsFirstOfferedAction = immediate != nil
             self.subjectLifeStatus = subjectLifeStatus
             self.refinableQuery = refinableQuery
+            self.noReferentDecline = noReferentDecline
         }
 
         /// The same answer with extra things to look at. Facts untouched.
@@ -580,7 +593,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                noReferentDecline: noReferentDecline)
         }
 
         /// The same answer carrying a PROVENANCE note — how Hallie read the
@@ -616,7 +630,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                noReferentDecline: noReferentDecline)
         }
 
         /// The same answer with its prose replaced by a verified composition.
@@ -644,7 +659,8 @@ enum HallieTurnExecutor {
                 performsFirstOfferedAction: performsFirstOfferedAction,
                 immediateOfferedAction: immediateOfferedAction,
                 subjectLifeStatus: subjectLifeStatus,
-                refinableQuery: refinableQuery)
+                refinableQuery: refinableQuery,
+                noReferentDecline: noReferentDecline)
         }
     }
 
