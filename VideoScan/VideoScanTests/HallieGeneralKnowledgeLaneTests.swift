@@ -74,6 +74,7 @@ struct HallieGeneralKnowledgeLaneTests {
         "What's the difference between a memory and a historical record?",
         "Can you make a gentle pun about libraries?",
         "Help me think of three questions to ask my grandmother.",
+        "What questions could I ask my grandmother about her childhood?",
         "What is a thoughtful way to label old family photographs?",
         "How can I encourage relatives to tell family stories?",
         "Suggest a simple rainy-day activity for a grandparent and child.",
@@ -331,6 +332,15 @@ struct HallieGeneralKnowledgeLaneTests {
             "Help me think of three questions to ask my grandmother.",
             isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
         #expect(HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask my grandmother about her childhood?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions should I ask my grandfather about his childhood?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions might I ask my grandparents about their childhoods?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
             "Suggest a simple rainy-day activity for a grandparent and child.",
             isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
         // Not an advice request: the family lanes keep it.
@@ -340,9 +350,34 @@ struct HallieGeneralKnowledgeLaneTests {
         #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
             "My grandmother was born in Boston.",
             isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        // "What questions" alone is not an advice cue. Past-tense asks are
+        // family facts and must stay grounded.
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions did my grandmother ask?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask her about childhood?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask my brother about her childhood?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "Why did my grandmother leave her home?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        // A year or selected/archive media remains a hard archive cue even
+        // when the sentence opens with the new advice shape.
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask about my grandmother in 1994?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask about this video?",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
         // An advice request that names a relative is still theirs.
         #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
             "Help me think of three questions to ask Donna.",
+            isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
+        #expect(!HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+            "What questions could I ask Donna?",
             isKnownPerson: Self.known(_:), isInnerCircleName: Self.inner(_:)).isGeneral)
     }
 

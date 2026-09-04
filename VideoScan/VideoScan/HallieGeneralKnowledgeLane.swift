@@ -579,6 +579,15 @@ enum HallieGeneralKnowledgeLane {
     /// explanation of public knowledge, or something creative. Used ONLY to
     /// let a family-ADJACENT request through — never to decide, on its own,
     /// that something is general.
+    /// Interview-planning questions are family-adjacent advice, not asks
+    /// for a fact about the relative. Kept separate because only these
+    /// leads may treat a later locally-bound possessive ("my grandmother
+    /// ... her childhood") as self-contained.
+    static let familyInterviewAdviceLeads = [
+        "what questions can i", "what questions could i",
+        "what questions should i", "what questions might i",
+    ]
+
     static let adviceLeads = [
         "help me", "suggest", "give me", "write ", "make up a",
         "come up with", "think of", "recommend", "any ideas", "ideas for",
@@ -592,6 +601,7 @@ enum HallieGeneralKnowledgeLane {
         "what would be a good", "what would you suggest",
         "how can i", "how could i", "how might i", "how should i",
         "what should i", "what could i",
+    ] + familyInterviewAdviceLeads + [
         "tell me a ", "tell me another ",
         "explain ", "define ", "what does ", "what do ",
         "what is the difference", "what's the difference",
@@ -629,6 +639,43 @@ enum HallieGeneralKnowledgeLane {
         "instead", "again", "more", "then",
     ]
 
+    /// A possessive pronoun can be self-contained when its antecedent was
+    /// stated earlier in the same sentence: "my grandmother ... her
+    /// childhood". Without this distinction, the advice request is treated
+    /// as a follow-up even though it needs no conversation history.
+    private static let feminineKinAntecedents: Set<String> = [
+        "grandma", "grandmother", "mom", "mum", "mother", "sister",
+        "aunt", "niece", "daughter", "wife", "nana",
+    ]
+    private static let masculineKinAntecedents: Set<String> = [
+        "grandpa", "grandfather", "dad", "father", "brother", "uncle",
+        "nephew", "son", "husband",
+    ]
+    private static let neutralKinAntecedents: Set<String> = [
+        "grandparent", "grandparents", "parent", "parents", "relative",
+        "relatives", "sibling", "siblings", "cousin", "cousins", "child",
+        "children", "kid", "kids", "spouse",
+    ]
+
+    private static func hasLocalPossessiveAntecedent(
+        for pronoun: String,
+        before index: Int,
+        tokens: [String]
+    ) -> Bool {
+        let candidates: Set<String>
+        switch pronoun {
+        case "her", "hers": candidates = feminineKinAntecedents
+        case "his": candidates = masculineKinAntecedents
+        case "their", "theirs": candidates = neutralKinAntecedents
+        default: return false
+        }
+        guard index >= 2 else { return false }
+        return (1..<index).contains { position in
+            (tokens[position - 1] == "my" || tokens[position - 1] == "our")
+                && candidates.contains(tokens[position])
+        }
+    }
+
     /// Prepositions a sentence only ends with when its object was said in
     /// the previous turn ("what are you unsure about?").
     static let danglingPrepositions: Set<String> = [
@@ -644,7 +691,15 @@ enum HallieGeneralKnowledgeLane {
         if let last = tokens.last, danglingPrepositions.contains(last) {
             return "ends with the dangling preposition “\(last)”"
         }
-        if let hit = tokens.first(where: outwardReferences.contains) {
+        let isFamilyInterviewAdvice = familyInterviewAdviceLeads.contains {
+            normalized.hasPrefix($0)
+        }
+        if let hit = tokens.enumerated().first(where: { index, token in
+            outwardReferences.contains(token)
+                && !(isFamilyInterviewAdvice
+                     && hasLocalPossessiveAntecedent(
+                        for: token, before: index, tokens: tokens))
+        })?.element {
             return "refers back with “\(hit)”"
         }
         return nil
