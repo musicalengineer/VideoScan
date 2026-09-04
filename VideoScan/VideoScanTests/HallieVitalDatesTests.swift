@@ -17,11 +17,16 @@
 //
 //   Ma  (Eileen Latta)        TRUE  born 31 Aug 1933, died 1 June 2023 (89)
 //                             tree  born 31 Aug 1930, died 3 March 2023 (92)
-//   Dad (Richard H Breen Sr)  TRUE  died 25 June 2008
-//                             tree  died 22 June 2008
+//   Dad (Richard H Breen Sr)  TRUE  born 21 Feb 1929, died 25 June 2008
+//                             tree  born 22 Feb 1929, died 22 June 2008
 //
-// These tests pin the fix at the shared seam (HallieVitalDates) and at both
-// of the routes that read it.
+// Dad's BIRTH date was the one open question when the first two routes
+// shipped; Rick confirmed it 2026-09-04 — the profile's 21 February is
+// right and the tree's 22 February is wrong, like the other three.
+//
+// These tests pin the fix at the shared seam (HallieVitalDates) and at all
+// THREE of the routes that read it: the age route, the biography card, and
+// the kinship overlay's trailing aside.
 
 import Foundation
 import Testing
@@ -58,8 +63,8 @@ struct HallieVitalDatesTests {
     0 TRLR
     """
 
-    /// Rick's Dad as the import records him — the birth date is right, the
-    /// death date is three days out.
+    /// Rick's Dad as the import records him — both dates wrong, the birth by
+    /// one day and the death by three.
     private static let dadTree = """
     0 HEAD
     0 @I1@ INDI
@@ -119,7 +124,7 @@ struct HallieVitalDatesTests {
         HallieVitalProfile(
             stableID: stableID, canonicalName: "Dad",
             treeIdentity: .familySearchID("RHBS-R01"),
-            birthdate: date(1929, 2, 22), deathdate: date(2008, 6, 25))
+            birthdate: date(1929, 2, 21), deathdate: date(2008, 6, 25))
     }
 
     // MARK: - Rule 1: the profile's date wins
@@ -138,14 +143,16 @@ struct HallieVitalDatesTests {
         #expect(resolved.deathdate?.provenance == .poiProfile(profileID: "ma"))
     }
 
-    /// Dad: 25 June 2008, not the tree's 22 June 2008.
-    @Test func theProfileDateWinsForDadsDeath() {
+    /// Dad: born 21 February 1929 and died 25 June 2008, not the tree's
+    /// 22 February 1929 and 22 June 2008 (Rick, 2026-09-04, on both).
+    @Test func theProfileDatesWinForDad() {
         let graph = GedcomFamilyGraph(gedcomText: Self.dadTree)
         let profile = dadProfile()
         let resolved = HallieVitalDates.resolve(
             profile: profile, among: [profile], graph: graph)
 
-        #expect(resolved.birthdate?.date == date(1929, 2, 22))
+        #expect(resolved.birthdate?.date == date(1929, 2, 21))
+        #expect(resolved.birthdate?.provenance == .poiProfile(profileID: "dad"))
         #expect(resolved.deathdate?.date == date(2008, 6, 25))
         #expect(resolved.deathdate?.provenance == .poiProfile(profileID: "dad"))
     }
@@ -571,6 +578,75 @@ struct HallieVitalDatesTests {
                 Comment(rawValue: allProfiles.basisLine))
     }
 
+    // MARK: - The third route: a relative named inside another sentence
+
+    /// "who are Tim's parents" states each parent's vitals as a trailing
+    /// aside (HallieBiographyCard.vitalsAside), and that read the tree
+    /// directly too. Live 2026-09-04, after the first two routes shipped,
+    /// it still answered "born 22 February 1929 … died 22 June 2008" for
+    /// Dad while "tell me about Dad" in the same conversation said
+    /// 21 February 1929 and 25 June 2008. It now reads the same seam.
+    @Test func theKinshipAsideSpeaksTheProfileDatesToo() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.dadTree)
+        let person = graph.person(familySearchID: "RHBS-R01")!
+        let profile = dadProfile()
+        let vitals = HallieVitalDates.resolve(
+            treePerson: person, profiles: [profile], graph: graph,
+            throughProfileStableID: "dad")
+        let aside = HallieBiographyCard.vitalsAside(
+            person,
+            profileBirthdate: vitals.profileBirthdate,
+            profileDeathdate: vitals.profileDeathdate)
+
+        #expect(aside.contains("born 21 February 1929"), Comment(rawValue: aside))
+        #expect(aside.contains("died 25 June 2008"), Comment(rawValue: aside))
+        #expect(!aside.contains("22 February 1929"), Comment(rawValue: aside))
+        #expect(!aside.contains("22 June 2008"), Comment(rawValue: aside))
+        // Places still come from the tree (rule 4).
+        #expect(aside.contains("Boston"), Comment(rawValue: aside))
+        #expect(aside.contains("Brockton"), Comment(rawValue: aside))
+
+        // A tree person no profile owns is untouched, exactly as before.
+        let strangerGraph = GedcomFamilyGraph(gedcomText: Self.twoPeopleTree)
+        let stranger = strangerGraph.person(familySearchID: "ELSE-XX1")!
+        let none = HallieVitalDates.resolve(
+            treePerson: stranger, profiles: [profile], graph: strangerGraph,
+            throughProfileStableID: nil)
+        #expect(HallieBiographyCard.vitalsAside(
+            stranger, profileBirthdate: none.profileBirthdate,
+            profileDeathdate: none.profileDeathdate)
+            == HallieBiographyCard.vitalsAside(stranger))
+    }
+
+    /// Rule 1 is unconditional, and this is its visible consequence — the
+    /// one the four amended FamilyKinshipTests assertions record. A profile
+    /// date is stated in the aside even where the TREE records no date at
+    /// all, so a relative who has a People profile now carries dates in
+    /// sentences that used to carry none. Deliberate, not a special case.
+    @Test func theAsideStatesAProfileDateTheTreeDoesNotRecord() {
+        let dateless = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Richard Harding /Breen/ Sr
+        1 SEX M
+        1 _FSFTID RHBS-R01
+        0 TRLR
+        """
+        let graph = GedcomFamilyGraph(gedcomText: dateless)
+        let person = graph.person(familySearchID: "RHBS-R01")!
+        #expect(HallieBiographyCard.vitalsAside(person) == "")
+
+        let profile = dadProfile()
+        let vitals = HallieVitalDates.resolve(
+            treePerson: person, profiles: [profile], graph: graph,
+            throughProfileStableID: "dad")
+        let aside = HallieBiographyCard.vitalsAside(
+            person,
+            profileBirthdate: vitals.profileBirthdate,
+            profileDeathdate: vitals.profileDeathdate)
+        #expect(aside == ", born 21 February 1929, died 25 June 2008", Comment(rawValue: aside))
+    }
+
     // MARK: - Sensor
 
     private struct VitalCase {
@@ -582,6 +658,7 @@ struct HallieVitalDatesTests {
         let profileDeath: Date
         let spokenBirth: String
         let spokenDeath: String
+        let treeBirthSpoken: String
         let treeDeathSpoken: String
         let expectedAge: Int
     }
@@ -599,8 +676,8 @@ struct HallieVitalDatesTests {
     ///
     ///   Ma  born 31 Aug 1933, died 1 June 2023, age 89
     ///       (tree, wrong: born 31 Aug 1930, died 3 March 2023, age 92)
-    ///   Dad died 25 June 2008
-    ///       (tree, wrong: died 22 June 2008)
+    ///   Dad born 21 Feb 1929, died 25 June 2008
+    ///       (tree, wrong: born 22 Feb 1929, died 22 June 2008)
     ///
     /// This runs BOTH real composers — ArchivistTemporalExecutor for the age
     /// and HallieBiographyCard for the biography — from one HallieVitalDates
@@ -613,13 +690,15 @@ struct HallieVitalDatesTests {
                 stableID: "ma", name: "Ma",
                 profileBirth: date(1933, 8, 31), profileDeath: date(2023, 6, 1),
                 spokenBirth: "31 August 1933", spokenDeath: "1 June 2023",
-                treeDeathSpoken: "3 March 2023", expectedAge: 89),
+                treeBirthSpoken: "31 August 1930", treeDeathSpoken: "3 March 2023",
+                expectedAge: 89),
             VitalCase(
                 fixture: Self.dadTree, familySearchID: "RHBS-R01",
                 stableID: "dad", name: "Dad",
-                profileBirth: date(1929, 2, 22), profileDeath: date(2008, 6, 25),
-                spokenBirth: "22 February 1929", spokenDeath: "25 June 2008",
-                treeDeathSpoken: "22 June 2008", expectedAge: 79),
+                profileBirth: date(1929, 2, 21), profileDeath: date(2008, 6, 25),
+                spokenBirth: "21 February 1929", spokenDeath: "25 June 2008",
+                treeBirthSpoken: "22 February 1929", treeDeathSpoken: "22 June 2008",
+                expectedAge: 79),
         ]
         for testCase in cases {
             let graph = GedcomFamilyGraph(gedcomText: testCase.fixture)
@@ -657,6 +736,7 @@ struct HallieVitalDatesTests {
             // ── They agree, and on Rick's numbers ────────────────────────
             #expect(answer.text.contains(testCase.spokenBirth), Comment(rawValue: answer.text))
             #expect(answer.text.contains(testCase.spokenDeath), Comment(rawValue: answer.text))
+            #expect(!answer.text.contains(testCase.treeBirthSpoken), Comment(rawValue: answer.text))
             #expect(!answer.text.contains(testCase.treeDeathSpoken), Comment(rawValue: answer.text))
             #expect(bio.profileBirthdate == resolved.birthdate?.date)
             #expect(bio.profileDeathdate == resolved.deathdate?.date)
@@ -669,6 +749,63 @@ struct HallieVitalDatesTests {
 
             // Places still come from the tree, untouched (rule 4).
             #expect(answer.text.contains(person.birthPlace ?? "—"), Comment(rawValue: answer.text))
+        }
+    }
+
+    /// SENSOR — do not delete. The companion to the one above, for the
+    /// THIRD route.
+    ///
+    /// Live 2026-09-04, after the biography and age routes were fixed and
+    /// merged (7f85aae2), "who are Tim's parents" still answered from the
+    /// tree —
+    ///
+    ///   "Richard Harding Breen Sr (Dad in the People tab), born 22 February
+    ///    1929 …, died 22 June 2008 …, Eileen Latta (Ma in the People tab),
+    ///    born 31 August 1930 …, died 3 March 2023 …"
+    ///
+    /// — while "tell me about Dad", asked in the same conversation, said
+    /// 21 February 1929 and 25 June 2008. Rick confirmed that day that all
+    /// four of those tree dates are wrong and the profiles are right,
+    /// including Dad's birthday.
+    ///
+    /// This runs the biography composer and the kinship aside from ONE
+    /// HallieVitalDates resolution and pins that a date stated by either is
+    /// stated by both. If it goes red, a third opinion about a birthday has
+    /// appeared again.
+    @Test func theKinshipAsideAndTheBiographyCardNeverStateDifferentDates() {
+        let cases: [(fixture: String, fsid: String, stableID: String,
+                     profile: HallieVitalProfile,
+                     birth: String, death: String,
+                     treeBirth: String, treeDeath: String)] = [
+            (Self.maTree, "EILA-TA1", "ma", maProfile(),
+             "31 August 1933", "1 June 2023", "31 August 1930", "3 March 2023"),
+            (Self.dadTree, "RHBS-R01", "dad", dadProfile(),
+             "21 February 1929", "25 June 2008", "22 February 1929", "22 June 2008"),
+        ]
+        for testCase in cases {
+            let graph = GedcomFamilyGraph(gedcomText: testCase.fixture)
+            let person = graph.person(familySearchID: testCase.fsid)!
+            let vitals = HallieVitalDates.resolve(
+                treePerson: person, profiles: [testCase.profile], graph: graph,
+                throughProfileStableID: testCase.stableID)
+
+            let (answer, _, _) = HallieBiographyCard.answer(
+                for: person, in: graph,
+                profileBirthdate: vitals.profileBirthdate,
+                profileDeathdate: vitals.profileDeathdate)
+            let aside = HallieBiographyCard.vitalsAside(
+                person,
+                profileBirthdate: vitals.profileBirthdate,
+                profileDeathdate: vitals.profileDeathdate)
+
+            for spoken in [testCase.birth, testCase.death] {
+                #expect(answer.text.contains(spoken), Comment(rawValue: answer.text))
+                #expect(aside.contains(spoken), Comment(rawValue: aside))
+            }
+            for wrong in [testCase.treeBirth, testCase.treeDeath] {
+                #expect(!answer.text.contains(wrong), Comment(rawValue: answer.text))
+                #expect(!aside.contains(wrong), Comment(rawValue: aside))
+            }
         }
     }
 }

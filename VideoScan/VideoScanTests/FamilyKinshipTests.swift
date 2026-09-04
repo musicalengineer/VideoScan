@@ -700,13 +700,24 @@ struct FamilyKinshipTests {
         #expect(father.conclusion == .answered)
         // A bridged relative answers with the tree name and the People-tab
         // name as the alias (live 2026-08-29, "known as Dad").
-        #expect(father.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab).")
+        // AMENDED 2026-09-04 (Rick's ruling — the People tab is the truth for
+        // the people he knew): a relative named inside another sentence now
+        // carries the People profile's dates, which the tree fixture does not
+        // record at all. Before: "… (Dad in the People tab)." See
+        // HallieVitalDates and the aside sensor in HallieVitalDatesTests.
+        #expect(father.prose
+                == "Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 15 June 1931.")
         #expect(father.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile)"))
         let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs())
         // Tim is Rick's sibling and Rick is Dad's child, so Tim is Dad's son
         // too (full siblings share parents, 2026-09-02) — marked in the
         // basis, plain in the prose. Ann is his daughter, not listed here.
-        #expect(son.prose == "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), Tim.")
+        // AMENDED 2026-09-04, same reason. Rick's profile records a birthdate
+        // and the tree fixture does not, so his aside now carries it; Tim is
+        // unbridged and keeps his bare name.
+        // Before: "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), Tim."
+        #expect(son.prose
+                == "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), born 15 June 1962, Tim.")
         // The sibling rows sit on Tim's and Ann's cards here (not Rick's),
         // and the note says so.
         #expect(son.basisLine.hasPrefix("Basis: People tab relationship (stored on Rick's profile; Tim derived from Rick's rows: full siblings share parents (sibling rows on Ann and Tim))"),
@@ -720,7 +731,9 @@ struct FamilyKinshipTests {
         dadSide[0].kinships = []
         dadSide[1].kinships = [Kinship(relation: .parent, relativeTo: .profile(name: "Rick"))]
         let mirrored = ArchivistGraphExecutor.execute(kinship("Rick", .father), inputs: inputs(dadSide))
-        #expect(mirrored.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab).")
+        // AMENDED 2026-09-04, same reason. Before: "… (Dad in the People tab)."
+        #expect(mirrored.prose
+                == "Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 15 June 1931.")
     }
 
     /// AMENDED 2026-09-03 (Director — exact name wins): "Dad" is Rick's
@@ -790,8 +803,13 @@ struct FamilyKinshipTests {
             // live shape carries no siblings.
             let son = ArchivistGraphExecutor.execute(kinship("Grampa Breen", .son), inputs: inputs(profiles))
             #expect(son.conclusion == .answered, Comment(rawValue: label))
+            // AMENDED 2026-09-04 (Rick's ruling): the bridged shape's aside now
+            // carries Rick's People-profile birthdate. Before, the bridged
+            // branch read "Dad's sons: Richard Harding Breen Jr (Rick in the
+            // People tab), Tim". The live (unbridged) branch is unchanged —
+            // there is no tree record to name, so there is no aside.
             #expect(son.prose.hasPrefix(bridged
-                ? "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), Tim"
+                ? "Dad's sons: Richard Harding Breen Jr (Rick in the People tab), born 15 June 1962, Tim"
                 : "Dad's son: Rick"), Comment(rawValue: label))
             // Asking about "Dad" never produces an answer about Rick's own children.
             let dadSon = ArchivistGraphExecutor.execute(kinship("Dad", .son), inputs: inputs(profiles))
