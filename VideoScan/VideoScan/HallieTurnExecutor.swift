@@ -320,6 +320,14 @@ enum HallieTurnExecutor {
         /// The profile's recorded death (LifeStatus, 2026-09-01): what makes
         /// a People-tab person "passed on" in Hallie's tense. Additive.
         let deathdate: Date?
+        // Family-name fields (2026-09-04). Additive and all-optional: nil
+        // everywhere ⇒ this snapshot behaves exactly as it did before, which
+        // is the state of all thirteen live profiles. `titles` is absent on
+        // purpose — titles are display only and must never reach matching.
+        let surname: String?
+        let maidenName: String?
+        let middleName: String?
+        let suffix: String?
 
         init(
             stableID: String,
@@ -331,7 +339,11 @@ enum HallieTurnExecutor {
             sex: PersonSex? = nil,
             uuid: UUID? = nil,
             treeIdentity: TreeIdentity? = nil,
-            deathdate: Date? = nil
+            deathdate: Date? = nil,
+            surname: String? = nil,
+            maidenName: String? = nil,
+            middleName: String? = nil,
+            suffix: String? = nil
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
@@ -343,6 +355,30 @@ enum HallieTurnExecutor {
             self.uuid = uuid
             self.treeIdentity = treeIdentity
             self.deathdate = deathdate
+            self.surname = POINameText.cleaned(surname)
+            self.maidenName = POINameText.cleaned(maidenName)
+            self.middleName = POINameText.cleaned(middleName)
+            self.suffix = POINameText.cleanedSuffix(suffix)
+        }
+
+        /// The same pure builder the profile uses, so the People tab and the
+        /// stored profile can never disagree about what "Tim Breen" means.
+        var nameForms: POINameForms {
+            POINameForms(name: canonicalName, aliases: aliases,
+                         middleName: middleName, surname: surname,
+                         maidenName: maidenName, suffix: suffix)
+        }
+
+        /// First-mention name in profile-derived prose. Equals
+        /// `canonicalName` when no surname is set.
+        var displayFullName: String { nameForms.displayFullName }
+
+        /// Derived exact-match spellings; empty until Rick fills a surname
+        /// in. The nil check comes first because identity resolution walks
+        /// every profile — the scale test drives it with 100,000 of them.
+        var fullNameForms: [String] {
+            guard surname != nil || maidenName != nil else { return [] }
+            return nameForms.matchingForms
         }
     }
 

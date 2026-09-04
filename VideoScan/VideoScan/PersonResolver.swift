@@ -26,10 +26,34 @@
 import Foundation
 
 /// One resolvable identity: canonical name + the aliases/spellings that
-/// map to it (from POIProfile.name / POIProfile.aliases).
+/// map to it (from POIProfile.name / POIProfile.aliases), plus the full-name
+/// spellings derived from the family-name fields (POIProfile.fullNameForms,
+/// 2026-09-04).
+///
+/// `fullNameForms` is kept SEPARATE from `aliases` rather than merged into
+/// it because aliases are also what the People tab reads back as "also known
+/// as": a derived "Tim Breen" is a matching key, not something Rick typed,
+/// and must not appear in that list. For matching the two are equal in
+/// strength — both are alias-kind claims, so the exact-name-wins rule is
+/// untouched. Defaulted so every existing call site (and test fixture) keeps
+/// compiling and behaving as before.
 struct ResolvablePerson: Sendable, Equatable {
     let canonicalName: String
     let aliases: [String]
+    let fullNameForms: [String]
+
+    init(canonicalName: String, aliases: [String], fullNameForms: [String] = []) {
+        self.canonicalName = canonicalName
+        self.aliases = aliases
+        self.fullNameForms = fullNameForms
+    }
+
+    /// Every spelling other than the canonical name that maps here. Returns
+    /// `aliases` itself in the overwhelmingly common no-surname case, so
+    /// building a resolver over a large gallery costs no extra allocation.
+    var alternateSpellings: [String] {
+        fullNameForms.isEmpty ? aliases : aliases + fullNameForms
+    }
 }
 
 enum PersonResolution: Sendable, Equatable {
@@ -81,7 +105,7 @@ struct PersonResolver: Sendable {
             let canonical = person.canonicalName
             let nameKey = Self.normalize(canonical)
             if !nameKey.isEmpty { names[nameKey, default: []].insert(canonical) }
-            for alias in person.aliases {
+            for alias in person.alternateSpellings {
                 let key = Self.normalize(alias)
                 guard !key.isEmpty else { continue }
                 aliases[key, default: []].insert(canonical)
@@ -103,16 +127,22 @@ struct PersonResolver: Sendable {
         spellingEntries = people.map {
             SpellingEntry(
                 canonicalName: $0.canonicalName,
-                spellings: [$0.canonicalName] + $0.aliases)
+                spellings: [$0.canonicalName] + $0.alternateSpellings)
         }
     }
 
     /// Production bridge from the persisted People gallery. Keep this
     /// mapping here (instead of at a call site) so aliases cannot silently
     /// disappear from Archivist resolution during a UI refactor.
-    init(profiles: [POIProfile]) {
+    ///
+    /// `includingFullNameForms` (2026-09-04) exists for exactly one caller:
+    /// `FamilyTreeIdentityResolver`, the profile→GEDCOM bridging path, which
+    /// Rick explicitly scoped OUT of the family-name change. Flip it there
+    /// when that path is changed deliberately, not as a side effect here.
+    init(profiles: [POIProfile], includingFullNameForms: Bool = true) {
         self.init(people: profiles.map {
-            ResolvablePerson(canonicalName: $0.name, aliases: $0.aliases)
+            ResolvablePerson(canonicalName: $0.name, aliases: $0.aliases,
+                             fullNameForms: includingFullNameForms ? $0.fullNameForms : [])
         })
     }
 
@@ -484,7 +514,12 @@ struct FamilyTreeIdentityResolver {
     init(graph: GedcomFamilyGraph, profiles: [POIProfile]) {
         self.graph = graph
         self.profiles = profiles
-        self.profileResolver = PersonResolver(profiles: profiles)
+        // Bridging is out of scope for the family-name change (Rick,
+        // 2026-09-04): this resolver sees exactly the spellings it saw
+        // before, so surname/maiden name cannot alter which GEDCOM record a
+        // profile reaches until that path is changed on purpose.
+        self.profileResolver = PersonResolver(profiles: profiles,
+                                              includingFullNameForms: false)
     }
 
     func resolve(_ typedName: String) -> FamilyTreeIdentityResolution {

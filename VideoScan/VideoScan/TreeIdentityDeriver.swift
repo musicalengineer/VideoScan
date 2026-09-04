@@ -622,7 +622,9 @@ extension TreeIdentityDeriver {
                     aliases: snapshot.aliases, birthdate: snapshot.birthdate, note: snapshot.note,
                     kinships: snapshot.kinships, sex: snapshot.sex, uuid: snapshot.uuid,
                     treeIdentity: candidate.identity(fingerprint: nil),
-                    deathdate: snapshot.deathdate)
+                    deathdate: snapshot.deathdate,
+                    surname: snapshot.surname, maidenName: snapshot.maidenName,
+                    middleName: snapshot.middleName, suffix: snapshot.suffix)
             }
             if added == 0 { break }
         }

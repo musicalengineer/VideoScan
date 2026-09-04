@@ -109,6 +109,15 @@ struct PersonEditSheet: View {
     @State private var name: String
     @State private var notes: String
     @State private var aliasText: String
+    // Family-name fields (2026-09-04). `name` stays the SHORT name Rick
+    // types today; these are optional and any of them may be left blank
+    // forever. Titles use the same comma-separated text field aliases use,
+    // rather than a second kind of list control.
+    @State private var surname: String
+    @State private var maidenName: String
+    @State private var middleName: String
+    @State private var suffix: String
+    @State private var titleText: String
     @State private var coverFilename: String?
     @State private var referencePath: String
     // Identity metadata (feeds match plausibility ranking — see
@@ -170,6 +179,11 @@ struct PersonEditSheet: View {
         _name = State(initialValue: profile.name)
         _notes = State(initialValue: profile.notes)
         _aliasText = State(initialValue: profile.aliases.joined(separator: ", "))
+        _surname = State(initialValue: profile.surname ?? "")
+        _maidenName = State(initialValue: profile.maidenName ?? "")
+        _middleName = State(initialValue: profile.middleName ?? "")
+        _suffix = State(initialValue: profile.suffix ?? "")
+        _titleText = State(initialValue: profile.titles.joined(separator: ", "))
         _coverFilename = State(initialValue: profile.coverImageFilename)
         _referencePath = State(initialValue: profile.referencePath)
         _cropScale = State(initialValue: profile.coverCropScale)
@@ -199,6 +213,16 @@ struct PersonEditSheet: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+        // Blank is absent — an untouched field is "" here, and "" must be
+        // indistinguishable from a profile written before these fields
+        // existed. POINameText is the single rule; POIProfile applies it
+        // again on write, so no path can persist an empty string.
+        p.surname = POINameText.cleaned(surname)
+        p.maidenName = POINameText.cleaned(maidenName)
+        p.middleName = POINameText.cleaned(middleName)
+        p.suffix = POINameText.cleanedSuffix(suffix)
+        p.titles = POINameText.cleaned(
+            titleText.split(separator: ",").map(String.init))
         p.coverImageFilename = coverFilename
         p.referencePath = referencePath
         p.coverCropScale = cropScale
@@ -281,9 +305,33 @@ struct PersonEditSheet: View {
                 Section("Identity") {
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
+                        .help("The short name the family actually uses — Tim, Ma, Dad. This stays the display name everywhere.")
+                    HStack(spacing: 8) {
+                        TextField("Middle name", text: $middleName)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("pf.edit.middlename")
+                            .help("Optional. Not spoken in answers; it helps match the formal name on the family tree.")
+                        TextField("Last name", text: $surname)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("pf.edit.surname")
+                            .help("Optional. \u{201C}Tim\u{201D} + \u{201C}Breen\u{201D} lets \u{201C}Tim Breen\u{201D} find this person. A last name on its own never does.")
+                        TextField("Suffix", text: $suffix)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 90)
+                            .accessibilityIdentifier("pf.edit.suffix")
+                            .help("Jr, Sr, III \u{2014} optional.")
+                    }
+                    TextField("Maiden name", text: $maidenName)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("pf.edit.maidenname")
+                        .help("Optional. The family tree files many women under their birth name, so both the married and maiden forms find this person.")
                     TextField("Aliases (comma-separated)", text: $aliasText)
                         .textFieldStyle(.roundedBorder)
                         .help("Alternate names that might appear in video filenames or metadata")
+                    TextField("Titles (comma-separated)", text: $titleText)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("pf.edit.titles")
+                        .help("Grampa, Pops, Nana \u{2014} shown here only. A title means someone different depending on who is asking, so it is never used to find a person. Put a distinctive form like \u{201C}Grampa Dicky\u{201D} in Aliases instead.")
                 }
 
                 aboutSection
