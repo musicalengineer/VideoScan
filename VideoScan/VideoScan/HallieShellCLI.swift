@@ -1161,46 +1161,20 @@ enum HallieShellCLI {
                 recordScope: recordScope,
                 speakers: state.speakers)
             let request = HallieTurnExecutor.Request(intent: intent)
-            var result = try await dependencies.executeRequest(request, context)
+            let executed = try await dependencies.executeRequest(request, context)
             // A narrow second chance, taken only after the archive route has
             // already given up (HallieCapabilityDeclineFallback, 2026-09-04):
             // an app-capability decline or a bare-name/unknown-name tree
             // lookup retries once through the general-knowledge lane instead
             // of dead-ending. Every other decline — one that reports a real
             // archive fact — is left exactly as the executor built it.
-            var recordedIntent: HallieTurnExecutor.Intent? = intent
-            var usedGeneralFallback = false
-            if HallieCapabilityDeclineFallback.qualifies(result) {
-                appLog.write(HallieCapabilityDeclineFallback.logLine(
-                    for: result, question: routingQuestion))
-                let social = await dependencies.composeConversation(
-                    .generalKnowledge, routingQuestion, state.socialHistory, options)
-                // THE BOUNDARY. Unweakened, unbypassed: a general answer may
-                // not assert anything about Rick's family, his media, or his
-                // archive.
-                let bounded = HallieGeneralAnswerBoundary.enforce(
-                    social.value,
-                    kind: .generalKnowledge,
-                    isFamilyName: {
-                        HallieTurnExecutor.isFamilyReferenceName($0, context: identity)
-                    },
-                    log: { appLog.write($0) })
-                if HallieCapabilityDeclineFallback.isBoundaryRefusal(bounded) {
-                    // The user must see ONE answer, not a boundary refusal
-                    // stacked on top of a decline. The original decline is
-                    // already honest.
-                    appLog.write(HallieCapabilityDeclineFallback.boundaryKeptOriginalLogLine)
-                } else {
-                    state.lastResponder = bounded.composedByModel ? social.responderHost : "local"
-                    result = HallieCapabilityDeclineFallback.result(
-                        for: bounded, queryDescription: result.queryDescription)
-                    recordedIntent = nil
-                    usedGeneralFallback = true
-                    state.rememberSocial(question: question, answer: result.prose)
-                }
-            }
-            state.memory.record(intent: recordedIntent, result: result)
-            if !usedGeneralFallback {
+            let fallback = await deadEndGeneralKnowledgeFallback(
+                executed, intent: intent, identity: identity, question: question,
+                routingQuestion: routingQuestion, options: options, state: &state,
+                dependencies: dependencies)
+            var result = fallback.result
+            state.memory.record(intent: fallback.recordedIntent, result: result)
+            if !fallback.usedFallback {
                 result = await phrase(result, question: question, options: options,
                                       state: &state, dependencies: dependencies)
             }
@@ -1293,6 +1267,65 @@ enum HallieShellCLI {
         case .declined, .needsClarification, .failed: return .declined
         case .unsupported: return .unsupported
         }
+    }
+
+    /// The outcome of one dead-end retry: the result to show, the intent to
+    /// bind in memory (nil for a fallback, since the answer no longer came
+    /// from the executed archive intent), and whether the retry fired at
+    /// all (so the caller knows to skip `phrase` — a general-lane answer is
+    /// already finished prose, never a composable archive plan).
+    private struct DeadEndFallbackOutcome {
+        let result: HallieTurnExecutor.Result
+        let recordedIntent: HallieTurnExecutor.Intent?
+        let usedFallback: Bool
+    }
+
+    /// A narrow second chance, taken only after the archive route has
+    /// already given up (HallieCapabilityDeclineFallback, 2026-09-04): an
+    /// app-capability decline or a bare-name/unknown-name tree lookup
+    /// retries once through the general-knowledge lane instead of
+    /// dead-ending. Every other decline — one that reports a real archive
+    /// fact — is returned exactly as the executor built it.
+    private static func deadEndGeneralKnowledgeFallback(
+        _ executed: HallieTurnExecutor.Result,
+        intent: HallieTurnExecutor.Intent,
+        identity: HallieTurnExecutor.Context,
+        question: String,
+        routingQuestion: String,
+        options: Options,
+        state: inout Session,
+        dependencies: Dependencies
+    ) async -> DeadEndFallbackOutcome {
+        guard HallieCapabilityDeclineFallback.qualifies(executed) else {
+            return DeadEndFallbackOutcome(
+                result: executed, recordedIntent: intent, usedFallback: false)
+        }
+        appLog.write(HallieCapabilityDeclineFallback.logLine(
+            for: executed, question: routingQuestion))
+        let social = await dependencies.composeConversation(
+            .generalKnowledge, routingQuestion, state.socialHistory, options)
+        // THE BOUNDARY. Unweakened, unbypassed: a general answer may not
+        // assert anything about Rick's family, his media, or his archive.
+        let bounded = HallieGeneralAnswerBoundary.enforce(
+            social.value,
+            kind: .generalKnowledge,
+            isFamilyName: {
+                HallieTurnExecutor.isFamilyReferenceName($0, context: identity)
+            },
+            log: { appLog.write($0) })
+        guard !HallieCapabilityDeclineFallback.isBoundaryRefusal(bounded) else {
+            // The user must see ONE answer, not a boundary refusal stacked
+            // on top of a decline. The original decline is already honest.
+            appLog.write(HallieCapabilityDeclineFallback.boundaryKeptOriginalLogLine)
+            return DeadEndFallbackOutcome(
+                result: executed, recordedIntent: intent, usedFallback: false)
+        }
+        state.lastResponder = bounded.composedByModel ? social.responderHost : "local"
+        let result = HallieCapabilityDeclineFallback.result(
+            for: bounded, queryDescription: executed.queryDescription)
+        state.rememberSocial(question: question, answer: result.prose)
+        return DeadEndFallbackOutcome(
+            result: result, recordedIntent: nil, usedFallback: true)
     }
 
     /// Plan → phrase → verify for the shell, only with `--compose` and only
