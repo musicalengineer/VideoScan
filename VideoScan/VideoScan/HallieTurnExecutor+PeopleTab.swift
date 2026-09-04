@@ -520,7 +520,12 @@ extension HallieTurnExecutor {
         static func quotedNote(_ profile: ProfileSnapshot) -> String? {
             let note = profile.note.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !note.isEmpty else { return nil }
-            let trimmed = note.count > 240 ? String(note.prefix(240)) + "…" : note
+            // 400, not 240 (Rick, 2026-09-04): Dad's note is 256 characters
+            // and the old cap cut it at "they married in 1956, then…",
+            // losing "had 5 children" — the very fact the child-count
+            // sentence beside it exists to get right. 400 carries every
+            // note the People tab currently holds, the longest being 347.
+            let trimmed = note.count > 400 ? String(note.prefix(400)) + "…" : note
             return "The note on the profile says: “\(trimmed)” — that's a note, not something I've verified."
         }
 
