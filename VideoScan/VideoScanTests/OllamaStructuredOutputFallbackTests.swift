@@ -190,6 +190,47 @@ struct OllamaStructuredOutputFallbackTests {
         #expect(options["num_ctx"] as? Int == OllamaQueryTranslator.defaultContextTokens)
     }
 
+    /// REGRESSION SENSOR (2026-09-03, ruling on the repair-hint branch).
+    /// A prose "emit every key an example shows" suffix was appended to the
+    /// system prompt on the schema-dropped retry only. It was pulled before
+    /// merge: it claimed "every example below" when the AST prompt's
+    /// presence examples show DIFFERENT optional fields, so a model reading
+    /// it literally could take "emit every key an example shows" as license
+    /// to fill in optional fields nobody asked for — and the live check on
+    /// that branch proved it did not even help the thing it was for (the
+    /// model repeated the same invalid field with or without it). The
+    /// dropped-schema retry must therefore send the IDENTICAL system prompt
+    /// as the schema-bearing attempt — dropping `format:` changes only
+    /// what's negotiated with the server, never what the model is told.
+    @Test func droppingTheSchemaNeverAltersTheSystemPrompt() async throws {
+        let bodies = FakeBodies()
+        let memo = OllamaStructuredOutputCapability()
+        var t = OllamaQueryTranslator()
+        t.structuredOutputCapability = memo
+        t.transport = .fake { urlString, body in
+            if urlString.hasSuffix("/api/tags") { return .ok(#"{"models":[]}"#) }
+            await bodies.record(body)
+            return carriesFormatKey(body)
+                ? .status(501, structuredOutputRefusal)
+                : .ok(unconstrainedASTReply)
+        }
+
+        _ = try await t.translateAST("show me Donna in 1994")
+
+        let sent = await bodies.all
+        try #require(sent.count == 2)
+        func systemContent(_ body: Data) throws -> String {
+            let object = try #require(
+                try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let messages = try #require(object["messages"] as? [[String: Any]])
+            return try #require(messages.first?["content"] as? String)
+        }
+        let firstSystem = try systemContent(sent[0])
+        let retrySystem = try systemContent(sent[1])
+        #expect(firstSystem == retrySystem,
+                "dropping the schema must not change a single byte of the system prompt")
+    }
+
     /// A schema-less reply that the strict decoder refuses is STILL a
     /// failure. The fallback buys another attempt, never a lower bar.
     @Test func fallbackDoesNotLowerTheDecodingBar() async {
