@@ -1401,7 +1401,17 @@ enum HallieTurnExecutor {
         // appends it to the prose and pins it on the plan, so the composer
         // re-attaches it and the verifier is never asked to prove it.
         let taken = assumedBridges(result, context: context)
-        let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
+        var aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
+        // The People-tab note on a subject the tree ALSO knows (2026-09-04).
+        // The profile route has always quoted it — "who is Tim" does — but a
+        // subject with a tree bridge went down the biography card, which is
+        // built from the GEDCOM alone, and everything Rick typed about his
+        // father was silently dropped. It rides here, with the rest of the
+        // provenance, for exactly the reason the aside does: Swift writes
+        // it, Swift appends it after verification, the model never sees it
+        // and can never launder it into a cited fact. Same sentence, same
+        // hedge, as the profile route.
+        aside += profileNoteProvenance(result, context: context)
         let base = Result(
             route: .graph,
             outcome: result.conclusion == .answered ? .answered : .declined,
@@ -1831,6 +1841,23 @@ enum HallieTurnExecutor {
                 personID: duplicate.personID, personName: duplicate.personName))
         }
         return offers
+    }
+
+    /// The People-tab note behind a bridged biography subject, in the SAME
+    /// words and with the SAME hedge the profile route uses, ready to append
+    /// to the prose. Empty when the subject has no profile, the profile has
+    /// no note, or the note is only whitespace.
+    static func profileNoteProvenance(
+        _ result: ArchivistGraphResult,
+        context: Context
+    ) -> String {
+        // Swift's `guard let` chain ≈ C++ early-return after a series of
+        // null checks; any one failing means "say nothing", not "say less".
+        guard let stableID = result.peopleTabProfileStableID,
+              let profile = context.profiles?.first(where: { $0.stableID == stableID }),
+              let quoted = PeopleTab.quotedNote(profile)
+        else { return "" }
+        return " " + quoted
     }
 
     /// "(taking Dad as Richard Harding Breen Sr)" — every tree person the

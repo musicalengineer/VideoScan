@@ -521,9 +521,14 @@ struct HallieCrossWorldDadTests {
         #expect(r.outcome == .answered, Comment(rawValue: r.prose))
         #expect(r.prose.hasPrefix("Richard Harding Breen Sr (Dad in the People tab) was born 22 February 1929 in Albany, New York and died 1 July 2008."),
                 Comment(rawValue: r.prose))
-        // Jr is in the tree as Sr's child, so no People-tab child line.
-        #expect(r.prose.contains("He had 1 recorded child, Richard Harding Breen Jr."), Comment(rawValue: r.prose))
+        // Jr is in the tree as Sr's child, so the tree's count is stated as
+        // the TREE's and the People tab only ADDS Tim (2026-09-04) — Rick is
+        // never said twice, and the two sources are never summed.
+        #expect(r.prose.contains("The family tree records one child for him, Richard Harding Breen Jr; "
+                                 + "the People tab adds Tim as a son."),
+                Comment(rawValue: r.prose))
         #expect(!r.prose.contains("Rick — son"))
+        #expect(!r.prose.contains("two children"), Comment(rawValue: r.prose))
         // A stranger's possessive is not routed.
         let stranger = Executor.preTranslation(
             question: live, playAfterAnswer: false, memory: .init(), isKnownPerson: { _ in false })

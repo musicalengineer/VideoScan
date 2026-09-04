@@ -437,7 +437,7 @@ struct HallieClaimCoverageTests {
         let children = graph.relatives(.children, of: subject)
         #expect(children.count == 13)
         let plan = HallieBiographyCard.card(for: subject, in: graph).plan
-        let claim = try #require(plan.claims.first { $0.text.contains("recorded children") })
+        let claim = try #require(plan.claims.first { $0.text.contains("The family tree records") })
         // The sentence names the subject too; the cap is on the LIST.
         let rendered = Set(claim.requiredPersonNames).subtracting([subject.name])
         #expect(rendered.count == HallieBiographyCard.maxListedNames)

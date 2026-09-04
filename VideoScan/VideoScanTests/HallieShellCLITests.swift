@@ -2500,8 +2500,8 @@ struct HallieShellCLITests {
         // 2. "tell me about ma" — the tree's Rick, then the three from the
         //    People tab, with the derived note in the basis.
         let biography = answers[1]
-        #expect(biography.text.contains("1 recorded child, Richard Harding Breen Jr."), Comment(rawValue: biography.text))
-        #expect(biography.text.contains("In the People tab: Beth — daughter, Ellen — daughter and Tim — son."),
+        #expect(biography.text.contains("The family tree records one child for her, Richard Harding Breen Jr; "
+                                        + "the People tab adds Beth and Ellen as daughters and Tim as a son."),
                 Comment(rawValue: biography.text))
         #expect((biography.basisLine ?? "").contains("People tab relationships (stored on Rick's profile; Beth, Ellen and Tim \(rule)); local only, not from the family tree."),
                 Comment(rawValue: biography.basisLine ?? ""))

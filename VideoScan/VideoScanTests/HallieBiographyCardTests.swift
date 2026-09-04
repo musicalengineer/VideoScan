@@ -99,7 +99,7 @@ private let matthewFacts = [
     "died before 29 November 1717 in Sudbury, Middlesex, Massachusetts Bay Colony",
     "child of Edmund Rice and Thomasine Frost",
     "married to Martha Lamson (married 1654)",
-    "2 recorded children, Isaac Rice and Patience Rice",
+    "The family tree records two children for him, Isaac Rice and Patience Rice",
     "2 recorded ancestors across 1 generation",
     "3 recorded descendants across 2 generations",
 ]
@@ -115,7 +115,7 @@ struct HallieBiographyCardTests {
                     + "and died before 29 November 1717 in Sudbury, Middlesex, Massachusetts Bay Colony. "
                     + "He was the child of Edmund Rice and Thomasine Frost. "
                     + "He was married to Martha Lamson (married 1654). "
-                    + "He had 2 recorded children, Isaac Rice and Patience Rice. "
+                    + "The family tree records two children for him, Isaac Rice and Patience Rice. "
                     + "His family tree includes 2 recorded ancestors across 1 generation "
                     + "and 3 recorded descendants across 2 generations.")
         #expect(r.basisLine == "Basis: imported family tree (GEDCOM).")
@@ -186,7 +186,7 @@ struct HallieBiographyCardTests {
             "Isaac Rice was the child of Martha Lamson and Matthew Rice; "
             + "his recorded grandparents were Edmund Rice and Thomasine Frost. "
             + "He had 1 recorded sibling, Patience Rice. "
-            + "He had 1 recorded child, Abigail Rice. "
+            + "The family tree records one child for him, Abigail Rice. "
             + "His family tree includes 4 recorded ancestors across 2 generations"), Comment(rawValue: r.prose))
         #expect(r.answerPlan?.claims[0].evidenceIDs == ["@I5@", "@I4@", "@I1@", "@I2@", "@I3@"])
         #expect(try await ask("Isaac Rice", .biography).prose == r.prose)

@@ -613,8 +613,10 @@ struct FamilyKinshipSiblingInferenceTests {
             #expect(r.outcome == .answered, Comment(rawValue: r.prose))
             // The tree's child first, then the People tab's three — the
             // living are never on FamilySearch.
-            #expect(r.prose.contains("1 recorded child, Richard Harding Breen Jr."), Comment(rawValue: r.prose))
-            #expect(r.prose.contains("In the People tab: Beth — daughter, Ellen — daughter and Tim — son."),
+            // One sentence, each source named (2026-09-04): the tree's count is
+            // the TREE's, and the People tab ADDS — the two are never summed.
+            #expect(r.prose.contains("The family tree records one child for her, Richard Harding Breen Jr; "
+                                     + "the People tab adds Beth and Ellen as daughters and Tim as a son."),
                     Comment(rawValue: r.prose))
             #expect(r.basisLine.contains("People tab relationships (stored on Rick's profile; Beth, Ellen and Tim \(fullRule)); local only, not from the family tree."),
                     Comment(rawValue: r.basisLine))
@@ -622,8 +624,11 @@ struct FamilyKinshipSiblingInferenceTests {
             // of the derivation — Rick's pinned identity, once — never the
             // three children's own profiles (codex #984 item 4).
             let plan = try #require(r.answerPlan)
-            let claim = try #require(plan.claims.first { $0.text.hasPrefix("In the People tab: Beth") })
-            #expect(claim.evidenceIDs == ["@I3@", "fsid:GVQV-NW3"], Comment(rawValue: claim.evidenceIDs.joined(separator: ",")))
+            // Since 2026-09-04 the People-tab names ride in the SAME claim as
+            // the tree's count, so that one claim cites Eileen's record, the
+            // tree child it names, and Rick's pinned identity — once.
+            let claim = try #require(plan.claims.first { $0.text.hasPrefix("The family tree records one child") })
+            #expect(claim.evidenceIDs == ["@I3@", "@I1@", "fsid:GVQV-NW3"], Comment(rawValue: claim.evidenceIDs.joined(separator: ",")))
         }
     }
 

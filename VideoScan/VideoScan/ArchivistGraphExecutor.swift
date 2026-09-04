@@ -339,6 +339,13 @@ struct ArchivistGraphResult: Sendable, Equatable {
     /// 2026-09-01), so the composer keeps the template's tense. Nil when
     /// the result has no single subject (declines, ambiguity, no person).
     let subjectLifeStatus: LifeStatus?
+    /// The People-tab profile the BIOGRAPHY subject is bridged to
+    /// (2026-09-04). Only the id travels — the profile's free-text note
+    /// stays outside graph execution, exactly as before; the turn
+    /// executor, which already holds the profiles, looks the note up and
+    /// quotes it with the People tab's own attribution. Nil for an
+    /// unbridged subject or any other operation.
+    let peopleTabProfileStableID: String?
 
     struct PossibleDuplicate: Sendable, Equatable {
         let personID: String
@@ -358,7 +365,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
         subjectIndex: Int? = nil,
         answerPlan: HallieAnswerPlan? = nil,
         possibleDuplicate: PossibleDuplicate? = nil,
-        subjectLifeStatus: LifeStatus? = nil
+        subjectLifeStatus: LifeStatus? = nil,
+        peopleTabProfileStableID: String? = nil
     ) {
         self.conclusion = conclusion
         self.prose = prose
@@ -373,6 +381,7 @@ struct ArchivistGraphResult: Sendable, Equatable {
         self.answerPlan = answerPlan
         self.possibleDuplicate = possibleDuplicate
         self.subjectLifeStatus = subjectLifeStatus
+        self.peopleTabProfileStableID = peopleTabProfileStableID
     }
 
     /// The same result tagged with the people-list slot it concerns.
@@ -385,7 +394,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
             catalogPersonName: catalogPersonName,
             familyTreeFocus: familyTreeFocus, subjectIndex: index,
             answerPlan: answerPlan, possibleDuplicate: possibleDuplicate,
-            subjectLifeStatus: subjectLifeStatus)
+            subjectLifeStatus: subjectLifeStatus,
+            peopleTabProfileStableID: peopleTabProfileStableID)
     }
 
     /// The same result carrying the subject's life status. Only an answer
@@ -408,7 +418,8 @@ struct ArchivistGraphResult: Sendable, Equatable {
             catalogPersonName: catalogPersonName,
             familyTreeFocus: familyTreeFocus, subjectIndex: subjectIndex,
             answerPlan: statusAwarePlan, possibleDuplicate: possibleDuplicate,
-            subjectLifeStatus: status)
+            subjectLifeStatus: status,
+            peopleTabProfileStableID: peopleTabProfileStableID)
     }
 }
 
@@ -1003,6 +1014,16 @@ enum ArchivistGraphExecutor {
             }
             let peopleTab = peopleTabKin(
                 for: person, profileStableID: profileStableID, inputs: inputs)
+            // Biography only: "tell me about Dad" is where a profile's
+            // free-text note belongs. A family-tree VIEW is structure, not
+            // a life, so it is deliberately left out of that one.
+            // (Swift: an immediately-invoked closure ≈ a C++ IIFE lambda,
+            // used here so `guard` can express the three conditions once.)
+            let notedProfileStableID: String? = {
+                guard query.operation == .biography,
+                      let id = peopleTab?.profileStableID, !id.isEmpty else { return nil }
+                return id
+            }()
             let (answer, plan, card) = HallieBiographyCard.answer(
                 for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
             let result = fromPolicy(
@@ -1026,7 +1047,8 @@ enum ArchivistGraphExecutor {
                 answerPlan: plan,
                 possibleDuplicate: card.dataQualityFlags.first.map {
                     .init(personID: $0.child.id, personName: $0.child.name)
-                })
+                },
+                peopleTabProfileStableID: notedProfileStableID)
 
         case .birthPlace, .deathPlace:
             guard query.relation == nil else {
@@ -1350,7 +1372,9 @@ enum ArchivistGraphExecutor {
         let spouses = relatives(.spouse)
         // A sibling set of this person's that failed closed: said in the
         // basis even when no row was usable.
-        return .init(profileName: member.name, siblings: siblings, children: children,
+        return .init(profileName: member.name,
+                     profileStableID: member.profileStableID ?? "",
+                     siblings: siblings, children: children,
                      spouses: spouses, storedOn: storedOn.sorted(),
                      warnings: overlay.derivationWarnings(touching: [node]))
     }

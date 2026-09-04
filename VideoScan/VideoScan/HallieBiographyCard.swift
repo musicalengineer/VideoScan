@@ -138,6 +138,12 @@ enum HallieBiographyCard {
         }
         /// The subject's own People-tab canonical name ("Rick").
         let profileName: String
+        /// That profile's stable id, so a caller that holds the People-tab
+        /// profiles (the turn executor) can find the SAME profile again —
+        /// today to quote its free-text note. Empty for legacy callers that
+        /// never had one. Notes themselves deliberately never enter graph
+        /// execution (see ArchivistGraphProfileSnapshot).
+        var profileStableID: String = ""
         let siblings: [Relative]
         let children: [Relative]
         let spouses: [Relative]
@@ -149,9 +155,11 @@ enum HallieBiographyCard {
         /// basis so a silent gap is never mistaken for "no siblings".
         var warnings: [String] = []
 
-        init(profileName: String, siblings: [Relative] = [], children: [Relative] = [],
+        init(profileName: String, profileStableID: String = "",
+             siblings: [Relative] = [], children: [Relative] = [],
              spouses: [Relative] = [], storedOn: [String] = [], warnings: [String] = []) {
             self.profileName = profileName
+            self.profileStableID = profileStableID
             self.siblings = siblings
             self.children = children
             self.spouses = spouses
@@ -231,17 +239,23 @@ enum HallieBiographyCard {
         }()
         func lead() -> String { sentences.isEmpty ? leadName : pronoun.subject }
 
-        /// "In the People tab: Tim — brother, Beth — sister." Nil when the
-        /// tree already lists every one of them.
-        func peopleTabSentence(_ relatives: [PeopleTabKin.Relative],
-                               treeIDs: Set<String>) -> Card.Sentence? {
+        /// The People-tab relatives the tree does not already list, with
+        /// their derivation notes registered for the basis line. Call once
+        /// per relation — it mutates the derivation bookkeeping.
+        func extraPeopleTab(_ relatives: [PeopleTabKin.Relative],
+                            treeIDs: Set<String>) -> [PeopleTabKin.Relative] {
             let extra = relatives.filter { $0.gedcomID.map { !treeIDs.contains($0) } ?? true }
-            guard !extra.isEmpty else { return nil }
             for relative in extra {
                 guard let note = relative.derivation else { continue }
                 if derivedNames[note] == nil { derivedOrder.append(note) }
                 derivedNames[note, default: []].append(relative.name)
             }
+            return extra
+        }
+
+        /// "In the People tab: Tim — brother, Beth — sister." over relatives
+        /// already filtered by `extraPeopleTab`.
+        func peopleTabListSentence(_ extra: [PeopleTabKin.Relative]) -> Card.Sentence {
             let listed = extra.map { "\($0.name) — \($0.term)" }
             // Three siblings derived from one card cite that card once.
             var evidence = [person.id]
@@ -249,6 +263,15 @@ enum HallieBiographyCard {
             return .init(text: "In the People tab: " + joined(listed) + ".",
                          evidenceIDs: evidence,
                          requiredPersonNames: extra.map(\.name))
+        }
+
+        /// "In the People tab: Tim — brother, Beth — sister." Nil when the
+        /// tree already lists every one of them.
+        func peopleTabSentence(_ relatives: [PeopleTabKin.Relative],
+                               treeIDs: Set<String>) -> Card.Sentence? {
+            let extra = extraPeopleTab(relatives, treeIDs: treeIDs)
+            guard !extra.isEmpty else { return nil }
+            return peopleTabListSentence(extra)
         }
 
         // 1. Vitals with places, as recorded.
@@ -308,20 +331,42 @@ enum HallieBiographyCard {
             sentences.append(extra)
             peopleTab.storedOn.forEach { storedOn.insert($0) }
         }
-        // 5. Children: the tree's count and names, then the People tab's
-        //    that the tree lacks (2026-09-02: Eileen's tree lists Rick;
-        //    Tim, Ellen and Beth are hers through Rick's sibling rows).
-        if !summary.children.isEmpty {
-            let n = summary.children.count
-            sentences.append(.init(
-                text: "\(lead()) \(have()) \(n) recorded \(n == 1 ? "child" : "children"), "
-                    + listedNames(summary.children) + ".",
-                evidenceIDs: [person.id] + summary.children.map(\.id),
-                requiredPersonNames: Array(summary.children.prefix(maxListedNames)).map(\.name)))
-        }
-        if let peopleTab,
-           let extra = peopleTabSentence(peopleTab.children, treeIDs: Set(summary.children.map(\.id))) {
-            sentences.append(extra)
+        // 5. Children — ONE sentence that names each source (Rick,
+        //    2026-09-04). "He had 1 recorded child, Richard Harding Breen
+        //    Jr." stated the TREE's count as the truth, to that man's son,
+        //    and the very next sentence named three more children from the
+        //    People tab. The archive cannot stand behind ANY total here:
+        //    the two sources may overlap, and Michael is in neither. So the
+        //    count is attributed to the tree that holds it, the People-tab
+        //    names are added as the People tab's, and nothing is summed.
+        let treeChildren = summary.children
+        let tabChildren = peopleTab.map {
+            extraPeopleTab($0.children, treeIDs: Set(treeChildren.map(\.id)))
+        } ?? []
+        if !treeChildren.isEmpty {
+            // The first sentence of a card always names the subject in full;
+            // later ones use the pronoun — same rule as the no-siblings line.
+            let about = sentences.isEmpty ? leadName : pronoun.object
+            let n = treeChildren.count
+            var text = "The family tree records \(countWord(n)) "
+                + "\(n == 1 ? "child" : "children") for \(about), "
+                + listedNames(treeChildren)
+            var evidence = [person.id] + treeChildren.map(\.id)
+            var required = Array(treeChildren.prefix(maxListedNames)).map(\.name)
+            if !tabChildren.isEmpty {
+                text += "; the People tab adds " + addedClause(tabChildren)
+                for id in tabChildren.map(\.evidenceID) where !evidence.contains(id) {
+                    evidence.append(id)
+                }
+                required += tabChildren.map(\.name)
+                peopleTab?.storedOn.forEach { storedOn.insert($0) }
+            }
+            sentences.append(.init(text: text + ".", evidenceIDs: evidence,
+                                   requiredPersonNames: required))
+        } else if !tabChildren.isEmpty, let peopleTab {
+            // The tree records no children at all, so there is no count to
+            // attribute: the People tab speaks for itself, exactly as before.
+            sentences.append(peopleTabListSentence(tabChildren))
             peopleTab.storedOn.forEach { storedOn.insert($0) }
         }
         // 6. How far the tree reaches from this person.
@@ -430,11 +475,45 @@ enum HallieBiographyCard {
 
     static func countWord(_ n: Int) -> String {
         switch n {
+        case 1: return "one"
         case 2: return "two"
         case 3: return "three"
         case 4: return "four"
+        case 5: return "five"
+        case 6: return "six"
+        case 7: return "seven"
+        case 8: return "eight"
+        case 9: return "nine"
+        case 10: return "ten"
+        case 11: return "eleven"
+        case 12: return "twelve"
         default: return "\(n)"
         }
+    }
+
+    /// "Beth and Ellen as daughters and Tim as a son" — People-tab
+    /// relatives grouped by the word their row gives them. Deliberately
+    /// ADDS rather than totals: the sentence that carries this never says
+    /// how many children the person had, only what each source holds.
+    static func addedClause(_ relatives: [PeopleTabKin.Relative]) -> String {
+        var order: [String] = []
+        var namesByTerm: [String: [String]] = [:]
+        for relative in relatives {
+            if namesByTerm[relative.term] == nil { order.append(relative.term) }
+            namesByTerm[relative.term, default: []].append(relative.name)
+        }
+        return joined(order.map { term in
+            let names = namesByTerm[term] ?? []
+            return joined(names) + " as "
+                + (names.count == 1 ? "a \(term)" : pluralTerm(term))
+        })
+    }
+
+    /// "daughter" → "daughters", "child" → "children"; a term that is
+    /// already plural is left alone.
+    static func pluralTerm(_ term: String) -> String {
+        if term.hasSuffix("child") { return term + "ren" }
+        return term.hasSuffix("s") ? term : term + "s"
     }
 
     // MARK: - Clauses
