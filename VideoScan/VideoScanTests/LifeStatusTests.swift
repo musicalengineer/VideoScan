@@ -222,7 +222,8 @@ struct LifeStatusBiographyCardTests {
         #expect(card.prose.hasPrefix("Rick Breen was born 4 March 1959. "), "a birth stays in the past")
         #expect(card.prose.contains("He is the child of Dad Breen and Ma Breen."), Comment(rawValue: card.prose))
         #expect(card.prose.contains("He is married to Donna Hudson."), Comment(rawValue: card.prose))
-        #expect(card.prose.contains("He has 1 recorded child, Dan Breen."), Comment(rawValue: card.prose))
+        #expect(card.prose.contains("The family tree records one child for him, Dan Breen."),
+                Comment(rawValue: card.prose))
         #expect(!card.prose.contains(" was the child"))
         #expect(!card.prose.contains(" was married"))
         #expect(!card.prose.contains(" had "))
@@ -243,7 +244,7 @@ struct LifeStatusBiographyCardTests {
         #expect(card.prose
                 == "Dad Breen was born 22 February 1929 and died 1 July 2008. "
                     + "He was married to Ma Breen. "
-                    + "He had 1 recorded child, Rick Breen. "
+                    + "The family tree records one child for him, Rick Breen. "
                     + "His family tree includes 2 recorded descendants across 2 generations.")
     }
 

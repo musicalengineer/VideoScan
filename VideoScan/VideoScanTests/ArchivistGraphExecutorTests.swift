@@ -88,7 +88,7 @@ struct ArchivistGraphExecutorTests {
                     + "He is the child of Alex River Sr and Bailey River. "
                     + "He has 1 recorded sibling, Zoe River. "
                     + "He is married to Morgan Vale. "
-                    + "He has 2 recorded children, Aaron River and Zoe River Jr. "
+                    + "The family tree records two children for him, Aaron River and Zoe River Jr. "
                     + "His family tree includes 2 recorded ancestors across 1 generation "
                     + "and 2 recorded descendants across 1 generation.")
         #expect(execute(people: ["Chris River"], operation: .familyTree).prose == result.prose)
@@ -186,7 +186,7 @@ struct ArchivistGraphExecutorTests {
         // unrecorded sex reads "They", which takes the plural verb.
         #expect(first.prose
                 == "Parent One is married to Amy Partner and Zoe Partner. "
-                    + "They have 3 recorded children, Aaron Child, Sam Child and Sam Child. "
+                    + "The family tree records three children for them, Aaron Child, Sam Child and Sam Child. "
                     + "Their family tree includes 3 recorded descendants across 1 generation.")
         let evidence = try #require(first.evidence)
         #expect(evidence.relationships.map(\.relation) == [.spouse, .children])
