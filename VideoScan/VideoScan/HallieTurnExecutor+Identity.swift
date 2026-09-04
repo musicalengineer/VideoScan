@@ -170,11 +170,20 @@ extension HallieTurnExecutor {
         for stableID in grouped.keys.sorted() {
             guard let definitions = grouped[stableID],
                   let first = definitions.first else { continue }
-            let participates = definitions.contains(where: {
-                      ([$0.canonicalName] + $0.aliases).contains {
-                          PersonResolver.normalize($0) == key
-                      }
-                  })
+            // Derived full names count as spellings here for the same reason
+            // they do in PersonResolver (2026-09-04): the two routes must not
+            // disagree about who "Tim Breen" is. Kept as a SECOND pass, after
+            // the original check and skipped entirely when the profile has no
+            // family name, because this walks every profile — the scale test
+            // drives it with 100,000 of them.
+            let participates = definitions.contains(where: { snapshot in
+                if ([snapshot.canonicalName] + snapshot.aliases).contains(where: {
+                    PersonResolver.normalize($0) == key
+                }) { return true }
+                let forms = snapshot.fullNameForms
+                guard !forms.isEmpty else { return false }
+                return forms.contains { PersonResolver.normalize($0) == key }
+            })
             guard participates else { continue }
             guard definitions.allSatisfy({ sameProfileMeaning($0, first) })
             else { return .missing(requested: requested) }
@@ -190,7 +199,7 @@ extension HallieTurnExecutor {
             matches,
             typed: requested,
             name: { $0.canonicalName },
-            aliases: { $0.aliases })
+            aliases: { $0.aliases + $0.fullNameForms })
         if !narrowed.isEmpty { matches = narrowed }
         if matches.count > 1 {
             return .ambiguous(

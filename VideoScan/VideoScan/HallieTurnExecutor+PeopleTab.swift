@@ -280,7 +280,9 @@ extension HallieTurnExecutor {
                 return people.first { $0.stableID == stableID }.map(Claim.one) ?? .none
             }
             let resolver = PersonResolver(people: people.map {
-                ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+                ResolvablePerson(canonicalName: $0.canonicalName,
+                                 aliases: $0.aliases,
+                                 fullNameForms: $0.fullNameForms)
             })
             switch resolver.resolve(typed) {
             case .resolved(let canonicalName):
@@ -329,6 +331,12 @@ extension HallieTurnExecutor {
                            context: Context,
                            queryDescription: String) -> Result {
             let name = profile.canonicalName
+            // FIRST MENTION IN FULL, short name afterwards (2026-09-04) —
+            // the pattern the biography card already uses for tree people
+            // ("Richard Harding Breen Sr (Dad in the People tab)"). With no
+            // surname on the profile `full == name`, so every one of the
+            // thirteen live profiles reads exactly as it does today.
+            let full = profile.displayFullName
             let aliases = alternateNames(profile)
             let born = profile.birthdate.map(birthText)
             let tagCount = taggedVideoCount(profile, in: context.presenceRecords)
@@ -339,7 +347,7 @@ extension HallieTurnExecutor {
             switch payload.operation {
             case .biography:
                 sentences.append(
-                    "\(name) is one of the people in the People tab"
+                    "\(full) is one of the people in the People tab"
                         + (aliases.isEmpty ? "" : " — also known as \(aliases.joined(separator: ", "))")
                         + ".")
                 if let born { sentences.append("\(name) was born \(born), according to the People profile.") }
@@ -353,27 +361,27 @@ extension HallieTurnExecutor {
                 if let note = quotedNote(profile) { sentences.append(note) }
             case .birth:
                 if let born {
-                    sentences.append("\(name) was born \(born), according to the People profile.")
+                    sentences.append("\(full) was born \(born), according to the People profile.")
                 } else {
                     outcome = .declined
-                    sentences.append("The People profile for \(name) doesn't record a birth date.")
+                    sentences.append("The People profile for \(full) doesn't record a birth date.")
                 }
             case .death:
                 outcome = .declined
-                sentences.append("The People profile for \(name) doesn't record that.")
+                sentences.append("The People profile for \(full) doesn't record that.")
             case .birthPlace, .deathPlace:
                 // A People profile carries a birth DATE and nothing else
                 // about the event, so there is no place to give. Say that
                 // rather than substituting the date for the place.
                 outcome = .declined
                 sentences.append(
-                    "The People profile for \(name) doesn't record a place — "
+                    "The People profile for \(full) doesn't record a place — "
                         + "it only carries a birth date.")
             case .kinship, .familyTree, .relationship, .commonAncestor:
                 outcome = .declined
                 let what = payload.relation.map { "\($0.rawValue) " } ?? "relatives "
                 sentences.append(
-                    "\(name) is in the People tab"
+                    "\(full) is in the People tab"
                         + (aliases.isEmpty ? "" : " (also known as \(aliases.joined(separator: ", ")))")
                         + ", so I know the name — but I can't trace \(what)for \(name) yet.")
             }
@@ -448,7 +456,11 @@ extension HallieTurnExecutor {
                         sex: preferred.sex ?? fallback.sex,
                         uuid: preferred.uuid ?? fallback.uuid,
                         treeIdentity: preferred.treeIdentity ?? fallback.treeIdentity,
-                        deathdate: preferred.deathdate ?? fallback.deathdate)
+                        deathdate: preferred.deathdate ?? fallback.deathdate,
+                        surname: preferred.surname ?? fallback.surname,
+                        maidenName: preferred.maidenName ?? fallback.maidenName,
+                        middleName: preferred.middleName ?? fallback.middleName,
+                        suffix: preferred.suffix ?? fallback.suffix)
                 } else {
                     byID[profile.stableID] = profile
                     order.append(profile.stableID)
@@ -477,7 +489,11 @@ extension HallieTurnExecutor {
                     sex: profile.sex,
                     uuid: profile.uuid,
                     treeIdentity: profile.treeIdentity,
-                    deathdate: profile.deathdate)
+                    deathdate: profile.deathdate,
+                    surname: profile.surname,
+                    maidenName: profile.maidenName,
+                    middleName: profile.middleName,
+                    suffix: profile.suffix)
             }
                 .sorted {
                     let lhs = normalizeName($0.canonicalName)

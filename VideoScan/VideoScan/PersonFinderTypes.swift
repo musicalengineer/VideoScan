@@ -484,10 +484,42 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var largestFaceOnly: Bool = false
     /// Filename of the best reference photo — used as the avatar in the People gallery.
     var coverImageFilename: String?
-    /// Free-form notes about this person (relationship, maiden name, etc.)
+    /// Free-form notes about this person (relationship, how Rick knows them).
+    /// Maiden names used to live here for want of a field — see `maidenName`.
     var notes: String = ""
     /// Alternate names / spellings that might appear in video filenames or metadata.
     var aliases: [String] = []
+    // MARK: Family-name fields (2026-09-04, Rick: "should be easy to add last
+    // names, maiden names etc, this will help the bios")
+    //
+    // `name` stays the SHORT name — what the family calls this person — and
+    // is never renamed by any of this. These five fields are all additive and
+    // all optional: absent in older profile.json ⇒ nil/[], and a blank one
+    // typed in the sheet is normalized to nil on write, so blank is
+    // indistinguishable from absent. See POINameForms.swift for the rules.
+    /// Family name. Combines with a known given name to make exact-match
+    /// spellings ("Tim" + "Breen" ⇒ "Tim Breen"). NEVER a spelling on its
+    /// own — a bare "Breen" must resolve to nobody in particular.
+    var surname: String?
+    /// Birth surname, for the women in the tree whose records are filed under
+    /// it. Rick's mother is Eileen Latta in the tree, Ma in the family, and a
+    /// Breen by marriage; both full forms must reach the same profile.
+    var maidenName: String?
+    /// Middle name. Not shown in prose (the display name is a short name);
+    /// it earns its keep in the matching forms and, later, in tree bridging —
+    /// the GEDCOM knows "Richard Harding Breen Sr".
+    var middleName: String?
+    /// Generational suffix — Jr, Sr, III. Stored bare, no trailing period,
+    /// the same spelling `GedcomFamilyGraph.nameSuffixes` and
+    /// `FamilyAssetStore.groupFolderMatches` already use.
+    var suffix: String?
+    /// What the younger generations call this person — "Grampa", "Pops",
+    /// "Grampa Dicky". DISPLAY ONLY, and deliberately so: a title is
+    /// RELATIONAL (Rick's sons' "Dad" is Rick; Tim's "Dad" is their father),
+    /// so making titles matchable would recreate the Mom/Ma collision that
+    /// produced a wrong-person answer on 2026-09-03. A distinctive form Rick
+    /// wants resolved belongs in `aliases`, which already works.
+    var titles: [String] = []
     /// Cover photo crop: pan offset (normalized, 0 = centered).
     var coverCropOffsetX: Double = 0
     var coverCropOffsetY: Double = 0
@@ -573,6 +605,41 @@ struct POIProfile: Codable, Identifiable, Equatable {
         uuidPersisted ? .profile(id: uuid) : .profileName(name)
     }
 
+    // MARK: Family-name derivations (2026-09-04)
+
+    /// The family-name fields as the pure form builder sees them. `titles` is
+    /// NOT passed: titles are display only and must never become a key.
+    var nameForms: POINameForms {
+        POINameForms(name: name, aliases: aliases, middleName: middleName,
+                     surname: surname, maidenName: maidenName, suffix: suffix)
+    }
+
+    /// How a profile-derived answer names this person on FIRST mention —
+    /// "Tim Breen", "Richard Breen Sr". Equal to `name` when no surname is
+    /// set, so every existing profile's prose is byte-identical to today.
+    /// This is NOT a rename: `name` remains the display/short name and
+    /// everything else keeps using it ("Tim is 66 today").
+    var displayFullName: String { nameForms.displayFullName }
+
+    /// Exact-match spellings the family-name fields imply, offered to the
+    /// resolver alongside `aliases`. Empty for every profile that has not
+    /// filled a surname or maiden name in — checked here, before any string
+    /// work, because resolution walks EVERY profile.
+    var fullNameForms: [String] {
+        guard surname != nil || maidenName != nil else { return [] }
+        return nameForms.matchingForms
+    }
+
+    /// Blank ⇒ absent, applied once immediately before serialization so no
+    /// "" can ever be written even if a caller assigned one directly.
+    mutating func normalizeNameFields() {
+        surname = POINameText.cleaned(surname)
+        maidenName = POINameText.cleaned(maidenName)
+        middleName = POINameText.cleaned(middleName)
+        suffix = POINameText.cleanedSuffix(suffix)
+        titles = POINameText.cleaned(titles)
+    }
+
     // MARK: Codable — tolerate missing keys from older JSON files
 
     /// Explicit so the transient `uuidPersisted` stays out of profile.json.
@@ -582,6 +649,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case name, referencePath, rejectedFiles, engine
         case visionThreshold, arcfaceThreshold, adafaceThreshold
         case minFaceConfidence, largestFaceOnly, coverImageFilename, notes, aliases
+        case surname, maidenName, middleName, suffix, titles
         case coverCropOffsetX, coverCropOffsetY, coverCropScale, sortOrder
         case birthdate, deathdate, sex, hairColor, eyeColor, identityNotes
         case kinships, kinshipsQuarantined, uuid, treeIdentity, treeIdentityQuarantined
@@ -595,6 +663,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
          adafaceThreshold: Float = 0.30,
          minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
          coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
+         surname: String? = nil, maidenName: String? = nil, middleName: String? = nil,
+         suffix: String? = nil, titles: [String] = [],
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
          sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
          sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
@@ -612,6 +682,13 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.coverImageFilename = coverImageFilename
         self.notes = notes
         self.aliases = aliases
+        // Blank in ⇒ absent stored, at every write point (the sheet, this
+        // initializer, the decoder, and `write(profileJSONAt:)`).
+        self.surname = POINameText.cleaned(surname)
+        self.maidenName = POINameText.cleaned(maidenName)
+        self.middleName = POINameText.cleaned(middleName)
+        self.suffix = POINameText.cleanedSuffix(suffix)
+        self.titles = POINameText.cleaned(titles)
         self.coverCropOffsetX = coverCropOffsetX
         self.coverCropOffsetY = coverCropOffsetY
         self.coverCropScale = coverCropScale
@@ -641,6 +718,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
         coverImageFilename = try c.decodeIfPresent(String.self, forKey: .coverImageFilename)
         notes             = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         aliases           = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        // Family-name fields (2026-09-04). decodeIfPresent so older files
+        // load unchanged, and cleaned on the way in so a blank written by any
+        // path — an older build, a hand-edited json — is absent, not "".
+        surname           = POINameText.cleaned(try c.decodeIfPresent(String.self, forKey: .surname))
+        maidenName        = POINameText.cleaned(try c.decodeIfPresent(String.self, forKey: .maidenName))
+        middleName        = POINameText.cleaned(try c.decodeIfPresent(String.self, forKey: .middleName))
+        suffix            = POINameText.cleanedSuffix(try c.decodeIfPresent(String.self, forKey: .suffix))
+        titles            = POINameText.cleaned(try c.decodeIfPresent([String].self, forKey: .titles) ?? [])
         coverCropOffsetX  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetX) ?? 0
         coverCropOffsetY  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetY) ?? 0
         coverCropScale    = try c.decodeIfPresent(Double.self, forKey: .coverCropScale) ?? 1.0
@@ -741,6 +826,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
         // Keep referencePath in sync with actual location.
         var copy = self
         copy.referencePath = folder.path
+        // The single writer is also the single place blank collapses to
+        // absent on disk (2026-09-04): "" and "   " never reach profile.json.
+        copy.normalizeNameFields()
         let data = try JSONEncoder().encode(copy)
         try data.write(to: url, options: .atomic)
     }

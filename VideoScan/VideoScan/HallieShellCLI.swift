@@ -788,7 +788,9 @@ enum HallieShellCLI {
                         stableID: $0.id, canonicalName: $0.name,
                         aliases: $0.aliases, birthdate: $0.birthdate, note: $0.notes,
                         kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
-                        treeIdentity: $0.treeIdentity, deathdate: $0.deathdate)
+                        treeIdentity: $0.treeIdentity, deathdate: $0.deathdate,
+                        surname: $0.surname, maidenName: $0.maidenName,
+                        middleName: $0.middleName, suffix: $0.suffix)
                 },
                 graph: graph,
                 needsRecompile: needsRecompile,
@@ -1148,7 +1150,9 @@ enum HallieShellCLI {
                     aliases: $0.aliases,
                     birthdate: $0.birthdate, note: $0.notes,
                     kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
-                    treeIdentity: $0.treeIdentity, deathdate: $0.deathdate)
+                    treeIdentity: $0.treeIdentity, deathdate: $0.deathdate,
+                    surname: $0.surname, maidenName: $0.maidenName,
+                    middleName: $0.middleName, suffix: $0.suffix)
             }
             let context = HallieTurnExecutor.Context(
                 presenceRecords: state.presenceSnapshots ?? [],
