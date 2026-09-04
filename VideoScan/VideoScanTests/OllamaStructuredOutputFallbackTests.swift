@@ -190,12 +190,19 @@ struct OllamaStructuredOutputFallbackTests {
         #expect(options["num_ctx"] as? Int == OllamaQueryTranslator.defaultContextTokens)
     }
 
-    /// With the schema gone, nothing enforces its `required` arrays — the
-    /// unconstrained retry's system prompt must say so in prose. The FIRST,
-    /// schema-bearing attempt must NOT carry the sentence: the schema
-    /// already enforces it there, and the constrained-path prompt is not
-    /// meant to change (2026-09-03, part 2 of the repair-hint fix).
-    @Test func unconstrainedRetryToldRequiredKeysAreMandatory() async throws {
+    /// REGRESSION SENSOR (2026-09-03, ruling on the repair-hint branch).
+    /// A prose "emit every key an example shows" suffix was appended to the
+    /// system prompt on the schema-dropped retry only. It was pulled before
+    /// merge: it claimed "every example below" when the AST prompt's
+    /// presence examples show DIFFERENT optional fields, so a model reading
+    /// it literally could take "emit every key an example shows" as license
+    /// to fill in optional fields nobody asked for — and the live check on
+    /// that branch proved it did not even help the thing it was for (the
+    /// model repeated the same invalid field with or without it). The
+    /// dropped-schema retry must therefore send the IDENTICAL system prompt
+    /// as the schema-bearing attempt — dropping `format:` changes only
+    /// what's negotiated with the server, never what the model is told.
+    @Test func droppingTheSchemaNeverAltersTheSystemPrompt() async throws {
         let bodies = FakeBodies()
         let memo = OllamaStructuredOutputCapability()
         var t = OllamaQueryTranslator()
@@ -220,10 +227,8 @@ struct OllamaStructuredOutputFallbackTests {
         }
         let firstSystem = try systemContent(sent[0])
         let retrySystem = try systemContent(sent[1])
-        #expect(!firstSystem.contains("complete set of keys"),
-                "the schema-constrained attempt already enforces this; the prompt must be unchanged")
-        #expect(retrySystem.contains("complete set of keys"),
-                "the unconstrained retry has lost the schema's `required` enforcement")
+        #expect(firstSystem == retrySystem,
+                "dropping the schema must not change a single byte of the system prompt")
     }
 
     /// A schema-less reply that the strict decoder refuses is STILL a

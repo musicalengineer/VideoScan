@@ -237,16 +237,6 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         return String(detail.prefix(200))
     }
 
-    /// Appended to the AST/interpretation system prompt ONLY on a turn where
-    /// a schema was wanted but had to be dropped (structured output
-    /// unsupported by this ollama build — see `structuredOutputUnsupported`
-    /// and `requestContent` below). Without `format:` nothing enforces the
-    /// JSON schema's `required` arrays, so the model has no signal that,
-    /// say, `payload.reference` is mandatory for a temporal question — the
-    /// prose prompt alone was silent on that. Never appended on the
-    /// schema-constrained path.
-    static let unconstrainedRequiredFieldsSuffix = "\n\nEvery example below shows the complete set of keys for its shape. Emit every key an example shows, invent no other keys, and use only the values the examples use."
-
     var displayName: String { "\(model) @ \(host)" }
 
     /// Classify a non-200 reply.
@@ -573,19 +563,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             schemaToSend = nil
         }
         while true {
-            // A schema was WANTED (`schema != nil`) but is not going out on
-            // this attempt: the model loses the JSON schema's `required`
-            // enforcement, so tell it in prose instead. Recomputed each
-            // pass so the retry below (schema refused mid-loop) picks it up
-            // too, and never applied when the caller never wanted a schema
-            // (`composePlainText`, `warmUp`).
-            let effectiveSystemPrompt = (schema != nil && schemaToSend == nil)
-                ? systemPrompt + Self.unconstrainedRequiredFieldsSuffix
-                : systemPrompt
             do {
                 return try await sendChatRequest(
                     text, schema: schemaToSend,
-                    systemPrompt: effectiveSystemPrompt, options: options)
+                    systemPrompt: systemPrompt, options: options)
             } catch let error as NLTranslatorError {
                 // Only a request that ACTUALLY carried a schema can be
                 // recovered by dropping it. Once `schemaToSend` is nil the
