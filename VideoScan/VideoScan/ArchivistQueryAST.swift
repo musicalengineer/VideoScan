@@ -756,24 +756,6 @@ private extension KeyedDecodingContainer {
 ///     Hampshire.mov") is a question about that one record, not a keyword
 ///     sweep ("who is in New Hampshire.mov" → 29 videos, live 2026-09-02)
 ///     → `record{file, [people]}` carrying the people list.
-///   * A non-`graph` payload carrying a `relation` field (a KNOWN field,
-///     just in the wrong place — see the rule above) is, in one narrow
-///     case, not misplacement but the same "my mother" split two different
-///     ways depending on the retry (live 2026-09-04: "show me videos of my
-///     mother" → `{"people":["me"],"relation":"mother"}`; Homebrew ollama
-///     0.33.2 returns HTTP 501 for a schema-enforced request, so the
-///     translator retries WITHOUT `format` and the model is then free to
-///     invent keys — "my mom"/"my dad" already work because there the
-///     model keeps the kin word inside `people`). When `relation` names a
-///     word in `HallieTurnExecutor.SpeakerKinship.kinWords`, `people` is
-///     empty/absent/speaker-pronouns-only, AND the caller's original
-///     question contains "my <that word>" adjacently, the two fields are
-///     rejoined into `people: ["my <word>"]` and `relation` is dropped —
-///     `SpeakerKinship.rebind` then resolves it exactly as it already does
-///     for "my mom". Absent an original question, or absent the adjacent
-///     "my <word>" in it, the payload is left alone and falls through to
-///     the strict decoder's rejection: the decoder must never assert a
-///     family relationship from model JSON alone.
 extension ArchivistQueryAST {
     struct TranslatorDecoding: Sendable {
         let ast: ArchivistQueryAST
@@ -805,10 +787,7 @@ extension ArchivistQueryAST {
         "anchorPeople",
     ]
 
-    static func decodeTranslatorOutput(
-        _ data: Data,
-        originalQuestion: String? = nil
-    ) throws -> TranslatorDecoding {
+    static func decodeTranslatorOutput(_ data: Data) throws -> TranslatorDecoding {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               var top = object as? [String: Any] else {
             // Not a JSON object at all: let the strict decoder produce the
@@ -820,7 +799,6 @@ extension ArchivistQueryAST {
 
         var notes: [String] = []
         top = recordScopeRewrite(top, notes: &notes)
-        top = presenceRelationRejoin(top, originalQuestion: originalQuestion, notes: &notes)
         let shape = top["shape"] as? String
         top = try sanitize(top, path: "", shape: shape, notes: &notes)
         if var payload = top["payload"] as? [String: Any] {
@@ -889,57 +867,6 @@ extension ArchivistQueryAST {
             return result
         }
         return top
-    }
-
-    /// The tokens of `text`, lowercased and split on anything that is not a
-    /// letter or digit — the same normalization `SpeakerKinship.rebind` and
-    /// `repairPossessiveSpeakerPronoun` use, so "adjacent" means the same
-    /// thing everywhere this codebase looks for a possessive kinship phrase.
-    private static func normalizedTokens(_ text: String) -> [String] {
-        text.lowercased()
-            .replacingOccurrences(of: "\u{2019}", with: "'")
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-    }
-
-    /// Rejoin (see the design note in the doc comment above): ollama 0.33.2
-    /// cannot enforce the schema (HTTP 501), so the unenforced retry lets
-    /// the model split "my mother" into `people:["me"]` plus a bare
-    /// `relation:"mother"` that no non-graph payload accepts. Fires ONLY
-    /// when `relation` is a known kin word, `people` carries nothing but
-    /// speaker pronouns (or is absent), and the caller's own question has
-    /// "my <that word>" adjacent — never inferred from the model's claim
-    /// alone, so a wrong guess (e.g. the model inventing "mother" while the
-    /// user asked about Donna) cannot silently become a search for "mother".
-    private static func presenceRelationRejoin(
-        _ top: [String: Any],
-        originalQuestion: String?,
-        notes: inout [String]
-    ) -> [String: Any] {
-        guard let originalQuestion,
-              let shape = top["shape"] as? String, shape != "graph",
-              var payload = top["payload"] as? [String: Any],
-              let relationValue = payload["relation"] as? String
-        else { return top }
-
-        let key = relationValue.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard HallieTurnExecutor.SpeakerKinship.kinWords[key] != nil else { return top }
-
-        let people = (payload["people"] as? [String]) ?? []
-        guard people.allSatisfy({ HallieTurnExecutor.isSpeakerPronoun($0) }) else { return top }
-
-        let words = normalizedTokens(originalQuestion)
-        guard let myIndex = words.firstIndex(of: "my"), myIndex + 1 < words.count,
-              words[myIndex + 1] == key else { return top }
-
-        var result = top
-        payload["people"] = ["my \(key)"]
-        payload["relation"] = nil
-        result["payload"] = payload
-        notes.append("rejoined payload.relation '\(key)' into people 'my \(key)' "
-            + "(ollama 0.33.2 cannot enforce the schema; adjacent 'my \(key)' "
-            + "confirmed in the question)")
-        return result
     }
 
     /// Graph-payload spellings the model uses for meanings the contract

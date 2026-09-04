@@ -393,8 +393,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             // Tolerant of benign extras (`limit` on a presence payload,
             // `confidence`, nulls) — see ArchivistQueryAST.decodeTranslatorOutput.
             // Genuinely malformed shapes still fail here.
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(
-                astData, originalQuestion: text)
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(astData)
             if !decoded.notes.isEmpty {
                 let notes = decoded.notes.joined(separator: "; ")
                 translatorLog.notice(
@@ -423,8 +422,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 return .conversation(
                     try HallieTurnInterpretation.decodeConversation(data))
             }
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(
-                data, originalQuestion: text)
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(data)
             if !decoded.notes.isEmpty {
                 translatorLog.notice(
                     "turn interpretation normalized: \(decoded.notes.joined(separator: "; "), privacy: .public)")

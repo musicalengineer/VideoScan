@@ -40,10 +40,7 @@ extension HallieTurnExecutor {
             var failure: String?
         }
 
-        /// Not `private`: also reused by ArchivistQueryAST's translator-output
-        /// decoder (the presence/cross "relation" rejoin, 2026-09-04) so
-        /// there is exactly one kin-word vocabulary in the app, never two.
-        static let kinWords: [String: GedcomFamilyGraph.Relation] = [
+        private static let kinWords: [String: GedcomFamilyGraph.Relation] = [
             "dad": .father, "daddy": .father, "father": .father, "pop": .father, "papa": .father,
             "mom": .mother, "mommy": .mother, "mother": .mother, "mum": .mother, "mama": .mother, "ma": .mother,
             "brother": .brother, "sister": .sister,
