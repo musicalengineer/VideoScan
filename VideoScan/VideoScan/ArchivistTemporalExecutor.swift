@@ -300,6 +300,20 @@ enum ArchivistTemporalExecutor {
             return decline(.invalidSubject)
         }
         guard let rawBirthdate = subject.birthdate else {
+            // A recorded death with no birthdate at all: say the death, not
+            // an invented age (Rick, 2026-09-03 — "this must not be
+            // possible" applies just as much to guessing an age from
+            // nothing as to counting a dead person's age to today).
+            if let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) {
+                return ArchivistTemporalResult(
+                    value: nil, decline: .missingBirthdate,
+                    prose: "\(subject.canonicalName) died on \(longDayString(deathDay)). "
+                        + "I don't have a birthdate for \(subject.canonicalName), so I "
+                        + "can't give an age.",
+                    basisLine: "Basis: \(subject.canonicalName)'s People profile records a "
+                        + "death \(dayString(deathDay)) but no birthdate.",
+                    evidence: nil)
+            }
             return decline(.missingBirthdate, name: subject.canonicalName)
         }
         guard let birthdate = canonicalDay(rawBirthdate) else {
@@ -457,9 +471,10 @@ enum ArchivistTemporalExecutor {
     }
 
     /// Age today from the profile birthdate — or, for someone who has passed
-    /// on, the age at death ("Dad passed on in 2011 at 74"). With only a
-    /// tree birth year the answer is "about N". `now` is injected so the
-    /// tests are not a function of the wall clock.
+    /// on, the age at death ("Dad died on 22 June 2008, at 79" — never an
+    /// age counted to today: Rick, 2026-09-03, demo eve, on his late
+    /// parents). With only a tree birth year the answer is "about N". `now`
+    /// is injected so the tests are not a function of the wall clock.
     static func executePresentAge(
         _ query: ArchivistQueryAST.Temporal,
         subject resolution: ArchivistTemporalSubjectResolution,
@@ -486,25 +501,25 @@ enum ArchivistTemporalExecutor {
         }
         let name = subject.canonicalName
         guard let today = canonicalDay(now) else { return decline(.invalidDate, name: name) }
-        let status = LifeStatus.ofProfile(deathdate: subject.deathdate, now: now)
 
         if let rawBirthdate = subject.birthdate {
             guard let birthdate = canonicalDay(rawBirthdate) else {
                 return decline(.invalidDate, name: name)
             }
-            if status != .living, let rawDeath = subject.deathdate,
+            if let rawDeath = subject.deathdate,
                let deathDay = canonicalDay(rawDeath) {
+                // A recorded death always wins over "today" — counting to
+                // today would report a living age for someone who has died.
                 guard deathDay >= birthdate,
                       let age = calendar.dateComponents([.year], from: birthdate, to: deathDay).year,
                       age >= 0 else {
                     return decline(.invalidDate, name: name)
                 }
-                let deathYear = calendar.component(.year, from: deathDay)
                 return ArchivistTemporalResult(
                     value: .exactAge(age), decline: nil,
-                    prose: "\(name) passed on in \(deathYear) at \(age).",
-                    basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)) "
-                        + "and recorded death \(dayString(deathDay)); no video selected.",
+                    prose: "\(name) died on \(longDayString(deathDay)), at \(age).",
+                    basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)), "
+                        + "counted to their recorded death \(dayString(deathDay)); no video selected.",
                     evidence: ArchivistTemporalEvidence(
                         subjectID: subject.stableID, canonicalName: name,
                         birthdate: birthdate, birthdateProvenance: subject.birthdateProvenance,
@@ -529,18 +544,19 @@ enum ArchivistTemporalExecutor {
         // No full birthdate on the profile: a tree birth YEAR gives "about N".
         if let approximate = approximateBirthYear {
             let nowYear = calendar.component(.year, from: today)
-            if status != .living, let rawDeath = subject.deathdate,
-               let deathDay = canonicalDay(rawDeath) {
+            if let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) {
                 let deathYear = calendar.component(.year, from: deathDay)
                 guard deathYear >= approximate.year else {
                     return decline(.invalidDate, name: name)
                 }
                 return ArchivistTemporalResult(
                     value: .approximateAge(deathYear - approximate.year), decline: nil,
-                    prose: "\(name) passed on in \(deathYear) at about \(deathYear - approximate.year) "
-                        + "— \(approximate.source) gives only the birth year, \(approximate.year).",
+                    prose: "\(name) died on \(longDayString(deathDay)), at about "
+                        + "\(deathYear - approximate.year) — \(approximate.source) gives only "
+                        + "the birth year, \(approximate.year).",
                     basisLine: "Basis: birth year \(approximate.year) from \(approximate.source) "
-                        + "(no month/day) and recorded death \(dayString(deathDay)); no video selected.",
+                        + "(no month/day), counted to their recorded death \(dayString(deathDay)); "
+                        + "no video selected.",
                     evidence: nil)
             }
             guard nowYear >= approximate.year else {
@@ -553,6 +569,18 @@ enum ArchivistTemporalExecutor {
                     + "\(approximate.year).",
                 basisLine: "Basis: birth year \(approximate.year) from \(approximate.source) "
                     + "(no month/day), counted to \(nowYear); no video selected.",
+                evidence: nil)
+        }
+
+        // No birthdate at all, exact or approximate: a recorded death is
+        // still worth stating, but never with a guessed age.
+        if let rawDeath = subject.deathdate, let deathDay = canonicalDay(rawDeath) {
+            return ArchivistTemporalResult(
+                value: nil, decline: .missingBirthdate,
+                prose: "\(name) died on \(longDayString(deathDay)). I don't have a birthdate "
+                    + "for \(name), so I can't give an age.",
+                basisLine: "Basis: \(name)'s People profile records a death "
+                    + "\(dayString(deathDay)) but no birthdate.",
                 evidence: nil)
         }
         return decline(.missingBirthdate, name: name)

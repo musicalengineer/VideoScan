@@ -452,10 +452,131 @@ struct ArchivistTemporalExecutorTests {
             subject: resolved("Dad", birthdate: date(1936, 5, 10), deathdate: date(2011, 2, 1)),
             now: date(2026, 9, 1))
         #expect(result.value == .exactAge(74))
-        #expect(result.prose == "Dad passed on in 2011 at 74.")
+        #expect(result.prose == "Dad died on 1 February 2011, at 74.")
         #expect(result.basisLine.contains("recorded death 2011-02-01"))
         #expect(!result.prose.contains("today"))
         #expect(result.evidence?.reference == .death(date(2011, 2, 1)))
+    }
+
+    /// Rick's real family data, demo eve 2026-09-03: a fabricated "is N
+    /// today" for either late parent is the one answer that must never come
+    /// out of this composer.
+    @Test func realParentsGetAgeAtDeathInTheHouseDateFormat() {
+        let ma = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Ma"),
+            subject: resolved("Ma", birthdate: date(1930, 8, 31), deathdate: date(2023, 3, 3)),
+            now: date(2026, 9, 3))
+        #expect(ma.value == .exactAge(92))
+        #expect(ma.prose == "Ma died on 3 March 2023, at 92.", Comment(rawValue: ma.prose))
+        #expect(!ma.prose.contains("today"))
+
+        let dad = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Dad"),
+            subject: resolved("Dad", birthdate: date(1929, 2, 22), deathdate: date(2008, 6, 22)),
+            now: date(2026, 9, 3))
+        #expect(dad.value == .exactAge(79))
+        #expect(dad.prose == "Dad died on 22 June 2008, at 79.", Comment(rawValue: dad.prose))
+        #expect(!dad.prose.contains("today"))
+    }
+
+    /// The demo-critical regression: once "how old is X" is reachable for
+    /// every subject (the temporal-reference-optional fix this branch sits
+    /// on top of), a dead person's age must never be counted to today. Named
+    /// so the intent survives a future refactor of this file.
+    @Test func anAgeIsNeverCountedToTodayForSomeoneWhoHasDied() {
+        let farFuture = date(2099, 1, 1)
+        let ma = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Ma"),
+            subject: resolved("Ma", birthdate: date(1930, 8, 31), deathdate: date(2023, 3, 3)),
+            now: farFuture)
+        // Whatever "today" is, the age is fixed at death — never (farFuture
+        // year - birth year), which would be a plainly impossible age for a
+        // living person and, worse, a lie for a dead one.
+        #expect(ma.value == .exactAge(92))
+        #expect(ma.prose.contains("died"))
+        #expect(!ma.prose.contains("today"))
+    }
+
+    /// A birthday that falls ON or just AFTER the death date within the same
+    /// calendar year: completed years, not a naive year subtraction.
+    @Test func ageAtDeathIsCompletedYearsNotNaiveYearSubtraction() {
+        // Birthday 5 March, died 3 March the same year they turned 70 by
+        // the naive (deathYear - birthYear) subtraction — the completed age
+        // is 69, since the birthday had not yet occurred.
+        let notYetBirthday = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Aunt"),
+            subject: resolved("Aunt", birthdate: date(1950, 3, 5), deathdate: date(2020, 3, 3)),
+            now: date(2026, 9, 3))
+        #expect(notYetBirthday.value == .exactAge(69), Comment(rawValue: "\(String(describing: notYetBirthday.value))"))
+
+        // Birthday 1 March, died 3 March the same year: the birthday had
+        // already occurred, so the completed age is the full 70.
+        let alreadyBirthday = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Uncle"),
+            subject: resolved("Uncle", birthdate: date(1950, 3, 1), deathdate: date(2020, 3, 3)),
+            now: date(2026, 9, 3))
+        #expect(alreadyBirthday.value == .exactAge(70), Comment(rawValue: "\(String(describing: alreadyBirthday.value))"))
+
+        // Died ON the birthday itself: that birthday counts.
+        let onTheBirthday = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Cousin"),
+            subject: resolved("Cousin", birthdate: date(1950, 3, 3), deathdate: date(2020, 3, 3)),
+            now: date(2026, 9, 3))
+        #expect(onTheBirthday.value == .exactAge(70), Comment(rawValue: "\(String(describing: onTheBirthday.value))"))
+    }
+
+    /// Living family members keep today's unchanged wording — this branch's
+    /// death handling must not leak into the common case.
+    @Test func livingFamilyKeepTodaysWordingUnchanged() {
+        let tim = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Tim"),
+            subject: resolved("Tim", birthdate: date(1960, 6, 21)),
+            now: date(2026, 9, 4))
+        #expect(tim.value == .exactAge(66))
+        #expect(tim.prose == "Tim is 66 today — born 21 June 1960.", Comment(rawValue: tim.prose))
+
+        let donna = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Donna"),
+            subject: resolved("Donna", birthdate: date(1959, 8, 4)),
+            now: date(2026, 9, 4))
+        #expect(donna.prose == "Donna is 67 today — born 4 August 1959.", Comment(rawValue: donna.prose))
+
+        let timmy = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("Timmy"),
+            subject: resolved("Timmy", birthdate: date(1999, 4, 22)),
+            now: date(2026, 9, 4))
+        #expect(timmy.prose == "Timmy is 27 today — born 22 April 1999.", Comment(rawValue: timmy.prose))
+    }
+
+    /// A death date exists but there is no birthdate at all (not even a
+    /// tree birth year): state the death, never guess an age.
+    @Test func aDeathWithNoBirthdateAtAllNeverGuessesAnAge() {
+        let result = ArchivistTemporalExecutor.executePresentAge(
+            ageQuery("GreatAunt"),
+            subject: resolved("GreatAunt", birthdate: nil, deathdate: date(1975, 12, 25)),
+            now: date(2026, 9, 3))
+        #expect(result.value == nil)
+        #expect(result.decline == .missingBirthdate)
+        #expect(result.prose == "GreatAunt died on 25 December 1975. I don't have a birthdate "
+            + "for GreatAunt, so I can't give an age.", Comment(rawValue: result.prose))
+        #expect(result.basisLine.contains("death 1975-12-25"))
+        #expect(!result.prose.contains("about"))
+    }
+
+    /// Same rule through `execute()` (the selected-video / explicit-year
+    /// path), not just `executePresentAge()`.
+    @Test func aDeathWithNoBirthdateNeverGuessesAnAgeThroughSelectedVideoPathEither() {
+        let result = ArchivistTemporalExecutor.execute(
+            query(.currentSelection),
+            subject: .resolved(requested: "Timmy", subject: .init(
+                stableID: "greataunt", canonicalName: "GreatAunt", birthdate: nil,
+                deathdate: date(1975, 12, 25))),
+            currentSelection: .dossierInferred(
+                recordID: UUID(), fullPath: "/Archive/1970.mov",
+                date: date(1970, 1, 1), confidence: 0.5))
+        #expect(result.value == nil)
+        #expect(result.prose.contains("died on 25 December 1975"))
+        #expect(result.prose.contains("can't give an age"))
     }
 
     @Test func aTreeBirthYearAloneGivesAnApproximateAgeAndSaysSo() {
@@ -697,5 +818,57 @@ struct ArchivistTemporalExecutorTests {
             context: .init(profiles: profiles, selectedTemporalDate: christmas1994, speakers: .none))
         #expect(noOwner.outcome == .declined)
         #expect(noOwner.prose.hasPrefix("I don't know who “the boys” are — no one has told me who is using the archive."), Comment(rawValue: noOwner.prose))
+    }
+
+    // MARK: - A selected video on either side of a recorded death (2026-09-03)
+
+    /// "how old was Ma in [a video from before she died]" is a perfectly
+    /// good, welcome question — the normal per-record age arithmetic, no
+    /// special-casing needed, because she was alive when it was made.
+    @Test func aSelectedVideoBeforeTheDeathDateGetsAnOrdinaryAge() async throws {
+        let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
+            .init(stableID: "ma", canonicalName: "Ma", birthdate: date(1930, 8, 31),
+                  sex: .female, deathdate: date(2023, 3, 3)),
+        ]
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles,
+            selectedTemporalDate: .dossierInferred(
+                recordID: UUID(), fullPath: "/Archive/1991.mov",
+                date: date(1991, 6, 15), confidence: 0.9))
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old was Ma in this video", ast: .temporal(
+                .init(subject: "Ma", operation: .age, reference: .currentSelection)))),
+            context: context)
+        #expect(result.outcome == .answered)
+        #expect(result.prose.contains("calculated age is 60 years"), Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("today"))
+    }
+
+    /// The demo-critical guard on the OTHER route into an age: a video
+    /// selected AFTER a recorded death must never be used to state a living
+    /// age ("how old is Ma" answered against a 2024 clip would otherwise say
+    /// "Ma is 93" — she died in 2023). The turn executor already reroutes a
+    /// deceased subject whose death precedes the reference through the
+    /// would-have-been composer; this test pins THAT safety property against
+    /// a plain "how old is/was" question, not just an explicit "would have
+    /// been" ask.
+    @Test func aSelectedVideoAfterTheDeathDateNeverStatesALivingAge() async throws {
+        let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
+            .init(stableID: "ma", canonicalName: "Ma", birthdate: date(1930, 8, 31),
+                  sex: .female, deathdate: date(2023, 3, 3)),
+        ]
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles,
+            selectedTemporalDate: .dossierInferred(
+                recordID: UUID(), fullPath: "/Archive/2024_reunion.mov",
+                date: date(2024, 7, 4), confidence: 0.9))
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "how old is Ma here", ast: .temporal(
+                .init(subject: "Ma", operation: .age, reference: .currentSelection)))),
+            context: context)
+        #expect(result.outcome == .answered)
+        #expect(result.prose.contains("2023"), Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("Ma is"), Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("Ma was 93"), Comment(rawValue: result.prose))
     }
 }
