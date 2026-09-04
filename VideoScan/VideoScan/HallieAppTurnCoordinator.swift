@@ -677,12 +677,15 @@ enum HallieAppTurnCoordinator {
                 try await dependencies.executeRequest(request, context)
             }
         // A narrow second chance, taken only after the archive route has
-        // already given up (HallieCapabilityDeclineFallback, 2026-09-04):
-        // an app-capability decline or a bare-name/unknown-name tree lookup
-        // retries once through the general-knowledge lane instead of
-        // dead-ending. Every other decline — one that reports a real
-        // archive fact — is returned exactly as the executor built it.
-        guard HallieCapabilityDeclineFallback.qualifies(response.result) else {
+        // already given up (HallieCapabilityDeclineFallback, 2026-09-04): an
+        // unsupported-event decline or a bare-name/unknown-name tree lookup,
+        // for a REFLECTIVE OR ADVISORY question only, retries once through
+        // the general-knowledge lane instead of dead-ending. Every other
+        // decline — a real archive fact, an honest `.capability` answer, or
+        // any retrieval-shaped question — is returned exactly as the
+        // executor built it.
+        guard HallieCapabilityDeclineFallback.qualifies(
+            response.result, question: routingQuestion) else {
             return response
         }
         return try await deadEndGeneralKnowledgeFallback(
