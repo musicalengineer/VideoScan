@@ -257,10 +257,19 @@ struct HallieGroundedCompositionTests {
 
     @Test func verifierExpandsMonthsAndChecksSpelledOutNumbers() {
         let plan = biographyPlan()
-        // "12 MAR 1920" vouches for "March 12, 1920" (live smoke 2026-08-17).
-        let month = HallieCompositionVerifier.verify(
+        // CONTRACT CHANGED 2026-09-03 (fix/hallie-deterministic-dates).
+        // "12 MAR 1920" used to vouch for ANY rendering of that day, so
+        // "March 12, 1920" was kept (live smoke 2026-08-17). That latitude
+        // is what produced four date formats and a misspelled month in one
+        // live answer. A GEDCOM date now vouches for itself and for its
+        // HOUSE rendering — "12 March 1920" — and nothing else. The month
+        // is still expanded; only the RE-ORDERING is now refused.
+        let house = HallieCompositionVerifier.verify(
+            "Ellen Breen was born on 12 March 1920 [c1].", plan: plan, personaName: "Hallie Mae")
+        #expect(house.kept.count == 1)
+        let reordered = HallieCompositionVerifier.verify(
             "Ellen Breen was born on March 12, 1920 [c1].", plan: plan, personaName: "Hallie Mae")
-        #expect(month.kept.count == 1)
+        #expect(reordered.dropped.first?.reason == .alteredDate)
         // A spelled-out count with no digit or word in the cited claim leaks.
         let word = HallieCompositionVerifier.verify(
             "Ellen Breen had seven children [c3].", plan: plan, personaName: "Hallie Mae")

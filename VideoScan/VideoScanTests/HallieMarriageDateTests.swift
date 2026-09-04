@@ -59,7 +59,9 @@ struct HallieMarriageDateTests {
             ast: .graph(.init(people: ["Richard Harding Breen Jr"], operation: .birth)))
         let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
         #expect(result.outcome == .answered)
-        #expect(result.prose == "Richard Harding Breen Jr and Donna Elaine Hudson were married on 14 Jun 1980.")
+        // House format (`HallieDateStyle`, 2026-09-03). Was "14 Jun 1980" —
+        // the raw GEDCOM month, a third format in Hallie's answers.
+        #expect(result.prose == "Richard Harding Breen Jr and Donna Elaine Hudson were married on 14 June 1980.")
         #expect(!result.prose.contains("1959"))
         #expect(result.answerPlan?.isComposable == false)
     }

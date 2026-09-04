@@ -504,13 +504,17 @@ extension HallieTurnExecutor {
             }.count
         }
 
-        /// GEDCOM-style day-month-year so it reads like the tree's own dates.
+        /// The house format, same as every other date Hallie says
+        /// (`HallieDateStyle`): "21 June 1960".
+        ///
+        /// Was "d MMM yyyy" — "21 Jun 1960" — until 2026-09-03. That
+        /// abbreviation was the SECOND date format in Hallie's answers, and
+        /// it is why "when was Tim born" came back "June 21, 1960" one run
+        /// and "21 June 1960" the next: the model was handed a shortened
+        /// month and expanded it however it felt. One format everywhere
+        /// leaves nothing to expand.
         static func birthText(_ date: Date) -> String {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = .current
-            formatter.dateFormat = "d MMM yyyy"
-            return formatter.string(from: date)
+            HallieDateStyle.spoken(date)
         }
 
         static func quotedNote(_ profile: ProfileSnapshot) -> String? {

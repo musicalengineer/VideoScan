@@ -81,7 +81,12 @@ struct HallieFragmentGuardTests {
     private static let claimTexts = [
         "Muriel Lamb was born in April 1902 in Quebec, Canada.",
         "She was the child of Edith Lucy Parker and Frederick Burton Lamb; her recorded grandparents were Clarissa Horton Schoolcraft, Judson L. Parker, Mary Elizabeth Smith and Sewell Stone Parker.",
-        "She was married to George Breen (married 17 OCT 1925).",
+        // House format (`HallieDateStyle`) — this mirrors what
+        // `HallieBiographyCard.marriageClause` actually builds from
+        // "2 DATE 17 OCT 1925" above. The fixture said "17 OCT 1925" until
+        // 2026-09-03; production has never shown the reader a raw GEDCOM
+        // date, and the boundary test above now pins that.
+        "She was married to George Breen (married 17 October 1925).",
         "She had 1 recorded child, Richard Harding Breen Sr.",
         "Her family tree includes 12578 recorded ancestors across 18 generations and 2 recorded descendants across 2 generations.",
     ]
@@ -131,6 +136,10 @@ struct HallieFragmentGuardTests {
             "Clarissa Horton Schoolcraft",
             "Judson L. Parker",
             "married to George Breen",
+            // The house format at the production boundary (2026-09-03).
+            // The GEDCOM says "17 OCT 1925"; the reader is never shown
+            // that, and this is what `claimTexts` below must mirror.
+            "(married 17 October 1925)",
             "Richard Harding Breen Sr",
         ] {
             #expect(result.prose.contains(fact), Comment(rawValue: "missing \(fact): \(result.prose)"))
@@ -140,22 +149,54 @@ struct HallieFragmentGuardTests {
         #expect(!result.prose.localizedCaseInsensitiveContains("catalog items matching"))
     }
 
-    /// The whole live turn: every claim reaches the reader, nothing is
-    /// dropped, nothing is a fragment, and the coverage line is clean.
+    /// The whole live turn: every claim reaches the reader, nothing is a
+    /// fragment, and the coverage line accounts for everything.
+    ///
+    /// AMENDED 2026-09-03. The 2026-08-29 reply carried a FOURTH defect
+    /// nobody noticed at the time: `s34` renders the claim's "17 October
+    /// 1925" as "October 17, 1925". Under the old rules a claim's date
+    /// vouched for any rendering of the same day, so it shipped — and that
+    /// same latitude is what produced four date formats and a misspelled
+    /// month in one live answer five days later. It is now `.alteredDate`,
+    /// and c3/c4 come back as the plan's own sentences. Every claim still
+    /// reaches the reader; the model just does not get to re-type the date.
     @Test func murielLambLiveTurnShipsAllFiveClaimsWithoutFragments() async {
         let outcome = await compose([Self.s1, Self.s2, Self.s34, Self.s5].joined(separator: " "))
         #expect(outcome.composedBy == .model)
+        #expect(outcome.dropped.map(\.reason) == [.alteredDate],
+                Comment(rawValue: "\(outcome.dropped)"))
+        #expect(outcome.restored.map(\.claimID) == ["c3", "c4"],
+                Comment(rawValue: "\(outcome.restored)"))
+        let sentences = HallieCompositionVerifier.splitSentences(outcome.transcriptText)
+        #expect(sentences.map(HallieCompositionVerifier.claimTags) == [["c1"], ["c2"], ["c3"], ["c4"], ["c5"]],
+                Comment(rawValue: outcome.transcriptText))
+        // The reader still gets all five claims, and the date is the one
+        // Swift rendered — not the one the model re-typed.
+        #expect(outcome.displayText.contains("(married 17 October 1925)"),
+                Comment(rawValue: outcome.displayText))
+        #expect(!outcome.displayText.contains("October 17, 1925"))
+        #expect(outcome.displayText.contains("Richard Harding Breen Sr"))
+        // The three defects this suite was written for are unchanged.
+        #expect(!outcome.displayText.contains(" , "))
+        #expect(!outcome.displayText.contains("Sr.."))
+        #expect(outcome.displayText.contains("12,578 ancestors"))
+        let dropLines = HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan())
+        #expect(dropLines.count == 1)
+        #expect(dropLines[0].contains("reason: alteredDate"), Comment(rawValue: dropLines[0]))
+    }
+
+    /// The same live turn with the date copied verbatim, which is what the
+    /// composer now asks for: nothing dropped, nothing restored, and the
+    /// clean coverage line the suite originally pinned.
+    @Test func murielLambTurnWithTheDateCopiedVerbatimIsUntouched() async {
+        let faithful = Self.s34.replacingOccurrences(
+            of: "on October 17, 1925,", with: "on 17 October 1925,")
+        let outcome = await compose([Self.s1, Self.s2, faithful, Self.s5].joined(separator: " "))
         #expect(outcome.dropped.isEmpty, Comment(rawValue: "\(outcome.dropped)"))
         #expect(outcome.restored.isEmpty, Comment(rawValue: "\(outcome.restored)"))
         let sentences = HallieCompositionVerifier.splitSentences(outcome.transcriptText)
         #expect(sentences.map(HallieCompositionVerifier.claimTags) == [["c1"], ["c2"], ["c3", "c4"], ["c5"]],
                 Comment(rawValue: outcome.transcriptText))
-        #expect(outcome.displayText == [
-            "Muriel Lamb was born in April 1902 in Quebec, Canada.",
-            "She was the daughter of Edith Lucy Parker and Frederick Burton Lamb, with recorded grandparents including Clarissa Horton Schoolcraft, Judson L., Mary Elizabeth Smith, and Sewell Stone Parker.",
-            "Muriel married George Breen on October 17, 1925, and they had one child named Richard Harding Breen Sr.",
-            "Her family tree documents 12,578 ancestors across 18 generations and 2 descendants across 2 generations.",
-        ].joined(separator: " "), Comment(rawValue: outcome.displayText))
         #expect(!outcome.displayText.contains(" , "))
         #expect(!outcome.displayText.contains("Sr.."))
         let lines = HallieGroundedComposer.verifyLogLines(outcome, plan: plan())

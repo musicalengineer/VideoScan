@@ -69,18 +69,26 @@ enum HallieMarriageDate {
                            basis: "Basis: imported family tree (GEDCOM) has no MARR date for \(person.id).",
                            payload: payload)
         }
+        // The house format (`HallieDateStyle`, 2026-09-03). This route used
+        // to print the GEDCOM string straight through — "were married on
+        // 14 Jun 1980" — which was a THIRD date format in Hallie's answers
+        // beside the biography card's "14 June 1980" and the People tab's.
+        // `spoken` changes no precision and drops no qualifier; it only
+        // spells the month the one way Hallie spells it, so the basis line
+        // below still holds.
         let sentences = dated.map { marriage -> String in
+            let when = HallieDateStyle.spoken(marriage.date) ?? "an unrecorded date"
             if let spouse = marriage.spouse {
-                return "\(person.name) and \(spouse.name) were married on \(marriage.date ?? "an unrecorded date")."
+                return "\(person.name) and \(spouse.name) were married on \(when)."
             }
-            return "\(person.name) was married on \(marriage.date ?? "an unrecorded date")."
+            return "\(person.name) was married on \(when)."
         }
         let prose = sentences.joined(separator: " ")
         return HallieTurnExecutor.Result(
             route: .graph,
             outcome: .answered,
             prose: prose,
-            basisLine: "Basis: imported family tree (GEDCOM) MARR date for \(person.id); the date is shown exactly as recorded.",
+            basisLine: "Basis: imported family tree (GEDCOM) MARR date for \(person.id); the date is stated at exactly its recorded precision.",
             queryDescription: "shape=graph operation=marriage person=\(typed)",
             citations: [],
             catalogPersonName: nil,

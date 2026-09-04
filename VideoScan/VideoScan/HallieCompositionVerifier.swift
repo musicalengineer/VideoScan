@@ -2,8 +2,11 @@
 // The deterministic leash on model phrasing. A composed answer is accepted
 // sentence by sentence: each sentence must carry at least one bracket tag
 // naming an existing claim, and may not introduce a year, number, or
-// capitalized name that is absent from the claims it cites. Anything else is
-// dropped and logged. Nothing here calls a model.
+// capitalized name that is absent from the claims it cites. Two things are
+// held to a stricter standard than "vouched for" — a FILENAME and a DATE
+// are exact evidence, and must be reproduced exactly, not paraphrased or
+// reformatted. Anything else is dropped and logged. Nothing here calls a
+// model.
 
 import Foundation
 
@@ -27,6 +30,17 @@ enum HallieCompositionVerifier {
             /// A composed filename was shortened, embellished, or invented.
             /// File identity is exact evidence and may never be paraphrased.
             case alteredFilename
+            /// A composed DATE was misspelled, reformatted, reordered, or
+            /// changed. Same class as `alteredFilename`: a date is exact
+            /// evidence, and the reader's eye is what the rule protects.
+            /// Live 2026-09-03, one sentence, four dates: "born feberuary
+            /// 22 1929 … died june 22 2008 … born August 31 1930 … died
+            /// March 3, 2023" — four formats and a misspelled month, out of
+            /// claims that said "22 February 1929" and so on, uniformly.
+            /// Nothing else in the verifier looked: `leak` only inspects
+            /// CAPITALIZED words, so a lowercased month walked past it, and
+            /// every digit in the sentence was genuinely in the claims.
+            case alteredDate
             case sentenceFragment
             case overSentenceBudget
             /// A sentence asserting she has no evidence/knowledge, inside a
@@ -193,6 +207,18 @@ enum HallieCompositionVerifier {
                 dropped.append(Dropped(text: raw, reason: .alteredFilename))
                 continue
             }
+            // Ordered with the filename rule, before the token leak check:
+            // both ask "is this exact evidence, reproduced exactly?", which
+            // is a narrower and more specific question than "is this word
+            // vouched for?". A sentence that BOTH mangles a date and leaks
+            // a name is reported as `.alteredDate`; nothing false reaches
+            // the reader either way (the sentence is dropped whole), and
+            // what is restored afterwards is the plan's own text, never the
+            // model's. A sentence that only leaks still reads as a leak.
+            if containsUnvouchedDate(display, claims: claims) {
+                dropped.append(Dropped(text: raw, reason: .alteredDate))
+                continue
+            }
             // A living subject is never spoken of as finished (LifeStatus,
             // 2026-09-01). Only plans that carry a verdict are checked, so
             // media / presence phrasing is untouched.
@@ -254,6 +280,33 @@ enum HallieCompositionVerifier {
         return remainder.range(
             of: mediaFilenamePattern,
             options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Remove every date this sentence's claims vouch for — as the claim
+    /// writes it, plus the house rendering of a raw GEDCOM date — then
+    /// reject any date-shaped run left behind.
+    ///
+    /// Exactly the shape of `containsUnvouchedFilename`, and for the same
+    /// reason: removal-then-rescan catches ALTERATION as well as invention.
+    /// A correctly copied date is gone from the remainder and costs nothing;
+    /// "june 22 2008", "March 3, 2023" and "feberuary 22 1929" all survive
+    /// the removal of "22 June 2008", "3 March 2023" and "22 February 1929"
+    /// and are caught.
+    ///
+    /// Case-sensitive on purpose. A lowercased month is a fourth format on
+    /// the page, and lowercasing is precisely what the live answer did to
+    /// two of its four dates.
+    private static func containsUnvouchedDate(
+        _ display: String,
+        claims: [HallieAnswerPlan.Claim]
+    ) -> Bool {
+        var remainder = display
+        for claim in claims {
+            for rendering in HallieDateStyle.vouchedRenderings(in: claim.text) {
+                remainder = remainder.replacingOccurrences(of: rendering, with: " ")
+            }
+        }
+        return !HallieDateStyle.occurrences(in: remainder).isEmpty
     }
 
     /// The filename an item claim vouches for. Two claim shapes are
