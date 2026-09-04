@@ -1869,6 +1869,83 @@ enum HallieTurnExecutor {
         return false
     }
 
+    /// The SMALL, curated set of names: People-tab profiles (canonical
+    /// name, aliases, and each word of the canonical name) plus CyberBrain.
+    /// This is the only oracle the general-knowledge router may ask about a
+    /// lone capitalised word — in the 39,250-person GEDCOM, "English",
+    /// "Star", "Short" and "Happy" are all surnames, which is exactly how
+    /// "Explain nostalgia in plain English." became a family-tree lookup
+    /// (eval demo-20260903-eve).
+    static func isInnerCircleName(_ name: String, context: Context) -> Bool {
+        let key = PersonResolver.normalize(name)
+        guard !key.isEmpty else { return false }
+        if let profiles = context.profiles {
+            for profile in profiles {
+                let forms = [profile.canonicalName] + profile.aliases
+                if forms.contains(where: { PersonResolver.normalize($0) == key }) {
+                    return true
+                }
+                // "Donna" for the profile "Donna Breen".
+                if profile.canonicalName.split(separator: " ").contains(where: {
+                    PersonResolver.normalize(String($0)) == key
+                }) { return true }
+            }
+        }
+        if let cyberBrain = context.cyberBrain {
+            if case .notFound = cyberBrain.resolve(name) {} else { return true }
+        }
+        // The tree's ROOTS and the people one hop from them — Rick, Donna,
+        // their parents, spouses, children and siblings. A bare first name
+        // in an ordinary sentence almost always means one of these, and a
+        // tree may be loaded before anyone has a People-tab profile.
+        //
+        // Bounded by construction: at most a couple of roots, each with a
+        // handful of relatives, so this is tens of names and never grows
+        // with the 39,250-person tree.
+        return rootNeighbourhoodNames(context: context).contains(key)
+    }
+
+    /// Normalized names of the roots and their immediate family: full
+    /// names and each word of each full name. Recomputed per call; the
+    /// walk touches only the roots' own edges.
+    static func rootNeighbourhoodNames(context: Context) -> Set<String> {
+        guard let graph = context.graph else { return [] }
+        var names: Set<String> = []
+        func add(_ person: GedcomFamilyGraph.Person) {
+            let full = PersonResolver.normalize(person.name)
+            guard !full.isEmpty else { return }
+            names.insert(full)
+            for word in person.name.split(separator: " ") {
+                let part = PersonResolver.normalize(String(word))
+                if part.count > 1 { names.insert(part) }
+            }
+        }
+        for root in graph.roots {
+            add(root)
+            for relative in graph.relatives(.parents, of: root) { add(relative) }
+            for relative in graph.relatives(.children, of: root) { add(relative) }
+            for relative in graph.relatives(.siblings, of: root) { add(relative) }
+            for marriage in graph.marriages(of: root) {
+                if let spouse = marriage.spouse { add(spouse) }
+            }
+        }
+        return names
+    }
+
+    /// The oracle the general-answer BOUNDARY uses. Precise rather than
+    /// wide: the inner circle at any length, plus the GEDCOM tree for a
+    /// MULTI-WORD name only. A lone word is never asked of the tree —
+    /// every English sentence opens with a capital letter, and blocking
+    /// "The" or "He" would refuse every general answer.
+    static func isFamilyReferenceName(_ name: String, context: Context) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if isInnerCircleName(trimmed, context: context) { return true }
+        guard trimmed.split(whereSeparator: { $0 == " " }).count > 1,
+              let graph = context.graph else { return false }
+        return !graph.people(matching: trimmed).isEmpty
+    }
+
     /// "ricks" → "rick" when only the singular is a known name. Returns the
     /// payload to execute and, when rewritten, the note for the basis line.
     private static func singularizedGraphPayload(

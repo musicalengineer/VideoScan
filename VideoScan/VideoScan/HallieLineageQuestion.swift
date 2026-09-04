@@ -951,6 +951,17 @@ enum HallieLineageQuestion: Equatable, Sendable {
         "generation", "individual", "human", "guy", "lady", "to", "and", "with", "that", "who", "whom",
         "year", "years", "date", "dated", "death", "died", "life", "lived", "surviving", "known", "name",
         "named", "entry", "record", "records", "recorded", "surname", "tree", "line", "photo", "picture",
+        // Live 2026-09-03: "what is the oldest thing in the family tree"
+        // answered "I don't find anyone named Thing in the family tree."
+        // The kind was right (earliest born) and the scope was wrong: the
+        // noun after "oldest" was read as a surname. These are nouns, not
+        // families. The tree holds only people, so an unscoped ranking is
+        // the correct reading of "the oldest thing in it".
+        "thing", "things", "item", "items", "stuff", "object", "objects",
+        "part", "piece", "bit", "event", "story", "fact", "detail",
+        "details", "artifact", "artefact", "document", "documents",
+        "video", "videos", "clip", "clips", "file", "files", "photos",
+        "pictures", "anything", "something", "everything",
     ]
 
     /// Shape for the trace verbs once the start person is known. A NAMED

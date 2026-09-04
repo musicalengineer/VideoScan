@@ -432,6 +432,7 @@ extension HallieTurnExecutor {
         playAfterAnswer: Bool,
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
+        isInnerCircleName: ((String) -> Bool)? = nil,
         catalogStats: HallieCatalogStats? = nil,
         rosterAnswer: ((PeopleTab.RosterScope) -> Result)? = nil,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)? = nil,
@@ -442,14 +443,16 @@ extension HallieTurnExecutor {
         if let (first, second) = splitTwoQuestions(question),
            case .answer(let a) = preTranslationSingle(
                question: first, playAfterAnswer: playAfterAnswer, memory: memory,
-               isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+               isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+               catalogStats: catalogStats,
                rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                relationshipsOverview: relationshipsOverview,
                researchAnswer: researchAnswer, selectedRecord: selectedRecord),
            a.route != .reset, a.clarification == nil {
             let secondTurn = preTranslationSingle(
                 question: second, playAfterAnswer: playAfterAnswer, memory: memory,
-                isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+                isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+                catalogStats: catalogStats,
                 rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
                 relationshipsOverview: relationshipsOverview,
                 researchAnswer: researchAnswer, selectedRecord: selectedRecord)
@@ -472,7 +475,8 @@ extension HallieTurnExecutor {
         }
         return preTranslationSingle(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
-            isKnownPerson: isKnownPerson, catalogStats: catalogStats,
+            isKnownPerson: isKnownPerson, isInnerCircleName: isInnerCircleName,
+            catalogStats: catalogStats,
             rosterAnswer: rosterAnswer, lineageAnswer: lineageAnswer,
             relationshipsOverview: relationshipsOverview,
             researchAnswer: researchAnswer, selectedRecord: selectedRecord)
@@ -779,6 +783,7 @@ extension HallieTurnExecutor {
         playAfterAnswer: Bool,
         memory: ConversationMemory,
         isKnownPerson: (String) -> Bool,
+        isInnerCircleName: ((String) -> Bool)? = nil,
         catalogStats: HallieCatalogStats?,
         rosterAnswer: ((PeopleTab.RosterScope) -> Result)?,
         lineageAnswer: ((HallieLineageQuestion) -> Result?)?,
@@ -824,6 +829,37 @@ extension HallieTurnExecutor {
                 originalQuestion: question,
                 ast: .record(record),
                 playAfterAnswer: playAfterAnswer))
+        }
+        // An advice / creative / definition request that carries no hard
+        // archive cue skips the FAMILY lanes and goes on to be answered as
+        // general knowledge. Narrow on purpose: it runs after capability,
+        // help/small-talk/reset, the weather aside and the record
+        // recogniser, so it cannot steal any of them, and it claims only a
+        // sentence that already reads as a request for advice.
+        //
+        // Observed 2026-09-03: "Help me think of three questions to ask my
+        // grandmother." was answered by the kinship lane with the names of
+        // Rick's two grandmothers — a family fact nobody asked for, in
+        // place of the advice that was asked for.
+        //
+        // `.translate` is the right result rather than a new PreTranslation
+        // case: both clients already consult the same router before they
+        // call the model, so a question routed here reaches the general
+        // lane without a second, divergent decision.
+        let generalAdvice: Bool
+        if let isInnerCircleName {
+            generalAdvice = HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+                question, isKnownPerson: isKnownPerson,
+                isInnerCircleName: isInnerCircleName).isGeneral
+        } else {
+            // No curated inner circle: the WIDE oracle judges lone words
+            // too, which over-routes to grounded rather than under-routing
+            // to free composition.
+            generalAdvice = HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
+                question, isKnownPerson: isKnownPerson).isGeneral
+        }
+        if generalAdvice {
+            return .translate(question: question, playAfterAnswer: playAfterAnswer)
         }
         if let turn = knowledgeLaneTurn(
             question: question, playAfterAnswer: playAfterAnswer, memory: memory,
