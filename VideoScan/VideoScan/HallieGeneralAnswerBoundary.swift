@@ -140,7 +140,7 @@ enum HallieGeneralAnswerBoundary {
         let numberWord = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)"
         let count = "(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*[km]?|(?:a\\s+)?\(numberWord)(?:[ -]+\(numberWord))*|a\\s+couple|a\\s+few|few|several|many|dozens|hundreds|thousands|lots\\s+of|plenty\\s+of)"
         let nouns = countedMediaNouns.joined(separator: "|")
-        let descriptor = "(?:family|home|old|new|short|long|personal|digital|archived|archive|historic|historical|original|duplicate|silent|favorite|favourite)"
+        let descriptor = "(?:family|home|old|new|short|long|personal|digital|archived|archive|historic|historical|original|duplicate|silent|favorite|favourite|scanned|cataloged|catalogued|labeled|labelled|unlabeled|unlabelled)"
         // Only known media descriptors may bridge the count and noun. This
         // catches "2,064 family videos" without treating "Many people enjoy
         // films" as a count belonging to Rick's archive.
@@ -202,7 +202,7 @@ enum HallieGeneralAnswerBoundary {
         "in your archive", "in the archive", "in the catalog",
         "in your collection", "your videos", "your clips", "your footage",
         "your recordings", "your tapes", "your family tree",
-        "the family tree",
+        "the family tree", "the archive", "the catalog", "the collection",
     ]
 
     static func archivePossessionPhrase(in text: String) -> String? {
@@ -264,7 +264,13 @@ enum HallieGeneralAnswerBoundary {
         let maxSpanWords = 4
         let maxWideOracleQueries = 64
         var wideOracleQueries = 0
-        let runs = capitalizedRuns(text)
+        let words = nameWords(text)
+        let markingVerbIndices = markingVerbWordIndices(in: text)
+        var nameScanWords = words
+        for index in markingVerbIndices {
+            nameScanWords[index] = "label"
+        }
+        let runs = capitalizedRuns(nameScanWords)
         for run in runs {
             // A normal personal name does not contain nine uninterrupted
             // capitalised words. Fail closed before a Title-Case paragraph
@@ -296,25 +302,13 @@ enum HallieGeneralAnswerBoundary {
             if run.precededByKinWord { return run.words.joined(separator: " ") }
         }
 
-        let words = nameWords(text)
         for (index, word) in words.enumerated() {
             // The production oracle handles a lone token only for the
             // curated inner circle. This catches lowercase `donna` without
             // asking the 39k GEDCOM whether `old`, `star`, or `bread` is a
             // surname.
-            // The lowercase name `mark` can be an infinitive verb. Exempt it
-            // only when an object determiner proves that shape; `to donna`,
-            // `to mark.` and `to mark was born` remain name candidates.
-            let objectDeterminers: Set<String> = [
-                "the", "a", "an", "this", "that", "your", "each", "every",
-            ]
-            let isMarkingVerb = word == "mark"
-                && index > 0
-                && words[index - 1].lowercased() == "to"
-                && index + 1 < words.count
-                && objectDeterminers.contains(words[index + 1].lowercased())
             if word.first?.isLowercase == true,
-               !isMarkingVerb,
+               !markingVerbIndices.contains(index),
                isFamilyName(word) {
                 return word
             }
@@ -337,8 +331,7 @@ enum HallieGeneralAnswerBoundary {
         let precededByKinWord: Bool
     }
 
-    private static func capitalizedRuns(_ text: String) -> [Run] {
-        let raw = nameWords(text)
+    private static func capitalizedRuns(_ raw: [String]) -> [Run] {
         var runs: [Run] = []
         var index = 0
         while index < raw.count {
@@ -352,6 +345,51 @@ enum HallieGeneralAnswerBoundary {
             index = end + 1
         }
         return runs
+    }
+
+    /// Locate `mark` only when its immediate grammar is unmistakably the
+    /// labeling verb. The fixed object vocabulary prevents a family name in
+    /// `to Mark the gardener` from being masked.
+    private static func markingVerbWordIndices(in text: String) -> Set<Int> {
+        let determiners: Set<String> = [
+            "the", "a", "an", "this", "that", "your", "each", "every",
+        ]
+        let objects: Set<String> = [
+            "back", "front", "reverse", "photo", "photograph", "picture",
+            "image", "file", "record", "tape", "clip", "video", "item",
+            "entry", "label", "date", "box", "page", "spot", "place",
+            "checkbox", "section", "field",
+        ]
+        let sentenceLeads: Set<String> = [
+            "please", "gently", "kindly", "carefully", "simply",
+        ]
+        var result: Set<Int> = []
+        var globalOffset = 0
+
+        for sentence in sentences(of: text) {
+            let words = nameWords(sentence)
+            for index in words.indices where words[index].lowercased() == "mark" {
+                var objectIndex = index + 1
+                guard objectIndex < words.count else { continue }
+                if determiners.contains(words[objectIndex].lowercased()) {
+                    objectIndex += 1
+                }
+                guard objectIndex < words.count,
+                      objects.contains(words[objectIndex].lowercased())
+                else { continue }
+
+                let followsInfinitive = index > 0
+                    && words[index - 1].lowercased() == "to"
+                let startsImperative = index == 0
+                    || (index == 1
+                        && sentenceLeads.contains(words[0].lowercased()))
+                if followsInfinitive || startsImperative {
+                    result.insert(globalOffset + index)
+                }
+            }
+            globalOffset += words.count
+        }
+        return result
     }
 
     private static func nameWords(_ text: String) -> [String] {
@@ -386,6 +424,9 @@ enum HallieGeneralAnswerBoundary {
         "relative", "ancestor", "nana", "grandchildren", "grandchild",
         "grandson", "grandsons", "granddaughter", "granddaughters",
         "spouse", "spouses", "namesake", "namesakes", "in-laws",
+        "brothers", "sisters", "uncles", "aunts", "mothers", "fathers",
+        "grandmothers", "grandfathers", "grandmas", "grandpas", "husbands",
+        "wives", "folks", "kin", "relations",
     ]
 
     /// Familiar claim words retained for a more useful refusal log. They
@@ -401,6 +442,9 @@ enum HallieGeneralAnswerBoundary {
 
     private static func sentenceViolation(_ sentence: String) -> Violation? {
         let normalized = HallieGeneralKnowledgeLane.normalize(sentence)
+        if let marker = directAddresseeLifeFact(in: normalized) {
+            return .familyAssertion(referent: "you", marker: marker)
+        }
         guard let referent = familyReferent(in: normalized) else { return nil }
 
         // A catalog/tree-range year beside a relative is a date belonging
@@ -425,6 +469,47 @@ enum HallieGeneralAnswerBoundary {
         return .familyAssertion(referent: referent, marker: marker)
     }
 
+    /// In an ungrounded general answer, a sentence beginning with a life
+    /// event about the addressee is a family fact even without `your ...`.
+    /// Anchoring at the start leaves questions and `If you grew up ...`
+    /// conditionals alone.
+    private static func directAddresseeLifeFact(in normalized: String) -> String? {
+        let tokens = HallieGeneralKnowledgeLane.words(normalized)
+        guard tokens.first != "if" else { return nil }
+
+        let allowedPrefixes: [[String]] = [
+            [], ["certainly"], ["surely"], ["probably"], ["likely"],
+            ["perhaps"], ["maybe"], ["i", "imagine"], ["i", "guess"],
+            ["i", "would", "guess"],
+        ]
+        guard let prefix = allowedPrefixes.first(where: { candidate in
+            tokens.starts(with: candidate + ["you"])
+        }) else { return nil }
+
+        var eventIndex = prefix.count + 1
+        let speculation: Set<String> = [
+            "certainly", "surely", "probably", "likely", "perhaps", "maybe",
+        ]
+        if eventIndex < tokens.count, speculation.contains(tokens[eventIndex]) {
+            eventIndex += 1
+        }
+        let events: [([String], String)] = [
+            (["grew", "up"], "you grew up"),
+            (["were", "born"], "you were born"),
+            (["lived", "in"], "you lived in"),
+            (["lived", "on"], "you lived on"),
+            (["worked", "as"], "you worked as"),
+            (["worked", "at"], "you worked at"),
+            (["served", "in"], "you served in"),
+            (["moved", "to"], "you moved to"),
+            (["came", "from"], "you came from"),
+            (["settled", "in"], "you settled in"),
+            (["used", "to"], "you used to"),
+        ]
+        let tail = tokens.dropFirst(eventIndex)
+        return events.first(where: { tail.starts(with: $0.0) })?.1
+    }
+
     /// "your grandmother" / "our family" as literal text, so the violation
     /// can quote what it objected to.
     static func familyReferent(in normalized: String) -> String? {
@@ -446,6 +531,10 @@ enum HallieGeneralAnswerBoundary {
                 next = tokens[nounIndex + 1]
                 if familyNouns.contains(next) { return "\(prefix) great \(next)" }
             }
+            if next == "loved", nounIndex + 1 < tokens.count,
+               tokens[nounIndex + 1] == "ones" {
+                return "\(prefix) loved ones"
+            }
         }
         return nil
     }
@@ -456,7 +545,9 @@ enum HallieGeneralAnswerBoundary {
     ) -> Bool {
         let prefix = String(sentence[..<referentRange.lowerBound])
         let suffix = String(sentence[referentRange.upperBound...])
-        guard !suffix.contains(where: { [",", ":", "—", "–"].contains($0) }),
+        let trimmedSuffix = suffix.trimmingCharacters(in: .whitespaces)
+        guard (!suffix.contains(where: { [",", ":", "—", "–"].contains($0) })
+                || trimmedSuffix == ":"),
               familyReferent(in: suffix) == nil
         else { return false }
         let suffixWords = HallieGeneralKnowledgeLane.words(suffix)
@@ -467,8 +558,22 @@ enum HallieGeneralAnswerBoundary {
         guard suffixWords.first.map(adviceComplements.contains) ?? true else {
             return false
         }
+        let assertiveConnectors: Set<String> = [
+            "because", "since", "as", "and", "but",
+        ]
+        let familyPronouns: Set<String> = ["she", "he", "they", "her", "his", "their"]
+        if suffixWords.indices.dropLast().contains(where: { index in
+            assertiveConnectors.contains(suffixWords[index])
+                && familyPronouns.contains(suffixWords[index + 1])
+        }) {
+            return false
+        }
         var words = HallieGeneralKnowledgeLane.words(prefix)
-        if words.first == "perhaps" || words.first == "maybe" {
+        let adviceLeads: Set<String> = [
+            "perhaps", "maybe", "please", "gently", "kindly", "carefully",
+            "simply",
+        ]
+        if words.first.map(adviceLeads.contains) == true {
             words.removeFirst()
         }
         let adviceActions: Set<String> = [
@@ -488,6 +593,12 @@ enum HallieGeneralAnswerBoundary {
            words[1] == "by" {
             return true
         }
+        if words.count == 7,
+           words[0...3] == ["here", "are", "three", "questions"],
+           words[4] == "you",
+           ["could", "might", "may", "can", "should", "would"].contains(words[5]) {
+            return true
+        }
 
         let modals: Set<String> = ["could", "might", "may", "can", "should", "would"]
         guard words.count >= 3,
@@ -499,7 +610,7 @@ enum HallieGeneralAnswerBoundary {
         var bridge = Array(words.dropFirst(2).dropLast())
         let adviceAdverbs: Set<String> = [
             "gently", "kindly", "carefully", "privately", "directly",
-            "simply", "first", "perhaps", "maybe", "quietly", "very",
+            "simply", "first", "perhaps", "maybe", "quietly", "very", "also",
         ]
         while bridge.first.map(adviceAdverbs.contains) == true {
             bridge.removeFirst()
@@ -507,6 +618,7 @@ enum HallieGeneralAnswerBoundary {
         return bridge.isEmpty
             || bridge == ["consider"]
             || bridge == ["try"]
+            || bridge == ["want", "to"]
             || bridge == ["start", "by"]
             || bridge == ["begin", "by"]
     }
