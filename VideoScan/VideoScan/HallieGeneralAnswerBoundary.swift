@@ -96,20 +96,32 @@ enum HallieGeneralAnswerBoundary {
         in text: String,
         isFamilyName: (String) -> Bool
     ) -> Violation? {
+        let inspected = removingBenignFormatting(from: text)
         // Whole-text checks first: a media count or an archive claim is
         // wrong wherever it appears.
-        if let phrase = mediaCountPhrase(in: text) { return .mediaCount(phrase) }
-        if let phrase = archivePossessionPhrase(in: text) {
+        if let phrase = mediaCountPhrase(in: inspected) { return .mediaCount(phrase) }
+        if let phrase = archivePossessionPhrase(in: inspected) {
             return .archivePossession(phrase)
         }
-        if let name = familyNameMentioned(in: text, isFamilyName: isFamilyName) {
+        if let name = familyNameMentioned(in: inspected, isFamilyName: isFamilyName) {
             return .familyName(name)
         }
         // Sentence-scoped checks: a family referent plus an assertion.
-        for sentence in sentences(of: text) {
+        for sentence in sentences(of: inspected) {
             if let violation = sentenceViolation(sentence) { return violation }
         }
         return nil
+    }
+
+    /// Strip only presentation characters that Markdown may put inside a
+    /// safety-significant word. This is intentionally not a Markdown
+    /// parser: emphasis cannot turn `remember`, `Donna`, or `your father`
+    /// into tokens the boundary cannot see.
+    private static func removingBenignFormatting(from text: String) -> String {
+        text.replacingOccurrences(of: "*", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "~", with: "")
     }
 
     // MARK: - Media counts
@@ -123,27 +135,20 @@ enum HallieGeneralAnswerBoundary {
         "transcript", "transcripts", "caption", "captions",
     ]
 
-    private static let writtenNumbers = [
-        "one", "two", "three", "four", "five", "six", "seven", "eight",
-        "nine", "ten", "eleven", "twelve", "dozens", "hundreds",
-        "thousands", "several", "many", "a few", "lots of", "plenty of",
-    ]
-
     static func mediaCountPhrase(in text: String) -> String? {
-        let tokens = HallieGeneralKnowledgeLane.words(
-            HallieGeneralKnowledgeLane.normalize(text))
-        for (index, token) in tokens.enumerated() where index + 1 < tokens.count {
-            let isCount = token.allSatisfy(\.isNumber) || writtenNumbers.contains(token)
-            guard isCount else { continue }
-            // "23 clips" and "dozens of files" are the same claim.
-            let next = tokens[index + 1]
-            if countedMediaNouns.contains(next) { return "\(token) \(next)" }
-            if next == "of", index + 2 < tokens.count,
-               countedMediaNouns.contains(tokens[index + 2]) {
-                return "\(token) of \(tokens[index + 2])"
-            }
-        }
-        return nil
+        let normalized = HallieGeneralKnowledgeLane.normalize(text)
+        let numberWord = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)"
+        let count = "(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*[km]?|(?:a\\s+)?\(numberWord)(?:[ -]+\(numberWord))*|a\\s+few|few|several|many|dozens|hundreds|thousands|lots\\s+of|plenty\\s+of)"
+        let nouns = countedMediaNouns.joined(separator: "|")
+        let pattern = "\\b\(count)(?:\\s+of)?\\s+(?:\(nouns))\\b"
+        guard let expression = try? NSRegularExpression(
+            pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(
+                in: normalized,
+                range: NSRange(normalized.startIndex..., in: normalized)),
+              let range = Range(match.range, in: normalized)
+        else { return nil }
+        return String(normalized[range])
     }
 
     // MARK: - Speaking for the archive
@@ -152,8 +157,15 @@ enum HallieGeneralAnswerBoundary {
     /// archive holds. In the general lane she has looked at nothing, so
     /// these are wrong wherever they appear.
     static let archivePossessionPhrases = [
-        "the archive holds", "the archive has", "the catalog holds",
-        "the catalog has", "i found", "i looked", "i searched",
+        "the archive holds", "the archive has", "the archive contains",
+        "the archive includes", "the catalog holds", "the catalog has",
+        "the catalog contains", "the catalog includes",
+        "the collection holds", "the collection has",
+        "the collection contains", "the collection includes",
+        "the footage holds", "the footage has", "the footage contains",
+        "the footage includes", "the recordings contain",
+        "the recordings include", "i found", "i discovered", "i located",
+        "i uncovered", "i came across", "i looked", "i searched",
         "i checked the", "the records show",
         "according to the archive", "according to the catalog",
         "based on the archive", "based on the catalog",
@@ -165,6 +177,10 @@ enum HallieGeneralAnswerBoundary {
         "our archive has", "our archive holds", "our archive contains",
         "our catalog has", "our catalog holds", "our catalog contains",
         "our collection has", "our collection holds", "our records show",
+        "your archive has", "your archive holds", "your archive contains",
+        "your archive includes", "your catalog has", "your catalog holds",
+        "your catalog contains", "your collection has",
+        "your collection holds", "your collection contains",
     ]
 
     /// Phrases that merely POINT AT the archive. Wrong when Hallie states
@@ -194,10 +210,7 @@ enum HallieGeneralAnswerBoundary {
             let lowered = HallieGeneralKnowledgeLane.normalize(sentence)
             guard let hit = archiveReferencePhrases.first(where: lowered.contains),
                   let hitRange = lowered.range(of: hit) else { continue }
-            let hitOffset = lowered.distance(from: lowered.startIndex,
-                                             to: hitRange.lowerBound)
-            if let adviceOffset = earliestIndex(of: adviceMarkers, in: lowered),
-               adviceOffset <= hitOffset {
+            if isArchiveAdvice(around: hitRange, in: lowered) {
                 continue
             }
             return hit
@@ -243,25 +256,61 @@ enum HallieGeneralAnswerBoundary {
         in text: String,
         isFamilyName: (String) -> Bool
     ) -> String? {
+        let maxRunWords = 8
+        let maxSpanWords = 4
+        let maxWideOracleQueries = 64
+        var wideOracleQueries = 0
         let runs = capitalizedRuns(text)
         for run in runs {
-            let joined = run.words.joined(separator: " ")
-            if run.words.count > 1 {
-                if isFamilyName(joined) { return joined }
-                if run.words.count > 2 {
-                    let pair = run.words.prefix(2).joined(separator: " ")
-                    if isFamilyName(pair) { return pair }
-                }
-                // Any capitalised pair introduced by a kin word is a
-                // fabricated relative whether or not the tree knows it:
-                // "your grandmother Muriel Lamb".
-                if run.precededByKinWord { return joined }
-                continue
+            // A normal personal name does not contain nine uninterrupted
+            // capitalised words. Fail closed before a Title-Case paragraph
+            // can turn the 39k GEDCOM oracle into quadratic work.
+            if run.words.count > maxRunWords {
+                return run.words.prefix(maxSpanWords).joined(separator: " ")
             }
-            let lone = joined
-            if run.precededByKinWord { return lone }
-            if ordinaryCapitalized.contains(lone.lowercased()) { continue }
-            if isFamilyName(lone) { return lone }
+            // Punctuation and honorifics often attach harmless capitalised
+            // words to a real name: "Sure, Donna" / "Dr. Muriel Lamb".
+            // Ask about bounded contiguous subspans, longest first.
+            let longest = min(run.words.count, maxSpanWords)
+            for length in stride(from: longest, through: 1, by: -1) {
+                for start in 0...(run.words.count - length) {
+                    let candidate = run.words[start..<(start + length)]
+                        .joined(separator: " ")
+                    if length == 1,
+                       ordinaryCapitalized.contains(candidate.lowercased()) {
+                        continue
+                    }
+                    guard wideOracleQueries < maxWideOracleQueries else {
+                        return candidate
+                    }
+                    wideOracleQueries += 1
+                    if isFamilyName(candidate) { return candidate }
+                }
+            }
+            // Any capitalised name-shaped run introduced by a kin word is
+            // a fabricated relative whether or not the tree knows it.
+            if run.precededByKinWord { return run.words.joined(separator: " ") }
+        }
+
+        let words = nameWords(text)
+        for (index, word) in words.enumerated() {
+            // The production oracle handles a lone token only for the
+            // curated inner circle. This catches lowercase `donna` without
+            // asking the 39k GEDCOM whether `old`, `star`, or `bread` is a
+            // surname.
+            if word.first?.isLowercase == true, isFamilyName(word) {
+                return word
+            }
+            // Dictation can lowercase a surname after a correctly-cased
+            // given name ("Muriel lamb"). Keep the wide oracle constrained
+            // to this two-word, proper-name-shaped candidate.
+            if word.first?.isUppercase == true,
+               !ordinaryCapitalized.contains(word.lowercased()),
+               index + 1 < words.count,
+               words[index + 1].first?.isLowercase == true {
+                let candidate = "\(word) \(words[index + 1])"
+                if isFamilyName(candidate) { return candidate }
+            }
         }
         return nil
     }
@@ -272,17 +321,7 @@ enum HallieGeneralAnswerBoundary {
     }
 
     private static func capitalizedRuns(_ text: String) -> [Run] {
-        let raw = text.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "\u{2019}" })
-            .map { word -> String in
-                // "Muriel Lamb's" → "Lamb", so the pair still reads as the
-                // name the tree stores.
-                let lowered = word.lowercased()
-                if lowered.hasSuffix("'s") || lowered.hasSuffix("\u{2019}s") {
-                    return String(word.dropLast(2))
-                }
-                return String(word)
-            }
-            .filter { !$0.isEmpty }
+        let raw = nameWords(text)
         var runs: [Run] = []
         var index = 0
         while index < raw.count {
@@ -298,22 +337,42 @@ enum HallieGeneralAnswerBoundary {
         return runs
     }
 
+    private static func nameWords(_ text: String) -> [String] {
+        text.split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "\u{2019}" })
+            .map { word -> String in
+                // "Muriel Lamb's" → "Lamb", so the pair still reads as the
+                // name the tree stores.
+                let lowered = word.lowercased()
+                if lowered.hasSuffix("'s")
+                    || lowered.hasSuffix("\u{2019}s")
+                    || lowered.hasSuffix("\u{02BC}s") {
+                    return String(word.dropLast(2))
+                }
+                return String(word)
+            }
+            .filter { !$0.isEmpty }
+    }
+
     // MARK: - Family referents and assertions
 
     /// "your grandmother", "his father", "our family" …
-    static let possessives = ["your", "his", "her", "their", "our", "my", "your own"]
+    static let possessives: Set<String> = ["your", "his", "her", "their", "our", "my"]
 
     static let familyNouns: Set<String> = [
         "family", "grandmother", "grandma", "grandfather", "grandpa",
         "grandparents", "grandparent", "mother", "mom", "mum", "father",
         "dad", "parents", "parent", "brother", "sister", "siblings",
-        "uncle", "aunt", "cousin", "cousins", "son", "daughter",
+        "sibling", "uncle", "aunt", "cousin", "cousins", "niece",
+        "nieces", "nephew", "nephews", "son", "sons", "daughter",
+        "daughters",
         "children", "kids", "husband", "wife", "relatives", "ancestors",
-        "ancestor", "nana", "grandchildren", "in-laws",
+        "relative", "ancestor", "nana", "grandchildren", "grandchild",
+        "grandson", "grandsons", "granddaughter", "granddaughters",
+        "spouse", "spouses", "namesake", "namesakes", "in-laws",
     ]
 
-    /// Words that turn a mention of a relative into a CLAIM about them —
-    /// a finished-life verb, a speculation, or a life event.
+    /// Familiar claim words retained for a more useful refusal log. They
+    /// are not the safety gate: any non-advice family referent is blocked.
     static let assertionMarkers = [
         "was born", "were born", "was married", "grew up", "passed away",
         "died", "lived in", "lived on", "worked as", "worked at",
@@ -321,16 +380,6 @@ enum HallieGeneralAnswerBoundary {
         "probably", "likely", "must have", "would have", "may have",
         "might have", "i imagine", "i'd guess", "i would guess",
         "no doubt", "surely", "certainly", "used to",
-    ]
-
-    /// Second-person advice is safe: it instructs the READER, it does not
-    /// assert. "You might ask your grandmother what her childhood was
-    /// like" is exactly the answer Rick asked for.
-    static let adviceMarkers = [
-        "you could", "you might", "you may", "you can", "you should",
-        "you would", "you'd", "try ", "consider ", "ask ", "asking ",
-        "invite ", "inviting ", "encourage ", "encouraging ",
-        "start by", "begin by",
     ]
 
     private static func sentenceViolation(_ sentence: String) -> Violation? {
@@ -347,17 +396,16 @@ enum HallieGeneralAnswerBoundary {
             return .familyDate(referent: referent, year: year)
         }
 
-        // Advice that comes BEFORE the relative is instruction, not
-        // assertion. `ask your grandmother …` / `you might ask your aunt …`
-        if let adviceIndex = earliestIndex(of: adviceMarkers, in: normalized),
-           let referentIndex = normalized.range(of: referent)?.lowerBound,
-           adviceIndex <= normalized.distance(from: normalized.startIndex, to: referentIndex) {
+        // Only an advice verb that structurally governs the family referent
+        // is safe. A stray earlier phrase is not a waiver: "Ask yourself:
+        // your father served …" remains an unsupported family statement.
+        if let referentRange = normalized.range(of: referent),
+           isFamilyAdvice(around: referentRange, in: normalized) {
             return nil
         }
-        if let marker = assertionMarkers.first(where: normalized.contains) {
-            return .familyAssertion(referent: referent, marker: marker)
-        }
-        return nil
+        let marker = assertionMarkers.first(where: normalized.contains)
+            ?? "unsupported family statement"
+        return .familyAssertion(referent: referent, marker: marker)
     }
 
     /// "your grandmother" / "our family" as literal text, so the violation
@@ -366,26 +414,77 @@ enum HallieGeneralAnswerBoundary {
         let tokens = HallieGeneralKnowledgeLane.words(normalized)
         for (index, token) in tokens.enumerated() where possessives.contains(token) {
             guard index + 1 < tokens.count else { continue }
-            var next = tokens[index + 1]
-            if familyNouns.contains(next) { return "\(token) \(next)" }
+            var nounIndex = index + 1
+            var prefix = token
+            if token == "your", tokens[nounIndex] == "own" {
+                prefix = "your own"
+                nounIndex += 1
+                guard nounIndex < tokens.count else { continue }
+            }
+            var next = tokens[nounIndex]
+            if familyNouns.contains(next) { return "\(prefix) \(next)" }
             // "your great-grandmother" survives the word split as two
             // tokens; rejoin one hop.
-            if next == "great", index + 2 < tokens.count {
-                next = tokens[index + 2]
-                if familyNouns.contains(next) { return "\(token) great \(next)" }
+            if next == "great", nounIndex + 1 < tokens.count {
+                next = tokens[nounIndex + 1]
+                if familyNouns.contains(next) { return "\(prefix) great \(next)" }
             }
         }
         return nil
     }
 
-    private static func earliestIndex(of needles: [String], in text: String) -> Int? {
-        var best: Int?
-        for needle in needles {
-            guard let range = text.range(of: needle) else { continue }
-            let offset = text.distance(from: text.startIndex, to: range.lowerBound)
-            best = min(best ?? offset, offset)
+    private static func isFamilyAdvice(
+        around referentRange: Range<String.Index>,
+        in sentence: String
+    ) -> Bool {
+        let prefix = String(sentence[..<referentRange.lowerBound])
+        let suffix = String(sentence[referentRange.upperBound...])
+        guard !suffix.contains(where: { [",", ":", "—", "–"].contains($0) }),
+              familyReferent(in: suffix) == nil
+        else { return false }
+        let suffixWords = HallieGeneralKnowledgeLane.words(suffix)
+        let adviceComplements: Set<String> = [
+            "about", "what", "where", "when", "why", "how", "whether",
+            "if", "to", "for",
+        ]
+        guard suffixWords.first.map(adviceComplements.contains) ?? true else {
+            return false
         }
-        return best
+        let words = HallieGeneralKnowledgeLane.words(prefix)
+        let directAdvice: [[String]] = [
+            ["ask"], ["invite"], ["encourage"],
+            ["consider", "asking"], ["consider", "inviting"],
+            ["consider", "encouraging"], ["try", "asking"],
+            ["try", "inviting"], ["try", "encouraging"],
+            ["start", "by", "asking"], ["begin", "by", "asking"],
+        ]
+        if directAdvice.contains(words) { return true }
+        guard words.count == 3,
+              words[0] == "you",
+              ["could", "might", "may", "can", "should"].contains(words[1]),
+              ["ask", "invite", "encourage"].contains(words[2])
+        else { return false }
+        return true
+    }
+
+    private static func isArchiveAdvice(
+        around referenceRange: Range<String.Index>,
+        in sentence: String
+    ) -> Bool {
+        let prefix = String(sentence[..<referenceRange.lowerBound])
+        let suffix = String(sentence[referenceRange.upperBound...])
+        guard !suffix.contains(where: { [",", ":", "—", "–"].contains($0) })
+        else { return false }
+        let words = HallieGeneralKnowledgeLane.words(prefix)
+        guard words.count >= 3,
+              words[0] == "you",
+              ["could", "might", "may", "can", "should"].contains(words[1])
+        else { return false }
+        let archiveActions: Set<String> = [
+            "look", "search", "browse", "check", "review", "explore",
+            "label", "organize", "preserve", "share", "watch", "listen",
+        ]
+        return archiveActions.contains(words[2])
     }
 
     /// Split on sentence-final punctuation. Worst case is one composed
@@ -393,7 +492,10 @@ enum HallieGeneralAnswerBoundary {
     /// sentences — so this allocates a handful of short strings and never
     /// grows with the catalog.
     static func sentences(of text: String) -> [String] {
-        text.split(whereSeparator: { $0 == "." || $0 == "?" || $0 == "!" })
+        text.split(whereSeparator: {
+            $0 == "." || $0 == "?" || $0 == "!" || $0 == ";"
+                || $0 == "\u{2026}" || $0.isNewline
+        })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }

@@ -406,6 +406,12 @@ struct HallieGeneralAnswerBoundaryTests {
 
     @Test(arguments: [
         "You have 2064 videos, so labelling them will take a while.",
+        "2,064 videos",
+        "2k files",
+        "twenty thousand photos",
+        "a hundred clips",
+        "a few videos",
+        "lots of videos",
         "There are 23 clips of that sort of thing.",
         "I found 5 photographs that match.",
         "Several tapes cover that period.",
@@ -426,6 +432,10 @@ struct HallieGeneralAnswerBoundaryTests {
         "According to the catalog, the earliest one is from a summer trip.",
         "Your family tree already answers that.",
         "Our archive holds three tapes of that trip.",
+        "the collection contains footage",
+        "the footage includes",
+        "The archive contains old home movies.",
+        "I discovered family recordings from several summers.",
     ])
     func speakingForTheArchiveIsBlocked(answer: String) {
         #expect(Self.enforce(answer).text == HallieGeneralAnswerBoundary.replacement,
@@ -441,6 +451,21 @@ struct HallieGeneralAnswerBoundaryTests {
         "Your family moved to the Berkshires in 1974.",
         "Your grandfather must have served in the war.",
         "I imagine your grandmother used to bake on Sundays.",
+        "Your brother enjoys jazz.",
+        "Your father is 97.",
+        "Your grandmother prefers roses.",
+        "Your father was a Marine.",
+        "Your brother lives in Boston.",
+        "Your brother’s birthday is June 21.",
+        "Your own father served in the Marines.",
+        "Your nephew was born in 1998.",
+        "Ask yourself: your father served in the Marines.",
+        "Ask your grandmother: your father served in the Marines.",
+        "You might ask your grandmother about music, but your father served in the Marines.",
+        "Your grandmother probably grew up without television.",
+        "I **remember** your father loved jazz.",
+        "You could begin gently… Your father served in the Marines.",
+        "You could begin gently; Your father served in the Marines.",
     ])
     func aFamilyDateOrSpeculationIsBlocked(answer: String) {
         #expect(Self.enforce(answer).text == HallieGeneralAnswerBoundary.replacement,
@@ -457,6 +482,7 @@ struct HallieGeneralAnswerBoundaryTests {
         "Bittersweet describes a feeling that mixes happiness with sadness.",
         "Why did the scarecrow win an award? Because he was outstanding in his field.",
         "You might ask your grandmother about her favorite holiday tradition.",
+        "You might ask your grandmother what her childhood was like.",
         "Ask your grandmother what she wishes she had known when she was younger.",
         "Try writing names and dates on the back of each photo in soft pencil.",
         "Start by asking open-ended questions about specific memories rather than broad topics.",
@@ -468,6 +494,32 @@ struct HallieGeneralAnswerBoundaryTests {
         let result = Self.enforce(answer)
         #expect(result.text == answer, "wrongly blocked: \(answer)")
         #expect(result.composedByModel)
+    }
+
+    @Test(arguments: [
+        "Sure, Donna was born in 1959.",
+        "Okay. Donna was born in 1959.",
+        "Dr. Muriel Lamb lived in Boston.",
+        "donna was born in 1959.",
+        "Muriel lamb was born in 1918.",
+        "D**onna** moved to Boston.",
+        "Donnaʼs birthday is June 21.",
+    ])
+    func familyNamesWithFormattingAndCaseVariantsAreBlocked(answer: String) {
+        #expect(Self.enforce(answer).text == HallieGeneralAnswerBoundary.replacement,
+                "not blocked: \(answer)")
+    }
+
+    @Test func longCapitalizedReplyFailsClosedWithoutOracleExplosion() {
+        var oracleCalls = 0
+        let violation = HallieGeneralAnswerBoundary.firstViolation(
+            in: "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliett Kilo Lima.",
+            isFamilyName: { _ in
+                oracleCalls += 1
+                return false
+            })
+        #expect(violation != nil)
+        #expect(oracleCalls == 0)
     }
 
     // MARK: The deterministic replies are never re-judged
