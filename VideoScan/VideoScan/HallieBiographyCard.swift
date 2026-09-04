@@ -584,22 +584,31 @@ enum HallieBiographyCard {
         return parts.isEmpty ? nil : parts.joined(separator: " and ")
     }
 
-    /// KNOWN GAP, 2026-09-04 (reported to the Manager, not fixed here):
-    /// this aside still reads the TREE's dates directly, so "who are Tim's
-    /// parents" states Ma's death as 3 March 2023 while "tell me about Ma"
-    /// and "how old is Ma" both state 1 June 2023 (HallieVitalDates).
-    /// Routing it through the same seam is a two-line change at
-    /// ArchivistGraphExecutor+KinshipOverlay.swift:165, but it also makes
-    /// the aside state a profile date where the tree records none, which
-    /// changes four existing FamilyKinshipTests expectations — out of scope
-    /// for the demo-eve fix, and Rick's call.
-    /// ", born 22 February 1929 in Albany, died 1 July 2008" — the vitals
+    /// ", born 21 February 1929 in Boston, died 25 June 2008" — the vitals
     /// as a trailing aside for a relative named inside another sentence
     /// (the kinship overlay's bridged answers). Empty when nothing is
     /// recorded.
-    static func vitalsAside(_ person: GedcomFamilyGraph.Person) -> String {
-        let birth = eventClause("born", date: person.birthDate, place: person.birthPlace)
-        let death = eventClause("died", date: person.deathDate, place: person.deathPlace)
+    ///
+    /// `profileBirthdate`/`profileDeathdate`: as on `vitalsClause` — the
+    /// owning People profile's date, spoken instead of the tree's own
+    /// (HallieVitalDates rule 1, Rick's ruling 2026-09-04). This is the
+    /// THIRD route that states a person's dates, and until 2026-09-04 it
+    /// was the last one still reading the tree directly: "who are Tim's
+    /// parents" said Dad died 22 June 2008 while "tell me about Dad" in the
+    /// same conversation said 25 June 2008. Note that a profile date is
+    /// stated here even when the tree records none for that field — that is
+    /// rule 1, not a special case, and it is why a relative who has a
+    /// People profile now carries dates in sentences that used to carry
+    /// none.
+    static func vitalsAside(
+        _ person: GedcomFamilyGraph.Person,
+        profileBirthdate: Date? = nil,
+        profileDeathdate: Date? = nil
+    ) -> String {
+        let birth = eventClause("born", date: person.birthDate, place: person.birthPlace,
+                                profileDate: profileBirthdate)
+        let death = eventClause("died", date: person.deathDate, place: person.deathPlace,
+                                profileDate: profileDeathdate)
         let parts = [birth, death].compactMap { $0 }
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
     }

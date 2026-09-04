@@ -162,7 +162,21 @@ extension ArchivistGraphExecutor {
                     requiredPersonNames.append(record.name)
                     let alias = PersonResolver.normalize(record.name) == PersonResolver.normalize(hit.member.name)
                         ? "" : " (\(hit.member.name) in the People tab)"
-                    return record.name + alias + HallieBiographyCard.vitalsAside(record) + aside
+                    // The same shared vital-date seam the biography and
+                    // age routes read (HallieVitalDates, 2026-09-04): a
+                    // relative who has a People profile is stated with the
+                    // profile's dates, so "who are Tim's parents" cannot
+                    // contradict "tell me about Dad" about Dad's death in
+                    // the same conversation.
+                    let vitals = HallieVitalDates.resolve(
+                        treePerson: record,
+                        profiles: inputs.profiles.map(HallieVitalProfile.init),
+                        graph: inputs.graph,
+                        throughProfileStableID: hit.member.profileStableID)
+                    return record.name + alias + HallieBiographyCard.vitalsAside(
+                        record,
+                        profileBirthdate: vitals.profileBirthdate,
+                        profileDeathdate: vitals.profileDeathdate) + aside
                 }
                 requiredPersonNames.append(hit.member.name)
                 return hit.member.displayName + aside
