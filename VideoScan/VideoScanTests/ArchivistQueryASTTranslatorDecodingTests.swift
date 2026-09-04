@@ -10,17 +10,22 @@ import Testing
 /// strips benign decoration and normalizes list quirks before it.
 @Suite("Family Archivist translator-output decoding")
 struct ArchivistQueryASTTranslatorDecodingTests {
-    private func decode(_ json: String) throws -> ArchivistQueryAST.TranslatorDecoding {
-        try ArchivistQueryAST.decodeTranslatorOutput(Data(json.utf8))
+    private func decode(
+        _ json: String,
+        originalQuestion: String? = nil
+    ) throws -> ArchivistQueryAST.TranslatorDecoding {
+        try ArchivistQueryAST.decodeTranslatorOutput(
+            Data(json.utf8), originalQuestion: originalQuestion)
     }
 
     private func assertRejected(
         _ json: String,
+        originalQuestion: String? = nil,
         _ comment: Comment? = nil,
         sourceLocation: SourceLocation = #_sourceLocation
     ) {
         #expect(throws: (any Error).self, comment, sourceLocation: sourceLocation) {
-            try decode(json)
+            try decode(json, originalQuestion: originalQuestion)
         }
     }
 
@@ -164,6 +169,76 @@ struct ArchivistQueryASTTranslatorDecodingTests {
         assertRejected(#"["shape","presence"]"#)
         assertRejected(#"not json"#)
         assertRejected(#"{"payload":{"people":["donna"]}}"#)
+    }
+
+    // MARK: Presence/cross "relation" rejoin (live 2026-09-04)
+    //
+    // Homebrew ollama 0.33.2 returns HTTP 501 for a schema-enforced request
+    // (commit 88dceb2a), so the translator retries WITHOUT `format` and the
+    // model is free to invent keys. "show me videos of my mother" came back
+    // as `{"people":["me"],"relation":"mother"}` — the kin word landed
+    // OUTSIDE `people`, where no non-graph payload has ever accepted it, so
+    // the strict decoder failed with "unknown field(s): relation". "my mom"
+    // and "my dad" already worked because there the model keeps the kin
+    // word INSIDE `people`, where SpeakerKinship.rebind already resolves it.
+    // This block reunites the two fields — but ONLY when the caller's own
+    // question backs up the join; the decoder must never assert a family
+    // relationship on the model's say-so alone.
+
+    @Test func presenceRelationIsRejoinedIntoPeopleWhenTheQuestionConfirmsIt() throws {
+        let decoded = try decode(
+            #"{"shape":"presence","payload":{"people":["me"],"mediaKind":"video","relation":"mother"}}"#,
+            originalQuestion: "show me videos of my mother")
+        #expect(decoded.ast == .presence(.init(people: ["my mother"], mediaKind: .video)))
+        #expect(decoded.notes.contains {
+            $0.contains("rejoined payload.relation 'mother' into people 'my mother'")
+        })
+    }
+
+    @Test func presenceRelationRejoinRequiresAnOriginalQuestion() {
+        // No `originalQuestion` at all: the gate cannot fire, and the
+        // payload is malformed exactly as it was before this fix.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["me"],"mediaKind":"video","relation":"mother"}}"#)
+    }
+
+    @Test func presenceRelationRejoinRejectsAThirdPartyPossessive() {
+        // "Tim's mother" — not the speaker's own mother.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["me"],"relation":"mother"}}"#,
+            originalQuestion: "Tim's mother")
+    }
+
+    @Test func presenceRelationRejoinRejectsTheArchivistsPossessive() {
+        // "your mother" — the archivist's relative, not the speaker's.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["me"],"relation":"mother"}}"#,
+            originalQuestion: "your mother")
+    }
+
+    @Test func presenceRelationRejoinRequiresMyAndTheRelationAdjacent() {
+        // Both words appear, but not next to each other — no confirmed phrase.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["me"],"relation":"mother"}}"#,
+            originalQuestion: "my goodness, her mother called")
+    }
+
+    @Test func aNamedPersonBlocksInventingARelationEvenWithTheWordsAdjacent() {
+        // The sensor: the question is about DONNA. If the model also
+        // invents `relation:"mother"`, the decoder must not turn that into
+        // a search for "mother" — that would be a confident wrong-person
+        // answer. `people` already names Donna, so the rejoin's "speaker
+        // pronouns only" gate blocks it regardless of wording.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["Donna"],"mediaKind":"video","relation":"mother"}}"#,
+            originalQuestion: "how many videos of Donna do we have")
+    }
+
+    @Test func presenceRelationRejoinRejectsANonKinWord() {
+        // "neighbour" is not in the SpeakerKinship vocabulary.
+        assertRejected(
+            #"{"shape":"presence","payload":{"people":["me"],"relation":"neighbour"}}"#,
+            originalQuestion: "show me videos of my neighbour")
     }
 
     // MARK: Translator wiring
