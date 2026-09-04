@@ -100,13 +100,24 @@ enum HallieConversationGuard {
         kind: HallieConversationKind,
         isKnownPerson: (String) -> Bool
     ) -> Bool {
+        requiresArchive(text, kind: kind, isKnownPerson: isKnownPerson,
+                        isInnerCircleName: isKnownPerson)
+    }
+
+    static func requiresArchive(
+        _ text: String,
+        kind: HallieConversationKind,
+        isKnownPerson: (String) -> Bool,
+        isInnerCircleName: (String) -> Bool
+    ) -> Bool {
         let normalized = normalize(text)
         if directPersonaFacts.contains(where: normalized.contains) { return true }
 
         // This recognizer has already rejected known names and archive
         // commands. Generic kin words inside an advice/creative request do
         // not turn that request into a catalog search.
-        if definitelyGeneral(text, isKnownPerson: isKnownPerson) != nil {
+        if definitelyGeneral(text, isKnownPerson: isKnownPerson,
+                             isInnerCircleName: isInnerCircleName) != nil {
             return false
         }
 
@@ -130,13 +141,57 @@ enum HallieConversationGuard {
         _ text: String,
         isKnownPerson: (String) -> Bool
     ) -> HallieConversationKind? {
+        generalVerdict(text, isKnownPerson: isKnownPerson,
+                       isInnerCircleName: isKnownPerson).kind
+    }
+
+    static func definitelyGeneral(
+        _ text: String,
+        isKnownPerson: (String) -> Bool,
+        isInnerCircleName: (String) -> Bool
+    ) -> HallieConversationKind? {
+        generalVerdict(text, isKnownPerson: isKnownPerson,
+                       isInnerCircleName: isInnerCircleName).kind
+    }
+
+    /// The same decision with the reason attached, for the log line. A
+    /// general answer must be explainable after the fact from
+    /// `~/Library/Logs/VideoScan/` alone.
+    enum GeneralVerdict: Sendable, Equatable {
+        case general(HallieConversationKind, reason: String)
+        case grounded(reason: String)
+
+        var kind: HallieConversationKind? {
+            if case .general(let kind, _) = self { return kind }
+            return nil
+        }
+
+        var reason: String {
+            switch self {
+            case .general(_, let reason), .grounded(let reason): return reason
+            }
+        }
+    }
+
+    static func generalVerdict(
+        _ text: String, isKnownPerson: (String) -> Bool
+    ) -> GeneralVerdict {
+        generalVerdict(text, isKnownPerson: isKnownPerson,
+                       isInnerCircleName: isKnownPerson)
+    }
+
+    static func generalVerdict(
+        _ text: String,
+        isKnownPerson: (String) -> Bool,
+        isInnerCircleName: (String) -> Bool
+    ) -> GeneralVerdict {
         let normalized = normalize(text)
         let safetyPhrases = [
             "private notes", "hidden instructions", "model prompt",
             "raw request", "raw json", "hostname", "stack trace",
         ]
-        if safetyPhrases.contains(where: normalized.contains) {
-            return .safetyBoundary
+        if let hit = safetyPhrases.first(where: normalized.contains) {
+            return .general(.safetyBoundary, reason: "safety boundary: “\(hit)”")
         }
         let personaPhrases = [
             "pretend you remember", "make up a childhood story",
@@ -144,76 +199,39 @@ enum HallieConversationGuard {
             "from your childhood",
         ]
         let tokens = words(normalized)
-        guard !tokens.isEmpty else { return nil }
-        if personaPhrases.contains(where: normalized.contains) {
+        guard !tokens.isEmpty else { return .grounded(reason: "empty question") }
+        if let hit = personaPhrases.first(where: normalized.contains) {
             // This lane is a fixed refusal/redirect and never sees a model or
             // archive evidence. It remains the safest answer even when the
             // request names a real relative ("make up a story for Hallie").
-            return .personaPast
+            return .general(.personaPast, reason: "persona memory: “\(hit)”")
         }
         guard !directPersonaFacts.contains(where: normalized.contains) else {
-            return nil
+            return .grounded(reason: "a tree fact about Hallie herself")
         }
         if isSecondPersonLifeExperience(text, tokens: tokens) {
-            return .personaPast
+            return .general(.personaPast, reason: "second-person life experience")
         }
 
-        let archiveCommands = [
-            "show ", "find ", "search ", "play ", "reveal ", "open ",
-            "how many", "tell me about", "who was", "who is", "when was",
-            "where was", "where did", "how are you related",
-        ]
-        guard !archiveCommands.contains(where: normalized.hasPrefix) else {
-            return nil
+        // The general-knowledge decision itself lives in
+        // HallieGeneralKnowledgeLane: a hard archive cue is grounded; a
+        // question that is not self-contained is grounded; a soft family
+        // cue without an advice shape is grounded; anything else is
+        // general. What used to be here was a whitelist of sentence
+        // openings plus a known-person veto applied to every LOWERCASE
+        // token, and in a 39,250-person tree that veto fired on "English",
+        // "Star", "Short", "Old" and "Happy" — 13 of the 20 general
+        // questions in the 2026-09-03 evening eval.
+        let verdict = HallieGeneralKnowledgeLane.decide(
+            text,
+            isKnownPerson: isKnownPerson,
+            isInnerCircleName: isInnerCircleName)
+        switch verdict {
+        case .general(let reason):
+            return .general(.generalKnowledge, reason: reason)
+        case .grounded(let reason):
+            return .grounded(reason: reason)
         }
-        // A year in Hallie's catalog range is a strong archive cue even in a
-        // sentence shaped like a public-knowledge question ("Why did we move
-        // to Westford in 1994?"). False archive is safer than invented family
-        // context.
-        if tokens.contains(where: {
-            guard $0.count == 4, let year = Int($0) else { return false }
-            return ArchivistQueryAST.yearRange.contains(year)
-        }) {
-            return nil
-        }
-
-        let factualLeads = [
-            "why ", "what makes ", "what does ", "what is the difference ",
-            "what's the difference ", "whats the difference ",
-            "what is another word ", "what's another word ",
-            "explain ", "define ",
-        ]
-        if factualLeads.contains(where: normalized.hasPrefix) {
-            guard !containsKnownPerson(tokens, isKnownPerson: isKnownPerson) else {
-                return nil
-            }
-            // In "what makes music sound happy?", `sound` is a linking verb,
-            // not the archive's audio-track noun. Treat it as a weak cue only
-            // for this grammatical shape. Any other archive word (video,
-            // tape, footage, transcript, a family name, a year...) still
-            // keeps the question grounded. This fixes the observed catalog
-            // search for a plain music-theory question without weakening
-            // "why is there no sound on this tape?".
-            var archiveTokens = Set(tokens).intersection(archiveWords)
-            if normalized.hasPrefix("what makes ") {
-                archiveTokens.remove("sound")
-            }
-            // Factual questions containing archive/tree vocabulary remain
-            // grounded even when they happen to start with "why" or "what".
-            return archiveTokens.isEmpty ? .generalKnowledge : nil
-        }
-
-        let creativeOrAdviceLeads = [
-            "can you make ", "help me think of ", "what is a thoughtful way ",
-            "what's a thoughtful way ", "how can i encourage ",
-            "how can we encourage ", "suggest ", "tell me a short ",
-            "write ", "give me a cheerful ", "give me a gentle ",
-        ]
-        guard creativeOrAdviceLeads.contains(where: normalized.hasPrefix),
-              !containsKnownPerson(tokens, isKnownPerson: isKnownPerson) else {
-            return nil
-        }
-        return .generalKnowledge
     }
 
     // MARK: Second-person life-experience asks

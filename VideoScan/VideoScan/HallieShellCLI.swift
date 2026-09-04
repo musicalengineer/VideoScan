@@ -984,6 +984,9 @@ enum HallieShellCLI {
                 playAfterAnswer: false,
                 memory: state.memory,
                 isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
+                isInnerCircleName: {
+                    HallieTurnExecutor.isInnerCircleName($0, context: identity)
+                },
                 catalogStats: state.catalogStats,
                 rosterAnswer: { scope in
                     HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity, scope: scope)
@@ -1019,11 +1022,25 @@ enum HallieShellCLI {
                     ? "Hallie is interpreting that question…"
                     : "Hallie is thinking…")
                 let interpretation: TurnInterpretation
-                if let kind = HallieConversationGuard.definitelyGeneral(
+                // DETERMINISTIC ROUTING. The model is never asked whether
+                // it may answer freely; Swift decides, and only then is the
+                // model given either the archive schema or the social lane.
+                let verdict = HallieConversationGuard.generalVerdict(
                     effectiveQuestion,
                     isKnownPerson: {
                         HallieTurnExecutor.isKnownPerson($0, context: identity)
-                    }) {
+                    },
+                    isInnerCircleName: {
+                        HallieTurnExecutor.isInnerCircleName($0, context: identity)
+                    })
+                // A turn whose verb was peeled into a play intent is an
+                // archive request by construction — "play donna at the
+                // cape" arrives here as "donna at the cape", stripped of
+                // the one word that made it a command. It never goes to
+                // the general lane.
+                if let kind = verdict.kind, !wantsPlay {
+                    appLog.write(
+                        "[hallie-general] lane=\(kind.rawValue) reason=\(verdict.reason) — “\(effectiveQuestion.prefix(120))”")
                     interpretation = TurnInterpretation(
                         value: .conversation(kind), responderHost: "local")
                 } else {
@@ -1050,6 +1067,9 @@ enum HallieShellCLI {
                         kind: kind,
                         isKnownPerson: {
                             HallieTurnExecutor.isKnownPerson($0, context: identity)
+                        },
+                        isInnerCircleName: {
+                            HallieTurnExecutor.isInnerCircleName($0, context: identity)
                         }) {
                         let translation = try await dependencies.translateAST(
                             effectiveQuestion, options)
@@ -1065,7 +1085,21 @@ enum HallieShellCLI {
                         let social = await dependencies.composeConversation(
                             kind, routingQuestion, state.socialHistory, options)
                         state.lastResponder = social.responderHost
-                        let result = HallieSocialConversation.result(for: social.value)
+                        // THE BOUNDARY. A general answer may not assert
+                        // anything about Rick's family, his media, or his
+                        // archive; one that does is replaced, not edited.
+                        let bounded = HallieGeneralAnswerBoundary.enforce(
+                            social.value,
+                            kind: kind,
+                            isFamilyName: {
+                                HallieTurnExecutor.isFamilyReferenceName(
+                                    $0, context: identity)
+                            },
+                            log: { appLog.write($0) })
+                        if !bounded.composedByModel, social.value.composedByModel {
+                            state.lastResponder = "local"
+                        }
+                        let result = HallieSocialConversation.result(for: bounded)
                         state.memory.record(intent: nil, result: result)
                         if options.diagnostics { output("interpreted: conversation") }
                         render(result, ast: nil, context: identity, state: &state,

@@ -582,10 +582,19 @@ enum HallieAppTurnCoordinator {
             }
             composeHosts = effectiveHosts
             try Task.checkCancellation()
-            let certainConversation = try await definitelyGeneralOffMain(
+            // DETERMINISTIC ROUTING. Swift decides whether this turn is
+            // general knowledge; the model is only ever handed one of the
+            // two lanes, never the choice between them.
+            let verdict = try await generalVerdictOffMain(
                 question: effectiveQuestion, dependencies: dependencies)
             let interpretation: TurnInterpretation
-            if let kind = certainConversation {
+            // A turn whose verb was peeled into a play intent is an archive
+            // request by construction — "play donna at the cape" arrives
+            // here as "donna at the cape", stripped of the one word that
+            // made it a command. It never goes to the general lane.
+            if let kind = verdict.kind, !wantsPlay {
+                appLog.write(
+                    "[hallie-general] lane=\(kind.rawValue) reason=\(verdict.reason) — “\(effectiveQuestion.prefix(120))”")
                 interpretation = TurnInterpretation(
                     value: .conversation(kind), responderHost: localResponder)
             } else {
@@ -622,10 +631,16 @@ enum HallieAppTurnCoordinator {
                     let social = await dependencies.composeConversation(
                         kind, routingQuestion, history, effectiveHosts, modelName)
                     try Task.checkCancellation()
-                    let result = HallieSocialConversation.result(for: social.value)
+                    // THE BOUNDARY. A general answer may not assert
+                    // anything about Rick's family, his media, or his
+                    // archive; one that does is replaced, not edited.
+                    let bounded = try await enforceGeneralBoundaryOffMain(
+                        social.value, kind: kind, dependencies: dependencies)
+                    let result = HallieSocialConversation.result(for: bounded)
                     return Response(
                         result: result,
-                        responderHost: social.responderHost,
+                        responderHost: bounded.composedByModel
+                            ? social.responderHost : localResponder,
                         biographyPhoto: nil,
                         capturedReferentID: referent.recordID,
                         citations: [],
@@ -729,6 +744,9 @@ enum HallieAppTurnCoordinator {
                 isKnownPerson: { name in
                     HallieTurnExecutor.isKnownPerson(name, context: sources())
                 },
+                isInnerCircleName: { name in
+                    HallieTurnExecutor.isInnerCircleName(name, context: sources())
+                },
                 catalogStats: catalogStats,
                 rosterAnswer: { scope in
                     HallieTurnExecutor.PeopleTab.rosterAnswer(context: sources(), scope: scope)
@@ -762,6 +780,9 @@ enum HallieAppTurnCoordinator {
                 kind: kind,
                 isKnownPerson: {
                     HallieTurnExecutor.isKnownPerson($0, context: context)
+                },
+                isInnerCircleName: {
+                    HallieTurnExecutor.isInnerCircleName($0, context: context)
                 })
         }
         return try await withTaskCancellationHandler {
@@ -771,12 +792,45 @@ enum HallieAppTurnCoordinator {
         }
     }
 
-    private static func definitelyGeneralOffMain(
+    /// The family-claim boundary needs the identity oracles, which read
+    /// files; keep it off the main actor like its two siblings.
+    ///
+    /// `Task.detached` here ≈ handing the work to a different thread and
+    /// awaiting its future — nothing of the UI actor comes along.
+    private static func enforceGeneralBoundaryOffMain(
+        _ reply: HallieSocialConversation.Reply,
+        kind: HallieConversationKind,
+        dependencies: Dependencies
+    ) async throws -> HallieSocialConversation.Reply {
+        guard reply.composedByModel else { return reply }
+        let worker = Task.detached(priority: .userInitiated) {
+            () throws -> HallieSocialConversation.Reply in
+            try Task.checkCancellation()
+            let context = HallieTurnExecutor.Context(
+                profiles: dependencies.loadProfiles(),
+                graph: dependencies.loadGraph(),
+                cyberBrain: dependencies.loadCyberBrain())
+            return HallieGeneralAnswerBoundary.enforce(
+                reply,
+                kind: kind,
+                isFamilyName: {
+                    HallieTurnExecutor.isFamilyReferenceName($0, context: context)
+                },
+                log: { appLog.write($0) })
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    private static func generalVerdictOffMain(
         question: String,
         dependencies: Dependencies
-    ) async throws -> HallieConversationKind? {
+    ) async throws -> HallieConversationGuard.GeneralVerdict {
         let worker = Task.detached(priority: .userInitiated) {
-            () throws -> HallieConversationKind? in
+            () throws -> HallieConversationGuard.GeneralVerdict in
             try Task.checkCancellation()
             var loaded: HallieTurnExecutor.Context?
             func sources() -> HallieTurnExecutor.Context {
@@ -788,10 +842,13 @@ enum HallieAppTurnCoordinator {
                 loaded = context
                 return context
             }
-            return HallieConversationGuard.definitelyGeneral(
+            return HallieConversationGuard.generalVerdict(
                 question,
                 isKnownPerson: {
                     HallieTurnExecutor.isKnownPerson($0, context: sources())
+                },
+                isInnerCircleName: {
+                    HallieTurnExecutor.isInnerCircleName($0, context: sources())
                 })
         }
         return try await withTaskCancellationHandler {
