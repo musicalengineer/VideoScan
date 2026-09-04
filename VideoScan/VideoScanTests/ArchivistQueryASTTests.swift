@@ -175,6 +175,42 @@ struct ArchivistQueryASTTests {
         assertRejected(#"{"shape":"presence","payload":[]}"#)
     }
 
+    /// Homebrew ollama 0.33.2 returns HTTP 501 for structured output
+    /// (commit 88dceb2a); the fallback retry drops `format`, so
+    /// `OllamaQueryTranslator.astTemporalPayload`'s JSON schema goes
+    /// unenforced and the model may omit `reference` entirely. That was a
+    /// live 2026-09-03 repro: "how old is Tim" produced exactly this
+    /// payload and the whole turn was discarded because decoding was
+    /// fatal. Missing `reference` must default to `.currentSelection` —
+    /// the same meaning a present `{"kind":"currentSelection"}` already
+    /// has — while a present-but-malformed `reference` must still fail.
+    @Test func temporalReferenceMayBeOmittedWhenTheModelIsUnconstrained() throws {
+        // The literal production payload from the 2026-09-03 log.
+        let unconstrained = #"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#
+        #expect(try decoder.decode(ArchivistQueryAST.self, from: Data(unconstrained.utf8))
+            == .temporal(.init(subject: "tim", operation: .age,
+                               reference: .currentSelection)))
+
+        // An explicit currentSelection reference still decodes the same way.
+        let explicitCurrent = #"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"currentSelection"}}}"#
+        #expect(try decoder.decode(ArchivistQueryAST.self, from: Data(explicitCurrent.utf8))
+            == .temporal(.init(subject: "tim", operation: .age,
+                               reference: .currentSelection)))
+
+        // An explicit year reference still decodes as before.
+        let explicitYear = #"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"explicitYear","year":1995}}}"#
+        #expect(try decoder.decode(ArchivistQueryAST.self, from: Data(explicitYear.utf8))
+            == .temporal(.init(subject: "tim", operation: .age,
+                               reference: .explicitYear(1995))))
+
+        // A present-but-malformed reference must still be rejected.
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{"kind":"bogus"}}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":{}}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","reference":null}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"tim","operation":"age","sql":"drop"}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"  ","operation":"age"}}"#)
+    }
+
     private func assertRejected(_ json: String) {
         #expect(throws: DecodingError.self) {
             try decoder.decode(ArchivistQueryAST.self, from: Data(json.utf8))
