@@ -138,9 +138,11 @@ enum HallieGeneralAnswerBoundary {
     static func mediaCountPhrase(in text: String) -> String? {
         let normalized = HallieGeneralKnowledgeLane.normalize(text)
         let numberWord = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)"
-        let count = "(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*[km]?|(?:a\\s+)?\(numberWord)(?:[ -]+\(numberWord))*|a\\s+few|few|several|many|dozens|hundreds|thousands|lots\\s+of|plenty\\s+of)"
+        let count = "(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*[km]?|(?:a\\s+)?\(numberWord)(?:[ -]+\(numberWord))*|a\\s+couple|a\\s+few|few|several|many|dozens|hundreds|thousands|lots\\s+of|plenty\\s+of)"
         let nouns = countedMediaNouns.joined(separator: "|")
-        let pattern = "\\b\(count)(?:\\s+of)?\\s+(?:\(nouns))\\b"
+        // Bound the gap so natural qualifiers such as "family" and "old" are
+        // accepted without letting a count match an arbitrarily distant noun.
+        let pattern = "\\b\(count)(?:\\s+of)?(?:\\s+[a-z]+){0,2}\\s+(?:\(nouns))\\b"
         guard let expression = try? NSRegularExpression(
             pattern: pattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(
@@ -298,7 +300,14 @@ enum HallieGeneralAnswerBoundary {
             // curated inner circle. This catches lowercase `donna` without
             // asking the 39k GEDCOM whether `old`, `star`, or `bread` is a
             // surname.
-            if word.first?.isLowercase == true, isFamilyName(word) {
+            // An inner-circle given name can also be an ordinary verb
+            // (notably "mark"). The infinitive shape is unambiguously the
+            // verb; keep the exemption this narrow so "mark was born ..."
+            // still fails closed.
+            let isInfinitiveVerb = index > 0 && words[index - 1].lowercased() == "to"
+            if word.first?.isLowercase == true,
+               !isInfinitiveVerb,
+               isFamilyName(word) {
                 return word
             }
             // Dictation can lowercase a surname after a correctly-cased
@@ -451,20 +460,10 @@ enum HallieGeneralAnswerBoundary {
             return false
         }
         let words = HallieGeneralKnowledgeLane.words(prefix)
-        let directAdvice: [[String]] = [
-            ["ask"], ["invite"], ["encourage"],
-            ["consider", "asking"], ["consider", "inviting"],
-            ["consider", "encouraging"], ["try", "asking"],
-            ["try", "inviting"], ["try", "encouraging"],
-            ["start", "by", "asking"], ["begin", "by", "asking"],
+        let adviceActions: Set<String> = [
+            "ask", "asking", "invite", "inviting", "encourage", "encouraging",
         ]
-        if directAdvice.contains(words) { return true }
-        guard words.count == 3,
-              words[0] == "you",
-              ["could", "might", "may", "can", "should"].contains(words[1]),
-              ["ask", "invite", "encourage"].contains(words[2])
-        else { return false }
-        return true
+        return words.last.map(adviceActions.contains) ?? false
     }
 
     private static func isArchiveAdvice(
