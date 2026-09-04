@@ -190,6 +190,42 @@ struct OllamaStructuredOutputFallbackTests {
         #expect(options["num_ctx"] as? Int == OllamaQueryTranslator.defaultContextTokens)
     }
 
+    /// With the schema gone, nothing enforces its `required` arrays — the
+    /// unconstrained retry's system prompt must say so in prose. The FIRST,
+    /// schema-bearing attempt must NOT carry the sentence: the schema
+    /// already enforces it there, and the constrained-path prompt is not
+    /// meant to change (2026-09-03, part 2 of the repair-hint fix).
+    @Test func unconstrainedRetryToldRequiredKeysAreMandatory() async throws {
+        let bodies = FakeBodies()
+        let memo = OllamaStructuredOutputCapability()
+        var t = OllamaQueryTranslator()
+        t.structuredOutputCapability = memo
+        t.transport = .fake { urlString, body in
+            if urlString.hasSuffix("/api/tags") { return .ok(#"{"models":[]}"#) }
+            await bodies.record(body)
+            return carriesFormatKey(body)
+                ? .status(501, structuredOutputRefusal)
+                : .ok(unconstrainedASTReply)
+        }
+
+        _ = try await t.translateAST("show me Donna in 1994")
+
+        let sent = await bodies.all
+        try #require(sent.count == 2)
+        func systemContent(_ body: Data) throws -> String {
+            let object = try #require(
+                try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let messages = try #require(object["messages"] as? [[String: Any]])
+            return try #require(messages.first?["content"] as? String)
+        }
+        let firstSystem = try systemContent(sent[0])
+        let retrySystem = try systemContent(sent[1])
+        #expect(!firstSystem.contains("complete set of keys"),
+                "the schema-constrained attempt already enforces this; the prompt must be unchanged")
+        #expect(retrySystem.contains("complete set of keys"),
+                "the unconstrained retry has lost the schema's `required` enforcement")
+    }
+
     /// A schema-less reply that the strict decoder refuses is STILL a
     /// failure. The fallback buys another attempt, never a lower bar.
     @Test func fallbackDoesNotLowerTheDecodingBar() async {
