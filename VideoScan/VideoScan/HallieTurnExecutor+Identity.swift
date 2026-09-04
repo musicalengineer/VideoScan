@@ -134,7 +134,8 @@ extension HallieTurnExecutor {
     static func temporalResolution(
         _ requested: String,
         profiles: [ProfileSnapshot],
-        selectedIdentity: CandidateID?
+        selectedIdentity: CandidateID?,
+        graph: GedcomFamilyGraph? = nil
     ) -> ArchivistTemporalSubjectResolution {
         if let selectedIdentity {
             guard case .profileStableID(let rawID) = selectedIdentity else {
@@ -150,12 +151,7 @@ extension HallieTurnExecutor {
             let profile = deterministicProfile(definitions)
             return .resolved(
                 requested: requested,
-                subject: .init(
-                    stableID: profile.stableID,
-                    canonicalName: profile.canonicalName,
-                    birthdate: profile.birthdate,
-                    deathdate: profile.deathdate,
-                    sex: profile.sex))
+                subject: vitalSubject(profile, graph: graph))
         }
 
         let key = PersonResolver.normalize(requested)
@@ -197,12 +193,34 @@ extension HallieTurnExecutor {
         let profile = matches[0]
         return .resolved(
             requested: requested,
-            subject: .init(
-                stableID: profile.stableID,
-                canonicalName: profile.canonicalName,
-                birthdate: profile.birthdate,
-                deathdate: profile.deathdate,
-                    sex: profile.sex))
+            subject: vitalSubject(profile, graph: graph))
+    }
+
+    /// The one seam both routes' vital dates go through (HallieVitalDates,
+    /// 2026-09-04): a bridged profile's birth/death come from the tree
+    /// when the tree has them, the profile's own fields otherwise — see
+    /// HallieVitalDates.swift for the full rule. `ArchivistGraphExecutor`'s
+    /// biography/family-tree case calls `HallieVitalDates.resolve`
+    /// directly for the same reason, as a fallback for a field the tree's
+    /// own raw GEDCOM string lacks.
+    private static func vitalSubject(
+        _ profile: ProfileSnapshot, graph: GedcomFamilyGraph?
+    ) -> ArchivistTemporalSubjectSnapshot {
+        let vitals = HallieVitalDates.resolve(
+            stableID: profile.stableID,
+            canonicalName: profile.canonicalName,
+            treeIdentity: profile.treeIdentity,
+            profileBirthdate: profile.birthdate,
+            profileDeathdate: profile.deathdate,
+            graph: graph)
+        return ArchivistTemporalSubjectSnapshot(
+            stableID: profile.stableID,
+            canonicalName: profile.canonicalName,
+            birthdate: vitals.birthdate?.date,
+            birthdateProvenance: vitals.birthdate?.provenance,
+            deathdate: vitals.deathdate?.date,
+            deathdateProvenance: vitals.deathdate?.provenance,
+            sex: profile.sex)
     }
 
     static func profileCandidates(

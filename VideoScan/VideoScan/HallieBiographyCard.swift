@@ -194,10 +194,18 @@ enum HallieBiographyCard {
     /// `lifeStatus` nil ⇒ decided from the tree record and the family around
     /// it (LifeStatus.of); the executor passes the People-tab verdict when
     /// the subject is a profile, whose recorded death the tree may lack.
+    /// `fallbackBirthdate`/`fallbackDeathdate` (HallieVitalDates, 2026-09-04,
+    /// rule 3): the BRIDGED profile's own date, used ONLY when the tree's
+    /// own raw GEDCOM string for that field is absent — the tree still
+    /// wins whenever it records anything at all, even an imprecise date
+    /// ("about 1900"), which stays exactly as written; this never
+    /// overrides a value the tree HAS.
     static func card(for person: GedcomFamilyGraph.Person,
                      in graph: GedcomFamilyGraph,
                      peopleTab: PeopleTabKin? = nil,
-                     lifeStatus: LifeStatus? = nil) -> Card {
+                     lifeStatus: LifeStatus? = nil,
+                     fallbackBirthdate: Date? = nil,
+                     fallbackDeathdate: Date? = nil) -> Card {
         let summary = ArchivistFamilyTreePolicy.summary(of: person, in: graph)
         let name = person.name
         let pronoun = Pronoun(sex: person.sex)
@@ -252,7 +260,8 @@ enum HallieBiographyCard {
         }
 
         // 1. Vitals with places, as recorded.
-        if let vitals = vitalsClause(person) {
+        if let vitals = vitalsClause(
+            person, fallbackBirthdate: fallbackBirthdate, fallbackDeathdate: fallbackDeathdate) {
             sentences.append(.init(text: "\(leadName) \(vitals).", evidenceIDs: [person.id]))
         }
         // 2. Parents, with grandparents folded in (the family-tree summary
@@ -343,8 +352,11 @@ enum HallieBiographyCard {
     static func answer(for person: GedcomFamilyGraph.Person,
                        in graph: GedcomFamilyGraph,
                        peopleTab: PeopleTabKin? = nil,
-                       lifeStatus: LifeStatus? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
-        let card = card(for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
+                       lifeStatus: LifeStatus? = nil,
+                       fallbackBirthdate: Date? = nil,
+                       fallbackDeathdate: Date? = nil) -> (ArchivistBiographyAnswer, HallieAnswerPlan?, Card) {
+        let card = card(for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus,
+                        fallbackBirthdate: fallbackBirthdate, fallbackDeathdate: fallbackDeathdate)
         guard !card.sentences.isEmpty else {
             return (ArchivistBiographyAnswer(
                 state: .missingFact,
@@ -456,9 +468,19 @@ enum HallieBiographyCard {
     /// 29 November 1717 in Sudbury, Middlesex" — either half may be absent;
     /// a place with no date still stands on its own ("was born in Boston").
     /// Nil when the record has neither a date nor a place for either event.
-    static func vitalsClause(_ person: GedcomFamilyGraph.Person) -> String? {
-        let birth = eventClause("was born", date: person.birthDate, place: person.birthPlace)
-        let death = eventClause("died", date: person.deathDate, place: person.deathPlace)
+    /// `fallbackBirthdate`/`fallbackDeathdate`: a bridged People profile's
+    /// date, spoken ONLY when the tree's own raw string for that field is
+    /// nil (HallieVitalDates rule 3) — the tree's own value, however
+    /// imprecise, is never replaced.
+    static func vitalsClause(
+        _ person: GedcomFamilyGraph.Person,
+        fallbackBirthdate: Date? = nil,
+        fallbackDeathdate: Date? = nil
+    ) -> String? {
+        let birth = eventClause("was born", date: person.birthDate, place: person.birthPlace,
+                                fallback: fallbackBirthdate)
+        let death = eventClause("died", date: person.deathDate, place: person.deathPlace,
+                                fallback: fallbackDeathdate)
         let parts = [birth, death].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " and ")
     }
@@ -474,8 +496,16 @@ enum HallieBiographyCard {
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
     }
 
-    private static func eventClause(_ verb: String, date: String?, place: String?) -> String? {
-        let spoken = spokenDate(date)
+    private static func eventClause(
+        _ verb: String, date: String?, place: String?, fallback: Date? = nil
+    ) -> String? {
+        // The fallback Date is canonicalised to noon UTC
+        // (ArchivistTemporalExecutor.canonicalDay, via HallieVitalDates);
+        // render it back out in the same UTC calendar so the calendar day
+        // it names cannot shift with the reader's local time zone.
+        let spoken = spokenDate(date) ?? fallback.map {
+            HallieDateStyle.spoken($0, calendar: utcCalendar)
+        }
         let trimmedPlace = place?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard spoken != nil || !trimmedPlace.isEmpty else { return nil }
         var text = verb
@@ -595,5 +625,13 @@ enum HallieBiographyCard {
     /// a date the verifier recognises can never drift apart.
     static func spokenDate(_ raw: String?) -> String? {
         HallieDateStyle.spoken(raw)
+    }
+
+    /// The same fixed UTC calendar `ArchivistTemporalExecutor` and
+    /// `HallieVitalDates` canonicalise every fallback `Date` through.
+    private static var utcCalendar: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(secondsFromGMT: 0)!
+        return value
     }
 }

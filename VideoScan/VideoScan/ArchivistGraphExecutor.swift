@@ -1003,8 +1003,24 @@ enum ArchivistGraphExecutor {
             }
             let peopleTab = peopleTabKin(
                 for: person, profileStableID: profileStableID, inputs: inputs)
+            // HallieVitalDates, 2026-09-04: the same shared accessor the
+            // temporal ("how old") route reads, here used only as a
+            // fallback for a vitals field the tree's own raw string
+            // lacks — a bridged person's tree record still wins whenever
+            // it records anything for that field. See HallieVitalDates.swift.
+            let bridgedProfile = profileStableID.flatMap { id in
+                inputs.profiles.first { $0.stableID == id }
+            }
+            let vitals = bridgedProfile.map {
+                HallieVitalDates.resolve(
+                    stableID: $0.stableID, canonicalName: $0.canonicalName,
+                    treeIdentity: $0.treeIdentity, profileBirthdate: $0.birthdate,
+                    profileDeathdate: $0.deathdate, graph: graph)
+            }
             let (answer, plan, card) = HallieBiographyCard.answer(
-                for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus)
+                for: person, in: graph, peopleTab: peopleTab, lifeStatus: lifeStatus,
+                fallbackBirthdate: vitals?.birthdate?.date,
+                fallbackDeathdate: vitals?.deathdate?.date)
             let result = fromPolicy(
                 answer,
                 evidence: biographyEvidence(

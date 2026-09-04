@@ -3,6 +3,23 @@ import VideoScanCore
 
 enum ArchivistTemporalBirthdateProvenance: Sendable, Equatable {
     case poiProfile(profileID: String)
+    /// The bridged family-tree record this date came from instead
+    /// (HallieVitalDates, 2026-09-04): a People profile whose
+    /// `treeIdentity` pin resolves on the installed tree, for a field
+    /// the tree records. The tree wins over the profile's own field when
+    /// both are present; the profile is used only when the tree lacks it.
+    case gedcomTree(personID: String)
+
+    /// "Ma's People profile" / "the family tree" — the noun the basis
+    /// lines use, generalised so a reader can tell which store an age was
+    /// counted from (Rick, 2026-09-04: the two stores must never again
+    /// disagree silently).
+    func basisNoun(canonicalName: String) -> String {
+        switch self {
+        case .poiProfile: return "\(canonicalName)'s People profile"
+        case .gedcomTree: return "the family tree"
+        }
+    }
 }
 
 /// Immutable canonical identity resolved before temporal execution.
@@ -15,6 +32,11 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
     /// present-tense path reads it: "how old is X" for someone who has
     /// passed on is answered as the age at death, never an age today.
     let deathdate: Date?
+    /// Which store `deathdate` came from (HallieVitalDates, 2026-09-04) —
+    /// independent of `birthdateProvenance`: a bridged person's birthdate
+    /// and death date can come from different stores when the tree has
+    /// one field but not the other (rule 3).
+    let deathdateProvenance: ArchivistTemporalBirthdateProvenance
     /// The profile's recorded sex, for the pronoun in "(he passed on in
     /// 1977)". Nil = no pronoun is used. Additive (2026-09-02).
     let sex: PersonSex?
@@ -25,6 +47,7 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
         birthdate: Date?,
         birthdateProvenance: ArchivistTemporalBirthdateProvenance? = nil,
         deathdate: Date? = nil,
+        deathdateProvenance: ArchivistTemporalBirthdateProvenance? = nil,
         sex: PersonSex? = nil
     ) {
         self.stableID = stableID
@@ -33,6 +56,8 @@ struct ArchivistTemporalSubjectSnapshot: Sendable, Equatable {
         self.birthdateProvenance = birthdateProvenance
             ?? .poiProfile(profileID: stableID)
         self.deathdate = deathdate
+        self.deathdateProvenance = deathdateProvenance
+            ?? .poiProfile(profileID: stableID)
         self.sex = sex
     }
 
@@ -310,8 +335,8 @@ enum ArchivistTemporalExecutor {
                     prose: "\(subject.canonicalName) died on \(longDayString(deathDay)). "
                         + "I don't have a birthdate for \(subject.canonicalName), so I "
                         + "can't give an age.",
-                    basisLine: "Basis: \(subject.canonicalName)'s People profile records a "
-                        + "death \(dayString(deathDay)) but no birthdate.",
+                    basisLine: "Basis: \(subject.deathdateProvenance.basisNoun(canonicalName: subject.canonicalName)) "
+                        + "records a death \(dayString(deathDay)) but no birthdate.",
                     evidence: nil)
             }
             return decline(.missingBirthdate, name: subject.canonicalName)
@@ -356,7 +381,8 @@ enum ArchivistTemporalExecutor {
             }
             return ArchivistTemporalResult(
                 value: .ageRange(range), decline: nil, prose: prose,
-                basisLine: "Basis: POI profile birthdate \(dayString(birthdate)); "
+                basisLine: "Basis: \(subject.birthdateProvenance.basisNoun(canonicalName: subject.canonicalName)) "
+                    + "birthdate \(dayString(birthdate)); "
                     + "the question supplied year \(year) without a month/day.",
                 evidence: evidence)
 
@@ -375,7 +401,8 @@ enum ArchivistTemporalExecutor {
                 reference: .currentSelection(selection))
             let birthYear = calendar.component(.year, from: birthdate)
             let referenceYear = calendar.component(.year, from: referenceDate)
-            let basis = "Basis: POI profile birthdate \(dayString(birthdate)); "
+            let basis = "Basis: \(subject.birthdateProvenance.basisNoun(canonicalName: subject.canonicalName)) "
+                + "birthdate \(dayString(birthdate)); "
                 + referenceBasis(selection, date: referenceDate) + "."
 
             // A year-only date ("1994" typed by Rick, or a bare year in the
@@ -518,8 +545,10 @@ enum ArchivistTemporalExecutor {
                 return ArchivistTemporalResult(
                     value: .exactAge(age), decline: nil,
                     prose: "\(name) died on \(longDayString(deathDay)), at \(age).",
-                    basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)), "
-                        + "counted to their recorded death \(dayString(deathDay)); no video selected.",
+                    basisLine: "Basis: from \(subject.birthdateProvenance.basisNoun(canonicalName: name)) "
+                        + "birthdate \(dayString(birthdate)), counted to a recorded death "
+                        + "\(dayString(deathDay)) from \(subject.deathdateProvenance.basisNoun(canonicalName: name)); "
+                        + "no video selected.",
                     evidence: ArchivistTemporalEvidence(
                         subjectID: subject.stableID, canonicalName: name,
                         birthdate: birthdate, birthdateProvenance: subject.birthdateProvenance,
@@ -533,7 +562,8 @@ enum ArchivistTemporalExecutor {
             return ArchivistTemporalResult(
                 value: .exactAge(age), decline: nil,
                 prose: "\(name) is \(age) today — born \(longDayString(birthdate)).",
-                basisLine: "Basis: from \(name)'s People profile birthdate \(dayString(birthdate)), "
+                basisLine: "Basis: from \(subject.birthdateProvenance.basisNoun(canonicalName: name)) "
+                    + "birthdate \(dayString(birthdate)), "
                     + "counted to today (\(dayString(today))); no video selected.",
                 evidence: ArchivistTemporalEvidence(
                     subjectID: subject.stableID, canonicalName: name,
@@ -579,8 +609,8 @@ enum ArchivistTemporalExecutor {
                 value: nil, decline: .missingBirthdate,
                 prose: "\(name) died on \(longDayString(deathDay)). I don't have a birthdate "
                     + "for \(name), so I can't give an age.",
-                basisLine: "Basis: \(name)'s People profile records a death "
-                    + "\(dayString(deathDay)) but no birthdate.",
+                basisLine: "Basis: \(subject.deathdateProvenance.basisNoun(canonicalName: name)) "
+                    + "records a death \(dayString(deathDay)) but no birthdate.",
                 evidence: nil)
         }
         return decline(.missingBirthdate, name: name)
@@ -599,7 +629,10 @@ enum ArchivistTemporalExecutor {
         return value
     }
 
-    private static func canonicalDay(_ date: Date) -> Date? {
+    /// Not `private`: `HallieVitalDates` canonicalises a family-tree date
+    /// through this exact function too, so a tree date and a POI profile
+    /// date compare fairly with `==`/`!=` — one definition of "same day".
+    static func canonicalDay(_ date: Date) -> Date? {
         guard date.timeIntervalSinceReferenceDate.isFinite else { return nil }
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         guard let year = components.year, let month = components.month,
