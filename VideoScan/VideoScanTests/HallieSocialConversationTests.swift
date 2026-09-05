@@ -204,6 +204,15 @@ struct HallieSocialConversationTests {
         "how would you like to be remembered",
         "Hallie, what was your first job?",
         "what chores did you have to do as a kid",
+        // 2026-09-05, moved here from the negative list below. These two
+        // were listed as "the life-experience rule must not reach them",
+        // which was true — but nothing else reached them either, and the
+        // live log that morning shows what they actually returned:
+        // Hallie Mae McGill's 1876 birth and 1908 death records. They are
+        // questions about the ASSISTANT, and HallieSelfReferenceQuestion
+        // (the sibling predicate) now claims them for the same boundary.
+        "Are you a real person or a program?",
+        "did you serve in the military",
     ])
     func secondPersonLifeQuestionsArePersonaNotBiography(text: String) {
         let hallieIsInTheTree: (String) -> Bool = {
@@ -233,9 +242,7 @@ struct HallieSocialConversationTests {
         "can you tell me about Donna's childhood",
         "did you find any videos of my friend",
         "show me videos of you as a kid",
-        "Are you a real person or a program?",
         "what can you do",
-        "did you serve in the military",
         "what was it like during the war",
         "what was life like before cell phones",
         "what was Rick like back then",

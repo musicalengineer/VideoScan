@@ -313,19 +313,46 @@ struct HallieRelationshipTests {
         #expect(result.basisLine.hasPrefix("Basis: 'me' = Rick Breen; "))
     }
 
-    @Test func tellMeAboutYourselfBindsYouToTheArchivistLadder() async throws {
-        // Biography of "yourself" → "Hallie Mae" → the tree spells her
-        // "Hallie May McGill": the name ladder lands on "Hallie", so the
-        // biography route answers about HER, and the basis says how.
+    // AMENDED 2026-09-05. This test used to pin the opposite: a biography
+    // of "yourself" walked the ladder to "Hallie" and answered with the
+    // namesake's record. The live log that morning showed where that
+    // leads — "Are you a real person or a program?" came back as
+    // "Hallie Mae McGill … died 14 January 1908". A biography lookup whose
+    // only subject is a BARE second-person pronoun is a question about the
+    // assistant, so the graph route now returns the personal-memory
+    // boundary instead of a GEDCOM record. (In the live pipeline "tell me
+    // about yourself" never reached the graph route anyway: it is an exact
+    // entry in ArchivistConversationCommand.helpPhrases and is answered by
+    // the help card.) The ladder itself is unchanged and still covered —
+    // by her NAME below, and by the relationship test above.
+    @Test func biographyOfYourselfIsAboutTheArchivistNotHerNamesake() async throws {
         let context = HallieTurnExecutor.Context(
             profiles: [], graph: graph, cyberBrain: nil, speakers: speakers)
         let intent = HallieTurnExecutor.Intent(
             originalQuestion: "tell me about yourself",
             ast: .graph(.init(people: ["yourself"], operation: .biography)))
         let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        #expect(result.route == .conversation, Comment(rawValue: result.prose))
+        #expect(result.prose == HallieSocialConversation.noMemoryReply, Comment(rawValue: result.prose))
+        #expect(!result.prose.contains("Hallie May McGill"), Comment(rawValue: result.prose))
+        #expect(result.basisLine.contains("means me, the archivist"), Comment(rawValue: result.basisLine))
+    }
+
+    /// The ladder the amended test above used to cover: her DISPLAY name
+    /// still walks "Hallie Mae" → "Hallie" → the tree's "Hallie May
+    /// McGill", and still answers with her record. Pronoun means the
+    /// assistant; an explicit name means the ancestor.
+    @Test func herNameStillWalksTheLadderToTheNamesakeBiography() async throws {
+        let context = HallieTurnExecutor.Context(
+            profiles: [], graph: graph, cyberBrain: nil, speakers: speakers)
+        let intent = HallieTurnExecutor.Intent(
+            originalQuestion: "tell me about Hallie Mae",
+            ast: .graph(.init(people: ["Hallie Mae"], operation: .biography)))
+        let result = try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
+        #expect(result.route == .graph, Comment(rawValue: result.prose))
         #expect(result.outcome == .answered, Comment(rawValue: result.prose))
         #expect(result.prose.contains("Hallie May McGill"), Comment(rawValue: result.prose))
-        #expect(result.basisLine.contains("'yourself' = Hallie Mae (as “Hallie” in the family tree)"), Comment(rawValue: result.basisLine))
+        #expect(result.basisLine.contains("(as “Hallie” in the family tree)"), Comment(rawValue: result.basisLine))
     }
 
     // MARK: 5. Clarification for an ambiguous slot keeps the other slot pinned
