@@ -5,14 +5,24 @@ import Foundation
 /// model, no catalog access, no regex.
 ///
 /// Three-tier keyword semantics (see `ArchivistPresenceExecutor.keywordBasis`):
-///   1. whole-phrase substring — "cape cod" inside "CapeCod_June_1997" after
-///      normalization ("cape cod" is not a substring of "capecod_june_1997",
-///      but "cape" is of "cape-1992");
+///   1. word-start-anchored phrase — the phrase must BEGIN at a token
+///      boundary but may continue into more characters: "golf" matches
+///      "golfing" and "golfer"; "cia" does NOT match "special", "social" or
+///      "Garcia";
 ///   2. token-all — every SIGNIFICANT token of the keyword is a token of the
 ///      value ("down the cape" → ["cape"] ⊆ {cape, 1992, archive});
 ///   3. alias — the same token-all test using `ArchivistKeywordAliases`
 ///      ("cape cod" → ["capecod"] for lowercase one-word filenames).
 /// Never OR-over-tokens: "down the cape" must not match "Down the Road".
+///
+/// Tier 1 was a NAKED SUBSTRING TEST until 2026-09-05. It answered "tell us
+/// about ma breen and the cia" with a transcript hit, because a child saying
+/// "my little special rock" contains "cia". Manufacturing evidence for a
+/// premise the questioner supplied is worse than saying nothing, so tier 1
+/// now anchors the start of the phrase at a token boundary — the same
+/// boundary rules `containsToken` already used on both ends. It is
+/// deliberately NOT anchored at the end: "golf" must keep matching
+/// "golfing".
 enum ArchivistKeywordText {
     /// Function words and generic media nouns that carry no place/event
     /// meaning. Dropped from keywords before token matching so a family idiom
@@ -115,12 +125,17 @@ enum ArchivistKeywordText {
         return false
     }
 
-    /// Case-insensitive (ASCII) substring test; the phrase tier.
-    static func containsPhrase(
+    /// Byte offset of the first case-insensitive (ASCII) occurrence of
+    /// `needle` that BEGINS at a token boundary; the phrase tier.
+    ///
+    /// Anchored at the start only. "golf" finds "golfing" at 0; "cia" finds
+    /// nothing in "special" (the candidate at index 3 has a lowercase letter
+    /// before it, so it is not a word start).
+    static func firstPhraseStart(
         _ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>
-    ) -> Bool {
+    ) -> Int? {
         let n = bytes.count, m = needle.count
-        if m == 0 || m > n { return false }
+        if m == 0 || m > n { return nil }
         let first = needle[0]
         var i = 0
         outer: while i <= n - m {
@@ -130,19 +145,27 @@ enum ArchivistKeywordText {
                 if lowerASCII(bytes[i + j]) != needle[j] { i += 1; continue outer }
                 j += 1
             }
-            return true
+            if isBoundary(bytes, i) { return i }
+            i += 1
         }
-        return false
+        return nil
     }
 
-    /// Whole-token test: a case-insensitive occurrence of `needle` with a
-    /// token boundary before and after and none inside ("cape" is a token of
-    /// "CapeCod_1997" and "cape-1992", not of "scape" or "CaPe").
-    static func containsToken(
+    /// Case-insensitive (ASCII) word-start-anchored phrase test.
+    static func containsPhrase(
         _ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>
     ) -> Bool {
+        firstPhraseStart(needle, in: bytes) != nil
+    }
+
+    /// Byte offset of the first whole-token occurrence of `needle`: a token
+    /// boundary before and after and none inside ("cape" is a token of
+    /// "CapeCod_1997" and "cape-1992", not of "scape" or "CaPe").
+    static func firstTokenStart(
+        _ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>
+    ) -> Int? {
         let n = bytes.count, m = needle.count
-        if m == 0 || m > n { return false }
+        if m == 0 || m > n { return nil }
         let first = needle[0]
         var i = 0
         outer: while i <= n - m {
@@ -159,23 +182,117 @@ enum ArchivistKeywordText {
                     if isBoundary(bytes, k) { split = true; break }
                     k += 1
                 }
-                if !split { return true }
+                if !split { return i }
             }
             i += 1
         }
-        return false
+        return nil
     }
 
-    /// Index of the first needle list (lowest index wins) whose every token
-    /// is a token of the value, or nil.
+    /// Whole-token test: see `firstTokenStart`.
+    static func containsToken(
+        _ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>
+    ) -> Bool {
+        firstTokenStart(needle, in: bytes) != nil
+    }
+
+    /// Which needle list matched, and where its FIRST needle was found — the
+    /// span a citation quotes back so a reader can falsify it.
+    struct ListMatch {
+        let listIndex: Int
+        let start: Int
+        let length: Int
+    }
+
+    /// First needle list (lowest index wins) whose every token is a token of
+    /// the value, or nil.
     static func firstList(
         of lists: [[[UInt8]]], fullyContainedIn bytes: UnsafeBufferPointer<UInt8>
-    ) -> Int? {
-        for (index, needles) in lists.enumerated()
-            where needles.allSatisfy({ containsToken($0, in: bytes) }) {
-            return index
+    ) -> ListMatch? {
+        for (index, needles) in lists.enumerated() {
+            guard let firstNeedle = needles.first else { continue }
+            guard let start = firstTokenStart(firstNeedle, in: bytes) else {
+                continue
+            }
+            guard needles.dropFirst().allSatisfy({
+                containsToken($0, in: bytes)
+            }) else { continue }
+            return ListMatch(listIndex: index, start: start,
+                             length: firstNeedle.count)
         }
         return nil
+    }
+
+    // MARK: Citation excerpts
+    //
+    // A basis line is a claim a human is meant to be able to check. Before
+    // 2026-09-05 a transcript hit printed the WHOLE transcript into it (326
+    // basis lines in the September conversation logs were over 400 chars,
+    // the largest 60,331) while a phrase hit printed no text at all. Both
+    // are unfalsifiable in practice. These two helpers give every citation
+    // the same shape: the matched span with a little context.
+
+    /// Characters of context on each side of a quoted match.
+    static let citationSnippetContext = 40
+    /// Values longer than this are quoted as an excerpt, not in full.
+    static let citationValueLimit = 160
+
+    /// The matched span plus `context` bytes either side, whitespace
+    /// collapsed, elided with "..." where it was cut. Built from the same
+    /// folded buffer the match was found in, so the offsets are exact.
+    static func snippet(
+        at start: Int,
+        length: Int,
+        in bytes: UnsafeBufferPointer<UInt8>,
+        context: Int = citationSnippetContext
+    ) -> String {
+        let n = bytes.count
+        guard n > 0, start >= 0, start < n, length >= 0 else { return "" }
+        let matchEnd = min(n, start + length)
+        var lo = max(0, start - context)
+        var hi = min(n, matchEnd + context)
+        // Never split a UTF-8 scalar: back up off continuation bytes at the
+        // low end, run forward past them at the high end.
+        while lo > 0, (bytes[lo] & 0xC0) == 0x80 { lo -= 1 }
+        while hi < n, (bytes[hi] & 0xC0) == 0x80 { hi += 1 }
+        guard lo < hi else { return "" }
+        // `String(decoding:as:)`, not `String(bytes:encoding:)`: the range is
+        // already scalar-aligned, and a repaired excerpt beats an Optional
+        // that would add an unrelated failure path to every citation.
+        let slice = UnsafeBufferPointer(rebasing: bytes[lo..<hi])
+        // swiftlint:disable:next optional_data_string_conversion
+        let text = collapsingWhitespace(String(decoding: slice, as: UTF8.self))
+        if text.isEmpty { return "" }
+        return (lo > 0 ? "..." : "") + text + (hi < n ? "..." : "")
+    }
+
+    /// Runs of whitespace (including newlines) become one space; ends
+    /// trimmed. Transcripts are full of newlines that would wreck a one-line
+    /// basis.
+    static func collapsingWhitespace(_ value: String) -> String {
+        var out = ""
+        out.reserveCapacity(value.count)
+        var pendingSpace = false
+        for character in value {
+            if character.isWhitespace {
+                if !out.isEmpty { pendingSpace = true }
+            } else {
+                if pendingSpace { out.append(" "); pendingSpace = false }
+                out.append(character)
+            }
+        }
+        return out
+    }
+
+    /// What a citation should print for the value it matched in: short
+    /// values (filenames, tags, volume names) verbatim; long ones
+    /// (transcripts, note blobs, OCR dumps) as the matched excerpt.
+    static func citationValue(_ value: String, matchSnippet: String?) -> String {
+        // utf8.count is O(1) on a native String; `count` would walk 21 KB.
+        if value.utf8.count <= citationValueLimit { return value }
+        if let matchSnippet, !matchSnippet.isEmpty { return matchSnippet }
+        return collapsingWhitespace(String(value.prefix(citationValueLimit)))
+            + "..."
     }
 
     private enum ScalarKind { case upper, lower, digit, other }
@@ -303,6 +420,8 @@ enum ArchivistKeywordFieldScan {
         let timestamp: Double?
         /// Which needle list matched (index into the `lists` argument).
         let listIndex: Int
+        /// The matched span with context, for the citation's basis line.
+        let snippet: String
     }
 
     /// First value (citation priority order) whose tokens include every
@@ -315,12 +434,21 @@ enum ArchivistKeywordFieldScan {
         func scan(_ field: String, _ values: [String],
                   timestamps: [Double]? = nil) -> Hit? {
             for (index, value) in values.enumerated() {
-                if let listIndex = ArchivistKeywordText.withFoldedBytes(value, {
-                    ArchivistKeywordText.firstList(of: lists, fullyContainedIn: $0)
-                }) {
+                // The snippet is cut inside the closure because the byte
+                // offsets index the FOLDED buffer, which need not line up
+                // with the original String for non-ASCII values.
+                let found = ArchivistKeywordText.withFoldedBytes(value) { buffer -> (Int, String)? in
+                    guard let match = ArchivistKeywordText.firstList(
+                        of: lists, fullyContainedIn: buffer) else { return nil }
+                    return (match.listIndex,
+                            ArchivistKeywordText.snippet(
+                                at: match.start, length: match.length,
+                                in: buffer))
+                }
+                if let (listIndex, snippet) = found {
                     return Hit(field: field, value: value,
                                timestamp: timestamps?[index],
-                               listIndex: listIndex)
+                               listIndex: listIndex, snippet: snippet)
                 }
             }
             return nil

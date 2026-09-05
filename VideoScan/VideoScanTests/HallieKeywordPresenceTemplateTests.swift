@@ -23,7 +23,7 @@ struct HallieKeywordPresenceTemplateTests {
 
     @Test func transcriptHitSaysWhoSaysWhatAndWhen() {
         let r = result("shape=presence keyword=oldest photo", [
-            citation("Christmas1997-clip2.mov", [.transcriptMention(queryTerm: "oldest photo", model: "whisper")]),
+            citation("Christmas1997-clip2.mov", [.transcriptMention(queryTerm: "oldest photo", snippet: nil, model: "whisper")]),
         ])
         #expect(ArchivistPresenceAnswerComposer.compose(r).prose
                 == "1 video where someone says “oldest photo” — Christmas1997-clip2.mov (1997).")
@@ -32,7 +32,7 @@ struct HallieKeywordPresenceTemplateTests {
         let tokens = result("shape=presence keyword=oldest photo", [
             citation("clip2.mov", [.keywordTokens(field: "transcript", queryTerm: "oldest photo", matchedTokens: ["oldest"], alias: nil, matchedValue: "the oldest one", timestamp: 3),
                                    .pathYear(year: 1997, fullPath: "/vol/1997/clip2.mov")]),
-            citation("clip3.mov", [.transcriptMention(queryTerm: "oldest photo", model: nil)]),
+            citation("clip3.mov", [.transcriptMention(queryTerm: "oldest photo", snippet: nil, model: nil)]),
         ])
         #expect(ArchivistPresenceAnswerComposer.compose(tokens).prose
                 == "2 videos where someone says “oldest photo” — clip2.mov (1997), clip3.mov.")
@@ -63,9 +63,9 @@ struct HallieKeywordPresenceTemplateTests {
     // one kind must not attribute that kind to the unseen remainder.
     @Test func truncatedSingleVisibleKindSaysShownNotAll() {
         let truncated = result("shape=presence keyword=oldest photo", [
-            citation("a.mov", [.transcriptMention(queryTerm: "oldest photo", model: nil),
+            citation("a.mov", [.transcriptMention(queryTerm: "oldest photo", snippet: nil, model: nil),
                                .pathYear(year: 1993, fullPath: "/vol/1993/a.mov")]),
-            citation("b.mov", [.transcriptMention(queryTerm: "oldest photo", model: nil)]),
+            citation("b.mov", [.transcriptMention(queryTerm: "oldest photo", snippet: nil, model: nil)]),
         ], total: 7)
         let prose = ArchivistPresenceAnswerComposer.compose(truncated).prose
         #expect(prose == "7 videos matched: 2 shown where someone says “oldest photo” — a.mov (1993), b.mov; 5 more.")
@@ -73,13 +73,13 @@ struct HallieKeywordPresenceTemplateTests {
         // More than three cited: the first three are named, the rest of the
         // page counted as shown, the unseen remainder apart.
         let wide = result("shape=presence keyword=cape", (1...5).map { i in
-            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", model: nil)])
+            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", snippet: nil, model: nil)])
         }, total: 30)
         #expect(ArchivistPresenceAnswerComposer.compose(wide).prose
                 == "30 videos matched: 5 shown where someone says “cape” — c1.mov, c2.mov, c3.mov, and 2 more shown; 25 more.")
         // cited == total with more than three: unchanged template.
         let full = result("shape=presence keyword=cape", (1...5).map { i in
-            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", model: nil)])
+            citation("c\(i).mov", [.transcriptMention(queryTerm: "cape", snippet: nil, model: nil)])
         })
         #expect(ArchivistPresenceAnswerComposer.compose(full).prose
                 == "5 videos where someone says “cape” — c1.mov, c2.mov, c3.mov, and 2 more.")
@@ -90,7 +90,7 @@ struct HallieKeywordPresenceTemplateTests {
     // one was a transcript hit). Mixed evidence is now counted per kind.
     @Test func mixedEvidenceIsCountedPerKindNotByTheFirstCitation() {
         let mixed = result("shape=presence keyword=cape", [
-            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", snippet: nil, model: nil)]),
             citation("Cape_1994.mov", [.keywordTokens(field: "filename", queryTerm: "cape", matchedTokens: ["cape"], alias: nil, matchedValue: "Cape_1994.mov", timestamp: nil)]),
             citation("Cape_1995.mov", [.catalogField(field: "filename", queryTerm: "cape", matchedValue: "Cape_1995.mov")]),
             citation("cottage.mov", [.caption(queryTerm: "cape", timestamp: 1, text: "cape cod cottage", model: nil)]),
@@ -101,7 +101,7 @@ struct HallieKeywordPresenceTemplateTests {
         // A truncated page: per-kind counts cover what was cited, the
         // remainder is said plainly.
         let truncated = result("shape=presence keyword=cape", [
-            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", snippet: nil, model: nil)]),
             citation("Cape_1994.mov", [.catalogField(field: "filename", queryTerm: "cape", matchedValue: "Cape_1994.mov")]),
         ], total: 7)
         #expect(ArchivistPresenceAnswerComposer.compose(truncated).prose
@@ -109,7 +109,7 @@ struct HallieKeywordPresenceTemplateTests {
         // A cited item with no keyword basis at all is counted apart, never
         // folded into the first kind.
         let odd = result("shape=presence keyword=cape year=1993", [
-            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", model: nil)]),
+            citation("Beach1993.mov", [.transcriptMention(queryTerm: "cape", snippet: nil, model: nil)]),
             citation("x.mov", [.pathYear(year: 1993, fullPath: "/1993/x.mov")]),
         ])
         #expect(ArchivistPresenceAnswerComposer.compose(odd).prose
@@ -117,13 +117,13 @@ struct HallieKeywordPresenceTemplateTests {
         // An item matching several ways counts once, under its strongest kind.
         #expect(ArchivistPresenceAnswerComposer.keywordMatchKind(of: citation("a.mov", [
             .catalogField(field: "filename", queryTerm: "cape", matchedValue: "a"),
-            .transcriptMention(queryTerm: "cape", model: nil)])) == .says("cape"))
+            .transcriptMention(queryTerm: "cape", snippet: nil, model: nil)])) == .says("cape"))
     }
 
     @Test func personAnswersKeepTheirTemplate() {
         let person = result("shape=presence person=Donna keyword=cape", [
             citation("Cape_1993.mov", [.humanPersonTag(queryIdentity: "Donna", taggedName: "Donna", confirmedAt: Date()),
-                                       .transcriptMention(queryTerm: "cape", model: nil)]),
+                                       .transcriptMention(queryTerm: "cape", snippet: nil, model: nil)]),
         ])
         #expect(ArchivistPresenceAnswerComposer.compose(person).prose == "I found 1 catalog item matching that.")
         // No keyword-ish basis at all (a year-only hit) → the old template.

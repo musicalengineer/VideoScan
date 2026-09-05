@@ -12,7 +12,10 @@ enum ArchivistEvidenceBasis: Sendable, Equatable {
     case fileDate(field: String, year: Int, date: Date)
     case pathYear(year: Int, fullPath: String)
     case mediaKind(requested: String, streamType: String)
-    case transcriptMention(queryTerm: String, model: String?)
+    /// `snippet` is the matched span with surrounding context, whitespace
+    /// collapsed. Without it "transcript mentions cia" is unfalsifiable — and
+    /// on 2026-09-05 it was also wrong (the transcript said "special").
+    case transcriptMention(queryTerm: String, snippet: String?, model: String?)
     case caption(queryTerm: String, timestamp: Double, text: String,
                  model: String?)
     /// Token-tier keyword evidence: every significant token of `queryTerm`
@@ -42,8 +45,11 @@ enum ArchivistEvidenceBasis: Sendable, Equatable {
             return "path year \(year)"
         case .mediaKind(let requested, let stream):
             return "media \(requested) (\(stream))"
-        case .transcriptMention(let term, let model):
-            return "transcript mentions \(term) (\(model ?? "model unrecorded"))"
+        case .transcriptMention(let term, let snippet, let model):
+            let quoted = snippet.flatMap { $0.isEmpty ? nil : " — \"\($0)\"" }
+                ?? ""
+            return "transcript mentions \(term)\(quoted) "
+                + "(\(model ?? "model unrecorded"))"
         case .caption(let term, let time, _, let model):
             return "caption mentions \(term) at "
                 + String(format: "%.1fs", time)
@@ -693,7 +699,9 @@ enum ArchivistPresenceExecutor {
             field: hit.field, queryTerm: keyword.original,
             matchedTokens: matched,
             alias: hit.listIndex == 0 ? nil : matched.joined(separator: " "),
-            matchedValue: hit.value, timestamp: hit.timestamp)
+            matchedValue: ArchivistKeywordText.citationValue(
+                hit.value, matchSnippet: hit.snippet),
+            timestamp: hit.timestamp)
     }
 
     private static func phraseKeywordBasis(
@@ -704,17 +712,28 @@ enum ArchivistPresenceExecutor {
         let phrase = keyword.phrase
         guard !phrase.isEmpty else { return nil }
         let phraseBytes = keyword.phraseBytes
-        func contains(_ value: String) -> Bool {
-            ArchivistKeywordText.withFoldedBytes(value) {
-                ArchivistKeywordText.containsPhrase(phraseBytes, in: $0)
+        /// The matched span with context when the phrase occurs at a word
+        /// start, else nil. The snippet is cut inside the closure because
+        /// the offset indexes the folded buffer, not the original String.
+        func matchSnippet(_ value: String) -> String? {
+            ArchivistKeywordText.withFoldedBytes(value) { buffer in
+                ArchivistKeywordText.firstPhraseStart(phraseBytes, in: buffer)
+                    .map {
+                        ArchivistKeywordText.snippet(
+                            at: $0, length: phraseBytes.count, in: buffer)
+                    }
             }
         }
+        func contains(_ value: String) -> Bool { matchSnippet(value) != nil }
         func catalog(_ field: String, _ values: [String]) -> ArchivistEvidenceBasis? {
-            guard let value = values.first(where: { contains($0) }) else {
-                return nil
+            for value in values {
+                guard let snippet = matchSnippet(value) else { continue }
+                return .catalogField(
+                    field: field, queryTerm: queryTerm,
+                    matchedValue: ArchivistKeywordText.citationValue(
+                        value, matchSnippet: snippet))
             }
-            return .catalogField(
-                field: field, queryTerm: queryTerm, matchedValue: value)
+            return nil
         }
 
         // Note: the former camelCase-spaced path variant ("cape cod" vs
@@ -732,9 +751,11 @@ enum ArchivistPresenceExecutor {
                 queryIdentity: queryTerm, taggedName: tag.name,
                 confirmedAt: tag.confirmedAt)
         }
-        if let transcript = record.transcript, contains(transcript) {
+        if let transcript = record.transcript,
+           let snippet = matchSnippet(transcript) {
             return .transcriptMention(
-                queryTerm: queryTerm, model: record.transcriptModel)
+                queryTerm: queryTerm, snippet: snippet,
+                model: record.transcriptModel)
         }
         if let caption = record.captions.first(where: {
             contains($0.text)
@@ -887,7 +908,7 @@ enum ArchivistPresenceAnswerComposer {
         var field: (String, String)?
         for basis in citation.bases {
             switch basis {
-            case .transcriptMention(let term, _):
+            case .transcriptMention(let term, _, _):
                 says = says ?? term
             case .keywordTokens(let f, let term, _, _, _, _):
                 if f.lowercased().contains("transcript") { says = says ?? term }

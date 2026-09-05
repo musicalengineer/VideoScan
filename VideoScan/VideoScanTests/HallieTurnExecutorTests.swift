@@ -86,7 +86,7 @@ struct HallieTurnExecutorTests {
         let bases = try #require(result.citations.first?.bases)
         #expect(bases.count == 2)
         guard case .humanPersonTag(let query, _, _) = bases[0],
-              case .transcriptMention(let term, let model) = bases[1] else {
+              case .transcriptMention(let term, _, let model) = bases[1] else {
             Issue.record("expected person tag + transcript bases, got \(bases)")
             return
         }
