@@ -212,6 +212,17 @@ enum HallieConversationGuard {
         if isSecondPersonLifeExperience(text, tokens: tokens) {
             return .general(.personaPast, reason: "second-person life experience")
         }
+        // The sibling predicate (2026-09-05): the reminiscence rule above
+        // covers a lived PAST; this one covers what she IS, how she FEELS
+        // and who MADE her. Without it "are you a real person or a
+        // program?" reached the translator, "you" bound to the archivist's
+        // name, and the family got Hallie Mae McGill's 1876 birth and 1908
+        // death records. Only `.noPersonalLife` belongs in this lane;
+        // `.introduction` is claimed earlier, before translation, by
+        // HallieTurnExecutor.preTranslation.
+        if HallieSelfReferenceQuestion.detect(text) == .noPersonalLife {
+            return .general(.personaPast, reason: "second-person assistant nature")
+        }
 
         // The general-knowledge decision itself lives in
         // HallieGeneralKnowledgeLane: a hard archive cue is grounded; a

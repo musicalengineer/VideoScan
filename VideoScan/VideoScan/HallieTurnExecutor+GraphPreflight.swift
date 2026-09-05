@@ -89,6 +89,34 @@ extension HallieTurnExecutor {
         if let unbound = binding.unbound.first {
             return unboundPronounResult(unbound, payload: rawPayload)
         }
+        // THE SEAM (2026-09-05). "you" has two competing readings and the
+        // binder cannot tell them apart on its own: in "how am I related to
+        // you?" it means the ancestor Hallie Mae McGill — that question is
+        // printed on Hallie's own help card — but in "do you ever get
+        // tired?" it means the assistant. The discriminator is the
+        // OPERATION, not the word: a `biography` lookup whose only subject
+        // came from a BARE second-person pronoun is a question about
+        // herself, and answering it with a GEDCOM record is how the family
+        // got a death date for "are you a real person or a program?".
+        //
+        // Deliberately narrow. Her NAME still resolves ("who was Hallie
+        // Mae", "tell me about Hallie Mae McGill" — the binding's pronoun
+        // is her name, not a pronoun), and every other operation —
+        // relationship, kinship, birth, death, familyTree — still binds
+        // "you" to the ancestor exactly as before.
+        if rawPayload.operation == .biography,
+           rawPayload.people.count == 1,
+           binding.bindings.count == 1,
+           let only = binding.bindings.first,
+           only.role == .archivist,
+           HallieSelfReferenceQuestion.secondPersonPronouns.contains(
+               only.pronoun.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return HallieSocialConversation.result(for: HallieSocialConversation.Reply(
+                text: HallieSocialConversation.noMemoryReply,
+                composedByModel: false,
+                note: "deterministic personal-memory boundary"))
+                .prefixingBasis("“\(only.pronoun)” means me, the archivist, not my namesake in the family tree")
+        }
         if !binding.bindings.isEmpty {
             var bound = rawPayload
             bound.people = binding.people

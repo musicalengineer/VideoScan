@@ -32,7 +32,11 @@ enum HallieSocialConversation {
     }
     static let maximumHistoryTurns = 3
 
-    private static let noMemoryReply = """
+    /// The personaPast boundary. Not private since 2026-09-05: the graph
+    /// route's self-reference guard returns the SAME words when a bare
+    /// "you" would otherwise have fetched her namesake's biography, so the
+    /// family never hears two different answers to the same confusion.
+    static let noMemoryReply = """
     I don't have personal memories or a childhood of my own. If you mean Hallie Mae in the family tree, I can tell you what the archive records about when she lived, but I shouldn't pretend those memories are mine.
     """
 

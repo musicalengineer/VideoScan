@@ -815,6 +815,17 @@ extension HallieTurnExecutor {
         if let command = ArchivistConversationCommand.detect(question) {
             return .answer(commandResult(command))
         }
+        // "who made you" / "what should I call you" (2026-09-05): a question
+        // about the ASSISTANT, answered by the help card she already gives
+        // for "who are you". The exact-phrase table above owns the fixed
+        // forms; this claims the same question in the shapes a family member
+        // actually types. Nature/state asks ("are you a real person or a
+        // program?") are NOT claimed here — they belong to the existing
+        // personaPast boundary, which HallieConversationGuard routes to.
+        if HallieSelfReferenceQuestion.detect(question) == .introduction {
+            return .answer(commandResult(.help())
+                .prefixingBasis("“you” means me, the archivist, not my namesake in the family tree"))
+        }
         // "who is in New Hampshire.mov" / "does it have my name in it" /
         // "tell me about this video" (2026-09-02): ONE record, answered
         // from its own fields by the record route — never a catalog-wide
