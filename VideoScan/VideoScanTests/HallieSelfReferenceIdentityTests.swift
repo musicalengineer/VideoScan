@@ -179,6 +179,67 @@ struct HallieSelfReferenceIdentityTests {
         #expect(HallieSelfReferenceQuestion.detect(question) == nil, Comment(rawValue: question))
     }
 
+    // MARK: 2c. DETERMINISM — the model is never asked
+
+    /// The bug was intermittent, and this is why it must be: on 2026-09-05
+    /// the ollama build on RicksM4.local answers HTTP 501 to structured
+    /// output ("structured output is unavailable", 1,549 lines in
+    /// videoscan.log), so the turn's SHAPE was decided by unconstrained
+    /// generation. The identical question, twice from a cold `:reset`,
+    /// classified as `graph` once and `conversation` the next time.
+    ///
+    /// So a fix that merely hopes the model says "conversation" is not a
+    /// fix. This pins the property that makes it deterministic: for every
+    /// trigger phrase the pure Swift verdict is non-nil, and both clients
+    /// (HallieAppTurnCoordinator ~line 597, HallieShellCLI ~line 1044) read
+    /// `if let kind = verdict.kind` and build the interpretation
+    /// THEMSELVES — `interpretTurn` is never called. The composer then
+    /// short-circuits before its own model call.
+    @Test(arguments: natureQuestions)
+    func theShapeDecisionNeverReachesTheModel(question: String) async {
+        // 1. Swift decides the lane, with no I/O.
+        let verdict = HallieConversationGuard.generalVerdict(
+            question, isKnownPerson: { _ in false })
+        #expect(verdict.kind != nil, Comment(rawValue: "\(question) would fall through to the model"))
+        #expect(verdict.kind == .personaPast, Comment(rawValue: "\(question) — \(verdict.reason)"))
+
+        // 2. The composer for that lane returns before any model call.
+        let reply = await HallieSocialConversation.reply(
+            kind: .personaPast, question: question,
+            modelCall: { _, _ in
+                Issue.record(Comment(rawValue: "“\(question)” reached the model"))
+                return "Hallie Mae McGill was born March 1876 and died 14 January 1908."
+            })
+        #expect(reply.composedByModel == false, Comment(rawValue: question))
+        #expect(reply.text == HallieSocialConversation.noMemoryReply, Comment(rawValue: question))
+
+        // 3. Pure means repeatable: same answer every time, unlike the
+        //    unconstrained generation this replaces.
+        for _ in 0..<25 {
+            #expect(HallieSelfReferenceQuestion.detect(question) == .noPersonalLife,
+                    Comment(rawValue: question))
+            #expect(HallieConversationGuard.generalVerdict(
+                question, isKnownPerson: { _ in false }).kind == .personaPast,
+                    Comment(rawValue: question))
+        }
+    }
+
+    /// The same property for the introduction lane, which is settled even
+    /// earlier — before translation, so neither `interpretTurn` nor
+    /// `translateAST` is reached.
+    @Test(arguments: originQuestions)
+    func theIntroductionLaneIsSettledBeforeTranslation(question: String) {
+        for _ in 0..<25 {
+            guard case .answer(let result) = HallieTurnExecutor.preTranslation(
+                question: question, playAfterAnswer: false, memory: .init(),
+                isKnownPerson: { _ in false }) else {
+                Issue.record(Comment(rawValue: "“\(question)” escaped to the model"))
+                return
+            }
+            #expect(result.route == .help, Comment(rawValue: question))
+        }
+    }
+
     // MARK: 3. Isolation — a cold conversation and a warm one
 
     /// All three live failures happened immediately after `:reset`, so the
@@ -362,5 +423,109 @@ struct HallieSelfReferenceGraphSeamTests {
             context: context)
         #expect(result.route == .graph, Comment(rawValue: result.prose))
         #expect(result.basisLine.contains("'you' = Hallie Mae"))
+    }
+}
+
+
+/// The structural proof for the intermittency. The 2026-09-05 ollama build
+/// answers HTTP 501 to structured output, so whenever the SHAPE decision
+/// reaches the model it is made by unconstrained generation and the same
+/// question can classify as `graph` one turn and `conversation` the next.
+/// These drive the real coordinator with dependencies that fail the test if
+/// the model classifier, the AST translator, or the executor is reached at
+/// all — so the answer cannot depend on what any model decided.
+@MainActor
+@Suite("Hallie self-reference — no model in the loop", .serialized)
+struct HallieSelfReferenceNoModelTests {
+
+    private func trippedDependencies() -> HallieAppTurnCoordinator.Dependencies {
+        HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { hosts in hosts },
+            translateAST: { question, _, _ in
+                Issue.record(Comment(rawValue: "translateAST reached for “\(question)”"))
+                return .init(ast: .graph(.init(people: ["Hallie Mae"], operation: .biography)),
+                             responderHost: "should-not-happen")
+            },
+            interpretTurn: { question, _, _ in
+                Issue.record(Comment(rawValue: "interpretTurn reached for “\(question)”"))
+                return .init(value: .archive(.graph(.init(
+                    people: ["Hallie Mae"], operation: .biography))),
+                    responderHost: "should-not-happen")
+            },
+            loadProfiles: { [] },
+            loadGraph: { nil },
+            executeRequest: { request, _ in
+                Issue.record(Comment(rawValue: "executeRequest reached with \(request.intent.ast)"))
+                return HallieTurnExecutor.Result(
+                    route: .graph, outcome: .answered,
+                    prose: "Hallie Mae McGill was born March 1876 and died 14 January 1908.",
+                    basisLine: "should not happen", queryDescription: nil,
+                    citations: [], catalogPersonName: nil)
+            },
+            continueTurn: { _, _, _ in
+                Issue.record("continueTurn reached")
+                throw CancellationError()
+            },
+            resolveBiographyPhoto: { _ in nil })
+    }
+
+    @Test(arguments: HallieSelfReferenceIdentityTests.natureQuestions
+          + HallieSelfReferenceIdentityTests.originQuestions)
+    func noSelfReferenceTurnConsultsAModel(question: String) async throws {
+        let response = try await HallieAppTurnCoordinator.execute(
+            question: question,
+            records: [],
+            referent: .init(recordID: nil, temporalDate: nil),
+            hosts: ["should-not-be-used.invalid"],
+            modelName: "should-not-be-used",
+            dependencies: trippedDependencies())
+        // Whatever lane claimed it, the answer carries no GEDCOM record.
+        #expect(response.result.route != .graph, Comment(rawValue: question))
+        #expect(response.result.citations.isEmpty, Comment(rawValue: question))
+        #expect(!response.result.prose.contains("1908"), Comment(rawValue: response.result.prose))
+        #expect(!response.result.prose.contains("1876"), Comment(rawValue: response.result.prose))
+        // (The help card legitimately mentions McGill as a PRONUNCIATION
+        // example — "pronounce McGill like MahGill" — so the test looks for
+        // the biography sentence and the vital dates, not the surname.)
+        #expect(!response.result.prose.contains("McGill was born"),
+                Comment(rawValue: response.result.prose))
+        #expect(!response.result.prose.lowercased().contains(" died "),
+                Comment(rawValue: response.result.prose))
+        #expect(response.result.route == .help || response.result.route == .conversation,
+                Comment(rawValue: "\(question) → \(response.result.route)"))
+    }
+
+    /// The contrast, on the same tripwires: a question that genuinely NEEDS
+    /// the tree still goes to the model. If this ever stops reaching
+    /// `interpretTurn`, the guard above has grown too wide.
+    @Test(arguments: ["who was Hallie Mae", "tell me about Hallie Mae McGill"])
+    func namingHerNamesakeStillGoesToTheArchiveLane(question: String) async throws {
+        var reached = false
+        let dependencies = HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { hosts in hosts },
+            translateAST: { _, _, _ in
+                .init(ast: .graph(.init(people: ["Hallie Mae"], operation: .biography)),
+                      responderHost: "fixture-host")
+            },
+            loadProfiles: { [] },
+            loadGraph: { nil },
+            executeRequest: { request, _ in
+                reached = true
+                #expect(request.intent.ast == .graph(.init(
+                    people: ["Hallie Mae"], operation: .biography)))
+                return HallieTurnExecutor.Result(
+                    route: .graph, outcome: .answered,
+                    prose: "Hallie Mae McGill was born March 1876.",
+                    basisLine: "fixture", queryDescription: nil,
+                    citations: [], catalogPersonName: "Hallie Mae McGill")
+            },
+            continueTurn: { _, _, _ in throw CancellationError() },
+            resolveBiographyPhoto: { _ in nil })
+        _ = try await HallieAppTurnCoordinator.execute(
+            question: question, records: [],
+            referent: .init(recordID: nil, temporalDate: nil),
+            hosts: ["fixture.invalid"], modelName: "fixture-model",
+            dependencies: dependencies)
+        #expect(reached, Comment(rawValue: "“\(question)” never reached the archive lane"))
     }
 }
