@@ -156,7 +156,7 @@ struct ArchivistPresenceExecutorTests {
             transcript: "Then everybody shouted surprise together")
         let result = await execute(.init(keywords: ["surprise"]), records: [value])
         let basis = try #require(result.evidence.citations.first?.bases.first)
-        guard case .transcriptMention(let term, let model) = basis else {
+        guard case .transcriptMention(let term, _, let model) = basis else {
             Issue.record("expected exact transcript provenance")
             return
         }

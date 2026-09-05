@@ -161,7 +161,10 @@ enum ArchivistRecordExecutor {
                 sentences.append(contentsOf: verdictSentences(verdicts, file: file, snapshot: snapshot))
                 for verdict in verdicts where verdict.tier == .mentioned {
                     bases.append(.transcriptMention(
-                        queryTerm: verdict.name, model: snapshot.presence.transcriptModel))
+                        queryTerm: verdict.name,
+                        snippet: transcriptSnippet(
+                            of: verdict.name, in: snapshot.transcript),
+                        model: snapshot.presence.transcriptModel))
                 }
                 if verdicts.count == 1, verdicts[0].tier != .unbound {
                     subject = verdicts[0].name
@@ -251,6 +254,23 @@ enum ArchivistRecordExecutor {
             return displayName(String(name.split(separator: " ").first ?? Substring(name)))
         }
         return nil
+    }
+
+    /// The spoken span, quoted back with context, so "transcript mentions
+    /// Rick" can be checked rather than believed. Nil when the spelling has
+    /// no token in the transcript.
+    static func transcriptSnippet(
+        of spelling: String, in transcript: String?
+    ) -> String? {
+        guard let transcript, !transcript.isEmpty,
+              let token = identityTokens(spelling).first else { return nil }
+        let needle = Array(token.utf8)
+        return ArchivistKeywordText.withFoldedBytes(transcript) { buffer in
+            ArchivistKeywordText.firstTokenStart(needle, in: buffer).map {
+                ArchivistKeywordText.snippet(
+                    at: $0, length: needle.count, in: buffer)
+            }
+        }
     }
 
     private static func identityTokens(_ value: String) -> [String] {

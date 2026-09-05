@@ -101,7 +101,7 @@ struct ArchivistRecordExecutorTests {
         #expect(prose.contains("Rick isn't tagged, but someone says the name “Rick” in the transcript."), Comment(rawValue: prose))
         #expect(prose.contains("Nothing for Bob — not tagged, not detected, and the name isn't in the transcript."), Comment(rawValue: prose))
         #expect(result.citations[0].bases.contains {
-            if case .transcriptMention(let term, let model) = $0 { return term == "Rick" && model == "fixture-whisper" }
+            if case .transcriptMention(let term, _, let model) = $0 { return term == "Rick" && model == "fixture-whisper" }
             return false
         })
         #expect(result.catalogPersonName == nil)
