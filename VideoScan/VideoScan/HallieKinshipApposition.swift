@@ -385,7 +385,8 @@ extension HallieLineageAnswer {
         return treeAppositionAnswer(q, found: found, record: record, tokens: tokens,
                                     setNames: candidates.map(\.displayName), plural: plural,
                                     ownerLabel: ownerLabel, subject: subject, graph: graph,
-                                    basis: basis, description: description)
+                                    basis: basis, description: description,
+                                    lens: HallieVitalDates.Lens.forTurn(context))
     }
 
     // MARK: The two stores, each in its own step
@@ -528,16 +529,35 @@ extension HallieLineageAnswer {
         found: AppositionCandidate, record: GedcomFamilyGraph.Person, tokens: [String],
         setNames: [String], plural: String, ownerLabel: String,
         subject: GedcomFamilyGraph.Person, graph: GedcomFamilyGraph,
-        basis: String, description: String
+        basis: String, description: String,
+        lens: HallieVitalDates.Lens
     ) -> Result {
-        let years = HalliePersonCard.yearsText(record).map { " (\($0))" } ?? ""
-        let tense = record.deathDate != nil ? "was" : "is"
+        // codex #1114-1, closed 2026-09-06. This route read the tree's own
+        // dates while every other route had migrated to the vital-dates
+        // seam, so a person Rick had corrected in the People tab kept their
+        // tree years HERE — and the answer beside it, from a migrated route,
+        // said something different about the same person. It needed the
+        // turn's lens, which meant a signature change: `treeAppositionAnswer`
+        // never received the context.
+        let years = lens.yearsText(record).map { " (\($0))" } ?? ""
+        // Tense follows the seam too. A death the People tab records and the
+        // tree does not made Hallie say "is" about someone who has died.
+        let tense = lens.deathYear(record) != nil ? "was" : "is"
         var displayName = record.name
         if let married = graph.marriedSurname(of: record, satisfying: tokens) {
             displayName += " (\(married))"
         }
         let whoIs = "\(displayName)\(years) \(tense) \(HallieLineageQuestion.possessive(ownerLabel)) \(found.label)."
-        let bio = ArchivistBiographyPolicy.biography(personID: record.id, in: graph).text
+        // The biography sentence still comes from the tree: `biography` has
+        // no date-override seam (only `lifeDate`/`lifePlace` do), and adding
+        // one is a Core change with its own blast radius. What is fixed here
+        // is the CONTRADICTION — when the seam and the tree disagree about
+        // this person's years, the tree-dated prose is dropped rather than
+        // printed next to corrected years saying something else. Losing a
+        // sentence is a smaller harm than an answer that argues with itself.
+        let policyBio = ArchivistBiographyPolicy.biography(personID: record.id, in: graph).text
+        let treeYears = HalliePersonCard.yearsText(record)
+        let bio = (treeYears == lens.yearsText(record)) ? policyBio : ""
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
         var attachments: [HallieAttachment] = []
         if let url = assets.photoURLs(for: record).first {
