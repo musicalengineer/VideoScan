@@ -29,10 +29,21 @@
 // actually knew. The usual genealogical instinct — prefer the curated
 // tree — is backwards here.
 //
-//   Ma  (Eileen Latta)        TRUE  born 31 Aug 1933, died 1 June 2023 (89)
-//                             tree  born 31 Aug 1930, died 3 March 2023 (92)
-//   Dad (Richard H Breen Sr)  TRUE  died 25 June 2008
-//                             tree  died 22 June 2008
+// The values as they stood when the ruling was made, 2026-09-04:
+//
+//   Ma  (Eileen Latta)        profile  born 31 Aug 1933, died 1 June 2023
+//                             tree     born 31 Aug 1930, died 3 March 2023
+//   Dad (Richard H Breen Sr)  profile  died 25 June 2008
+//                             tree     died 22 June 2008
+//
+// SUPERSEDED AS DATA, 2026-09-06. Rick re-checked his parents' dates
+// against his brothers and sisters and their obituaries and corrected the
+// People tab: Ma born 31 Aug 1930, died 3 March 2023; Dad born 21 Feb 1929,
+// died 25 June 2008. Ma's profile therefore now AGREES with the tree, and
+// she is no longer a case where the two stores differ — do not write a
+// regression test that relies on her disagreeing, because it would pass for
+// the wrong reason. The RULE below is unaffected: it decides which store
+// wins, not what either store says.
 //
 // THE RULE (per field, birth and death independently):
 //   1. The People profile holds a date for the field → that date wins,
@@ -430,6 +441,101 @@ enum HallieVitalDates {
         var value = Calendar(identifier: .gregorian)
         value.timeZone = TimeZone(secondsFromGMT: 0)!
         return value
+    }
+
+    // MARK: - The lineage, birth-place and trail routes
+
+    /// Prepared ONCE per turn, then asked about many people.
+    ///
+    /// The three routes converted on 2026-09-06 render a whole LINE of
+    /// ancestors rather than one subject, so they cannot use the
+    /// single-subject `resolve` overloads: rebuilding `PinOwnership` per
+    /// ancestor would redo the same O(profiles) pass every generation, and
+    /// the seam's own contract is "build ownership once per turn and pass it
+    /// to both routes".
+    ///
+    /// C++ analogy: a small const view constructed at the top of a render
+    /// pass and handed by reference to the leaf formatters.
+    struct Lens: Sendable {
+        let profiles: [HallieVitalProfile]
+        let ownership: PinOwnership
+        let graph: GedcomFamilyGraph?
+
+        /// No profiles were read, so every date is the tree's own.
+        ///
+        /// `HallieTurnExecutor.Context.profiles == nil` means profile
+        /// evidence could not be READ. That must leave the tree standing
+        /// exactly as it does today — a failed read is not evidence that the
+        /// tree is right, and it must not silently become one.
+        static let treeOnly = Lens(profiles: [], ownership: .none, graph: nil)
+
+        /// The lens for THIS turn. One place builds it, so a route cannot
+        /// accidentally construct a different view of the same profiles.
+        static func forTurn(_ context: HallieTurnExecutor.Context) -> Lens {
+            make(profiles: context.profiles?.map(HallieVitalProfile.init),
+                 graph: context.graph)
+        }
+
+        static func make(
+            profiles: [HallieVitalProfile]?,
+            graph: GedcomFamilyGraph?
+        ) -> Lens {
+            guard let profiles, !profiles.isEmpty, let graph else {
+                return treeOnly
+            }
+            return Lens(
+                profiles: profiles,
+                ownership: HallieVitalDates.pinOwnership(profiles: profiles, graph: graph),
+                graph: graph)
+        }
+
+        /// This ancestor's dates.
+        ///
+        /// `throughProfileStableID` is nil deliberately. An ancestor in a
+        /// line is NOT the subject the question came through, so only a tree
+        /// pin may bind them to a profile. Passing the subject's profile here
+        /// would hand every ancestor in the line the subject's own dates.
+        func resolved(_ person: GedcomFamilyGraph.Person) -> Resolved {
+            guard !profiles.isEmpty else { return .none }
+            return HallieVitalDates.resolve(
+                treePerson: person, profiles: profiles, graph: graph,
+                throughProfileStableID: nil, ownership: ownership)
+        }
+
+        /// The birth year to speak: the People tab's when it holds one, else
+        /// the tree's own recorded year.
+        ///
+        /// The fallback is `person.birthYear`, which is parsed from the
+        /// tree's raw GEDCOM STRING. That is what keeps an imprecise tree
+        /// date imprecise: "ABT 1900" yields 1900 and never a fabricated
+        /// day. Nothing here ever invents precision a store does not hold.
+        func birthYear(_ person: GedcomFamilyGraph.Person) -> Int? {
+            year(resolved(person).profileBirthdate) ?? person.birthYear
+        }
+
+        func deathYear(_ person: GedcomFamilyGraph.Person) -> Int? {
+            year(resolved(person).profileDeathdate) ?? person.deathYear
+        }
+
+        /// The same shapes `HalliePersonCard.yearsText` produces —
+        /// "1930–2023", "b. 1930", "d. 2023" — with any field the People tab
+        /// holds spoken from the People tab.
+        func yearsText(_ person: GedcomFamilyGraph.Person) -> String? {
+            let birth = birthYear(person).map(String.init)
+            let death = deathYear(person).map(String.init)
+            switch (birth, death) {
+            case let (b?, d?): return "\(b)–\(d)"
+            case let (b?, nil): return "b. \(b)"
+            case let (nil, d?): return "d. \(d)"
+            default: return nil
+            }
+        }
+
+        private func year(_ date: Date?) -> Int? {
+            date.map {
+                HallieVitalDates.utcCalendar.component(.year, from: $0)
+            }
+        }
     }
 
     // MARK: - Rule 5: log once, never speak

@@ -1076,10 +1076,25 @@ enum ArchivistGraphExecutor {
             // is common in this tree — that is a better answer than
             // silently handing back the birthday, which is what "where was
             // Eileen Latta born" used to do.
+            // The DATE this sentence carries obeys the same seam as every
+            // other route (HallieVitalDates migration, 2026-09-06): this
+            // route had never read it, so "where was Eileen Latta born"
+            // kept speaking the tree's year after Rick corrected her
+            // profile. The place itself is still the tree's, per rule 4.
+            let placeVitals = HallieVitalDates.resolve(
+                treePerson: person,
+                profiles: inputs.profiles.map(HallieVitalProfile.init),
+                graph: graph,
+                throughProfileStableID: profileStableID)
+            let placeDate = query.operation == .birthPlace
+                ? placeVitals.profileBirthdate : placeVitals.profileDeathdate
             let placeAnswer = ArchivistBiographyPolicy.lifePlace(
                 personID: person.id,
                 birth: query.operation == .birthPlace,
-                in: graph)
+                in: graph,
+                dateTextOverride: placeDate.map {
+                    HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                })
             return fromPolicy(
                 placeAnswer,
                 evidence: lifeDateEvidence(
@@ -1092,10 +1107,23 @@ enum ArchivistGraphExecutor {
             guard query.relation == nil else {
                 return declineUnexpectedRelation()
             }
+            // Fourth route found during the migration, 2026-09-06: "when
+            // was Ma born" read the tree directly, one case away from the
+            // birth-place route above. Same seam, same rule.
+            let dateVitals = HallieVitalDates.resolve(
+                treePerson: person,
+                profiles: inputs.profiles.map(HallieVitalProfile.init),
+                graph: graph,
+                throughProfileStableID: profileStableID)
+            let resolvedLifeDate = query.operation == .birth
+                ? dateVitals.profileBirthdate : dateVitals.profileDeathdate
             let answer = ArchivistBiographyPolicy.lifeDate(
                 personID: person.id,
                 birth: query.operation == .birth,
-                in: graph)
+                in: graph,
+                dateTextOverride: resolvedLifeDate.map {
+                    HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                })
             return fromPolicy(
                 answer,
                 evidence: lifeDateEvidence(

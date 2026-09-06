@@ -186,6 +186,21 @@ private let graph = GedcomFamilyGraph(gedcomText: treeText)
 private typealias Profile = HallieTurnExecutor.ProfileSnapshot
 private typealias Executor = HallieTurnExecutor
 
+/// An EXACT day, for a profile that really holds one. Rick's father was
+/// born 21 February 1929 (re-verified with his brothers and sisters and
+/// their obituaries, 2026-09-06) and the People tab records exactly that.
+private func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+    var c = DateComponents(); c.year = y; c.month = m; c.day = d
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+    return cal.date(from: c)!
+}
+
+/// A YEAR-ONLY stand-in. NOTE it is not year-only at all — it fabricates
+/// 15 June. A People profile stores a bare `Date` and cannot express "just
+/// 1929", so this helper invents a day and month that no store holds. That
+/// invention is what produced "born 15 June 1929" in the 2026-09-06 nightly
+/// and sent a bug hunt after Rick's father's birthday. Use `date(_:_:_:)`
+/// wherever the asserted prose contains the date.
 private func date(_ y: Int) -> Date {
     var c = DateComponents(); c.year = y; c.month = 6; c.day = 15
     var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
@@ -210,7 +225,9 @@ private func profiles(rickPin: String? = "GVQV-NW3", dadPin: String? = nil,
         Profile(stableID: "tim", canonicalName: "Tim", aliases: ["Timmy"], sex: .male, uuid: UUID()),
         Profile(stableID: "donna", canonicalName: "Donna", sex: .female, uuid: UUID(),
                 treeIdentity: .familySearchID("DONN-A03")),
-        Profile(stableID: "dad", canonicalName: "Dad", aliases: dadAliases, birthdate: date(1929),
+        // Birth from the People tab, death deliberately absent so the tree
+        // supplies it: one sentence proving precedence is PER FIELD.
+        Profile(stableID: "dad", canonicalName: "Dad", aliases: dadAliases, birthdate: date(1929, 2, 21),
                 sex: .male, uuid: UUID(), treeIdentity: dadPin.map { .familySearchID($0) }),
         Profile(stableID: "ma", canonicalName: "Ma", aliases: maAliases, birthdate: date(1930),
                 sex: .female, uuid: UUID()),
@@ -468,13 +485,23 @@ struct HallieCrossWorldDadTests {
         #expect(cold.derive(TreeIdentitySubject(snapshots.first { $0.stableID == "ma" }!)).certainCandidate == nil)
     }
 
-    /// "who is Rick's dad?" with Dad bridged: the tree's name and dates,
-    /// the People-tab name as the alias, both sources in the basis.
-    @Test func ricksFatherIsAnsweredWithTheTreeNameAndVitals() async throws {
+    /// "who is Rick's dad?" with Dad bridged: the tree's NAME, the People
+    /// tab's DATES, the People-tab name as the alias, both sources in the
+    /// basis.
+    ///
+    /// POLICY CHANGE, 2026-09-06, not a data correction. This test was named
+    /// `...WithTheTreeNameAndVitals` and asserted the tree's 22 February
+    /// 1929 because the tree used to win. Rick's ruling of 2026-09-04 made
+    /// the People tab the source of truth for contemporary people, and
+    /// 8f505d38 implemented it; this suite was never updated. The birth date
+    /// below now comes from the profile and the death date still comes from
+    /// the tree — because the profile records no death — which is precedence
+    /// working PER FIELD, exactly as the rule says.
+    @Test func ricksFatherIsAnsweredWithTheTreeNameAndPeopleTabDates() async throws {
         let r = try await ask("Rick", .kinship, relation: .father,
                               context: context(profiles(dadPin: "G2S4-JF4")))
         #expect(r.outcome == .answered, Comment(rawValue: r.prose))
-        #expect(r.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 22 February 1929 in Albany, New York, died 1 July 2008.",
+        #expect(r.prose == "Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 21 February 1929 in Albany, New York, died 1 July 2008.",
                 Comment(rawValue: r.prose))
         #expect(r.basisLine.contains("stored on Rick's profile"), Comment(rawValue: r.basisLine))
         #expect(r.basisLine.contains("GEDCOM: Richard Harding Breen Sr @I2@"), Comment(rawValue: r.basisLine))
@@ -490,7 +517,7 @@ struct HallieCrossWorldDadTests {
             ownerName: "Rick Breen", ownerFamilySearchID: "GVQV-NW3")
         let r = try await ask("Rick", .kinship, relation: .father,
                               context: context(out.snapshots, ownerFSID: "GVQV-NW3", assumed: out.assumed))
-        #expect(r.prose.hasPrefix("Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 22 February 1929"), Comment(rawValue: r.prose))
+        #expect(r.prose.hasPrefix("Rick's father: Richard Harding Breen Sr (Dad in the People tab), born 21 February 1929"), Comment(rawValue: r.prose))
         #expect(r.prose.contains(" (taking "), Comment(rawValue: r.prose))
         #expect(r.prose.hasSuffix("Dad as Richard Harding Breen Sr)"), Comment(rawValue: r.prose))
     }
@@ -519,7 +546,7 @@ struct HallieCrossWorldDadTests {
             originalQuestion: live, ast: .graph(.init(people: ["Dad"], operation: .biography)))))
         let r = try await ask("Dad", .biography, context: context(profiles(dadPin: "G2S4-JF4")))
         #expect(r.outcome == .answered, Comment(rawValue: r.prose))
-        #expect(r.prose.hasPrefix("Richard Harding Breen Sr (Dad in the People tab) was born 22 February 1929 in Albany, New York and died 1 July 2008."),
+        #expect(r.prose.hasPrefix("Richard Harding Breen Sr (Dad in the People tab) was born 21 February 1929 in Albany, New York and died 1 July 2008."),
                 Comment(rawValue: r.prose))
         // Jr is in the tree as Sr's child, so the tree's count is stated as
         // the TREE's and the People tab only ADDS Tim (2026-09-04) — Rick is
