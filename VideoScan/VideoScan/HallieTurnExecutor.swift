@@ -1933,6 +1933,26 @@ enum HallieTurnExecutor {
     /// The whole set of names anybody in the context can vouch for: People
     /// profiles (name + aliases), CyberBrain (name + aliases), GEDCOM (token
     /// match), and — for family-tree requests — GEDCOM surnames.
+    /// Is this name someone in the PEOPLE TAB specifically — Rick's own
+    /// curated family — as opposed to merely a name the tree or CyberBrain
+    /// has heard of?
+    ///
+    /// The distinction decides whether a name may be retried as a place or a
+    /// word when no catalog record is tagged with it. A tree-only name can
+    /// plausibly be a place: New England surnames and town names are the
+    /// same words, and this family's own are Breen, Hudson, Chester,
+    /// Franklin. A People-tab profile cannot — Rick put that person there
+    /// himself, and 2026-09-06 made the People tab authoritative for exactly
+    /// these people.
+    static func isPeopleTabPerson(_ name: String, context: Context) -> Bool {
+        let key = PersonResolver.normalize(name)
+        guard !key.isEmpty, let profiles = context.profiles else { return false }
+        return profiles.contains { profile in
+            ([profile.canonicalName] + profile.aliases + profile.fullNameForms)
+                .contains { PersonResolver.normalize($0) == key }
+        }
+    }
+
     static func isKnownPerson(
         _ name: String,
         context: Context,
@@ -1940,8 +1960,15 @@ enum HallieTurnExecutor {
     ) -> Bool {
         let key = PersonResolver.normalize(name)
         guard !key.isEmpty else { return false }
+        // `fullNameForms` belongs here as of 2026-09-06. Without it the
+        // B7 fix undid itself one block later: the kinship rebind now hands
+        // execution "Richard Breen Sr", the demotion pass below asked this
+        // question, got "no", and turned the disambiguated father straight
+        // back into a search word — "isn't a person I know" about the person
+        // whose profile supplied the spelling.
         if let profiles = context.profiles, profiles.contains(where: {
-            ([$0.canonicalName] + $0.aliases).contains { PersonResolver.normalize($0) == key }
+            ([$0.canonicalName] + $0.aliases + $0.fullNameForms)
+                .contains { PersonResolver.normalize($0) == key }
         }) { return true }
         if let cyberBrain = context.cyberBrain {
             if case .notFound = cyberBrain.resolve(name) {} else { return true }

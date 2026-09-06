@@ -453,7 +453,18 @@ struct FamilyKinshipTests {
             people: ["me"], question: "show me videos of my dad", speakers: speakers,
             graph: bareTree, kinshipOverlay: overlay)
         #expect(bound.failure == nil)
-        #expect(bound.people == ["Dad"])
+        // 2026-09-06 (B7): "Dad" is exactly the contested spelling this test
+        // was built around — Rick's profile carries it as a stray alias and
+        // Dad's profile owns it as a canonical name. Binding it would hand
+        // execution a string that means two people, which is how "when was
+        // my dad born" came back with Rick's birthday on 2026-09-05. The
+        // rebind now reaches for a spelling that names one person and still
+        // round trips through this overlay's resolver. The person is
+        // unchanged; only the spelling handed onward is.
+        #expect(bound.people == ["Richard Harding Breen Sr"])
+        #expect(FamilyKinshipOverlay(profiles: conflicting, graph: bareTree)
+                    .nodes(claiming: "Richard Harding Breen Sr", ownerName: "Rick Breen").count == 1,
+                "the bound spelling must resolve to exactly one vertex")
         #expect(bound.notes == ["'my dad' = Dad (Richard Harding Breen Sr), father of Rick Breen in the People tab relationships"])
 
         // Row absent → the tree is asked and declines honestly by name.

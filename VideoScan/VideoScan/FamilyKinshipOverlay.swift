@@ -255,6 +255,15 @@ struct FamilyKinshipOverlay: Sendable {
     /// tell a stored fact from an inference; the walks union the two.
     private var derivedOutgoing: [Node: [Edge]] = [:]
     private var nodeByProfileStableID: [String: Node] = [:]
+    /// The profile's own full name per vertex ("Richard" + Breen + Sr →
+    /// "Richard Breen Sr"), for `unambiguousName`. Absent for a vertex whose
+    /// profile has no surname, which is the common case and the reason the
+    /// lookup is optional rather than a stored field on Member.
+    private var fullNameByNode: [Node: String] = [:]
+    /// Normalized short names that more than one profile answers to, by
+    /// canonical name or alias. These are the spellings that must never
+    /// leave a resolution as themselves — see `unambiguousName`.
+    private var contestedShortNames: Set<String> = []
     /// POIProfile.uuid (lowercased) → vertex, for durable `.profile(id:)` anchors.
     private var nodeByUUID: [String: Node] = [:]
     /// The ONE spelling verdict shared with every other route (codex #778):
@@ -314,6 +323,52 @@ struct FamilyKinshipOverlay: Sendable {
         "grandma", "gramma", "nana", "papa", "gran", "granny", "pop", "pops",
     ]
 
+    /// The spelling to hand downstream once THIS member has been resolved:
+    /// the shortest name that still means one person.
+    ///
+    /// A resolved identity used to be flattened to `member.name` before it
+    /// left the kinship rebind, and a bare given name is not an identity —
+    /// since Rick adopted surnames on 2026-09-04, "Richard" is his father's
+    /// canonical name and Rick's own alias at the same time. Downstream the
+    /// graph route re-resolved that string against the GEDCOM and answered
+    /// "when was my dad born" with Richard Harding Breen JR's birthday
+    /// (live, 2026-09-05).
+    ///
+    /// Returns `member.name` unchanged when the short name is already
+    /// unambiguous — which is every profile without a surname, i.e. the way
+    /// this behaved before the fix. Never returns `displayName`: that is a
+    /// human-readable composite ("Dad (Richard Harding Breen Sr)"), not a
+    /// spelling anything can resolve.
+    func unambiguousName(of member: Member) -> String {
+        // NOT `resolver.resolve(...) == .ambiguous`. This resolver applies
+        // exact-name-wins, so "Richard" resolves cleanly HERE — Dad claims
+        // it by name, Rick only by alias. The damage happens downstream, in
+        // the GEDCOM route, which has no such rule and matched Richard
+        // Harding Breen Jr. What makes a short name unsafe to hand onward is
+        // that more than one identity answers to it AT ALL, however weakly.
+        guard contestedShortNames.contains(PersonResolver.normalize(member.name))
+        else { return member.name }
+        // The profile's own full name is preferred: it resolves through the
+        // same resolver (full-name forms have been indexed since 2026-09-06)
+        // and it is what the person is actually called.
+        if let full = fullNameByNode[member.node],
+           case .resolved = resolver.resolve(full) {
+            return full
+        }
+        // A bridged member's tree name is the fallback — longer, but it
+        // names one record. Only when it ROUND TRIPS: binding a spelling
+        // nothing downstream resolves would trade a wrong answer for no
+        // answer, which is not an improvement.
+        if let treeName = member.treeName,
+           case .resolved = resolver.resolve(treeName) {
+            return treeName
+        }
+        // Nothing better exists. Returning the contested short name is the
+        // honest outcome — the caller's own note names the person in full,
+        // and a spelling nobody can resolve would be worse.
+        return member.name
+    }
+
     var isEmpty: Bool { outgoing.isEmpty }
     /// Stored rows + inverses (derived edges are counted separately).
     var edgeCount: Int { outgoing.values.reduce(0) { $0 + $1.count } }
@@ -327,9 +382,24 @@ struct FamilyKinshipOverlay: Sendable {
 
     init(snapshots: [ArchivistGraphProfileSnapshot], graph: GedcomFamilyGraph? = nil) {
         self.graph = graph
+        // Full-name forms reach the resolver as of 2026-09-06 (codex
+        // #1114-2). Without them "Richard Harding Breen Sr" resolved to
+        // nobody here, so a kinship rebind that HAD disambiguated Dad could
+        // only hand execution the bare given name "Richard" — which is his
+        // father's canonical name and Rick's own alias at once.
         self.resolver = PersonResolver(people: snapshots.map {
-            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases)
+            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases,
+                             fullNameForms: $0.fullNameForms)
         })
+        var claimants: [String: Set<String>] = [:]
+        for snapshot in snapshots {
+            for spelling in [snapshot.canonicalName] + snapshot.aliases {
+                let key = PersonResolver.normalize(spelling)
+                guard !key.isEmpty else { continue }
+                claimants[key, default: []].insert(snapshot.stableID)
+            }
+        }
+        self.contestedShortNames = Set(claimants.filter { $0.value.count > 1 }.keys)
         let usesPointers = snapshots.contains { snapshot in
             if case .pointer = snapshot.treeIdentity { return true }
             return snapshot.kinships.contains { if case .treePointer = $0.relativeTo { return true } else { return false } }
@@ -343,6 +413,10 @@ struct FamilyKinshipOverlay: Sendable {
             let node: Node = bridged.map { .tree(gedcomID: $0.id) }
                 ?? .profile(stableID: snapshot.stableID)
             nodeByProfileStableID[snapshot.stableID] = node
+            let full = snapshot.displayFullName
+            if PersonResolver.normalize(full) != PersonResolver.normalize(snapshot.canonicalName) {
+                fullNameByNode[node] = full
+            }
             if let uuid = snapshot.uuid { nodeByUUID[uuid.uuidString.lowercased()] = node }
             let sex = snapshot.sex ?? bridged.flatMap { Self.sex(of: $0) }
             if members[node] == nil {

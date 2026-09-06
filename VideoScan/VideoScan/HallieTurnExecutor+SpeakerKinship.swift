@@ -38,6 +38,33 @@ extension HallieTurnExecutor {
             var notes: [String] = []
             /// A decline Hallie should give instead of searching.
             var failure: String?
+            /// The kinship phrase and its kin word once they have been SPENT
+            /// on resolving a person ("my dad" → Richard Breen Sr). B5,
+            /// 2026-09-06: the translator emits `person=my dad keyword=dad`,
+            /// and the kin word survived into the content search, so "show me
+            /// videos of my dad" became "videos of Richard with 'dad'" and
+            /// found nothing — the right person AND'd with a word that
+            /// appears in no filename, transcript or caption. A term that has
+            /// been turned into an identity is not also a thing to search for.
+            /// nil when no kinship phrase was resolved.
+            var consumedKinPhrase: (phrase: String, word: String)?
+
+            static func == (lhs: Rebinding, rhs: Rebinding) -> Bool {
+                lhs.people == rhs.people && lhs.notes == rhs.notes
+                    && lhs.failure == rhs.failure
+                    && lhs.consumedKinPhrase?.phrase == rhs.consumedKinPhrase?.phrase
+                    && lhs.consumedKinPhrase?.word == rhs.consumedKinPhrase?.word
+            }
+
+            /// Does `keyword` name the relationship this rebinding already
+            /// spent? Compared on the same normalization the keyword matcher
+            /// uses, so "Dad" and "dad" are one term.
+            func spentKeyword(_ keyword: String) -> Bool {
+                guard let consumed = consumedKinPhrase else { return false }
+                let key = ArchivistKeywordText.normalizedPhrase(keyword)
+                return key == ArchivistKeywordText.normalizedPhrase(consumed.word)
+                    || key == ArchivistKeywordText.normalizedPhrase(consumed.phrase)
+            }
         }
 
         private static let kinWords: [String: GedcomFamilyGraph.Relation] = [
@@ -57,6 +84,11 @@ extension HallieTurnExecutor {
             let word = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
             guard let relation = kinWords[word] else { return nil }
             return (phrase, relation)
+        }
+
+        /// The kin word inside a phrase: "my dad" → "dad".
+        static func kinWord(of phrase: String) -> String {
+            phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
         }
 
         /// Which people-list slot holds the relative: a bare pronoun, the
@@ -125,15 +157,32 @@ extension HallieTurnExecutor {
                         return result
                     }
                     if let hit = relatives.first {
+                        // B7, 2026-09-06: bind the UNAMBIGUOUS spelling.
+                        // Binding `hit.member.name` threw the resolution
+                        // away — since Rick adopted surnames on 2026-09-04,
+                        // his father's canonical name is "Richard" and Rick's
+                        // own alias is "Richard" too, so downstream the graph
+                        // route re-resolved that bare given name against the
+                        // GEDCOM and answered with Richard Harding Breen JR.
+                        // Live 2026-09-05: "when was my dad born" → "Richard
+                        // Harding Breen Jr was born 4 March 1959" — Rick's
+                        // birthday, given confidently as his father's. The
+                        // full name ("Richard Breen Sr") names one person and
+                        // resolves back to the same profile, because the
+                        // overlay's resolver now indexes full-name forms.
+                        let bound = overlay.unambiguousName(of: hit.member)
                         result.people = bind(
-                            people, name: hit.member.name,
+                            people, name: bound,
                             slot: slotIndex(in: people, phrase: phrase, speakers: speakers),
                             namesSamePerson: { entry in
                                 PersonResolver.normalize(entry)
                                     == PersonResolver.normalize(hit.member.name)
+                                    || PersonResolver.normalize(entry)
+                                        == PersonResolver.normalize(bound)
                                     || overlay.nodes(claiming: entry, ownerName: owner)
                                         .contains(hit.member.node)
                             })
+                        result.consumedKinPhrase = (phrase: phrase, word: kinWord(of: phrase))
                         result.notes.append("'\(phrase)' = \(hit.member.displayName), \(relation.rawValue) of \(owner) in the People tab relationships")
                         return result
                     }

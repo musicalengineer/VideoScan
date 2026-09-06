@@ -25,11 +25,45 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
     /// True when the stored pin could not be decoded (newer build wrote it):
     /// the overlay fails closed — unbridged with a pin problem, never a name.
     let treeIdentityUnreadable: Bool
+    // Family-name fields (2026-09-06). They stopped at this boundary until
+    // now, which is why `FamilyKinshipOverlay` could only build a resolver
+    // over canonical names and aliases: "Richard Harding Breen Sr" resolved
+    // to nobody, so the ONLY spelling the kinship rebind had to work with
+    // was the ambiguous given name "Richard" — which, since Rick adopted
+    // surnames on 2026-09-04, is his father's canonical name AND Rick's own
+    // alias. At equal priority the son won and "my dad" stopped finding Dad.
+    // Additive and all-optional: nil everywhere ⇒ the old behaviour exactly.
+    let surname: String?
+    let maidenName: String?
+    let middleName: String?
+    let suffix: String?
+
+    /// The exact-match spellings these fields imply, built by the SAME pure
+    /// builder `POIProfile` and `ProfileSnapshot` use — so the People tab,
+    /// the stored profile and the kinship overlay can never disagree about
+    /// what "Tim Breen" means. Empty until Rick fills in a surname.
+    var fullNameForms: [String] {
+        guard surname != nil || maidenName != nil else { return [] }
+        return POINameForms(name: canonicalName, aliases: aliases,
+                            middleName: middleName, surname: surname,
+                            maidenName: maidenName, suffix: suffix).matchingForms
+    }
+
+    /// How this person is named on first mention once a surname is known —
+    /// the unambiguous spelling the kinship rebind binds in place of a bare
+    /// given name.
+    var displayFullName: String {
+        POINameForms(name: canonicalName, aliases: aliases,
+                     middleName: middleName, surname: surname,
+                     maidenName: maidenName, suffix: suffix).displayFullName
+    }
 
     init(stableID: String, canonicalName: String, aliases: [String] = [],
          kinships: [Kinship] = [], sex: PersonSex? = nil, birthdate: Date? = nil,
          deathdate: Date? = nil,
-         uuid: UUID? = nil, treeIdentity: TreeIdentity? = nil, treeIdentityUnreadable: Bool = false) {
+         uuid: UUID? = nil, treeIdentity: TreeIdentity? = nil, treeIdentityUnreadable: Bool = false,
+         surname: String? = nil, maidenName: String? = nil,
+         middleName: String? = nil, suffix: String? = nil) {
         self.stableID = stableID
         self.canonicalName = canonicalName
         self.aliases = aliases
@@ -40,6 +74,10 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
         self.uuid = uuid
         self.treeIdentity = treeIdentity
         self.treeIdentityUnreadable = treeIdentityUnreadable
+        self.surname = POINameText.cleaned(surname)
+        self.maidenName = POINameText.cleaned(maidenName)
+        self.middleName = POINameText.cleaned(middleName)
+        self.suffix = POINameText.cleanedSuffix(suffix)
     }
 
     // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
@@ -56,7 +94,9 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
             deathdate: profile.deathdate,
             uuid: profile.uuid,
             treeIdentity: profile.treeIdentity,
-            treeIdentityUnreadable: profile.treeIdentityQuarantined != nil)
+            treeIdentityUnreadable: profile.treeIdentityQuarantined != nil,
+            surname: profile.surname, maidenName: profile.maidenName,
+            middleName: profile.middleName, suffix: profile.suffix)
     }
 }
 

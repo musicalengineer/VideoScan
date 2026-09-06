@@ -844,7 +844,15 @@ struct ArchivistGraphExecutorTests {
         #expect(Mirror(reflecting: snapshot).children.compactMap(\.label)
                 == ["stableID", "canonicalName", "aliases", "kinships", "sex", "birthdate",
                     "deathdate",   // 2026-09-01: living / passed on decides Hallie's tense (LifeStatus)
-                    "uuid", "treeIdentity", "treeIdentityUnreadable"])   // 2026-08-29: the tree PIN is identity
+                    "uuid", "treeIdentity", "treeIdentityUnreadable",   // 2026-08-29: the tree PIN is identity
+                    // 2026-09-06 (B7): a person's own name is identity, and
+                    // withholding it here is what broke "when was my dad
+                    // born" — the overlay could build a resolver over short
+                    // names only, so a resolved father left execution as the
+                    // bare "Richard" and the GEDCOM route answered with
+                    // Richard Harding Breen JR. Still no notes, photos or
+                    // paths: the three assertions below stay as they were.
+                    "surname", "maidenName", "middleName", "suffix"])
         #expect(!String(reflecting: snapshot).contains(profile.referencePath))
         #expect(!String(reflecting: snapshot).contains(profile.notes))
         #expect(!String(reflecting: snapshot).contains(profile.identityNotes!))

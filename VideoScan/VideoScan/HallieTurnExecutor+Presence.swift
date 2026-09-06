@@ -72,6 +72,19 @@ extension HallieTurnExecutor {
             effective.people = kin.people
             notes.append(contentsOf: kin.notes)
         }
+        // B5, 2026-09-06: a kinship term spent on an identity is not also a
+        // content keyword. The translator emits both — `person="my dad"` AND
+        // `keyword="dad"` — and the keyword survived into the catalog query,
+        // so "show me videos of my dad" became "videos of Richard with
+        // 'dad'" and found nothing, twice on 2026-09-05 (rows 301 and 916 of
+        // the conversation log). No filename, transcript or caption in the
+        // archive says "dad" about Dad; the word was never evidence, it was
+        // the question's way of naming him. Dropped silently: a note here
+        // would explain a term the user never meant as a search word.
+        if let existing = effective.keywords, kin.consumedKinPhrase != nil {
+            let kept = existing.filter { !kin.spentKeyword($0) }
+            if kept.count != existing.count { effective.keywords = kept.isEmpty ? nil : kept }
+        }
 
         // "can you play a video for me?" (eval ic009, 2026-09-01): a first-
         // or second-person pronoun the translator kept as a name or a word
@@ -167,7 +180,19 @@ extension HallieTurnExecutor {
             let taggedNames = Set(records.flatMap {
                 $0.confirmedPeople.map { PersonResolver.normalize($0.name) }
             })
-            if people.allSatisfy({ !taggedNames.contains(PersonResolver.normalize($0)) }) {
+            // B6, 2026-09-06: never for someone in the People tab. Live
+            // 2026-09-05 row 914, "show me videos of Dad": the name resolved
+            // to Rick's father, nobody in the catalog is tagged with him, and
+            // this fallback answered with 123 videos of OTHER people saying
+            // the word "Richard" — presented as videos of Dad. The honest
+            // answer is that no video is tagged with him yet. The fallback
+            // still earns its keep for a tree-only name, where "Franklin" or
+            // "Hudson" really might be the place on the box.
+            let anyIsFamily = people.contains {
+                HallieTurnExecutor.isPeopleTabPerson($0, context: context)
+            }
+            if !anyIsFamily,
+               people.allSatisfy({ !taggedNames.contains(PersonResolver.normalize($0)) }) {
                 var asWords = effective
                 asWords.people = nil
                 asWords.keywords = people
