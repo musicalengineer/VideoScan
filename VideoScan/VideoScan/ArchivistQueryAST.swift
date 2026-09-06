@@ -104,7 +104,16 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
                     debugDescription: "subject must not be empty")
             }
             operation = try c.decode(Operation.self, forKey: .operation)
-            reference = try c.decode(Reference.self, forKey: .reference)
+            // `reference` is normally required (see astTemporalPayload's JSON
+            // schema `required` list), but Homebrew ollama 0.33.2 returns
+            // HTTP 501 for structured output (commit 88dceb2a) and the
+            // fallback retry drops `format`, so the schema goes unenforced
+            // and the model may omit this key. Missing -> default to
+            // `.currentSelection` (identical to what a present
+            // `{"kind":"currentSelection"}` already means); present-but-null
+            // or present-but-malformed must still fail.
+            reference = try c.decodeNonNullIfPresent(Reference.self, forKey: .reference)
+                ?? .currentSelection
         }
 
         enum Reference: Codable, Equatable, Sendable {
