@@ -107,6 +107,15 @@ enum OllamaEndpoints {
         return String(chat.dropLast("chat".count)) + "tags"
     }
 
+    /// `/api/ps` — what this server currently holds in memory, which is a
+    /// different question from `/api/tags` ("what could it load"). The gap
+    /// between them is the cold-load a first question pays.
+    static func psURLString(for endpoint: String, defaultPort: Int) -> String {
+        let chat = chatURLString(for: endpoint, defaultPort: defaultPort)
+        guard chat.hasSuffix("/api/chat") else { return chat }
+        return String(chat.dropLast("chat".count)) + "ps"
+    }
+
     /// Short label for the UI — the bit a human recognises.
     static func displayLabel(for endpoint: String) -> String {
         guard let e = normalize(endpoint) else { return endpoint }

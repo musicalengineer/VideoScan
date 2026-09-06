@@ -51,6 +51,66 @@ struct ArchivistEndpointSettings: View {
     @State private var restarting = false
     @State private var restartReport: String?
     @State private var restartReportIsGood = false
+    /// Is the CONFIGURED model loaded on each host (2026-09-06)? A separate
+    /// question from host liveness, and Rick hit the gap: RicksM4.local
+    /// showed a green "online" light while the restart report said no
+    /// answer — both true, because the host was up and the model was not
+    /// loaded. Keyed by host.
+    @State private var readiness: [String: ModelReadiness] = [:]
+    /// Resident size of the configured model on the host that answered,
+    /// in bytes, and the machine's own RAM.
+    @State private var residentBytes: Int64?
+    @State private var installedBytes: Int64?
+    /// Short digests of the configured tag per host — shown ONLY when two
+    /// hosts disagree, which is the case worth interrupting anyone about.
+    @State private var digestsByHost: [String: String] = [:]
+
+    /// Whether the configured model is ready to answer ON THIS HOST.
+    ///
+    /// Deliberately NOT folded into `Liveness`. Rick ruled that an offline
+    /// host is yellow rather than red — a sleeping laptop is normal, not an
+    /// error — and that ruling is about the MACHINE. This is about the
+    /// model, where red really does mean "asking here will fail", so it
+    /// gets its own light rather than overloading his.
+    enum ModelReadiness: Equatable {
+        /// Loaded and warm: the next question is fast.
+        case resident
+        /// The host answers, but this model is not in memory. The next
+        /// question pays a cold load — about six seconds for a 27B on the
+        /// M4, measured 2026-09-06.
+        case cold
+        /// The host answers and does not have this model AT ALL. Asking
+        /// here fails, or silently pulls, depending on the server.
+        case missing
+        /// No answer, or not asked yet.
+        case unknown
+
+        var color: Color {
+            switch self {
+            case .resident: return .green
+            case .cold:     return .yellow
+            case .missing:  return .red
+            case .unknown:  return .secondary
+            }
+        }
+        var label: String {
+            switch self {
+            case .resident: return "loaded"
+            case .cold:     return "cold"
+            case .missing:  return "absent"
+            case .unknown:  return ""
+            }
+        }
+        var detail: String {
+            switch self {
+            case .resident: return "The model is in memory here — answers are fast."
+            case .cold:     return "This server has the model but hasn't loaded it. "
+                                 + "The next question waits for it (about six seconds for a 27B)."
+            case .missing:  return "This server doesn't have this model installed."
+            case .unknown:  return "Not asked yet."
+            }
+        }
+    }
 
     enum Liveness: Equatable {
         case unknown, online, idle(String), offline(String)
@@ -128,6 +188,24 @@ struct ArchivistEndpointSettings: View {
                         .frame(width: 46, alignment: .leading)
                         .help(state.detail.isEmpty ? state.label : state.detail)
 
+                    // Second light: the MODEL, not the machine. Rick,
+                    // 2026-09-06 — a green host light beside "no answer
+                    // from RicksM4.local" was not a contradiction, it was
+                    // two facts sharing one indicator.
+                    let ready = readiness[host] ?? .unknown
+                    if ready != .unknown {
+                        Circle()
+                            .fill(ready.color)
+                            .frame(width: 8, height: 8)
+                            .help(ready.detail)
+                        Text(ready.label)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .frame(width: 42, alignment: .leading)
+                            .help(ready.detail)
+                            .accessibilityIdentifier("archivist.modelReadiness.\(host)")
+                    }
+
                     Spacer()
 
                     Button { move(index, by: -1) } label: { Image(systemName: "arrow.up") }
@@ -189,12 +267,15 @@ struct ArchivistEndpointSettings: View {
                         }
                         .labelsHidden()
                         .font(.system(size: 12, design: .monospaced))
-                        .onChange(of: model) { _, _ in persistModel() }
+                        .onChange(of: model) { _, _ in
+                            persistModel()
+                            Task { await refreshModelFacts() }
+                        }
                         .accessibilityIdentifier("archivist.ollamaModel")
                     }
 
                     Button(loadingModels ? "…" : "Refresh") {
-                        Task { await refreshModels() }
+                        Task { await refreshModels(); await refreshModelFacts() }
                     }
                     .controlSize(.small)
                     .disabled(loadingModels || hosts.isEmpty)
@@ -216,6 +297,20 @@ struct ArchivistEndpointSettings: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let memoryLine {
+                    Text(memoryLine)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("archivist.modelMemory")
+                }
+                if let digestWarning {
+                    Text(digestWarning)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("archivist.modelDigestWarning")
+                }
                 if let restartReport {
                     Text(restartReport)
                         .font(.caption)
@@ -250,12 +345,12 @@ struct ArchivistEndpointSettings: View {
                 Button("Restore Defaults") {
                     hosts = OllamaEndpoints.defaultHosts
                     persist()
-                    Task { await refreshLiveness() }
+                    Task { await refreshLiveness(); await refreshModelFacts() }
                 }
                 .controlSize(.small)
 
                 Button(checking ? "Checking…" : "Check Servers") {
-                    Task { await refreshLiveness() }
+                    Task { await refreshLiveness(); await refreshModelFacts() }
                 }
                 .controlSize(.small)
                 .disabled(checking || hosts.isEmpty)
@@ -275,7 +370,7 @@ struct ArchivistEndpointSettings: View {
             Task { await refreshModels() }
             // Lights refresh every time the pane appears — a stale green
             // is worse than no light at all.
-            Task { await refreshLiveness() }
+            Task { await refreshLiveness(); await refreshModelFacts() }
         }
     }
 
@@ -348,6 +443,103 @@ struct ArchivistEndpointSettings: View {
         }
         installed = []
         modelSourceHost = nil
+    }
+
+    // MARK: What the model costs, and whether it is the model you think
+
+    /// Total physical RAM, so the figure below is a fraction of something
+    /// rather than a number floating in space.
+    private static let machineRAMBytes: Int64 = Int64(ProcessInfo.processInfo.physicalMemory)
+
+    static func roundedGB(_ bytes: Int64) -> Int {
+        // Round UP. This number answers "will it fit", and a figure that
+        // rounds 22.7 down to 22 answers it wrong in the one direction that
+        // matters.
+        let gb = Double(bytes) / 1_073_741_824
+        return max(1, Int(gb.rounded(.up)))
+    }
+
+    /// "≈23 GB in memory of 64 GB" — the honest figure.
+    ///
+    /// RESIDENT size, not the on-disk size `ollama list` prints. For
+    /// qwen3.8:27b-mlx those are 22.7 GB and 18.2 GB; the difference is the
+    /// KV cache at our 32K context. Showing the smaller number would
+    /// understate what the machine actually gives up, which is the whole
+    /// question anyone reads this line to answer. Falls back to the on-disk
+    /// size, clearly labelled, when nothing has loaded it yet.
+    private var memoryLine: String? {
+        let total = Self.roundedGB(Self.machineRAMBytes)
+        if let residentBytes, residentBytes > 0 {
+            return "≈\(Self.roundedGB(residentBytes)) GB in memory, of \(total) GB on this Mac."
+        }
+        if let installedBytes, installedBytes > 0 {
+            return "≈\(Self.roundedGB(installedBytes)) GB on disk, of \(total) GB on this Mac "
+                 + "— it needs somewhat more than that once loaded."
+        }
+        return nil
+    }
+
+    /// Silent when every host agrees, loud when they do not.
+    ///
+    /// A tag is a NAME and names are not identity: two servers can serve
+    /// "qwen3.8:27b-mlx" over different bytes. The digest is the content,
+    /// which is why this shows a digest rather than a file path — ollama
+    /// stores blobs content-addressed, so a path would look authoritative
+    /// without being it.
+    private var digestWarning: String? {
+        let distinct = Set(digestsByHost.values.filter { !$0.isEmpty })
+        guard distinct.count > 1 else { return nil }
+        let detail = digestsByHost
+            .filter { !$0.value.isEmpty }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key) \($0.value.prefix(12))" }
+            .joined(separator: ", ")
+        return "Two servers have different builds of “\(model)”: \(detail). "
+             + "Same name, different bytes — answers may differ depending on which one replies."
+    }
+
+    /// Ask every host what it holds. One pass fills the readiness lights,
+    /// the memory line and the digest comparison, because all three come
+    /// from the same two cheap GETs.
+    @MainActor
+    private func refreshModelFacts() async {
+        guard !hosts.isEmpty else {
+            readiness = [:]; digestsByHost = [:]
+            residentBytes = nil; installedBytes = nil
+            return
+        }
+        let tag = model
+        var nextReadiness: [String: ModelReadiness] = [:]
+        var nextDigests: [String: String] = [:]
+        var firstResident: Int64?
+        var firstInstalled: Int64?
+
+        for host in hosts {
+            var probe = OllamaQueryTranslator()
+            probe.host = host
+            let installed = await probe.installedModelFacts()
+            guard !installed.isEmpty else {
+                nextReadiness[host] = .unknown   // no answer: the host light already says so
+                continue
+            }
+            if let match = installed.first(where: { $0.name == tag }) {
+                nextDigests[host] = match.digest
+                if firstInstalled == nil, match.bytes > 0 { firstInstalled = match.bytes }
+                let resident = await probe.residentModelFacts()
+                if let live = resident.first(where: { $0.name == tag }) {
+                    nextReadiness[host] = .resident
+                    if firstResident == nil, live.bytes > 0 { firstResident = live.bytes }
+                } else {
+                    nextReadiness[host] = .cold
+                }
+            } else {
+                nextReadiness[host] = .missing
+            }
+        }
+        readiness = nextReadiness
+        digestsByHost = nextDigests
+        residentBytes = firstResident
+        installedBytes = firstInstalled
     }
 
     /// Restart the brain (Rick, 2026-09-06).
@@ -443,6 +635,7 @@ struct ArchivistEndpointSettings: View {
             lines.append("No answer from \(silent.joined(separator: ", ")).")
         }
         restartReport = lines.isEmpty ? "Nothing to restart." : lines.joined(separator: " ")
+        await refreshModelFacts()
     }
 
     /// Probe every host concurrently. Uses the SAME `probeLiveness` the

@@ -332,6 +332,63 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    /// One model as this server describes it. `bytes` is the on-disk size
+    /// from `/api/tags` or the RESIDENT size from `/api/ps` — they are not
+    /// the same number and the caller must say which it is showing.
+    struct ModelFacts: Sendable, Equatable {
+        let name: String
+        let bytes: Int64
+        /// Content digest. The honest answer to "is this the same model?" —
+        /// two servers can serve one tag over different bytes, and a
+        /// filesystem path would look authoritative without being it
+        /// (ollama stores blobs content-addressed).
+        let digest: String
+    }
+
+    /// What this server COULD load, with sizes and digests.
+    func installedModelFacts() async -> [ModelFacts] {
+        await modelFacts(urlString: OllamaEndpoints.tagsURLString(for: host, defaultPort: port))
+    }
+
+    /// What this server currently HOLDS IN MEMORY. The gap between this and
+    /// `installedModelFacts` is the cold load a first question pays — about
+    /// six seconds for a 27B on Rick's M4, measured 2026-09-06.
+    func residentModelFacts() async -> [ModelFacts] {
+        await modelFacts(urlString: OllamaEndpoints.psURLString(for: host, defaultPort: port))
+    }
+
+    /// `/api/tags` and `/api/ps` return the same envelope: {"models":[…]}.
+    /// `size` means on-disk in one and resident in the other; this reads
+    /// whichever the endpoint meant.
+    private func modelFacts(urlString: String) async -> [ModelFacts] {
+        guard let url = URL(string: urlString) else { return [] }
+        var payload: Data?
+        switch transport {
+        case .urlSession:
+            var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
+            request.httpMethod = "GET"
+            payload = try? await URLSession.shared.data(for: request).0
+        case .fake(let handler):
+            payload = await handler(urlString, Data()).data
+        case .curl:
+            let result = await ProcessRunner.runProcess(
+                executable: "/usr/bin/curl",
+                arguments: ["-sS", "-m", "\(Int(probeTimeoutSeconds))", urlString],
+                stdoutLimitBytes: 1 << 20)
+            payload = result.exitCode == 0 ? (result.stdout.map { Data($0.utf8) }) : nil
+        }
+        guard let payload,
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let models = object["models"] as? [[String: Any]]
+        else { return [] }
+        return models.compactMap { entry in
+            guard let name = entry["name"] as? String, !name.isEmpty else { return nil }
+            let bytes = (entry["size"] as? NSNumber)?.int64Value ?? 0
+            let digest = (entry["digest"] as? String) ?? ""
+            return ModelFacts(name: name, bytes: bytes, digest: digest)
+        }
+    }
+
     /// Cheap liveness check against `/api/tags`.
     ///
     /// Returns nil when the host is serving, or the reason it is not.
