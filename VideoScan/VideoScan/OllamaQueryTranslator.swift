@@ -506,6 +506,44 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             options: ["temperature": 0, "num_predict": 1])
     }
 
+    /// Evict the model's weights so the next request loads them fresh.
+    /// `keep_alive: 0` is ollama's own unload signal. Failure is ignored on
+    /// purpose: this is the first half of a restart, and a host that will
+    /// not unload is reported by the warm-up and probe that follow, where
+    /// the caller can say something useful about it.
+    func unloadModel() async {
+        _ = try? await requestContent(
+            "", schema: nil, systemPrompt: "",
+            options: ["temperature": 0, "num_predict": 1, "keep_alive": 0])
+    }
+
+    /// Can this host constrain output to a schema RIGHT NOW?
+    ///
+    /// Deliberately does not consult `structuredOutputCapability`: the
+    /// whole point of asking is to find out whether a remembered refusal
+    /// is still true. Sends the smallest possible schema-bearing request
+    /// and classifies the answer.
+    enum StructuredOutputProbe: Equatable { case available, refused, unreachable }
+
+    func structuredOutputProbe() async -> StructuredOutputProbe {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": ["ok": ["type": "boolean"]],
+            "required": ["ok"],
+        ]
+        do {
+            _ = try await sendChatRequest(
+                "Reply with ok true.", schema: schema, systemPrompt: "",
+                options: ["temperature": 0, "num_predict": 8])
+            return .available
+        } catch let error as NLTranslatorError {
+            if case .structuredOutputUnsupported = error { return .refused }
+            return .unreachable
+        } catch {
+            return .unreachable
+        }
+    }
+
     /// Shared transport and ollama-envelope machinery. The only caller-
     /// selected inputs are the output schema (nil = free text), the
     /// system prompt, and generation options.

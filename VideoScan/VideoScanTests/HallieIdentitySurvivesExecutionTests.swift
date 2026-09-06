@@ -243,3 +243,76 @@ struct HallieFamilyIsNotAWordTests {
         #expect(!HallieTurnExecutor.isPeopleTabPerson("Hudson", context: context))
     }
 }
+
+/// The overlay the LIVE turn builds, as opposed to the one the tests above
+/// build by hand.
+///
+/// This suite exists because the B7 fix shipped broken. Every unit test
+/// passed, because each constructed its overlay directly and passed the
+/// family-name fields. `kinshipOverlay(context:)` — the only builder
+/// production uses — did not, so at runtime the overlay had no full names to
+/// reach for and went on binding the contested given name. Rick saw it on
+/// the first question after the build:
+///
+///   basis: 'my dad' = Richard, father of Rick Breen in the People tab
+///
+/// where it should have said Richard Breen Sr. Testing the seam is not
+/// testing the route.
+@Suite("The overlay the live turn actually builds")
+struct HallieProductionOverlayTests {
+
+    /// Rick's real collision, in the shape `Context` carries.
+    private static func profiles() -> [HallieTurnExecutor.ProfileSnapshot] {
+        [
+            .init(stableID: "richard", canonicalName: "Richard",
+                  aliases: ["Dad", "Grampa Breen", "Dick", "Dad Breen"],
+                  kinships: [], sex: .male,
+                  surname: "Breen", middleName: "Harding", suffix: "Sr"),
+            .init(stableID: "rick", canonicalName: "Rick",
+                  aliases: ["Dicky", "Richy", "Rich", "Richard"],
+                  kinships: [Kinship(relation: .child, relativeTo: .profile(name: "Richard"))],
+                  sex: .male),
+        ]
+    }
+
+    private static func context() -> HallieTurnExecutor.Context {
+        HallieTurnExecutor.Context(profiles: profiles())
+    }
+
+    @Test func theProductionBuilderCarriesTheFamilyNameFields() throws {
+        let overlay = try #require(HallieTurnExecutor.kinshipOverlay(context: Self.context()))
+        // If the name fields did not cross this builder, the full name
+        // resolves to nobody and unambiguousName has nothing to reach for.
+        #expect(overlay.nodes(claiming: "Richard Breen Sr", ownerName: "Rick").count == 1,
+                "the production builder must pass surname/suffix through")
+    }
+
+    /// The end-to-end assertion, in the words Rick reads on screen.
+    @Test func myDadBindsTheFullNameThroughTheProductionBuilder() throws {
+        let overlay = try #require(HallieTurnExecutor.kinshipOverlay(context: Self.context()))
+        let bound = HallieTurnExecutor.SpeakerKinship.rebind(
+            people: ["my dad"], question: "show me videos of my dad",
+            speakers: .init(ownerName: "Rick", archivistName: "Hallie Mae"),
+            graph: nil, kinshipOverlay: overlay)
+        #expect(bound.people == ["Richard Breen Sr"], Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people != ["Richard"], "the contested given name must never survive")
+    }
+
+    /// A profile with no surname is unaffected — the field simply is not there
+    /// to carry, and behaviour is what it always was.
+    @Test func aFamilyWithNoSurnamesBehavesAsBefore() throws {
+        let plain: [HallieTurnExecutor.ProfileSnapshot] = [
+            .init(stableID: "dad", canonicalName: "Dad", sex: .male),
+            .init(stableID: "rick", canonicalName: "Rick",
+                  kinships: [Kinship(relation: .child, relativeTo: .profile(name: "Dad"))],
+                  sex: .male),
+        ]
+        let overlay = try #require(
+            HallieTurnExecutor.kinshipOverlay(context: .init(profiles: plain)))
+        let bound = HallieTurnExecutor.SpeakerKinship.rebind(
+            people: ["my dad"], question: "videos of my dad",
+            speakers: .init(ownerName: "Rick", archivistName: "Hallie Mae"),
+            graph: nil, kinshipOverlay: overlay)
+        #expect(bound.people == ["Dad"])
+    }
+}

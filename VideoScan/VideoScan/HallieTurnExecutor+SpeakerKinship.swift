@@ -27,7 +27,17 @@ extension HallieTurnExecutor {
                 stableID: $0.stableID, canonicalName: $0.canonicalName, aliases: $0.aliases,
                 kinships: $0.kinships, sex: $0.sex, birthdate: $0.birthdate,
                 deathdate: $0.deathdate, uuid: $0.uuid,
-                treeIdentity: $0.treeIdentity)
+                treeIdentity: $0.treeIdentity,
+                // The name fields have to be here, not only on the
+                // POIProfile bridge (2026-09-06). This is the builder the
+                // LIVE turn uses, and without them `fullNameByNode` is empty
+                // at runtime, so `unambiguousName` finds nothing fuller to
+                // reach for and B7 goes on binding the contested given name.
+                // Every unit test passed because each one built its overlay
+                // directly, with the fields — the production route was the
+                // one path nothing covered. Hence the test below.
+                surname: $0.surname, maidenName: $0.maidenName,
+                middleName: $0.middleName, suffix: $0.suffix)
         }, graph: context.graph)
     }
 

@@ -47,6 +47,10 @@ struct ArchivistEndpointSettings: View {
     /// Which host the menu is describing, named in the caption so the
     /// reader knows whose model list they are looking at.
     @State private var modelSourceHost: String?
+    /// Restart-the-brain state (Rick, 2026-09-06).
+    @State private var restarting = false
+    @State private var restartReport: String?
+    @State private var restartReportIsGood = false
 
     enum Liveness: Equatable {
         case unknown, online, idle(String), offline(String)
@@ -195,6 +199,15 @@ struct ArchivistEndpointSettings: View {
                     .controlSize(.small)
                     .disabled(loadingModels || hosts.isEmpty)
                     .help("Re-read the installed models from the first server that answers")
+
+                    Button(restarting ? "…" : "Restart") {
+                        Task { await restartBrain() }
+                    }
+                    .controlSize(.small)
+                    .disabled(restarting || hosts.isEmpty)
+                    .help("Unload and reload the model, and forget anything this "
+                          + "run has decided the server can't do")
+                    .accessibilityIdentifier("archivist.restartBrain")
                 }
                 Text(installed.isEmpty
                      ? "No server answered, so type the tag exactly as `ollama list` shows it."
@@ -203,6 +216,13 @@ struct ArchivistEndpointSettings: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let restartReport {
+                    Text(restartReport)
+                        .font(.caption)
+                        .foregroundColor(restartReportIsGood ? .green : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("archivist.restartBrain.report")
+                }
             }
 
             Divider()
@@ -328,6 +348,93 @@ struct ArchivistEndpointSettings: View {
         }
         installed = []
         modelSourceHost = nil
+    }
+
+    /// Restart the brain (Rick, 2026-09-06).
+    ///
+    /// The motivating failure is worth stating, because "restart the model"
+    /// is not what actually goes wrong most often. On 2026-09-06 the ollama
+    /// SERVER on this machine was 0.33.2 while the client binary was 0.33.3,
+    /// and the old server answered every schema-bearing request with HTTP
+    /// 501 "structured output is unavailable". Hallie handled that
+    /// correctly — she dropped the schema and kept going — but
+    /// `OllamaStructuredOutputCapability` memoizes the refusal PER PROCESS,
+    /// deliberately, so one bad host cannot cost a doomed round trip on
+    /// every turn. The consequence is the thing this button exists for:
+    /// restarting ollama did not help, because VideoScan had already
+    /// decided, for the rest of its run, not to ask again. The only cure
+    /// was relaunching the app.
+    ///
+    /// So the order here is: FORGET first, then reload the model, then
+    /// re-probe and say plainly whether the server can constrain output
+    /// now. Forgetting without re-probing would just move the discovery to
+    /// Rick's next question; re-probing without forgetting would report a
+    /// capability the translator has already stopped using.
+    ///
+    /// What it does NOT do is restart the ollama server process. That is a
+    /// bigger hammer than an app should swing at something it does not
+    /// own, and the report below names the version mismatch when it sees
+    /// one so the person reading it knows to go do that themselves.
+    @MainActor
+    private func restartBrain() async {
+        guard !restarting, !hosts.isEmpty else { return }
+        restarting = true
+        restartReport = nil
+        defer { restarting = false }
+
+        let tag = model
+        var reloaded: [String] = []
+        var constrained: [String] = []
+        var refused: [String] = []
+        var silent: [String] = []
+
+        for host in hosts {
+            let endpoint = OllamaEndpoints.chatURLString(for: host, defaultPort: 11434)
+            // 1. Forget, so the very next turn is willing to send a schema.
+            await OllamaStructuredOutputCapability.shared.forget(endpoint)
+
+            // 2. Unload and reload. `keep_alive: 0` evicts the weights; the
+            //    warm-up that follows pulls them back in, which is what
+            //    clears a model that has wedged rather than a server that
+            //    has.
+            var probe = OllamaQueryTranslator()
+            probe.host = host
+            probe.model = tag
+            await probe.unloadModel()
+            do {
+                try await probe.warmUp()
+                reloaded.append(host)
+            } catch {
+                silent.append(host)
+                continue
+            }
+
+            // 3. Ask the question the button is really about.
+            switch await probe.structuredOutputProbe() {
+            case .available: constrained.append(host)
+            case .refused:   refused.append(host)
+            case .unreachable: silent.append(host)
+            }
+        }
+
+        restartReportIsGood = !constrained.isEmpty && refused.isEmpty && silent.isEmpty
+        var lines: [String] = []
+        if !reloaded.isEmpty {
+            lines.append("Reloaded \(tag) on \(reloaded.joined(separator: ", ")).")
+        }
+        if !constrained.isEmpty {
+            lines.append("Structured output is working again — Hallie will ask with a schema.")
+        }
+        if !refused.isEmpty {
+            lines.append("\(refused.joined(separator: ", ")) still refuses structured output. "
+                         + "That is the ollama SERVER build, not the model: restart the ollama "
+                         + "server itself (a client upgrade doesn't restart it), then press "
+                         + "Restart again.")
+        }
+        if !silent.isEmpty {
+            lines.append("No answer from \(silent.joined(separator: ", ")).")
+        }
+        restartReport = lines.isEmpty ? "Nothing to restart." : lines.joined(separator: " ")
     }
 
     /// Probe every host concurrently. Uses the SAME `probeLiveness` the
