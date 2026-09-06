@@ -159,11 +159,43 @@ struct ArchivistQueryASTTranslatorDecodingTests {
         assertRejected(#"{"shape":"biography","payload":{}}"#)
         assertRejected(#"{"shape":"presence","payload":{"mediaKind":"hologram"}}"#)
         assertRejected(#"{"shape":"presence","payload":{"yearStart":2100}}"#)
-        assertRejected(#"{"shape":"temporal","payload":{"subject":"Timmy","operation":"age","reference":null}}"#)
+        // `reference: null` moved OUT of this list on 2026-09-06 and into
+        // its own test below. It is no longer malformed, and the reason is
+        // a composition of two commits that were each correct alone:
+        // 4f720b0f strips null values before decoding as benign translator
+        // extras, and 828e00da defaults a MISSING reference to
+        // `.currentSelection`. Together, null is stripped and then
+        // defaulted. 828e00da was green in isolation on 2026-09-03 because
+        // main did not strip nulls yet.
+        //
+        // A reference that is present and WRONG must still be rejected —
+        // that is what this line now checks, and it is the part with teeth.
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"Timmy","operation":"age","reference":{"kind":"nonsense"}}}"#)
+        assertRejected(#"{"shape":"temporal","payload":{"subject":"Timmy","operation":"age","reference":42}}"#)
         assertRejected(#"{"shape":"graph","payload":{"people":["Ellen"],"operation":"kinship"}}"#)
         assertRejected(#"["shape","presence"]"#)
         assertRejected(#"not json"#)
         assertRejected(#"{"payload":{"people":["donna"]}}"#)
+    }
+
+    /// The composition described above, pinned deliberately rather than
+    /// left to be discovered by a failing negative test on someone's merge.
+    ///
+    /// An explicit null reference now means the same as an absent one:
+    /// "count to today", which is exactly what `.currentSelection` says.
+    /// The sanitizer's note is part of the contract — the turn records that
+    /// something was dropped, so a run that starts producing them is
+    /// visible rather than silent.
+    @Test func anExplicitlyNullReferenceIsDroppedAndDefaulted() throws {
+        let decoded = try decode(
+            #"{"shape":"temporal","payload":{"subject":"Timmy","operation":"age","reference":null}}"#)
+        guard case .temporal(let temporal) = decoded.ast else {
+            Issue.record("expected a temporal shape, got \(decoded.ast)")
+            return
+        }
+        #expect(temporal.reference == .currentSelection)
+        #expect(decoded.notes.contains("dropped null payload.reference"),
+                Comment(rawValue: "\(decoded.notes)"))
     }
 
     // MARK: Translator wiring
