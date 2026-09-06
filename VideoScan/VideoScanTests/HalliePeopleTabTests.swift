@@ -193,13 +193,17 @@ struct HalliePeopleTabTests {
         #expect(result.prose.contains("was born 22 April 1965, according to the People profile"))
         // Tags under any of the profile's own names count.
         #expect(result.prose.contains("tagged in 3 catalog videos"))
-        #expect(result.prose.contains("The note on the profile says: “Number four son, sometimes wears glasses” — that's a note, not something I've verified."))
+        // 2026-09-06: the hedge is retired and replaced by attribution —
+        // Rick's corrected biography is the most verified thing Hallie has.
+        #expect(result.prose.contains("From Rick's People profile for Timmy: “Number four son, sometimes wears glasses”"))
+        #expect(!result.prose.contains("not something I've verified"),
+                "the retired hedge must not come back")
         #expect(result.prose.contains("I couldn't match Timmy to a record in the family tree I have."))
         #expect(!result.prose.contains("goes up to people born"), "no max-birth-year reach claim (2026-08-26)")
         #expect(result.prose.hasSuffix("If you tell me more about Timmy — “let me tell you about Timmy” — I'll remember it."))
         #expect(!result.prose.contains("don't find"))
         #expect(result.basisLine.contains("People profile “Timmy”"))
-        #expect(result.basisLine.contains("note — quoted, not verified"))
+        #expect(result.basisLine.contains("biography — quoted from the profile Rick maintains"))
         #expect(result.catalogPersonName == "Timmy")
     }
 

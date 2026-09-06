@@ -171,6 +171,29 @@ struct POINameForms: Equatable {
         return full.isEmpty ? shortName : full
     }
 
+    /// First-mention name for a BIOGRAPHY answer, where a family archivist
+    /// says the birth surname: "Eileen Breen (née Latta)". Everywhere else
+    /// keeps `displayFullName` — a search result, a chip label or a kinship
+    /// aside naming a woman by two surnames reads as clutter, and matching
+    /// never sees this string at all.
+    ///
+    /// Falls back to `displayFullName` exactly when there is nothing to add:
+    /// no maiden name, or a maiden name that IS the surname (an unmarried
+    /// woman, or one who kept her name — saying "née" there is wrong).
+    /// 2026-09-06, Rick: maiden and married names were resolving queries but
+    /// never being spoken.
+    var biographyFullName: String {
+        let display = displayFullName
+        guard let maiden = POINameText.cleaned(maidenName) else { return display }
+        if let surname, PersonResolver.normalize(surname) == PersonResolver.normalize(maiden) {
+            return display
+        }
+        // With no married surname on file there is no "née" to draw — the
+        // maiden name is simply the only last name this person has.
+        guard surname != nil else { return display }
+        return "\(display) (née \(maiden))"
+    }
+
     /// True when `displayFullName` says more than the short name — the only
     /// case where first-mention phrasing differs from today.
     var hasFullName: Bool {

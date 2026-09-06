@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 302 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 311 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2461,6 +2461,77 @@
         "1."
       ],
       "notes": "Origin phrasing on a named line is the read-out trail (paternal, to the top), not the catalog-wide 'where does the family come from' summary."
+    },
+    {
+      "id": "lv260906-001",
+      "category": "live",
+      "text": "tell me about dad",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed"
+    },
+    {
+      "id": "lv260906-002",
+      "category": "live",
+      "text": "find videos of tim",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-003",
+      "category": "live",
+      "text": "find golf video",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-004",
+      "category": "live",
+      "text": "show thankful pratt tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-005",
+      "category": "live",
+      "text": "who was fred lamb",
+      "expect": "biography",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-006",
+      "category": "live",
+      "text": "how are rick and donna related?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-007",
+      "category": "live",
+      "text": "find david t mcgill",
+      "expect": "catalog",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-008",
+      "category": "live",
+      "text": "was his father in the civil war?",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv260906-009",
+      "category": "live",
+      "text": "tell us about ma breen and the cia",
+      "expect": "kinship",
+      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+      "followsPrevious": true
     }
   ]
 }

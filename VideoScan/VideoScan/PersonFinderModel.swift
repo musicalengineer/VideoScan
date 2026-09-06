@@ -589,11 +589,59 @@ final class PersonFinderModel: ObservableObject {
 
     /// Save an edited profile back to disk and refresh the gallery.
     /// If the name changed, delete the old file first.
-    func updateProfile(_ updated: POIProfile, oldName: String? = nil) {
-        if let old = oldName, old.lowercased() != updated.name.lowercased() {
-            try? POIProfile.delete(name: old)
+    /// What a profile write actually did. Returned — not swallowed — because
+    /// the People tab is the source of truth for the family Rick knew
+    /// personally (director ruling, 2026-09-06). A save that fails silently
+    /// leaves Hallie answering yesterday's facts while the card says
+    /// "Saved", and the person reading the answer has no way to tell.
+    enum ProfileSaveOutcome: Equatable {
+        case saved
+        /// The edit IS on disk under the new name, but the pre-rename folder
+        /// could not be retired, so both names still resolve. Not a data
+        /// loss — a tidiness failure the user should know about.
+        case savedOldNameRemains(String)
+        case failed(String)
+
+        /// Did the edit reach disk? `savedOldNameRemains` counts: the new
+        /// profile.json was written.
+        var reachedDisk: Bool {
+            if case .failed = self { return false }
+            return true
         }
-        try? updated.save()
+
+        /// User-facing sentence, nil when there is nothing to report.
+        var problem: String? {
+            switch self {
+            case .saved: return nil
+            case .savedOldNameRemains(let why):
+                return "Saved, but the old name is still there: \(why)"
+            case .failed(let why):
+                return "Not saved — \(why)"
+            }
+        }
+    }
+
+    @discardableResult
+    func updateProfile(_ updated: POIProfile, oldName: String? = nil) -> ProfileSaveOutcome {
+        // Write BEFORE retiring the old folder. The old order — delete, then
+        // `try?` save — could move a person into .trash/ and then fail to
+        // write the replacement, so a rename that hit a full disk or a
+        // read-only volume erased the person while the card flashed "Saved".
+        var outcome = ProfileSaveOutcome.saved
+        do {
+            try updated.save()
+        } catch {
+            // Nothing was deleted and nothing was written: the profile on
+            // disk is exactly what it was before this call.
+            return .failed(error.localizedDescription)
+        }
+        if let old = oldName, old.lowercased() != updated.name.lowercased() {
+            do {
+                try POIProfile.delete(name: old)
+            } catch {
+                outcome = .savedOldNameRemains(error.localizedDescription)
+            }
+        }
         savedProfiles = POIProfile.listAll()
 
         // If the edited person is the currently active one, sync settings
@@ -603,6 +651,7 @@ final class PersonFinderModel: ObservableObject {
         }
 
         refreshJobsForUpdatedProfile(updated, oldName: oldName)
+        return outcome
     }
 
     /// POIProfile is a struct (value type — C++ analogy: each job holds a

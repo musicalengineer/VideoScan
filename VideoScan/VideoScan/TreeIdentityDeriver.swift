@@ -173,10 +173,20 @@ struct TreeIdentitySubject: Equatable, Sendable {
                   notInFamilyTree: profile.notInFamilyTree)
     }
 
+    /// Every field the deriver reasons over must be forwarded here, or the
+    /// guard that reads it can never fire. `deathdate`, `notInFamilyTree`
+    /// and `treeIdentityUnreadable` were silently defaulted until 2026-09-06:
+    /// `deriveAll()` skips subjects marked "not in the tree", and on the app
+    /// turn path — which builds subjects from THIS initializer — the flag was
+    /// always false, so a living relative Rick had excluded on privacy
+    /// grounds was auto-bridged to a tree record regardless.
     init(_ snapshot: HallieTurnExecutor.ProfileSnapshot) {
         self.init(stableID: snapshot.stableID, name: snapshot.canonicalName, aliases: snapshot.aliases,
-                  sex: snapshot.sex, birthdate: snapshot.birthdate, kinships: snapshot.kinships,
-                  uuid: snapshot.uuid, treeIdentity: snapshot.treeIdentity)
+                  sex: snapshot.sex, birthdate: snapshot.birthdate,
+                  deathdate: snapshot.deathdate, kinships: snapshot.kinships,
+                  uuid: snapshot.uuid, treeIdentity: snapshot.treeIdentity,
+                  treeIdentityUnreadable: snapshot.treeIdentityUnreadable,
+                  notInFamilyTree: snapshot.notInFamilyTree)
     }
 
     /// Birth year in UTC — the same calendar BirthKnowledge uses, so a

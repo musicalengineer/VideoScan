@@ -267,6 +267,8 @@ extension PersonFinderView {
                             PersonCard(profile: profile,
                                        isActive: isActive,
                                        justSaved: justSavedProfileID == profile.id,
+                                       saveProblem: profileSaveProblem?.profileID == profile.id
+                                           ? profileSaveProblem?.message : nil,
                                        imageSize: personImageSize,
                                        cardWidth: personCardWidth,
                                        nameFontSize: personNameFontSize,
@@ -515,11 +517,20 @@ extension PersonFinderView {
                     store: FamilyAssetConfigurationCenter.shared.snapshot().makeStore(),
                     fingerprint: { kinshipCenter.graphFingerprint })
                 photoCenter.invalidate()
-                model.updateProfile(updated, oldName: editingOriginalName)
+                let outcome = model.updateProfile(updated, oldName: editingOriginalName)
                 // If this person is now the active POI, reload their faces
                 if model.settings.personName.lowercased() == updated.name.lowercased() {
                     Task { await model.loadPOI(updated) }
                 }
+                // Report what actually happened. "Saved" is earned by a write
+                // that reached disk, never by having been asked to write.
+                if let problem = outcome.problem {
+                    profileSaveProblem = ProfileSaveProblem(
+                        profileID: updated.id, message: problem)
+                } else {
+                    profileSaveProblem = nil
+                }
+                guard outcome.reachedDisk else { return }
                 // Flash the saved indicator on the card
                 justSavedProfileID = updated.id
                 Task {
@@ -561,4 +572,13 @@ extension PersonFinderView {
             .environmentObject(catalogModel)
         }
     }
+}
+
+
+/// A profile write that did not fully succeed, pinned to the card it
+/// belongs to. Carries the profile id so a later edit of a DIFFERENT
+/// person never inherits this person's warning.
+struct ProfileSaveProblem: Equatable {
+    let profileID: String
+    let message: String
 }

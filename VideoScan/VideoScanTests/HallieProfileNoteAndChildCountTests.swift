@@ -134,9 +134,15 @@ struct HallieBridgedProfileNoteTests {
     @Test func aBridgedSubjectsNoteIsQuotedWithTheSameAttributionAndHedge() async throws {
         let r = try await ask("Dad", .biography, context: context(profiles()))
         #expect(r.outcome == .answered, Comment(rawValue: r.prose))
-        #expect(r.prose.contains("The note on the profile says: \u{201C}Rick\u{2019}s father was born in 1929, "
+        // The attribution names the PROFILE, not the tree record: this
+        // fixture's profile is "Dad" with no surname, so `displayFullName`
+        // is "Dad" even though the tree knows him as Richard Harding Breen
+        // Sr. That is the honest thing to say — the quote came from the
+        // profile called Dad.
+        #expect(r.prose.contains("From Rick's People profile for Dad: "
+                                 + "\u{201C}Rick\u{2019}s father was born in 1929, "
                                  + "served in the US Marine Corp"), Comment(rawValue: r.prose))
-        #expect(r.prose.contains("\u{201D} — that's a note, not something I've verified."),
+        #expect(!r.prose.contains("not something I've verified"),
                 Comment(rawValue: r.prose))
         // The verified tree sentences are exactly what they were.
         #expect(r.prose.hasPrefix(
@@ -144,7 +150,7 @@ struct HallieBridgedProfileNoteTests {
             + "Boston, Suffolk, Massachusetts and died 22 June 2008 in Brockton, Plymouth, "
             + "Massachusetts. He was married to Eileen Latta."), Comment(rawValue: r.prose))
         // And the note is said LAST, after everything the tree vouches for.
-        let noteStart = try #require(r.prose.range(of: "The note on the profile says:"))
+        let noteStart = try #require(r.prose.range(of: "From Rick's People profile for"))
         #expect(r.prose[noteStart.lowerBound...].contains("family tree includes") == false,
                 Comment(rawValue: r.prose))
     }
@@ -156,10 +162,10 @@ struct HallieBridgedProfileNoteTests {
         let r = try await ask("Dad", .biography, context: context(profiles()))
         let plan = try #require(r.answerPlan)
         for claim in plan.claims {
-            #expect(!claim.text.contains("note on the profile"), Comment(rawValue: claim.text))
+            #expect(!claim.text.contains("From Rick's People profile"), Comment(rawValue: claim.text))
             #expect(!claim.text.contains("Marine Corp"), Comment(rawValue: claim.text))
         }
-        #expect((plan.provenanceNote ?? "").contains("The note on the profile says:"),
+        #expect((plan.provenanceNote ?? "").contains("From Rick's People profile for"),
                 Comment(rawValue: plan.provenanceNote ?? "nil"))
         // The basis line still says only what the tree and the rows say.
         #expect(!r.basisLine.contains("Marine"), Comment(rawValue: r.basisLine))
@@ -168,7 +174,7 @@ struct HallieBridgedProfileNoteTests {
     @Test func anEmptyOrWhitespaceNoteAppendsNothingAndLeavesNoDanglingPunctuation() async throws {
         for note in ["", "   ", " \n\t "] {
             let r = try await ask("Dad", .biography, context: context(profiles(dadNote: note)))
-            #expect(!r.prose.contains("note on the profile"), Comment(rawValue: r.prose))
+            #expect(!r.prose.contains("From Rick's People profile"), Comment(rawValue: r.prose))
             #expect(!r.prose.contains("\u{201C}"), Comment(rawValue: r.prose))
             #expect(r.prose.hasSuffix("."), Comment(rawValue: r.prose))
             #expect(!r.prose.contains("  "), Comment(rawValue: r.prose))
@@ -185,13 +191,12 @@ struct HallieBridgedProfileNoteTests {
         let r = try await ask("Tim", .biography, context: context(profiles()))
         #expect(r.prose.hasPrefix("Tim is one of the people in the People tab."),
                 Comment(rawValue: r.prose))
-        #expect(r.prose.contains("The note on the profile says: \u{201C}\(timsNote)\u{201D} "
-                                 + "— that's a note, not something I've verified."),
+        #expect(r.prose.contains("From Rick's People profile for Tim: \u{201C}\(timsNote)\u{201D}"),
                 Comment(rawValue: r.prose))
         #expect(r.prose.contains("I couldn't match Tim to a record in the family tree I have."),
                 Comment(rawValue: r.prose))
         // Said once, not twice: the graph route must not also append it.
-        #expect(r.prose.components(separatedBy: "note on the profile").count == 2,
+        #expect(r.prose.components(separatedBy: "From Rick's People profile").count == 2,
                 Comment(rawValue: r.prose))
     }
 }

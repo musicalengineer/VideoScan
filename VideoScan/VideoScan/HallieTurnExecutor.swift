@@ -328,6 +328,18 @@ enum HallieTurnExecutor {
         let maidenName: String?
         let middleName: String?
         let suffix: String?
+        /// Rick said this person is NOT on the family tree — a living
+        /// relative FamilySearch never carries (2026-09-06). Carried here
+        /// because `TreeIdentityDeriver` reads its subjects from THIS type
+        /// on the app turn path: without it the deriver's own
+        /// "not marked not-in-the-tree" guard could never fire, and a
+        /// living relative Rick had explicitly excluded was auto-bridged to
+        /// a tree record anyway. Additive; absent ⇒ false, the old behaviour.
+        let notInFamilyTree: Bool
+        /// The profile carries a `treeIdentity` this build could not decode.
+        /// Fail closed: the deriver must not invent a pin for a profile that
+        /// already has one it cannot read. Additive; absent ⇒ false.
+        let treeIdentityUnreadable: Bool
 
         init(
             stableID: String,
@@ -343,7 +355,9 @@ enum HallieTurnExecutor {
             surname: String? = nil,
             maidenName: String? = nil,
             middleName: String? = nil,
-            suffix: String? = nil
+            suffix: String? = nil,
+            notInFamilyTree: Bool = false,
+            treeIdentityUnreadable: Bool = false
         ) {
             self.stableID = stableID
             self.canonicalName = canonicalName
@@ -359,6 +373,8 @@ enum HallieTurnExecutor {
             self.maidenName = POINameText.cleaned(maidenName)
             self.middleName = POINameText.cleaned(middleName)
             self.suffix = POINameText.cleanedSuffix(suffix)
+            self.notInFamilyTree = notInFamilyTree
+            self.treeIdentityUnreadable = treeIdentityUnreadable
         }
 
         /// The same pure builder the profile uses, so the People tab and the
@@ -372,6 +388,11 @@ enum HallieTurnExecutor {
         /// First-mention name in profile-derived prose. Equals
         /// `canonicalName` when no surname is set.
         var displayFullName: String { nameForms.displayFullName }
+
+        /// First-mention name in a BIOGRAPHY answer — carries the maiden
+        /// name ("Eileen Breen (née Latta)"). Biography prose only; every
+        /// other route keeps `displayFullName`.
+        var biographyFullName: String { nameForms.biographyFullName }
 
         /// Derived exact-match spellings; empty until Rick fills a surname
         /// in. The nil check comes first because identity resolution walks

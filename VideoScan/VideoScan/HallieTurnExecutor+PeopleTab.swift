@@ -346,8 +346,12 @@ extension HallieTurnExecutor {
             var outcome: Outcome = .answered
             switch payload.operation {
             case .biography:
+                // The ONE sentence that carries the maiden name (2026-09-06):
+                // first mention of a biography. `full` stays plain everywhere
+                // else in this answer, including the quote attribution below,
+                // so "née Latta" is said once and not three times.
                 sentences.append(
-                    "\(full) is one of the people in the People tab"
+                    "\(profile.biographyFullName) is one of the people in the People tab"
                         + (aliases.isEmpty ? "" : " — also known as \(aliases.joined(separator: ", "))")
                         + ".")
                 if let born { sentences.append("\(name) was born \(born), according to the People profile.") }
@@ -390,7 +394,7 @@ extension HallieTurnExecutor {
 
             var checked = "Checked: People profile “\(name)” (alternate names, birth date"
             if !profile.note.isEmpty, payload.operation == .biography {
-                checked += ", note — quoted, not verified"
+                checked += ", biography — quoted from the profile Rick maintains"
             }
             checked += "); family tree (no entry for \(name))"
             checked += context.presenceRecords.isEmpty ? "." : "; catalog tags (\(videos))."
@@ -493,7 +497,9 @@ extension HallieTurnExecutor {
                     surname: profile.surname,
                     maidenName: profile.maidenName,
                     middleName: profile.middleName,
-                    suffix: profile.suffix)
+                    suffix: profile.suffix,
+                    notInFamilyTree: profile.notInFamilyTree,
+                    treeIdentityUnreadable: profile.treeIdentityUnreadable)
             }
                 .sorted {
                     let lhs = normalizeName($0.canonicalName)
@@ -533,16 +539,52 @@ extension HallieTurnExecutor {
             HallieDateStyle.spoken(date)
         }
 
+        /// How much of a biography one spoken answer carries. Was 240, then
+        /// 400 (2026-09-04). 1000 as of 2026-09-06: Rick's ruling made the
+        /// People tab the source of truth for the family he knew personally,
+        /// so these stopped being one-line relationship notes and started
+        /// being biographies. A paragraph is the right size for an answer;
+        /// past that, `trimmedToSentence` stops somewhere a reader can hear.
+        static let biographyQuoteLimit = 1000
+
+        /// Cut long prose at a sentence end rather than mid-word. The old
+        /// `prefix(400)` produced "they married in 1956, then…" — a quote
+        /// that stops mid-clause reads as if the archivist lost her place.
+        ///
+        /// The `limit / 2` floor matters: a biography whose first sentence
+        /// is "He was a Marine." would otherwise be cut to four words
+        /// because that is the last terminator inside the budget. When no
+        /// sentence end sits in the back half, fall back to a word boundary.
+        static func trimmedToSentence(_ text: String, limit: Int) -> String {
+            guard text.count > limit else { return text }
+            let head = String(text.prefix(limit))
+            if let cut = head.lastIndex(where: { ".!?".contains($0) }) {
+                let upTo = head[head.startIndex...cut]
+                if upTo.count >= limit / 2 { return String(upTo) + " …" }
+            }
+            if let space = head.lastIndex(of: " ") {
+                return String(head[head.startIndex..<space]) + " …"
+            }
+            return head + "…"
+        }
+
+        /// The biography Rick keeps on a People profile, ready to speak.
+        ///
+        /// Until 2026-09-06 this ended "— that's a note, not something I've
+        /// verified." Rick's ruling retired that sentence: the People tab is
+        /// authoritative for the family he knew personally, and he corrects
+        /// it by hand. Hedging his own corrected biography told the family
+        /// the OPPOSITE of the truth — it is the most verified thing Hallie
+        /// has, more so than the GEDCOM. What replaces the hedge is
+        /// attribution: the answer still says where the words came from, so
+        /// a reader can weigh them, and Swift still writes this sentence
+        /// after verification so the composer can never launder it into a
+        /// cited fact.
         static func quotedNote(_ profile: ProfileSnapshot) -> String? {
             let note = profile.note.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !note.isEmpty else { return nil }
-            // 400, not 240 (Rick, 2026-09-04): Dad's note is 256 characters
-            // and the old cap cut it at "they married in 1956, then…",
-            // losing "had 5 children" — the very fact the child-count
-            // sentence beside it exists to get right. 400 carries every
-            // note the People tab currently holds, the longest being 347.
-            let trimmed = note.count > 400 ? String(note.prefix(400)) + "…" : note
-            return "The note on the profile says: “\(trimmed)” — that's a note, not something I've verified."
+            let trimmed = trimmedToSentence(note, limit: biographyQuoteLimit)
+            return "From Rick's People profile for \(profile.displayFullName): “\(trimmed)”"
         }
 
         /// Never "the tree only goes up to people born in YYYY" (live

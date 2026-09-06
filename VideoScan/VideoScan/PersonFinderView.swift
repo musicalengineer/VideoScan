@@ -103,7 +103,14 @@ struct PersonFinderView: View {
     /// The original name of the profile being edited (nil when adding new).
     @State var editingOriginalName: String?
     /// Briefly set after a profile save to flash confirmation on the card.
+    /// Set ONLY when the write actually reached disk (2026-09-06) — the flash
+    /// used to be unconditional, so a failed save reported success and Hallie
+    /// went on answering from the profile.json that was never replaced.
     @State var justSavedProfileID: String?
+    /// A save that did not fully succeed, shown on the card until dismissed
+    /// or superseded. Persistent, not a 2-second flash: a lost edit is not
+    /// something to blink at the user and take away.
+    @State var profileSaveProblem: ProfileSaveProblem?
     /// Alert message shown when user tries to edit/switch during a scan.
     @State var scanLockMessage: String?
     /// Profile ID currently being dragged for reordering.

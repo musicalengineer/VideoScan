@@ -89,6 +89,11 @@ struct PersonCard: View {
     let profile: POIProfile
     let isActive: Bool
     var justSaved: Bool = false
+    /// A save that failed or half-succeeded, shown until the next edit
+    /// (2026-09-06). Deliberately NOT a timed flash: "Saved" may vanish
+    /// after two seconds because nothing was lost, but an edit that did not
+    /// reach disk has to stay on screen until it is dealt with.
+    var saveProblem: String? = nil
     /// Image diameter — driven by the parent gallery's drag-resizable height.
     var imageSize: CGFloat = 64
     /// Card width — should accommodate the image plus a little breathing room.
@@ -168,16 +173,25 @@ struct PersonCard: View {
                         .help(aliasWarning)
                         .accessibilityLabel(aliasWarning)
                 }
-                if justSaved {
+                if let saveProblem {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .font(.system(size: max(9, nameFontSize * 0.7)))
+                        .foregroundColor(.red)
+                        .help(saveProblem)
+                        .accessibilityLabel(saveProblem)
+                } else if justSaved {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: max(9, nameFontSize * 0.7)))
                         .foregroundColor(.green)
                         .transition(.scale.combined(with: .opacity))
                 }
-                Text(justSaved ? "Saved" : profile.name)
+                Text(saveProblem != nil ? "Not saved" : justSaved ? "Saved" : profile.name)
                     .font(.system(size: nameFontSize, weight: isActive ? .bold : .medium))
                     .lineLimit(1)
-                    .foregroundColor(justSaved ? .green : isActive ? .blue : .primary)
+                    .help(saveProblem ?? "")
+                    .foregroundColor(saveProblem != nil ? .red
+                                     : justSaved ? .green
+                                     : isActive ? .blue : .primary)
             }
             .animation(.easeInOut(duration: 0.3), value: justSaved)
 
