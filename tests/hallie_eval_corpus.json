@@ -1,2537 +1,2566 @@
 {
-  "version": 1,
-  "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 311 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
-  "expect_values": {
-    "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
-    "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
-    "kinship": "Answer from the family graph (people, relationships, dates).",
-    "biography": "Narrative composed from the knowledge base, attributed, no invented biography.",
-    "graceful_decline": "Should honestly say it does not know, warmly, and offer what it can do instead. Never fabricate.",
-    "clarify": "Should ask which one / what is meant rather than guessing."
+ "version": 1,
+ "created": "2026-08-21",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 311 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "expect_values": {
+  "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
+  "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
+  "kinship": "Answer from the family graph (people, relationships, dates).",
+  "biography": "Narrative composed from the knowledge base, attributed, no invented biography.",
+  "graceful_decline": "Should honestly say it does not know, warmly, and offer what it can do instead. Never fabricate.",
+  "clarify": "Should ask which one / what is meant rather than guessing."
+ },
+ "sources": [
+  {
+   "name": "StoryCorps Great Questions",
+   "url": "https://storycorps.org/participate/great-questions/",
+   "note": "Canonical oral-history interview prompt list; sections for Grandparents, Growing Up, School, Working, War. Used as the model for the grandparent_style set."
   },
-  "sources": [
-    {
-      "name": "StoryCorps Great Questions",
-      "url": "https://storycorps.org/participate/great-questions/",
-      "note": "Canonical oral-history interview prompt list; sections for Grandparents, Growing Up, School, Working, War. Used as the model for the grandparent_style set."
-    },
-    {
-      "name": "StoryCorps Archive - Great Questions List",
-      "url": "https://archive.storycorps.org/great-questions-list/",
-      "note": "Archive mirror of the same prompt list."
-    },
-    {
-      "name": "Heritage Whisper - 100+ Questions to Ask Your Grandparents Before It's Too Late",
-      "url": "https://heritagewhisper.com/guides/questions-for-grandparents",
-      "note": "Source of the technology / cars / television / cost-of-things / first-job / how-did-you-meet phrasings."
-    },
-    {
-      "name": "The Good Trade - 99 Questions To Ask Your Grandparents While You Can",
-      "url": "https://www.thegoodtrade.com/features/questions-to-ask-your-grandparents/",
-      "note": "Source of daily-life, free-time, music, money and neighborhood phrasings."
-    },
-    {
-      "name": "Storyworth - Questions to Ask Your Grandparents",
-      "url": "https://welcome.storyworth.com/blog/questions-to-ask-your-grandparents",
-      "note": "Cross-check for common phrasing of childhood and school questions."
-    },
-    {
-      "name": "Southtree - 10 Questions to Ask Your Grandparents",
-      "url": "https://southtree.com/blogs/artifact/10-questions-to-ask-your-grandparents",
-      "note": "Home-movie-oriented interview prompts; relevant because the asker is often watching old tape."
-    }
-  ],
-  "questions": [
-    {
-      "id": "sm001",
-      "category": "smalltalk",
-      "text": "Hi Hallie",
-      "expect": "social"
-    },
-    {
-      "id": "sm002",
-      "category": "smalltalk",
-      "text": "hello there",
-      "expect": "social"
-    },
-    {
-      "id": "sm003",
-      "category": "smalltalk",
-      "text": "Good morning!",
-      "expect": "social"
-    },
-    {
-      "id": "sm004",
-      "category": "smalltalk",
-      "text": "How are you today?",
-      "expect": "social",
-      "notes": "Should answer socially without deflecting into an archive pitch."
-    },
-    {
-      "id": "sm005",
-      "category": "smalltalk",
-      "text": "how's your day going",
-      "expect": "social",
-      "followsPrevious": true,
-      "notes": "Second social probe in a row - must not repeat the same canned line as sm004."
-    },
-    {
-      "id": "sm006",
-      "category": "smalltalk",
-      "text": "hey whats up",
-      "expect": "social"
-    },
-    {
-      "id": "sm007",
-      "category": "smalltalk",
-      "text": "how's it going",
-      "expect": "social"
-    },
-    {
-      "id": "sm008",
-      "category": "smalltalk",
-      "text": "Thanks, that's really helpful.",
-      "expect": "social"
-    },
-    {
-      "id": "sm009",
-      "category": "smalltalk",
-      "text": "thank you so much",
-      "expect": "social"
-    },
-    {
-      "id": "sm010",
-      "category": "smalltalk",
-      "text": "You're helpful, you know that?",
-      "expect": "social",
-      "notes": "Compliment. Should accept graciously and briefly, not launch into a capability list."
-    },
-    {
-      "id": "sm011",
-      "category": "smalltalk",
-      "text": "I appreciate you.",
-      "expect": "social"
-    },
-    {
-      "id": "sm012",
-      "category": "smalltalk",
-      "text": "nice to meet you",
-      "expect": "social"
-    },
-    {
-      "id": "sm013",
-      "category": "smalltalk",
-      "text": "Sorry, I meant something else.",
-      "expect": "social"
-    },
-    {
-      "id": "sm014",
-      "category": "smalltalk",
-      "text": "My apologies, I keep typing the wrong name.",
-      "expect": "social"
-    },
-    {
-      "id": "sm015",
-      "category": "smalltalk",
-      "text": "hold on a sec",
-      "expect": "social",
-      "notes": "Should acknowledge and wait, not fill the silence with output."
-    },
-    {
-      "id": "sm016",
-      "category": "smalltalk",
-      "text": "one moment please",
-      "expect": "social"
-    },
-    {
-      "id": "sm017",
-      "category": "smalltalk",
-      "text": "never mind",
-      "expect": "social",
-      "notes": "Should drop the thread cleanly without asking three follow-up questions."
-    },
-    {
-      "id": "sm018",
-      "category": "smalltalk",
-      "text": "ok gotta run, talk later",
-      "expect": "social"
-    },
-    {
-      "id": "sm019",
-      "category": "smalltalk",
-      "text": "Goodbye Hallie.",
-      "expect": "social"
-    },
-    {
-      "id": "sm020",
-      "category": "smalltalk",
-      "text": "see ya",
-      "expect": "social"
-    },
-    {
-      "id": "sm021",
-      "category": "smalltalk",
-      "text": "Have a good night.",
-      "expect": "social"
-    },
-    {
-      "id": "sm022",
-      "category": "smalltalk",
-      "text": "It's pouring rain here in the Berkshires today.",
-      "expect": "social",
-      "notes": "Weather chit-chat. Should engage as conversation, not treat 'Berkshires' as a search term."
-    },
-    {
-      "id": "sm023",
-      "category": "smalltalk",
-      "text": "beautiful day out isn't it",
-      "expect": "social"
-    },
-    {
-      "id": "sm024",
-      "category": "smalltalk",
-      "text": "Supposed to snow tonight. First one of the year.",
-      "expect": "social"
-    },
-    {
-      "id": "sm025",
-      "category": "smalltalk",
-      "text": "Do you ever get tired?",
-      "expect": "social",
-      "notes": "Should be honest that it is software, without being cold or lecturing."
-    },
-    {
-      "id": "sm026",
-      "category": "smalltalk",
-      "text": "are you busy right now",
-      "expect": "social"
-    },
-    {
-      "id": "sm027",
-      "category": "smalltalk",
-      "text": "tell me a joke",
-      "expect": "social"
-    },
-    {
-      "id": "sm028",
-      "category": "smalltalk",
-      "text": "that was terrible lol",
-      "expect": "social",
-      "followsPrevious": true,
-      "notes": "Playful teasing after the joke. Should take it well."
-    },
-    {
-      "id": "sm029",
-      "category": "smalltalk",
-      "text": "what time is it",
-      "expect": "social"
-    },
-    {
-      "id": "sm030",
-      "category": "smalltalk",
-      "text": "What's today's date?",
-      "expect": "social"
-    },
-    {
-      "id": "ic001",
-      "category": "identity_capability",
-      "text": "who are you",
-      "expect": "social"
-    },
-    {
-      "id": "ic002",
-      "category": "identity_capability",
-      "text": "What can you do?",
-      "expect": "social",
-      "notes": "Should be concrete about the archive, not a generic assistant blurb."
-    },
-    {
-      "id": "ic003",
-      "category": "identity_capability",
-      "text": "are you an AI?",
-      "expect": "social",
-      "notes": "Must answer truthfully."
-    },
-    {
-      "id": "ic004",
-      "category": "identity_capability",
-      "text": "Are you a real person or a program?",
-      "expect": "social"
-    },
-    {
-      "id": "ic005",
-      "category": "identity_capability",
-      "text": "Do you know my family?",
-      "expect": "social"
-    },
-    {
-      "id": "ic006",
-      "category": "identity_capability",
-      "text": "what do you know about our videos",
-      "expect": "catalog"
-    },
-    {
-      "id": "ic007",
-      "category": "identity_capability",
-      "text": "how do you know that",
-      "expect": "social",
-      "followsPrevious": true,
-      "notes": "Provenance challenge. Should name the catalog / knowledge base rather than bluff."
-    },
-    {
-      "id": "ic008",
-      "category": "identity_capability",
-      "text": "Where does your information come from?",
-      "expect": "social"
-    },
-    {
-      "id": "ic009",
-      "category": "identity_capability",
-      "text": "Can you play a video for me?",
-      "expect": "social",
-      "notes": "Capability question, not yet a specific request. Should say yes and ask which."
-    },
-    {
-      "id": "ic010",
-      "category": "identity_capability",
-      "text": "who made you",
-      "expect": "social"
-    },
-    {
-      "id": "ic011",
-      "category": "identity_capability",
-      "text": "what should I call you",
-      "expect": "social"
-    },
-    {
-      "id": "ic012",
-      "category": "identity_capability",
-      "text": "Can you delete files for me?",
-      "expect": "social",
-      "notes": "Should be clear about destructive-action boundaries."
-    },
-    {
-      "id": "ic013",
-      "category": "identity_capability",
-      "text": "Do you remember what we talked about yesterday?",
-      "expect": "social",
-      "notes": "Honesty about memory scope."
-    },
-    {
-      "id": "ic014",
-      "category": "identity_capability",
-      "text": "what can't you do",
-      "expect": "social"
-    },
-    {
-      "id": "ic015",
-      "category": "identity_capability",
-      "text": "Can you help me find things in the archive, or just tell me about them?",
-      "expect": "social"
-    },
-    {
-      "id": "cc001",
-      "category": "catalog_count",
-      "text": "how many videos do you have",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc002",
-      "category": "catalog_count",
-      "text": "How many of those are from the 90s?",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "'those' refers to the whole catalog from cc001."
-    },
-    {
-      "id": "cc003",
-      "category": "catalog_count",
-      "text": "and how many from the 80s",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "cc004",
-      "category": "catalog_count",
-      "text": "how many have Donna in them",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc005",
-      "category": "catalog_count",
-      "text": "How much footage is there altogether?",
-      "expect": "catalog",
-      "notes": "Duration, not file count. Should not silently answer the wrong unit."
-    },
-    {
-      "id": "cc006",
-      "category": "catalog_count",
-      "text": "what's the oldest video",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc007",
-      "category": "catalog_count",
-      "text": "and the newest?",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "cc008",
-      "category": "catalog_count",
-      "text": "how many are archived",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc009",
-      "category": "catalog_count",
-      "text": "How many hours of video do we have from the Cape?",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc010",
-      "category": "catalog_count",
-      "text": "how many files are audio only",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc011",
-      "category": "catalog_count",
-      "text": "How many videos have all four boys in them?",
-      "expect": "catalog",
-      "notes": "Requires person co-occurrence. Should decline honestly if person tagging is incomplete."
-    },
-    {
-      "id": "cc012",
-      "category": "catalog_count",
-      "text": "what percentage of the archive is from before 2000",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc013",
-      "category": "catalog_count",
-      "text": "How many videos were shot in Westford?",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc014",
-      "category": "catalog_count",
-      "text": "how many duplicates are there",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc015",
-      "category": "catalog_count",
-      "text": "How many videos do we have of my dad?",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc016",
-      "category": "catalog_count",
-      "text": "how many videos are there from 1994",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc017",
-      "category": "catalog_count",
-      "text": "How much disk space does the whole archive take up?",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc018",
-      "category": "catalog_count",
-      "text": "how many still need to be archived",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc019",
-      "category": "catalog_count",
-      "text": "Which year has the most videos?",
-      "expect": "catalog"
-    },
-    {
-      "id": "cc020",
-      "category": "catalog_count",
-      "text": "how many of them are in HD",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs001",
-      "category": "catalog_search",
-      "text": "show me Donna at the Cape",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs002",
-      "category": "catalog_search",
-      "text": "play the first one",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "Ordinal reference into the previous result list."
-    },
-    {
-      "id": "cs003",
-      "category": "catalog_search",
-      "text": "who else is in it",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "'it' = the video now playing. 'it' = the selected video; selected via :select (harness, 2026-09-01).",
-      "select": "Christmas_1994_etc.mkv"
-    },
-    {
-      "id": "cs004",
-      "category": "catalog_search",
-      "text": "any others from that same trip?",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "Hardest link in the chain - 'that same trip' means same place and same date window."
-    },
-    {
-      "id": "cs005",
-      "category": "catalog_search",
-      "text": "find videos from 1994",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs006",
-      "category": "catalog_search",
-      "text": "any videos of the kids at Christmas",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs007",
-      "category": "catalog_search",
-      "text": "show me the Westford house",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs008",
-      "category": "catalog_search",
-      "text": "play something from the 80s",
-      "expect": "catalog",
-      "notes": "Vague request - either pick one and say why, or offer a short list."
-    },
-    {
-      "id": "cs009",
-      "category": "catalog_search",
-      "text": "something else",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "Must not return the same file again."
-    },
-    {
-      "id": "cs010",
-      "category": "catalog_search",
-      "text": "videos with just audio",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs011",
-      "category": "catalog_search",
-      "text": "show me Timmy as a baby",
-      "expect": "catalog",
-      "notes": "Requires mapping 'as a baby' to a birth-year window."
-    },
-    {
-      "id": "cs012",
-      "category": "catalog_search",
-      "text": "I want to see Matt's graduation",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs013",
-      "category": "catalog_search",
-      "text": "do we have anything from Middlefield",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs014",
-      "category": "catalog_search",
-      "text": "narrow that to winter",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "cs015",
-      "category": "catalog_search",
-      "text": "ok show me the second one",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "cs016",
-      "category": "catalog_search",
-      "text": "show me birthday parties",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs017",
-      "category": "catalog_search",
-      "text": "find the videos with Dan and Mark together",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs018",
-      "category": "catalog_search",
-      "text": "pull up anything from Franklin",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs019",
-      "category": "catalog_search",
-      "text": "show me the beach videos",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs020",
-      "category": "catalog_search",
-      "text": "just the ones with Donna in them",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "cs021",
-      "category": "catalog_search",
-      "text": "find home movies from the summer of 1998",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs022",
-      "category": "catalog_search",
-      "text": "can you show me the wedding video",
-      "expect": "catalog",
-      "notes": "Possibly ambiguous - whose wedding? Clarify or state the assumption."
-    },
-    {
-      "id": "cs023",
-      "category": "catalog_search",
-      "text": "show me videos of my dad",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs024",
-      "category": "catalog_search",
-      "text": "just the ones where he's talking",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "notes": "Requires audio evidence, not just a face tag. Decline honestly if unavailable."
-    },
-    {
-      "id": "cs025",
-      "category": "catalog_search",
-      "text": "find the VHS transfers",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs026",
-      "category": "catalog_search",
-      "text": "show me the iPhone videos from last year",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs027",
-      "category": "catalog_search",
-      "text": "i want to see the boys when they were little",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs028",
-      "category": "catalog_search",
-      "text": "show me videos taken at the Cape Cod house in the 90s",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs029",
-      "category": "catalog_search",
-      "text": "find anything with Donna and Timmy together",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs030",
-      "category": "catalog_search",
-      "text": "play the longest video in the archive",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs031",
-      "category": "catalog_search",
-      "text": "find the videos from Christmas 1991",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs032",
-      "category": "catalog_search",
-      "text": "show me the oldest video of the whole family together",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs033",
-      "category": "catalog_search",
-      "text": "find videos shot on the old camcorder",
-      "expect": "catalog"
-    },
-    {
-      "id": "cs034",
-      "category": "catalog_search",
-      "text": "do we have any video of my father talking about typewriters",
-      "expect": "catalog",
-      "notes": "Very specific. Warm honest miss is the right answer if nothing matches."
-    },
-    {
-      "id": "cs035",
-      "category": "catalog_search",
-      "text": "show me videos where somebody's playing guitar",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm001",
-      "category": "temporal",
-      "text": "when was this filmed",
-      "expect": "catalog",
-      "notes": "'this' with no prior context - should ask which video, or use the currently selected one. Selected video via :select before asking (harness, 2026-09-01).",
-      "select": "Christmas_1994_etc.mkv"
-    },
-    {
-      "id": "tm002",
-      "category": "temporal",
-      "text": "how old was Timmy in this",
-      "expect": "catalog",
-      "notes": "Needs a birthdate from the family graph plus a capture date from the catalog. Selected video via :select before asking (harness, 2026-09-01).",
-      "select": "Christmas_1994_etc.mkv"
-    },
-    {
-      "id": "tm003",
-      "category": "temporal",
-      "text": "what year is that from",
-      "expect": "catalog",
-      "select": "1984-11-xx_Thanksgiving_1984.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm004",
-      "category": "temporal",
-      "text": "what happened in 1994",
-      "expect": "catalog",
-      "notes": "Should summarize what the archive holds for 1994, not narrate world history."
-    },
-    {
-      "id": "tm005",
-      "category": "temporal",
-      "text": "show me the earliest video of Donna",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm006",
-      "category": "temporal",
-      "text": "how many years of footage do we have",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm007",
-      "category": "temporal",
-      "text": "what's the earliest video in the whole archive",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm008",
-      "category": "temporal",
-      "text": "how old were the boys then",
-      "expect": "kinship",
-      "followsPrevious": true,
-      "notes": "Joins the capture year from tm007 to four birthdates."
-    },
-    {
-      "id": "tm009",
-      "category": "temporal",
-      "text": "and the most recent one?",
-      "expect": "catalog",
-      "followsPrevious": true
-    },
-    {
-      "id": "tm010",
-      "category": "temporal",
-      "text": "was that before or after we moved to Middlefield",
-      "expect": "catalog",
-      "followsPrevious": true,
-      "select": "Christmas_1994_etc.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm011",
-      "category": "temporal",
-      "text": "how old is this tape",
-      "expect": "catalog",
-      "select": "1984-11-xx_Thanksgiving_1984.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm012",
-      "category": "temporal",
-      "text": "what decade is most of our footage from",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm013",
-      "category": "temporal",
-      "text": "how old was Mark when this was taken",
-      "expect": "catalog",
-      "select": "Christmas_1994_etc.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm014",
-      "category": "temporal",
-      "text": "were the boys born yet when this was shot",
-      "expect": "catalog",
-      "select": "1984-11-xx_Thanksgiving_1984.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm015",
-      "category": "temporal",
-      "text": "what season was this filmed in",
-      "expect": "catalog",
-      "select": "Christmas_1994_etc.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm016",
-      "category": "temporal",
-      "text": "how long ago was that",
-      "expect": "catalog",
-      "select": "1984-11-xx_Thanksgiving_1984.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm017",
-      "category": "temporal",
-      "text": "give me a count of videos by year",
-      "expect": "catalog"
-    },
-    {
-      "id": "tm018",
-      "category": "temporal",
-      "text": "are there any years we have nothing from",
-      "expect": "catalog",
-      "notes": "Gap analysis - a genuinely useful archivist answer."
-    },
-    {
-      "id": "tm019",
-      "category": "temporal",
-      "text": "how old would my dad have been in this video",
-      "expect": "catalog",
-      "select": "Christmas_1994_etc.mkv",
-      "notes": "Selected video via :select before asking (harness, 2026-09-01)."
-    },
-    {
-      "id": "tm020",
-      "category": "temporal",
-      "text": "when did we stop using the camcorder",
-      "expect": "catalog",
-      "notes": "Inference from format/codec distribution over time."
-    },
-    {
-      "id": "ft001",
-      "category": "family_tree",
-      "text": "who is Donna",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft002",
-      "category": "family_tree",
-      "text": "who are Rick's sons",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft003",
-      "category": "family_tree",
-      "text": "which one is the oldest",
-      "expect": "kinship",
-      "followsPrevious": true
-    },
-    {
-      "id": "ft004",
-      "category": "family_tree",
-      "text": "and the youngest?",
-      "expect": "kinship",
-      "followsPrevious": true
-    },
-    {
-      "id": "ft005",
-      "category": "family_tree",
-      "text": "who is Tim's brother",
-      "expect": "kinship",
-      "notes": "Trap: he has three, not one. Should not pick arbitrarily."
-    },
-    {
-      "id": "ft006",
-      "category": "family_tree",
-      "text": "how am I related to Donna",
-      "expect": "kinship",
-      "notes": "Requires knowing who 'I' is in this app."
-    },
-    {
-      "id": "ft007",
-      "category": "family_tree",
-      "text": "when was Donna born",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft008",
-      "category": "family_tree",
-      "text": "who did Rick marry",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft009",
-      "category": "family_tree",
-      "text": "when did they get married",
-      "expect": "kinship",
-      "followsPrevious": true
-    },
-    {
-      "id": "ft010",
-      "category": "family_tree",
-      "text": "who was my father",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft011",
-      "category": "family_tree",
-      "text": "who is my grandfather",
-      "expect": "kinship",
-      "notes": "Ambiguous - paternal or maternal. Clarifying is a fine answer."
-    },
-    {
-      "id": "ft012",
-      "category": "family_tree",
-      "text": "how many grandchildren are there",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft013",
-      "category": "family_tree",
-      "text": "is Tim the same person as Timmy",
-      "expect": "kinship",
-      "notes": "Known alias problem in this archive. Should resolve rather than treat as two people."
-    },
-    {
-      "id": "ft014",
-      "category": "family_tree",
-      "text": "who's the youngest person in the family",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft015",
-      "category": "family_tree",
-      "text": "list everyone in the family",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft016",
-      "category": "family_tree",
-      "text": "who are Matt's brothers",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft017",
-      "category": "family_tree",
-      "text": "whats donnas maiden name",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft018",
-      "category": "family_tree",
-      "text": "who is Dan's mother",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft019",
-      "category": "family_tree",
-      "text": "am I related to Mark?",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft020",
-      "category": "family_tree",
-      "text": "who are my uncles",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft021",
-      "category": "family_tree",
-      "text": "did my dad have brothers or sisters",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft022",
-      "category": "family_tree",
-      "text": "how old is Donna",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft023",
-      "category": "family_tree",
-      "text": "when was my dad born",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft024",
-      "category": "family_tree",
-      "text": "who's in the family besides the six of us",
-      "expect": "kinship"
-    },
-    {
-      "id": "ft025",
-      "category": "family_tree",
-      "text": "can you draw me the family tree",
-      "expect": "kinship"
-    },
-    {
-      "id": "bi001",
-      "category": "biography",
-      "text": "tell me about Donna",
-      "expect": "biography"
-    },
-    {
-      "id": "bi002",
-      "category": "biography",
-      "text": "tell me about my dad",
-      "expect": "biography"
-    },
-    {
-      "id": "bi003",
-      "category": "biography",
-      "text": "what was my father like",
-      "expect": "biography"
-    },
-    {
-      "id": "bi004",
-      "category": "biography",
-      "text": "write a short biography of Rick",
-      "expect": "biography"
-    },
-    {
-      "id": "bi005",
-      "category": "biography",
-      "text": "make it a little warmer, that read like a resume",
-      "expect": "biography",
-      "followsPrevious": true,
-      "notes": "Tone revision on the same facts - must not add new facts to sound warmer."
-    },
-    {
-      "id": "bi006",
-      "category": "biography",
-      "text": "what do you know about the Breen family",
-      "expect": "biography"
-    },
-    {
-      "id": "bi007",
-      "category": "biography",
-      "text": "tell me the story of the Cape Cod trips",
-      "expect": "biography"
-    },
-    {
-      "id": "bi008",
-      "category": "biography",
-      "text": "who was my father as a young man",
-      "expect": "biography"
-    },
-    {
-      "id": "bi009",
-      "category": "biography",
-      "text": "tell me about my dad's time in the Marines",
-      "expect": "biography"
-    },
-    {
-      "id": "bi010",
-      "category": "biography",
-      "text": "what did my father do for work",
-      "expect": "biography"
-    },
-    {
-      "id": "bi011",
-      "category": "biography",
-      "text": "tell me about Rick and Donna's life together",
-      "expect": "biography"
-    },
-    {
-      "id": "bi012",
-      "category": "biography",
-      "text": "give me a paragraph about each of the boys",
-      "expect": "biography"
-    },
-    {
-      "id": "bi013",
-      "category": "biography",
-      "text": "what's the story behind the Westford house",
-      "expect": "biography"
-    },
-    {
-      "id": "bi014",
-      "category": "biography",
-      "text": "tell me what it was like growing up in this family",
-      "expect": "biography"
-    },
-    {
-      "id": "bi015",
-      "category": "biography",
-      "text": "write something about Donna I could read out loud at a family gathering",
-      "expect": "biography",
-      "notes": "High stakes for tone. Should sound like a person wrote it and stay factual."
-    },
-    {
-      "id": "bi016",
-      "category": "biography",
-      "text": "what would you say our family is known for",
-      "expect": "biography"
-    },
-    {
-      "id": "bi017",
-      "category": "biography",
-      "text": "tell me about Timmy",
-      "expect": "biography"
-    },
-    {
-      "id": "bi018",
-      "category": "biography",
-      "text": "describe our family in a few sentences",
-      "expect": "biography"
-    },
-    {
-      "id": "bi019",
-      "category": "biography",
-      "text": "tell me about the move to the Berkshires",
-      "expect": "biography"
-    },
-    {
-      "id": "bi020",
-      "category": "biography",
-      "text": "what stories do we have about the World War Two generation in our family",
-      "expect": "biography"
-    },
-    {
-      "id": "gp001",
-      "category": "grandparent_style",
-      "text": "did you have cars when you were young",
-      "expect": "graceful_decline",
-      "notes": "Addressed to Hallie as if she were a grandparent. Should be warm and honest that she is not a person, then offer what the archive does hold."
-    },
-    {
-      "id": "gp002",
-      "category": "grandparent_style",
-      "text": "what was school like when you were my age",
-      "expect": "graceful_decline",
-      "notes": "StoryCorps School section."
-    },
-    {
-      "id": "gp003",
-      "category": "grandparent_style",
-      "text": "did you have TV growing up",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp004",
-      "category": "grandparent_style",
-      "text": "what music did you listen to",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp005",
-      "category": "grandparent_style",
-      "text": "what was your first job",
-      "expect": "graceful_decline",
-      "notes": "StoryCorps Working section."
-    },
-    {
-      "id": "gp006",
-      "category": "grandparent_style",
-      "text": "how did you meet grandma",
-      "expect": "graceful_decline",
-      "notes": "Should gently redirect - the archive may know how Rick met Donna, which is the real answer the asker wants."
-    },
-    {
-      "id": "gp007",
-      "category": "grandparent_style",
-      "text": "what was it like during the war",
-      "expect": "biography",
-      "notes": "Redirect target exists: Rick's dad was a US Marine in the WW2 generation. Best answer offers that instead of a flat no."
-    },
-    {
-      "id": "gp008",
-      "category": "grandparent_style",
-      "text": "what did you do for fun",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp009",
-      "category": "grandparent_style",
-      "text": "were there computers back then",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp010",
-      "category": "grandparent_style",
-      "text": "how much did things cost when you were a kid",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp011",
-      "category": "grandparent_style",
-      "text": "what was your first car",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp012",
-      "category": "grandparent_style",
-      "text": "what was the happiest moment of your life",
-      "expect": "graceful_decline",
-      "notes": "StoryCorps Great Questions for Anyone."
-    },
-    {
-      "id": "gp013",
-      "category": "grandparent_style",
-      "text": "what are you most proud of",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp014",
-      "category": "grandparent_style",
-      "text": "what's your earliest memory",
-      "expect": "graceful_decline",
-      "notes": "A clever answer might reframe this as the earliest video in the archive - but must not pretend it is a personal memory."
-    },
-    {
-      "id": "gp015",
-      "category": "grandparent_style",
-      "text": "what was your childhood home like",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp016",
-      "category": "grandparent_style",
-      "text": "who was your best friend growing up",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp017",
-      "category": "grandparent_style",
-      "text": "what invention had the biggest impact on your life",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp018",
-      "category": "grandparent_style",
-      "text": "did you ever get in trouble as a kid",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp019",
-      "category": "grandparent_style",
-      "text": "what was your first date like",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp020",
-      "category": "grandparent_style",
-      "text": "how would you like to be remembered",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp021",
-      "category": "grandparent_style",
-      "text": "if you could talk to a younger version of yourself what would you say",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp022",
-      "category": "grandparent_style",
-      "text": "what was life like before cell phones",
-      "expect": "social",
-      "notes": "Rick wants Hallie to know her history: period colour with no invented family fact is the librarian answer (2026-09-01)."
-    },
-    {
-      "id": "gp023",
-      "category": "grandparent_style",
-      "text": "did you serve in the military",
-      "expect": "biography",
-      "notes": "Redirect to what is known about Rick's dad's Marine service and the uncles who served."
-    },
-    {
-      "id": "gp024",
-      "category": "grandparent_style",
-      "text": "where were you when the moon landing happened",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "gp025",
-      "category": "grandparent_style",
-      "text": "what chores did you have to do",
-      "expect": "graceful_decline"
-    },
-    {
-      "id": "ec001",
-      "category": "edge_cases",
-      "text": "who did rick narry? and wen?",
-      "expect": "kinship",
-      "notes": "Typos for 'marry' and 'when'. Should answer, not stall on spelling."
-    },
-    {
-      "id": "ec002",
-      "category": "edge_cases",
-      "text": "shwo me donna",
-      "expect": "catalog"
-    },
-    {
-      "id": "ec003",
-      "category": "edge_cases",
-      "text": "dnna cape cod vidoes 90s",
-      "expect": "catalog",
-      "notes": "Keyword-soup input with two typos."
-    },
-    {
-      "id": "ec004",
-      "category": "edge_cases",
-      "text": "what about him",
-      "expect": "clarify",
-      "notes": "No antecedent in this position."
-    },
-    {
-      "id": "ec005",
-      "category": "edge_cases",
-      "text": "where?",
-      "expect": "clarify"
-    },
-    {
-      "id": "ec006",
-      "category": "edge_cases",
-      "text": "the other one",
-      "expect": "clarify"
-    },
-    {
-      "id": "ec007",
-      "category": "edge_cases",
-      "text": "tell me about Napoleon",
-      "expect": "graceful_decline",
-      "notes": "Outside the family archive. Should not answer from general world knowledge as if it were archive data."
-    },
-    {
-      "id": "ec008",
-      "category": "edge_cases",
-      "text": "show me videos of Elvis",
-      "expect": "catalog",
-      "notes": "9 transcript hits say 'elvis' — a real catalog answer, not a decline (2026-09-01 eval)."
-    },
-    {
-      "id": "ec009",
-      "category": "edge_cases",
-      "text": "um",
-      "expect": "clarify"
-    },
-    {
-      "id": "ec010",
-      "category": "edge_cases",
-      "text": "ok",
-      "expect": "social",
-      "notes": "Bare acknowledgement. Should not generate a paragraph."
-    },
-    {
-      "id": "ln001",
-      "category": "lineage",
-      "text": "show Rick's maternal line back 5 generations",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln002",
-      "category": "lineage",
-      "text": "show my paternal line back three generations",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln003",
-      "category": "lineage",
-      "text": "Donna's mother's side",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln004",
-      "category": "lineage",
-      "text": "my ancestors back 4 generations",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln005",
-      "category": "lineage",
-      "text": "show the family tree for the Breen family",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln006",
-      "category": "lineage",
-      "text": "the Hudson family tree",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln007",
-      "category": "lineage",
-      "text": "family tree starting with the Lattas",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln008",
-      "category": "lineage",
-      "text": "family tree of the McGills",
-      "expect": "kinship"
-    },
-    {
-      "id": "ln009",
-      "category": "lineage",
-      "text": "trace the family back to Ireland",
-      "expect": "kinship",
-      "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
-    },
-    {
-      "id": "ln010",
-      "category": "lineage",
-      "text": "trace Rick's ancestors back to England",
-      "expect": "kinship",
-      "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
-    },
-    {
-      "id": "ln011",
-      "category": "lineage",
-      "text": "where did the family come from?",
-      "expect": "kinship",
-      "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
-    },
-    {
-      "id": "ln012",
-      "category": "lineage",
-      "text": "what is GEDCOM?",
-      "expect": "social",
-      "notes": "Capability answer: explain GEDCOM and name the loaded file/counts; never a decline."
-    },
-    {
-      "id": "ln013",
-      "category": "lineage",
-      "text": "where does your family tree come from",
-      "expect": "social",
-      "notes": "Capability answer: explain GEDCOM and name the loaded file/counts; never a decline."
-    },
-    {
-      "id": "ln014",
-      "category": "lineage",
-      "text": "show me the family tree for Donna",
-      "expect": "kinship",
-      "notes": "A person, not a surname — must fall through to the person family-tree route, not decline."
-    },
-    {
-      "id": "cj001",
-      "category": "conjunction",
-      "text": "where was Martha Lamson born and when was she born",
-      "expect": "biography",
-      "mustMatch": [
-        "Ridgewell|Essex|England",
-        "1633"
-      ],
-      "mustNotContain": [
-        "who do you mean",
-        "not sure who you mean"
-      ],
-      "notes": "Rick 2026-09-01. Cross-shape conjunction (place + date). Both halves must be answered; the pronoun binds to the name six words earlier."
-    },
-    {
-      "id": "cj002",
-      "category": "conjunction",
-      "text": "did she have kids",
-      "expect": "kinship",
-      "followsPrevious": true,
-      "mustMatch": [
-        "child|children|son|daughter|kids"
-      ],
-      "mustNotContain": [
-        "who do you mean",
-        "not sure who you mean"
-      ],
-      "notes": "Pronoun follow-up after a split question: conversation memory must hold Martha Lamson."
-    },
-    {
-      "id": "cj003",
-      "category": "conjunction",
-      "text": "and her husband?",
-      "expect": "kinship",
-      "followsPrevious": true,
-      "mustMatch": [
-        "Rice"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ],
-      "notes": "Librarian conversation: a fragment that continues the thread."
-    },
-    {
-      "id": "cj004",
-      "category": "conjunction",
-      "text": "who was Martha Lamson and do we have any videos of her",
-      "expect": "graceful_decline",
-      "mustMatch": [
-        "Lamson",
-        "1888|motion picture|film|footage|video"
-      ],
-      "mustNotContain": [
-        "who do you mean",
-        "not sure who you mean"
-      ],
-      "notes": "The measured failure of 2026-09-01. Biography half answers; the video half is CORRECTLY the film-floor line (b. before 1633 + a lifetime < 1888), so the merged turn grades as a graceful decline; mustMatch requires both halves."
-    },
-    {
-      "id": "cj005",
-      "category": "conjunction",
-      "text": "when did she die",
-      "expect": "kinship",
-      "followsPrevious": true,
-      "mustMatch": [
-        "1717"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ]
-    },
-    {
-      "id": "cj006",
-      "category": "conjunction",
-      "text": "who was Thomasine Frost and are there any photos of her",
-      "expect": "graceful_decline",
-      "mustMatch": [
-        "Frost",
-        "1838|photograph|photo|painting|portrait"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ],
-      "notes": "Biography + photo ask for someone who died two centuries before photography. The photo half is CORRECTLY a decline (the 1838 line), so the merged turn is graded as a graceful decline; mustMatch still requires the biography half."
-    },
-    {
-      "id": "cj007",
-      "category": "conjunction",
-      "text": "when was Donna born and who are her sons",
-      "expect": "kinship",
-      "mustMatch": [
-        "19\\d\\d",
-        "Dan|Mark|Tim|Matt"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ]
-    },
-    {
-      "id": "cj008",
-      "category": "conjunction",
-      "text": "who is Tim's brother and how old is Tim",
-      "expect": "kinship",
-      "mustMatch": [
-        "Dan|Mark|Matt",
-        "\\d+"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ]
-    },
-    {
-      "id": "cj009",
-      "category": "conjunction",
-      "text": "who were Martha Lamson's parents and where was she born",
-      "expect": "kinship",
-      "mustMatch": [
-        "Ridgewell|Essex|England"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ],
-      "notes": "Person + place. If the tree records no parents the first half may honestly say so; the place half must still answer."
-    },
-    {
-      "id": "cj010",
-      "category": "conjunction",
-      "text": "tell me about Martha Lamson then show me the family tree on her",
-      "expect": "biography",
-      "mustMatch": [
-        "Lamson"
-      ],
-      "mustNotContain": [
-        "who do you mean"
-      ],
-      "notes": "'then' conjunction; second clause is a tree action."
-    },
-    {
-      "id": "cj011",
-      "category": "conjunction",
-      "text": "show me Donna and the boys at Christmas",
-      "expect": "catalog",
-      "notes": "NEGATIVE: compound noun phrase, must NOT split. 'the boys at Christmas' is a fragment, not a question."
-    },
-    {
-      "id": "cj012",
-      "category": "conjunction",
-      "text": "how many videos do we have from 1994 and what happened that year",
-      "expect": "catalog",
-      "mustMatch": [
-        "\\d+"
-      ],
-      "notes": "Count + open temporal. The second half may honestly say the catalog cannot narrate a year; the count must still be given."
-    },
-    {
-      "id": "ec011",
-      "category": "edge_cases",
-      "text": "show me a video of Edmund Rice",
-      "expect": "graceful_decline",
-      "mustMatch": [
-        "1888|motion picture|film"
-      ],
-      "mustNotContain": [
-        "couldn't find",
-        "no evidence"
-      ],
-      "notes": "Historical plausibility (Rick 2026-09-01): died 1663, motion pictures begin 1888. The honest line, not a failed search."
-    },
-    {
-      "id": "ec012",
-      "category": "edge_cases",
-      "text": "are there any photos of Thomasine Frost",
-      "expect": "graceful_decline",
-      "mustMatch": [
-        "1838|photograph"
-      ],
-      "mustNotContain": [
-        "couldn't find",
-        "no evidence"
-      ],
-      "notes": "Died 1654; photography begins 1838."
-    },
-    {
-      "id": "ec013",
-      "category": "edge_cases",
-      "text": "do we have any recordings of Edmund Rice's voice",
-      "expect": "graceful_decline",
-      "notes": "Probe: sound recording begins 1877 (WorldKnowledge has the fact). Any honest decline passes; the floor line would be better."
-    },
-    {
-      "id": "tn001",
-      "category": "biography",
-      "text": "tell me about Rick",
-      "expect": "biography",
-      "mustNotContain": [
-        "Rick was the child",
-        "was married to",
-        "Rick was a ",
-        "Rick was an ",
-        "passed"
-      ],
-      "notes": "Rick 2026-09-01: living people must never be spoken of in the past tense ('Rick was …' sounds like he has passed on). 'was born' is fine."
-    },
-    {
-      "id": "tn002",
-      "category": "biography",
-      "text": "tell me about Tim",
-      "expect": "biography",
-      "mustNotContain": [
-        "Tim was the child",
-        "was married to",
-        "Tim was a ",
-        "Tim was an "
-      ],
-      "notes": "Living son; present tense for who he is."
-    },
-    {
-      "id": "tn003",
-      "category": "biography",
-      "text": "tell me about Matthew Rice",
-      "expect": "biography",
-      "mustMatch": [
-        "1629",
-        "was "
-      ],
-      "notes": "Control: a 17th-century ancestor keeps the past tense."
-    },
-    {
-      "id": "sb001",
-      "category": "family_tree",
-      "text": "who are my sisters",
-      "expect": "kinship",
-      "mustMatch": [
-        "Beth",
-        "Ellen"
-      ],
-      "mustNotContain": [
-        "can't tell",
-        "cannot tell",
-        "not sure who"
-      ],
-      "notes": "Rick 2026-09-01: 'It still doesn't know who my brothers and sisters are.' Beth and Ellen had no sex recorded in People."
-    },
-    {
-      "id": "sb002",
-      "category": "family_tree",
-      "text": "who are my brothers and sisters",
-      "expect": "kinship",
-      "mustMatch": [
-        "Beth|Ellen"
-      ],
-      "mustNotContain": [
-        "can't tell",
-        "cannot tell",
-        "not sure who"
-      ],
-      "notes": "One question, both groups; must not split on the plural conjunction."
-    },
-    {
-      "id": "sb003",
-      "category": "family_tree",
-      "text": "who are my brothers",
-      "expect": "kinship",
-      "mustNotContain": [
-        "Beth",
-        "Ellen",
-        "not sure who"
-      ],
-      "notes": "Sisters must not be listed as brothers (the 8/31 lookup-table bug)."
-    },
-    {
-      "id": "lv260901-001",
-      "category": "live",
-      "text": "show videos of tim",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-002",
-      "category": "live",
-      "text": "who is rick's brother?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-003",
-      "category": "live",
-      "text": "where was eileen latta born?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-004",
-      "category": "live",
-      "text": "tell me about William Love Latta Sr.",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-005",
-      "category": "live",
-      "text": "tell me about rick's brothers and sisters",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-006",
-      "category": "live",
-      "text": "how are you today hallie?",
-      "expect": "social",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-007",
-      "category": "live",
-      "text": "tell me about yourself",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-008",
-      "category": "live",
-      "text": "show me videos of Donna down the Cape in the 90s",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-009",
-      "category": "live",
-      "text": "tell me about thankful pratt",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-010",
-      "category": "live",
-      "text": "could a photo exist of someone prior to 1820?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-011",
-      "category": "live",
-      "text": "when was photography developed?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-012",
-      "category": "live",
-      "text": "how many lattas are in the tree",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-013",
-      "category": "live",
-      "text": "where was Martha lamson born and when?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-014",
-      "category": "live",
-      "text": "where was martha lamson born",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-015",
-      "category": "live",
-      "text": "tell me about donna breen",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-016",
-      "category": "live",
-      "text": "where was thankful pratt born?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-017",
-      "category": "live",
-      "text": "where was peter ronan born",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-018",
-      "category": "live",
-      "text": "when did the latta family come to america?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-019",
-      "category": "live",
-      "text": "tell me about John Robert Latta",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-020",
-      "category": "live",
-      "text": "could John Robert Latta have been in the american civil war?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-021",
-      "category": "live",
-      "text": "when was matt born?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed"
-    },
-    {
-      "id": "lv260901-022",
-      "category": "live",
-      "text": "find matt in the home view catalog",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-023",
-      "category": "live",
-      "text": "how many videos in the archive now?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-024",
-      "category": "live",
-      "text": "who was martha lampson",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-025",
-      "category": "live",
-      "text": "who did she marry?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-026",
-      "category": "live",
-      "text": "are there any photos of martha?",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-027",
-      "category": "live",
-      "text": "would there be any photos or videos of martha lampson?",
-      "expect": "graceful_decline",
-      "notes": "Martha Lamson b. before 1633: the film/photo floor line IS the answer."
-    },
-    {
-      "id": "lv260901-028",
-      "category": "live",
-      "text": "tell me about rick and donna breen",
-      "expect": "biography",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260901-029",
-      "category": "live",
-      "text": "who are rick's brothers?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260902-000",
-      "category": "live",
-      "text": "tell me about thankful pratt",
-      "expect": "biography",
-      "mustContain": [
-        "Thankful Pratt",
-        "1761"
-      ],
-      "followsPrevious": false,
-      "notes": "setup turn for the 9/02 chain (codex #962): the harvester dropped it as already-known, which broke the antecedent for -001/-002. Observed live 9/02: PASS, biography with 3 citations."
-    },
-    {
-      "id": "lv260902-001",
-      "category": "live",
-      "text": "would there be a photo of her if she born so long ago?",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — lineage resolver took 'Her If She Born So Long Ago' as a person name and declined. 'her' must bind to the previous subject (Thankful Pratt) and the shape is photo-plausibility (d. 1849 vs photography 1839): possible but unlikely; none in the catalog. DISPATCH: pronoun binding in HallieLineageQuestion (small).",
-      "followsPrevious": true,
-      "mustNotContain": [
-        "Her If She Born",
-        "don't find"
-      ],
-      "mustContain": [
-        "Thankful Pratt",
-        "photograph"
-      ]
-    },
-    {
-      "id": "lv260902-002",
-      "category": "live",
-      "text": "tell me about her again",
-      "expect": "biography",
-      "notes": "observed live 2026-09-02 13:xx ET: PASS — 'her' bound to Thankful Pratt, biography repeated.",
-      "mustMatch": [
-        "Thankful Pratt"
-      ],
-      "followsPrevious": true,
-      "mustContain": [
-        "Thankful Pratt",
-        "1761",
-        "Parker"
-      ]
-    },
-    {
-      "id": "lv260902-003",
-      "category": "live",
-      "text": "why do you ask me for a photo of Thankful Pratt who died before photography was commonly available?",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — routed to the death operation ('has been at rest since'). Meta question about the photograph offer; answer = photography 1839 vs death 1849, so a daguerreotype is possible, which is why the offer exists. DISPATCH: world-knowledge lane / offer-explanation shape (corpus first, no regex).",
-      "followsPrevious": true,
-      "mustNotContain": [
-        "passed away",
-        "no longer with us",
-        "at rest"
-      ],
-      "mustContain": [
-        "photograph"
-      ]
-    },
-    {
-      "id": "lv260902-004",
-      "category": "live",
-      "text": "find videos of my brother tim",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one. 9/02 21:15 baseline: brother now resolves to Tim (rows fixed) but the presence answer reads 'tagged with tim and Tim' — the typed word and the resolved person are not de-duplicated case-insensitively. DISPATCH: presence person-term dedupe (small).",
-      "followsPrevious": false,
-      "mustContain": [
-        "Tim"
-      ],
-      "mustNotContain": [
-        "Matt",
-        "Timmy",
-        "Which one",
-        "which one do you mean",
-        "tim and Tim"
-      ]
-    },
-    {
-      "id": "lv260902-005",
-      "category": "live",
-      "text": "tell me about rick's brother",
-      "expect": "kinship",
-      "notes": "observed live 2026-09-02 13:xx ET: DATA — same People-card rows; expect 'Tim' only once fixed. Also a good declarative-correction target ('Matt and Timmy are sons, not brothers' declined as un-searchable → should propose People-row edits).",
-      "mustNotContain": [
-        "Matt",
-        "Timmy"
-      ],
-      "followsPrevious": true,
-      "mustContain": [
-        "Tim"
-      ]
-    },
-    {
-      "id": "lv260902-006",
-      "category": "live",
-      "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — became a catalog-wide keyword presence over 29 videos. Wanted: ONE record (selection or filename 'New Hampshire.mov'), its resolved date and who is in it. DISPATCH: record-scope feature (plan in progress). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
-      "followsPrevious": false,
-      "mustMatch": [
-        "New Hampshire.mov"
-      ],
-      "select": "New Hampshire.mov",
-      "mustContain": [
-        "New Hampshire.mov"
-      ],
-      "mustNotContain": [
-        "29 videos",
-        "videos:",
-        "in the directory",
-        "in the filename"
-      ],
-      "expectEvidenceCount": 1
-    },
-    {
-      "id": "lv260902-007",
-      "category": "live",
-      "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — filename dropped; keyword sweep for tim/nancy/rick/donna and the literal word 'date'. Wanted: transcript name mentions + date within that one file. DISPATCH: record-scope (what-is-said operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
-      "mustMatch": [
-        "New Hampshire.mov"
-      ],
-      "followsPrevious": true,
-      "mustContain": [
-        "New Hampshire.mov"
-      ],
-      "mustNotContain": [
-        "9 videos",
-        "videos:",
-        "someone says “tim”"
-      ],
-      "expectEvidenceCount": 1
-    },
-    {
-      "id": "lv260902-008",
-      "category": "live",
-      "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: MISS — declined ('metadata' and 'new hampshire.mov' became keywords, Rick a person filter). Full path given. Wanted: dossier-style summary of one record (metadata, date, people, transcript highlights) + is Rick in it. DISPATCH: record-scope (tell-me-all-about-it operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
-      "followsPrevious": true,
-      "mustMatch": [
-        "New Hampshire.mov"
-      ],
-      "mustContain": [
-        "New Hampshire.mov"
-      ],
-      "mustNotContain": [
-        "Setting aside",
-        "Nothing matches",
-        "items. Want those"
-      ],
-      "expectEvidenceCount": 1
-    },
-    {
-      "id": "lv260902-009",
-      "category": "live",
-      "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
-      "expect": "catalog",
-      "notes": "observed live 2026-09-02 13:xx ET: NEAR — filename matcher returned the exact file first (+2 near-misses) but 'my name' was dropped as a non-search word. Wanted: is Rick in New Hampshire.mov (tags/Find-and-Tag/transcript). DISPATCH: record-scope (who-is-in-it) + 'my name' = speaker. Graded on ONE record: a count-of-videos answer must fail (codex #962).",
-      "followsPrevious": true,
-      "mustMatch": [
-        "New Hampshire.mov"
-      ],
-      "mustContain": [
-        "New Hampshire.mov",
-        "Rick"
-      ],
-      "mustNotContain": [
-        "3 videos",
-        "videos with",
-        "in the filename",
-        "not a search word"
-      ],
-      "expectEvidenceCount": 1
-    },
-    {
-      "id": "rc001",
-      "category": "record_scope",
-      "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
-      "expect": "catalog",
-      "notes": "Live 2026-09-02 (Rick). ONE video by stem: route=record, date + people from New Hampshire.mov's own fields. Was a 29-video keyword sweep.",
-      "mustNotContain": [
-        "29 videos",
-        "9 videos",
-        "Setting aside",
-        "3 videos"
-      ]
-    },
-    {
-      "id": "rc002",
-      "category": "record_scope",
-      "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
-      "expect": "catalog",
-      "notes": "Live 2026-09-02. route=record; one verdict per name (tagged / face matcher / transcript / not found) plus the date. Was a cross decline.",
-      "mustNotContain": [
-        "29 videos",
-        "9 videos",
-        "Setting aside",
-        "3 videos"
-      ]
-    },
-    {
-      "id": "rc003",
-      "category": "record_scope",
-      "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
-      "expect": "catalog",
-      "notes": "Live 2026-09-02. route=record by full path; about = metadata line + date + Rick's verdict + transcript opening. Was 'Nothing matches all of that … 9 items'.",
-      "mustNotContain": [
-        "29 videos",
-        "9 videos",
-        "Setting aside",
-        "3 videos"
-      ]
-    },
-    {
-      "id": "rc004",
-      "category": "record_scope",
-      "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
-      "expect": "catalog",
-      "notes": "Live 2026-09-02. route=record; 'my name' = the owner's configured name. Was a 3-video filename sweep.",
-      "mustNotContain": [
-        "29 videos",
-        "9 videos",
-        "Setting aside",
-        "3 videos"
-      ]
-    },
-    {
-      "id": "rc005",
-      "category": "record_scope",
-      "text": "who else is in it",
-      "expect": "catalog",
-      "notes": "cs003 with the record route: the selected video's people by tier. Was aggregate → 'couldn't resolve the anchor currentSelection'.",
-      "select": "Christmas_1994_etc.mkv",
-      "mustNotContain": [
-        "resolve the anchor"
-      ]
-    },
-    {
-      "id": "rc006",
-      "category": "record_scope",
-      "text": "who is in this video",
-      "expect": "catalog",
-      "notes": "route=record on the selection.",
-      "select": "Christmas_1994_etc.mkv",
-      "mustNotContain": [
-        "resolve the anchor",
-        "Setting aside"
-      ]
-    },
-    {
-      "id": "rc007",
-      "category": "record_scope",
-      "text": "is Donna in this?",
-      "expect": "catalog",
-      "notes": "route=record; one verdict for Donna on the selected video.",
-      "select": "Christmas_1994_etc.mkv",
-      "mustNotContain": [
-        "resolve the anchor",
-        "Setting aside",
-        "videos"
-      ]
-    },
-    {
-      "id": "rc008",
-      "category": "record_scope",
-      "text": "tell me about this video",
-      "expect": "catalog",
-      "notes": "route=record about: metadata line, date, people, transcript opening.",
-      "select": "Christmas_1994_etc.mkv",
-      "mustNotContain": [
-        "resolve the anchor",
-        "Setting aside"
-      ]
-    },
-    {
-      "id": "rc009",
-      "category": "record_scope",
-      "text": "who is in Christmas.mov",
-      "expect": "clarify",
-      "notes": "Several Christmas files: route=record declines with a which-one list (≤5 filenames, one chip each) — never a keyword sweep.",
-      "mustContain": [
-        "Which one do you mean"
-      ],
-      "mustNotContain": [
-        "Setting aside",
-        "videos"
-      ]
-    },
-    {
-      "id": "rc010",
-      "category": "record_scope",
-      "text": "does it have my name in it",
-      "expect": "catalog",
-      "notes": "route=record; 'my name' bound to the owner on the selected video.",
-      "select": "New Hampshire.mov",
-      "mustNotContain": [
-        "resolve the anchor",
-        "Setting aside",
-        "videos"
-      ]
-    },
-    {
-      "id": "lv260902-010",
-      "category": "live",
-      "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
-      "expect": "kinship",
-      "mustContain": [
-        "Elaine Bowser"
-      ],
-      "mustNotContain": [
-        "The Birth Locations Of Donna",
-        "don't find"
-      ],
-      "followsPrevious": false,
-      "notes": "observed live 2026-09-02 19:12: MISS — lineage resolver took 'The Birth Locations Of Donna' as a person name. Wanted: Donna's maternal line (Elaine Bowser → Ethel Evelyn Damon → …) with birthplaces, stopping at the first non-US birth. DISPATCH: codex lineage name extractor (same class as -001). 9/02 21:15 baseline: the maternal line now answers (codex 495cf285) — 'Brockton' was a wrong expectation (Donna's own birthplace, not an ancestor's); the birthplace-per-generation + stop-outside-USA part is the trail feature."
-    },
-    {
-      "id": "lv260902-011",
-      "category": "live",
-      "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
-      "expect": "kinship",
-      "mustNotContain": [
-        "39,250",
-        "most common surnames"
-      ],
-      "followsPrevious": false,
-      "notes": "observed live 2026-09-02 19:08 (×2): MISS — answered with the generic tree overview. Wanted: nearest European-born ancestor of the owner, with generation count, name and birthplace. DISPATCH: lineage origin-trail walk (new operation)."
-    },
-    {
-      "id": "lv260902-012",
-      "category": "live",
-      "text": "show the archive window",
-      "expect": "catalog",
-      "mustNotContain": [
-        "couldn't turn that into a search"
-      ],
-      "followsPrevious": false,
-      "notes": "observed live 2026-09-02 18:49: MISS — generic decline; no tab/window navigation verbs (tree centering exists). DISPATCH: navigation chips (Archive/People/Storage/Catalog/Family Tree)."
-    },
-    {
-      "id": "lv260902-013a",
-      "category": "live",
-      "text": "research william love latter",
-      "expect": "clarify",
-      "followsPrevious": false,
-      "mustContain": [
-        "William Love Latta"
-      ],
-      "notes": "setup turn for the SYNTHETIC yes-after-did-you-mean contract (-013); the did-you-mean offer itself was observed live 9/02: PASS."
-    },
-    {
-      "id": "lv260902-013",
-      "category": "live",
-      "text": "yes",
-      "expect": "kinship",
-      "followsPrevious": true,
-      "mustContain": [
-        "William Love Latta"
-      ],
-      "mustNotContain": [
-        "couldn't tell how"
-      ],
-      "notes": "SYNTHETIC contract (codex #973): the live 9/02 sequence was 'research william love latter' → did-you-mean → Rick re-asked with the right name → biography → 'yes' → unclear-refinement decline. An immediate yes after a did-you-mean is the contract worth pinning; -013a → -013 is not the observed sequence. DISPATCH: follow-up resolver accepts yes/that one after a which-one/did-you-mean."
-    },
-    {
-      "id": "lv260902-014",
-      "category": "live",
-      "text": "tell me about rick's parents",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "Eileen",
-        "Richard"
-      ],
-      "notes": "observed live 2026-09-02 18:52 (codex #973 caught it): MISS — basis and evidence cited both Richard Harding Breen Sr and Eileen Latta; the model-composed prose described only Eileen. Wanted: both parents named. DISPATCH: composer completeness — a kinship answer must name every person in the evidence (verifier claim-coverage rule)."
-    },
-    {
-      "id": "lv260902-021",
-      "category": "live",
-      "text": "who are eileen's children",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "Rick",
-        "Tim",
-        "Ellen",
-        "Beth"
-      ],
-      "notes": "Rick's ruling 2026-09-02 19:20: 'children of' is inferred at read time (full siblings share parents), no GEDCOM edit. Rick's card says child of Ma (Eileen Latta) and Dad, sibling of Tim, Ellen and Beth; the siblings' cards carry no rows. Before: only Rick. The basis must carry the marker 'derived from Rick's rows: full siblings share parents'."
-    },
-    {
-      "id": "lv260902-022",
-      "category": "live",
-      "text": "tell me about ma",
-      "expect": "biography",
-      "followsPrevious": false,
-      "mustContain": [
-        "Richard Harding Breen Jr",
-        "Tim",
-        "Ellen",
-        "Beth"
-      ],
-      "notes": "Same ruling, biography shape: Eileen Latta's card lists the tree's child (Richard Harding Breen Jr / Rick) and then the People tab's three (Beth, Ellen, Tim) with the derived note in the basis. Ma bridges to Eileen Latta through the profile's tree pin / certain derivation, never by name. 9/02 22:20 interim: PASSES in substance (tree child Richard Harding Breen Jr + People-tab Beth/Ellen/Tim, one-mother note in basis); expectation said 'Rick' but a biography names him in full."
-    },
-    {
-      "id": "lv260902-023",
-      "category": "live",
-      "text": "who are tim's parents",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "Eileen",
-        "Richard"
-      ],
-      "notes": "Same ruling, the other direction: Tim's card has no rows; his parents are Rick's (Eileen Latta and Richard Harding Breen Sr, named from the tree with their vitals). Basis: 'Dad and Ma derived from Rick's rows: full siblings share parents'."
-    },
-    {
-      "id": "lv260902-030",
-      "category": "live",
-      "text": "who is eileen latta's mother",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "Mary Catherine O'Connor"
-      ],
-      "mustNotContain": [
-        "Mary O'Connor,",
-        "Mary O'Connor (b.",
-        "two mothers"
-      ],
-      "notes": "Rick's ruling 2026-09-02 19:55: Hallie read out TWO mothers for Eileen Latta (FAMC @F3@ David Latta Sr + Mary Catherine O'Connor, FamilySearch MT64-4HP; FAMC @F4@ wife-only Mary O'Connor b. 1905 — the same woman, both daughters of @F6@). One primary parent family per person, ranked both-parents > FamilySearch family id > parent facts > GEDCOM order; the duplicate is folded and appears only as the basis note '(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same parents; treated as the same person)'. Read-time selection only; no GEDCOM or FamilySearch edits."
-    },
-    {
-      "id": "lv260902-031",
-      "category": "live",
-      "text": "tell me about eileen latta",
-      "expect": "biography",
-      "followsPrevious": false,
-      "mustContain": [
-        "Mary Catherine O'Connor",
-        "David McGill Latta Sr"
-      ],
-      "mustNotContain": [
-        "Mary O'Connor,",
-        "two mothers",
-        "The tree records two"
-      ],
-      "notes": "Same ruling, biography shape: 'child of David McGill Latta Sr and Mary Catherine O'Connor' — one mother in prose. The old 'The tree records two mothers for Eileen Latta …' sentence is retired; its content is the basis note. The 'Show possible duplicate in Family Tree' chip stays."
-    },
-    {
-      "id": "lv260902-032",
-      "category": "live",
-      "text": "who are eileen's parents",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "David McGill Latta Sr",
-        "Mary Catherine O'Connor"
-      ],
-      "mustNotContain": [
-        "Mary O'Connor,",
-        "Mary O'Connor."
-      ],
-      "notes": "Same ruling: two people, not three. 'Eileen Latta's parents: David McGill Latta Sr, Mary Catherine O'Connor.' with the fold note in the basis."
-    },
-    {
-      "id": "lv260902-033",
-      "category": "live",
-      "text": "show eileen latta's maternal line back 3 generations",
-      "expect": "kinship",
-      "followsPrevious": false,
-      "mustContain": [
-        "Mother: Mary Catherine O'Connor",
-        "Ellen Ronan"
-      ],
-      "mustNotContain": [
-        "Mary O'Connor (b. 1905)",
-        "O'Connor (1904–1985), born Ireland; Mary O'Connor"
-      ],
-      "notes": "Same ruling, the walks: the compiled parent table lists one mother per person, so a maternal line never forks at the duplicate — Mother: Mary Catherine O'Connor (1904–1985); Grandmother: Ellen Ronan (b. 1883). Before: 'Grandmother: Mary Catherine O'Connor (1904–1985), born Ireland; Mary O'Connor (b. 1905), born Ireland' on Rick's maternal line (live shell 2026-09-02T23:40)."
-    },
-    {
-      "id": "lv260902-041",
-      "category": "live",
-      "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
-      "expect": "lineage",
-      "followsPrevious": false,
-      "mustContain": [
-        "Brockton"
-      ],
-      "notes": "Rick 2026-09-02 (brother's demo). The birthplace TRAIL: Donna's maternal line read out as a numbered list, one generation per line, stopping at the first birth outside the United States (colonial-era names count as home). Route 'birthplace trail maternal stop=outside:United_States list: …'."
-    },
-    {
-      "id": "lv260902-042",
-      "category": "live",
-      "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
-      "expect": "lineage",
-      "followsPrevious": false,
-      "mustNotContain": [
-        "39,250"
-      ],
-      "notes": "Rick 2026-09-02. Subject defaults to the owner; every ancestor walked one generation at a time; the answer is 'N generations. <name>, born <year> in <place>, is the first ancestor born in Europe on any line: you → … → <name>.' with a Family Tree chip on that ancestor. Never the tree summary."
-    },
-    {
-      "id": "lv260902-043",
-      "category": "live",
-      "text": "birthplaces on donna's mother's side",
-      "expect": "lineage",
-      "followsPrevious": false,
-      "mustContain": [
-        "Brockton"
-      ],
-      "notes": "Paraphrase of -041 with no stop rule: the whole maternal line read out to where the tree ends (or 20 generations, or three unrecorded generations in a row)."
-    },
-    {
-      "id": "lv260902-044",
-      "category": "live",
-      "text": "how far back until donna's ancestors were born in europe",
-      "expect": "lineage",
-      "followsPrevious": false,
-      "mustContain": [
-        "generation"
-      ],
-      "mustNotContain": [
-        "39,250"
-      ],
-      "notes": "Paraphrase of -042 with a named subject: all of Donna's ancestors, breadth-first, the first generation with a European birth."
-    },
-    {
-      "id": "lv260902-045",
-      "category": "live",
-      "text": "where did rick's paternal line come from",
-      "expect": "lineage",
-      "followsPrevious": false,
-      "mustContain": [
-        "1."
-      ],
-      "notes": "Origin phrasing on a named line is the read-out trail (paternal, to the top), not the catalog-wide 'where does the family come from' summary."
-    },
-    {
-      "id": "lv260906-001",
-      "category": "live",
-      "text": "tell me about dad",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed"
-    },
-    {
-      "id": "lv260906-002",
-      "category": "live",
-      "text": "find videos of tim",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-003",
-      "category": "live",
-      "text": "find golf video",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-004",
-      "category": "live",
-      "text": "show thankful pratt tree",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-005",
-      "category": "live",
-      "text": "who was fred lamb",
-      "expect": "biography",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-006",
-      "category": "live",
-      "text": "how are rick and donna related?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-007",
-      "category": "live",
-      "text": "find david t mcgill",
-      "expect": "catalog",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-008",
-      "category": "live",
-      "text": "was his father in the civil war?",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    },
-    {
-      "id": "lv260906-009",
-      "category": "live",
-      "text": "tell us about ma breen and the cia",
-      "expect": "kinship",
-      "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
-      "followsPrevious": true
-    }
-  ]
+  {
+   "name": "StoryCorps Archive - Great Questions List",
+   "url": "https://archive.storycorps.org/great-questions-list/",
+   "note": "Archive mirror of the same prompt list."
+  },
+  {
+   "name": "Heritage Whisper - 100+ Questions to Ask Your Grandparents Before It's Too Late",
+   "url": "https://heritagewhisper.com/guides/questions-for-grandparents",
+   "note": "Source of the technology / cars / television / cost-of-things / first-job / how-did-you-meet phrasings."
+  },
+  {
+   "name": "The Good Trade - 99 Questions To Ask Your Grandparents While You Can",
+   "url": "https://www.thegoodtrade.com/features/questions-to-ask-your-grandparents/",
+   "note": "Source of daily-life, free-time, music, money and neighborhood phrasings."
+  },
+  {
+   "name": "Storyworth - Questions to Ask Your Grandparents",
+   "url": "https://welcome.storyworth.com/blog/questions-to-ask-your-grandparents",
+   "note": "Cross-check for common phrasing of childhood and school questions."
+  },
+  {
+   "name": "Southtree - 10 Questions to Ask Your Grandparents",
+   "url": "https://southtree.com/blogs/artifact/10-questions-to-ask-your-grandparents",
+   "note": "Home-movie-oriented interview prompts; relevant because the asker is often watching old tape."
+  }
+ ],
+ "questions": [
+  {
+   "id": "sm001",
+   "category": "smalltalk",
+   "text": "Hi Hallie",
+   "expect": "social"
+  },
+  {
+   "id": "sm002",
+   "category": "smalltalk",
+   "text": "hello there",
+   "expect": "social"
+  },
+  {
+   "id": "sm003",
+   "category": "smalltalk",
+   "text": "Good morning!",
+   "expect": "social"
+  },
+  {
+   "id": "sm004",
+   "category": "smalltalk",
+   "text": "How are you today?",
+   "expect": "social",
+   "notes": "Should answer socially without deflecting into an archive pitch."
+  },
+  {
+   "id": "sm005",
+   "category": "smalltalk",
+   "text": "how's your day going",
+   "expect": "social",
+   "followsPrevious": true,
+   "notes": "Second social probe in a row - must not repeat the same canned line as sm004."
+  },
+  {
+   "id": "sm006",
+   "category": "smalltalk",
+   "text": "hey whats up",
+   "expect": "social"
+  },
+  {
+   "id": "sm007",
+   "category": "smalltalk",
+   "text": "how's it going",
+   "expect": "social"
+  },
+  {
+   "id": "sm008",
+   "category": "smalltalk",
+   "text": "Thanks, that's really helpful.",
+   "expect": "social"
+  },
+  {
+   "id": "sm009",
+   "category": "smalltalk",
+   "text": "thank you so much",
+   "expect": "social"
+  },
+  {
+   "id": "sm010",
+   "category": "smalltalk",
+   "text": "You're helpful, you know that?",
+   "expect": "social",
+   "notes": "Compliment. Should accept graciously and briefly, not launch into a capability list."
+  },
+  {
+   "id": "sm011",
+   "category": "smalltalk",
+   "text": "I appreciate you.",
+   "expect": "social"
+  },
+  {
+   "id": "sm012",
+   "category": "smalltalk",
+   "text": "nice to meet you",
+   "expect": "social"
+  },
+  {
+   "id": "sm013",
+   "category": "smalltalk",
+   "text": "Sorry, I meant something else.",
+   "expect": "social"
+  },
+  {
+   "id": "sm014",
+   "category": "smalltalk",
+   "text": "My apologies, I keep typing the wrong name.",
+   "expect": "social"
+  },
+  {
+   "id": "sm015",
+   "category": "smalltalk",
+   "text": "hold on a sec",
+   "expect": "social",
+   "notes": "Should acknowledge and wait, not fill the silence with output."
+  },
+  {
+   "id": "sm016",
+   "category": "smalltalk",
+   "text": "one moment please",
+   "expect": "social"
+  },
+  {
+   "id": "sm017",
+   "category": "smalltalk",
+   "text": "never mind",
+   "expect": "social",
+   "notes": "Should drop the thread cleanly without asking three follow-up questions."
+  },
+  {
+   "id": "sm018",
+   "category": "smalltalk",
+   "text": "ok gotta run, talk later",
+   "expect": "social"
+  },
+  {
+   "id": "sm019",
+   "category": "smalltalk",
+   "text": "Goodbye Hallie.",
+   "expect": "social"
+  },
+  {
+   "id": "sm020",
+   "category": "smalltalk",
+   "text": "see ya",
+   "expect": "social"
+  },
+  {
+   "id": "sm021",
+   "category": "smalltalk",
+   "text": "Have a good night.",
+   "expect": "social"
+  },
+  {
+   "id": "sm022",
+   "category": "smalltalk",
+   "text": "It's pouring rain here in the Berkshires today.",
+   "expect": "social",
+   "notes": "Weather chit-chat. Should engage as conversation, not treat 'Berkshires' as a search term."
+  },
+  {
+   "id": "sm023",
+   "category": "smalltalk",
+   "text": "beautiful day out isn't it",
+   "expect": "social"
+  },
+  {
+   "id": "sm024",
+   "category": "smalltalk",
+   "text": "Supposed to snow tonight. First one of the year.",
+   "expect": "social"
+  },
+  {
+   "id": "sm025",
+   "category": "smalltalk",
+   "text": "Do you ever get tired?",
+   "expect": "social",
+   "notes": "Should be honest that it is software, without being cold or lecturing."
+  },
+  {
+   "id": "sm026",
+   "category": "smalltalk",
+   "text": "are you busy right now",
+   "expect": "social"
+  },
+  {
+   "id": "sm027",
+   "category": "smalltalk",
+   "text": "tell me a joke",
+   "expect": "social"
+  },
+  {
+   "id": "sm028",
+   "category": "smalltalk",
+   "text": "that was terrible lol",
+   "expect": "social",
+   "followsPrevious": true,
+   "notes": "Playful teasing after the joke. Should take it well."
+  },
+  {
+   "id": "sm029",
+   "category": "smalltalk",
+   "text": "what time is it",
+   "expect": "social"
+  },
+  {
+   "id": "sm030",
+   "category": "smalltalk",
+   "text": "What's today's date?",
+   "expect": "social"
+  },
+  {
+   "id": "ic001",
+   "category": "identity_capability",
+   "text": "who are you",
+   "expect": "social"
+  },
+  {
+   "id": "ic002",
+   "category": "identity_capability",
+   "text": "What can you do?",
+   "expect": "social",
+   "notes": "Should be concrete about the archive, not a generic assistant blurb."
+  },
+  {
+   "id": "ic003",
+   "category": "identity_capability",
+   "text": "are you an AI?",
+   "expect": "social",
+   "notes": "Must answer truthfully."
+  },
+  {
+   "id": "ic004",
+   "category": "identity_capability",
+   "text": "Are you a real person or a program?",
+   "expect": "social"
+  },
+  {
+   "id": "ic005",
+   "category": "identity_capability",
+   "text": "Do you know my family?",
+   "expect": "social"
+  },
+  {
+   "id": "ic006",
+   "category": "identity_capability",
+   "text": "what do you know about our videos",
+   "expect": "catalog"
+  },
+  {
+   "id": "ic007",
+   "category": "identity_capability",
+   "text": "how do you know that",
+   "expect": "social",
+   "followsPrevious": true,
+   "notes": "Provenance challenge. Should name the catalog / knowledge base rather than bluff."
+  },
+  {
+   "id": "ic008",
+   "category": "identity_capability",
+   "text": "Where does your information come from?",
+   "expect": "social"
+  },
+  {
+   "id": "ic009",
+   "category": "identity_capability",
+   "text": "Can you play a video for me?",
+   "expect": "social",
+   "notes": "Capability question, not yet a specific request. Should say yes and ask which."
+  },
+  {
+   "id": "ic010",
+   "category": "identity_capability",
+   "text": "who made you",
+   "expect": "social"
+  },
+  {
+   "id": "ic011",
+   "category": "identity_capability",
+   "text": "what should I call you",
+   "expect": "social"
+  },
+  {
+   "id": "ic012",
+   "category": "identity_capability",
+   "text": "Can you delete files for me?",
+   "expect": "social",
+   "notes": "Should be clear about destructive-action boundaries."
+  },
+  {
+   "id": "ic013",
+   "category": "identity_capability",
+   "text": "Do you remember what we talked about yesterday?",
+   "expect": "social",
+   "notes": "Honesty about memory scope."
+  },
+  {
+   "id": "ic014",
+   "category": "identity_capability",
+   "text": "what can't you do",
+   "expect": "social"
+  },
+  {
+   "id": "ic015",
+   "category": "identity_capability",
+   "text": "Can you help me find things in the archive, or just tell me about them?",
+   "expect": "social"
+  },
+  {
+   "id": "cc001",
+   "category": "catalog_count",
+   "text": "how many videos do you have",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc002",
+   "category": "catalog_count",
+   "text": "How many of those are from the 90s?",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "'those' refers to the whole catalog from cc001."
+  },
+  {
+   "id": "cc003",
+   "category": "catalog_count",
+   "text": "and how many from the 80s",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "cc004",
+   "category": "catalog_count",
+   "text": "how many have Donna in them",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc005",
+   "category": "catalog_count",
+   "text": "How much footage is there altogether?",
+   "expect": "catalog",
+   "notes": "Duration, not file count. Should not silently answer the wrong unit."
+  },
+  {
+   "id": "cc006",
+   "category": "catalog_count",
+   "text": "what's the oldest video",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc007",
+   "category": "catalog_count",
+   "text": "and the newest?",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "cc008",
+   "category": "catalog_count",
+   "text": "how many are archived",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc009",
+   "category": "catalog_count",
+   "text": "How many hours of video do we have from the Cape?",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc010",
+   "category": "catalog_count",
+   "text": "how many files are audio only",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc011",
+   "category": "catalog_count",
+   "text": "How many videos have all four boys in them?",
+   "expect": "catalog",
+   "notes": "Requires person co-occurrence. Should decline honestly if person tagging is incomplete."
+  },
+  {
+   "id": "cc012",
+   "category": "catalog_count",
+   "text": "what percentage of the archive is from before 2000",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc013",
+   "category": "catalog_count",
+   "text": "How many videos were shot in Westford?",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc014",
+   "category": "catalog_count",
+   "text": "how many duplicates are there",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc015",
+   "category": "catalog_count",
+   "text": "How many videos do we have of my dad?",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc016",
+   "category": "catalog_count",
+   "text": "how many videos are there from 1994",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc017",
+   "category": "catalog_count",
+   "text": "How much disk space does the whole archive take up?",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc018",
+   "category": "catalog_count",
+   "text": "how many still need to be archived",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc019",
+   "category": "catalog_count",
+   "text": "Which year has the most videos?",
+   "expect": "catalog"
+  },
+  {
+   "id": "cc020",
+   "category": "catalog_count",
+   "text": "how many of them are in HD",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs001",
+   "category": "catalog_search",
+   "text": "show me Donna at the Cape",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs002",
+   "category": "catalog_search",
+   "text": "play the first one",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "Ordinal reference into the previous result list."
+  },
+  {
+   "id": "cs003",
+   "category": "catalog_search",
+   "text": "who else is in it",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "'it' = the video now playing. 'it' = the selected video; selected via :select (harness, 2026-09-01).",
+   "select": "Christmas_1994_etc.mkv"
+  },
+  {
+   "id": "cs004",
+   "category": "catalog_search",
+   "text": "any others from that same trip?",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "Hardest link in the chain - 'that same trip' means same place and same date window."
+  },
+  {
+   "id": "cs005",
+   "category": "catalog_search",
+   "text": "find videos from 1994",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs006",
+   "category": "catalog_search",
+   "text": "any videos of the kids at Christmas",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs007",
+   "category": "catalog_search",
+   "text": "show me the Westford house",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs008",
+   "category": "catalog_search",
+   "text": "play something from the 80s",
+   "expect": "catalog",
+   "notes": "Vague request - either pick one and say why, or offer a short list."
+  },
+  {
+   "id": "cs009",
+   "category": "catalog_search",
+   "text": "something else",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "Must not return the same file again."
+  },
+  {
+   "id": "cs010",
+   "category": "catalog_search",
+   "text": "videos with just audio",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs011",
+   "category": "catalog_search",
+   "text": "show me Timmy as a baby",
+   "expect": "catalog",
+   "notes": "Requires mapping 'as a baby' to a birth-year window."
+  },
+  {
+   "id": "cs012",
+   "category": "catalog_search",
+   "text": "I want to see Matt's graduation",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs013",
+   "category": "catalog_search",
+   "text": "do we have anything from Middlefield",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs014",
+   "category": "catalog_search",
+   "text": "narrow that to winter",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "cs015",
+   "category": "catalog_search",
+   "text": "ok show me the second one",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "cs016",
+   "category": "catalog_search",
+   "text": "show me birthday parties",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs017",
+   "category": "catalog_search",
+   "text": "find the videos with Dan and Mark together",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs018",
+   "category": "catalog_search",
+   "text": "pull up anything from Franklin",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs019",
+   "category": "catalog_search",
+   "text": "show me the beach videos",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs020",
+   "category": "catalog_search",
+   "text": "just the ones with Donna in them",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "cs021",
+   "category": "catalog_search",
+   "text": "find home movies from the summer of 1998",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs022",
+   "category": "catalog_search",
+   "text": "can you show me the wedding video",
+   "expect": "catalog",
+   "notes": "Possibly ambiguous - whose wedding? Clarify or state the assumption."
+  },
+  {
+   "id": "cs023",
+   "category": "catalog_search",
+   "text": "show me videos of my dad",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs024",
+   "category": "catalog_search",
+   "text": "just the ones where he's talking",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "notes": "Requires audio evidence, not just a face tag. Decline honestly if unavailable."
+  },
+  {
+   "id": "cs025",
+   "category": "catalog_search",
+   "text": "find the VHS transfers",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs026",
+   "category": "catalog_search",
+   "text": "show me the iPhone videos from last year",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs027",
+   "category": "catalog_search",
+   "text": "i want to see the boys when they were little",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs028",
+   "category": "catalog_search",
+   "text": "show me videos taken at the Cape Cod house in the 90s",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs029",
+   "category": "catalog_search",
+   "text": "find anything with Donna and Timmy together",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs030",
+   "category": "catalog_search",
+   "text": "play the longest video in the archive",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs031",
+   "category": "catalog_search",
+   "text": "find the videos from Christmas 1991",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs032",
+   "category": "catalog_search",
+   "text": "show me the oldest video of the whole family together",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs033",
+   "category": "catalog_search",
+   "text": "find videos shot on the old camcorder",
+   "expect": "catalog"
+  },
+  {
+   "id": "cs034",
+   "category": "catalog_search",
+   "text": "do we have any video of my father talking about typewriters",
+   "expect": "catalog",
+   "notes": "Very specific. Warm honest miss is the right answer if nothing matches."
+  },
+  {
+   "id": "cs035",
+   "category": "catalog_search",
+   "text": "show me videos where somebody's playing guitar",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm001",
+   "category": "temporal",
+   "text": "when was this filmed",
+   "expect": "catalog",
+   "notes": "'this' with no prior context - should ask which video, or use the currently selected one. Selected video via :select before asking (harness, 2026-09-01).",
+   "select": "Christmas_1994_etc.mkv"
+  },
+  {
+   "id": "tm002",
+   "category": "temporal",
+   "text": "how old was Timmy in this",
+   "expect": "catalog",
+   "notes": "Needs a birthdate from the family graph plus a capture date from the catalog. Selected video via :select before asking (harness, 2026-09-01).",
+   "select": "Christmas_1994_etc.mkv"
+  },
+  {
+   "id": "tm003",
+   "category": "temporal",
+   "text": "what year is that from",
+   "expect": "catalog",
+   "select": "1984-11-xx_Thanksgiving_1984.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm004",
+   "category": "temporal",
+   "text": "what happened in 1994",
+   "expect": "catalog",
+   "notes": "Should summarize what the archive holds for 1994, not narrate world history."
+  },
+  {
+   "id": "tm005",
+   "category": "temporal",
+   "text": "show me the earliest video of Donna",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm006",
+   "category": "temporal",
+   "text": "how many years of footage do we have",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm007",
+   "category": "temporal",
+   "text": "what's the earliest video in the whole archive",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm008",
+   "category": "temporal",
+   "text": "how old were the boys then",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "notes": "Joins the capture year from tm007 to four birthdates."
+  },
+  {
+   "id": "tm009",
+   "category": "temporal",
+   "text": "and the most recent one?",
+   "expect": "catalog",
+   "followsPrevious": true
+  },
+  {
+   "id": "tm010",
+   "category": "temporal",
+   "text": "was that before or after we moved to Middlefield",
+   "expect": "catalog",
+   "followsPrevious": true,
+   "select": "Christmas_1994_etc.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm011",
+   "category": "temporal",
+   "text": "how old is this tape",
+   "expect": "catalog",
+   "select": "1984-11-xx_Thanksgiving_1984.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm012",
+   "category": "temporal",
+   "text": "what decade is most of our footage from",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm013",
+   "category": "temporal",
+   "text": "how old was Mark when this was taken",
+   "expect": "catalog",
+   "select": "Christmas_1994_etc.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm014",
+   "category": "temporal",
+   "text": "were the boys born yet when this was shot",
+   "expect": "catalog",
+   "select": "1984-11-xx_Thanksgiving_1984.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm015",
+   "category": "temporal",
+   "text": "what season was this filmed in",
+   "expect": "catalog",
+   "select": "Christmas_1994_etc.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm016",
+   "category": "temporal",
+   "text": "how long ago was that",
+   "expect": "catalog",
+   "select": "1984-11-xx_Thanksgiving_1984.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm017",
+   "category": "temporal",
+   "text": "give me a count of videos by year",
+   "expect": "catalog"
+  },
+  {
+   "id": "tm018",
+   "category": "temporal",
+   "text": "are there any years we have nothing from",
+   "expect": "catalog",
+   "notes": "Gap analysis - a genuinely useful archivist answer."
+  },
+  {
+   "id": "tm019",
+   "category": "temporal",
+   "text": "how old would my dad have been in this video",
+   "expect": "catalog",
+   "select": "Christmas_1994_etc.mkv",
+   "notes": "Selected video via :select before asking (harness, 2026-09-01)."
+  },
+  {
+   "id": "tm020",
+   "category": "temporal",
+   "text": "when did we stop using the camcorder",
+   "expect": "catalog",
+   "notes": "Inference from format/codec distribution over time."
+  },
+  {
+   "id": "ft001",
+   "category": "family_tree",
+   "text": "who is Donna",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft002",
+   "category": "family_tree",
+   "text": "who are Rick's sons",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft003",
+   "category": "family_tree",
+   "text": "which one is the oldest",
+   "expect": "kinship",
+   "followsPrevious": true
+  },
+  {
+   "id": "ft004",
+   "category": "family_tree",
+   "text": "and the youngest?",
+   "expect": "kinship",
+   "followsPrevious": true
+  },
+  {
+   "id": "ft005",
+   "category": "family_tree",
+   "text": "who is Tim's brother",
+   "expect": "kinship",
+   "notes": "Trap: he has three, not one. Should not pick arbitrarily."
+  },
+  {
+   "id": "ft006",
+   "category": "family_tree",
+   "text": "how am I related to Donna",
+   "expect": "kinship",
+   "notes": "Requires knowing who 'I' is in this app."
+  },
+  {
+   "id": "ft007",
+   "category": "family_tree",
+   "text": "when was Donna born",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft008",
+   "category": "family_tree",
+   "text": "who did Rick marry",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft009",
+   "category": "family_tree",
+   "text": "when did they get married",
+   "expect": "kinship",
+   "followsPrevious": true
+  },
+  {
+   "id": "ft010",
+   "category": "family_tree",
+   "text": "who was my father",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft011",
+   "category": "family_tree",
+   "text": "who is my grandfather",
+   "expect": "kinship",
+   "notes": "Ambiguous - paternal or maternal. Clarifying is a fine answer."
+  },
+  {
+   "id": "ft012",
+   "category": "family_tree",
+   "text": "how many grandchildren are there",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft013",
+   "category": "family_tree",
+   "text": "is Tim the same person as Timmy",
+   "expect": "kinship",
+   "notes": "Known alias problem in this archive. Should resolve rather than treat as two people."
+  },
+  {
+   "id": "ft014",
+   "category": "family_tree",
+   "text": "who's the youngest person in the family",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft015",
+   "category": "family_tree",
+   "text": "list everyone in the family",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft016",
+   "category": "family_tree",
+   "text": "who are Matt's brothers",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft017",
+   "category": "family_tree",
+   "text": "whats donnas maiden name",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft018",
+   "category": "family_tree",
+   "text": "who is Dan's mother",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft019",
+   "category": "family_tree",
+   "text": "am I related to Mark?",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft020",
+   "category": "family_tree",
+   "text": "who are my uncles",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft021",
+   "category": "family_tree",
+   "text": "did my dad have brothers or sisters",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft022",
+   "category": "family_tree",
+   "text": "how old is Donna",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft023",
+   "category": "family_tree",
+   "text": "when was my dad born",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft024",
+   "category": "family_tree",
+   "text": "who's in the family besides the six of us",
+   "expect": "kinship"
+  },
+  {
+   "id": "ft025",
+   "category": "family_tree",
+   "text": "can you draw me the family tree",
+   "expect": "kinship"
+  },
+  {
+   "id": "bi001",
+   "category": "biography",
+   "text": "tell me about Donna",
+   "expect": "biography"
+  },
+  {
+   "id": "bi002",
+   "category": "biography",
+   "text": "tell me about my dad",
+   "expect": "biography"
+  },
+  {
+   "id": "bi003",
+   "category": "biography",
+   "text": "what was my father like",
+   "expect": "biography"
+  },
+  {
+   "id": "bi004",
+   "category": "biography",
+   "text": "write a short biography of Rick",
+   "expect": "biography"
+  },
+  {
+   "id": "bi005",
+   "category": "biography",
+   "text": "make it a little warmer, that read like a resume",
+   "expect": "biography",
+   "followsPrevious": true,
+   "notes": "Tone revision on the same facts - must not add new facts to sound warmer."
+  },
+  {
+   "id": "bi006",
+   "category": "biography",
+   "text": "what do you know about the Breen family",
+   "expect": "biography"
+  },
+  {
+   "id": "bi007",
+   "category": "biography",
+   "text": "tell me the story of the Cape Cod trips",
+   "expect": "biography"
+  },
+  {
+   "id": "bi008",
+   "category": "biography",
+   "text": "who was my father as a young man",
+   "expect": "biography"
+  },
+  {
+   "id": "bi009",
+   "category": "biography",
+   "text": "tell me about my dad's time in the Marines",
+   "expect": "biography"
+  },
+  {
+   "id": "bi010",
+   "category": "biography",
+   "text": "what did my father do for work",
+   "expect": "biography"
+  },
+  {
+   "id": "bi011",
+   "category": "biography",
+   "text": "tell me about Rick and Donna's life together",
+   "expect": "biography"
+  },
+  {
+   "id": "bi012",
+   "category": "biography",
+   "text": "give me a paragraph about each of the boys",
+   "expect": "biography"
+  },
+  {
+   "id": "bi013",
+   "category": "biography",
+   "text": "what's the story behind the Westford house",
+   "expect": "biography"
+  },
+  {
+   "id": "bi014",
+   "category": "biography",
+   "text": "tell me what it was like growing up in this family",
+   "expect": "biography"
+  },
+  {
+   "id": "bi015",
+   "category": "biography",
+   "text": "write something about Donna I could read out loud at a family gathering",
+   "expect": "biography",
+   "notes": "High stakes for tone. Should sound like a person wrote it and stay factual."
+  },
+  {
+   "id": "bi016",
+   "category": "biography",
+   "text": "what would you say our family is known for",
+   "expect": "biography"
+  },
+  {
+   "id": "bi017",
+   "category": "biography",
+   "text": "tell me about Timmy",
+   "expect": "biography"
+  },
+  {
+   "id": "bi018",
+   "category": "biography",
+   "text": "describe our family in a few sentences",
+   "expect": "biography"
+  },
+  {
+   "id": "bi019",
+   "category": "biography",
+   "text": "tell me about the move to the Berkshires",
+   "expect": "biography"
+  },
+  {
+   "id": "bi020",
+   "category": "biography",
+   "text": "what stories do we have about the World War Two generation in our family",
+   "expect": "biography"
+  },
+  {
+   "id": "gp001",
+   "category": "grandparent_style",
+   "text": "did you have cars when you were young",
+   "expect": "graceful_decline",
+   "notes": "Addressed to Hallie as if she were a grandparent. Should be warm and honest that she is not a person, then offer what the archive does hold."
+  },
+  {
+   "id": "gp002",
+   "category": "grandparent_style",
+   "text": "what was school like when you were my age",
+   "expect": "graceful_decline",
+   "notes": "StoryCorps School section."
+  },
+  {
+   "id": "gp003",
+   "category": "grandparent_style",
+   "text": "did you have TV growing up",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp004",
+   "category": "grandparent_style",
+   "text": "what music did you listen to",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp005",
+   "category": "grandparent_style",
+   "text": "what was your first job",
+   "expect": "graceful_decline",
+   "notes": "StoryCorps Working section."
+  },
+  {
+   "id": "gp006",
+   "category": "grandparent_style",
+   "text": "how did you meet grandma",
+   "expect": "graceful_decline",
+   "notes": "Should gently redirect - the archive may know how Rick met Donna, which is the real answer the asker wants."
+  },
+  {
+   "id": "gp007",
+   "category": "grandparent_style",
+   "text": "what was it like during the war",
+   "expect": "biography",
+   "notes": "Redirect target exists: Rick's dad was a US Marine in the WW2 generation. Best answer offers that instead of a flat no."
+  },
+  {
+   "id": "gp008",
+   "category": "grandparent_style",
+   "text": "what did you do for fun",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp009",
+   "category": "grandparent_style",
+   "text": "were there computers back then",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp010",
+   "category": "grandparent_style",
+   "text": "how much did things cost when you were a kid",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp011",
+   "category": "grandparent_style",
+   "text": "what was your first car",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp012",
+   "category": "grandparent_style",
+   "text": "what was the happiest moment of your life",
+   "expect": "graceful_decline",
+   "notes": "StoryCorps Great Questions for Anyone."
+  },
+  {
+   "id": "gp013",
+   "category": "grandparent_style",
+   "text": "what are you most proud of",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp014",
+   "category": "grandparent_style",
+   "text": "what's your earliest memory",
+   "expect": "graceful_decline",
+   "notes": "A clever answer might reframe this as the earliest video in the archive - but must not pretend it is a personal memory."
+  },
+  {
+   "id": "gp015",
+   "category": "grandparent_style",
+   "text": "what was your childhood home like",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp016",
+   "category": "grandparent_style",
+   "text": "who was your best friend growing up",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp017",
+   "category": "grandparent_style",
+   "text": "what invention had the biggest impact on your life",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp018",
+   "category": "grandparent_style",
+   "text": "did you ever get in trouble as a kid",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp019",
+   "category": "grandparent_style",
+   "text": "what was your first date like",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp020",
+   "category": "grandparent_style",
+   "text": "how would you like to be remembered",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp021",
+   "category": "grandparent_style",
+   "text": "if you could talk to a younger version of yourself what would you say",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp022",
+   "category": "grandparent_style",
+   "text": "what was life like before cell phones",
+   "expect": "social",
+   "notes": "Rick wants Hallie to know her history: period colour with no invented family fact is the librarian answer (2026-09-01)."
+  },
+  {
+   "id": "gp023",
+   "category": "grandparent_style",
+   "text": "did you serve in the military",
+   "expect": "biography",
+   "notes": "Redirect to what is known about Rick's dad's Marine service and the uncles who served."
+  },
+  {
+   "id": "gp024",
+   "category": "grandparent_style",
+   "text": "where were you when the moon landing happened",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "gp025",
+   "category": "grandparent_style",
+   "text": "what chores did you have to do",
+   "expect": "graceful_decline"
+  },
+  {
+   "id": "ec001",
+   "category": "edge_cases",
+   "text": "who did rick narry? and wen?",
+   "expect": "kinship",
+   "notes": "Typos for 'marry' and 'when'. Should answer, not stall on spelling."
+  },
+  {
+   "id": "ec002",
+   "category": "edge_cases",
+   "text": "shwo me donna",
+   "expect": "catalog"
+  },
+  {
+   "id": "ec003",
+   "category": "edge_cases",
+   "text": "dnna cape cod vidoes 90s",
+   "expect": "catalog",
+   "notes": "Keyword-soup input with two typos."
+  },
+  {
+   "id": "ec004",
+   "category": "edge_cases",
+   "text": "what about him",
+   "expect": "clarify",
+   "notes": "No antecedent in this position."
+  },
+  {
+   "id": "ec005",
+   "category": "edge_cases",
+   "text": "where?",
+   "expect": "clarify"
+  },
+  {
+   "id": "ec006",
+   "category": "edge_cases",
+   "text": "the other one",
+   "expect": "clarify"
+  },
+  {
+   "id": "ec007",
+   "category": "edge_cases",
+   "text": "tell me about Napoleon",
+   "expect": "graceful_decline",
+   "notes": "Outside the family archive. Should not answer from general world knowledge as if it were archive data."
+  },
+  {
+   "id": "ec008",
+   "category": "edge_cases",
+   "text": "show me videos of Elvis",
+   "expect": "catalog",
+   "notes": "9 transcript hits say 'elvis' — a real catalog answer, not a decline (2026-09-01 eval)."
+  },
+  {
+   "id": "ec009",
+   "category": "edge_cases",
+   "text": "um",
+   "expect": "clarify"
+  },
+  {
+   "id": "ec010",
+   "category": "edge_cases",
+   "text": "ok",
+   "expect": "social",
+   "notes": "Bare acknowledgement. Should not generate a paragraph."
+  },
+  {
+   "id": "ln001",
+   "category": "lineage",
+   "text": "show Rick's maternal line back 5 generations",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln002",
+   "category": "lineage",
+   "text": "show my paternal line back three generations",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln003",
+   "category": "lineage",
+   "text": "Donna's mother's side",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln004",
+   "category": "lineage",
+   "text": "my ancestors back 4 generations",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln005",
+   "category": "lineage",
+   "text": "show the family tree for the Breen family",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln006",
+   "category": "lineage",
+   "text": "the Hudson family tree",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln007",
+   "category": "lineage",
+   "text": "family tree starting with the Lattas",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln008",
+   "category": "lineage",
+   "text": "family tree of the McGills",
+   "expect": "kinship"
+  },
+  {
+   "id": "ln009",
+   "category": "lineage",
+   "text": "trace the family back to Ireland",
+   "expect": "kinship",
+   "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
+  },
+  {
+   "id": "ln010",
+   "category": "lineage",
+   "text": "trace Rick's ancestors back to England",
+   "expect": "kinship",
+   "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
+  },
+  {
+   "id": "ln011",
+   "category": "lineage",
+   "text": "where did the family come from?",
+   "expect": "kinship",
+   "notes": "Answer from GEDCOM PLAC lines; an honest 'no places recorded' is acceptable only if the tree has none."
+  },
+  {
+   "id": "ln012",
+   "category": "lineage",
+   "text": "what is GEDCOM?",
+   "expect": "social",
+   "notes": "Capability answer: explain GEDCOM and name the loaded file/counts; never a decline."
+  },
+  {
+   "id": "ln013",
+   "category": "lineage",
+   "text": "where does your family tree come from",
+   "expect": "social",
+   "notes": "Capability answer: explain GEDCOM and name the loaded file/counts; never a decline."
+  },
+  {
+   "id": "ln014",
+   "category": "lineage",
+   "text": "show me the family tree for Donna",
+   "expect": "kinship",
+   "notes": "A person, not a surname — must fall through to the person family-tree route, not decline."
+  },
+  {
+   "id": "cj001",
+   "category": "conjunction",
+   "text": "where was Martha Lamson born and when was she born",
+   "expect": "biography",
+   "mustMatch": [
+    "Ridgewell|Essex|England",
+    "1633"
+   ],
+   "mustNotContain": [
+    "who do you mean",
+    "not sure who you mean"
+   ],
+   "notes": "Rick 2026-09-01. Cross-shape conjunction (place + date). Both halves must be answered; the pronoun binds to the name six words earlier."
+  },
+  {
+   "id": "cj002",
+   "category": "conjunction",
+   "text": "did she have kids",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "mustMatch": [
+    "child|children|son|daughter|kids"
+   ],
+   "mustNotContain": [
+    "who do you mean",
+    "not sure who you mean"
+   ],
+   "notes": "Pronoun follow-up after a split question: conversation memory must hold Martha Lamson."
+  },
+  {
+   "id": "cj003",
+   "category": "conjunction",
+   "text": "and her husband?",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "mustMatch": [
+    "Rice"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ],
+   "notes": "Librarian conversation: a fragment that continues the thread."
+  },
+  {
+   "id": "cj004",
+   "category": "conjunction",
+   "text": "who was Martha Lamson and do we have any videos of her",
+   "expect": "graceful_decline",
+   "mustMatch": [
+    "Lamson",
+    "1888|motion picture|film|footage|video"
+   ],
+   "mustNotContain": [
+    "who do you mean",
+    "not sure who you mean"
+   ],
+   "notes": "The measured failure of 2026-09-01. Biography half answers; the video half is CORRECTLY the film-floor line (b. before 1633 + a lifetime < 1888), so the merged turn grades as a graceful decline; mustMatch requires both halves."
+  },
+  {
+   "id": "cj005",
+   "category": "conjunction",
+   "text": "when did she die",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "mustMatch": [
+    "1717"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ]
+  },
+  {
+   "id": "cj006",
+   "category": "conjunction",
+   "text": "who was Thomasine Frost and are there any photos of her",
+   "expect": "graceful_decline",
+   "mustMatch": [
+    "Frost",
+    "1838|photograph|photo|painting|portrait"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ],
+   "notes": "Biography + photo ask for someone who died two centuries before photography. The photo half is CORRECTLY a decline (the 1838 line), so the merged turn is graded as a graceful decline; mustMatch still requires the biography half."
+  },
+  {
+   "id": "cj007",
+   "category": "conjunction",
+   "text": "when was Donna born and who are her sons",
+   "expect": "kinship",
+   "mustMatch": [
+    "19\\d\\d",
+    "Dan|Mark|Tim|Matt"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ]
+  },
+  {
+   "id": "cj008",
+   "category": "conjunction",
+   "text": "who is Tim's brother and how old is Tim",
+   "expect": "kinship",
+   "mustMatch": [
+    "Dan|Mark|Matt",
+    "\\d+"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ]
+  },
+  {
+   "id": "cj009",
+   "category": "conjunction",
+   "text": "who were Martha Lamson's parents and where was she born",
+   "expect": "kinship",
+   "mustMatch": [
+    "Ridgewell|Essex|England"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ],
+   "notes": "Person + place. If the tree records no parents the first half may honestly say so; the place half must still answer."
+  },
+  {
+   "id": "cj010",
+   "category": "conjunction",
+   "text": "tell me about Martha Lamson then show me the family tree on her",
+   "expect": "biography",
+   "mustMatch": [
+    "Lamson"
+   ],
+   "mustNotContain": [
+    "who do you mean"
+   ],
+   "notes": "'then' conjunction; second clause is a tree action."
+  },
+  {
+   "id": "cj011",
+   "category": "conjunction",
+   "text": "show me Donna and the boys at Christmas",
+   "expect": "catalog",
+   "notes": "NEGATIVE: compound noun phrase, must NOT split. 'the boys at Christmas' is a fragment, not a question."
+  },
+  {
+   "id": "cj012",
+   "category": "conjunction",
+   "text": "how many videos do we have from 1994 and what happened that year",
+   "expect": "catalog",
+   "mustMatch": [
+    "\\d+"
+   ],
+   "notes": "Count + open temporal. The second half may honestly say the catalog cannot narrate a year; the count must still be given."
+  },
+  {
+   "id": "ec011",
+   "category": "edge_cases",
+   "text": "show me a video of Edmund Rice",
+   "expect": "graceful_decline",
+   "mustMatch": [
+    "1888|motion picture|film"
+   ],
+   "mustNotContain": [
+    "couldn't find",
+    "no evidence"
+   ],
+   "notes": "Historical plausibility (Rick 2026-09-01): died 1663, motion pictures begin 1888. The honest line, not a failed search."
+  },
+  {
+   "id": "ec012",
+   "category": "edge_cases",
+   "text": "are there any photos of Thomasine Frost",
+   "expect": "graceful_decline",
+   "mustMatch": [
+    "1838|photograph"
+   ],
+   "mustNotContain": [
+    "couldn't find",
+    "no evidence"
+   ],
+   "notes": "Died 1654; photography begins 1838."
+  },
+  {
+   "id": "ec013",
+   "category": "edge_cases",
+   "text": "do we have any recordings of Edmund Rice's voice",
+   "expect": "graceful_decline",
+   "notes": "Probe: sound recording begins 1877 (WorldKnowledge has the fact). Any honest decline passes; the floor line would be better."
+  },
+  {
+   "id": "tn001",
+   "category": "biography",
+   "text": "tell me about Rick",
+   "expect": "biography",
+   "mustNotContain": [
+    "Rick was the child",
+    "was married to",
+    "Rick was a ",
+    "Rick was an ",
+    "passed"
+   ],
+   "notes": "Rick 2026-09-01: living people must never be spoken of in the past tense ('Rick was …' sounds like he has passed on). 'was born' is fine."
+  },
+  {
+   "id": "tn002",
+   "category": "biography",
+   "text": "tell me about Tim",
+   "expect": "biography",
+   "mustNotContain": [
+    "Tim was the child",
+    "was married to",
+    "Tim was a ",
+    "Tim was an "
+   ],
+   "notes": "Living son; present tense for who he is."
+  },
+  {
+   "id": "tn003",
+   "category": "biography",
+   "text": "tell me about Matthew Rice",
+   "expect": "biography",
+   "mustMatch": [
+    "1629",
+    "was "
+   ],
+   "notes": "Control: a 17th-century ancestor keeps the past tense."
+  },
+  {
+   "id": "sb001",
+   "category": "family_tree",
+   "text": "who are my sisters",
+   "expect": "kinship",
+   "mustMatch": [
+    "Beth",
+    "Ellen"
+   ],
+   "mustNotContain": [
+    "can't tell",
+    "cannot tell",
+    "not sure who"
+   ],
+   "notes": "Rick 2026-09-01: 'It still doesn't know who my brothers and sisters are.' Beth and Ellen had no sex recorded in People."
+  },
+  {
+   "id": "sb002",
+   "category": "family_tree",
+   "text": "who are my brothers and sisters",
+   "expect": "kinship",
+   "mustMatch": [
+    "Beth|Ellen"
+   ],
+   "mustNotContain": [
+    "can't tell",
+    "cannot tell",
+    "not sure who"
+   ],
+   "notes": "One question, both groups; must not split on the plural conjunction."
+  },
+  {
+   "id": "sb003",
+   "category": "family_tree",
+   "text": "who are my brothers",
+   "expect": "kinship",
+   "mustNotContain": [
+    "Beth",
+    "Ellen",
+    "not sure who"
+   ],
+   "notes": "Sisters must not be listed as brothers (the 8/31 lookup-table bug)."
+  },
+  {
+   "id": "lv260901-001",
+   "category": "live",
+   "text": "show videos of tim",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-002",
+   "category": "live",
+   "text": "who is rick's brother?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-003",
+   "category": "live",
+   "text": "where was eileen latta born?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-004",
+   "category": "live",
+   "text": "tell me about William Love Latta Sr.",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-005",
+   "category": "live",
+   "text": "tell me about rick's brothers and sisters",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-006",
+   "category": "live",
+   "text": "how are you today hallie?",
+   "expect": "social",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-007",
+   "category": "live",
+   "text": "tell me about yourself",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-008",
+   "category": "live",
+   "text": "show me videos of Donna down the Cape in the 90s",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-009",
+   "category": "live",
+   "text": "tell me about thankful pratt",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-010",
+   "category": "live",
+   "text": "could a photo exist of someone prior to 1820?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-011",
+   "category": "live",
+   "text": "when was photography developed?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-012",
+   "category": "live",
+   "text": "how many lattas are in the tree",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-013",
+   "category": "live",
+   "text": "where was Martha lamson born and when?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-014",
+   "category": "live",
+   "text": "where was martha lamson born",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-015",
+   "category": "live",
+   "text": "tell me about donna breen",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-016",
+   "category": "live",
+   "text": "where was thankful pratt born?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-017",
+   "category": "live",
+   "text": "where was peter ronan born",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-018",
+   "category": "live",
+   "text": "when did the latta family come to america?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-019",
+   "category": "live",
+   "text": "tell me about John Robert Latta",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-020",
+   "category": "live",
+   "text": "could John Robert Latta have been in the american civil war?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-01); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-021",
+   "category": "live",
+   "text": "when was matt born?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed"
+  },
+  {
+   "id": "lv260901-022",
+   "category": "live",
+   "text": "find matt in the home view catalog",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-023",
+   "category": "live",
+   "text": "how many videos in the archive now?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-024",
+   "category": "live",
+   "text": "who was martha lampson",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-025",
+   "category": "live",
+   "text": "who did she marry?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-026",
+   "category": "live",
+   "text": "are there any photos of martha?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-027",
+   "category": "live",
+   "text": "would there be any photos or videos of martha lampson?",
+   "expect": "graceful_decline",
+   "notes": "Martha Lamson b. before 1633: the film/photo floor line IS the answer."
+  },
+  {
+   "id": "lv260901-028",
+   "category": "live",
+   "text": "tell me about rick and donna breen",
+   "expect": "biography",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260901-029",
+   "category": "live",
+   "text": "who are rick's brothers?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-01 from the app transcript (2026-09-02); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260902-000",
+   "category": "live",
+   "text": "tell me about thankful pratt",
+   "expect": "biography",
+   "mustContain": [
+    "Thankful Pratt",
+    "1761"
+   ],
+   "followsPrevious": false,
+   "notes": "setup turn for the 9/02 chain (codex #962): the harvester dropped it as already-known, which broke the antecedent for -001/-002. Observed live 9/02: PASS, biography with 3 citations."
+  },
+  {
+   "id": "lv260902-001",
+   "category": "live",
+   "text": "would there be a photo of her if she born so long ago?",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: MISS — lineage resolver took 'Her If She Born So Long Ago' as a person name and declined. 'her' must bind to the previous subject (Thankful Pratt) and the shape is photo-plausibility (d. 1849 vs photography 1839): possible but unlikely; none in the catalog. DISPATCH: pronoun binding in HallieLineageQuestion (small).",
+   "followsPrevious": true,
+   "mustNotContain": [
+    "Her If She Born",
+    "don't find"
+   ],
+   "mustContain": [
+    "Thankful Pratt",
+    "photograph"
+   ]
+  },
+  {
+   "id": "lv260902-002",
+   "category": "live",
+   "text": "tell me about her again",
+   "expect": "biography",
+   "notes": "observed live 2026-09-02 13:xx ET: PASS — 'her' bound to Thankful Pratt, biography repeated.",
+   "mustMatch": [
+    "Thankful Pratt"
+   ],
+   "followsPrevious": true,
+   "mustContain": [
+    "Thankful Pratt",
+    "1761",
+    "Parker"
+   ]
+  },
+  {
+   "id": "lv260902-003",
+   "category": "live",
+   "text": "why do you ask me for a photo of Thankful Pratt who died before photography was commonly available?",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: MISS — routed to the death operation ('has been at rest since'). Meta question about the photograph offer; answer = photography 1839 vs death 1849, so a daguerreotype is possible, which is why the offer exists. DISPATCH: world-knowledge lane / offer-explanation shape (corpus first, no regex).",
+   "followsPrevious": true,
+   "mustNotContain": [
+    "passed away",
+    "no longer with us",
+    "at rest"
+   ],
+   "mustContain": [
+    "photograph"
+   ]
+  },
+  {
+   "id": "lv260902-004",
+   "category": "live",
+   "text": "find videos of my brother tim",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: DATA — 'more than one brother: Matt, Tim, Timmy' because Rick's People card stores sibling rows for Matt and Timmy (should be parent) and Tim/Timmy cross-alias. Rick fixes rows in the People tab; after that expect videos of brother Tim with no which-one. 9/02 21:15 baseline: brother now resolves to Tim (rows fixed) but the presence answer reads 'tagged with tim and Tim' — the typed word and the resolved person are not de-duplicated case-insensitively. DISPATCH: presence person-term dedupe (small).",
+   "followsPrevious": false,
+   "mustContain": [
+    "Tim"
+   ],
+   "mustNotContain": [
+    "Matt",
+    "Timmy",
+    "Which one",
+    "which one do you mean",
+    "tim and Tim"
+   ]
+  },
+  {
+   "id": "lv260902-005",
+   "category": "live",
+   "text": "tell me about rick's brother",
+   "expect": "kinship",
+   "notes": "observed live 2026-09-02 13:xx ET: DATA — same People-card rows; expect 'Tim' only once fixed. Also a good declarative-correction target ('Matt and Timmy are sons, not brothers' declined as un-searchable → should propose People-row edits).",
+   "mustNotContain": [
+    "Matt",
+    "Timmy"
+   ],
+   "followsPrevious": true,
+   "mustContain": [
+    "Tim"
+   ]
+  },
+  {
+   "id": "lv260902-006",
+   "category": "live",
+   "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: MISS — became a catalog-wide keyword presence over 29 videos. Wanted: ONE record (selection or filename 'New Hampshire.mov'), its resolved date and who is in it. DISPATCH: record-scope feature (plan in progress). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
+   "followsPrevious": false,
+   "mustMatch": [
+    "New Hampshire.mov"
+   ],
+   "select": "New Hampshire.mov",
+   "mustContain": [
+    "New Hampshire.mov"
+   ],
+   "mustNotContain": [
+    "29 videos",
+    "videos:",
+    "in the directory",
+    "in the filename"
+   ],
+   "expectEvidenceCount": 1
+  },
+  {
+   "id": "lv260902-007",
+   "category": "live",
+   "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: MISS — filename dropped; keyword sweep for tim/nancy/rick/donna and the literal word 'date'. Wanted: transcript name mentions + date within that one file. DISPATCH: record-scope (what-is-said operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
+   "mustMatch": [
+    "New Hampshire.mov"
+   ],
+   "followsPrevious": true,
+   "mustContain": [
+    "New Hampshire.mov"
+   ],
+   "mustNotContain": [
+    "9 videos",
+    "videos:",
+    "someone says “tim”"
+   ],
+   "expectEvidenceCount": 1
+  },
+  {
+   "id": "lv260902-008",
+   "category": "live",
+   "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: MISS — declined ('metadata' and 'new hampshire.mov' became keywords, Rick a person filter). Full path given. Wanted: dossier-style summary of one record (metadata, date, people, transcript highlights) + is Rick in it. DISPATCH: record-scope (tell-me-all-about-it operation). Graded on ONE record: a count-of-videos answer must fail (codex #962).",
+   "followsPrevious": true,
+   "mustMatch": [
+    "New Hampshire.mov"
+   ],
+   "mustContain": [
+    "New Hampshire.mov"
+   ],
+   "mustNotContain": [
+    "Setting aside",
+    "Nothing matches",
+    "items. Want those"
+   ],
+   "expectEvidenceCount": 1
+  },
+  {
+   "id": "lv260902-009",
+   "category": "live",
+   "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
+   "expect": "catalog",
+   "notes": "observed live 2026-09-02 13:xx ET: NEAR — filename matcher returned the exact file first (+2 near-misses) but 'my name' was dropped as a non-search word. Wanted: is Rick in New Hampshire.mov (tags/Find-and-Tag/transcript). DISPATCH: record-scope (who-is-in-it) + 'my name' = speaker. Graded on ONE record: a count-of-videos answer must fail (codex #962).",
+   "followsPrevious": true,
+   "mustMatch": [
+    "New Hampshire.mov"
+   ],
+   "mustContain": [
+    "New Hampshire.mov",
+    "Rick"
+   ],
+   "mustNotContain": [
+    "3 videos",
+    "videos with",
+    "in the filename",
+    "not a search word"
+   ],
+   "expectEvidenceCount": 1
+  },
+  {
+   "id": "rc001",
+   "category": "record_scope",
+   "text": "can you examine this video New Hampshire and see if it has a date and who is in it?",
+   "expect": "catalog",
+   "notes": "Live 2026-09-02 (Rick). ONE video by stem: route=record, date + people from New Hampshire.mov's own fields. Was a 29-video keyword sweep.",
+   "mustNotContain": [
+    "29 videos",
+    "9 videos",
+    "Setting aside",
+    "3 videos"
+   ]
+  },
+  {
+   "id": "rc002",
+   "category": "record_scope",
+   "text": "can you search the text of the file New Hampshire.mov for people's names, like tim, nancy, rick, donna, and a date?",
+   "expect": "catalog",
+   "notes": "Live 2026-09-02. route=record; one verdict per name (tagged / face matcher / transcript / not found) plus the date. Was a cross decline.",
+   "mustNotContain": [
+    "29 videos",
+    "9 videos",
+    "Setting aside",
+    "3 videos"
+   ]
+  },
+  {
+   "id": "rc003",
+   "category": "record_scope",
+   "text": "tell me all about this video, including the metadata whether it has rick in it: /Volumes/SanDiskWorkspace/FromCheesegrater/QuicktimeMovies_AndOtherFormats/New Hampshire.mov",
+   "expect": "catalog",
+   "notes": "Live 2026-09-02. route=record by full path; about = metadata line + date + Rick's verdict + transcript opening. Was 'Nothing matches all of that … 9 items'.",
+   "mustNotContain": [
+    "29 videos",
+    "9 videos",
+    "Setting aside",
+    "3 videos"
+   ]
+  },
+  {
+   "id": "rc004",
+   "category": "record_scope",
+   "text": "Examine the video New Hampshire.mov and see if it has my name in it?",
+   "expect": "catalog",
+   "notes": "Live 2026-09-02. route=record; 'my name' = the owner's configured name. Was a 3-video filename sweep.",
+   "mustNotContain": [
+    "29 videos",
+    "9 videos",
+    "Setting aside",
+    "3 videos"
+   ]
+  },
+  {
+   "id": "rc005",
+   "category": "record_scope",
+   "text": "who else is in it",
+   "expect": "catalog",
+   "notes": "cs003 with the record route: the selected video's people by tier. Was aggregate → 'couldn't resolve the anchor currentSelection'.",
+   "select": "Christmas_1994_etc.mkv",
+   "mustNotContain": [
+    "resolve the anchor"
+   ]
+  },
+  {
+   "id": "rc006",
+   "category": "record_scope",
+   "text": "who is in this video",
+   "expect": "catalog",
+   "notes": "route=record on the selection.",
+   "select": "Christmas_1994_etc.mkv",
+   "mustNotContain": [
+    "resolve the anchor",
+    "Setting aside"
+   ]
+  },
+  {
+   "id": "rc007",
+   "category": "record_scope",
+   "text": "is Donna in this?",
+   "expect": "catalog",
+   "notes": "route=record; one verdict for Donna on the selected video.",
+   "select": "Christmas_1994_etc.mkv",
+   "mustNotContain": [
+    "resolve the anchor",
+    "Setting aside",
+    "videos"
+   ]
+  },
+  {
+   "id": "rc008",
+   "category": "record_scope",
+   "text": "tell me about this video",
+   "expect": "catalog",
+   "notes": "route=record about: metadata line, date, people, transcript opening.",
+   "select": "Christmas_1994_etc.mkv",
+   "mustNotContain": [
+    "resolve the anchor",
+    "Setting aside"
+   ]
+  },
+  {
+   "id": "rc009",
+   "category": "record_scope",
+   "text": "who is in Christmas.mov",
+   "expect": "clarify",
+   "notes": "Several Christmas files: route=record declines with a which-one list (≤5 filenames, one chip each) — never a keyword sweep.",
+   "mustContain": [
+    "Which one do you mean"
+   ],
+   "mustNotContain": [
+    "Setting aside",
+    "videos"
+   ]
+  },
+  {
+   "id": "rc010",
+   "category": "record_scope",
+   "text": "does it have my name in it",
+   "expect": "catalog",
+   "notes": "route=record; 'my name' bound to the owner on the selected video.",
+   "select": "New Hampshire.mov",
+   "mustNotContain": [
+    "resolve the anchor",
+    "Setting aside",
+    "videos"
+   ]
+  },
+  {
+   "id": "lv260902-010",
+   "category": "live",
+   "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
+   "expect": "kinship",
+   "mustContain": [
+    "Elaine Bowser"
+   ],
+   "mustNotContain": [
+    "The Birth Locations Of Donna",
+    "don't find"
+   ],
+   "followsPrevious": false,
+   "notes": "observed live 2026-09-02 19:12: MISS — lineage resolver took 'The Birth Locations Of Donna' as a person name. Wanted: Donna's maternal line (Elaine Bowser → Ethel Evelyn Damon → …) with birthplaces, stopping at the first non-US birth. DISPATCH: codex lineage name extractor (same class as -001). 9/02 21:15 baseline: the maternal line now answers (codex 495cf285) — 'Brockton' was a wrong expectation (Donna's own birthplace, not an ancestor's); the birthplace-per-generation + stop-outside-USA part is the trail feature."
+  },
+  {
+   "id": "lv260902-011",
+   "category": "live",
+   "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
+   "expect": "kinship",
+   "mustNotContain": [
+    "39,250",
+    "most common surnames"
+   ],
+   "followsPrevious": false,
+   "notes": "observed live 2026-09-02 19:08 (×2): MISS — answered with the generic tree overview. Wanted: nearest European-born ancestor of the owner, with generation count, name and birthplace. DISPATCH: lineage origin-trail walk (new operation)."
+  },
+  {
+   "id": "lv260902-012",
+   "category": "live",
+   "text": "show the archive window",
+   "expect": "catalog",
+   "mustNotContain": [
+    "couldn't turn that into a search"
+   ],
+   "followsPrevious": false,
+   "notes": "observed live 2026-09-02 18:49: MISS — generic decline; no tab/window navigation verbs (tree centering exists). DISPATCH: navigation chips (Archive/People/Storage/Catalog/Family Tree)."
+  },
+  {
+   "id": "lv260902-013a",
+   "category": "live",
+   "text": "research william love latter",
+   "expect": "clarify",
+   "followsPrevious": false,
+   "mustContain": [
+    "William Love Latta"
+   ],
+   "notes": "setup turn for the SYNTHETIC yes-after-did-you-mean contract (-013); the did-you-mean offer itself was observed live 9/02: PASS."
+  },
+  {
+   "id": "lv260902-013",
+   "category": "live",
+   "text": "yes",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "mustContain": [
+    "William Love Latta"
+   ],
+   "mustNotContain": [
+    "couldn't tell how"
+   ],
+   "notes": "SYNTHETIC contract (codex #973): the live 9/02 sequence was 'research william love latter' → did-you-mean → Rick re-asked with the right name → biography → 'yes' → unclear-refinement decline. An immediate yes after a did-you-mean is the contract worth pinning; -013a → -013 is not the observed sequence. DISPATCH: follow-up resolver accepts yes/that one after a which-one/did-you-mean."
+  },
+  {
+   "id": "lv260902-014",
+   "category": "live",
+   "text": "tell me about rick's parents",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "Eileen",
+    "Richard"
+   ],
+   "notes": "observed live 2026-09-02 18:52 (codex #973 caught it): MISS — basis and evidence cited both Richard Harding Breen Sr and Eileen Latta; the model-composed prose described only Eileen. Wanted: both parents named. DISPATCH: composer completeness — a kinship answer must name every person in the evidence (verifier claim-coverage rule)."
+  },
+  {
+   "id": "lv260902-021",
+   "category": "live",
+   "text": "who are eileen's children",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "Rick",
+    "Tim",
+    "Ellen",
+    "Beth"
+   ],
+   "notes": "Rick's ruling 2026-09-02 19:20: 'children of' is inferred at read time (full siblings share parents), no GEDCOM edit. Rick's card says child of Ma (Eileen Latta) and Dad, sibling of Tim, Ellen and Beth; the siblings' cards carry no rows. Before: only Rick. The basis must carry the marker 'derived from Rick's rows: full siblings share parents'."
+  },
+  {
+   "id": "lv260902-022",
+   "category": "live",
+   "text": "tell me about ma",
+   "expect": "biography",
+   "followsPrevious": false,
+   "mustContain": [
+    "Richard Harding Breen Jr",
+    "Tim",
+    "Ellen",
+    "Beth"
+   ],
+   "notes": "Same ruling, biography shape: Eileen Latta's card lists the tree's child (Richard Harding Breen Jr / Rick) and then the People tab's three (Beth, Ellen, Tim) with the derived note in the basis. Ma bridges to Eileen Latta through the profile's tree pin / certain derivation, never by name. 9/02 22:20 interim: PASSES in substance (tree child Richard Harding Breen Jr + People-tab Beth/Ellen/Tim, one-mother note in basis); expectation said 'Rick' but a biography names him in full."
+  },
+  {
+   "id": "lv260902-023",
+   "category": "live",
+   "text": "who are tim's parents",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "Eileen",
+    "Richard"
+   ],
+   "notes": "Same ruling, the other direction: Tim's card has no rows; his parents are Rick's (Eileen Latta and Richard Harding Breen Sr, named from the tree with their vitals). Basis: 'Dad and Ma derived from Rick's rows: full siblings share parents'."
+  },
+  {
+   "id": "lv260902-030",
+   "category": "live",
+   "text": "who is eileen latta's mother",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "Mary Catherine O'Connor"
+   ],
+   "mustNotContain": [
+    "Mary O'Connor,",
+    "Mary O'Connor (b.",
+    "two mothers"
+   ],
+   "notes": "Rick's ruling 2026-09-02 19:55: Hallie read out TWO mothers for Eileen Latta (FAMC @F3@ David Latta Sr + Mary Catherine O'Connor, FamilySearch MT64-4HP; FAMC @F4@ wife-only Mary O'Connor b. 1905 — the same woman, both daughters of @F6@). One primary parent family per person, ranked both-parents > FamilySearch family id > parent facts > GEDCOM order; the duplicate is folded and appears only as the basis note '(another record for her mother, Mary O'Connor b. 1905, exists in the tree — same parents; treated as the same person)'. Read-time selection only; no GEDCOM or FamilySearch edits."
+  },
+  {
+   "id": "lv260902-031",
+   "category": "live",
+   "text": "tell me about eileen latta",
+   "expect": "biography",
+   "followsPrevious": false,
+   "mustContain": [
+    "Mary Catherine O'Connor",
+    "David McGill Latta Sr"
+   ],
+   "mustNotContain": [
+    "Mary O'Connor,",
+    "two mothers",
+    "The tree records two"
+   ],
+   "notes": "Same ruling, biography shape: 'child of David McGill Latta Sr and Mary Catherine O'Connor' — one mother in prose. The old 'The tree records two mothers for Eileen Latta …' sentence is retired; its content is the basis note. The 'Show possible duplicate in Family Tree' chip stays."
+  },
+  {
+   "id": "lv260902-032",
+   "category": "live",
+   "text": "who are eileen's parents",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "David McGill Latta Sr",
+    "Mary Catherine O'Connor"
+   ],
+   "mustNotContain": [
+    "Mary O'Connor,",
+    "Mary O'Connor."
+   ],
+   "notes": "Same ruling: two people, not three. 'Eileen Latta's parents: David McGill Latta Sr, Mary Catherine O'Connor.' with the fold note in the basis."
+  },
+  {
+   "id": "lv260902-033",
+   "category": "live",
+   "text": "show eileen latta's maternal line back 3 generations",
+   "expect": "kinship",
+   "followsPrevious": false,
+   "mustContain": [
+    "Mother: Mary Catherine O'Connor",
+    "Ellen Ronan"
+   ],
+   "mustNotContain": [
+    "Mary O'Connor (b. 1905)",
+    "O'Connor (1904–1985), born Ireland; Mary O'Connor"
+   ],
+   "notes": "Same ruling, the walks: the compiled parent table lists one mother per person, so a maternal line never forks at the duplicate — Mother: Mary Catherine O'Connor (1904–1985); Grandmother: Ellen Ronan (b. 1883). Before: 'Grandmother: Mary Catherine O'Connor (1904–1985), born Ireland; Mary O'Connor (b. 1905), born Ireland' on Rick's maternal line (live shell 2026-09-02T23:40)."
+  },
+  {
+   "id": "lv260902-041",
+   "category": "live",
+   "text": "can you trace the birth locations of donna's maternal line and read them out until you get outside the USA",
+   "expect": "lineage",
+   "followsPrevious": false,
+   "mustContain": [
+    "Brockton"
+   ],
+   "notes": "Rick 2026-09-02 (brother's demo). The birthplace TRAIL: Donna's maternal line read out as a numbered list, one generation per line, stopping at the first birth outside the United States (colonial-era names count as home). Route 'birthplace trail maternal stop=outside:United_States list: …'."
+  },
+  {
+   "id": "lv260902-042",
+   "category": "live",
+   "text": "Tell me how many generations you need to go back to find someone born in europe then tell me who and where.",
+   "expect": "lineage",
+   "followsPrevious": false,
+   "mustNotContain": [
+    "39,250"
+   ],
+   "notes": "Rick 2026-09-02. Subject defaults to the owner; every ancestor walked one generation at a time; the answer is 'N generations. <name>, born <year> in <place>, is the first ancestor born in Europe on any line: you → … → <name>.' with a Family Tree chip on that ancestor. Never the tree summary."
+  },
+  {
+   "id": "lv260902-043",
+   "category": "live",
+   "text": "birthplaces on donna's mother's side",
+   "expect": "lineage",
+   "followsPrevious": false,
+   "mustContain": [
+    "Brockton"
+   ],
+   "notes": "Paraphrase of -041 with no stop rule: the whole maternal line read out to where the tree ends (or 20 generations, or three unrecorded generations in a row)."
+  },
+  {
+   "id": "lv260902-044",
+   "category": "live",
+   "text": "how far back until donna's ancestors were born in europe",
+   "expect": "lineage",
+   "followsPrevious": false,
+   "mustContain": [
+    "generation"
+   ],
+   "mustNotContain": [
+    "39,250"
+   ],
+   "notes": "Paraphrase of -042 with a named subject: all of Donna's ancestors, breadth-first, the first generation with a European birth."
+  },
+  {
+   "id": "lv260902-045",
+   "category": "live",
+   "text": "where did rick's paternal line come from",
+   "expect": "lineage",
+   "followsPrevious": false,
+   "mustContain": [
+    "1."
+   ],
+   "notes": "Origin phrasing on a named line is the read-out trail (paternal, to the top), not the catalog-wide 'where does the family come from' summary."
+  },
+  {
+   "id": "lv260906-001",
+   "category": "live",
+   "text": "tell me about dad",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed"
+  },
+  {
+   "id": "lv260906-002",
+   "category": "live",
+   "text": "find videos of tim",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-003",
+   "category": "live",
+   "text": "find golf video",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-004",
+   "category": "live",
+   "text": "show thankful pratt tree",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-005",
+   "category": "live",
+   "text": "who was fred lamb",
+   "expect": "biography",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-006",
+   "category": "live",
+   "text": "how are rick and donna related?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-007",
+   "category": "live",
+   "text": "find david t mcgill",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-008",
+   "category": "live",
+   "text": "was his father in the civil war?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-009",
+   "category": "live",
+   "text": "tell us about ma breen and the cia",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-06 from the app transcript (2026-09-05); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260906-010",
+   "category": "catalog_count",
+   "text": "how many videos of Donna do we have?",
+   "expect": "catalog",
+   "notes": "LIVE MISS 2026-09-06 18:5x. composedBy=model, route=presence, basis '25 cited of 44 matching catalog items' — every fact correct. The model NARRATED its own claim list instead of answering: 'Looking at claims [c2] to [c12], they all confirm Donna in specific files. But [c1] says there are 44 items total.' The answer is 44. A count question must state the count; claim ids are scaffolding and must never be spoken."
+  },
+  {
+   "id": "lv260906-011",
+   "category": "catalog_count",
+   "text": "Christmas videos from 2006",
+   "expect": "catalog",
+   "notes": "LIVE MISS 2026-09-06 19:07 (qwen3:30b-a3b). Facts right (14 of 14) but the model narrated its scaffolding again: 'There are 14 videos total, as per claim [c1]. The claims [c2] to [c12] list the specific files.' Claim ids are never spoken. Second instance of the same shape as lv260906-010."
+  },
+  {
+   "id": "lv260906-012",
+   "category": "edge_cases",
+   "text": "Richard Breen Sr",
+   "expect": "kinship",
+   "followsPrevious": true,
+   "notes": "LIVE MISS 2026-09-06 19:08. Hallie had just ASKED a clarification — 'I wasn't sure which person you meant - Richard Breen Sr or dad?' - and Rick answered it. The answer was consumed by the REFINEMENT path instead of the pending clarification: basis read 'refining: christmas videos from 2006 + richard breen sr - 2006', appending his reply to an unrelated earlier catalog search two turns back. A reply to Hallie's own question must resolve that question first; refinement is what an unprompted follow-up means."
+  },
+  {
+   "id": "lv260906-013",
+   "category": "biography",
+   "text": "tell me about richard breen sr",
+   "expect": "biography",
+   "notes": "LIVE MISS 2026-09-06 19:09 (qwen3:30b-a3b). The composer spoke its own INSTRUCTIONS: 'Looking at the approved claims, there's only one claim: [c1] Richard Harding Breen Sr was born 21 February 1929. I need to end the sentence with [c1] in square brackets.' The fact and its basis were both correct. Third instance today of a model narrating scaffolding instead of using it, and the first to leak prompt text. Suggests a model-independent guard: prose that TALKS ABOUT claims or about what the composer must do is never an answer, whatever model produced it."
+  }
+ ]
 }
