@@ -274,6 +274,21 @@ struct ArchivistEndpointSettings: View {
                         .accessibilityIdentifier("archivist.ollamaModel")
                     }
 
+                    // How much RAM this model reserves. On the Model row and
+                    // in larger type on purpose (Rick, 2026-09-06): the M5
+                    // Ultra's 96 GB is about to make "what does this one
+                    // cost me" the question asked most often in this pane,
+                    // and it should be readable at a glance rather than
+                    // parsed out of a sentence underneath.
+                    if let memoryBadge {
+                        Text(memoryBadge)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .help(memoryDetail)
+                            .accessibilityIdentifier("archivist.modelMemory")
+                    }
+
                     Button(loadingModels ? "…" : "Refresh") {
                         Task { await refreshModels(); await refreshModelFacts() }
                     }
@@ -297,13 +312,6 @@ struct ArchivistEndpointSettings: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let memoryLine {
-                    Text(memoryLine)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("archivist.modelMemory")
-                }
                 if let digestWarning {
                     Text(digestWarning)
                         .font(.caption)
@@ -464,24 +472,43 @@ struct ArchivistEndpointSettings: View {
         return max(1, Int(gb.rounded(.up)))
     }
 
-    /// "≈23 GB in memory of 64 GB" — the honest figure.
+    /// "≈21 GB" — what this model reserves, at a glance.
     ///
     /// RESIDENT size, not the on-disk size `ollama list` prints. For
     /// qwen3.8:27b-mlx those are 22.7 GB and 18.2 GB; the difference is the
-    /// KV cache at our 32K context. Showing the smaller number would
-    /// understate what the machine actually gives up, which is the whole
-    /// question anyone reads this line to answer. Falls back to the on-disk
-    /// size, clearly labelled, when nothing has loaded it yet.
-    private var memoryLine: String? {
-        let total = Self.roundedGB(Self.machineRAMBytes)
+    /// KV cache at our 32K context. The smaller number would understate what
+    /// the machine actually gives up, which is the only question this badge
+    /// exists to answer. Falls back to the on-disk figure — an understatement
+    /// the tooltip admits to — when nothing has loaded the model yet.
+    ///
+    /// The machine's own total is deliberately NOT here. Rick, 2026-09-06:
+    /// "I just want to see the ram size". He knows what his Macs have; what
+    /// he is sizing is the model against a machine that has not arrived yet.
+    /// The total is in the tooltip for anyone who wants the fraction.
+    private var memoryBadge: String? {
         if let residentBytes, residentBytes > 0 {
-            return "≈\(Self.roundedGB(residentBytes)) GB in memory, of \(total) GB on this Mac."
+            return "≈\(Self.roundedGB(residentBytes)) GB"
         }
         if let installedBytes, installedBytes > 0 {
-            return "≈\(Self.roundedGB(installedBytes)) GB on disk, of \(total) GB on this Mac "
-                 + "— it needs somewhat more than that once loaded."
+            return "≈\(Self.roundedGB(installedBytes)) GB"
         }
         return nil
+    }
+
+    /// The nuance the badge deliberately leaves out.
+    private var memoryDetail: String {
+        let total = Self.roundedGB(Self.machineRAMBytes)
+        if let residentBytes, residentBytes > 0 {
+            return "Roughly what this model reserves while it is loaded — "
+                 + "weights plus its context cache — of \(total) GB on this Mac. "
+                 + "Measured from the server that is holding it."
+        }
+        if let installedBytes, installedBytes > 0 {
+            return "Its size on disk, of \(total) GB on this Mac. Loaded it reserves "
+                 + "somewhat more than this — the context cache is not on disk. "
+                 + "Load it once and this becomes the measured figure."
+        }
+        return "No server has reported this model's size yet."
     }
 
     /// Silent when every host agrees, loud when they do not.
