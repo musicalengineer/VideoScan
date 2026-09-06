@@ -146,6 +146,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
                 with: replacement,
                 options: [.regularExpression, .caseInsensitive])
         }
+        // Numbers become words BEFORE the lexicon runs, so a respelling can
+        // never land inside a numeral (2026-09-06). Display text is
+        // untouched — this whole function exists to diverge from it.
+        spoken = HallieSpokenNumbers.spoken(spoken)
         return lexicon.apply(to: spoken, style: phonemeLinks ? .kokoro : .respelling).spoken
     }
 

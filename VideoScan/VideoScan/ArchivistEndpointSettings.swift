@@ -438,6 +438,11 @@ struct ArchivistEndpointSettings: View {
             if !tags.isEmpty {
                 installed = tags
                 modelSourceHost = host
+                // WHICH server's shelf this menu is. Rick had a picker full
+                // of models that were not on the server answering his
+                // questions, and no way to tell from the log.
+                appLog.write("[hallie-brain] model menu read from \(host) — "
+                             + "\(tags.count) installed: \(tags.joined(separator: ", "))")
                 return
             }
         }
@@ -540,6 +545,33 @@ struct ArchivistEndpointSettings: View {
         digestsByHost = nextDigests
         residentBytes = firstResident
         installedBytes = firstInstalled
+
+        // Put in the log exactly what the pane is showing (Rick,
+        // 2026-09-06: "how is the logging around which model is loaded and
+        // running, so you can see what I see in the log?").
+        //
+        // The line that prompted it was a picker listing granite4.2:30b and
+        // qwen-videoscan:64k while the warm-up line two inches away said
+        // qwen3.8:27b-mlx @ 127.0.0.1 — two Ollama servers on one Mac, the
+        // picker reading one and Hallie asking the other. Nothing in the
+        // log said WHICH server the menu came from, so there was no way to
+        // see that from the outside. Now there is: one line per host, host
+        // first, naming the configured tag and what that host has to say
+        // about it.
+        for host in hosts {
+            let state = nextReadiness[host] ?? .unknown
+            var line = "[hallie-brain] \(host): model “\(tag)” \(state.label.isEmpty ? "no answer" : state.label)"
+            if let digest = nextDigests[host], !digest.isEmpty {
+                line += " (\(digest.prefix(19)))"
+            }
+            appLog.write(line)
+        }
+        if let residentBytes, residentBytes > 0 {
+            appLog.write("[hallie-brain] “\(tag)” resident size "
+                         + "\(Self.roundedGB(residentBytes)) GB of "
+                         + "\(Self.roundedGB(Self.machineRAMBytes)) GB")
+        }
+        if let warning = digestWarning { appLog.write("[hallie-brain] \(warning)") }
     }
 
     /// Restart the brain (Rick, 2026-09-06).
