@@ -65,10 +65,16 @@ struct HalliePersonCard: Sendable, Equatable, Identifiable {
     var photoURL: URL? = nil
     var id: String { gedcomID }
 
-    init(_ person: GedcomFamilyGraph.Person, photoURL: URL? = nil) {
+    /// `lens` decides which STORE the years come from. Defaulted to
+    /// `.treeOnly` so cards built outside a turn still compile, but every
+    /// route that has a Context must pass the turn's lens: the card and the
+    /// prose beside it read the same value, so they cannot disagree about
+    /// one person's dates (codex HOLD on 6e01da6a, 2026-09-06).
+    init(_ person: GedcomFamilyGraph.Person, photoURL: URL? = nil,
+         lens: HallieVitalDates.Lens = .treeOnly) {
         gedcomID = person.id
         name = person.name
-        years = HalliePersonCard.yearsText(person)
+        years = lens.yearsText(person)
         birthPlace = person.birthPlace
         self.photoURL = photoURL
     }
@@ -143,7 +149,8 @@ enum HallieAttachmentBuilder {
                         generations requested: Int,
                         untilYear: Int? = nil,
                         in graph: GedcomFamilyGraph,
-                        photo: (GedcomFamilyGraph.Person) -> URL? = { _ in nil }) -> HallieLineageCard {
+                        photo: (GedcomFamilyGraph.Person) -> URL? = { _ in nil },
+                        lens: HallieVitalDates.Lens = .treeOnly) -> HallieLineageCard {
         let found = graph.ancestorLine(of: person, line: line, generations: requested, untilYear: untilYear)
         let lineWord: String
         switch line {
@@ -153,13 +160,15 @@ enum HallieAttachmentBuilder {
         }
         return HallieLineageCard(
             title: "\(HallieLineageQuestion.possessive(person.name)) \(lineWord)",
-            root: HalliePersonCard(person, photoURL: photo(person)),
+            root: HalliePersonCard(person, photoURL: photo(person), lens: lens),
             line: line,
             generations: found.map { gen in
                 HallieLineageCard.Generation(
                     generation: gen.generation,
                     label: generationLabel(gen.generation, line: line),
-                    people: gen.people.map { HalliePersonCard($0, photoURL: photo($0)) })
+                    people: gen.people.map {
+                        HalliePersonCard($0, photoURL: photo($0), lens: lens)
+                    })
             },
             requested: requested)
     }

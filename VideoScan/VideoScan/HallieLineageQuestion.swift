@@ -1173,7 +1173,8 @@ enum HallieLineageAnswer {
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
-                return deepAncestors(of: p, depth: depth, sex: sex, side: side, graph: graph, basisNote: note)
+                return deepAncestors(of: p, depth: depth, sex: sex, side: side, graph: graph,
+                                     basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
             }
         case .surnameTree(let surname):
             guard let graph = context.graph else { return noTree(context) }
@@ -1184,14 +1185,16 @@ enum HallieLineageAnswer {
             case .failure(let r): return r
             case .success(let p, let note):
                 return ancestorLine(of: p, line: line, generations: generations, untilYear: untilYear,
-                                    graph: graph, basisNote: note)
+                                    graph: graph, basisNote: note,
+                                    lens: HallieVitalDates.Lens.forTurn(context))
             }
         case .originTrail(let person, let country, let line):
             guard let graph = context.graph else { return noTree(context) }
             switch resolve(person, context: context, graph: graph) {
             case .failure(let r): return r
             case .success(let p, let note):
-                return originTrail(of: p, country: country, line: line, graph: graph, basisNote: note)
+                return originTrail(of: p, country: country, line: line, graph: graph,
+                                   basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
             }
         case .birthplaceTrail(let person, let line, let stop, let ask):
             return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
@@ -1418,11 +1421,18 @@ enum HallieLineageAnswer {
                              generations: Int,
                              untilYear: Int? = nil,
                              graph: GedcomFamilyGraph,
-                             basisNote: String? = nil) -> Result {
+                             basisNote: String? = nil,
+                             lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        // THE route my 2026-09-05 log evidence implicated ("lineage maternal
+        // x5", "lineage both x4", both speaking Eileen 1930 after Rick had
+        // corrected her profile). The first pass of this migration converted
+        // deepAncestors and originTrail and missed this one entirely; the
+        // Lens unit tests could not see it, because a dropped CALL SITE is
+        // invisible to a test of the thing that was not called.
         let card = HallieAttachmentBuilder.lineage(
             of: person, line: line, generations: generations, untilYear: untilYear, in: graph,
-            photo: { assets.photoURLs(for: $0).first })
+            photo: { assets.photoURLs(for: $0).first }, lens: lens)
         var sentences: [String] = []
         if card.generations.isEmpty {
             let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
@@ -1685,7 +1695,12 @@ enum HallieLineageAnswer {
                               sex: String?,
                               side: ArchivistQueryAST.Graph.Side?,
                               graph: GedcomFamilyGraph,
-                              basisNote: String? = nil) -> Result {
+                              basisNote: String? = nil,
+                              // Defaulted so the many existing callers and
+                              // tests that ask only about tree shape keep
+                              // compiling; `answer` always passes the real
+                              // lens (HallieVitalDates migration, 2026-09-06).
+                              lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let sexFilter = (sex?.isEmpty ?? true) ? nil : sex
         let sideWord = side.map { "\($0.rawValue) " } ?? ""
         let noun = sideWord + GedcomFamilyGraph.generationLabel(generations: depth, sex: sexFilter ?? "")
@@ -1825,7 +1840,7 @@ enum HallieLineageAnswer {
         let lines = paths.map { path -> String in
             let relative = path[path.count - 1]
             var text = relative.name
-            if let years = HalliePersonCard.yearsText(relative) { text += " (\(years))" }
+            if let years = lens.yearsText(relative) { text += " (\(years))" }
             let route = ([person.name] + path.enumerated().map { i, p in
                 "\(hopLabel(p, from: i == 0 ? nil : path[i - 1])) \(p.name)"
             }).joined(separator: " → ")
@@ -1911,7 +1926,8 @@ enum HallieLineageAnswer {
                             country: String?,
                             line: GedcomFamilyGraph.Line = .both,
                             graph: GedcomFamilyGraph,
-                            basisNote: String? = nil) -> Result {
+                            basisNote: String? = nil,
+                            lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let maxGen = HallieLineageQuestion.maxGenerations
         let stops = graph.originTrail(of: person, country: country, line: line, maxGenerations: maxGen)
         let anyPlaces = graph.originTrail(of: person, country: nil, line: line, maxGenerations: maxGen)
@@ -1921,7 +1937,7 @@ enum HallieLineageAnswer {
 
         func describe(_ s: GedcomFamilyGraph.OriginStop) -> String {
             var t = s.person.name
-            if let y = HalliePersonCard.yearsText(s.person) { t += " (\(y))" }
+            if let y = lens.yearsText(s.person) { t += " (\(y))" }
             return t + ", " + HallieAttachmentBuilder.generationLabel(s.generation, line: .both).replacingOccurrences(of: "parents", with: "parent")
                 + " — born \(s.place)"
         }

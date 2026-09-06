@@ -1076,33 +1076,71 @@ enum ArchivistGraphExecutor {
             // is common in this tree — that is a better answer than
             // silently handing back the birthday, which is what "where was
             // Eileen Latta born" used to do.
+            // The DATE this sentence carries obeys the same seam as every
+            // other route (HallieVitalDates migration, 2026-09-06): this
+            // route had never read it, so "where was Eileen Latta born"
+            // kept speaking the tree's year after Rick corrected her
+            // profile. The place itself is still the tree's, per rule 4.
+            let placeVitals = HallieVitalDates.resolve(
+                treePerson: person,
+                profiles: inputs.profiles.map(HallieVitalProfile.init),
+                graph: graph,
+                throughProfileStableID: profileStableID)
+            let placeDate = query.operation == .birthPlace
+                ? placeVitals.profileBirthdate : placeVitals.profileDeathdate
             let placeAnswer = ArchivistBiographyPolicy.lifePlace(
                 personID: person.id,
                 birth: query.operation == .birthPlace,
-                in: graph)
+                in: graph,
+                dateTextOverride: placeDate.map {
+                    HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                },
+                dateSourceName: placeDate == nil ? nil : placeVitals.profileName)
             return fromPolicy(
                 placeAnswer,
                 evidence: lifeDateEvidence(
                     for: person, birth: query.operation == .birthPlace,
-                    identityBridge: identityBridge),
+                    identityBridge: identityBridge,
+                    resolvedDateText: placeDate.map {
+                        HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                    }),
                 identityBridge: identityBridge,
-                unresolvedProfileRoute: nil)
+                unresolvedProfileRoute: nil,
+                dateSourceName: placeDate == nil ? nil : placeVitals.profileName)
 
         case .birth, .death:
             guard query.relation == nil else {
                 return declineUnexpectedRelation()
             }
+            // Fourth route found during the migration, 2026-09-06: "when
+            // was Ma born" read the tree directly, one case away from the
+            // birth-place route above. Same seam, same rule.
+            let dateVitals = HallieVitalDates.resolve(
+                treePerson: person,
+                profiles: inputs.profiles.map(HallieVitalProfile.init),
+                graph: graph,
+                throughProfileStableID: profileStableID)
+            let resolvedLifeDate = query.operation == .birth
+                ? dateVitals.profileBirthdate : dateVitals.profileDeathdate
             let answer = ArchivistBiographyPolicy.lifeDate(
                 personID: person.id,
                 birth: query.operation == .birth,
-                in: graph)
+                in: graph,
+                dateTextOverride: resolvedLifeDate.map {
+                    HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                },
+                dateSourceName: resolvedLifeDate == nil ? nil : dateVitals.profileName)
             return fromPolicy(
                 answer,
                 evidence: lifeDateEvidence(
                     for: person, birth: query.operation == .birth,
-                    identityBridge: identityBridge),
+                    identityBridge: identityBridge,
+                    resolvedDateText: resolvedLifeDate.map {
+                        HallieDateStyle.spoken($0, calendar: HallieVitalDates.utcCalendar)
+                    }),
                 identityBridge: identityBridge,
-                unresolvedProfileRoute: nil)
+                unresolvedProfileRoute: nil,
+                dateSourceName: resolvedLifeDate == nil ? nil : dateVitals.profileName)
 
         case .relationship:
             // Two-person operation; dispatched before single-subject
@@ -1176,7 +1214,14 @@ enum ArchivistGraphExecutor {
         _ answer: ArchivistBiographyAnswer,
         evidence: ArchivistGraphEvidence?,
         identityBridge: ArchivistGraphEvidence.IdentityBridge?,
-        unresolvedProfileRoute: ProfileRoute?
+        unresolvedProfileRoute: ProfileRoute?,
+        // The People profile that supplied the spoken DATE, when one did.
+        // An identity bridge outranks `answer.basis` below, so a policy
+        // basis naming the People tab was being discarded and the answer
+        // spoke a profile date over a basis line crediting the tree
+        // (codex HOLD on 6e01da6a, 2026-09-06). Appended, not substituted:
+        // the bridge and the tree provenance are both still true.
+        dateSourceName: String? = nil
     ) -> ArchivistGraphResult {
         let conclusion: ArchivistGraphConclusion
         switch answer.state {
@@ -1188,11 +1233,15 @@ enum ArchivistGraphExecutor {
         return ArchivistGraphResult(
             conclusion: conclusion,
             prose: answer.text,
-            basisLine: identityBridgeBasis(
-                identityBridge, answered: answer.state == .answered
-                    || answer.state == .missingFact)
-                ?? unresolvedProfileRouteBasis(unresolvedProfileRoute)
-                ?? answer.basis,
+            basisLine: {
+                let base = identityBridgeBasis(
+                    identityBridge, answered: answer.state == .answered
+                        || answer.state == .missingFact)
+                    ?? unresolvedProfileRouteBasis(unresolvedProfileRoute)
+                    ?? answer.basis
+                guard let dateSourceName else { return base }
+                return base + " Date from the People tab profile \u{201C}\(dateSourceName)\u{201D}."
+            }(),
             evidence: answer.state == .answered || answer.state == .missingFact
                 ? evidence : nil,
             candidates: answer.candidates,
@@ -1236,16 +1285,21 @@ enum ArchivistGraphExecutor {
             identityBridge: identityBridge)
     }
 
+    /// `resolvedDateText` is the date the ANSWER actually speaks. The
+    /// evidence must carry the same value: an answer citing evidence that
+    /// contradicts it is worse for this product than either value being
+    /// wrong on its own (codex HOLD on 6e01da6a, 2026-09-06).
     private static func lifeDateEvidence(
         for person: GedcomFamilyGraph.Person,
         birth: Bool,
-        identityBridge: ArchivistGraphEvidence.IdentityBridge?
+        identityBridge: ArchivistGraphEvidence.IdentityBridge?,
+        resolvedDateText: String? = nil
     ) -> ArchivistGraphEvidence {
         ArchivistGraphEvidence(
             subjectID: person.id,
             subjectName: person.name,
-            birthDate: birth ? person.birthDate : nil,
-            deathDate: birth ? nil : person.deathDate,
+            birthDate: birth ? (resolvedDateText ?? person.birthDate) : nil,
+            deathDate: birth ? nil : (resolvedDateText ?? person.deathDate),
             relationships: [],
             identityBridge: identityBridge)
     }

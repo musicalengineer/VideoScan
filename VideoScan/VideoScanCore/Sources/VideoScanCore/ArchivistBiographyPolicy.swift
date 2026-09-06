@@ -204,8 +204,16 @@ public enum ArchivistBiographyPolicy {
         return lifeDate(for: candidates[0], birth: birth)
     }
 
+    /// `dateTextOverride`: see `lifePlace`. Same seam, same reason.
+    /// `dateSourceName` is the People profile that supplied it, so the basis
+    /// can NAME the store the spoken date came from (seam rule 6). Without
+    /// it the answer says the profile's date over a basis line claiming
+    /// GEDCOM — prose and evidence disagreeing, which for this product is
+    /// worse than either value being wrong (codex HOLD, 2026-09-06).
     public static func lifeDate(personID: String, birth: Bool,
-                                in graph: GedcomFamilyGraph)
+                                in graph: GedcomFamilyGraph,
+                                dateTextOverride: String? = nil,
+                                dateSourceName: String? = nil)
         -> ArchivistBiographyAnswer {
         guard let person = graph.people[personID] else {
             return ArchivistBiographyAnswer(
@@ -213,13 +221,28 @@ public enum ArchivistBiographyPolicy {
                 text: "That family-tree person is no longer available.",
                 basis: gedcomCheck)
         }
-        return lifeDate(for: person, birth: birth)
+        return lifeDate(for: person, birth: birth,
+                        dateTextOverride: dateTextOverride,
+                        dateSourceName: dateSourceName)
+    }
+
+    /// The basis for an answer whose DATE came from a People profile. The
+    /// name still comes from the tree, and this says so.
+    public static func peopleTabDateBasis(_ profileName: String,
+                                          alsoTree: Bool) -> String {
+        alsoTree
+            ? "Basis: date from the People tab profile “\(profileName)”; "
+                + "name and place from the imported family tree (GEDCOM)."
+            : "Basis: date from the People tab profile “\(profileName)”; "
+                + "name from the imported family tree (GEDCOM)."
     }
 
     private static func lifeDate(for person: GedcomFamilyGraph.Person,
-                                 birth: Bool) -> ArchivistBiographyAnswer {
+                                 birth: Bool,
+                                 dateTextOverride: String? = nil,
+                                 dateSourceName: String? = nil) -> ArchivistBiographyAnswer {
 
-        let date = birth ? person.birthDate : person.deathDate
+        let date = dateTextOverride ?? (birth ? person.birthDate : person.deathDate)
         guard let date else {
             return ArchivistBiographyAnswer(
                 state: .missingFact,
@@ -243,7 +266,7 @@ public enum ArchivistBiographyPolicy {
         return ArchivistBiographyAnswer(
             state: .answered,
             text: text,
-            basis: gedcomBasis,
+            basis: dateSourceName.map { peopleTabDateBasis($0, alsoTree: false) } ?? gedcomBasis,
             catalogPersonName: person.name)
     }
 
@@ -260,8 +283,16 @@ public enum ArchivistBiographyPolicy {
         return lifePlace(for: person, birth: birth)
     }
 
+    /// `dateTextOverride` is the already-spoken date the caller's vital-date
+    /// seam resolved for this person — the People tab's, when it holds one.
+    /// VideoScanCore cannot see `HallieVitalDates` (that lives in the app
+    /// target), so the app supplies the resolved text rather than this
+    /// package reaching upward. Nil keeps the tree's own recorded string,
+    /// including an imprecise one (HallieVitalDates migration, 2026-09-06).
     public static func lifePlace(personID: String, birth: Bool,
-                                 in graph: GedcomFamilyGraph)
+                                 in graph: GedcomFamilyGraph,
+                                 dateTextOverride: String? = nil,
+                                 dateSourceName: String? = nil)
         -> ArchivistBiographyAnswer {
         guard let person = graph.people[personID] else {
             return ArchivistBiographyAnswer(
@@ -270,11 +301,15 @@ public enum ArchivistBiographyPolicy {
                 basis: gedcomBasis,
                 catalogPersonName: nil)
         }
-        return lifePlace(for: person, birth: birth)
+        return lifePlace(for: person, birth: birth,
+                         dateTextOverride: dateTextOverride,
+                         dateSourceName: dateSourceName)
     }
 
     private static func lifePlace(for person: GedcomFamilyGraph.Person,
-                                  birth: Bool) -> ArchivistBiographyAnswer {
+                                  birth: Bool,
+                                  dateTextOverride: String? = nil,
+                                  dateSourceName: String? = nil) -> ArchivistBiographyAnswer {
         let place = cleanPlace(birth ? person.birthPlace : person.deathPlace)
         guard let place else {
             return ArchivistBiographyAnswer(
@@ -287,7 +322,7 @@ public enum ArchivistBiographyPolicy {
         }
         // The date is included when the record has it: someone asking where
         // almost always wants when as well, and it costs nothing.
-        let date = birth ? person.birthDate : person.deathDate
+        let date = dateTextOverride ?? (birth ? person.birthDate : person.deathDate)
         let text: String
         if birth {
             text = date.map { "\(person.name) was born in \(place), \($0)." }
@@ -297,7 +332,7 @@ public enum ArchivistBiographyPolicy {
                 ?? "\(person.name) died in \(place)."
         }
         return ArchivistBiographyAnswer(state: .answered, text: text,
-                                        basis: gedcomBasis,
+                                        basis: dateSourceName.map { peopleTabDateBasis($0, alsoTree: true) } ?? gedcomBasis,
                                         catalogPersonName: person.name)
     }
 

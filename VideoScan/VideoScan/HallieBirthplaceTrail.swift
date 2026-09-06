@@ -432,12 +432,14 @@ extension HallieLineageAnswer {
             if let typed, r?.outcome == .declined,
                let retried = trailRetryWithoutLeadingVerb(typed, context: context, graph: graph) {
                 return trailAnswer(of: retried.person, isOwner: false, line: line, stop: stop, ask: ask,
-                                   from: 1, graph: graph, basisNote: retried.note)
+                                   from: 1, graph: graph, basisNote: retried.note,
+                                   lens: HallieVitalDates.Lens.forTurn(context))
             }
             return r ?? noTree(context)
         case .success(let p, let note):
             return trailAnswer(of: p, isOwner: typed == nil, line: line, stop: stop, ask: ask,
-                               from: 1, graph: graph, basisNote: note)
+                               from: 1, graph: graph, basisNote: note,
+                               lens: HallieVitalDates.Lens.forTurn(context))
         }
     }
 
@@ -475,7 +477,8 @@ extension HallieLineageAnswer {
             HallieLineageQuestion.normalize($0) == HallieLineageQuestion.normalize(person.name)
         } ?? false
         return trailAnswer(of: person, isOwner: isOwner, line: line, stop: stop, ask: .list,
-                           from: from, graph: graph, basisNote: nil)
+                           from: from, graph: graph, basisNote: nil,
+                           lens: HallieVitalDates.Lens.forTurn(context))
     }
 
     // MARK: Prose
@@ -483,8 +486,13 @@ extension HallieLineageAnswer {
     /// One line of the read-out: "3. Ethel Cote — 1908, Stukley, Shefford,
     /// Quebec, Canada (first born outside the United States)." A place
     /// that spanned today's borders is read as recorded and marked.
-    static func trailLine(_ step: LineageTrail.Step, number: Int, stop: LineageTrail.Stop) -> String {
-        let year = step.birthYear.map(String.init) ?? "birth year not recorded"
+    static func trailLine(_ step: LineageTrail.Step, number: Int, stop: LineageTrail.Stop,
+                          lens: HallieVitalDates.Lens = .treeOnly) -> String {
+        // The People tab wins over the tree for anyone who has a profile
+        // (HallieVitalDates migration, 2026-09-06). `step.birthYear` is the
+        // tree's own parsed year and remains the fallback, so an imprecise
+        // tree date stays imprecise instead of being invented.
+        let year = lens.birthYear(step.person).map(String.init) ?? "birth year not recorded"
         let place = step.placeText ?? "birthplace not recorded"
         let marker: String
         if step.matchesStop {
@@ -504,7 +512,8 @@ extension HallieLineageAnswer {
                             ask: HallieLineageQuestion.TrailAsk,
                             from: Int,
                             graph: GedcomFamilyGraph,
-                            basisNote: String?) -> Result {
+                            basisNote: String?,
+                            lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let walk = LineageTrail.walk(line: line, from: person, stop: stop, graph: graph)
         let who = HallieLineageQuestion.possessive(person.name)
         let basis = trailBasis
@@ -543,10 +552,10 @@ extension HallieLineageAnswer {
         switch ask {
         case .firstMatch:
             return trailFirstMatchAnswer(walk, person: person, isOwner: isOwner, line: line, stop: stop,
-                                         basis: basis, token: token, card: card, ask: ask)
+                                         basis: basis, token: token, card: card, ask: ask, lens: lens)
         case .list:
             return trailListAnswer(walk, person: person, line: line, stop: stop, from: from,
-                                   basis: basis, token: token, card: card, ask: ask)
+                                   basis: basis, token: token, card: card, ask: ask, lens: lens)
         }
     }
 
@@ -587,7 +596,8 @@ extension HallieLineageAnswer {
                                 person: GedcomFamilyGraph.Person,
                                 line: LineageTrail.Line, stop: LineageTrail.Stop, from: Int,
                                 basis: String, token: String, card: (String) -> HallieAttachment,
-                                ask: HallieLineageQuestion.TrailAsk) -> Result {
+                                ask: HallieLineageQuestion.TrailAsk,
+                                lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let who = HallieLineageQuestion.possessive(person.name)
         let total = walk.steps.count
         let pageSize = HallieLineageQuestion.trailPageSize
@@ -618,7 +628,7 @@ extension HallieLineageAnswer {
             sentences.append("Continuing \(who) \(trailLineWords(line)) birthplaces, \(start) to \(end) of \(total):")
         }
         for (offset, step) in walk.steps[(start - 1)..<end].enumerated() {
-            sentences.append(trailLine(step, number: start + offset, stop: stop))
+            sentences.append(trailLine(step, number: start + offset, stop: stop, lens: lens))
         }
         var actions = chips
         if end < total {
@@ -642,8 +652,9 @@ extension HallieLineageAnswer {
     static let trailTieNames = 3
 
     /// "born 1904 in Glasgow, Scotland" for a tie entry.
-    static func trailBornDetail(_ step: LineageTrail.Step) -> String {
-        let year = step.birthYear.map(String.init) ?? "a year not recorded"
+    static func trailBornDetail(_ step: LineageTrail.Step,
+                                lens: HallieVitalDates.Lens = .treeOnly) -> String {
+        let year = lens.birthYear(step.person).map(String.init) ?? "a year not recorded"
         let place = step.placeText ?? "a place not recorded"
         return "born \(year) in \(place)"
     }
@@ -658,7 +669,8 @@ extension HallieLineageAnswer {
                                       person: GedcomFamilyGraph.Person, isOwner: Bool,
                                       line: LineageTrail.Line, stop: LineageTrail.Stop,
                                       basis: String, token: String, card: (String) -> HallieAttachment,
-                                      ask: HallieLineageQuestion.TrailAsk) -> Result {
+                                      ask: HallieLineageQuestion.TrailAsk,
+                                      lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let who = HallieLineageQuestion.possessive(person.name)
         let onLine = line == .allAncestors ? "on any line" : "on that line"
         let born = trailBornPhrase(stop)
@@ -693,14 +705,14 @@ extension HallieLineageAnswer {
         var chips: [HallieTurnExecutor.OfferedAction] = []
         if walk.matches.count <= 1 {
             let path = trailPathWords(walk.steps, isOwner: isOwner)
-            prose = "\(generations) \(match.person.name), \(trailBornDetail(match)), is the first ancestor \(born) \(onLine): \(path)."
+            prose = "\(generations) \(match.person.name), \(trailBornDetail(match, lens: lens)), is the first ancestor \(born) \(onLine): \(path)."
             chips.append(.openFamilyTreePerson(personID: match.person.id, personName: match.person.name))
         } else {
             // Several at the same distance (codex #1014 item 2): all are
             // named, none is "the" first.
             let ties = walk.matches
             let shown = Array(ties.prefix(trailTieNames))
-            let entries = shown.map { "\($0.person.name) (\(trailBornDetail($0)))" }
+            let entries = shown.map { "\($0.person.name) (\(trailBornDetail($0, lens: lens)))" }
             let more = ties.count - shown.count
             // "A (…) and B (…)." / "A (…), B (…), C (…) and 2 more."
             let named = more > 0
