@@ -46,6 +46,18 @@ struct SettingsTabView: View {
 
                 Divider()
 
+                // Where the Archivist thinks. Local fleet or cloud, in
+                // the order they are tried (Rick 2026-08-12).
+                //
+                // Moved above Scanning on 2026-09-06 at Rick's request. It
+                // had been last on the page, under two long background-
+                // service sections — and it is the one thing here that
+                // needs touching when Hallie stops answering, which is
+                // exactly when nobody wants to scroll.
+                ArchivistEndpointSettings()
+
+                Divider()
+
                 // Scanning section
                 VStack(alignment: .leading, spacing: 16) {
                     Label("Scanning", systemImage: "magnifyingglass")
@@ -160,12 +172,6 @@ struct SettingsTabView: View {
                     FindTagHelperStatusLine(isRunning: isFindTagHelperRunning)
                         .padding(.horizontal, 10)
                 }
-
-                Divider()
-
-                // Where the Archivist thinks. Local fleet or cloud, in
-                // the order they are tried (Rick 2026-08-12).
-                ArchivistEndpointSettings()
 
                 Divider()
 
