@@ -1185,7 +1185,8 @@ enum HallieLineageAnswer {
             case .failure(let r): return r
             case .success(let p, let note):
                 return ancestorLine(of: p, line: line, generations: generations, untilYear: untilYear,
-                                    graph: graph, basisNote: note)
+                                    graph: graph, basisNote: note,
+                                    lens: HallieVitalDates.Lens.forTurn(context))
             }
         case .originTrail(let person, let country, let line):
             guard let graph = context.graph else { return noTree(context) }
@@ -1420,11 +1421,18 @@ enum HallieLineageAnswer {
                              generations: Int,
                              untilYear: Int? = nil,
                              graph: GedcomFamilyGraph,
-                             basisNote: String? = nil) -> Result {
+                             basisNote: String? = nil,
+                             lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        // THE route my 2026-09-05 log evidence implicated ("lineage maternal
+        // x5", "lineage both x4", both speaking Eileen 1930 after Rick had
+        // corrected her profile). The first pass of this migration converted
+        // deepAncestors and originTrail and missed this one entirely; the
+        // Lens unit tests could not see it, because a dropped CALL SITE is
+        // invisible to a test of the thing that was not called.
         let card = HallieAttachmentBuilder.lineage(
             of: person, line: line, generations: generations, untilYear: untilYear, in: graph,
-            photo: { assets.photoURLs(for: $0).first })
+            photo: { assets.photoURLs(for: $0).first }, lens: lens)
         var sentences: [String] = []
         if card.generations.isEmpty {
             let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
