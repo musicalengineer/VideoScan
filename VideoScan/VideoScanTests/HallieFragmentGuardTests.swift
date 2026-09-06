@@ -352,8 +352,14 @@ struct HallieFragmentGuardTests {
             "Her grandparents were Judson L. Parker and Mary Smith.",
             "She married George.",
         ])
+        // "1902" reads as "nineteen oh two" since 2026-09-06 — this string
+        // goes to a speech synthesizer, and a year said as a cardinal
+        // ("one thousand nine hundred two") is what that change fixed. The
+        // subject of THIS test is the abbreviation rule: "Mrs." and "b."
+        // must not end a sentence. Both still hold, which is what the three
+        // pieces below prove.
         #expect(HallieSpeaker.sentences("Mrs. Breen was b. 1902 in Quebec. So did I. Done.") == [
-            "Mrs. Breen was b. 1902 in Quebec.", "So did I.", "Done.",
+            "Mrs. Breen was b. nineteen oh two in Quebec.", "So did I.", "Done.",
         ])
     }
 }
