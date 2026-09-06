@@ -204,7 +204,19 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
             hasInvalidYearRange = false
         }
         mediaKind = payload.mediaKind?.rawValue
-        keywords = payload.keywords ?? []
+        // Deduped for the same reason `people` is, one field above: the
+        // translator emits a keyword twice often enough that Rick saw it
+        // (2026-09-05, "do we have any video of my father talking about
+        // typewriters" → keyword=typewriters keyword=typewriters), and the
+        // duplicate reached his screen as: with "typewriters", "typewriters".
+        // It also doubled the per-record scan for no additional matches.
+        // Case-insensitive, order preserving, first spelling wins.
+        keywords = {
+            var seen: Set<String> = []
+            return (payload.keywords ?? []).filter {
+                seen.insert(ArchivistKeywordText.normalizedPhrase($0)).inserted
+            }
+        }()
         keywordQueries = keywords.map(ArchivistKeywordQuery.init)
     }
 
