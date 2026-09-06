@@ -1311,9 +1311,16 @@ enum HallieTurnExecutor {
         var ownerNote: String?
         switch request.selectedIdentity {
         case nil:
+            // The pinned record is bound FIRST so its name can settle the
+            // generation (2026-09-06). "Richard Breen Sr" used to satisfy
+            // isOwnerSpelling for owner "Rick Breen" — rick expands to
+            // richard, the suffix was discarded — and this line then
+            // overwrote a father the kinship rebind had already resolved
+            // correctly with Rick's own record.
             if let typed = payload.people.first,
-               HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
-               let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID) {
+               let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID),
+               HallieOwnerResolver.isOwnerSpelling(
+                   typed, owner: context.speakers.ownerName, ownerTreeName: pinned.name) {
                 selection = .gedcomPersonID(pinned.id)
                 ownerNote = "“you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? ""))."
             } else {

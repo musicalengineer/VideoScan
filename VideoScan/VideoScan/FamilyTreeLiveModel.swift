@@ -300,6 +300,15 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Where compiled artifacts live; nil = parse every load (tests).
     private let compiledStore: FamilyGraphCompiledStore?
     private var loadGeneration = 0
+    /// Bumped by anything that only needs to SUPPRESS STALE CAPTIONS, never
+    /// to invalidate a result (2026-09-06). `recompile()` used to bump
+    /// `loadGeneration` for this, and `performLoadFromDisk`'s guard reads a
+    /// bump as "a newer LOAD is coming and will install" — which after a
+    /// recompile was false. The load's result was dropped, nobody installed,
+    /// and the view stayed in `.loading` with whatever scene it had, which
+    /// on a freshly created model is nothing. The two counters were one
+    /// counter meaning two different things; this is the second meaning.
+    private var captionGeneration = 0
     /// The disk load currently running, and at most one queued after it
     /// (codex #792): `loadFromDisk` never runs two loads concurrently —
     /// a second caller waits for the running one, then runs its own
@@ -560,7 +569,15 @@ final class FamilyTreeLiveModel: ObservableObject {
             Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
             return (outcome, bundle)
         }.value
-        guard generation == loadGeneration else { return }
+        guard generation == loadGeneration else {
+            // A genuinely newer LOAD is in flight and will install; this
+            // result is stale. Say so, because the same line used to fire
+            // for a recompile that was never going to install anything and
+            // left the tab spinning with no tree (2026-09-06).
+            report("[family-tree] load \(generation) superseded by \(loadGeneration); "
+                   + "not installing")
+            return
+        }
         loadPhase = nil
         install(outcome: loaded.0, bundle: loaded.1)
     }
@@ -643,17 +660,19 @@ final class FamilyTreeLiveModel: ObservableObject {
         let clock = ContinuousClock()
         let began = clock.now
 
-        loadGeneration &+= 1
-        // Captured ONLY so a superseded compile's captions cannot overwrite
-        // a newer load's. It must never decide whether the RESULT counts.
-        let captionGeneration = loadGeneration
+        // Captions only. A recompile must NOT invalidate a load that is
+        // already in flight — the note below (item 3) argues exactly this
+        // for the recompile's own result, and the same reasoning applies to
+        // the load's.
+        captionGeneration &+= 1
+        let captionGeneration = self.captionGeneration
         let directory = originalsDirectory
         let promoted = await Task.detached(priority: .userInitiated) { [weak self] () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = { phase in
                 Task { @MainActor [weak self] in
-                    guard let self, self.loadGeneration == captionGeneration else { return }
+                    guard let self, self.captionGeneration == captionGeneration else { return }
                     self.loadPhase = phase
                 }
             }

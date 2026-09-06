@@ -114,9 +114,54 @@ enum HallieOwnerResolver {
     /// owner "Rick Breen"; "breen" alone, "rick lamb" → no. "dick" → no:
     /// two diminutives of one formal name are two people (Rick's father is
     /// Dick), so a typed nickname is never expanded on this side.
-    static func isOwnerSpelling(_ typed: String, owner: String?) -> Bool {
+    /// A generational suffix is a DISCRIMINATOR, never noise (2026-09-06).
+    ///
+    /// Both sides were stripped of it before comparing, which let
+    /// "Richard Breen Sr" match owner "Rick Breen" through the
+    /// `rick → richard` expansion. `tell me about my dad` then resolved the
+    /// father correctly and had him overwritten with Rick's own record:
+    ///
+    ///   Q: tell me about my dad
+    ///   A: Richard Harding Breen Jr was born 4 March 1959.   (that is RICK)
+    ///
+    /// The suffix cannot be judged against the CONFIGURED owner name, which
+    /// is usually "Rick Breen" — no suffix, even though Rick is Junior in
+    /// the tree. Rejecting on that basis would break the case this
+    /// tolerance exists for ("richard breen jr" IS Rick), pinned by
+    /// HallieKinshipSidePhrasingTests. So the comparison is against
+    /// `ownerTreeName` — the owner's PINNED record, where the tree actually
+    /// records the generation. Absent that, behaviour is exactly what it
+    /// was: unknown suffix, no opinion.
+    ///
+    /// The header above already makes this argument for nicknames — two
+    /// diminutives of one formal name are two people. A father and a son
+    /// sharing a name are two people for the same reason, and the suffix is
+    /// the only place the tree says so.
+    static func isOwnerSpelling(
+        _ typed: String,
+        owner: String?,
+        ownerTreeName: String? = nil
+    ) -> Bool {
         guard let owner else { return false }
         let suffixes = GedcomFamilyGraph.nameSuffixes
+        // "jr" and "junior" are one claim; compare them as one.
+        let canonical: (String) -> String = {
+            $0 == "junior" ? "jr" : ($0 == "senior" ? "sr" : $0)
+        }
+        let suffixSet: (String) -> Set<String> = { name in
+            Set(FamilyIdentityText.tokens(name)
+                .filter { suffixes.contains($0) }
+                .map(canonical))
+        }
+        let typedSuffixes = suffixSet(typed)
+        if !typedSuffixes.isEmpty, let ownerTreeName {
+            let ownerTreeSuffixes = suffixSet(ownerTreeName)
+            // Only a KNOWN, DIFFERENT generation is a refusal. An owner
+            // record with no suffix of its own says nothing either way.
+            if !ownerTreeSuffixes.isEmpty, typedSuffixes != ownerTreeSuffixes {
+                return false
+            }
+        }
         let t = FamilyIdentityText.tokens(typed).filter { !suffixes.contains($0) }
         let o = FamilyIdentityText.tokens(owner).filter { !suffixes.contains($0) }
         guard let first = t.first, let ownerFirst = o.first,

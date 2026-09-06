@@ -28,16 +28,24 @@ struct OllamaDecodeFailureDetailTests {
     /// changes how these fail, this test fails here — in CI — rather than
     /// silently degrading the repair hint again in front of Rick's family.
     @Test func repairHintNamesTheOffendingField_soTheTemperatureZeroRetryCanChange() throws {
-        // "how old is Tim": temporal payload missing the required
-        // `reference` field entirely.
-        let missingReference = Data(
-            #"{"shape":"temporal","payload":{"subject":"tim","operation":"age"}}"#.utf8)
+        // A temporal payload missing a required field.
+        //
+        // This used to use a missing `reference`, which no longer fails:
+        // 828e00da (merged 2026-09-06) defaults a missing reference to
+        // `.currentSelection` so that "how old is Tim" survives a server
+        // that cannot enforce the schema. That branch and this test were
+        // written the same night against different bases and only met in
+        // the merge. `operation` is still genuinely required — it has no
+        // sensible default, since nothing can guess whether the question is
+        // about an age or a date — so it is what this now asks about.
+        let missingOperation = Data(
+            #"{"shape":"temporal","payload":{"subject":"tim"}}"#.utf8)
         do {
-            _ = try ArchivistQueryAST.decodeTranslatorOutput(missingReference)
-            Issue.record("a temporal payload with no reference must fail to decode")
+            _ = try ArchivistQueryAST.decodeTranslatorOutput(missingOperation)
+            Issue.record("a temporal payload with no operation must fail to decode")
         } catch {
             let detail = OllamaQueryTranslator.decodeFailureDetail(error)
-            #expect(detail.contains("reference"), "got: \(detail)")
+            #expect(detail.contains("operation"), "got: \(detail)")
             #expect(!detail.lowercased().contains("couldn't be read"),
                     "must not fall back to the generic Foundation wording: \(detail)")
         }
