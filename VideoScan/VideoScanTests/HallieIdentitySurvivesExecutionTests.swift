@@ -316,3 +316,77 @@ struct HallieProductionOverlayTests {
         #expect(bound.people == ["Dad"])
     }
 }
+
+/// Live regression, 2026-09-06 17:20, reported by Rick mid-spot-test:
+///
+///   Q: show me videos of my dad
+///   A: I can't work out who "my dad" is without the family tree, and no
+///      family tree is loaded.
+///
+/// It had worked an hour earlier. Cause: adding `fullNameForms` to the
+/// overlay's resolver (B7) also added them to `PersonResolver.spellingEntries`,
+/// which is the FUZZY spelling-recovery pool. Rick's owner name is "Rick
+/// Breen" and his profile carries no surname, so the exact index misses and
+/// recovery runs — now against "Richard Breen", "Richard Breen Sr" and the
+/// rest of his father's forms.
+@Suite("The owner still resolves after full names entered the resolver")
+struct HallieOwnerResolutionRegressionTests {
+
+    /// Rick's live shape exactly: Dad surnamed and suffixed, Rick with
+    /// neither, and "Richard" on both.
+    private static func live() -> [ArchivistGraphProfileSnapshot] {
+        [
+            .init(stableID: "richard", canonicalName: "Richard",
+                  aliases: ["Dad", "Grampa Breen", "Dick", "Dad Breen"],
+                  sex: .male,
+                  surname: "Breen", middleName: "Harding", suffix: "Sr"),
+            .init(stableID: "rick", canonicalName: "Rick",
+                  aliases: ["Dicky", "Richy", "Rich", "Richard"],
+                  kinships: [Kinship(relation: .child, relativeTo: .profile(name: "Richard"))],
+                  sex: .male),
+        ]
+    }
+
+    @Test func theOwnerNameResolvesToTheOwnerNotToHisFather() {
+        let overlay = FamilyKinshipOverlay(snapshots: Self.live())
+        let owners = overlay.nodes(claiming: "Rick Breen", ownerName: "Rick Breen")
+        #expect(owners == [.profile(stableID: "rick")],
+                Comment(rawValue: "\(owners)"))
+    }
+
+    /// The end-to-end shape Rick actually typed.
+    @Test func videosOfMyDadStillResolvesThroughThePeopleTab() {
+        let bound = HallieTurnExecutor.SpeakerKinship.rebind(
+            people: ["my dad"], question: "show me videos of my dad",
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            graph: nil,
+            kinshipOverlay: FamilyKinshipOverlay(snapshots: Self.live()))
+        #expect(bound.failure == nil, Comment(rawValue: bound.failure ?? ""))
+        #expect(bound.people == ["Richard Breen Sr"], Comment(rawValue: "\(bound.people)"))
+    }
+
+    /// A full name is an EXACT-match affordance. It must never widen fuzzy
+    /// recovery — guessing that "Rick Breen" means "Richard Breen" is
+    /// precisely the wrong-person answer the forms were added to prevent.
+    @Test func fullNamesAreExactAffordancesNotFuzzyCandidates() {
+        let resolver = PersonResolver(people: Self.live().map {
+            ResolvablePerson(canonicalName: $0.canonicalName, aliases: $0.aliases,
+                             fullNameForms: $0.fullNameForms)
+        })
+        #expect(resolver.resolve("Richard Breen Sr") == .resolved(canonicalName: "Richard"),
+                "exact full-name matching must keep working")
+        // The requirement is NOT that "Rick Breen" resolves here — it is
+        // that it never resolves to somebody ELSE. `.unknown` is the right
+        // answer for a spelling no profile claims: `nodes(claiming:)` then
+        // takes the owner path (HallieOwnerResolver.isOwnerSpelling → first
+        // token → "Rick"), which is where an owner name carrying a surname
+        // the profile lacks is supposed to be handled. Asserting
+        // `.resolved("Rick")` here would be asserting that fuzzy recovery
+        // guesses well, which is the very thing that caused this bug.
+        #expect(resolver.resolve("Rick Breen") != .resolved(canonicalName: "Richard"),
+                "the owner must never be recovered onto his father")
+        if case .resolved(let who) = resolver.resolve("Rick Breen") {
+            #expect(who == "Rick", Comment(rawValue: "resolved to \(who)"))
+        }
+    }
+}

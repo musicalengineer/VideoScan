@@ -124,10 +124,24 @@ struct PersonResolver: Sendable {
             idx[key, default: Claimants()].byAlias = aliasOnly.sorted()
         }
         index = idx
+        // Aliases only — NOT `alternateSpellings`, which also carries
+        // `fullNameForms`.
+        //
+        // A full name is an EXACT-match affordance: "Richard Breen Sr" names
+        // one person, which is the whole reason the forms exist. Feeding
+        // them to fuzzy recovery does the opposite. Live regression, Rick,
+        // 2026-09-06: with the forms in this pool, "Rick Breen" — his own
+        // configured owner name, on a profile carrying no surname — was
+        // recovered onto "Richard Breen" and resolved to his FATHER. The
+        // owner then failed to resolve uniquely, the People-tab kinship path
+        // bailed to the tree, and "show me videos of my dad" answered "no
+        // family tree is loaded". Guessing that one family member's name
+        // means another's is precisely the wrong-person answer the forms
+        // were added to prevent.
         spellingEntries = people.map {
             SpellingEntry(
                 canonicalName: $0.canonicalName,
-                spellings: [$0.canonicalName] + $0.alternateSpellings)
+                spellings: [$0.canonicalName] + $0.aliases)
         }
     }
 
