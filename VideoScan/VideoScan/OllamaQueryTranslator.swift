@@ -512,9 +512,16 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     /// not unload is reported by the warm-up and probe that follow, where
     /// the caller can say something useful about it.
     func unloadModel() async {
-        _ = try? await requestContent(
+        // Ollama's documented unload: `keep_alive: 0` at the ROOT with an
+        // EMPTY messages array. Both halves matter — a nested keep_alive is
+        // ignored (codex #1141), and a request carrying a prompt would
+        // generate before unloading. Sent straight through
+        // `sendChatRequest` rather than `requestContent`, which exists to
+        // negotiate schemas and has nothing to negotiate here.
+        _ = try? await sendChatRequest(
             "", schema: nil, systemPrompt: "",
-            options: ["temperature": 0, "num_predict": 1, "keep_alive": 0])
+            options: ["temperature": 0, "num_predict": 1],
+            keepAlive: 0, messages: [])
     }
 
     /// Can this host constrain output to a schema RIGHT NOW?
@@ -523,7 +530,14 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     /// whole point of asking is to find out whether a remembered refusal
     /// is still true. Sends the smallest possible schema-bearing request
     /// and classifies the answer.
-    enum StructuredOutputProbe: Equatable { case available, refused, unreachable }
+    /// `unverified` (codex #1141): the host accepted a schema-bearing
+    /// request and answered, but the answer does not SATISFY the schema.
+    /// That is not proof of enforcement — a server that ignores `format:`
+    /// and a model that happens to ramble both land here — so it must not
+    /// be reported to Rick as working enforcement.
+    enum StructuredOutputProbe: Equatable {
+        case available, unverified, refused, unreachable
+    }
 
     func structuredOutputProbe() async -> StructuredOutputProbe {
         let schema: [String: Any] = [
@@ -532,9 +546,18 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "required": ["ok"],
         ]
         do {
-            _ = try await sendChatRequest(
+            let (content, _) = try await sendChatRequest(
                 "Reply with ok true.", schema: schema, systemPrompt: "",
                 options: ["temperature": 0, "num_predict": 8])
+            // Enforcement means the reply IS the object, not that it
+            // contains one somewhere after a sentence of preamble. A
+            // thinking model leaking prose ahead of its JSON is precisely
+            // what the schema is supposed to prevent.
+            guard let data = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["ok"] is Bool
+            else { return .unverified }
             return .available
         } catch let error as NLTranslatorError {
             if case .structuredOutputUnsupported = error { return .refused }
@@ -642,7 +665,14 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         _ text: String,
         schema: [String: Any]?,
         systemPrompt: String,
-        options: [String: Any] = ["temperature": 0, "num_predict": 512]
+        options: [String: Any] = ["temperature": 0, "num_predict": 512],
+        // Ollama reads `keep_alive` at the ROOT of the payload and ignores
+        // one nested under `options` (codex #1141). `unloadModel` needs the
+        // root value to be numeric 0 or it evicts nothing — which is exactly
+        // the bug that shipped: a "restart" that sent an ordinary 30-minute
+        // request while the UI reported the model reloaded.
+        keepAlive: Any = "30m",
+        messages: [[String: Any]]? = nil
     ) async throws -> (content: String, data: Data) {
         // `host` may be a bare name ("RicksM4.local"), a name with a
         // port, or a full URL ("https://ollama.example.com") now that
@@ -658,10 +688,11 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             // Keep the model resident between turns (Rick, 2026-09-01).
             // Ollama's default idle unload turned the first question of
             // every visit into a cold load, and the grounded composer's
-            // 6 s budget fell back to the template each time.
-            "keep_alive": "30m",
+            // 6 s budget fell back to the template each time. `unloadModel`
+            // overrides this with numeric 0.
+            "keep_alive": keepAlive,
             "options": Self.bounded(options),
-            "messages": [
+            "messages": messages ?? [
                 ["role": "system",
                  "content": systemPrompt
                      + (repairHint.map(Self.repairSuffix(for:)) ?? "")],

@@ -386,6 +386,7 @@ struct ArchivistEndpointSettings: View {
         var reloaded: [String] = []
         var constrained: [String] = []
         var refused: [String] = []
+        var unverified: [String] = []
         var silent: [String] = []
 
         for host in hosts {
@@ -411,19 +412,26 @@ struct ArchivistEndpointSettings: View {
 
             // 3. Ask the question the button is really about.
             switch await probe.structuredOutputProbe() {
-            case .available: constrained.append(host)
-            case .refused:   refused.append(host)
+            case .available:   constrained.append(host)
+            case .unverified:  unverified.append(host)
+            case .refused:     refused.append(host)
             case .unreachable: silent.append(host)
             }
         }
 
-        restartReportIsGood = !constrained.isEmpty && refused.isEmpty && silent.isEmpty
+        restartReportIsGood = !constrained.isEmpty
+            && refused.isEmpty && silent.isEmpty && unverified.isEmpty
         var lines: [String] = []
         if !reloaded.isEmpty {
             lines.append("Reloaded \(tag) on \(reloaded.joined(separator: ", ")).")
         }
         if !constrained.isEmpty {
             lines.append("Structured output is working again — Hallie will ask with a schema.")
+        }
+        if !unverified.isEmpty {
+            lines.append("\(unverified.joined(separator: ", ")) accepted the schema but "
+                         + "didn't obey it, so I can't say enforcement is working. "
+                         + "Hallie will still ask with a schema.")
         }
         if !refused.isEmpty {
             lines.append("\(refused.joined(separator: ", ")) still refuses structured output. "

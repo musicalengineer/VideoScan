@@ -60,6 +60,35 @@ struct HallieRestartBrainTests {
         #expect(await t.structuredOutputProbe() == .available)
     }
 
+    /// codex #1141: answering is not the same as OBEYING. A host that
+    /// accepts `format:` and then replies with prose has not demonstrated
+    /// enforcement, and reporting that to Rick as working would send him
+    /// back to a server that is still ignoring the schema.
+    @Test func aReplyThatIgnoresTheSchemaIsUnverifiedNotAvailable() async {
+        let prose = translator { _, _ in
+            .ok(#"{"message":{"content":"Sure! ok is true."}}"#)
+        }
+        #expect(await prose.structuredOutputProbe() == .unverified)
+    }
+
+    /// The live shape that motivated it: a thinking model leaking preamble
+    /// ahead of otherwise-valid JSON. Enforcement means the reply IS the
+    /// object, not that one can be found inside it.
+    @Test func jsonBuriedAfterPreambleIsUnverified() async {
+        let leaky = translator { _, _ in
+            .ok(#"{"message":{"content":" true.{\n  \"ok\": true\n}"}}"#)
+        }
+        #expect(await leaky.structuredOutputProbe() == .unverified)
+    }
+
+    /// Right shape, wrong type: `ok` must be a boolean.
+    @Test func aWrongTypedFieldIsUnverified() async {
+        let wrong = translator { _, _ in
+            .ok(#"{"message":{"content":"{\"ok\":\"yes\"}"}}"#)
+        }
+        #expect(await wrong.structuredOutputProbe() == .unverified)
+    }
+
     /// The live shape: HTTP 501 with ollama's own wording.
     @Test func aServerWithoutXgrammarProbesRefused() async {
         let t = translator { _, _ in
@@ -94,18 +123,60 @@ struct HallieRestartBrainTests {
 
     // MARK: unloading
 
-    /// `keep_alive: 0` is ollama's unload signal; without it "restart" would
-    /// reload nothing and a wedged model would stay wedged.
-    @Test func unloadingSendsKeepAliveZeroAndSwallowsFailure() async {
-        actor Seen { var bodies: [String] = []; func add(_ s: String) { bodies.append(s) } }
+    /// `keep_alive: 0` is ollama's unload signal — at the ROOT of the
+    /// payload. A nested one under `options` is ignored.
+    ///
+    /// THIS TEST USED TO BE UNABLE TO FAIL (codex #1141). It asserted that
+    /// the body contained the substring "keep_alive", which is true of every
+    /// request the translator has ever sent — `sendChatRequest` hardcodes
+    /// `"keep_alive": "30m"` to keep the model resident between turns. So it
+    /// passed against a shipped `unloadModel` that evicted nothing while the
+    /// settings pane cheerfully reported the model reloaded. It now decodes
+    /// the body and pins the actual value, which is the only version of this
+    /// assertion worth having.
+    @Test func unloadingSendsRootKeepAliveZeroWithNoMessages() async throws {
+        actor Seen { var bodies: [Data] = []; func add(_ d: Data) { bodies.append(d) } }
         let seen = Seen()
         let t = translator { _, body in
-            await seen.add(String(data: body, encoding: .utf8) ?? "")
+            await seen.add(body)
             return .down("gone")
         }
         await t.unloadModel()   // must not throw
+
         let bodies = await seen.bodies
-        #expect(bodies.contains { $0.contains("keep_alive") },
-                Comment(rawValue: bodies.joined(separator: " | ").prefix(300).description))
+        let payload = try #require(
+            bodies.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }.first)
+
+        // The root value, numerically zero — not "30m", not a string.
+        let keepAlive = try #require(payload["keep_alive"])
+        #expect((keepAlive as? NSNumber)?.doubleValue == 0,
+                Comment(rawValue: "root keep_alive was \(keepAlive)"))
+
+        // And NOT smuggled into options, where ollama would ignore it.
+        let options = payload["options"] as? [String: Any] ?? [:]
+        #expect(options["keep_alive"] == nil,
+                "a nested keep_alive is ignored by ollama and must not stand in for the root one")
+
+        // Empty messages: an unload must not generate first.
+        let messages = try #require(payload["messages"] as? [Any])
+        #expect(messages.isEmpty, Comment(rawValue: "\(messages.count) messages sent with the unload"))
+    }
+
+    /// The counterpart: an ORDINARY request must still keep the model
+    /// resident. The unload override must not leak into normal turns.
+    @Test func anOrdinaryRequestStillKeepsTheModelResident() async throws {
+        actor Seen { var bodies: [Data] = []; func add(_ d: Data) { bodies.append(d) } }
+        let seen = Seen()
+        let t = translator { _, body in
+            await seen.add(body)
+            return .ok(#"{"message":{"content":"{\"ok\":true}"}}"#)
+        }
+        _ = await t.structuredOutputProbe()
+        let payload = try #require(
+            (await seen.bodies).compactMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }.first)
+        #expect(payload["keep_alive"] as? String == "30m")
+        #expect((payload["messages"] as? [Any])?.isEmpty == false)
     }
 }
