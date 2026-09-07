@@ -26,8 +26,12 @@ enum FamilyTreePersonMetadata {
     /// The copyable block. `graph` supplies the relatives; everything else
     /// comes off the person record verbatim — raw GEDCOM date and place
     /// strings are never reformatted, matching how the app displays them.
+    /// `graph` is optional so the Demo tree — which has no loaded graph — still
+    /// copies the person's own fields instead of the menu item doing nothing
+    /// at all. A silent no-op on a click is the failure shape this codebase
+    /// spent 2026-09-07 removing.
     static func text(for person: GedcomFamilyGraph.Person,
-                     in graph: GedcomFamilyGraph) -> String {
+                     in graph: GedcomFamilyGraph?) -> String {
         var lines: [String] = [person.name]
 
         let others = person.alternateNames.filter { $0 != person.name }
@@ -52,14 +56,14 @@ enum FamilyTreePersonMetadata {
         }
         lines.append("Record ID: \(person.id)")
 
-        let parents = graph.allRecordedParents(of: person)
+        let parents = graph?.allRecordedParents(of: person) ?? []
         if !parents.isEmpty {
             lines.append("")
             lines.append("Parents:")
             for parent in parents { lines.append("  - " + summary(parent)) }
         }
 
-        let units = graph.familyUnits(of: person)
+        let units = graph?.familyUnits(of: person) ?? []
         for unit in units where unit.spouse != nil || !unit.children.isEmpty {
             lines.append("")
             if let spouse = unit.spouse {

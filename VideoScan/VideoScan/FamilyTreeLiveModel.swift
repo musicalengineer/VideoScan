@@ -269,6 +269,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// not loaded or the id is unknown (Rick, 2026-09-07: "I want all this
     /// text to be copyable"). Formatting lives in FamilyTreePersonMetadata
     /// so it can be tested without a view.
+    /// Nil when no GEDCOM is loaded (the Demo tree) or the id is unknown —
+    /// callers must HIDE the copy affordance rather than offer a click that
+    /// does nothing. A silent no-op is the failure shape this codebase spent
+    /// 2026-09-07 removing.
     func metadataText(for id: String) -> String? {
         guard let graph, let person = graph.people[id] else { return nil }
         return FamilyTreePersonMetadata.text(for: person, in: graph)

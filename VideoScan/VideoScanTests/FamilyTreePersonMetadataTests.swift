@@ -109,6 +109,16 @@ struct FamilyTreePersonMetadataTests {
         #expect(text.contains("titles, burial, notes and sources in the source GEDCOM are not kept"))
     }
 
+    /// No GEDCOM loaded (the Demo tree): the person's own fields still
+    /// render, and nothing pretends to know relatives.
+    @Test func withoutAGraphItStillCopiesTheOwnFields() throws {
+        let person = try #require(graph.people["@I1@"])
+        let text = FamilyTreePersonMetadata.text(for: person, in: nil)
+        #expect(text.contains("Born 11 October 1372 (Kenilworth, Warwickshire, England)"))
+        #expect(!text.contains("Parents:"), Comment(rawValue: text))
+        #expect(!text.contains("Married to"), Comment(rawValue: text))
+    }
+
     /// A sparse record must not invent anything or crash.
     @Test func aRecordWithAlmostNothingStillCopies() throws {
         let text = try copy("@I3@")

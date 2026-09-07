@@ -70,9 +70,10 @@ struct FamilyTreePersonCard: View {
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
     let onShowInPeople: (String) -> Void
-    /// Copy everything the app holds about this person to the pasteboard
-    /// (Rick, 2026-09-07). The parent owns the graph, so it owns the text.
-    let onCopyDetails: () -> Void
+    /// Everything the app holds about this person, as pasteboard text — nil
+    /// when no GEDCOM is loaded (Rick, 2026-09-07). A provider rather than an
+    /// action so the menu item can be ABSENT instead of doing nothing.
+    let detailedRecordText: () -> String?
     /// Research Person… (2026-08-29): sourced dossier for a deceased
     /// tree person, told to Hallie once confirmed.
     let onResearch: () -> Void
@@ -236,8 +237,11 @@ struct FamilyTreePersonCard: View {
             Divider()
             photoMenuItems
             Divider()
-            Button("Copy \(person.name)'s details", systemImage: "doc.on.doc") {
-                onCopyDetails()
+            if let record = detailedRecordText() {
+                Button("Copy person's detailed record", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(record, forType: .string)
+                }
             }
             Button("Show \(person.name) in People tab") {
                 onShowInPeople(person.name)

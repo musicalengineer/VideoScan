@@ -910,11 +910,7 @@ struct FamilyTreeDemoView: View {
                 onShowInPeople: { name in
                     showInPeopleTab(named: name)
                 },
-                onCopyDetails: {
-                    if let text = model.metadataText(for: card.person.id) {
-                        copyToPasteboard(text)
-                    }
-                },
+                detailedRecordText: { model.metadataText(for: card.person.id) },
                 onResearch: { presentResearch(for: card.person.id) }
             )
     }
@@ -1112,6 +1108,20 @@ struct FamilyTreeDemoView: View {
                     }
                     .padding(14)
                     .background(panelBackground)
+                    // Rick, 2026-09-07: "can you make that text in the upper
+                    // left of Family Tree for an individual copyable, right
+                    // click -> copy person's detailed record." The whole
+                    // identity block, not just the two id chips beside it —
+                    // the name, the Born/Died lines with their places, and
+                    // everything else the app holds. Same text the card's
+                    // context menu copies.
+                    .contextMenu {
+                        if let record = model.metadataText(for: person.id) {
+                            Button("Copy person's detailed record", systemImage: "doc.on.doc") {
+                                copyToPasteboard(record)
+                            }
+                        }
+                    }
 
                     if !model.lineOptions.isEmpty {
                         FamilyTreeLineToRow(options: model.lineOptions) { anchorID in
