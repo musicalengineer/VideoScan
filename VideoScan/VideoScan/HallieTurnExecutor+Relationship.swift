@@ -93,7 +93,8 @@ extension HallieTurnExecutor {
         for binding in request.intent.speakerBindings {
             voices[binding.index] = binding.role == .owner ? .owner : .archivist
         }
-        let query = ArchivistGraphQuery(payload, voices: voices)
+        let query = ArchivistGraphQuery(payload, voices: voices,
+                                        question: request.intent.originalQuestion)
 
         var pinned = request.intent.pinnedGraphSubjects
 

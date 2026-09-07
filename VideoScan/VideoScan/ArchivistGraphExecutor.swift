@@ -246,18 +246,62 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         self.voices = voices
     }
 
-    init(_ payload: ArchivistQueryAST.Graph, voices: [Int: Voice] = [:]) {
+    /// Does this sentence ask WHERE rather than when? Narrow on purpose: it
+    /// only claims a question whose subject is plainly the place, so
+    /// "tell me about X" keeps the biography and only the place asks move.
+    /// A death cue is required to reach `.deathPlace`; everything else that
+    /// asks a place is a birth ask, which is what people actually type.
+    static func asksForAPlace(_ question: String) -> Bool {
+        let q = question.lowercased()
+        // "where was/were/did … born", "where is … buried"
+        if q.range(of: #"\bwhere\s+(was|were|is|are|did|do|does)\b"#,
+                   options: .regularExpression) != nil { return true }
+        // "what/which country|city|town|state|county|place|part of the world"
+        if q.range(of: #"\b(what|which)\s+(country|city|town|state|county|province|region|place|village|parish)\b"#,
+                   options: .regularExpression) != nil { return true }
+        // "born in what country", "place of birth", "birthplace"
+        if q.range(of: #"\bborn\s+(in|at)\s+(what|which|where)\b"#,
+                   options: .regularExpression) != nil { return true }
+        if q.range(of: #"\bbirth\s*place\b|\bplace\s+of\s+(birth|death)\b"#,
+                   options: .regularExpression) != nil { return true }
+        return false
+    }
+
+    init(_ payload: ArchivistQueryAST.Graph, voices: [Int: Voice] = [:],
+         question: String? = nil) {
         people = payload.people
+        var resolved: Operation
         switch payload.operation {
-        case .biography: operation = .biography
-        case .birth: operation = .birth
-        case .death: operation = .death
-        case .birthPlace: operation = .birthPlace
-        case .deathPlace: operation = .deathPlace
-        case .kinship: operation = .kinship
-        case .familyTree: operation = .familyTree
-        case .relationship, .commonAncestor: operation = .relationship
+        case .biography: resolved = .biography
+        case .birth: resolved = .birth
+        case .death: resolved = .death
+        case .birthPlace: resolved = .birthPlace
+        case .deathPlace: resolved = .deathPlace
+        case .kinship: resolved = .kinship
+        case .familyTree: resolved = .familyTree
+        case .relationship, .commonAncestor: resolved = .relationship
         }
+        // A PLACE QUESTION GETS THE PLACE OPERATION (Rick, live 2026-09-07).
+        // He asked "what country was John Hastings born in?" four times and
+        // got the birth DATE every time. The record has the place — `2 PLAC
+        // Kenilworth, Warwickshire, England`, and the Family Tree view draws
+        // it — and the executor has a `.birthPlace` route whose own comment
+        // says handing back the birthday instead "is what 'where was Eileen
+        // Latta born' used to do". Nothing was broken downstream: the MODEL
+        // chose `birth` for a sentence asking where.
+        //
+        // The operation is the model's only real judgement call on this
+        // route, and this one is decidable from the words. Deterministic
+        // correction, applied after the model rather than instead of it, so
+        // it holds whatever the model returns and whatever model is loaded.
+        if let question, Self.asksForAPlace(question) {
+            switch resolved {
+            case .birth, .biography: resolved = .birthPlace
+            case .death: resolved = .deathPlace
+            default: break
+            }
+        }
+        operation = resolved
         self.voices = voices
         // Raw values are the shared closed vocabulary; a wire relation that
         // has no executor twin becomes nil and fails closed as "missing".
