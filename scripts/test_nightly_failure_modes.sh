@@ -319,6 +319,9 @@ echo
 echo "== Test 8: parse_test_counts fixture counts =="
 PARSE_LIB="$SANDBOX/parse_lib.sh"
 awk '/^parse_test_counts\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$PARSE_LIB"
+# parse_test_counts delegates the crash block to parse_crashed_tests; without
+# it the extracted lib would silently leave CRASHED unset.
+awk '/^parse_crashed_tests\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" >> "$PARSE_LIB"
 FIXTURE_DIR="$SCRIPT_DIR/../tests/fixtures/logs"
 
 # Runs parse_test_counts on a log in a subshell and echoes
@@ -328,6 +331,14 @@ run_parse() {
     ( source "$PARSE_LIB"
       parse_test_counts "$1"
       echo "$PASSED|$FAILED|$SKIPPED|$FAILED_NAMES_JSON" )
+}
+
+# Same, but reporting the crash columns: "CRASHED|CRASHED_NAMES_JSON".
+run_parse_crashed() {
+    # shellcheck disable=SC1090
+    ( source "$PARSE_LIB"
+      parse_test_counts "$1"
+      echo "$CRASHED|$CRASHED_NAMES_JSON" )
 }
 
 if [ ! -s "$PARSE_LIB" ]; then
@@ -367,6 +378,39 @@ else
     else
         fail "empty log parsing broke: got '$got' (counts must be plain integers)"
     fi
+
+    # 8d: THE 2026-09-07 REGRESSION SENSOR. Four tests trapped (SIGTRAP) and
+    # printed no per-test failure line at all; their names exist only in
+    # xcodebuild's "Failing tests:" block. The fixture also carries ONE
+    # ordinary failure listed in BOTH places, suite-qualified in the block
+    # ("VideoScanTests.PerfTests.performanceRebuildUnderBudget()") and bare on
+    # its own failure line — it must count once as a failure and NEVER as a
+    # crash, which is what the bare-method-token match is for.
+    got=$(run_parse "$FIXTURE_DIR/nightly_excerpt_crash.log")
+    want='6|1|4|["performanceRebuildUnderBudget()"]'
+    if [ "$got" = "$want" ]; then
+        pass "crash fixture: the one real failure still counts exactly once"
+    else
+        fail "crash fixture counts: got '$got', want '$want'"
+    fi
+    got=$(run_parse_crashed "$FIXTURE_DIR/nightly_excerpt_crash.log")
+    want='4|["HallieAppositionVitalsTests.aDeathOnlyThePeopleTabKnowsMakesTheTensepast()", "HallieAppositionVitalsTests.theAsideSpeaksTheCorrectedYear()", "HallieAppositionVitalsTests.theTwoStoresGenuinelyDisagreeAboutHerYear()", "HallieAppositionVitalsTests.withNoProfilesTheTreesOwnYearStands()"]'
+    if [ "$got" = "$want" ]; then
+        pass "crash fixture: 4 trapped tests recovered from the Failing-tests block, dual-listed failure excluded"
+    else
+        fail "crashed-test recovery broke: got '$got', want '$want'"
+    fi
+
+    # 8e: a run where every failure announced itself normally must report NO
+    # crashes — the new parser may not invent them from an ordinary block.
+    for f in nightly_excerpt_green.log nightly_excerpt_one_failure.log; do
+        got=$(run_parse_crashed "$FIXTURE_DIR/$f")
+        if [ "$got" = "0|[]" ]; then
+            pass "$f: no phantom crashes"
+        else
+            fail "$f invented crashes: got '$got', want '0|[]'"
+        fi
+    done
 fi
 
 # ───────────────────────────────────────────────────────────────────
@@ -659,6 +703,71 @@ if [ "$TIMEOUT_ZERO" = "failed|test-timeout:7s" ] &&
     pass "build/test timeout reasons are explicit and timeout outranks zero/failure rc"
 else
     fail "timeout classification broke (zero=$TIMEOUT_ZERO failures=$TIMEOUT_FAILURES build=$BUILD_REASON)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
+# Test 12b: THE 2026-09-07 FALSE-GREEN SENSOR. A crashing test host prints no
+# failure line, so `failed` stays 0 while xcodebuild exits 65. Before this,
+# classify_nightly_test_result read test_rc only in the total-eq-0 branch and
+# published status=ok / failed=0 for a run that died five times.
+#
+# The ladder under test, in order:
+#   crashed>0            → failed  (outranks the ui-runner-hung excuse)
+#   ui_runner_hung       → ok      (KNOWN-benign nonzero rc; unchanged)
+#   test_rc != 0         → failed  (nothing explained it; fail closed)
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 12b: a crashed host and an unexplained rc can never publish green =="
+classify_case() {
+    # shellcheck disable=SC1090
+    ( source "$WATCHDOG_LIB"
+      classify_nightly_test_result "$@"
+      printf '%s|%s' "$STATUS" "$REASON" )
+}
+
+#            timed_out timeout total failed ui_hung rc  crashed
+INCIDENT=$(classify_case  false 900 6886    0      false 65  4)
+UNEXPLAINED=$(classify_case false 900 6886  0      false 65  0)
+UI_HANG=$(classify_case    false 900 6886   0      true  65  0)
+UI_HANG_CRASH=$(classify_case false 900 6886 0     true  65  2)
+CLEAN=$(classify_case      false 900 6886   0      false 0   0)
+COUNTED_WINS=$(classify_case false 900 6886 3      false 65  4)
+LEGACY_6ARG=$(classify_case false 900 6886  0      false 0)
+
+if [ "$INCIDENT" = "failed|crashed-tests:4" ]; then
+    pass "2026-09-07 incident: 4 trapped tests + rc=65 + failed=0 publishes FAILED, not ok"
+else
+    fail "the false-green hole is still open: got '$INCIDENT', want 'failed|crashed-tests:4'"
+fi
+if [ "$UNEXPLAINED" = "failed|test-rc:65" ]; then
+    pass "an unexplained nonzero test rc fails closed"
+else
+    fail "unexplained rc does not fail closed: got '$UNEXPLAINED'"
+fi
+if [ "$UI_HANG" = "ok|ui-runner-hung" ]; then
+    pass "a known UI-runner hang keeps its pre-existing ok+reason classification"
+else
+    fail "UI-runner-hang classification regressed: got '$UI_HANG', want 'ok|ui-runner-hung'"
+fi
+if [ "$UI_HANG_CRASH" = "failed|crashed-tests:2" ]; then
+    pass "a real crash outranks the ui-runner-hung excuse"
+else
+    fail "a hung UI runner masked a crash: got '$UI_HANG_CRASH'"
+fi
+if [ "$CLEAN" = "ok|" ]; then
+    pass "a genuinely clean run still publishes ok with an empty reason"
+else
+    fail "clean-run classification regressed: got '$CLEAN', want 'ok|'"
+fi
+if [ "$COUNTED_WINS" = "failed|failed-tests:3" ]; then
+    pass "counted failures keep precedence over the crash rung"
+else
+    fail "failure precedence regressed: got '$COUNTED_WINS'"
+fi
+if [ "$LEGACY_6ARG" = "ok|" ]; then
+    pass "the 7th argument is optional — 6-arg callers still classify"
+else
+    fail "adding crashed broke 6-arg callers under set -u: got '$LEGACY_6ARG'"
 fi
 
 # ───────────────────────────────────────────────────────────────────

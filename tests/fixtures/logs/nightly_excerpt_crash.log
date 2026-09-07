@@ -1,0 +1,28 @@
+✔ Test mixedCatalogProcessAndModelLoadWorkloadsReachTerminalState() passed after 0.001 seconds.
+✔ Test everyFrameUsesPassthroughAndNoFilter() passed after 0.001 seconds.
+✔ Test everyNthBuildsEscapedSelectFilter() passed after 0.001 seconds.
+✔ Test framesPerSecondUsesFpsFilter() passed after 0.001 seconds.
+✔ Test commonFlagsPresentInAllModes() passed after 0.001 seconds.
+✔ Test destinationDirNameNeverCollidesWithFacialRipper() passed after 0.001 seconds.
+​​➜ Test "provoke MLE5 crash with unlocked shared-model concurrent predictions" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash simulating multiple simultaneous job starts" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash via rapid model load-predict-discard cycles" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash via concurrent arcfaceLoadReferenceEmbeddings on real POI photos" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+✘ Test performanceRebuildUnderBudget() recorded an issue at PerfTests.swift:41: Expectation failed: rowsRebuilt (25) <= budget (2)
+✘ Test performanceRebuildUnderBudget() failed after 6.402 seconds with 1 issue.
+VideoScanTests/HallieAppositionVitalsTests.swift:57: Fatal error: Unexpectedly found nil while unwrapping an Optional value
+2026-09-07 02:25:45.762797-0400 VideoScan[82825:9471005] VideoScanTests/HallieAppositionVitalsTests.swift:57: Fatal error: Unexpectedly found nil while unwrapping an Optional value
+Restarting after unexpected exit, crash, or test timeout in HallieAppositionVitalsTests.theTwoStoresGenuinelyDisagreeAboutHerYear(); summary will include totals from previous launches.
+
+Test session results, code coverage, and logs:
+	/tmp/nightly-results.xcresult
+
+Failing tests:
+	HallieAppositionVitalsTests.theTwoStoresGenuinelyDisagreeAboutHerYear()
+	HallieAppositionVitalsTests.theAsideSpeaksTheCorrectedYear()
+	HallieAppositionVitalsTests.withNoProfilesTheTreesOwnYearStands()
+	HallieAppositionVitalsTests.aDeathOnlyThePeopleTabKnowsMakesTheTensepast()
+	VideoScanTests.PerfTests.performanceRebuildUnderBudget()
+
+** TEST EXECUTE FAILED **
+

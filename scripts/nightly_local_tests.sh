@@ -74,7 +74,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-08-30-xcodebuild-watchdog-r3"
+NIGHTLY_SCRIPT_VERSION="2026-09-07-crash-verdict-r4"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -223,7 +223,26 @@ with open(output_path, "wb") as output:
 
 # One precedence function owns the published test verdict. In particular, a
 # watchdog timeout is never rewritten as zero-tests-ran or a normal test rc.
-# Args: timed_out timeout_seconds total failed ui_runner_hung test_rc
+#
+# 2026-09-07 (r4): THE EXIT CODE IS EVIDENCE, NOT DECORATION. A test host that
+#   TRAPS (SIGTRAP/EXC_BREAKPOINT — a force-unwrap of nil, a precondition) never
+#   prints a per-test failure line, so `failed` stayed 0 while xcodebuild
+#   returned 65 and listed the dead tests in its own "Failing tests:" block.
+#   `test_rc` was already a parameter here, but was read only inside the
+#   total-eq-0 branch, so the night of 2026-09-07 published
+#   status=ok / passed=6830 / failed=0 for a run that had died five times
+#   (HallieAppositionVitalsTests force-unwrapped tree.people["I2"]; GEDCOM ids
+#   carry their at-signs). Nine hours of green that never happened.
+#   Two new rungs close the class:
+#     * `crashed` — tests named in the "Failing tests:" block that produced no
+#       failure line of their own. This outranks ui-runner-hung: a real crash is
+#       never excused by a hung UI runner.
+#     * a nonzero `test_rc` that NOTHING else explained now fails closed. The
+#       text scrapers are best-effort; the exit code is the contract.
+#   ui_runner_hung keeps its rung ABOVE the bare-rc rule on purpose — that hang
+#   is a KNOWN-benign source of nonzero rc whose unit counts are still honest,
+#   and it stays ok exactly as before.
+# Args: timed_out timeout_seconds total failed ui_runner_hung test_rc [crashed]
 classify_nightly_test_result() {
     local timed_out="$1"
     local timeout_seconds="$2"
@@ -231,6 +250,7 @@ classify_nightly_test_result() {
     local failed="$4"
     local ui_runner_hung="$5"
     local test_rc="$6"
+    local crashed="${7:-0}"
     STATUS="ok"
     REASON=""
     if $timed_out; then
@@ -242,8 +262,14 @@ classify_nightly_test_result() {
     elif [ "$failed" -gt 0 ]; then
         STATUS="failed"
         REASON="failed-tests:$failed"
+    elif [ "$crashed" -gt 0 ]; then
+        STATUS="failed"
+        REASON="crashed-tests:$crashed"
     elif $ui_runner_hung; then
         REASON="ui-runner-hung"
+    elif [ "$test_rc" -ne 0 ]; then
+        STATUS="failed"
+        REASON="test-rc:$test_rc"
     fi
 }
 
@@ -313,16 +339,21 @@ print(json.dumps(base, separators=(",", ":")))
 # coverage field. Keeping this path callable before any optional post-test work
 # is what lets a watchdog timeout durably record partial counts immediately.
 make_current_test_result_row() {
-    local ts cov_field=""
+    local ts cov_field="" crashed_field=""
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
     if [ "$COV_LOGIC" != "null" ]; then
         cov_field=",\"coverage_logic_pct\":$COV_LOGIC"
+    fi
+    # Additive, and present ONLY when tests actually died — a green row keeps
+    # the exact shape every existing dashboard consumer already parses.
+    if [ "${CRASHED_NAMES_JSON:-[]}" != "[]" ]; then
+        crashed_field=",\"crashed_names\":${CRASHED_NAMES_JSON}"
     fi
     printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
         "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
         "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
         "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
-        "$FAILED_NAMES_JSON" "$cov_field"
+        "$FAILED_NAMES_JSON" "${cov_field}${crashed_field}"
 }
 
 publish_current_test_result() {
@@ -780,12 +811,80 @@ parse_test_counts() {
         | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))' \
         2>/dev/null)
     FAILED_NAMES_JSON=${FAILED_NAMES_JSON:-[]}
+    parse_crashed_tests "$out"
+}
+
+# Tests that DIED rather than failed. A trap takes the host down before any
+# per-test terminal line is printed, so the only place these names ever appear
+# is xcodebuild's own trailing block:
+#
+#     Failing tests:
+#     	HallieAppositionVitalsTests.theAsideSpeaksTheCorrectedYear()
+#
+#     ** TEST EXECUTE FAILED **
+#
+# That block also lists ordinary failures, which parse_test_counts has already
+# counted — double-counting them would inflate the row. Entries are matched
+# against the counted names by their bare method token, because the block is
+# suite-qualified ("Suite.method()") while a Swift Testing failure line is not
+# ("method()"). Sets CRASHED and CRASHED_NAMES_JSON; both are empty on a run
+# where every failure announced itself normally.
+parse_crashed_tests() {
+    local out="$1"
+    local parsed
+    parsed=$(NIGHTLY_LOG="$out" COUNTED_NAMES="$FAILED_NAMES_JSON" python3 -c '
+import json, os, sys
+
+def token(name):
+    """Reduce a test name to its bare method token for cross-shape matching."""
+    n = name.strip().rstrip(".")
+    if n.startswith("-[") or n.startswith("+["):
+        n = n[2:].rstrip("]").split()[-1]        # -[Suite method] -> method
+    elif "." in n:
+        n = n.rsplit(".", 1)[-1]                  # Suite.method() -> method()
+    return n.rstrip("()")
+
+try:
+    counted = {token(n) for n in json.loads(os.environ["COUNTED_NAMES"])}
+except Exception:
+    counted = set()
+
+crashed, in_block = [], False
+try:
+    with open(os.environ["NIGHTLY_LOG"], errors="replace") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped == "Failing tests:":
+                in_block = True
+                continue
+            if not in_block:
+                continue
+            # The block ends at the first line that is not an indented entry.
+            if not stripped or not line[:1].isspace() or stripped.startswith("**"):
+                in_block = False
+                continue
+            if token(stripped) not in counted:
+                crashed.append(stripped)
+except OSError:
+    pass
+
+names = sorted(set(crashed))
+print(len(names))
+print(json.dumps(names))
+' 2>/dev/null)
+    CRASHED=$(printf '%s\n' "$parsed" | sed -n '1p')
+    CRASHED_NAMES_JSON=$(printf '%s\n' "$parsed" | sed -n '2p')
+    case "$CRASHED" in
+        ''|*[!0-9]*) CRASHED=0; CRASHED_NAMES_JSON='[]' ;;
+    esac
+    CRASHED_NAMES_JSON=${CRASHED_NAMES_JSON:-[]}
 }
 
 parse_test_counts /tmp/nightly-test-output.log
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total)"
 [ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
+[ "${CRASHED:-0}" -gt 0 ] && log "Crashed tests (host died, no failure line): $CRASHED_NAMES_JSON"
 
 # Look for the UI test runner timeout/hang marker — the unit-test pass
 # count is still honest, but we want the row to flag this so a sudden
@@ -798,7 +897,7 @@ fi
 
 classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
-    "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC"
+    "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}"
 
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?
