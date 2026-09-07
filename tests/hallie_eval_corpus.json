@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 322 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 345 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2614,6 +2614,182 @@
    "expect": "graceful_decline",
    "notes": "LIVE MISS 2026-09-07: a general-knowledge geography question, asked because the previous turn contradicted itself. Answered with RICK'S BIOGRAPHY ('Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music...'). Fourth instance in one morning of the same shape: no route matches, and the fallback answers a different question with full confidence instead of declining.",
    "followsPrevious": true
+  },
+  {
+   "id": "lv260907-008",
+   "category": "live",
+   "text": "trace the birthplace locations of all my father's tree who were born in new england",
+   "expect": "kinship",
+   "notes": "LIVE MISS 2026-09-07: 'my father's tree' — 'tree' was not a line noun in trailLinePhrase, so the birthplace trail never engaged and the turn returned Dad's biography. Cue widened in c54e5c4c; re-run to confirm.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-009",
+   "category": "live",
+   "text": "tell me about Nathaniel Caleb Parker",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-010",
+   "category": "live",
+   "text": "tell me about his parents",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-011",
+   "category": "live",
+   "text": "tell me about the grandparents of Nathaniel Caleb Parker",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-012",
+   "category": "live",
+   "text": "tell me about stephen parker and stephen parker jr",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-013",
+   "category": "live",
+   "text": "tell me about John Hastings 3rd Earl of Pembroke",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-014",
+   "category": "live",
+   "text": "what country was John Hastings 3rd Earl of Pembroke born in ?",
+   "expect": "kinship",
+   "notes": "LIVE 2026-09-07: 'how am I related to King Edward III of England?' → 'no chain ... within 12 steps'. Edward III is Rick's 18th-great-grandfather, 20 generations up. Direct-line search added in 9217b12f; expect the term AND the chain.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-015",
+   "category": "live",
+   "text": "what country?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-016",
+   "category": "live",
+   "text": "No I meant what country was John Hastings born in?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-017",
+   "category": "live",
+   "text": "where  was John Hastings born and what country?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-018",
+   "category": "live",
+   "text": "tell me what country was he born in?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-019",
+   "category": "live",
+   "text": "how am I related to King Edward III of England?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-020",
+   "category": "live",
+   "text": "who is Edward III of Windsor King of England?",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-021",
+   "category": "live",
+   "text": "tell me about edward III",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-022",
+   "category": "live",
+   "text": "what country was John Hastings born in?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-023",
+   "category": "live",
+   "text": "where was he born?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-024",
+   "category": "live",
+   "text": "how old was he when he ided?",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-025",
+   "category": "live",
+   "text": "how old was he when he died?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-026",
+   "category": "live",
+   "text": "who was his spouse",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-027",
+   "category": "live",
+   "text": "who did john hastings marry?",
+   "expect": "kinship",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-028",
+   "category": "live",
+   "text": "tell me all about Edward III",
+   "expect": "catalog",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260907-029",
+   "category": "live",
+   "text": "his spouse?",
+   "expect": "social",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-030",
+   "category": "live",
+   "text": "tell me about Philippa de Hainaut Queen of England",
+   "expect": "biography",
+   "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
   }
  ]
 }
