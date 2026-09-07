@@ -132,6 +132,24 @@ reads as an error unless the reader notices it is about a person they did not
 ask about. Rick asked "if at all" — he was explicitly open to "not related",
 and got a confident answer about someone else.
 
+Rick re-asked with both full names and got a different wrong answer:
+
+  Q: how is richard h breen jr related to king henry 8th?
+  A: I wasn't sure which person you meant — richard h breen jr or king
+     henry 8th? Ask about one of them and I'll look them up.
+
+Better — it declines rather than leaking — but it is the wrong decline, and
+the shape is this morning's `["my dad", "dad"]` bug again: TWO PEOPLE IN A
+RELATIONSHIP QUESTION read as two candidates for one slot. Henry VIII fails to
+resolve, and a MISSING person is reported as an AMBIGUOUS one, which sends
+Rick off to disambiguate between a person who exists and a person who does
+not.
+
+Two rules, then, not one:
+  * an unresolved subject must never silently inherit the previous one;
+  * when one of two named people cannot be found, say WHICH — "Henry VIII is
+    not in this tree" — rather than asking which of them was meant.
+
 The rule it argues for: **an unresolved subject must never silently inherit
 the previous one.** A named person who cannot be found is a decline, always,
 and "not in the tree" is a real answer that this tree can support.
