@@ -507,7 +507,7 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
     /// an entry with phonemes becomes `[Written](/phonemes/)` — misaki's
     /// manual override, which no lexicon or fallback inside it re-guesses.
     func apply(to text: String, style: Style = .respelling) -> (spoken: String, fired: [Entry]) {
-        var spoken = text
+        var spoken = Self.expandingRegnalNumerals(text)
         var fired: [Entry] = []
         for entry in entries {
             let said = Self.alternatives(entry.spoken).first ?? entry.spoken
@@ -527,6 +527,36 @@ struct HalliePronunciationLexicon: Equatable, Sendable {
             fired.append(entry)
         }
         return (spoken, fired)
+    }
+
+    /// "Edward III" → "Edward the Third". Rick, live 2026-09-07: "she
+    /// pronounces III not as third but as I-I-I even though I kept telling
+    /// her Third." Every synthesizer reads a bare Roman numeral as letters,
+    /// and a twenty-generation tree is full of them — Edward III, Stephen
+    /// Parker Jr, John Neville, 5th Earl.
+    ///
+    /// Runs BEFORE the table so an explicit entry can still override it, and
+    /// deliberately narrow:
+    ///   * only when the numeral FOLLOWS a capitalised word, so it is a
+    ///     regnal or generational suffix on a name and not a stray token;
+    ///   * never bare "I", which is the pronoun and by far the commonest
+    ///     word this could damage;
+    ///   * only I–X, the range that actually occurs in names.
+    static func expandingRegnalNumerals(_ text: String) -> String {
+        guard text.range(of: #"\b[IVX]{1,4}\b"#, options: .regularExpression) != nil else { return text }
+        let ordinals = ["II": "the Second", "III": "the Third", "IV": "the Fourth",
+                        "V": "the Fifth", "VI": "the Sixth", "VII": "the Seventh",
+                        "VIII": "the Eighth", "IX": "the Ninth", "X": "the Tenth"]
+        var out = text
+        for (numeral, spoken) in ordinals.sorted(by: { $0.key.count > $1.key.count }) {
+            // A capitalised word, then the numeral as a whole word. The name
+            // is kept via $1 so only the numeral is replaced.
+            let pattern = #"(\b[A-Z][A-Za-z'’-]+\s+)"# + numeral + #"\b"#
+            out = out.replacingOccurrences(
+                of: pattern, with: "$1" + spoken,
+                options: [.regularExpression])
+        }
+        return out
     }
 
     /// `[Latta](/lˈætə/)` → the respelling this table has for the word,
