@@ -57,6 +57,25 @@ Rick asked four times.
 Row 13 is a different class from the rest and worth separating — nothing about
 routing, a note written onto the wrong record.
 
+### Late afternoon — the depth cap, and a pronunciation cluster
+
+| # | asked | what came back | root cause | status |
+|---|-------|----------------|-----------|--------|
+| 14 | "how am I related to King Edward III of England?" | "no chain ... joins them within **12 steps**" | `relationshipSearchDepthLimit = 12`. Edward III is Rick's **18th-great-grandfather, 20 generations up**, on a 20-generation pull. Honest in form, but it reads as "not related" | **FIXED** — see below |
+| 15 | "\"Edward III\" is pronounced Edward the third" | "I'll say **Edward as III** from now on" | the name/pronunciation pair was parsed backwards | **OPEN** |
+| 16 | "III is Third" | searched **videos** for "iii", "third" | a bare pronunciation statement is not recognised; falls to catalog | **OPEN** |
+
+Rows 13, 15 and 16 are one cluster: **pronunciation capture**. It files notes
+against the wrong person, parses the pair backwards, and drops the bare form
+into catalog search. Worth one pass over that path rather than three fixes.
+
+Row 14 is worth recording carefully because the code was *not* wrong so much
+as under-specified. Twelve hops is the right bound for **lateral** kin — six
+up and six back down reaches a fifth cousin, and the prose grows with every
+hop. A **direct ancestor** has no descent half: "your 18th-great-grandfather"
+is four words however deep it runs. One constant was being asked to bound two
+different shapes.
+
 ### Proposed fixes, smallest first
 
 1. **Continent destinations reach the continent stop** — match the captured
@@ -80,7 +99,13 @@ Plural nouns, a bare line of descent meaning every ancestor, edit-distance-1
 typo tolerance, and a continent backstop that resolves by membership instead
 of a country token. 33 tests.
 
-Rows 1, 2, 3 and 6, and the whole afternoon batch: **OPEN, none started.**
+**DONE 2026-09-07:** row 14 — a direct-line search (`directLineSearchDepthLimit
+= 25`, parent edges only) runs before the decline, so a straight climb is found
+and named with its chain. The twelve-hop lateral bound is untouched, and a test
+asserts that. 5 Core tests.
+
+Rows 1, 2, 3 and 6, the afternoon batch, and the pronunciation cluster
+(13, 15, 16): **OPEN, none started.**
 
 ---
 

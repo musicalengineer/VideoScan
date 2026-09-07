@@ -102,6 +102,87 @@ extension GedcomFamilyGraph {
     /// reads, and the search stays bounded on a 10k-person GEDCOM.
     public static let relationshipSearchDepthLimit = 12
 
+    /// A STRAIGHT CLIMB IS NOT A COUSIN (Rick, live 2026-09-07). He asked
+    /// "how am I related to King Edward III of England?" and was told no
+    /// chain joined them within twelve steps — which reads as "not related".
+    /// Edward III is his 18th-great-grandfather, twenty generations straight
+    /// up, and the tree is a twenty-generation pull.
+    ///
+    /// The twelve above is the right bound for LATERAL kin, where the path
+    /// climbs and comes back down and the prose grows with every hop. A
+    /// direct ancestor has no descent half: the answer is four words long
+    /// however deep it goes, so the readability argument does not apply.
+    /// Parent edges only, so the walk is bounded by the ancestor set (13,406
+    /// people on Rick's tree at this depth) rather than by branching.
+    public static let directLineSearchDepthLimit = 25
+
+    /// The generation distance when `to` is a direct ANCESTOR of `from`
+    /// (1 = parent, 2 = grandparent, 20 = 18th-great-grandparent), together
+    /// with the chain from `from` up to `to`. Nil when `to` is not on a
+    /// direct ancestral line within `maxGenerations`.
+    ///
+    /// Parent edges only and each person visited once, so this is a bounded
+    /// climb rather than the bidirectional BFS `relationshipPath` runs.
+    public func directAncestorLine(
+        from: Person,
+        to target: Person,
+        maxGenerations: Int = GedcomFamilyGraph.directLineSearchDepthLimit
+    ) -> (generations: Int, chain: [Person])? {
+        guard from.id != target.id, maxGenerations > 0 else { return nil }
+        var depth: [String: Int] = [from.id: 0]
+        var cameFrom: [String: String] = [:]
+        var frontier = [from]
+        var generation = 0
+        while !frontier.isEmpty, generation < maxGenerations {
+            var next: [Person] = []
+            for person in frontier {
+                for parent in allRecordedParents(of: person) where depth[parent.id] == nil {
+                    depth[parent.id] = generation + 1
+                    cameFrom[parent.id] = person.id
+                    if parent.id == target.id {
+                        var chain: [Person] = []
+                        var cursor: String? = parent.id
+                        while let id = cursor, let person = people[id] {
+                            chain.append(person)
+                            cursor = cameFrom[id]
+                        }
+                        return (generation + 1, chain.reversed())
+                    }
+                    next.append(parent)
+                }
+            }
+            frontier = next
+            generation += 1
+        }
+        return nil
+    }
+
+    /// "your grandmother", "your 18th-great-grandfather". `generations` is
+    /// the distance from `directAncestorLine`.
+    public static func directAncestorTerm(generations: Int, sex: String) -> String {
+        let parent = sex == "F" ? "mother" : sex == "M" ? "father" : "parent"
+        let grand = sex == "F" ? "grandmother" : sex == "M" ? "grandfather" : "grandparent"
+        switch generations {
+        case ..<1: return parent
+        case 1: return parent
+        case 2: return grand
+        case 3: return "great-\(grand)"
+        default:
+            // Genealogy's own convention: generation 4 is the 2nd
+            // great-grandparent, so the ordinal is generations − 2.
+            let n = generations - 2
+            let suffix: String
+            switch (n % 10, n % 100) {
+            case (1, 11), (2, 12), (3, 13): suffix = "th"
+            case (1, _): suffix = "st"
+            case (2, _): suffix = "nd"
+            case (3, _): suffix = "rd"
+            default: suffix = "th"
+            }
+            return "\(n)\(suffix)-great-\(grand)"
+        }
+    }
+
     /// Shortest path from `from` to `to` over parent/child/spouse edges, or
     /// nil when none exists within `maxDepth` hops (or the two are the same
     /// person). Breadth-first, so the first path found is a shortest one;

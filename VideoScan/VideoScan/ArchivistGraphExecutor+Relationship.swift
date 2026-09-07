@@ -121,6 +121,40 @@ extension ArchivistGraphExecutor {
                 catalogPersonName: nil)
         }
 
+        // A STRAIGHT CLIMB BEFORE THE DECLINE (Rick, live 2026-09-07). The
+        // twelve-hop bound is right for lateral kin, where the path comes
+        // back down and the prose grows with it — but Rick asked how he is
+        // related to Edward III and was told no chain joined them within
+        // twelve steps, which reads as "not related". Edward III is his
+        // 18th-great-grandfather: twenty generations straight up, on a
+        // twenty-generation pull, and the answer is four words long however
+        // deep it runs. Only when the general search finds nothing, and only
+        // up parent edges.
+        if graph.relationshipPath(from: a, to: b) == nil {
+            for (subject, ancestor, subjectVoice) in [(a, b, voiceA), (b, a, voiceB)] {
+                guard let line = graph.directAncestorLine(from: subject, to: ancestor) else { continue }
+                let term = GedcomFamilyGraph.directAncestorTerm(generations: line.generations,
+                                                               sex: ancestor.sex)
+                let whose = subjectVoice == .owner ? "your"
+                    : subjectVoice == .archivist ? "my" : "\(subject.name)'s"
+                let chain = line.chain.map(\.name).joined(separator: " → ")
+                return ArchivistGraphResult(
+                    conclusion: .answered,
+                    prose: "\(ancestor.name) is \(whose) \(term) — \(line.generations) generations up. "
+                        + "The recorded line: \(chain).",
+                    basisLine: basisPrefix
+                        + "climbed parent links from \(subject.name) (\(subject.id)) to "
+                        + "\(ancestor.name) (\(ancestor.id)) in \(line.generations) generations; "
+                        + "as recorded in the imported tree, not independently verified.",
+                    evidence: ArchivistGraphEvidence(
+                        subjectID: subject.id, subjectName: subject.name, birthDate: nil,
+                        deathDate: nil, relationships: [], identityBridge: bridges[0],
+                        counterpart: .init(id: ancestor.id, name: ancestor.name)),
+                    candidates: [], profileCandidates: [], ambiguityCandidates: [],
+                    catalogPersonName: nil)
+            }
+        }
+
         guard let path = graph.relationshipPath(from: a, to: b) else {
             let aPhrase = objectPhrase(a, voice: voiceA)
             let bPhrase = objectPhrase(b, voice: voiceB)
