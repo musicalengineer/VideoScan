@@ -110,6 +110,32 @@ guard took the model's word for birth-vs-death, so "what country was John
 Hastings **born** in?" arriving as `death` produced a death answer. Rick found
 it within minutes of it shipping. The sentence decides now.
 
+### The worst one, found last (2026-09-07 evening)
+
+  Q: how are we related, if at all, to king henry the 8th?
+  A: Philippa de Hainaut Queen of England is Richard Harding Breen Jr's
+     18th-great-grandmother. Line: Richard Harding Breen Jr → ...
+
+**Henry VIII is not in either tree.** The only matches are people whose notes
+mention him — "John Alexander Harrington (confidant of Henry VIII)", "Sir
+Robert Browne ** Privey Chamber to Henry VIII". The correct answer was that he
+is absent, and it could have added that three people in the tree are recorded
+around his court, which is a better answer than the one given.
+
+Instead the subject from the PREVIOUS turn leaked forward when the named
+person failed to resolve.
+
+This is the nastiest form of the day's pattern, and worth keeping at the top
+of this file for that reason: **the answer is TRUE.** Philippa really is his
+18th-great-grandmother; the chain is real and checkable. Nothing about it
+reads as an error unless the reader notices it is about a person they did not
+ask about. Rick asked "if at all" — he was explicitly open to "not related",
+and got a confident answer about someone else.
+
+The rule it argues for: **an unresolved subject must never silently inherit
+the previous one.** A named person who cannot be found is a decline, always,
+and "not in the tree" is a real answer that this tree can support.
+
 ### Proposed fixes, smallest first
 
 1. **Continent destinations reach the continent stop** — match the captured
