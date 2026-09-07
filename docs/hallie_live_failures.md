@@ -38,6 +38,25 @@ apart from the outside.
 | 6 | `lv260907-007` | "Ireland and the UK are part of europe aren't they?" | **Rick's own biography** | No route matched a general-knowledge geography question; fell to the owner/biography route | **OPEN** |
 | 7 | `lv260907-001` | "find the most recent common ancestor between rick breen and donna breen" | (answered) | — | expectation unconfirmed |
 
+### Afternoon, same day — the fallback shape again, six more times
+
+| # | asked | what came back | root cause | status |
+|---|-------|----------------|-----------|--------|
+| 8 | "tell me about his parents" | repeated **Nathaniel's own bio** | pronoun resolved, RELATION dropped | **OPEN** |
+| 9 | "tell me about the grandparents of X" | same, X's own bio | same | **OPEN** |
+| 10 | "what country was John Hastings born in?" (×4) | his birth **date**, never the place | the place IS recorded — `2 PLAC Kenilworth, Warwickshire, England` — and the FT view shows it. Not missing data: the route answers a different field and never says it lacks one | **OPEN** |
+| 11 | "what country?" (follow-up) | searched **videos** for the word "country" | a follow-up cannot inherit the previous route | **OPEN** |
+| 12 | "tell me about stephen parker and stephen parker jr" | "which one do you mean?" | a deliberate TWO-PERSON ask read as ambiguity | **OPEN** |
+| 13 | "Reading is pronounce Redding" | stored against **John Hastings 3rd Earl of Pembroke** | pronunciation filed under an unrelated person — data integrity, not phrasing | **OPEN** |
+
+Row 10 is the one to look at first. It is not a decline-honesty gap, which is
+what I assumed before checking the record properly: the field is present, the
+inspector renders it, and the answer silently substitutes a different field.
+Rick asked four times.
+
+Row 13 is a different class from the rest and worth separating — nothing about
+routing, a note written onto the wrong record.
+
 ### Proposed fixes, smallest first
 
 1. **Continent destinations reach the continent stop** — match the captured
@@ -53,7 +72,15 @@ apart from the outside.
    (`Index.swift:607`), per codex #1161/#1162. Fixes #1 and #3.
 5. **Route-changing refinements** — #2, largest, wants design.
 
-Awaiting Rick on order; none started.
+**DONE 2026-09-07:** rows 4 and 5 — `c54e5c4c`. The trail cue recognised
+essentially one sentence (the demo's): every line noun was singular so
+"maternal lineS" missed, "tree" was not a line noun, and a bare "my line"
+named no side so the gate refused and the turn fell to the country route.
+Plural nouns, a bare line of descent meaning every ancestor, edit-distance-1
+typo tolerance, and a continent backstop that resolves by membership instead
+of a country token. 33 tests.
+
+Rows 1, 2, 3 and 6, and the whole afternoon batch: **OPEN, none started.**
 
 ---
 
