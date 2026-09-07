@@ -66,7 +66,31 @@ extension HallieLineageQuestion {
     /// grandmother" (a kinship ask) stays out.
     /// Swift's `\b` is a UNICODE word boundary: "line's" is one word, so
     /// the possessive is spelled out rather than left to the boundary.
-    private static let trailLinePhrase = /\b(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s)\s+(?:line|side|lineage|ancestors|ancestry|forebears|birth\s*places?|birth\s+locations?)(?:'s)?\b/
+    ///
+    /// 2026-09-07, from Rick's own session. This matched ONE sentence shape —
+    /// the one it was demoed with. "my maternal lineS", spelled correctly,
+    /// MISSED, because every noun was singular and `\b` after "line" fails on
+    /// "lines". So did "my father's tree", because "tree" was not a line noun.
+    /// Rick asked for birthplaces four times in a morning and the trail never
+    /// engaged once. Nouns are plural-tolerant now, and the vocabulary covers
+    /// the words people actually use for a line of descent.
+    private static let trailLineNoun =
+        /(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)/
+    private static let trailLinePhrase =
+        /\b(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s)\s+(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)(?:'s)?\b/
+    /// A line of descent with NO side named: "trace my line back to europe",
+    /// "where do my ancestors come from". Rick's second attempt was exactly
+    /// this, and because no side was named the trail declined the turn and
+    /// the question fell through to the country route, which then read
+    /// "Europe" as the name of a country. Every ancestor, both sides.
+    /// The gate below still requires a birth/origin/stop cue, so "tell me
+    /// about my family" is not a trail.
+    /// Deliberately NOT "the …" and NOT "family": "where does the family come
+    /// from" and "trace the family back to ireland" are originTrail's, and
+    /// they are pinned as trail negatives. A possessive determiner with a
+    /// descent noun is the narrow case Rick actually asked.
+    private static let trailBareLinePhrase =
+        /\b(?:my|our|his|her|their)\s+(?:lines?|lineages?|ancestors|ancestry|ancestries|forebears|roots|pedigrees?)\b/
     private static let trailBirthCue = /\bbirth\s*places?\b|\bbirth\s+locations?\b|\bplaces?\s+of\s+birth\b|\bborn\b|\bbirths\b/
     private static let trailOriginCue = /\b(?:come|came|comes|coming)\s+from\b|\borigins?\b|\boriginat\w+\b/
     /// The ancestry words that make a generations count a TRAIL ask
@@ -92,6 +116,55 @@ extension HallieLineageQuestion {
     /// No line, no stop → not ours: "where was donna born", "how many
     /// generations are in the tree", "show donna's family tree", "how
     /// many generations back did donna travel to europe" keep their routes.
+    /// "materanl" — one transposed character in Rick's first birthplace
+    /// question of 2026-09-07. The literal-token gate missed, the trail never
+    /// engaged, and the turn fell through to a route that answered his own
+    /// birth date with full confidence. Rick's standing instruction is to
+    /// tolerate typos, so a word one edit away from "maternal" or "paternal"
+    /// counts — but ONLY when the next word is a line noun, which keeps the
+    /// tolerance from reaching real words. Distance 1, never more: "fraternal"
+    /// is two from "paternal" and stays out.
+    static func misspelledSide(in lower: String) -> LineageTrail.Line? {
+        let words = lower.split(whereSeparator: { !$0.isLetter && $0 != "'" }).map(String.init)
+        for (index, word) in words.enumerated() where word.count >= 6 {
+            guard index + 1 < words.count,
+                  String(words[index + 1]).wholeMatch(of: trailLineNoun) != nil else { continue }
+            if editDistanceIsOne(word, "maternal") { return .maternal }
+            if editDistanceIsOne(word, "paternal") { return .paternal }
+        }
+        return nil
+    }
+
+    /// True when one insertion, deletion, substitution or transposition of
+    /// adjacent characters turns `a` into `b`. Bounded and allocation-light;
+    /// a full Levenshtein matrix would be more code for a question that is
+    /// only ever "is this off by one".
+    static func editDistanceIsOne(_ a: String, _ b: String) -> Bool {
+        if a == b { return false }
+        let x = Array(a), y = Array(b)
+        if abs(x.count - y.count) > 1 { return false }
+        if x.count == y.count {
+            var diffs: [Int] = []
+            for i in 0..<x.count where x[i] != y[i] {
+                diffs.append(i)
+                if diffs.count > 2 { return false }
+            }
+            if diffs.count == 1 { return true }
+            // A transposition: "materanl" -> "maternal".
+            guard diffs.count == 2, diffs[1] == diffs[0] + 1 else { return false }
+            return x[diffs[0]] == y[diffs[1]] && x[diffs[1]] == y[diffs[0]]
+        }
+        let (longer, shorter) = x.count > y.count ? (x, y) : (y, x)
+        var i = 0, j = 0, skipped = false
+        while i < longer.count && j < shorter.count {
+            if longer[i] == shorter[j] { i += 1; j += 1; continue }
+            if skipped { return false }
+            skipped = true
+            i += 1
+        }
+        return true
+    }
+
     static func birthplaceTrailQuestion(in lower: String) -> HallieLineageQuestion? {
         guard lower.firstMatch(of: trailMediaNoun) == nil else { return nil }
         let linePhrase = lower.firstMatch(of: trailLinePhrase).map { String($0.0) }
@@ -102,9 +175,12 @@ extension HallieLineageQuestion {
         let originCue = lower.firstMatch(of: trailOriginCue) != nil
         let ancestryCue = lower.firstMatch(of: trailAncestryCue) != nil
 
-        let line: LineageTrail.Line? = linePhrase.map {
+        // A named side wins; a bare line of descent means both sides.
+        var line: LineageTrail.Line? = linePhrase.map {
             $0.hasPrefix("m") ? .maternal : .paternal
         }
+        if line == nil, let repaired = misspelledSide(in: lower) { line = repaired }
+        if line == nil, lower.firstMatch(of: trailBareLinePhrase) != nil { line = .allAncestors }
         let stop: LineageTrail.Stop
         if europe { stop = .continent(.europe) }
         else if outsideUS { stop = .outsideCountry(BirthplaceClassifier.unitedStates) }

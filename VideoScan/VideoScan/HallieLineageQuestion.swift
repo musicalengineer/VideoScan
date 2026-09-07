@@ -1929,8 +1929,35 @@ enum HallieLineageAnswer {
                             basisNote: String? = nil,
                             lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let maxGen = HallieLineageQuestion.maxGenerations
-        let stops = graph.originTrail(of: person, country: country, line: line, maxGenerations: maxGen)
         let anyPlaces = graph.originTrail(of: person, country: nil, line: line, maxGenerations: maxGen)
+        // A CONTINENT IS NOT A COUNTRY (Rick, live 2026-09-07). "trace my line
+        // back to europe" put "Europe" here as a country name; no place has a
+        // country called Europe, so the match was empty and the answer read
+        // "the tree records nobody born in Europe. The places it does reach:
+        // … Ireland, the United Kingdom" — naming two European countries in
+        // the sentence that denied them. His grandmother's generation was
+        // born in Ireland; 12,045 of his ancestors were born in Europe.
+        //
+        // The classifier already knows the continent of every country, so
+        // when the destination names one, membership decides instead of a
+        // token match. The trail route above normally takes these questions
+        // first; this is the backstop for phrasings that reach here without a
+        // line word, and it is why the fix lives in the answer rather than
+        // only in the cue.
+        let askedContinent = country.flatMap { name in
+            BirthplaceClassifier.Continent.allCases.first {
+                $0.rawValue.compare(name, options: .caseInsensitive) == .orderedSame
+            }
+        }
+        let stops: [GedcomFamilyGraph.OriginStop]
+        if let askedContinent {
+            stops = anyPlaces.filter {
+                BirthplaceClassifier.classify($0.place).isIn(askedContinent)
+            }
+        } else {
+            stops = graph.originTrail(of: person, country: country, line: line,
+                                      maxGenerations: maxGen)
+        }
         let who = HallieLineageQuestion.possessive(person.name)
         var sentences: [String] = []
         var card: HallieLineageCard? = nil

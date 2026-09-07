@@ -765,3 +765,138 @@ struct HallieBirthplaceTrailAnswerTests {
         #expect(again.prose.hasPrefix("That was the whole trail — 4 generations back from Donna Hudson."))
     }
 }
+
+/// Rick's own session, 2026-09-07. He asked for birthplaces four times in a
+/// morning and the trail engaged ZERO times — then said "she can never trace
+/// birthplaces, I want her to be able to do that".
+///
+/// The cue recognised essentially one sentence: the shape it was demoed with.
+/// Three independent reasons, one per question:
+///
+///   "my materanl lines"     transposed letter AND plural — every noun in
+///                           trailLinePhrase was singular, so `\b` after
+///                           "line" fails on "lines". The correctly spelled
+///                           "my maternal lines" missed too.
+///   "trace my line"         no side named, so line == nil and the gate
+///                           refused; the turn fell to the country route,
+///                           which read "Europe" as the name of a country
+///                           and answered "the tree records nobody born in
+///                           Europe. The places it does reach: … Ireland,
+///                           the United Kingdom". 12,045 of Rick's ancestors
+///                           are Europe-born; his grandmother's generation
+///                           was born in Ireland.
+///   "my father's tree"      "tree" was not a line noun.
+///
+/// The fixture's Rick reaches Glasgow, Scotland at generation 2, so a
+/// Europe stop has something true to find.
+@Suite("Birthplace trail — the phrasings Rick actually types")
+struct HallieBirthplaceTrailRickPhrasingTests {
+    let graph = GedcomFamilyGraph(gedcomText: tree)
+    fileprivate var context: Exec.Context {
+        Exec.Context(profiles: [], graph: graph,
+                     speakers: .init(ownerName: "Rick", archivistName: nil, archivistPersonName: nil))
+    }
+    fileprivate func answer(_ question: String) -> Exec.Result? {
+        guard case .answer(let r) = Exec.preTranslation(
+            question: question, playAfterAnswer: false, memory: .init(), isKnownPerson: { _ in false },
+            lineageAnswer: { HallieLineageAnswer.answer($0, context: context) }) else { return nil }
+        return r
+    }
+    private func isTrail(_ q: Q?) -> Bool {
+        if case .birthplaceTrail = q { return true }
+        return false
+    }
+
+    /// DETECTION: every phrasing Rick used must reach the trail.
+    @Test func rickResPhrasingsAllDetect() {
+        for question in ["find the birthplaces of my maternal lines back to europe",
+                         "find the birthplaces of my materanl lines back to europe",
+                         "trace my line back to europe",
+                         "where do my ancestors come from",
+                         "trace the birthplaces of my paternal lines",
+                         "trace the birth locations of donna's maternal line"] {
+            #expect(isTrail(Q.detect(question)), Comment(rawValue: question))
+        }
+    }
+
+    /// The plural was the whole bug for his first question — pin it alone.
+    @Test func pluralLineNounsDetect() {
+        #expect(Q.detect("find the birthplaces of my maternal lines back to europe")
+                == .birthplaceTrail(person: nil, line: .maternal, stop: europe, ask: .list))
+        #expect(Q.detect("find the birthplaces of my maternal line back to europe")
+                == .birthplaceTrail(person: nil, line: .maternal, stop: europe, ask: .list),
+                "the singular must not regress")
+    }
+
+    /// One transposed character, and only when a line noun follows.
+    @Test func aTransposedLetterStillFindsTheSide() {
+        #expect(HallieLineageQuestion.misspelledSide(in: "my materanl lines") == .maternal)
+        #expect(HallieLineageQuestion.misspelledSide(in: "my paernal line") == .paternal)
+        #expect(HallieLineageQuestion.misspelledSide(in: "my materanl grandmother") == nil,
+                "no line noun — a kinship ask stays a kinship ask")
+        #expect(HallieLineageQuestion.misspelledSide(in: "my fraternal line") == nil,
+                "two edits away is not a typo, it is a different word")
+        #expect(HallieLineageQuestion.editDistanceIsOne("maternal", "maternal") == false)
+        #expect(HallieLineageQuestion.editDistanceIsOne("materanl", "maternal"))
+        #expect(HallieLineageQuestion.editDistanceIsOne("maternl", "maternal"))
+        #expect(HallieLineageQuestion.editDistanceIsOne("maaternal", "maternal"))
+    }
+
+    /// A bare line of descent means both sides, and it is what let "trace my
+    /// line back to europe" fall through to the country route.
+    @Test func aBareLineMeansEveryAncestor() {
+        #expect(Q.detect("trace my line back to europe")
+                == .birthplaceTrail(person: nil, line: .allAncestors, stop: europe, ask: .list))
+    }
+
+    /// EXECUTION AND PROSE, not just detection: the answer must name the
+    /// Europe-born ancestor, and must never say nobody was born in Europe
+    /// while a European place is on the line.
+    @Test func theAnswerNamesTheEuropeanBirthAndNeverDeniesIt() throws {
+        for question in ["trace my line back to europe",
+                         "find the birthplaces of my maternal lines back to europe",
+                         "find the birthplaces of my materanl lines back to europe"] {
+            let r = try #require(answer(question), Comment(rawValue: question))
+            let text = r.prose
+            #expect(text.localizedCaseInsensitiveContains("Scotland")
+                    || text.localizedCaseInsensitiveContains("Glasgow"),
+                    Comment(rawValue: "\(question) → \(text)"))
+            #expect(!text.localizedCaseInsensitiveContains("nobody born in"),
+                    Comment(rawValue: "denied a birth it can see: \(question) → \(text)"))
+        }
+    }
+
+    /// THE BACKSTOP, independent of the cue: a continent reaching the country
+    /// route resolves by continent membership, not by a token match on a
+    /// country named "Europe".
+    @Test func aContinentReachingTheCountryRouteIsNotTreatedAsACountry() throws {
+        let rick = try #require(graph.people(matching: "Rick").first)
+        let result = HallieLineageAnswer.originTrail(of: rick, country: "Europe",
+                                                     line: .both, graph: graph)
+        #expect(!result.prose.localizedCaseInsensitiveContains("nobody born in Europe"),
+                Comment(rawValue: result.prose))
+        #expect(result.prose.localizedCaseInsensitiveContains("Scotland")
+                || result.prose.localizedCaseInsensitiveContains("Glasgow"),
+                Comment(rawValue: result.prose))
+    }
+
+    /// An ORDINARY COUNTRY must still behave exactly as before.
+    @Test func anOrdinaryCountryDestinationIsUnchanged() throws {
+        let donna = try #require(graph.people(matching: "Donna").first)
+        let result = HallieLineageAnswer.originTrail(of: donna, country: "Ireland",
+                                                     line: .both, graph: graph)
+        #expect(result.prose.localizedCaseInsensitiveContains("Ireland"), Comment(rawValue: result.prose))
+        #expect(Q.detect("trace the family back to ireland")
+                == .originTrail(person: nil, country: "Ireland", line: .both),
+                "the country route keeps its questions")
+    }
+
+    /// The routes that must NOT move, re-asserted against the wider cues.
+    @Test func theWiderCuesDoNotStealNeighbouringRoutes() {
+        #expect(Q.detect("where does the family come from") == .originTrail(person: nil, country: nil, line: .both))
+        #expect(Q.detect("trace the family back to ireland") == .originTrail(person: nil, country: "Ireland", line: .both))
+        #expect(!isTrail(Q.detect("show donna's family tree")))
+        #expect(!isTrail(Q.detect("who is donna's mother")))
+        #expect(!isTrail(Q.detect("where was donna born")))
+    }
+}
