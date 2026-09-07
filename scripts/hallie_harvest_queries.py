@@ -57,7 +57,37 @@ def is_question(text):
     # an opener; only a lead-in filler may precede the opener.
     if words[0] in OPENERS:
         return True
-    return words[0] in FILLERS and len(words) > 1 and words[1] in OPENERS
+    if words[0] in FILLERS and len(words) > 1 and words[1] in OPENERS:
+        return True
+    # A FRONTED CLAUSE STILL ASKS (2026-09-07). Only the first word of the
+    # whole line was ever consulted, so Rick's
+    #   "in the family tree going back, find the highest level of royalty"
+    # was dropped for starting with "in" — while "search the family tree for
+    # a title like king", the same question asked plainly, was kept. Both
+    # failed live that morning and only one reached the testbed. Each
+    # comma-separated clause gets the same opener test.
+    for clause in normalize(text).split(","):
+        clause_words = clause.split()
+        if clause_words and clause_words[0] in OPENERS:
+            return True
+        if (len(clause_words) > 1 and clause_words[0] in FILLERS
+                and clause_words[1] in OPENERS):
+            return True
+    return False
+
+
+# A CORRECTION IS A TURN WORTH TESTING (2026-09-07). "not in videos, in family
+# tree" is neither a question nor a statement, so it was dropped — yet it is
+# exactly where Hallie failed: the refinement path answered "I can only drop a
+# person, not a topic word". Deliberately narrow, and it must never widen to
+# swallow ordinary statements ("she was born in 1943"), which replay into
+# telling mode and write to CyberBrain.
+CORRECTION = re.compile(
+    r"^(no[,.]?\s|not\s|i meant\b|i mean\b|nope\b|wrong\b|that'?s not\b)", re.I)
+
+
+def is_correction(text):
+    return bool(CORRECTION.match(text.strip()))
 
 
 def guess_expect(text):
@@ -106,7 +136,8 @@ def harvest(turns, existing, include_statements=False, stamp=None):
         if PRONUNCIATION.search(text) or len(text) > 200:
             last_session, last_kept = session, False
             continue
-        if not is_question(text) and not include_statements:
+        correction = (is_correction(text) and session == last_session and last_kept)
+        if not is_question(text) and not correction and not include_statements:
             last_session, last_kept = session, False
             continue
         seen.add(key)
@@ -145,7 +176,13 @@ def main(argv=None):
     corpus["description"] = re.sub(r"\d+ questions", f"{len(corpus['questions'])} questions",
                                    corpus["description"], count=1)
     with open(args.corpus, "w") as f:
-        json.dump(corpus, f, indent=2, ensure_ascii=False)
+        # indent=1 MATCHES THE FILE (2026-09-07). Writing indent=2 into an
+        # indent=1 corpus rewrote all 2,565 lines on every append, so a
+        # four-question harvest showed up as a 5,160-line diff and nothing in
+        # it could be reviewed — the same shape as every other bug found
+        # today: a real change hidden inside noise. A corrupted entry would
+        # have been invisible.
+        json.dump(corpus, f, indent=1, ensure_ascii=False)
         f.write("\n")
     print(f"[harvest] appended {len(entries)} → {args.corpus} ({len(corpus['questions'])} questions)")
     return 0
