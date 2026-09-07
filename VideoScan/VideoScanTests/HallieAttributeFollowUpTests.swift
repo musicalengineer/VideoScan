@@ -56,9 +56,24 @@ struct HallieAttributeFollowUpTests {
         #expect(operation(resolve("what city?")) == .birthPlace)
         #expect(operation(resolve("where did he die?")) == .deathPlace)
         #expect(operation(resolve("where is he buried?")) == .deathPlace)
-        #expect(operation(resolve("when?")) == .birth)
         #expect(operation(resolve("what year was he born?")) == .birth)
         #expect(operation(resolve("when did he die?")) == .death)
+    }
+
+    /// THE FULL SUITE CAUGHT THESE. A bare time word, or any sentence naming
+    /// a relation, must be left to the pronoun-continuity path, which
+    /// rewrites the pronoun ("when did Rick get married") and translates —
+    /// a better answer than this resolver guessing "birth" from the word
+    /// "when". Both were live regressions in the first version.
+    @Test func timeWordsAloneAndRelationsAreLeftToTranslation() {
+        #expect(resolve("when did he get married") == nil, "married is a relation, not a date field")
+        #expect(resolve("when?") == nil, "born, died, married or moved — the sentence does not say")
+        #expect(resolve("what year?") == nil)
+        #expect(resolve("how old was he?") == nil)
+        #expect(resolve("who were his parents?") == nil, "a relation, not a field of this resolver")
+        // And the ones it SHOULD still claim are unaffected.
+        #expect(operation(resolve("where was he born?")) == .birthPlace)
+        #expect(operation(resolve("what country?")) == .birthPlace)
     }
 
     /// NAMING SOMEONE makes it a fresh question, not a follow-up.

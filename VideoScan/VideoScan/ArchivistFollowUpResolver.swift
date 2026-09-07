@@ -252,17 +252,28 @@ enum ArchivistFollowUpResolver {
         // A name of its own makes it a fresh question, not a follow-up.
         guard !body.contains(where: isKnownPerson) else { return nil }
 
+        // A RELATION WORD IS NOT A DATE FIELD. Caught by the full suite:
+        // "when did he get married" was claimed here as a BIRTH question
+        // because it contains "when", stealing a turn that the pronoun
+        // continuity path rewrites ("when did Rick get married") and
+        // translates. Marriage, parents and children are relations; this
+        // resolver only handles the birth/death fields of one person.
+        if ArchivistGraphQuery.asksForRelation(text) != nil { return nil }
+
         let operation: ArchivistQueryAST.Graph.Operation
         if ArchivistGraphQuery.asksForAPlace(text) {
-            let death = text.range(of: #"\b(die|died|death|buried|burial)\b"#,
-                                   options: [.regularExpression, .caseInsensitive]) != nil
-            operation = death ? .deathPlace : .birthPlace
-        } else if text.range(of: #"\bwhen\b|\bwhat\s+year\b|\bwhat\s+date\b|\bhow\s+old\b"#,
+            operation = ArchivistGraphQuery.asksAboutDeath(text) ? .deathPlace : .birthPlace
+        } else if text.range(of: #"\b(born|birth)\b"#,
                              options: [.regularExpression, .caseInsensitive]) != nil {
-            let death = text.range(of: #"\b(die|died|death)\b"#,
-                                   options: [.regularExpression, .caseInsensitive]) != nil
-            operation = death ? .death : .birth
+            operation = .birth
+        } else if text.range(of: #"\b(die|died|dies|death)\b"#,
+                             options: [.regularExpression, .caseInsensitive]) != nil {
+            operation = .death
         } else {
+            // A BARE time word is not enough. "when?" after a biography could
+            // mean born, died, married or moved; the existing continuity path
+            // rewrites the pronoun and lets the translator read the sentence,
+            // which is a better answer than this guessing birth.
             return nil
         }
         return .localQuery(.graph(ArchivistQueryAST.Graph(
