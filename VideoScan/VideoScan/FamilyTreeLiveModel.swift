@@ -264,6 +264,15 @@ final class FamilyTreeLiveModel: ObservableObject {
     // MARK: Private state
 
     private var graph: GedcomFamilyGraph?
+
+    /// The copyable metadata block for one person, or nil when the tree is
+    /// not loaded or the id is unknown (Rick, 2026-09-07: "I want all this
+    /// text to be copyable"). Formatting lives in FamilyTreePersonMetadata
+    /// so it can be tested without a view.
+    func metadataText(for id: String) -> String? {
+        guard let graph, let person = graph.people[id] else { return nil }
+        return FamilyTreePersonMetadata.text(for: person, in: graph)
+    }
     /// The People-tab kinship display follows the tree (codex #795 C):
     /// every `install(graph:)` is pushed here so "Relationships" lines
     /// rebuild when the tree is replaced in-session. Production models use

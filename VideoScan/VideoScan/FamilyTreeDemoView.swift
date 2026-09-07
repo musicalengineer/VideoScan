@@ -910,6 +910,11 @@ struct FamilyTreeDemoView: View {
                 onShowInPeople: { name in
                     showInPeopleTab(named: name)
                 },
+                onCopyDetails: {
+                    if let text = model.metadataText(for: card.person.id) {
+                        copyToPasteboard(text)
+                    }
+                },
                 onResearch: { presentResearch(for: card.person.id) }
             )
     }

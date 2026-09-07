@@ -70,6 +70,9 @@ struct FamilyTreePersonCard: View {
     /// "Tell me about this person").
     let onAskHallie: (String) -> Void
     let onShowInPeople: (String) -> Void
+    /// Copy everything the app holds about this person to the pasteboard
+    /// (Rick, 2026-09-07). The parent owns the graph, so it owns the text.
+    let onCopyDetails: () -> Void
     /// Research Person… (2026-08-29): sourced dossier for a deceased
     /// tree person, told to Hallie once confirmed.
     let onResearch: () -> Void
@@ -233,6 +236,9 @@ struct FamilyTreePersonCard: View {
             Divider()
             photoMenuItems
             Divider()
+            Button("Copy \(person.name)'s details", systemImage: "doc.on.doc") {
+                onCopyDetails()
+            }
             Button("Show \(person.name) in People tab") {
                 onShowInPeople(person.name)
             }
