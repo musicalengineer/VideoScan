@@ -16,7 +16,26 @@
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
 STATE=$HOME/Library/Logs/VideoScan/model-review
-ENDPOINT=${ENDPOINT:-http://localhost:11434}
+# THE REVIEWER'S OWN MODEL AND HOST (2026-09-06).
+#
+# This script used to pass no --model, so review_real_commits.py fell back
+# to configured_model(), which reads `defaults read Rick-Breen.VideoScan
+# archivist.ollamaModel` — HALLIE's setting. Changing the brain in the app's
+# Settings pane therefore silently changed the nightly code reviewer too,
+# and on 2026-09-06 Rick did exactly that while exploring the picker.
+# (codex #1147/#1148: installed != approved, and Hallie's role is not the
+# developer's role.)
+#
+# The reviewer is a CODE model and Hallie is a family archivist; they have
+# no reason to be the same tag, and every reason not to be. Both are
+# overridable from the environment for a one-off run.
+#
+# Host: ricksm5 rather than the M4, because Rick's M4 holds Hallie's brain
+# and a 20 GB reviewer beside a 21 GB archivist on a 64 GB machine is a
+# memory fight nobody asked for. ricksm5 has 48 GB and already has this
+# model installed.
+REVIEW_MODEL=${REVIEW_MODEL:-qwen2.5-coder:32b}
+ENDPOINT=${ENDPOINT:-http://ricksm5.local:11434}
 mkdir -p "$STATE"
 cd "$REPO" || exit 1
 
@@ -40,7 +59,7 @@ fi
 
 out="$STATE/$stamp"
 python3 tools/model-fitness/review_real_commits.py \
-  --range "$range" --endpoint "$ENDPOINT" --out "$out" \
+  --range "$range" --endpoint "$ENDPOINT" --model "$REVIEW_MODEL" --out "$out" \
   > "$out.summary.txt" 2>&1
 rc=$?
 # Advance the baseline only when the review actually ran: a transient

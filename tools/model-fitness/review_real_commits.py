@@ -55,6 +55,14 @@ SYSTEM = (
 
 
 def configured_model() -> str:
+    """Hallie's configured brain — a LAST RESORT for this script, not a default.
+
+    Reading the app's `archivist.ollamaModel` here coupled the nightly code
+    reviewer to the family archivist's brain: changing the model in Settings
+    changed the reviewer (codex #1147, 2026-09-06). nightly_review.sh now
+    always passes --model, so this fallback only fires for a hand-run with
+    no flag, and it warns when it does.
+    """
     """Whatever Settings ▸ Archivist Brain is set to, else the shipped default.
 
     One dropdown governs both Hallie and this reviewer. Hard-coding a second
@@ -178,7 +186,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
-    args.model = args.model or configured_model()
+    if not args.model:
+        args.model = configured_model()
+        print(f"warning: no --model given; falling back to Hallie's configured "
+              f"brain ({args.model}). The reviewer should name its own model — "
+              f"see nightly_review.sh.", file=sys.stderr)
 
     stamp = time.strftime("%Y%m%d-%H%M")
     out = Path(args.out or (Path.home() / "Library/Logs/VideoScan"
