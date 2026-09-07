@@ -390,3 +390,77 @@ struct HallieOwnerResolutionRegressionTests {
         }
     }
 }
+
+/// Live, 2026-09-06 evening. Rick's first question of the session:
+///
+///   Q: tell me about my dad
+///   A: I wasn't sure which person you meant — Richard Breen Sr or dad?
+///      Ask about one of them and I'll look them up.
+///   queryDescription: shape=graph operation=birth person=Richard Breen Sr,dad
+///   outcome: declined   offeredActions: []
+///
+/// The rebind resolved his father correctly and left a SECOND entry behind.
+/// The translator had emitted both the phrase and the bare kin word —
+/// `people = ["my dad", "dad"]` — slot 0 became "Richard Breen Sr" and "dad"
+/// rode along. Two people is not one person, so the graph route declined,
+/// and because a decline is not a clarification it registered no pending
+/// question (`offeredActions: []`). Rick answered "Richard Breen Sr" into
+/// nothing, and the refinement path took his reply as a search term against
+/// an unrelated catalog query two turns back.
+@Suite("One relative resolved once means one entry")
+struct HallieKinDuplicateEntryTests {
+    typealias Kin = HallieTurnExecutor.SpeakerKinship
+
+    private static func overlay() -> FamilyKinshipOverlay {
+        FamilyKinshipOverlay(snapshots: [
+            .init(stableID: "richard", canonicalName: "Richard",
+                  aliases: ["Dad", "Dad Breen"], sex: .male,
+                  surname: "Breen", middleName: "Harding", suffix: "Sr"),
+            .init(stableID: "rick", canonicalName: "Rick",
+                  aliases: ["Dicky", "Richard"],
+                  kinships: [Kinship(relation: .child, relativeTo: .profile(name: "Richard"))],
+                  sex: .male),
+        ])
+    }
+
+    private let rick = HallieTurnExecutor.Speakers(ownerName: "Rick", archivistName: "Hallie Mae")
+
+    /// The exact list the translator produced.
+    @Test func thePhraseAndTheBareKinWordCollapseToOnePerson() {
+        let bound = Kin.rebind(
+            people: ["my dad", "dad"], question: "tell me about my dad",
+            speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+        #expect(bound.people == ["Richard Breen Sr"], Comment(rawValue: "\(bound.people)"))
+    }
+
+    /// Every shape the translator has produced for one relative.
+    @Test func anyMixtureOfWaysToNameTheSameRelativeCollapses() {
+        for people in [["my dad", "dad"], ["dad", "my dad"], ["me", "dad"],
+                       ["my dad", "Dad"], ["Rick", "my dad"], ["my dad"], ["dad"], []] {
+            let bound = Kin.rebind(
+                people: people, question: "tell me about my dad",
+                speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+            #expect(bound.people == ["Richard Breen Sr"],
+                    Comment(rawValue: "\(people) → \(bound.people)"))
+        }
+    }
+
+    /// A DIFFERENT person named alongside the relative must survive: "videos
+    /// of my dad and Donna" is two people on purpose.
+    @Test func someoneElseInTheSameQuestionIsNotSweptUp() {
+        let bound = Kin.rebind(
+            people: ["my dad", "Donna"], question: "videos of my dad and Donna",
+            speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+        #expect(bound.people.contains("Richard Breen Sr"), Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people.contains("Donna"), Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people.count == 2, Comment(rawValue: "\(bound.people)"))
+    }
+
+    /// And a question with no kinship phrase is untouched.
+    @Test func aQuestionWithoutARelativeIsLeftAlone() {
+        let bound = Kin.rebind(
+            people: ["Donna", "Tim"], question: "videos of Donna and Tim",
+            speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+        #expect(bound.people == ["Donna", "Tim"])
+    }
+}

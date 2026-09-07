@@ -132,11 +132,37 @@ extension HallieTurnExecutor {
             _ people: [String],
             name: String,
             slot: Int?,
+            phrase: String,
+            speakers: Speakers,
             namesSamePerson: (String) -> Bool
         ) -> [String] {
             var people = people
             let target = slot ?? people.firstIndex(where: namesSamePerson)
             if let target { people[target] = name } else { people.append(name) }
+            // Every OTHER entry that named the same relative goes too
+            // (2026-09-06). The translator emits the phrase and the bare kin
+            // word often enough that Rick hit it on his first evening
+            // question: for "tell me about my dad" it produced
+            // `people = ["my dad", "dad"]`, slot 0 became "Richard Breen Sr",
+            // and "dad" rode along — `person=Richard Breen Sr,dad`. The
+            // graph route cannot choose between two people, so it declined
+            // with a question in PROSE and, because it was a decline rather
+            // than a clarification, registered no pending question. Rick
+            // answered "Richard Breen Sr" into the void and the refinement
+            // path took his reply as a new search term.
+            //
+            // One relative resolved once means one entry. Compared on the
+            // same normalization `slotIndex` uses, so "Dad", "my dad" and
+            // "MY DAD" are all the one we just spent.
+            let kin = kinWord(of: phrase)
+            people = people.enumerated().filter { index, entry in
+                if index == target { return true }
+                let key = entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return !(key == phrase || key == kin
+                         || HallieTurnExecutor.isSpeakerPronoun(key)
+                         || key == speakers.ownerName?.lowercased())
+            }.map(\.element)
+            if !people.contains(name) { people.append(name) }
             return PersonNameClaim.dedupe(people)
         }
 
@@ -184,6 +210,7 @@ extension HallieTurnExecutor {
                         result.people = bind(
                             people, name: bound,
                             slot: slotIndex(in: people, phrase: phrase, speakers: speakers),
+                            phrase: phrase, speakers: speakers,
                             namesSamePerson: { entry in
                                 PersonResolver.normalize(entry)
                                     == PersonResolver.normalize(hit.member.name)
@@ -265,6 +292,7 @@ extension HallieTurnExecutor {
             let relative = relatives[0]
             result.people = bind(
                 people, name: relative.name, slot: slot,
+                phrase: phrase, speakers: speakers,
                 namesSamePerson: { entry in
                     PersonResolver.normalize(entry)
                         == PersonResolver.normalize(relative.name)
