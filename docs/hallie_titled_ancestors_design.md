@@ -86,6 +86,23 @@ does not exist.
 
 ## 5. Proposed slices
 
+**Slice 0 — ad-hoc name search (Rick's clarification, codex #1158/#1161/#1162).**
+Rick's actual ask is text search over recorded names — he found *"Patrick, I
+Laird of Hailes Hepburn"* by reading, and wants to ask for it. codex found the
+reuse: `index.sidebarRows(containing:)` (`Index.swift:607`), already driving
+`FamilyTreeLiveModel.refilterNow`, searches preferred and alternate names plus
+surnames and IDs over a compiled haystack. Route explicit tree-text questions
+there, map `row → sidebarOrder[row] → ids[ordinal] → person`, and keep the
+stable GEDCOM ID in follow-ups rather than round-tripping the name through
+`Conversation.swift:141`. Literal contiguous case-insensitive matching only —
+reordered tokens and diacritics are a later stage, and `people(namedLike:)`
+has different nickname semantics that must not be silently conflated. Do NOT
+broaden the `ArchivistGraphExecutor` bare-name resolver: its given-name-only
+rule is what prevents identity errors.
+
+This is smaller than the classifier below and delivers Rick's literal request,
+so it goes first.
+
 **Slice 1 — `HallieTitleClassifier`** (no UI, no route). The three patterns
 above, `TitledPerson { person, rank, titleText, seat }`, a rank ordering
 (emperor > king > prince > duke > marquess > earl > viscount > baron > laird >
