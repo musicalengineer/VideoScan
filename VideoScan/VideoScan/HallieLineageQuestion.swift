@@ -1944,15 +1944,19 @@ enum HallieLineageAnswer {
         func trailCard(to targets: [GedcomFamilyGraph.Person], title: String) -> HallieLineageCard? {
             let gens = graph.ancestorPaths(from: person, to: targets, maxGenerations: maxGen)
             guard !gens.isEmpty else { return nil }
+            // `describe` four lines above spends `lens` on the prose; the
+            // card built here defaulted to `.treeOnly` and drew the tree's
+            // years beside it (2026-09-06). One turn, two stores, two
+            // answers about the same person.
             return HallieLineageCard(
                 title: title,
-                root: HalliePersonCard(person),
+                root: HalliePersonCard(person, lens: lens),
                 line: .both,
                 generations: gens.map { g in
                     HallieLineageCard.Generation(
                         generation: g.generation,
                         label: HallieAttachmentBuilder.generationLabel(g.generation, line: .both),
-                        people: g.people.map { HalliePersonCard($0) })
+                        people: g.people.map { HalliePersonCard($0, lens: lens) })
                 },
                 requested: gens.count)
         }

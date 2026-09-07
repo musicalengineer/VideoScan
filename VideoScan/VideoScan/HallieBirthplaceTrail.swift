@@ -536,15 +536,23 @@ extension HallieLineageAnswer {
         }
 
         func card(_ title: String) -> HallieAttachment {
+            // The CARD reads the same seam as the sentence beside it
+            // (2026-09-06). `lens` is this function's own parameter and the
+            // prose above already spends it; the card defaulted to
+            // `.treeOnly`, so a person Rick had corrected in the People tab
+            // was spoken with his date and drawn with the tree's — one
+            // answer disagreeing with itself, which is the failure codex
+            // held the vitals batch on. Same class 7dfefcd6 fixed for
+            // `ancestorLine`; these two were left behind.
             .lineage(HallieLineageCard(
                 title: title,
-                root: HalliePersonCard(person),
+                root: HalliePersonCard(person, lens: lens),
                 line: cardLine,
                 generations: walk.ancestors.map { step in
                     HallieLineageCard.Generation(
                         generation: step.generation,
                         label: HallieAttachmentBuilder.generationLabel(step.generation, line: cardLine),
-                        people: [HalliePersonCard(step.person)])
+                        people: [HalliePersonCard(step.person, lens: lens)])
                 },
                 requested: walk.generationsWalked))
         }
