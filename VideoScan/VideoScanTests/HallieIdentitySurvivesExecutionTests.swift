@@ -537,6 +537,40 @@ struct HallieKinConjunctionSurvivalTests {
         }
     }
 
+    /// codex #1163(A): the OWNER LISTED FIRST. `slotIndex` took whichever of
+    /// pronoun/phrase/kin-word/owner-name came first in the list, so this
+    /// people order overwrote Rick with the resolved father before the
+    /// preservation filter in `bind` ever ran. The order of the people list
+    /// must not decide who survives.
+    @Test func theOwnerListedBeforeTheRelativeIsNotOverwritten() {
+        for people in [["Rick", "my dad"], ["my dad", "Rick"]] {
+            let bound = Kin.rebind(
+                people: people, question: "videos of Rick and my dad",
+                speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+            #expect(bound.people.contains("Richard Breen Sr"),
+                    Comment(rawValue: "\(people) → \(bound.people)"))
+            #expect(bound.people.contains("Rick"),
+                    Comment(rawValue: "\(people) → \(bound.people)"))
+            #expect(bound.people.count == 2, Comment(rawValue: "\(people) → \(bound.people)"))
+        }
+    }
+
+    /// codex #1163(B): ordinary terminal punctuation. The adjacency test pads
+    /// with spaces, so "my dad and Rick?" ended the haystack with "rick?" and
+    /// the preservation silently switched off for anyone who types a question
+    /// mark.
+    @Test func terminalPunctuationDoesNotDisablePreservation() {
+        for question in ["videos of my dad and Rick?", "videos of my dad and Rick.",
+                         "videos of my dad and Rick!", "videos of Rick and my dad?"] {
+            let bound = Kin.rebind(
+                people: ["my dad", "Rick"], question: question,
+                speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+            #expect(bound.people.count == 2, Comment(rawValue: "\(question) → \(bound.people)"))
+        }
+        #expect(Kin.requestedAlongside("me", phrase: "my dad",
+                                       in: "videos of my dad and me.") == true)
+    }
+
     /// The adjacency test is on WORD boundaries: "me" must not be found inside
     /// "someone", or the sweep silently stops working for the common case.
     @Test func theConjunctionTestRespectsWordBoundaries() {

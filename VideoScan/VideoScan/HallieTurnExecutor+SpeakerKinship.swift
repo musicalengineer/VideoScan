@@ -110,9 +110,16 @@ extension HallieTurnExecutor {
         /// between the two, in either order — so that is what is tested, on
         /// word boundaries, because "me" must not be found inside "some".
         static func requestedAlongside(_ entry: String, phrase: String, in question: String) -> Bool {
-            let text = " " + question.lowercased()
-                .replacingOccurrences(of: ",", with: " ")
-                .replacingOccurrences(of: "&", with: " and ") + " "
+            // Sentence punctuation is separated, not just commas (codex
+            // #1163): "my dad and Rick?" and "my dad and me." both ended the
+            // padded haystack with "rick?" / "me." and failed the
+            // trailing-space requirement, so an ordinary question mark
+            // silently turned the preservation off.
+            var text = question.lowercased().replacingOccurrences(of: "&", with: " and ")
+            for mark in [",", ".", "?", "!", ";", ":", "\"", "'"] {
+                text = text.replacingOccurrences(of: mark, with: " ")
+            }
+            text = " " + text + " "
             let squeezed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             let entryWords = entry.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             let phraseWords = phrase.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -124,13 +131,27 @@ extension HallieTurnExecutor {
 
         /// Which people-list slot holds the relative: a bare pronoun, the
         /// phrase, the kin word, or the owner's name. nil ⇒ append.
-        private static func slotIndex(in people: [String], phrase: String, speakers: Speakers) -> Int? {
+        private static func slotIndex(in people: [String], phrase: String,
+                                      question: String, speakers: Speakers) -> Int? {
             let kinWord = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+            func key(_ entry: String) -> String {
+                entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            // THE PHRASE WINS THE SLOT (codex #1163). A single firstIndex over
+            // all four shapes handed the slot to whichever came FIRST in the
+            // list, so people = ["Rick", "my dad"] for "videos of Rick and my
+            // dad" overwrote Rick with the resolved father — before the
+            // preservation filter in bind() ever ran. The relative's own slot
+            // is looked for first; an owner or pronoun placeholder is only a
+            // fallback, and never one the question asked for by itself.
+            if let exact = people.firstIndex(where: { key($0) == phrase || key($0) == kinWord }) {
+                return exact
+            }
             return people.firstIndex { entry in
-                let key = entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                return HallieTurnExecutor.isSpeakerPronoun(key)
-                    || key == phrase || key == kinWord
-                    || key == speakers.ownerName?.lowercased()
+                let key = key(entry)
+                guard HallieTurnExecutor.isSpeakerPronoun(key)
+                        || key == speakers.ownerName?.lowercased() else { return false }
+                return !requestedAlongside(key, phrase: phrase, in: question)
             }
         }
 
@@ -247,7 +268,8 @@ extension HallieTurnExecutor {
                         let bound = overlay.unambiguousName(of: hit.member)
                         result.people = bind(
                             people, name: bound,
-                            slot: slotIndex(in: people, phrase: phrase, speakers: speakers),
+                            slot: slotIndex(in: people, phrase: phrase,
+                                                            question: question, speakers: speakers),
                             phrase: phrase, question: question, speakers: speakers,
                             namesSamePerson: { entry in
                                 PersonResolver.normalize(entry)
@@ -267,7 +289,7 @@ extension HallieTurnExecutor {
             // pronoun ("me"), the phrase itself, the kin word, or — when the
             // model dropped it — nothing, in which case the relative is added.
             let kinWord = phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
-            let slot = slotIndex(in: people, phrase: phrase, speakers: speakers)
+            let slot = slotIndex(in: people, phrase: phrase, question: question, speakers: speakers)
             guard let owner = speakers.ownerName else {
                 result.failure = "I don't know who “\(phrase)” is because no one has told me who is using the archive — set your name in Hallie's settings and I'll look \(kinWord == "dad" || kinWord == "father" ? "him" : "them") up in the family tree."
                 return result
