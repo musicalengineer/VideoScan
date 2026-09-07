@@ -16,11 +16,45 @@ Yes, and more than expected.
 | strict title matches | 1,157 | 2,650 |
 | highest rank present | King/Queen of England, Scotland, Mann | King of Scotland |
 
-**There is no structured title field.** The 69,526 `TITL` tags in Rick's
-GEDCOM are level-1 and level-2 source/media titles — `IMG_5311.jpg`,
-`Eliza Brooks (1803-1881) Birth Record`. Not one is a person's rank.
-`GedcomFamilyGraph.Person` has no title field and the parser has no `TITL`
-handling for people, exactly as codex reported.
+### CORRECTION, 2026-09-07 — there IS a structured title field
+
+An earlier version of this document said "there is no structured title field",
+and I repeated that to Rick and to codex to argue codex's schema gate away.
+**It was wrong.** I counted `TITL` tags by GEDCOM level and sampled a handful;
+every sample happened to sit under `2 FORM URL`, so I concluded they were all
+source and media titles and never checked the INDI context.
+
+Counted properly — `1 TITL` directly under an `INDI` record:
+
+| | person-level `TITL` | other `TITL` (source/media) |
+|---|---|---|
+| Rick's tree | **2,431** | 67,057 |
+| Donna's tree | **4,424** | 137,773 |
+
+They are a mixed vocabulary — nobility beside military rank, office and bare
+suffix:
+
+```
+Comte · Lord of Bradbury and Hilton · Baron of the Exchequer · Lady
+Major · Deacon · Capt. · Sergeant · Representative · Jr · Jr.
+```
+
+Found the honest way: Rick asked Hallie about *John Hastings 3rd Earl of
+Pembroke* and his record in Donna's tree carries
+`1 TITL 3rd Baron Manny - inherited from his mother`.
+
+**What this changes.** `GedcomFamilyGraph.Person` still has no title field and
+the parser still drops person `TITL` — codex's report was accurate. So the
+data exists in the source GEDCOM and is thrown away at parse time, which means
+preserving it *does* require the parser and schema work codex scoped, and
+**codex's approval gate was right**. My "nothing to preserve, so skip the
+gate" argument does not survive the corrected count.
+
+The name-string classifier below is still needed — 1,157 titled names in
+Rick's tree versus 2,431 `TITL` tags, with unknown overlap — but the two are
+now complementary sources, and the structured one is more trustworthy where
+it exists. **The order of slices is Rick's call, and the schema question goes
+back to him.**
 
 Every title in this tree lives **inside the NAME string**:
 
@@ -68,12 +102,17 @@ walks ancestral lines with cycle guards and paging); the deepest titled
 ancestors sit at generation 20, which is the pull depth, so the wall is the
 GEDCOM's, not the code's.
 
-## 4. The architectural finding — no schema change needed
+## 4. The architectural finding — WITHDRAWN, see the correction in §1
 
 codex's plan assumed title preservation across parser → compiled cache →
 version → merge → writer → display, and gated that on Rick's schema approval.
 
-**That gate can be skipped, because there is nothing to preserve.** The title
+**This argument is withdrawn** — see the correction in §1. There ARE 2,431
+person-level `TITL` tags in Rick's tree that the parser currently discards, so
+there is something to preserve after all, and codex's gate stands. The
+paragraph below is kept as the record of what I argued and why it was wrong.
+
+~~That gate can be skipped, because there is nothing to preserve.~~ The title
 is already in `Person.name`, which every one of those layers already carries.
 A title index is *derived* at load time from names the graph already holds —
 no new field, no codec bump, no merge semantics, no migration, and nothing
