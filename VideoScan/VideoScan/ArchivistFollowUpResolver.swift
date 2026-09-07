@@ -203,11 +203,70 @@ enum ArchivistFollowUpResolver {
         if let media = mediaResolution(words, original: text, snapshot: snapshot) {
             return media
         }
+        // A bare attribute follow-up about the SAME person, before
+        // refinement gets to call it a topic word (Rick, live 2026-09-07).
+        if let attribute = graphAttributeResolution(
+            text, words: words, snapshot: snapshot, isKnownPerson: isKnownPerson) {
+            return attribute
+        }
         if let refinement = refinementResolution(
             words, snapshot: snapshot, isKnownPerson: isKnownPerson) {
             return refinement
         }
         return .none
+    }
+
+    // MARK: - A different field, same person
+
+    /// "what country?" straight after an answer about John Hastings.
+    ///
+    /// Rick, 2026-09-07, twice in one session:
+    ///   "not in videos, in family tree" → "I can only drop a person, not a
+    ///     topic word — ask it fresh"
+    ///   "what country?"                 → 688 videos mentioning "country"
+    ///
+    /// Both are the same gap: a follow-up could edit the previous query's
+    /// FILTERS but could not change which FIELD of the same subject was
+    /// being asked about, so a two-word question about the person on screen
+    /// became a catalog search. The refinement path is right to refuse — it
+    /// edits filters — so this runs first and answers a narrower question:
+    /// the previous graph subject, a new operation, nothing else carried.
+    ///
+    /// Deliberately narrow. It requires ALL of:
+    ///   * the last turn was a graph question with at least one person;
+    ///   * this turn names no person of its own (otherwise it is a fresh
+    ///     question about someone else);
+    ///   * this turn asks for a field, and nothing more than a field — a
+    ///     short fragment, so "tell me everything about where people in this
+    ///     family were born" still translates normally.
+    static func graphAttributeResolution(
+        _ text: String,
+        words: [String],
+        snapshot: Snapshot?,
+        isKnownPerson: (String) -> Bool
+    ) -> Resolution? {
+        guard let snapshot, case .graph(let previous)? = snapshot.ast,
+              !previous.people.isEmpty else { return nil }
+        let body = dropLead(words)
+        guard !body.isEmpty, body.count <= 8 else { return nil }
+        // A name of its own makes it a fresh question, not a follow-up.
+        guard !body.contains(where: isKnownPerson) else { return nil }
+
+        let operation: ArchivistQueryAST.Graph.Operation
+        if ArchivistGraphQuery.asksForAPlace(text) {
+            let death = text.range(of: #"\b(die|died|death|buried|burial)\b"#,
+                                   options: [.regularExpression, .caseInsensitive]) != nil
+            operation = death ? .deathPlace : .birthPlace
+        } else if text.range(of: #"\bwhen\b|\bwhat\s+year\b|\bwhat\s+date\b|\bhow\s+old\b"#,
+                             options: [.regularExpression, .caseInsensitive]) != nil {
+            let death = text.range(of: #"\b(die|died|death)\b"#,
+                                   options: [.regularExpression, .caseInsensitive]) != nil
+            operation = death ? .death : .birth
+        } else {
+            return nil
+        }
+        return .localQuery(.graph(ArchivistQueryAST.Graph(
+            people: previous.people, operation: operation)))
     }
 
     // MARK: - Words
