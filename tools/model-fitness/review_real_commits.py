@@ -102,11 +102,26 @@ def units(args: argparse.Namespace) -> list[tuple[str, str, str]]:
     else:
         shas = run(["git", "log", "--no-merges", f"-{args.count}",
                     "--format=%H%x00%s"]).splitlines()
-    out = []
+    # Commits a PREVIOUS run never actually reviewed — it timed out on them or
+    # ollama was down — carried forward by nightly_review.sh so a review that
+    # errored is retried instead of being skipped for good (2026-09-07). They
+    # are usually already outside the range, so they are appended, then the
+    # whole list is deduped by sha.
+    for sha in [c.strip() for c in (args.also_commits or "").split(",") if c.strip()]:
+        try:
+            shas.append(run(["git", "log", "--no-walk", "--format=%H%x00%s",
+                             sha]).strip())
+        except subprocess.CalledProcessError:
+            print(f"warning: carried-forward commit {sha} is no longer in this "
+                  f"repo; dropping it", file=sys.stderr)
+    out, seen = [], set()
     for line in shas:
         if "\0" not in line:
             continue
         sha, subject = line.split("\0", 1)
+        if sha in seen:
+            continue
+        seen.add(sha)
         out.append((sha[:8], subject, diff_of(sha)))
     return out
 
@@ -179,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="review the last N commits (default)")
     parser.add_argument("--range", default=None,
                         help="a git range, e.g. origin/main..HEAD")
+    parser.add_argument("--also-commits", default=None,
+                        help="comma-separated SHAs to review in ADDITION to the "
+                             "range — used to retry commits an earlier run "
+                             "errored on. Deduped against the range.")
     parser.add_argument("--staged", action="store_true",
                         help="review what is staged, before you commit it")
     parser.add_argument("--working", action="store_true",
@@ -235,6 +254,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  flagged              {len(flagged):>3}/{total}"
           f"   <- read every one of these")
     print(f"  transport errors     {len(broken):>3}/{total}")
+    # A machine-readable line so nightly_review.sh can carry these forward
+    # WITHOUT grepping the per-commit .md files. An errored commit was never
+    # reviewed; before 2026-09-07 the baseline advanced past it anyway and it
+    # was never looked at again — 19 of 122 commits over the first five nights.
+    print("ERRORED_SHAS: " + ",".join(short for short, _, _ in broken))
+    if broken:
+        print("  UNREVIEWED (retried next run):")
+        for short, subject, error in broken:
+            print(f"    {short}  {subject[:56]}  — {str(error)[:60]}")
     if total:
         print(f"\n  flag rate on correct code: {len(flagged) / total:.0%}")
         print("  (high is bad: a reviewer that cries wolf stops being read)")
