@@ -76,6 +76,40 @@ hop. A **direct ancestor** has no descent half: "your 18th-great-grandfather"
 is four words however deep it runs. One constant was being asked to bound two
 different shapes.
 
+### The finding under all of it (2026-09-07 evening)
+
+Rick asked five questions about one dead earl and got the same death sentence
+to all of them — including "whom did he marry" and "tell me all about Edward
+III". Minutes later "his spouse?" answered correctly.
+
+**The prose is not in this codebase.** The wording changed every time — "has
+passed away", "has passed on", "is no longer with us" — because the MODEL was
+composing it. After a long run of turns about a deceased person it settles on
+`operation: death` and answers everything that way, and nothing deterministic
+disagreed.
+
+That is the same shape as every other row here, one layer up: **the model is
+being asked to make a judgement the sentence already settles.** Which field a
+question wants — place, relation, whole person — is not a judgement call. It
+is in the words.
+
+So three guards now run after the model and before the executor, narrowest
+first:
+
+| the sentence says | the operation becomes |
+|---|---|
+| "where / what country / birthplace" | `birthPlace` (or `deathPlace` — the sentence's OWN death cue decides, never the model's) |
+| exactly one relation — "marry", "his parents", "the grandparents of X" | `kinship` with that relation |
+| "tell me about / who is / describe X" | `biography` |
+
+Each is skipped when the sentence is ambiguous — two relations named, or
+none — so the model keeps every question that genuinely needs judgement.
+
+A correction I made inside the correction: the first version of the place
+guard took the model's word for birth-vs-death, so "what country was John
+Hastings **born** in?" arriving as `death` produced a death answer. Rick found
+it within minutes of it shipping. The sentence decides now.
+
 ### Proposed fixes, smallest first
 
 1. **Continent destinations reach the continent stop** — match the captured

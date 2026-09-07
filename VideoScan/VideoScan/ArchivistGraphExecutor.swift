@@ -251,10 +251,83 @@ struct ArchivistGraphQuery: Sendable, Equatable {
     /// "tell me about X" keeps the biography and only the place asks move.
     /// A death cue is required to reach `.deathPlace`; everything else that
     /// asks a place is a birth ask, which is what people actually type.
+    /// The relation a sentence plainly asks for, or nil. Rick, live
+    /// 2026-09-07: "whom did he marry", "who was his spouse" and "who did
+    /// john hastings marry?" ALL came back with the man's death — the model
+    /// answered `death` for every question in a conversation that had been
+    /// about a dead earl for twenty turns, and the deterministic layer had
+    /// nothing to say about it. These are decidable from the words, exactly
+    /// like the place questions above, so they are decided here.
+    ///
+    /// Only unambiguous single-relation asks: "his parents", "who did X
+    /// marry". A sentence naming two relations, or none, is left alone.
+    static func asksForRelation(_ question: String) -> Relation? {
+        let q = question.lowercased()
+        let table: [(pattern: String, relation: Relation)] = [
+            (#"\bgreat[- ]great[- ]grandparents?\b"#, .greatGreatGrandparents),
+            (#"\bgreat[- ]grandparents?\b"#, .greatGrandparents),
+            (#"\bgrandparents\b"#, .grandparents),
+            (#"\bgrandfather\b|\bgrandpa\b"#, .grandfather),
+            (#"\bgrandmother\b|\bgrandma\b"#, .grandmother),
+            (#"\bparents\b"#, .parents),
+            (#"\bfather\b|\bdad\b"#, .father),
+            (#"\bmother\b|\bmom\b"#, .mother),
+            (#"\bsiblings?\b"#, .siblings),
+            (#"\bbrothers?\b"#, .brother),
+            (#"\bsisters?\b"#, .sister),
+            (#"\bchildren\b|\bkids\b"#, .children),
+            (#"\bsons?\b"#, .son),
+            (#"\bdaughters?\b"#, .daughter),
+            (#"\bspouse\b|\bmarry\b|\bmarried\b|\bwed\b|\bwedded\b"#, .spouse),
+            (#"\bhusband\b"#, .husband),
+            (#"\bwife\b"#, .wife),
+            (#"\bcousins?\b"#, .cousins),
+            (#"\buncles?\b"#, .uncle),
+            (#"\baunts?\b"#, .aunt),
+        ]
+        let hits = table.filter {
+            q.range(of: $0.pattern, options: .regularExpression) != nil
+        }
+        guard hits.count == 1 else { return nil }
+        return hits[0].relation
+    }
+
+    /// "tell me about X" / "tell me all about X" / "who is X" — a request for
+    /// the whole person, not one field. Rick, live 2026-09-07: after a long
+    /// run of turns about a dead earl, even "tell me all about Edward III"
+    /// came back as "has passed on and has been resting in peace since 21
+    /// June 1377". The model had settled on `death` for the conversation.
+    ///
+    /// Only claims a sentence that asks for the person and nothing narrower —
+    /// the place and relation guards run first, so "tell me about his
+    /// parents" and "tell me about where he was born" never reach this.
+    static func asksForABiography(_ question: String) -> Bool {
+        let q = question.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return q.range(of: #"^(hallie[, ]+)?(please\s+)?(tell\s+me\s+(all\s+)?about|tell\s+me\s+more\s+about|who\s+(is|was)|what\s+do\s+you\s+know\s+about|describe)\b"#,
+                       options: .regularExpression) != nil
+    }
+
+    /// A death cue in the sentence itself. "born" wins when both appear —
+    /// "where was he born before he died in France" asks where he was BORN.
+    static func asksAboutDeath(_ question: String) -> Bool {
+        let q = question.lowercased()
+        guard q.range(of: #"\b(die|died|dies|death|buried|burial|interred)\b"#,
+                      options: .regularExpression) != nil else { return false }
+        return q.range(of: #"\b(born|birth|birthplace)\b"#, options: .regularExpression) == nil
+    }
+
     static func asksForAPlace(_ question: String) -> Bool {
         let q = question.lowercased()
         // "where was/were/did … born", "where is … buried"
         if q.range(of: #"\bwhere\s+(was|were|is|are|did|do|does)\b"#,
+                   options: .regularExpression) != nil { return true }
+        // "tell me about where he was born" — "where" and its verb separated
+        // by the subject. Caught by this suite's own ordering test: the
+        // biography guard claimed the sentence because the pattern above
+        // requires the verb to follow "where" immediately. A "where" anywhere
+        // beside a birth or death word is a place question.
+        if q.range(of: #"\bwhere\b"#, options: .regularExpression) != nil,
+           q.range(of: #"\b(born|birth|died|die|dies|death|buried|burial)\b"#,
                    options: .regularExpression) != nil { return true }
         // "what/which country|city|town|state|county|place|part of the world"
         if q.range(of: #"\b(what|which)\s+(country|city|town|state|county|province|region|place|village|parish)\b"#,
@@ -295,9 +368,39 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         // correction, applied after the model rather than instead of it, so
         // it holds whatever the model returns and whatever model is loaded.
         if let question, Self.asksForAPlace(question) {
+            // WHICH place is decided by the QUESTION, not by the model's
+            // birth/death guess (Rick, live 2026-09-07, minutes after the
+            // first version of this shipped). "what country was John
+            // Hastings born in?" reached here as `.death`, and taking the
+            // model's word for it turned a question containing the word
+            // "born" into a DEATH answer — "he has been resting in peace
+            // since 30 December 1389". Deferring to the model on a point the
+            // sentence settles is the exact mistake this guard exists to
+            // correct; I made it inside the correction itself.
             switch resolved {
-            case .birth, .biography: resolved = .birthPlace
-            case .death: resolved = .deathPlace
+            case .birth, .death, .biography, .birthPlace, .deathPlace:
+                resolved = Self.asksAboutDeath(question) ? .deathPlace : .birthPlace
+            default: break
+            }
+        }
+        // A RELATION THE SENTENCE NAMES beats the model's operation, for the
+        // same reason the place cue does: it is not a judgement call.
+        var resolvedRelation = payload.relation.flatMap { Relation(rawValue: $0.rawValue) }
+        if let question, resolvedRelation == nil,
+           !Self.asksForAPlace(question),
+           let asked = Self.asksForRelation(question) {
+            resolvedRelation = asked
+            switch resolved {
+            case .biography, .birth, .death: resolved = .kinship
+            default: break
+            }
+        }
+        // A REQUEST FOR THE WHOLE PERSON, last of the three, so the narrower
+        // guards above keep their sentences.
+        if let question, resolvedRelation == nil,
+           !Self.asksForAPlace(question), Self.asksForABiography(question) {
+            switch resolved {
+            case .birth, .death: resolved = .biography
             default: break
             }
         }
@@ -305,7 +408,7 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         self.voices = voices
         // Raw values are the shared closed vocabulary; a wire relation that
         // has no executor twin becomes nil and fails closed as "missing".
-        relation = payload.relation.flatMap { Relation(rawValue: $0.rawValue) }
+        relation = resolvedRelation
         switch payload.side {
         case .some(.maternal): side = .maternal
         case .some(.paternal): side = .paternal

@@ -35,6 +35,10 @@ struct HalliePlaceQuestionTests {
         #expect(asks("what is her place of birth"))
         #expect(asks("he was born in what country"))
         #expect(asks("where is he buried"))
+        // "where" separated from its verb by the subject — the ordering case
+        // this suite caught before it shipped.
+        #expect(asks("tell me about where he was born"))
+        #expect(asks("do you know where Mary Catherine O'Connor was born"))
     }
 
     /// A DATE question must not be stolen — this is the whole risk of the
@@ -63,6 +67,16 @@ struct HalliePlaceQuestionTests {
             return ArchivistGraphQuery(payload, question: question).operation
         }
         #expect(operation(.birth, "what country was John Hastings born in?") == .birthPlace)
+        // THE REGRESSION. Rick hit this minutes after the first version
+        // shipped: the model returned `.death` for a sentence containing
+        // "born", and deferring to it answered with the man's death.
+        #expect(operation(.death, "what country was John Hastings born in?") == .birthPlace)
+        #expect(operation(.death, "where was he born?") == .birthPlace)
+        #expect(operation(.deathPlace, "where was he born?") == .birthPlace)
+        #expect(operation(.birth, "where is he buried?") == .deathPlace)
+        #expect(operation(.biography, "where did he die?") == .deathPlace)
+        // Both cues present: "born" wins, because that is what was asked.
+        #expect(operation(.death, "where was he born before he died in France?") == .birthPlace)
         #expect(operation(.biography, "where was John Hastings born?") == .birthPlace)
         #expect(operation(.death, "what country did he die in?") == .deathPlace)
         // Unchanged without a place cue, and unchanged with no question at all.
@@ -70,5 +84,87 @@ struct HalliePlaceQuestionTests {
         #expect(operation(.biography, "tell me about John Hastings") == .biography)
         let payload = ArchivistQueryAST.Graph(people: ["x"], operation: .birth)
         #expect(ArchivistGraphQuery(payload).operation == .birth)
+    }
+
+    /// Rick, live 2026-09-07: "whom did he marry", "who was his spouse" and
+    /// "who did john hastings marry?" ALL came back with the man's death.
+    /// After twenty turns about a dead earl the model answered `death` for
+    /// everything, and nothing deterministic disagreed.
+    @Test func aRelationTheSentenceNamesIsNotLeftToTheModel() {
+        let asks = ArchivistGraphQuery.asksForRelation
+        #expect(asks("whom did he marry") == .spouse)
+        #expect(asks("who was his spouse") == .spouse)
+        #expect(asks("who did john hastings marry?") == .spouse)
+        #expect(asks("tell me about his parents") == .parents)
+        #expect(asks("tell me about the grandparents of Nathaniel Caleb Parker") == .grandparents)
+        #expect(asks("who were his children") == .children)
+        #expect(asks("did he have any brothers") == .brother)
+        #expect(asks("who was his mother") == .mother)
+    }
+
+    /// Ambiguous or absent: left to the model rather than guessed at.
+    @Test func twoRelationsOrNoneIsLeftAlone() {
+        let asks = ArchivistGraphQuery.asksForRelation
+        #expect(asks("tell me about his mother and father") == nil, "two relations named")
+        #expect(asks("tell me about John Hastings") == nil)
+        #expect(asks("where was he born") == nil)
+        #expect(asks("when did he die") == nil)
+    }
+
+    /// The operation moves to kinship and carries the relation.
+    @Test func theRelationReachesTheQuery() {
+        func query(_ op: ArchivistQueryAST.Graph.Operation,
+                   _ question: String) -> ArchivistGraphQuery {
+            ArchivistGraphQuery(
+                ArchivistQueryAST.Graph(people: ["John Hastings"], operation: op),
+                question: question)
+        }
+        let spouse = query(.death, "whom did he marry")
+        #expect(spouse.operation == .kinship)
+        #expect(spouse.relation == .spouse)
+
+        let parents = query(.biography, "tell me about his parents")
+        #expect(parents.operation == .kinship)
+        #expect(parents.relation == .parents)
+
+        // A place question is still a place question, not a relation.
+        #expect(query(.death, "where was he born?").operation == .birthPlace)
+        // And an ordinary biography ask is untouched.
+        let plain = query(.biography, "tell me about John Hastings")
+        #expect(plain.operation == .biography)
+        #expect(plain.relation == nil)
+    }
+
+    /// Rick, live 2026-09-07: "tell me all about Edward III" came back as
+    /// "has passed on and has been resting in peace since 21 June 1377". A
+    /// request for the whole person had become a death notice.
+    @Test func aRequestForTheWholePersonIsNotADeathNotice() {
+        let asks = ArchivistGraphQuery.asksForABiography
+        #expect(asks("tell me all about Edward III"))
+        #expect(asks("tell me about John Hastings"))
+        #expect(asks("tell me more about him"))
+        #expect(asks("who is Edward III of Windsor King of England"))
+        #expect(asks("who was Nathaniel Caleb Parker"))
+        #expect(asks("what do you know about Donna"))
+        #expect(asks("describe Stephen Parker"))
+        // Not a whole-person ask.
+        #expect(!asks("where was he born"))
+        #expect(!asks("when did he die"))
+        #expect(!asks("how am I related to Edward III"))
+
+        func query(_ op: ArchivistQueryAST.Graph.Operation,
+                   _ question: String) -> ArchivistGraphQuery {
+            ArchivistGraphQuery(
+                ArchivistQueryAST.Graph(people: ["Edward III"], operation: op),
+                question: question)
+        }
+        #expect(query(.death, "tell me all about Edward III").operation == .biography)
+        // The narrower guards still win their own sentences.
+        #expect(query(.death, "tell me about where he was born").operation == .birthPlace)
+        let parents = query(.death, "tell me about his parents")
+        #expect(parents.operation == .kinship)
+        #expect(parents.relation == .parents)
+        // And a genuine death question is still a death question.
+        #expect(query(.death, "when did he die").operation == .death)
     }
 }
