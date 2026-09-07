@@ -16,16 +16,19 @@
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REAL_SCRIPT="$SCRIPT_DIR/nightly_review.sh"
-SANDBOX="${TMPDIR:-/tmp}/nightly-review-test-$$"
-trap "rm -rf $SANDBOX" EXIT
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/nightly-review-test-XXXXXX")"
+trap 'rm -rf "$SANDBOX"' EXIT
 
 FAILS=0; PASSES=0
 pass() { PASSES=$((PASSES+1)); echo "  PASS: $*"; }
 fail() { FAILS=$((FAILS+1));  echo "  FAIL: $*"; }
 
-WORK="$SANDBOX/work"; ORIGIN="$SANDBOX/origin.git"; FAKEHOME="$SANDBOX/home"
-STATE="$FAKEHOME/Library/Logs/VideoScan/model-review"
-mkdir -p "$WORK/tools/model-fitness" "$FAKEHOME"
+WORK="$SANDBOX/work"; ORIGIN="$SANDBOX/origin.git"
+# STATE via the script's own REVIEW_STATE override rather than repurposing
+# HOME (codex #1160), so this harness can be run by anyone whose execution
+# rules forbid that.
+STATE="$SANDBOX/state"
+mkdir -p "$WORK/tools/model-fitness" "$STATE"
 git init --quiet --bare "$ORIGIN"
 git init --quiet "$WORK"
 git -C "$WORK" config user.email t@t; git -C "$WORK" config user.name T
@@ -42,6 +45,7 @@ also = sys.argv[sys.argv.index("--also-commits") + 1] if "--also-commits" in sys
 pathlib.Path(out).mkdir(parents=True, exist_ok=True)
 errs = [e for e in os.environ.get("STUB_ERRORS", "").split(",") if e]
 print("model    stub-model")
+print(f"units    {1 + len(errs)}")
 pathlib.Path(out, "01-aaaaaaaa.md").write_text("# aaaaaaaa x\n\n- verdict: quiet\n\n---\n\nfine\n")
 for i, e in enumerate(errs):
     pathlib.Path(out, f"{i+2:02d}-{e}.md").write_text(f"# {e} x\n\n- verdict: ERROR\n\n---\n\ntimeout\n")
@@ -64,7 +68,7 @@ POSTS="$SANDBOX/posts.txt"; : > "$POSTS"
 
 run_reviewer() {
     ( cd "$WORK"
-      HOME="$FAKEHOME" REPO="$WORK" POSTS_FILE="$POSTS" \
+      REVIEW_STATE="$STATE" REPO="$WORK" POSTS_FILE="$POSTS" \
       STUB_ERRORS="${1:-}" MAX_RETRIES="${MAX_RETRIES:-3}" \
       ENDPOINT=http://stub REVIEW_MODEL=stub-model \
       zsh "$REAL_SCRIPT" ) > "$SANDBOX/run.out" 2>&1
@@ -130,6 +134,32 @@ if grep -q "SUBJECT:.*abandoned" "$POSTS"; then
     pass "abandonment after MAX_RETRIES is announced, never silent"
 else
     fail "a permanently-failing commit vanished quietly: $(grep 'SUBJECT:' "$POSTS" | tr '\n' '|')"
+fi
+
+echo "== 5: a clean retry in the SAME MINUTE does not inherit stale verdicts =="
+# codex #1160. stamp is YYYYMMDD-HHMM and the python mkdirs exist_ok, so two
+# runs inside one minute shared an output directory and the flagged/errors
+# greps counted the FIRST run's .md files. A clean retry straight after an
+# ERROR is exactly when that happens.
+: > "$POSTS"
+echo five > "$WORK/e.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "errors then clean"
+ESHA=$(git -C "$WORK" rev-parse --short=8 HEAD)
+run_reviewer "$ESHA"                      # run A: one ERROR
+run_reviewer ""                           # run B: same minute, all clean
+LAST_SUBJECT=$(grep 'SUBJECT:' "$POSTS" | tail -1)
+if echo "$LAST_SUBJECT" | grep -q "UNREVIEWED"; then
+    fail "the clean retry inherited the previous run's ERROR: $LAST_SUBJECT"
+else
+    pass "the clean retry gets its own output directory and its own counts"
+fi
+
+echo "== 6: a retry-only run reports what it reviewed, never a negative =="
+# codex #1160: `quiet = count - flagged - errors` with count=0 on a
+# retry-only run went negative as soon as a carried-forward commit errored.
+if grep -hoE 'quiet -[0-9]+' "$STATE"/*.digest.md 2>/dev/null | head -1 | grep -q .; then
+    fail "a digest reported a negative quiet count"
+else
+    pass "no digest reports a negative quiet count"
 fi
 
 echo

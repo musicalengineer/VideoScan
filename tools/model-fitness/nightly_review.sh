@@ -15,7 +15,9 @@
 #   RANGE=origin/main~5..origin/main tools/model-fitness/nightly_review.sh
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
-STATE=$HOME/Library/Logs/VideoScan/model-review
+# STATE is overridable so a test harness can point it somewhere disposable
+# without repurposing HOME (codex #1160). Production is unchanged.
+STATE=${REVIEW_STATE:-$HOME/Library/Logs/VideoScan/model-review}
 # THE REVIEWER'S OWN MODEL AND HOST (2026-09-06).
 #
 # This script used to pass no --model, so review_real_commits.py fell back
@@ -93,7 +95,15 @@ That is either a genuinely quiet period or the reviewer is watching the wrong th
 fi
 echo 0 > "$quiet_file"
 
+# UNIQUE PER RUN, not per minute (codex #1160). The stamp is
+# YYYYMMDD-HHMM and review_real_commits.py does mkdir(exist_ok=True), so two
+# runs inside the same minute — a clean retry straight after an ERROR, which
+# is now the normal thing to do — shared one directory. The flagged/errors
+# greps below count *.md across it, so the second run inherited the first
+# run's stale ERROR and FLAGGED verdicts. My own harness masked this by
+# running several times a minute and never checking the counts afterwards.
 out="$STATE/$stamp"
+[[ -e $out ]] && out="$STATE/$stamp-$$"
 [[ -n $retry ]] && echo "$stamp retrying $(echo "$retry" | tr ',' '\n' | grep -c .) previously-unreviewed commit(s): $retry" >> "$STATE/nightly.log"
 # An ARRAY, not `${retry:+--also-commits "$retry"}`: zsh does not word-split
 # parameter expansions, so that form passed argparse ONE argument
@@ -114,6 +124,16 @@ if [[ $rc -eq 0 ]]; then echo "$head" > "$STATE/last_sha"; fi
 flagged=$(grep -l '^- verdict: FLAGGED' "$out"/*.md 2>/dev/null | wc -l | tr -d ' ')
 errors=$(grep -l '^- verdict: ERROR' "$out"/*.md 2>/dev/null | wc -l | tr -d ' ')
 model=$(grep -m1 '^model' "$out.summary.txt" | awk '{print $2}')
+# THE UNITS ACTUALLY REVIEWED, not the range size (codex #1160). A retry-only
+# run has count=0 while reviewing carried-forward commits, so `count - flagged
+# - errors` went NEGATIVE the moment one of them was flagged. The python
+# prints the real figure.
+# Counted from the per-commit verdict files, which are ground truth for what
+# was actually reviewed. Parsing the summary's "units" line would reintroduce
+# the same failure in a new place: when the parse misses, $count is wrong for
+# exactly the retry-only run that made quiet go negative.
+reviewed=$(ls "$out"/*.md 2>/dev/null | wc -l | tr -d ' ')
+[[ -n $reviewed ]] || reviewed=0
 
 # AN ERRORED COMMIT WAS NEVER REVIEWED (2026-09-07). Every ERROR is the 600s
 # ceiling or a dead endpoint; the commit's diff was never read by anything.
@@ -145,8 +165,8 @@ if [[ $rc -eq 0 ]]; then
   echo "$next" > "$retry_file"
 fi
 {
-  echo "Nightly local-model review ($model) of $count commit(s), $range"
-  echo "quiet $((count - flagged - errors)) / flagged $flagged / errors $errors  (exit $rc)"
+  echo "Nightly local-model review ($model) of $reviewed commit(s), $range"
+  echo "quiet $((reviewed - flagged - errors)) / flagged $flagged / errors $errors  (exit $rc)"
   echo "raw verdicts: $out"
   # UNREVIEWED IS NOT REVIEWED-AND-CLEAN. Before 2026-09-07 an error was a
   # number in this header and nothing else, so a night where 11 of 71 commits
@@ -171,9 +191,9 @@ fi
     done
   fi
 } > "$out.digest.md"
-echo "$stamp reviewed $count ($range): flagged $flagged errors $errors${abandoned:+ abandoned$abandoned}" >> "$STATE/nightly.log"
+echo "$stamp reviewed $reviewed ($range): flagged $flagged errors $errors${abandoned:+ abandoned$abandoned}" >> "$STATE/nightly.log"
 
-subject="nightly review: $count commits, $flagged flagged"
+subject="nightly review: $reviewed commits, $flagged flagged"
 [[ $errors -gt 0 ]] && subject="$subject, $errors UNREVIEWED"
 [[ -n ${abandoned// /} ]] && subject="$subject, abandoned$abandoned"
 python3 tools/team-channel.py post --from reviewer --to claude \
