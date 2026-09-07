@@ -29,6 +29,51 @@ Rick's three example asks all return real answers today if something will run
 them. "About 100 born in another country" has 14,851 candidates to draw from,
 not 3.
 
+## Rick's fuller framing (2026-09-07)
+
+> "computer software is good at this kinda stuff, finding patterns, averages,
+> outliers, finding things humans overlook. This app should be able to do
+> these things and hallie is the interface to finding these things. I don't
+> literally want a spreadsheet, unless it is necessary to show some important
+> demo/bio data trends ... other examples include compute average ages for
+> groups, how many people live in what location, how many generations between
+> Ireland and Boston."
+
+So: **Hallie is the interface, not a spreadsheet UI.** A table is an output
+format for when a trend needs showing, never the thing being asked for. And
+"how many generations between Ireland and Boston" adds a capability the filter
++ aggregate model above does not cover — see below.
+
+### A third answer kind: distance along a line
+
+Not a filter and not a statistic — a **path** between two places, measured in
+generations, with the chain shown. Run against Rick's tree it already answers:
+
+```
+"how many generations between Ireland and Boston?"   →   2
+
+   gen 2   Mary Catherine O'Connor    Ireland
+   gen 1   Eileen Latta               Chelsea, Suffolk, Massachusetts
+   gen 0   Richard Harding Breen Jr   Boston, Suffolk, Massachusetts
+```
+
+His grandmother was born in Ireland; he was born in Boston. The answer must
+show the chain, because the number alone ("2") is unverifiable and this is
+precisely the class of claim that has to be checkable.
+
+Note what it must NOT do: pick the *shortest* span and call it "the" answer
+without saying so. Several Irish-born ancestors exist on different lines; the
+nearest crossing is one fact among several and the wording has to say which
+it is.
+
+### The outliers Rick actually wants
+
+"Finding things humans overlook" is the point, so the first aggregate work
+should make these askable: longest and shortest lives, the generation where a
+line changes country, families with unusually many or few children, people
+with no recorded death, the decades with the most births. Each is arithmetic
+over recorded fields — no inference about people.
+
 ## The shape
 
 Two answer kinds, and they need different honesty rules.
@@ -90,6 +135,22 @@ Reuse, per codex #1161/#1162: the compiled index already scans the whole tree
 cheaply, and `BirthplaceClassifier.classify` already maps a raw place string
 to country and continent. No full-tree scan belongs in a view body — the
 project's standing rule, and the reason the 100k-scale budget test exists.
+
+## Proof the tree carries the fun answers too
+
+Asked of Rick's own line, not Donna's — he assumed the royalty came with his
+marriage:
+
+```
+RICK'S OWN ROYAL ANCESTORS
+   gen 20   Edward III of Windsor, King of England    b. 13 November 1312
+   gen 20   Philippa de Hainaut, Queen of England     b. 24 juin 1314
+```
+
+Recorded in the imported tree, twenty generations back, on FamilySearch's
+user-submitted medieval lines — a claim the tree makes, never a proven
+descent, and the wording must always say so. (Note the raw date is French,
+"24 juin 1314": another reason place and date strings are shown as recorded.)
 
 ## Open for Rick
 
