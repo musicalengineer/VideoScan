@@ -31,10 +31,16 @@ REPO = Path(__file__).resolve().parent.parent
 LOG_DIR = Path.home() / "Library/Logs/VideoScan/Hallie"
 CORPUS = REPO / "tests/hallie_eval_corpus.json"
 
+# The lineage route accepts trace/follow/walk/take as query verbs
+# (HallieLineageQuestion.swift:262) but the harvester did not, so
+# "trace my line back to europe" — a live 2026-09-07 miss that produced a
+# self-contradictory answer — never reached the corpus. If the app treats a
+# verb as a question, so does this.
 OPENERS = ("who", "what", "where", "when", "why", "how", "which", "whose",
            "did", "do", "does", "is", "was", "are", "were", "can", "could",
            "would", "should", "show", "tell", "find", "play", "list", "give",
-           "any", "count", "say", "pronounce", "describe", "get", "search")
+           "any", "count", "say", "pronounce", "describe", "get", "search",
+           "trace", "follow", "walk", "take", "open", "compare")
 FILLERS = ("hallie", "ok", "okay", "so", "and", "please", "hey", "now")
 PRONUNCIATION = re.compile(r"\b(pronounc|pronunciation|say it|say \w+$|drill|respell)", re.I)
 SOCIAL = re.compile(r"^(hi|hello|hey|thanks|thank you|bye|good ?night|good morning|how are you)", re.I)
@@ -121,9 +127,18 @@ def read_turns(since):
     return turns
 
 
-def harvest(turns, existing, include_statements=False, stamp=None):
+def harvest(turns, existing, include_statements=False, stamp=None, used_ids=()):
     stamp = stamp or time.strftime("%Y-%m-%d")
     seen, out = set(existing), []
+    # IDS CONTINUE THE DAY, they do not restart it (2026-09-07). The ordinal
+    # was len(out) + 1 — the count within THIS run — so a second harvest on
+    # the same day began again at 001 and collided with the morning's
+    # entries. Two questions shared lv260907-001 and nothing keyed by id
+    # could tell them apart.
+    prefix = f"lv{stamp.replace('-', '')[2:]}-"
+    taken = [int(i[len(prefix):]) for i in used_ids
+             if i.startswith(prefix) and i[len(prefix):].isdigit()]
+    ordinal = max(taken, default=0)
     last_session, last_kept = None, False
     for index, event in enumerate(turns, 1):
         text = (event.get("text") or "").strip()
@@ -142,7 +157,7 @@ def harvest(turns, existing, include_statements=False, stamp=None):
             continue
         seen.add(key)
         entry = {
-            "id": f"lv{stamp.replace('-', '')[2:]}-{len(out) + 1:03d}",
+            "id": f"{prefix}{ordinal + len(out) + 1:03d}",
             "category": "live",
             "text": text,
             "expect": guess_expect(text),
@@ -167,7 +182,8 @@ def main(argv=None):
     with open(args.corpus) as f:
         corpus = json.load(f)
     existing = {normalize(q["text"]) for q in corpus["questions"]}
-    entries = harvest(read_turns(args.since), existing, args.include_statements)
+    entries = harvest(read_turns(args.since), existing, args.include_statements,
+                      used_ids={q.get("id", "") for q in corpus["questions"]})
     if not args.append:
         print(json.dumps(entries, indent=1, ensure_ascii=False))
         print(f"[harvest] {len(entries)} new", file=sys.stderr)

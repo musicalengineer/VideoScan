@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 319 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 322 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2590,6 +2590,29 @@
    "text": "search the family tree for a title like king",
    "expect": "kinship",
    "notes": "LIVE MISS 2026-09-07: read 'Title like king' as a PERSON'S NAME — 'I don't find title like king in the family tree — try a fuller name' — and offered to remember it. The tree has no title/keyword search; 1,157 titled names exist in Rick's tree.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-005",
+   "category": "live",
+   "text": "find the birthplaces of my materanl lines back to europe",
+   "expect": "kinship",
+   "notes": "LIVE MISS 2026-09-07: 'materanl' is a one-character transposition of 'maternal'. HallieBirthplaceTrail.swift:69 gates on the literal token, so no cue matched, the trail never engaged, and the turn fell through to a generic graph/birth route: 'Richard Harding Breen Jr was born 4 March 1959' — true, cited, and not the question asked. A decline would have been correct."
+  },
+  {
+   "id": "lv260907-006",
+   "category": "live",
+   "text": "trace my line back to europe",
+   "expect": "kinship",
+   "notes": "LIVE MISS 2026-09-07: answered 'the tree records nobody born in Europe. The places it does reach: the United States, Canada, Ireland, the United Kingdom, British Colonial America' — self-contradictory; Ireland and the UK ARE Europe. HallieLineageQuestion.swift:262 captures whatever follows 'back to' as a COUNTRY, so country='Europe' matched nothing. BirthplaceClassifier:250-253 and the .continent(.europe) stop are both correct; this route never reaches them.",
+   "followsPrevious": true
+  },
+  {
+   "id": "lv260907-007",
+   "category": "live",
+   "text": "Ireland and the UK are part of europe aren't they?",
+   "expect": "graceful_decline",
+   "notes": "LIVE MISS 2026-09-07: a general-knowledge geography question, asked because the previous turn contradicted itself. Answered with RICK'S BIOGRAPHY ('Rick Breen is a retired software engineer whose career included Avid, Kurzweil Music...'). Fourth instance in one morning of the same shape: no route matches, and the fallback answers a different question with full confidence instead of declining.",
    "followsPrevious": true
   }
  ]
