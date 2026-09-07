@@ -464,3 +464,89 @@ struct HallieKinDuplicateEntryTests {
         #expect(bound.people == ["Donna", "Tim"])
     }
 }
+
+/// codex #1156, 2026-09-07. The dedupe that closed Rick's "my dad"/"dad"
+/// duplicate swept too wide: it removed EVERY remaining owner-name and
+/// speaker-pronoun entry, so a question that asked for two people came back
+/// with one.
+///
+///   people = ["my dad", "Rick"], owner Rick, "videos of my dad and Rick"
+///   → ["Richard Breen Sr"]        — Rick, independently requested, deleted
+///
+/// The sweep is right for "tell me about my dad", where "me" is an artifact of
+/// "tell me" and never a subject. What separates the two is the conjunction
+/// between them, so that is what `requestedAlongside` tests.
+@Suite("An independently requested speaker survives the kin dedupe")
+struct HallieKinConjunctionSurvivalTests {
+    typealias Kin = HallieTurnExecutor.SpeakerKinship
+
+    private static func overlay() -> FamilyKinshipOverlay {
+        FamilyKinshipOverlay(snapshots: [
+            .init(stableID: "richard", canonicalName: "Richard",
+                  aliases: ["Dad", "Dad Breen"], sex: .male,
+                  surname: "Breen", middleName: "Harding", suffix: "Sr"),
+            .init(stableID: "rick", canonicalName: "Rick",
+                  aliases: ["Dicky", "Richard"],
+                  kinships: [Kinship(relation: .child, relativeTo: .profile(name: "Richard"))],
+                  sex: .male),
+        ])
+    }
+
+    private let rick = HallieTurnExecutor.Speakers(ownerName: "Rick", archivistName: "Hallie Mae")
+
+    /// codex's first case: the owner asked for BY NAME beside the relative.
+    @Test func theOwnerNamedBesideTheRelativeSurvives() {
+        let bound = Kin.rebind(
+            people: ["my dad", "Rick"], question: "videos of my dad and Rick",
+            speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+        #expect(bound.people.contains("Richard Breen Sr"), Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people.contains("Rick"), Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people.count == 2, Comment(rawValue: "\(bound.people)"))
+    }
+
+    /// codex's second case: the same, asked with a pronoun.
+    @Test func theSpeakerPronounNamedBesideTheRelativeSurvives() {
+        let bound = Kin.rebind(
+            people: ["my dad", "me"], question: "videos of my dad and me",
+            speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+        #expect(bound.people.contains("Richard Breen Sr"), Comment(rawValue: "\(bound.people)"))
+        #expect(bound.people.count == 2, Comment(rawValue: "\(bound.people)"))
+    }
+
+    /// Order must not matter, and neither should the comma or ampersand forms.
+    @Test func eitherOrderAndEitherConjunctionKeepsBoth() {
+        for question in ["videos of Rick and my dad", "videos of my dad and Rick",
+                         "videos of my dad & Rick", "videos of Rick, and my dad"] {
+            let bound = Kin.rebind(
+                people: ["my dad", "Rick"], question: question,
+                speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+            #expect(bound.people.count == 2, Comment(rawValue: "\(question) → \(bound.people)"))
+        }
+    }
+
+    /// THE ORIGINAL BUG STAYS FIXED. No conjunction, so the speaker mention is
+    /// grammar and the relative collapses to exactly one entry.
+    @Test func theOriginalDuplicateStillCollapses() {
+        for people in [["my dad", "dad"], ["dad", "my dad"], ["me", "dad"],
+                       ["my dad", "Dad"], ["Rick", "my dad"], ["my dad"], ["dad"]] {
+            let bound = Kin.rebind(
+                people: people, question: "tell me about my dad",
+                speakers: rick, graph: nil, kinshipOverlay: Self.overlay())
+            #expect(bound.people == ["Richard Breen Sr"],
+                    Comment(rawValue: "\(people) → \(bound.people)"))
+        }
+    }
+
+    /// The adjacency test is on WORD boundaries: "me" must not be found inside
+    /// "someone", or the sweep silently stops working for the common case.
+    @Test func theConjunctionTestRespectsWordBoundaries() {
+        #expect(Kin.requestedAlongside("me", phrase: "my dad",
+                                       in: "videos of my dad and someone") == false)
+        #expect(Kin.requestedAlongside("me", phrase: "my dad",
+                                       in: "videos of my dad and me") == true)
+        #expect(Kin.requestedAlongside("rick", phrase: "my dad",
+                                       in: "tell me about my dad") == false)
+        #expect(Kin.requestedAlongside("rick", phrase: "my dad",
+                                       in: "my dad and rick at the beach") == true)
+    }
+}

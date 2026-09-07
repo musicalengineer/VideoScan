@@ -101,6 +101,27 @@ extension HallieTurnExecutor {
             phrase.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
         }
 
+        /// Did the QUESTION ask for `entry` as a second subject beside the
+        /// kinship phrase, rather than merely mentioning them?
+        ///
+        /// "videos of my dad and Rick" asks for two people. "tell me about my
+        /// dad" asks for one, and its "me" is grammar, not a subject. The
+        /// difference that survives normalization is the conjunction sitting
+        /// between the two, in either order — so that is what is tested, on
+        /// word boundaries, because "me" must not be found inside "some".
+        static func requestedAlongside(_ entry: String, phrase: String, in question: String) -> Bool {
+            let text = " " + question.lowercased()
+                .replacingOccurrences(of: ",", with: " ")
+                .replacingOccurrences(of: "&", with: " and ") + " "
+            let squeezed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let entryWords = entry.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let phraseWords = phrase.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard !entryWords.isEmpty, !phraseWords.isEmpty else { return false }
+            let padded = " " + squeezed + " "
+            return padded.contains(" \(phraseWords) and \(entryWords) ")
+                || padded.contains(" \(entryWords) and \(phraseWords) ")
+        }
+
         /// Which people-list slot holds the relative: a bare pronoun, the
         /// phrase, the kin word, or the owner's name. nil ⇒ append.
         private static func slotIndex(in people: [String], phrase: String, speakers: Speakers) -> Int? {
@@ -133,6 +154,7 @@ extension HallieTurnExecutor {
             name: String,
             slot: Int?,
             phrase: String,
+            question: String,
             speakers: Speakers,
             namesSamePerson: (String) -> Bool
         ) -> [String] {
@@ -154,13 +176,29 @@ extension HallieTurnExecutor {
             // One relative resolved once means one entry. Compared on the
             // same normalization `slotIndex` uses, so "Dad", "my dad" and
             // "MY DAD" are all the one we just spent.
+            //
+            // THE SWEEP IS NOT UNIFORM (codex #1156, 2026-09-07). The first
+            // version removed every remaining owner-name and pronoun entry as
+            // well, which is right for "tell me about my dad" — where "me" is
+            // an artifact of "tell me" — and wrong the moment the question
+            // asks for two people: "videos of my dad and Rick" with Rick as
+            // the owner bound "my dad" and then DELETED the independently
+            // requested Rick. Same for "my dad and me".
+            //
+            // The phrase and the bare kin word are always the person just
+            // resolved, so they always go. The owner and the speaker pronouns
+            // go only when the question did not ask for them ALONGSIDE the
+            // relative.
             let kin = kinWord(of: phrase)
             people = people.enumerated().filter { index, entry in
                 if index == target { return true }
                 let key = entry.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                return !(key == phrase || key == kin
-                         || HallieTurnExecutor.isSpeakerPronoun(key)
-                         || key == speakers.ownerName?.lowercased())
+                if key == phrase || key == kin { return false }
+                if HallieTurnExecutor.isSpeakerPronoun(key)
+                    || key == speakers.ownerName?.lowercased() {
+                    return requestedAlongside(key, phrase: phrase, in: question)
+                }
+                return true
             }.map(\.element)
             if !people.contains(name) { people.append(name) }
             return PersonNameClaim.dedupe(people)
@@ -210,7 +248,7 @@ extension HallieTurnExecutor {
                         result.people = bind(
                             people, name: bound,
                             slot: slotIndex(in: people, phrase: phrase, speakers: speakers),
-                            phrase: phrase, speakers: speakers,
+                            phrase: phrase, question: question, speakers: speakers,
                             namesSamePerson: { entry in
                                 PersonResolver.normalize(entry)
                                     == PersonResolver.normalize(hit.member.name)
@@ -292,7 +330,7 @@ extension HallieTurnExecutor {
             let relative = relatives[0]
             result.people = bind(
                 people, name: relative.name, slot: slot,
-                phrase: phrase, speakers: speakers,
+                phrase: phrase, question: question, speakers: speakers,
                 namesSamePerson: { entry in
                     PersonResolver.normalize(entry)
                         == PersonResolver.normalize(relative.name)
