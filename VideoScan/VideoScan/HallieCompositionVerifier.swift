@@ -190,7 +190,7 @@ enum HallieCompositionVerifier {
                 dropped.append(Dropped(text: raw, reason: .metaConversation))
                 continue
             }
-            if namesScaffoldLabel(display) {
+            if namesScaffoldLabel(display) || narratesScaffolding(display) {
                 dropped.append(Dropped(text: raw, reason: .scaffoldLabel))
                 continue
             }
@@ -569,6 +569,50 @@ enum HallieCompositionVerifier {
     static func namesScaffoldLabel(_ text: String) -> Bool {
         let pattern = #"(?i)\b(item|items|claim|claims|example)\s+#?\d+\b|\b(c|claim)\d+\b"#
         return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// The model talking ABOUT its own scaffolding rather than using it.
+    ///
+    /// Live, Rick's 2026-09-06 evening spin, three turns in a row:
+    ///   "Looking at claims [c2] to [c12], they all confirm Donna in specific files."
+    ///   "There are 14 videos total, as per claim [c1]."
+    ///   "I need to end the sentence with [c1] in square brackets."
+    /// Every fact underneath was right and every basis line was right. The
+    /// last one is the composer reciting its own instruction to the reader.
+    ///
+    /// WHY `namesScaffoldLabel` MISSED ALL THREE, which is the interesting
+    /// part: it runs on the DISPLAY text, after tags are stripped, and its
+    /// pattern needs the digits that stripping removes. "claims [c2]"
+    /// becomes "claims " — the word survives, the number does not, and
+    /// `claims\s+\d+` no longer matches. It was written for a model that
+    /// SPELLS OUT "claim 1" and fails precisely when the model uses real
+    /// tags. Running it on the raw sentence is not the fix either: every
+    /// legitimate sentence carries a tag.
+    ///
+    /// So this asks a different question — does the prose refer to the
+    /// machinery at all? Three signals, each near-impossible in an honest
+    /// answer about a family:
+    ///   • the word "claim"/"claims" itself. Hallie talks about people,
+    ///     videos, dates and places; "claim" is our vocabulary, not hers.
+    ///   • a first-person statement of what the composer must DO —
+    ///     "I need to", "I should" — near sentence/bracket/cite words.
+    ///   • "square brackets", which only ever describes the citation format.
+    ///
+    /// Model-independent on purpose. qwen3:30b-a3b produced these because
+    /// it puts reasoning in the content field, but the next model Rick tries
+    /// will have its own habits, and the contract should not depend on
+    /// which one is loaded (codex #1147: installed is not approved).
+    static let scaffoldNarrationPatterns = [
+        #"(?i)\bclaims?\b"#,
+        #"(?i)\bsquare brackets\b"#,
+        #"(?i)\bi\s+(need|have|must|ought)\s+to\b.{0,60}\b(sentence|bracket|cite|citation|tag|answer)"#,
+        #"(?i)\bi\s+should\b.{0,60}\b(sentence|bracket|cite|citation|tag)"#,
+    ]
+
+    static func narratesScaffolding(_ display: String) -> Bool {
+        scaffoldNarrationPatterns.contains {
+            display.range(of: $0, options: .regularExpression) != nil
+        }
     }
 
     /// Live 2026-08-29: ", Mary Elizabeth Smith, and Sewell Stone Parker
