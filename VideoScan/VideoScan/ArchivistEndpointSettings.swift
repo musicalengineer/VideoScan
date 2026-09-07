@@ -601,6 +601,16 @@ struct ArchivistEndpointSettings: View {
         if let warning = digestWarning { appLog.write("[hallie-brain] \(warning)") }
     }
 
+    /// One word per verdict, for the log line above.
+    static func probeWord(_ probe: OllamaQueryTranslator.StructuredOutputProbe) -> String {
+        switch probe {
+        case .available:   return "accepted"
+        case .unverified:  return "accepted but not obeyed — the reply did not match the schema"
+        case .refused:     return "refused by this server build"
+        case .unreachable: return "not answered"
+        }
+    }
+
     /// Restart the brain (Rick, 2026-09-06).
     ///
     /// The motivating failure is worth stating, because "restart the model"
@@ -661,8 +671,16 @@ struct ArchivistEndpointSettings: View {
                 continue
             }
 
-            // 3. Ask the question the button is really about.
-            switch await probe.structuredOutputProbe() {
+            // 3. Ask the question the button is really about — and SAY SO
+            // in the log. Rick, 2026-09-06, was reading videoscan.log to
+            // find out whether the schema had been accepted and found
+            // nothing: this verdict went to the settings pane and nowhere
+            // else. A fact that only exists in a view is a fact nobody can
+            // check afterwards.
+            let verdict = await probe.structuredOutputProbe()
+            appLog.write("[hallie-brain] \(host): structured output "
+                         + Self.probeWord(verdict))
+            switch verdict {
             case .available:   constrained.append(host)
             case .unverified:  unverified.append(host)
             case .refused:     refused.append(host)

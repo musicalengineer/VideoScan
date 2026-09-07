@@ -107,6 +107,25 @@ struct HallieModelReadinessTests {
         #expect(facts.first?.digest == "")
     }
 
+    /// The Restart verdict has to reach the LOG, not only the pane. Rick
+    /// went looking in videoscan.log for whether the schema had been
+    /// accepted and found nothing — the answer existed only in a view.
+    @Test func everyProbeVerdictHasAWordForTheLog() {
+        let words: [OllamaQueryTranslator.StructuredOutputProbe: String] = [
+            .available: "accepted",
+            .unverified: "accepted but not obeyed",
+            .refused: "refused",
+            .unreachable: "not answered",
+        ]
+        for (verdict, fragment) in words {
+            let said = ArchivistEndpointSettings.probeWord(verdict)
+            #expect(said.contains(fragment), Comment(rawValue: "\(verdict) → \(said)"))
+        }
+        // "accepted" must not be how a REFUSAL reads at a glance in a log.
+        #expect(!ArchivistEndpointSettings.probeWord(.refused).hasPrefix("accepted"))
+        #expect(!ArchivistEndpointSettings.probeWord(.unreachable).hasPrefix("accepted"))
+    }
+
     // MARK: the readiness lights are their own vocabulary
 
     /// Deliberately NOT folded into `Liveness`. Rick ruled an offline HOST
