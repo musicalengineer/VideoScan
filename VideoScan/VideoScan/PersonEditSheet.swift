@@ -136,6 +136,8 @@ struct PersonEditSheet: View {
     @State private var treeSearchText = ""
     // Photo import
     @State private var photosPickerItems: [PhotosPickerItem] = []
+    /// Last add-photos failure summary, shown under the buttons (GH #151).
+    @State private var photoImportProblem: String?
     @State private var isImporting = false
     @State private var imageFilenamesCache: [String]?
 
@@ -393,6 +395,13 @@ struct PersonEditSheet: View {
                     }
 
                     // Photo grid with cover selection
+                    if let photoImportProblem {
+                        Label(photoImportProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("people.addPhotos.problem")
+                    }
+
                     if !imageFilenames.isEmpty {
                         referencePhotoGrid
                     }
@@ -936,26 +945,20 @@ struct PersonEditSheet: View {
         return dir
     }
 
-    /// Copy image files from a source folder into the local poi_photos folder.
+    /// Copy image files (one photo or a folder) into the person's local
+    /// photo folder. The importer reports what happened; the log line is
+    /// the trace Rick did not have when photos silently failed to appear
+    /// (GH #151).
     private func copyPhotosToLocal(from sourceURL: URL) {
-        let fm = FileManager.default
         let destDir = ensureLocalPhotoFolder()
-        let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
-
-        var sourceFiles: [URL] = []
-        if sourceURL.hasDirectoryPath || (try? sourceURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-            sourceFiles = (try? fm.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil)) ?? []
-            sourceFiles = sourceFiles.filter { imageExts.contains($0.pathExtension.lowercased()) }
-        } else if imageExts.contains(sourceURL.pathExtension.lowercased()) {
-            sourceFiles = [sourceURL]
+        let outcome = ReferencePhotoImporter.copy(from: sourceURL, into: destDir)
+        appLog.write("[people] add photos for \(name.isEmpty ? "(unnamed)" : name) from "
+                     + "\(sourceURL.lastPathComponent): \(outcome.summary)")
+        if !outcome.failures.isEmpty {
+            let lines = outcome.failures.map { "\($0.key): \($0.value)" }.sorted()
+            photoImportProblem = "Could not add \(outcome.failures.count) photo\(outcome.failures.count == 1 ? "" : "s"):\n"
+                + lines.prefix(5).joined(separator: "\n")
         }
-
-        for file in sourceFiles {
-            let destFile = destDir.appendingPathComponent(file.lastPathComponent)
-            if fm.fileExists(atPath: destFile.path) { continue }  // skip duplicates by name
-            try? fm.copyItem(at: file, to: destFile)
-        }
-
         referencePath = destDir.path
         imageFilenamesCache = nil
     }
