@@ -13,6 +13,16 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **04:05** — the nightly's FIRST Hallie row: `hallie_replay_status=incomplete`,
+  strict 0 / 15 completed, advisory 0 / 345, 3,602 s. Honest — and it found
+  its own bug: the lane ran with the harness default `qwen3.8:27b-mlx` (the
+  M4's tag) against ricksm5, which has `qwen3.8:27b`; nothing paired for an
+  hour. Fixed `ddf25087`: the script reads the host's `/api/tags` first, picks
+  the plain tag when none is given, and a wrong model or dead host is
+  `failed` with a reason in seconds (4/4 stub tests, harness 41/41). Dry-run
+  against ricksm5 now chooses `qwen3.8:27b`. Tomorrow's 02:00 is the first
+  real number — and only meaningful once the M5 brain is deterministic (your
+  decision above still stands).
 - **01:41** — quiet hold, nothing of mine on the M4. For the record: Adobe
   Creative Cloud (IPCBroker 107 %, Creative Cloud 82 %, Desktop Service 82 %)
   was pegging three cores twenty minutes before the 02:00 nightly; if the
@@ -64,6 +74,7 @@ _(filled in as the night goes; latest entry on top)_
 | `8824a0f0` | refactor: GEDCOM awareness + common-ancestor answers → two `HallieLineageAnswer+…` extension files (2904 → 2306 lines; the one private helper moved with its section) | 86/86 on 11 suites; full 6845 / 1 known sensor |
 | `b7f5ec39` | ledger row 17: a resolved identity is searched by every name its People profile lists — minus any spelling another profile answers to (brother Tim / son Timmy) | `HalliePresenceAliasSearchTests` 3 + 5 neighbours 57/57; full 6848 / 1 known sensor |
 | `d5ce38b2` | refactor: superlatives + deep ancestors + origin trail → three `HallieLineageAnswer+…` extension files (HallieLineageQuestion.swift 2904 → 1776 over the night; one private left in the answer enum, local) | 82/82 on 11 suites; full 6848 / 1 known sensor |
+| `ddf25087` | nightly Hallie lane: model preflight against the host's `/api/tags`; wrong model / dead host → `failed` + reason in seconds, not a 900 s wait | `test_nightly_hallie_replay.sh` 4/4; failure-modes 41/41 |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
