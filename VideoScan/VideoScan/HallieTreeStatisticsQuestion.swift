@@ -42,13 +42,16 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
     private static let groupingAsk = /\bwhich\s+countr(y|ies)\b|\bwhat\s+countr(y|ies)\b|\bcountries\b|\bby\s+country\b|\bwhere\s+were\s+they\s+(all\s+)?born\b/
     /// The sentence is about the population, not one person.
     private static let populationWord = /\bpeople\b|\bpersons?\b|\bancestors?\b|\brelatives\b|\beveryone\b|\bthey\b|\bfamily\s+tree\b|\bthe\s+tree\b|\bin\s+the\s+family\b/
-    private static let ancestorScope = /\bmy\s+ancestors?\b|\bour\s+ancestors?\b|\bmy\s+line\b|\bmy\s+own\s+line\b|\bmy\s+direct\s+ancestors?\b/
+    private static let ancestorScope = /\b(?:my|our)\s+(?:own\s+|direct\s+)?ancestors?\b|\bmy\s+line\b|\bmy\s+own\s+line\b/
+    /// A SIDE ("my maternal ancestors") is a constraint `Scope.ancestors`
+    /// cannot hold; the first version read it as the whole tree (codex #1180).
+    private static let sidedScope = /\b(?:maternal|paternal|mother'?s|father'?s)\s+(?:side|line|ancestors?)\b/
 
     /// Constraints this recognizer cannot represent. Their presence forces an
     /// ABSTAIN rather than an answer that quietly ignores them — the whole
     /// point of the full-shape rule. "how many people born in Ireland MARRIED
     /// a Breen" is not a place count with the marriage silently dropped.
-    private static let unsupportedConstraint = /\bmarried\b|\bmarriage\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bwith\s+photos?\b|\bin\s+videos?\b|\bphotos?\b|\bvideos?\b|\bper\s+(decade|century|generation)\b|\bby\s+(decade|century|generation)\b|\bgeneration\b/
+    private static let unsupportedConstraint = /\bmarried\b|\bmarriage\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bwith\s+photos?\b|\bin\s+videos?\b|\bphotos?\b|\bvideos?\b|\bper\s+(decade|century|generation)s?\b|\bby\s+(decade|century|generation)s?\b|\bgenerations?\b|\balive\b|\bliving\b|\bstill\s+with\s+us\b|\bdead\b|\bdeceased\b|\bpassed\s+away\b|\bdied\s+(?:before|after|in|young|old)\b/
 
     // MARK: - Recognition
 
@@ -70,6 +73,9 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
         // BEFORE building a query so a partial answer can never escape.
         guard q.firstMatch(of: unsupportedConstraint) == nil else { return nil }
 
+        // "my maternal ancestors" names a side the scope cannot hold: abstain
+        // rather than silently answer for the whole tree (codex #1180).
+        guard q.firstMatch(of: sidedScope) == nil else { return nil }
         let scope: TreeStatistics.Scope = q.firstMatch(of: ancestorScope) != nil
             ? .ancestors(of: "", maxGenerations: LineageTrail.generationCap)
             : .wholeTree
@@ -148,20 +154,26 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
         // 11,280 to 13,622.
         let classified = BirthplaceClassifier.classify(raw)
         if let country = classified.country, !classified.isAmbiguous {
-            // The last-word check runs ONLY when the phrase already classifies
-            // as the United Kingdom. My first version tested the last word
-            // first and was about to read "new england" as England — its own
-            // test caught it — which would have counted Massachusetts births
-            // as English ones. "New England" classifies as the United States,
-            // never reaches this branch, and keeps its country filter.
+            // A COUNTRY FILTER ONLY WHEN THE PERSON NAMED A COUNTRY. The
+            // classifier maps regions and states to their country — "new
+            // england" and "massachusetts" both classify as the United
+            // States — which is right for continent membership and wrong for
+            // counting: "born in New England" would have counted every
+            // American birth (codex #1180; my earlier test had accepted
+            // exactly that). So the country filter is used only when the
+            // phrase IS the country, by canonical name or a common alias;
+            // anything narrower matches the recorded components as written.
+            let lastWord = raw.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? raw
             if country == BirthplaceClassifier.unitedKingdom {
-                let lastWord = raw.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? raw
                 for constituent in ["northern ireland", "england", "scotland", "wales"]
                 where raw == constituent || lastWord == constituent {
                     return .recordedText(constituent)
                 }
             }
-            return .country(country)
+            if namesTheCountryItself(raw, country: country) {
+                return .country(country)
+            }
+            return .recordedText(raw)
         }
         // Not a country the classifier knows. It may still be a real recorded
         // region ("new england"), which the engine can match as raw text —
@@ -170,6 +182,21 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
             return .recordedText(raw)
         }
         return nil
+    }
+
+    /// Did the sentence say the country, rather than a region inside it?
+    /// Canonical name, or the aliases people actually type.
+    private static func namesTheCountryItself(_ raw: String, country: String) -> Bool {
+        if raw == country.lowercased() { return true }
+        let aliases: [String: [String]] = [
+            BirthplaceClassifier.unitedStates: ["usa", "us", "u.s.", "u.s.a.", "united states",
+                                                "united states of america", "america", "the states"],
+            BirthplaceClassifier.unitedKingdom: ["uk", "u.k.", "united kingdom", "great britain", "britain"],
+            "Ireland": ["ireland", "eire", "republic of ireland"],
+            "Netherlands": ["netherlands", "the netherlands", "holland"],
+            "Germany": ["germany", "deutschland"],
+        ]
+        return aliases[country]?.contains(raw) ?? false
     }
 
     /// `understood` is false when the sentence names a time constraint whose
@@ -191,6 +218,12 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
             let decade = Int(m.1) ?? 0
             filter.bornFrom = decade
             filter.bornTo = decade + 9
+        } else if let m = q.firstMatch(of: /\bborn\s+in\s+(\d{3,4})\b(?!s)/) {
+            // "born in 1800" — an exact year. The first version had no
+            // pattern for it, so the year was dropped and the answer was a
+            // whole-tree count that read as complete (codex #1180).
+            filter.bornFrom = Int(m.1)
+            filter.bornTo = Int(m.1)
         }
         // A century said in words is a shape we do not parse. Say so rather
         // than answering as if no date had been mentioned.

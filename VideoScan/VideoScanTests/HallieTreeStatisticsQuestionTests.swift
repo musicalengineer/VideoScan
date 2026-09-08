@@ -40,10 +40,10 @@ struct HallieTreeStatisticsQuestionTests {
                 == .recordedText("england"))
         #expect(Q.detect("how many people were born in wales")?.query.place == .recordedText("wales"))
         // AND the trap my own first fix walked into: "New England" ends with
-        // "england" but is Massachusetts, not England. It classifies as the
-        // United States and must keep that.
+        // "england" but is Massachusetts, not England. It must never become
+        // the England filter.
         #expect(Q.detect("how many people were born in new england")?.query.place
-                == .country(BirthplaceClassifier.unitedStates))
+                == .recordedText("new england"))
     }
 
     @Test func theOtherShapesRickNamed() throws {
@@ -65,9 +65,14 @@ struct HallieTreeStatisticsQuestionTests {
                 == .outsideCountry(BirthplaceClassifier.unitedStates))
         #expect(place("how many people were born abroad")
                 == .outsideCountry(BirthplaceClassifier.unitedStates))
-        // "New England" IS known to the classifier — it maps to the United
-        // States — so the country filter is the right reading, not raw text.
-        #expect(place("how many people were born in new england") == .country(BirthplaceClassifier.unitedStates))
+        // "New England" classifies as the United States, and using THAT
+        // filter would count every American birth (codex #1180). A region
+        // matches the recorded components as written; only a country named
+        // as itself gets the country filter.
+        #expect(place("how many people were born in new england") == .recordedText("new england"))
+        #expect(place("how many people were born in massachusetts") == .recordedText("massachusetts"))
+        #expect(place("how many people were born in the usa") == .country(BirthplaceClassifier.unitedStates))
+        #expect(place("how many people were born in france") == .country("France"))
         // No place named at all is a fine whole-tree question.
         #expect(place("how many people are in the family tree") == .anywhere)
     }
@@ -104,6 +109,20 @@ struct HallieTreeStatisticsQuestionTests {
         #expect(Q.detect("how many people were born in ireland per generation") == nil)
         #expect(Q.detect("how many people named smythe are in the tree") == nil)
         #expect(Q.detect("how many children did people in the tree have on average") == nil)
+    }
+
+    /// codex #1180: three constraints the first version silently DROPPED,
+    /// answering a whole-tree count that read as complete.
+    @Test func theConstraintsCodexFoundLeaking() throws {
+        #expect(Q.detect("how many people in the tree are alive") == nil, "alive is not a filter we hold")
+        #expect(Q.detect("how many people are still living") == nil)
+        #expect(Q.detect("how many of my maternal ancestors were born in ireland") == nil,
+                "a SIDE is a constraint Scope.ancestors cannot hold")
+        let year = try #require(Q.detect("how many people were born in 1800"))
+        #expect(year.query.time.bornFrom == 1800)
+        #expect(year.query.time.bornTo == 1800)
+        #expect(Q.detect("how many people were born in ireland per generation") == nil)
+        #expect(Q.detect("how many generations back were people born in ireland") == nil)
     }
 
     /// A period we cannot parse abstains rather than answering as though no
