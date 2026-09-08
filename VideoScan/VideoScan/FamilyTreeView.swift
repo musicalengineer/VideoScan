@@ -141,90 +141,105 @@ struct FamilyTreeView: View {
                                                systemIsDark: systemColorScheme == .dark)
     }
 
+    /// The banner stack above the split view. Pulled out of `body`
+    /// because the compiler gave up type-checking the combined VStack
+    /// expression under the nightly analysis flags ("unable to type-check
+    /// this expression in reasonable time", GH #171, 2026-09-08). Pure
+    /// extraction: same views, same order, same modifiers.
+    @ViewBuilder
+    private var statusBanners: some View {
+        if !model.needsRecompile.isEmpty {
+            // codex #826: the demo tree is on screen only because the
+            // loader refused to demote N pulls to one file — say that,
+            // not "no GEDCOM found".
+            EmptyView()
+        } else if case .loaded(live: false) = model.loadState {
+            demoBanner
+        } else if model.loadState == .unavailable {
+            unavailableBanner
+        }
+        if let phase = model.loadPhase, model.loadState == .loading {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(phase).font(.system(size: 12))
+                Spacer()
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+        }
+        if !model.needsRecompile.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                if ViewerModeCenter.shared.isViewer {
+                    // Remote viewer (Phase 1): the tree is compiled on the
+                    // master; this build cannot read that generation. No
+                    // Recompile here — the fix is on the master, then a sync.
+                    Text(FamilyTreeViewerBanner.compiledElsewhereText())
+                        .font(.system(size: 12))
+                    Spacer()
+                } else if model.isRecompiling {
+                    // 2026-09-03: while the compile runs the banner used
+                    // to keep saying "none compiled" beside a greyed-out
+                    // button, which is what "pressing Recompile does
+                    // nothing" looked like. It takes ~30 s on the real
+                    // pulls; say so, and show a spinner.
+                    ProgressView().controlSize(.small)
+                    Text("Recompiling \(model.needsRecompile.count) pulls — about half a minute. Leave the app open.")
+                        .font(.system(size: 12))
+                    Spacer()
+                } else {
+                    Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Button("Recompile") { Task { await model.recompile() } }
+                        .disabled(model.isRecompiling)
+                }
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.10))
+        }
+        if let warning = model.loadWarning {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                Text(warning).font(.system(size: 12))
+                Spacer()
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.10))
+        }
+    }
+
+    /// Sidebar · canvas · inspector, with the sidebar slide.
+    private var splitContent: some View {
+        HSplitView {
+            // Hidden sidebar = the canvas takes its width. HSplitView
+            // is not a NavigationSplitView, so this is a plain
+            // conditional child with a slide transition.
+            if isSidebarVisible || sidebarRevealedForSearch {
+                sidebar
+                    .frame(minWidth: 220, idealWidth: 250, maxWidth: 310)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            treeCanvas
+                .frame(minWidth: 620)
+
+            inspector
+                .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
+        }
+        .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+        .animation(.easeInOut(duration: 0.2), value: sidebarRevealedForSearch)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !model.needsRecompile.isEmpty {
-                // codex #826: the demo tree is on screen only because the
-                // loader refused to demote N pulls to one file — say that,
-                // not "no GEDCOM found".
-                EmptyView()
-            } else if case .loaded(live: false) = model.loadState {
-                demoBanner
-            } else if model.loadState == .unavailable {
-                unavailableBanner
-            }
-            if let phase = model.loadPhase, model.loadState == .loading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(phase).font(.system(size: 12))
-                    Spacer()
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-            }
-            if !model.needsRecompile.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    if ViewerModeCenter.shared.isViewer {
-                        // Remote viewer (Phase 1): the tree is compiled on the
-                        // master; this build cannot read that generation. No
-                        // Recompile here — the fix is on the master, then a sync.
-                        Text(FamilyTreeViewerBanner.compiledElsewhereText())
-                            .font(.system(size: 12))
-                        Spacer()
-                    } else if model.isRecompiling {
-                        // 2026-09-03: while the compile runs the banner used
-                        // to keep saying "none compiled" beside a greyed-out
-                        // button, which is what "pressing Recompile does
-                        // nothing" looked like. It takes ~30 s on the real
-                        // pulls; say so, and show a spinner.
-                        ProgressView().controlSize(.small)
-                        Text("Recompiling \(model.needsRecompile.count) pulls — about half a minute. Leave the app open.")
-                            .font(.system(size: 12))
-                        Spacer()
-                    } else {
-                        Text("\(model.needsRecompile.count) pulls on disk, none compiled — the compiled tree was built by an older version.")
-                            .font(.system(size: 12))
-                        Spacer()
-                        Button("Recompile") { Task { await model.recompile() } }
-                            .disabled(model.isRecompiling)
-                    }
-                }
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.10))
-            }
-            if let warning = model.loadWarning {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                    Text(warning).font(.system(size: 12))
-                    Spacer()
-                }
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.10))
-            }
-            HSplitView {
-                // Hidden sidebar = the canvas takes its width. HSplitView
-                // is not a NavigationSplitView, so this is a plain
-                // conditional child with a slide transition.
-                if isSidebarVisible || sidebarRevealedForSearch {
-                    sidebar
-                        .frame(minWidth: 220, idealWidth: 250, maxWidth: 310)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                }
-
-                treeCanvas
-                    .frame(minWidth: 620)
-
-                inspector
-                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
-            }
-            .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
-            .animation(.easeInOut(duration: 0.2), value: sidebarRevealedForSearch)
+            statusBanners
+            splitContent
         }
         // Shortcut carriers: zero-size, invisible buttons whose only job is
         // the key equivalent (the visible toolbar buttons live inside the
