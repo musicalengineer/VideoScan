@@ -61,11 +61,11 @@ extension HallieLineageAnswer {
             if c.considered == 0 {
                 sentence = "There is nobody to count — \(population(0)) is empty."
             } else if c.matched == 0 {
-                sentence = "None of \(population(c.considered)) have a recorded birth \(filterWords)."
+                sentence = "None of \(population(c.considered)) were born \(filterWords)."
                     + Self.gapSentence(c)
             } else {
                 sentence = "\(Self.spoken(c.matched)) of \(population(c.considered)) "
-                    + (c.matched == 1 ? "has" : "have") + " a recorded birth \(filterWords)."
+                    + " were born \(filterWords)."
                     + Self.gapSentence(c)
             }
         case .lifespan:
@@ -124,7 +124,7 @@ extension HallieLineageAnswer {
         case .continent(let c): return "in \(c.rawValue)"
         case .outsideCountry(let c):
             return "outside \(c == BirthplaceClassifier.unitedStates ? "the United States" : c)"
-        case .recordedText(let t): return "recorded as \(t.capitalized)"
+        case .recordedText(let t): return "in a place recorded as \(t.capitalized)"
         }
     }
 
