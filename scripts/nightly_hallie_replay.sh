@@ -130,6 +130,13 @@ python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$B
         "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" <<'PYEOF'
 import json, os, sys, time
 out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp = sys.argv[1:14]
+def incomplete_count(s):
+    # The harness summary says incomplete: true/false; the row wants how many.
+    v = s.get("incomplete", 0)
+    if isinstance(v, bool):
+        return max(0, int(s.get("expected", s.get("total", 0)) or 0) - int(s.get("completed", 0) or 0)) if v else 0
+    return int(v or 0)
+
 def lane(js, name):
     s = json.loads(js) if js and js != 'null' else {"status": "not-run"}
     return {f"hallie_{name}_status": s.get("status", "not-run"),
@@ -137,7 +144,7 @@ def lane(js, name):
             f"hallie_{name}_completed": s.get("completed", 0),
             f"hallie_{name}_pass": s.get("clean", 0),
             f"hallie_{name}_fail": s.get("defects", 0),
-            f"hallie_{name}_incomplete": s.get("incomplete", 0),
+            f"hallie_{name}_incomplete": incomplete_count(s),
             f"hallie_{name}_run_id": s.get("runID"),
             f"hallie_{name}_flags": s.get("flags")}
 row = {"hallie_replay_status": status,
