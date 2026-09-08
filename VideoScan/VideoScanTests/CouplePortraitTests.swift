@@ -225,7 +225,7 @@ struct CouplePortraitTests {
 
         cache.store(poison, for: "portrait-stale.jpg")
         CouplePortraitPreference.remove(from: defaults, directory: dir)
-        #expect(cache.count == 0, "remove clears the cache")
+        #expect(cache.isEmpty, "remove clears the cache")
     }
 
     @Test func cacheRoundTripsByFileName() {
@@ -236,7 +236,7 @@ struct CouplePortraitTests {
         #expect(cache.image(for: "a.jpg") === image)
         #expect(cache.image(for: "b.jpg") == nil)
         cache.invalidate()
-        #expect(cache.count == 0)
+        #expect(cache.isEmpty)
     }
 
     // MARK: Sensor — cost of the one-time import

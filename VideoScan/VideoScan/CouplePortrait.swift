@@ -146,7 +146,7 @@ final class CouplePortraitImageCache: @unchecked Sendable {
         lock.withLock { images.removeAll() }
     }
 
-    var count: Int { lock.withLock { images.count } }
+    var isEmpty: Bool { lock.withLock { images.isEmpty } }
 }
 
 // MARK: - View
