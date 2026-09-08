@@ -66,7 +66,13 @@ jobs:
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
             sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
           fi
+          # The asset downloads fine but xcodebuild still said "missing
+          # Metal Toolchain" on run 34284885188: the component is only
+          # registered with the build service after first-launch runs.
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
+          xcrun metal --version 2>&1 | head -1
 
       - name: Build with strict concurrency + all upcoming features + perf warnings
         run: |
@@ -203,7 +209,13 @@ jobs:
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
             sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
           fi
+          # The asset downloads fine but xcodebuild still said "missing
+          # Metal Toolchain" on run 34284885188: the component is only
+          # registered with the build service after first-launch runs.
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
+          xcrun metal --version 2>&1 | head -1
 
       - name: Initialise CodeQL
         uses: github/codeql-action/init@v3
@@ -296,7 +308,13 @@ jobs:
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
             sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
           fi
+          # The asset downloads fine but xcodebuild still said "missing
+          # Metal Toolchain" on run 34284885188: the component is only
+          # registered with the build service after first-launch runs.
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
+          xcrun metal --version 2>&1 | head -1
 
       - name: Run unit tests under TSan
         run: |
@@ -403,7 +421,13 @@ jobs:
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
             sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
           fi
+          # The asset downloads fine but xcodebuild still said "missing
+          # Metal Toolchain" on run 34284885188: the component is only
+          # registered with the build service after first-launch runs.
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
+          xcrun metal --version 2>&1 | head -1
 
       - name: Install tools
         run: |
@@ -525,7 +549,13 @@ jobs:
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
             sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
           fi
+          # The asset downloads fine but xcodebuild still said "missing
+          # Metal Toolchain" on run 34284885188: the component is only
+          # registered with the build service after first-launch runs.
+          sudo xcodebuild -runFirstLaunch 2>&1 | tail -2 || true
+          xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
+          xcrun metal --version 2>&1 | head -1
 
       - name: Install tools
         run: |
