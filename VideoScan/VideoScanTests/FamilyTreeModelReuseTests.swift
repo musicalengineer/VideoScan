@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - FamilyTreeModelReuseTests
@@ -18,6 +19,116 @@ struct FamilyTreeModelReuseTests {
 
     private typealias Sandbox = FamilyGraphCompiledStoreTests.Sandbox
     private static let tree = FamilyGraphCompiledStoreTests.tree
+    private static let settings = FamilyTreeLaunchBundle.Settings(speakers: .none, ownerFamilySearchID: nil)
+
+    @Test @MainActor func warmAppearanceRefreshesNotesWrittenElsewhere() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write("0 HEAD\n0 @I1@ INDI\n1 NAME Eileen /Latta/\n0 TRLR\n")
+        let brain = box.root.appendingPathComponent("brain")
+        let model = FamilyTreeLiveModel(originalsDirectory: box.originals, cyberBrainRootURL: brain)
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        model.select("@I1@")
+        #expect(model.selectedNotes.isEmpty)
+        _ = try CyberBrainWriter.record(CyberBrainWriter.Testimony(
+            subjectName: "Eileen Latta", subjectAliases: [], speakerName: "Rick",
+            text: "She declined the CIA offer.", date: Date()), rootURL: brain)
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        #expect(model.diskLoadAttempts == 1)
+        #expect(model.selectedNotes.map(\.text) == ["She declined the CIA offer."])
+    }
+
+    @Test @MainActor func productionAppearancePathKeepsWarmTreeAndSelection() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write(Self.tree)
+        let model = FamilyTreeLiveModel(originalsDirectory: box.originals, compiledStore: box.store())
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        let selected = try #require(model.selectedID)
+        let attempts = model.diskLoadAttempts
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        #expect(model.diskLoadAttempts == attempts)
+        #expect(model.selectedID == selected)
+        #expect(model.peopleCount == 400)
+
+        // Explicit reload installs a changed generation; returning to the tab
+        // must retain that generation, not resurrect the original cached tree.
+        let replacement = GedcomSyntheticPedigree.gedcom(people: 450, generations: 8)
+        let url = try box.write(replacement)
+        #expect(box.store().ingest(graph: GedcomFamilyGraph(gedcomText: replacement), sources: [url]) != nil)
+        await model.loadFromDisk(settings: Self.settings)
+        #expect(model.peopleCount == 450)
+        let reloaded = model.diskLoadAttempts
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        #expect(model.diskLoadAttempts == reloaded)
+        #expect(model.peopleCount == 450)
+    }
+
+    @Test @MainActor func ownerPinChangeRebuildsAnchorsOnAppearance() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write(Self.tree)
+        let model = FamilyTreeLiveModel(originalsDirectory: box.originals, compiledStore: box.store())
+        await model.prepareForAppearance(revision: "a", settings: Self.settings)
+        let changed = FamilyTreeLaunchBundle.Settings(speakers: .none, ownerFamilySearchID: "MISSING-PIN")
+        await model.prepareForAppearance(revision: "a", settings: changed)
+        #expect(model.diskLoadAttempts == 2)
+        #expect(model.anchors.isEmpty)
+        #expect(model.anchorsCaption != nil)
+        await model.prepareForAppearance(revision: "a", settings: changed)
+        #expect(model.diskLoadAttempts == 2)
+    }
+
+    @Test @MainActor func bookmarkStoresFollowArchiveButExplicitStoresStayIsolated() async throws {
+        let a = try Sandbox(), b = try Sandbox()
+        defer { a.tearDown(); b.tearDown() }
+        _ = try a.write(Self.tree); _ = try b.write(Self.tree)
+        var first = FamilyTreeBookmarks(), second = FamilyTreeBookmarks()
+        first.toggle("a-only"); second.toggle("b-only")
+        try first.save(to: a.originals); try second.save(to: b.originals)
+        func source(_ box: Sandbox, access: FamilyAssetStore.Access = .readWrite) -> FamilyAssetConfiguration {
+            FamilyAssetConfiguration(
+                roots: FamilyAssetStore.Roots(assets: box.root.appendingPathComponent("assets"),
+                                              thumbnailCache: box.root.appendingPathComponent("cache")),
+                access: access, legacyGEDCOMDirectory: box.originals)
+        }
+        let model = FamilyTreeLiveModel(originalsDirectory: a.originals,
+                                        bookmarksDirectory: a.originals, bookmarksFollowSource: true)
+        await model.prepareForAppearance(revision: "a", source: source(a), settings: Self.settings)
+        model.configure(source: source(b))
+        model.toggleBookmark("old-tree-pointer")
+        #expect(!FamilyTreeBookmarks.load(from: b.originals).contains("old-tree-pointer"))
+        await model.prepareForAppearance(revision: "b", source: source(b), settings: Self.settings)
+        #expect(model.bookmarks.ids == ["b-only"])
+        model.toggleBookmark("new-b")
+        #expect(FamilyTreeBookmarks.load(from: a.originals) == first)
+        #expect(FamilyTreeBookmarks.load(from: b.originals).contains("new-b"))
+        model.configure(source: source(b, access: .readOnly))
+        model.toggleBookmark("memory-only")
+        #expect(!FamilyTreeBookmarks.load(from: b.originals).contains("memory-only"))
+
+        let isolated = FamilyTreeLiveModel(originalsDirectory: a.originals, bookmarksDirectory: a.originals)
+        isolated.configure(source: source(b))
+        #expect(isolated.bookmarks == first)
+        await model.prepareForAppearance(revision: "offline", source: source(b, access: .unavailable), settings: Self.settings)
+        #expect(model.loadState == .unavailable)
+        #expect(model.bookmarks.ids.isEmpty)
+        await model.prepareForAppearance(revision: "b", source: source(b), settings: Self.settings)
+        #expect(model.isLive)
+        #expect(model.bookmarks.contains("new-b"))
+    }
+
+    @Test @MainActor func warmReturnAtArchiveScaleDoesNotEnterLoader() async throws {
+        let box = try Sandbox(); defer { box.tearDown() }
+        _ = try box.write(GedcomSyntheticPedigree.gedcom(people: 100_000, generations: 17))
+        let model = FamilyTreeLiveModel(originalsDirectory: box.originals, compiledStore: box.store())
+        await model.prepareForAppearance(revision: "large", settings: Self.settings)
+        #expect(model.peopleCount == 100_000)
+        let attempts = model.diskLoadAttempts
+        let clock = ContinuousClock(), start = clock.now
+        for _ in 0..<10 {
+            await model.prepareForAppearance(revision: "large", settings: Self.settings)
+        }
+        #expect(model.diskLoadAttempts == attempts)
+        #expect(clock.now - start < .seconds(2))
+    }
 
     /// A model that has never loaded must load, whatever the revision.
     @Test @MainActor func freshModelNeedsALoad() throws {

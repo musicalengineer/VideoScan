@@ -95,6 +95,14 @@ struct FamilyTreeView: View {
     /// Hallie's "Get Family Tree…" chip: a fresh token per request so the
     /// same ask twice presents the sheet twice.
     @AppStorage("ftGetFamilyTreeRequest") private var getFamilyTreeRequest: String = ""
+    @AppStorage(HallieTurnExecutor.Speakers.ownerDefaultsKey)
+    private var ownerSetting = HallieTurnExecutor.Speakers.defaultOwnerName
+    @AppStorage(HallieTurnExecutor.Speakers.archivistNameDefaultsKey)
+    private var archivistSetting = HallieTurnExecutor.Speakers.defaultArchivistName
+    @AppStorage(HallieTurnExecutor.Speakers.archivistPersonNameDefaultsKey)
+    private var archivistPersonSetting = ""
+    @AppStorage(HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
+    private var ownerPinSetting = ""
 
     init(model: FamilyTreeLiveModel? = nil, preferences: UserDefaults = .standard) {
         usesInjectedModel = model != nil
@@ -331,28 +339,13 @@ struct FamilyTreeView: View {
                     })
             }
         }
-        .task(id: sourceRevision) {
+        .task(id: [sourceRevision, ownerSetting, archivistSetting,
+                   archivistPersonSetting, ownerPinSetting]) {
             let revision = sourceRevision
-            // A shared model that already holds this revision's tree keeps
-            // it: no demo flash, no graph reload on every tab switch. The
-            // notes index is still refreshed — Hallie may have learned
-            // something while the tab was away (codex #1210) — it is one
-            // small file, off the main actor.
-            guard model.needsLoad(for: revision) else {
-                await model.loadCyberBrain()
-                handleIncomingHighlight()
-                return
-            }
-            let clock = ContinuousClock()
-            let start = clock.now
-            if !usesInjectedModel {
-                model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
-            }
-            await model.loadFromDisk()
-            FamilyTreeLiveModel.logStep("tab: load on appear", took: clock.now - start,
-                                        people: model.peopleCount, always: true)
-            model.markLoaded(revision: revision)
-            await model.loadCyberBrain()
+            await model.prepareForAppearance(
+                revision: revision,
+                source: usesInjectedModel ? nil : FamilyAssetConfigurationCenter.shared.snapshot())
+            guard !Task.isCancelled else { return }
             handleIncomingHighlight()
         }
         .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
