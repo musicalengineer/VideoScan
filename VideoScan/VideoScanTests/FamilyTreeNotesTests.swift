@@ -344,6 +344,25 @@ struct FamilyTreeNotesScaleTests {
 @Suite("Family tree notes — said-as chips")
 struct FamilyTreePronunciationChipTests {
 
+    /// Rick's screenshot, 2026-09-07. A twenty-generation FamilySearch tree
+    /// carries whole offices inside the NAME, and one chip per word turned
+    /// this into sixteen capsules crushed to one character per line.
+    /// Connectors go; the words a family might actually want said a
+    /// particular way stay.
+    @Test func aLongTitleDoesNotBecomeSixteenChips() {
+        let name = "John Johannes Lord Viscount Strangford, High Sheriff of Essex, "
+            + "Assistant to King Henry VIII Smythe"
+        let words = FamilyTreePronunciationChips.nameWords(name)
+        #expect(!words.contains("of"))
+        #expect(!words.contains("to"))
+        #expect(words.contains("Johannes"))
+        #expect(words.contains("Strangford"))
+        #expect(words.contains("Smythe"))
+        #expect(words.contains("Essex"), "a place inside a name may still want saying a certain way")
+        #expect(words.contains("Lord"), "only connectors are dropped, not titles")
+        #expect(words.count <= 13, Comment(rawValue: "\(words.count): \(words)"))
+    }
+
     @Test func nameWordsDropSuffixesInitialsAndDuplicates() {
         #expect(FamilyTreePronunciationChips.nameWords("Richard Hardin Breen Jr") == ["Richard", "Hardin", "Breen"])
         #expect(FamilyTreePronunciationChips.nameWords("Nathaniel J. McGill III") == ["Nathaniel", "McGill"])

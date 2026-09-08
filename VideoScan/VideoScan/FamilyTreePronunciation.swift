@@ -32,6 +32,17 @@ enum FamilyTreePronunciationChips {
 
     /// "Richard Harding Breen Jr" → ["Richard", "Harding", "Breen"]. Drops
     /// suffixes, initials and duplicates; keeps the tree's spelling.
+    /// Grammar words that appear inside long titles and are never worth a
+    /// pronunciation chip. FamilySearch names in a twenty-generation tree
+    /// carry whole offices — "High Sheriff of Essex, Assistant to King Henry
+    /// VIII" — and a capsule offering to teach Hallie how to say "of" is
+    /// noise in a pane whose width belongs to genealogy (Rick, 2026-09-07).
+    /// Deliberately only connectors: "Lord", "Sheriff" and "Essex" are kept,
+    /// because a family might well want those said a particular way.
+    private static let connectors: Set<String> = [
+        "of", "to", "the", "and", "or", "in", "at", "on", "for", "by", "de",
+    ]
+
     static func nameWords(_ name: String) -> [String] {
         var seen: Set<String> = []
         var out: [String] = []
@@ -39,6 +50,7 @@ enum FamilyTreePronunciationChips {
             let word = raw.trimmingCharacters(in: CharacterSet(charactersIn: ".,()\"'“”‘’/[]"))
             let key = FamilyIdentityText.normalized(word)
             guard word.count > 1, !suffixes.contains(key), !key.isEmpty,
+                  !connectors.contains(key),
                   word.contains(where: \.isLetter), seen.insert(key).inserted else { continue }
             out.append(word)
         }

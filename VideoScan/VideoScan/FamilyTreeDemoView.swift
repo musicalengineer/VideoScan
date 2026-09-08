@@ -1266,7 +1266,14 @@ struct FamilyTreeDemoView: View {
     /// used by Hallie's voice on the very next answer.
     private var saidAsRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            // A WRAPPING row, not an HStack (Rick's screenshot, 2026-09-07).
+            // One capsule per name word is fine for "Mary Catherine
+            // O'Connor" and catastrophic for "John Johannes Lord Viscount
+            // Strangford, High Sheriff of Essex, Assistant to King Henry VIII
+            // Smythe": sixteen capsules in a ~300pt inspector were squeezed
+            // until each label wrapped to one character per line, and the row
+            // read as a bar chart.
+            FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                 Text("Said as")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -1291,7 +1298,6 @@ struct FamilyTreeDemoView: View {
                           : chip.inherited.map { "Hallie says \(chip.word) as \($0) (family default) — click to set it for this person" }
                             ?? "Click to tell Hallie how to say \(chip.word)")
                 }
-                Spacer(minLength: 0)
             }
             if let word = editingPronunciationWord {
                 pronunciationEditor(word: word)
