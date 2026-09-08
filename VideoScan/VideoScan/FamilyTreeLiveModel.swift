@@ -241,7 +241,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     private(set) var originalsDirectory: URL
     /// Where family-tree-bookmarks.json lives. nil in tests that inject an
     /// originals directory, which is what keeps them off the real archive.
-    private let bookmarksDirectory: URL?
+    private var bookmarksDirectory: URL?
+    private let bookmarksFollowSource: Bool
+    private var bookmarkSourceTransition = false
     /// People the reader marked to come back to (Rick, 2026-08-30).
     @Published private(set) var bookmarks: FamilyTreeBookmarks
     private var sourceAccess: FamilyAssetStore.Access
@@ -440,6 +442,7 @@ final class FamilyTreeLiveModel: ObservableObject {
          descendantGenerations: Int = 2,
          focusDefaults: UserDefaults? = nil,
          bookmarksDirectory: URL? = nil,
+         bookmarksFollowSource: Bool? = nil,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil },
          profilesProvider: (() -> [POIProfile])? = nil) {
         let production = FamilyAssetConfigurationCenter.shared.snapshot()
@@ -457,6 +460,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         // Same isolation rule as the brain above: a test that injects an
         // originals directory but no bookmarks directory gets NO
         // bookmarks, never the real archive's.
+        self.bookmarksFollowSource = bookmarksFollowSource
+            ?? (originalsDirectory == nil && bookmarksDirectory == nil)
         self.bookmarksDirectory = bookmarksDirectory
             ?? (originalsDirectory == nil ? production.gedcomDirectory() : nil)
         self.bookmarks = self.bookmarksDirectory
@@ -509,6 +514,41 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// re-appearance with the same revision keeps the tree it has instead
     /// of flashing the demo tree and waiting on a reload.
     private(set) var loadedRevision: String?
+    private var loadedAppearanceSettings: FamilyTreeLaunchBundle.Settings?
+    /// What the queued (not yet running) load was asked for, so a later
+    /// caller with the same request can be covered by it.
+    private var queuedLoadSettings: FamilyTreeLaunchBundle.Settings?
+    private var queuedLoadRevision: String?
+    private var appearanceGeneration = 0
+    /// Diagnostic sensor: counts real loader entries, not cache-key decisions.
+    private(set) var diskLoadAttempts = 0
+
+    /// The actual tab lifecycle, shared by the view and regression tests.
+    /// Warm returns keep selection and derived indexes, but still refresh notes.
+    /// Settings changes are uncommon and use the existing compiled/shared loader;
+    /// they must rebuild the settings-dependent launch bundle.
+    func prepareForAppearance(revision: String,
+                              source: FamilyAssetConfiguration? = nil,
+                              settings: FamilyTreeLaunchBundle.Settings = .fromDefaults()) async {
+        appearanceGeneration &+= 1
+        let request = appearanceGeneration
+        if let source { configure(source: source) }
+        if needsLoad(for: revision) || loadedAppearanceSettings != settings {
+            // The revision rides with the load and is recorded where the
+            // install happens, so a tab that is switched away from during
+            // the first load still counts as loaded when it comes back
+            // (Claude review N3, 2026-09-08).
+            let clock = ContinuousClock()
+            let start = clock.now
+            await loadFromDisk(settings: settings, revision: revision)
+            // Always on: this is the line that attributed today's 4.6 s
+            // first load (0.5 s hashing + 0.7 s decode + ~4 s first render).
+            Self.logStep("tab: load on appear", took: clock.now - start,
+                         people: peopleCount, always: true)
+        }
+        guard request == appearanceGeneration, !Task.isCancelled else { return }
+        await loadCyberBrain()
+    }
 
     /// True when the tab must (re)load on appearance: never loaded, no
     /// live graph, or the source revision changed while it was away.
@@ -526,26 +566,43 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// compiled store's ingest/prune (codex #792). A call that arrives
     /// while one is running still gets a load that STARTS after it (it
     /// may have been made because the files changed).
-    func loadFromDisk() async {
+    func loadFromDisk(settings: FamilyTreeLaunchBundle.Settings = .fromDefaults(),
+                      revision: String? = nil) async {
         if let queued = loadQueued {
-            await queued.value           // a pending reload already covers us
-            return
+            // A pending reload covers us only if it carries the same
+            // speaker settings (and revision, when we have one); otherwise
+            // wait for it and serialize our own (codex #792 coalescing,
+            // kept; Claude review N2).
+            let covered = queuedLoadSettings == settings
+                && (revision == nil || queuedLoadRevision == revision)
+            await queued.value
+            if covered { return }
         }
         let running = loadInFlight
         let isQueued = running != nil
         let task = Task { @MainActor [weak self] in
             await running?.value
             guard let self else { return }
-            if isQueued { self.loadQueued = nil }   // now running; the next caller may queue again
-            await self.performLoadFromDisk()
+            if isQueued {                          // now running; the next caller may queue again
+                self.loadQueued = nil
+                self.queuedLoadSettings = nil
+                self.queuedLoadRevision = nil
+            }
+            await self.performLoadFromDisk(settings: settings, revision: revision)
         }
-        if isQueued { loadQueued = task }
+        if isQueued {
+            loadQueued = task
+            queuedLoadSettings = settings
+            queuedLoadRevision = revision
+        }
         loadInFlight = task
         await task.value
         if loadInFlight == task { loadInFlight = nil }
     }
 
-    private func performLoadFromDisk() async {
+    private func performLoadFromDisk(settings: FamilyTreeLaunchBundle.Settings,
+                                     revision: String? = nil) async {
+        diskLoadAttempts += 1
         loadGeneration &+= 1
         let generation = loadGeneration
         guard sourceAccess != .unavailable else {
@@ -580,7 +637,6 @@ final class FamilyTreeLiveModel: ObservableObject {
                 Self.logStep("load: decode/parse (shared\(shared.loaded?.reused == true ? ", reused" : ""))",
                              took: clock.now - mark, people: people)
                 mark = clock.now
-                let settings = FamilyTreeLaunchBundle.Settings.fromDefaults()
                 let bundle = shared.loaded.map { FamilyTreeLaunchBundle.Cache.shared.bundle(for: $0, settings: settings) }
                 Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
                 return (outcome, bundle)
@@ -595,7 +651,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             // anchors are pure functions of the graph (+ speaker defaults):
             // built here, in parallel, not on the main actor.
             mark = clock.now
-            let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: .fromDefaults()) }
+            let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: settings) }
             Self.logStep("load: launch bundle (rows + identity + anchors)", took: clock.now - mark, people: people)
             return (outcome, bundle)
         }.value
@@ -610,6 +666,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         loadPhase = nil
         install(outcome: loaded.0, bundle: loaded.1)
+        loadedAppearanceSettings = settings
+        if isLive, let revision { loadedRevision = revision }
     }
 
     /// Every recompile the tab starts writes this line first, so the log
@@ -819,6 +877,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             installedSourceKey = sourceKey
         }
         graph = newGraph
+        bookmarkSourceTransition = false
         kinshipCenter?.install(graph: newGraph)
         // Everything O(people) lives in the bundle (rows, identity
         // directory, anchors + their ancestor indexes). Built inline only
@@ -934,13 +993,31 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     func configure(source: FamilyAssetConfiguration) {
-        originalsDirectory = source.gedcomDirectory()
+        let directory = source.gedcomDirectory()
+        let accessChanged = sourceAccess != source.access
+        if directory != originalsDirectory, graph != nil {
+            // Old cards may remain visible during the async replacement.
+            // Their GEDCOM pointers must never be written into the new archive.
+            bookmarkSourceTransition = true
+        }
+        if directory != originalsDirectory || accessChanged {
+            // Reject an old source's in-flight result before it can be installed.
+            loadGeneration &+= 1
+            loadedRevision = nil
+        }
+        originalsDirectory = directory
         sourceAccess = source.access
+        if bookmarksFollowSource && (bookmarksDirectory != directory || accessChanged) {
+            bookmarksDirectory = directory
+            bookmarks = source.access == .unavailable
+                ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
+        }
     }
 
     private func installUnavailable() {
         loadGeneration &+= 1
         graph = nil
+        bookmarkSourceTransition = false
         summariesInOrder = []
         peopleCount = 0
         filteredPeople = []
@@ -1466,8 +1543,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// icon responds; it simply will not survive a relaunch.
     @discardableResult
     func toggleBookmark(_ personID: String) -> Bool {
+        guard !bookmarkSourceTransition else { return bookmarks.contains(personID) }
         let nowMarked = bookmarks.toggle(personID)
-        if let bookmarksDirectory {
+        if sourceAccess == .readWrite, let bookmarksDirectory {
             do {
                 try bookmarks.save(to: bookmarksDirectory)
             } catch {
