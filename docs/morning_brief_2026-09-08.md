@@ -13,6 +13,10 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **05:05** — reviewer done: 90 commits, 0 flagged (#1202) — and quiet on
+  `ea588b97`, which had a known real defect. Section below; decision line
+  updated (recommend devstral:24b). Tree clean at this commit; nothing else
+  runs on the M4 before you're up. Codex has every SHA (#1195–#1203).
 - **04:05** — the nightly's FIRST Hallie row: `hallie_replay_status=incomplete`,
   strict 0 / 15 completed, advisory 0 / 345, 3,602 s. Honest — and it found
   its own bug: the lane ran with the harness default `qwen3.8:27b-mlx` (the
@@ -91,6 +95,26 @@ These three were committed on the seven affected suites (56/56); the full-suite 
 
 | finding | source | correction | evidence |
 |---|---|---|---|
+
+## What the nightly reviewer found (04:30, first night on `qwen2.5-coder:32b`)
+
+**90 commits, 0 flagged, 0 errors, 24 minutes** (#1202). The pipeline did
+everything yesterday's fixes promised: followed local `main` from the last
+push (`b31a2b59`) to `73278c47`, one unique output directory, retry queue
+empty, exit 0. The model did not:
+
+- **NO FINDINGS on all 89 units**, mean 16 s per commit, max 108 s. A
+  600-line extraction was "quiet" in 74 s; the row-17 alias change in 12 s.
+- **Calibration:** `ea588b97` — the commit where devstral:24b found the one
+  real defect of the whole bake-off ("tell me about his death" forced to
+  biography; fixed as `7bc5cb73`) — was **quiet, 22 s**. So were `39e21686`
+  and `58a8989c`, both with codex findings still open.
+
+A reviewer that is quiet on a commit with a verified bug is measuring
+nothing. This is the same shape as qwen-coder on Sunday (1 real finding in
+~10 claims, reviewing from the prompt): the local models that answer fast
+are not reading the diff. Verdict rows are at
+`~/Library/Logs/VideoScan/model-review/20260908-0430/`.
 
 ## Metrics — before and after
 
@@ -264,6 +288,9 @@ _(collected as they arise)_
 - Aggregate queries: whole tree or your ancestors when the question does not
   say? (`docs/hallie_tree_aggregate_queries.md`)
 - Titles: parser must keep `1 TITL` — a record-shape change (codex's gate).
-- Reviewer model: judge tonight's first `qwen2.5-coder:32b` nightly digest
-  against the four nights of `qwen3.8:27b-mlx` findings before changing it.
+- **Reviewer model — recommendation: switch to `devstral:24b`.** Tonight's
+  `qwen2.5-coder:32b` digest is 89/89 quiet including a commit with a
+  verified defect; devstral is the only local model of three that scored a
+  real finding on that same commit. A `tools/model-fitness` config change,
+  so yours; codex asked in #1201/#1203 for the same call.
 - Raw dates spoken as recorded ("24 juin 1314") vs normalised — design choice.
