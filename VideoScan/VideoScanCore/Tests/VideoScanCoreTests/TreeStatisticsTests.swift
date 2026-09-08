@@ -95,6 +95,58 @@ struct TreeStatisticsTests {
         #expect(c.matched == 2, "Ireland and Cork, Ireland")
         #expect(c.considered == 8, "the whole tree is the denominator")
         #expect(c.unrecorded == 1, "one person has no birthplace at all")
+        #expect(c.unclassifiable == 1, "New France is recorded but spans today's borders")
+    }
+
+    /// codex #1181: the first version filtered undated people out BEFORE
+    /// counting, so "born before 1800" over a pool of one dated and one undated
+    /// person reported 1 of 1 and looked complete. The denominator is the
+    /// population; the undated person is reported, not vanished.
+    @Test func anUndatedPersonIsReportedNotDropped() {
+        let two = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME Dated /Person/
+        1 BIRT
+        2 DATE 1700
+        0 @I2@ INDI
+        1 NAME Undated /Person/
+        0 TRLR
+        """
+        let g = GedcomFamilyGraph(gedcomText: two)
+        let c = Stats.count(Stats.Query(time: .init(bornTo: 1799)), in: g)
+        #expect(c.matched == 1)
+        #expect(c.considered == 2, "both people were asked about")
+        #expect(c.unrecorded == 1, "the undated one is the gap an honest sentence names")
+    }
+
+    /// codex #1180: `recordedText("england")` as a SUBSTRING matched "New
+    /// England", so a count of English births would have swallowed
+    /// Massachusetts. A recorded-text filter matches a whole comma-separated
+    /// component, never a substring.
+    @Test func recordedTextMatchesAWholeComponentNeverASubstring() {
+        let mixed = """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME English /Birth/
+        1 BIRT
+        2 PLAC Kenilworth, Warwickshire, England
+        0 @I2@ INDI
+        1 NAME Yankee /Birth/
+        1 BIRT
+        2 PLAC Boston, New England
+        0 @I3@ INDI
+        1 NAME Irish /Birth/
+        1 BIRT
+        2 PLAC Cork, Ireland
+        0 TRLR
+        """
+        let g = GedcomFamilyGraph(gedcomText: mixed)
+        #expect(Stats.count(Stats.Query(place: .recordedText("england")), in: g).matched == 1)
+        #expect(Stats.count(Stats.Query(place: .recordedText("new england")), in: g).matched == 1)
+        #expect(Stats.count(Stats.Query(place: .recordedText("ireland")), in: g).matched == 1,
+                "a component that IS the word still matches")
+        #expect(Stats.count(Stats.Query(place: .recordedText("cork")), in: g).matched == 1)
     }
 
     /// "how many were born in Europe?" — the question that started all this.
@@ -189,6 +241,8 @@ struct TreeStatisticsTests {
     @Test func timeFilterExcludesUndatedPeople() {
         let c = Stats.count(Stats.Query(time: .init(bornFrom: 1900, bornTo: 1999)), in: graph)
         #expect(c.matched == 4, "1959, 1930, 1929, 1900")
+        #expect(c.considered == 8)
+        #expect(c.unrecorded == 1, "the person with no birth year, reported rather than dropped")
     }
 
     /// An empty result is an ANSWER, not an error, and still reports its

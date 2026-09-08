@@ -73,13 +73,32 @@ public enum TreeStatistics {
 
     // MARK: - Answering
 
-    /// A count with the population it was drawn from. `unrecorded` is how
-    /// many of `considered` could not be judged because the field is absent
-    /// — the number an honest sentence has to mention.
+    /// A count with the population it was drawn from, and every way a person
+    /// can fall OUT of the measurement — the numbers an honest sentence has
+    /// to mention (codex #1181: the first version filtered undated people out
+    /// BEFORE counting, so "born before 1800" over a pool of one dated and one
+    /// undated person reported 1 of 1 and looked complete).
+    ///
+    ///   considered     the whole population the question was asked of
+    ///   matched        people who satisfied every filter
+    ///   unrecorded     people whose record LACKS a field a filter needed —
+    ///                  no birth year for a time filter, no birthplace for a
+    ///                  place filter
+    ///   unclassifiable people whose birthplace IS recorded but could not be
+    ///                  judged against a country/continent filter: an unknown
+    ///                  place name, or a historical name that spanned today's
+    ///                  borders ("New France"). Reported, never counted.
     public struct Count: Sendable, Equatable {
         public let matched: Int
         public let considered: Int
         public let unrecorded: Int
+        public let unclassifiable: Int
+        public init(matched: Int, considered: Int, unrecorded: Int, unclassifiable: Int = 0) {
+            self.matched = matched
+            self.considered = considered
+            self.unrecorded = unrecorded
+            self.unclassifiable = unclassifiable
+        }
     }
 
     /// A statistic over a numeric field, with the same denominator contract.
@@ -104,20 +123,29 @@ public enum TreeStatistics {
             .sorted { $0.id < $1.id }
     }
 
-    /// How many people match, and out of how many.
+    /// How many people match, out of how many — with everyone who could not
+    /// be judged accounted for, so the denominator is the population and not
+    /// a pre-filtered subset that happens to look complete.
     public static func count(_ query: Query, in graph: GedcomFamilyGraph) -> Count {
         let pool = population(query.scope, in: graph)
-        let timed = pool.filter { matches(time: query.time, $0) }
-        // "Unrecorded" is about the field the PLACE filter reads; a query
-        // with no place filter has nothing it could fail to record.
-        let unrecorded: Int
-        switch query.place {
-        case .anywhere: unrecorded = 0
-        default: unrecorded = timed.filter { ($0.birthPlace ?? "").isEmpty }.count
+        let needsYear = !query.time.isEmpty
+        let needsPlace = query.place != .anywhere
+        var matched = 0, unrecorded = 0, unclassifiable = 0
+        for person in pool {
+            if needsYear, person.birthYear == nil { unrecorded += 1; continue }
+            if needsPlace {
+                guard let raw = person.birthPlace, !raw.isEmpty else { unrecorded += 1; continue }
+                if case .recordedText = query.place {
+                    // Raw text needs no classification to be judged.
+                } else {
+                    let place = BirthplaceClassifier.classify(raw)
+                    if place.isUnknown || place.isAmbiguous { unclassifiable += 1; continue }
+                }
+            }
+            if matches(time: query.time, person), matches(place: query.place, person) { matched += 1 }
         }
-        return Count(matched: timed.filter { matches(place: query.place, $0) }.count,
-                     considered: timed.count,
-                     unrecorded: unrecorded)
+        return Count(matched: matched, considered: pool.count,
+                     unrecorded: unrecorded, unclassifiable: unclassifiable)
     }
 
     /// Lifespan in years over the matching people. Only people with BOTH a
@@ -200,8 +228,18 @@ public enum TreeStatistics {
         case .anywhere:
             return true
         case .recordedText(let text):
+            // A WHOLE comma-separated component, never a substring (codex
+            // #1180): "england" as a substring matched "New England", so a
+            // count of English births would have swallowed Massachusetts.
+            // Same rule as GedcomFamilyGraph.place(_:mentions:) — "Cork,
+            // Ireland" matches "ireland" because a component IS "ireland".
             guard let raw = person.birthPlace, !raw.isEmpty else { return false }
-            return raw.range(of: text, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            let wanted = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .trimmingCharacters(in: .whitespaces)
+            return raw.split(separator: ",").contains { component in
+                component.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                    .trimmingCharacters(in: .whitespaces) == wanted
+            }
         case .country, .continent, .outsideCountry:
             guard let raw = person.birthPlace, !raw.isEmpty else { return false }
             let place = BirthplaceClassifier.classify(raw)
