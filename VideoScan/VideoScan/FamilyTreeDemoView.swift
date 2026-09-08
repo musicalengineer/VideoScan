@@ -582,6 +582,10 @@ struct FamilyTreeDemoView: View {
                     .font(.title2.weight(.semibold))
                 Spacer()
             }
+            // The two people who joined the trees, framed under the title
+            // at sidebar width. Per-user; see CouplePortrait.swift.
+            CouplePortraitView(placement: .familyTree, height: 240)
+                .frame(maxWidth: .infinity)
             // Full-width button on its own row; turns into a live status
             // (spinner / ready / problem) while a download is in flight.
             FamilySearchPullButtonRow(status: pullCenter.status) {
