@@ -59,6 +59,18 @@ so nobody mistakes it for the criterion.
 5. **Large views** — `FamilyTreeDemoView` [1721] owns sheets, selection and
    edit state; extract stateless rendering only.
 
+## Found while Rick tested (evening 09/07)
+
+- **Henry Adams** — Rick clicked a Henry Adams and both "Line to" buttons were
+  grey. Correct, but unexplained: of three Henry Adams records in his tree and
+  six in Donna's, the Braintree immigrant (`LYNX-9NC`, b. 1583; duplicated as
+  `PXFH-LS9` in Rick's pull) is a **direct ancestor of both at generation 13**,
+  while `PWQP-NG9` (b. Dec 1622) and `P6T3-8FH` have **no `FAMC` link to anyone**
+  — floating records, related by no recorded line. Backlog: a grey "Line to"
+  should say why ("not on any recorded line above; nearest connection: none").
+  Also a data-quality note: the immigrant exists under two FamilySearch ids
+  across the two pulls — the merge did not fold them.
+
 ## Decisions that are Rick's
 
 _(collected as they arise)_
