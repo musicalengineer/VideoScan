@@ -23,7 +23,9 @@
 #
 # On demand:  scripts/nightly_hallie_replay.sh --out /tmp/hallie.json
 # Options:    --bin <VideoScan binary>  --host <ollama url>  --model <tag>
-#             --budget-seconds <N>  --strict-only  --advisory-only
+#             --budget-seconds <N>  --strict-only  --advisory-only  --dry-run
+# Preflight: the model must exist on the host (/api/tags) or the row is
+# `failed` with the reason in seconds; with no --model the host's tags choose.
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
 PY=${PY:-$REPO/venv/bin/python}
@@ -32,7 +34,7 @@ LOGDIR=${LOGDIR:-$HOME/Library/Logs/VideoScan/hallie-eval}
 mkdir -p "$LOGDIR"
 
 OUT=""; BIN=""; HOST=""; MODEL=""; BUDGET=${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}
-LANES="strict advisory"
+LANES="strict advisory"; DRY_RUN=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT="$2"; shift 2 ;;
@@ -42,10 +44,58 @@ while [ $# -gt 0 ]; do
         --budget-seconds) BUDGET="$2"; shift 2 ;;
         --strict-only) LANES="strict"; shift ;;
         --advisory-only) LANES="advisory"; shift ;;
+        --dry-run) DRY_RUN=1; shift ;;
         *) echo "unknown option: $1" >&2; exit 64 ;;
     esac
 done
 [ -n "$OUT" ] || { echo "--out is required" >&2; exit 64; }
+
+# PREFLIGHT: THE MODEL MUST EXIST ON THE HOST, OR SAY SO IN SECONDS.
+# First nightly run, 2026-09-08 02:37: no --model was passed, the harness
+# defaulted to the M4's tag (qwen3.8:27b-mlx), ricksm5 has qwen3.8:27b, and
+# the strict lane sat for its whole 900 s share pairing zero turns. The row
+# said "incomplete" — honest, but an hour of the night for a name.
+# With no --model the host's own tags choose: the shipped brain's plain tag
+# first, then its -mlx twin. A model the host does not have, or a host that
+# does not answer, is `failed` with the reason — never a 900 s wait.
+HOST=${HOST:-http://ricksm5.local:11434}
+PREFLIGHT_REASON=""
+TAGS=$(curl -s --max-time 15 "$HOST/api/tags" 2>/dev/null \
+    | python3 -c 'import json,sys
+try: print("\n".join(m["name"] for m in json.load(sys.stdin).get("models",[])))
+except Exception: pass' 2>/dev/null)
+if [ -z "$TAGS" ]; then
+    PREFLIGHT_REASON="host $HOST did not answer /api/tags (or lists no models)"
+elif [ -z "$MODEL" ]; then
+    for candidate in qwen3.8:27b qwen3.8:27b-mlx; do
+        if printf '%s\n' "$TAGS" | grep -qx "$candidate"; then MODEL="$candidate"; break; fi
+    done
+    [ -n "$MODEL" ] || PREFLIGHT_REASON="no --model given and neither qwen3.8:27b nor qwen3.8:27b-mlx is on $HOST"
+elif ! printf '%s\n' "$TAGS" | grep -qx "$MODEL"; then
+    PREFLIGHT_REASON="model $MODEL is not on $HOST (has: $(printf '%s' "$TAGS" | tr '\n' ' '))"
+fi
+if [ "$DRY_RUN" = 1 ]; then
+    echo "dry-run: host=$HOST model=${MODEL:-?} ${PREFLIGHT_REASON:+reason=$PREFLIGHT_REASON}"
+    [ -z "$PREFLIGHT_REASON" ]; exit $?
+fi
+if [ -n "$PREFLIGHT_REASON" ]; then
+    python3 - "$OUT" "$PREFLIGHT_REASON" "$HOST" "$MODEL" "$(date +%Y%m%dT%H%M%S)" \
+        "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" <<'PYEOF'
+import json, sys
+out, reason, host, model, stamp, sha = sys.argv[1:7]
+row = {"hallie_replay_status": "failed", "hallie_replay_reason": reason,
+       "hallie_replay_elapsed_s": 0, "hallie_replay_stamp": stamp,
+       "hallie_replay_git_sha": sha, "hallie_replay_host": host,
+       "hallie_replay_model": model or None}
+for lane in ("strict", "advisory"):
+    row.update({f"hallie_{lane}_status": "not-run", f"hallie_{lane}_expected": 0,
+                f"hallie_{lane}_completed": 0, f"hallie_{lane}_pass": 0,
+                f"hallie_{lane}_fail": 0, f"hallie_{lane}_incomplete": 0})
+json.dump(row, open(out, "w"), separators=(",", ":"))
+print(f"hallie replay failed before any lane: {reason}")
+PYEOF
+    exit 1
+fi
 
 STRICT_CORPUS="$REPO/tests/hallie_strict_regressions.json"
 ADVISORY_CORPUS="$REPO/tests/hallie_eval_corpus.json"
