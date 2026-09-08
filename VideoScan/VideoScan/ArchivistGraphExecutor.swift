@@ -442,8 +442,14 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         }
         // A REQUEST FOR THE WHOLE PERSON, last of the three, so the narrower
         // guards above keep their sentences.
+        // … and only when the sentence names no FIELD of its own. "tell me
+        // about his death" opens like a whole-person request and is a death
+        // question; forcing it to biography would answer the life story where
+        // the death was asked (devstral:24b bake-off, 2026-09-07 — the one
+        // finding of three local models that was real and still open).
         if let question, resolvedRelation == nil,
-           !Self.asksForAPlace(question), Self.asksForABiography(question) {
+           !Self.asksForAPlace(question), !Self.mentionsBirth(question), !Self.mentionsDeath(question),
+           Self.asksForABiography(question) {
             switch resolved {
             case .birth, .death: resolved = .biography
             default: break

@@ -193,5 +193,9 @@ struct HalliePlaceQuestionTests {
         #expect(parents.relation == .parents)
         // And a genuine death question is still a death question.
         #expect(query(.death, "when did he die").operation == .death)
+        // devstral:24b bake-off finding, real: a whole-person opener that
+        // names a FIELD is that field's question, not a biography.
+        #expect(query(.death, "tell me about his death").operation == .death)
+        #expect(query(.birth, "tell me about John Hastings' birth").operation == .birth)
     }
 }
