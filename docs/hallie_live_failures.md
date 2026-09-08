@@ -193,6 +193,15 @@ Rows 1, 2, 3 and 6, the afternoon batch, and the pronunciation cluster
 
 ---
 
+### Late evening, 09/07 — what the first strict replay found (fixed, pending checkpoint)
+
+| # | asked | what came back | root cause | status |
+|---|-------|----------------|-----------|--------|
+| 18 | "what country was John Hastings born in?" (strict-001, live binary) | the birth **date** — an hour after the place guard shipped | the question was never passed into `ArchivistGraphQuery` on the single-person path; the guards only ran for relationship questions. The unit tests called the initializer directly and were green | **FIXED** (question threaded at both sites) |
+| 19 | "what country?" after 18 | **Rick's biography** | `isKnownPerson("country")` is TRUE on the tree — the loose matcher resolves it to "William Culpeper of Preston Hall"; "born" and "he" resolve to narrative NAME records. The follow-up resolver name-probed every word and saw a fresh question | **FIXED** (resolver never probes its own vocabulary); structural cause OPEN — see decisions |
+| 20 | "tell me about dad" (strict-011) | "Richard Harding Breen Sr's **father** was George Breen" | the relation guard read the subject's own word ("dad", person=dad) as a relation asked of him | **FIXED** (guard ignores the subject's words) |
+| 21 | any translated question, 21:22 onward | `presence` / `event` / `temporal` shapes for graph questions | **the brain**: byte-identical requests to ricksm5 answered differently at temperature 0 (18 samples of one question → 5 shapes). ollama serve 0.32.14 under a 0.33.3 runner, 972 MB free | **OPEN — Rick** (restart ollama on M5) |
+
 ## Not a Hallie answer, but found the same day
 
 | what | where | status |
@@ -218,3 +227,5 @@ way the product was — quietly.
 | Harvester wrote `indent=2` into an `indent=1` corpus | Every harvest was a 5,160-line diff; nothing in it could be reviewed | `1563f99f` |
 | Harvester did not know `trace` | "trace my line back to europe" never recorded | `be0dd162` |
 | Harvester ids restarted each run | Two different questions shared `lv260907-001` | `be0dd162` |
+| `queryDescription` named the model's operation, not the resolved one | strict-001 answered correctly and was flagged `query_description_mismatch`; a log reader could not see a guard fire | `graphQueryDescription(_:resolved:)` |
+| Unit tests exercised the guard function, not the executor path | the place guard was green for an hour while the live path never called it | strict lane (`tests/hallie_strict_regressions.json`) |
