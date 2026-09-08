@@ -13,6 +13,21 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **22:30** — main at `534506ad` + one refactor in checkpoint (unpushed, 12
+  commits tonight). Hallie: four live-path bugs fixed and pinned (question
+  never reached the guards; "what country?" → Rick; "tell me about dad" →
+  dad's father; description named the model's op). Instrument: the strict
+  lane ran twice for real — then proved ricksm5's brain answers identical
+  bytes differently at temperature 0 (see "The first real strict replays");
+  **its numbers are untrusted until ollama on the M5 is restarted — your
+  call, not mine**. Refactors: two mechanical extractions landed, a third in
+  checkpoint; files >1000 lines 36 → 35; lint total unchanged at 332 (moves
+  carry their warnings). `HallieTurnExecutor.swift` has no seams at all —
+  one 2,118-line enum with privates throughout — so it stays codex's #1
+  design step, not a night move. Next: ledger row 17 ("find videos with
+  dad" must search every alias of the resolved identity). Off the M4 from
+  02:00.
+
 ## What landed
 
 | SHA | what | codex |
@@ -26,6 +41,8 @@ _(filled in as the night goes; latest entry on top)_
 | `a6ccc1cc` | count prose: "were born in a place recorded as England" | same checkpoint |
 | `139a8dc2` | replay row `incomplete` is a count, not the harness bool | same checkpoint |
 | `d9d8c808` | brief + ledger rows 18–21 | — |
+| `2a837e4f` | refactor: the eight field guards → `ArchivistGraphQuery+FieldGuards.swift` (1815 → 1689 lines; nothing widened) | route suites 50/50; full 6845 / 1 known sensor |
+| `534506ad` | refactor: translator-output decoding → `ArchivistQueryAST+TranslatorDecoding.swift` (1133 → 715 lines; no private helper crossed) | 71/71; full 6845 / 1 known sensor |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
@@ -47,11 +64,11 @@ These three were committed on the seven affected suites (56/56); the full-suite 
 
 Baseline captured at `5398c6fa` before any refactoring (production Swift only):
 
-| metric | baseline | now |
-|---|---|---|
-| files over the 1000-line guideline | 36 | |
-| swiftlint violations (all rules) | 332 | |
-| cyclomatic complexity > 15 | 91 | |
+| metric | baseline | after the day's fixes (`fdd88038`) | after the refactors |
+|---|---|---|---|
+| files over the 1000-line guideline | 36 | 36 | 35 at `534506ad` (ArchivistQueryAST) |
+| swiftlint violations (all rules) | 332 | 332 | 332 — the moves carry their warnings with them; nothing was hidden |
+| cyclomatic complexity > 15 | 91 | 91 | 91 |
 | function body > 80 lines | 100 | |
 | file length > 1000 | 36 | |
 | force unwraps | 33 | |
@@ -81,6 +98,13 @@ sample — one sample. Tonight's first `qwen2.5-coder:32b` nightly digest over
 37 commits is the fair comparison, tomorrow.
 
 ## Modules that need PROPER redesign, not tidying
+
+_(22:30 addendum: measured tonight — `HallieTurnExecutor.swift` is a single
+2,118-line enum with no MARK/extension seams and private members in every
+300-line band; `HallieAppTurnCoordinator.swift` likewise one 1,126-line enum.
+Neither can be split without deciding a contract first. `PersonEditSheet.swift`
+has clean MARK seams but is SwiftUI — codex's boundary requires a routed UI
+checkpoint, so it waits for a day with you at the M4.)_
 
 Ranked by RISK (codex #1182), not line count. Line count is in brackets only
 so nobody mistakes it for the criterion.
