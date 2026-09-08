@@ -858,6 +858,21 @@ extension HallieTurnExecutor {
             generalAdvice = HallieGeneralKnowledgeLane.claimsBeforeFamilyLanes(
                 question, isKnownPerson: isKnownPerson).isGeneral
         }
+        // A BARE FIELD FOLLOW-UP ABOUT THE LAST PERSON OUTRANKS THE GENERAL
+        // LANE (first strict replay, 2026-09-07). "what country?" straight
+        // after "what country was John Hastings born in?" reads, on its own,
+        // like a general-knowledge question, so the lane below took it to
+        // the translator with 'me' as the subject and Rick got his own
+        // biography. The follow-up resolver already knew the answer; it just
+        // ran three lanes too late. Only the narrow attribute shape is pulled
+        // forward — everything else keeps its order.
+        if let snapshot = memory.followUpSnapshot,
+           let attribute = ArchivistFollowUpResolver.graphAttributeResolution(
+               question, words: ArchivistFollowUpResolver.normalizedWords(question),
+               snapshot: snapshot, isKnownPerson: isKnownPerson),
+           case .localQuery(let ast) = attribute {
+            return .run(Intent(originalQuestion: question, ast: ast, playAfterAnswer: playAfterAnswer))
+        }
         if generalAdvice {
             return .translate(question: question, playAfterAnswer: playAfterAnswer)
         }

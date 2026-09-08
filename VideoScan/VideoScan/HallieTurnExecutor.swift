@@ -1287,8 +1287,15 @@ enum HallieTurnExecutor {
                 citations: [],
                 catalogPersonName: nil)
         }
-        let query = ArchivistGraphQuery(payload)
-        let queryDescription = graphQueryDescription(payload)
+        // THE QUESTION TRAVELS WITH THE QUERY (first strict replay,
+        // 2026-09-07 21:00). The field guards in ArchivistGraphQuery.init read
+        // it — and this site never passed it, so on the single-person path
+        // Rick's questions actually take, no guard ever ran: "what country
+        // was John Hastings born in?" still answered the DATE an hour after
+        // the guards shipped. Only the relationship path had been wired. The
+        // unit tests passed because they called the initializer directly.
+        let query = ArchivistGraphQuery(payload, question: request.intent.originalQuestion)
+        let queryDescription = graphQueryDescription(payload, resolved: query)
         let inputs = ArchivistGraphInputs(
             graph: graph,
             profiles: (context.profiles ?? []).map {
@@ -1800,7 +1807,14 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
         }
 
-        let query = ArchivistGraphQuery(payload)
+        // THE QUESTION TRAVELS WITH THE QUERY (first strict replay,
+        // 2026-09-07 21:00). The field guards in ArchivistGraphQuery.init read
+        // it — and this site never passed it, so on the single-person path
+        // Rick's questions actually take, no guard ever ran: "what country
+        // was John Hastings born in?" still answered the DATE an hour after
+        // the guards shipped. Only the relationship path had been wired. The
+        // unit tests passed because they called the initializer directly.
+        let query = ArchivistGraphQuery(payload, question: request.intent.originalQuestion)
         let inputs = ArchivistGraphInputs(
             graph: graph, profiles: [] as [ArchivistGraphProfileSnapshot])
         let execute = dependencies.executeGraph
@@ -1877,12 +1891,25 @@ enum HallieTurnExecutor {
         }
     }
 
-    static func graphQueryDescription(_ payload: ArchivistQueryAST.Graph) -> String {
-        var parts = ["shape=graph operation=\(payload.operation.rawValue)"]
+    /// With `resolved`, the description names the query that RAN — the
+    /// field guards in ArchivistGraphQuery.init can move the operation or
+    /// add a relation the model left out — and keeps the model's choice as
+    /// `model=` so a log reader can see the guard fire (strict replay
+    /// 2026-09-07: the answer was right and the description said `birth`).
+    static func graphQueryDescription(_ payload: ArchivistQueryAST.Graph,
+                                      resolved: ArchivistGraphQuery? = nil) -> String {
+        let operation = resolved?.operation.rawValue ?? payload.operation.rawValue
+        var parts = ["shape=graph operation=\(operation)"]
         if !payload.people.isEmpty {
             parts.append("person=\(payload.people.joined(separator: ","))")
         }
-        if let relation = payload.relation { parts.append("relation=\(relation.rawValue)") }
+        let relation = resolved != nil ? resolved?.relation?.rawValue : payload.relation?.rawValue
+        if let relation { parts.append("relation=\(relation)") }
+        if let resolved, resolved.operation.rawValue != payload.operation.rawValue
+            || resolved.relation?.rawValue != payload.relation?.rawValue {
+            parts.append("model=\(payload.operation.rawValue)"
+                         + (payload.relation.map { "/\($0.rawValue)" } ?? ""))
+        }
         if let side = payload.side { parts.append("side=\(side.rawValue)") }
         if let surname = payload.surname { parts.append("surname=\(surname)") }
         return parts.joined(separator: " ")

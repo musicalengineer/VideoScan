@@ -250,7 +250,17 @@ enum ArchivistFollowUpResolver {
         let body = dropLead(words)
         guard !body.isEmpty, body.count <= 8 else { return nil }
         // A name of its own makes it a fresh question, not a follow-up.
-        guard !body.contains(where: isKnownPerson) else { return nil }
+        // A NAME PROBE ON EVERY WORD IS A TRAP ON A 39,000-PERSON TREE
+        // (first strict replay, 2026-09-07). isKnownPerson("country") is
+        // TRUE on Rick's tree — the loose matcher resolves it to "William
+        // Culpeper of Preston Hall" — and so are "born" and "he", through
+        // narrative text stored in NAME records. So "what country?" read as
+        // a fresh question naming a person, went to the translator, and
+        // came back as Rick's biography. A word of this resolver's own
+        // vocabulary is never a name, whatever the tree says.
+        guard !body.contains(where: { !fieldVocabulary.contains($0) && isKnownPerson($0) }) else {
+            return nil
+        }
 
         // A RELATION WORD IS NOT A DATE FIELD. Caught by the full suite:
         // "when did he get married" was claimed here as a BIRTH question
@@ -305,6 +315,20 @@ enum ArchivistFollowUpResolver {
             .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
             .filter { !$0.isEmpty }
     }
+
+    /// The words a bare field follow-up is made of. None of them is a name,
+    /// even when a NAME record in the tree happens to contain one.
+    private static let fieldVocabulary: Set<String> = [
+        "what", "which", "where", "when", "who", "whom", "how", "why",
+        "was", "were", "is", "are", "did", "does", "do", "has", "had", "have",
+        "the", "a", "an", "in", "of", "at", "on", "to", "for", "from", "about",
+        "and", "or", "that", "this", "there", "it", "exactly", "again",
+        "he", "she", "they", "him", "her", "his", "their", "them",
+        "country", "county", "city", "town", "state", "village", "parish",
+        "place", "places", "where's", "what's",
+        "born", "birth", "birthplace", "die", "died", "dies", "death",
+        "buried", "burial", "interred", "year", "date", "day",
+    ]
 
     private static func dropLead(_ words: [String]) -> [String] {
         Array(words.drop { leadFiller.contains($0) })

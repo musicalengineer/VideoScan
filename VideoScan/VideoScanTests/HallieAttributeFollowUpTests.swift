@@ -111,4 +111,68 @@ struct HallieAttributeFollowUpTests {
         #expect(resolve("play the first one") == nil)
         #expect(resolve("and in the 90s?") == nil)
     }
+
+    /// FIRST STRICT REPLAY, 2026-09-07. "what country?" straight after a graph
+    /// answer about John Hastings reached the translator with 'me' as the
+    /// subject and came back as Rick's biography — the general-knowledge
+    /// lane claimed the bare fragment three lanes before the follow-up
+    /// resolver ran. The whole pre-translation must now yield the local
+    /// graph query about the previous person.
+    @Test func aBareFieldFollowUpOutranksTheGeneralLane() {
+        var memory = HallieTurnExecutor.ConversationMemory()
+        let born = HallieTurnExecutor.Result(
+            route: .graph, outcome: .answered,
+            prose: "John Hastings 3rd Earl of Pembroke was born 11 October 1372.",
+            basisLine: "Basis: GEDCOM", queryDescription: "shape=graph operation=birth person=john hastings",
+            citations: [], catalogPersonName: nil)
+        memory.record(intent: .init(originalQuestion: "what country was John Hastings born in?",
+                                    ast: .graph(.init(people: ["john hastings"], operation: .birth))),
+                      result: born)
+        let pre = HallieTurnExecutor.preTranslation(
+            question: "what country?", playAfterAnswer: false,
+            memory: memory, isKnownPerson: { _ in false })
+        guard case .run(let intent) = pre,
+              case .graph(let g) = intent.ast else {
+            Issue.record("expected a local graph query, got \(pre)"); return
+        }
+        #expect(g.people == ["john hastings"])
+        #expect(g.operation == .birthPlace)
+    }
 }
+
+/// THE TREE CALLS COMMON WORDS PEOPLE (first strict replay, 2026-09-07).
+/// On Rick's 39,250-person tree isKnownPerson("country") is true (the loose
+/// matcher resolves it to "William Culpeper of Preston Hall"), and so are
+/// "born" and "he" through narrative text stored in NAME records. A stub
+/// that says the same keeps the resolver honest about which words it may
+/// treat as a name.
+@Suite struct HallieFollowUpJunkNameTests {
+    private let junkNames: (String) -> Bool = { ["country", "born", "he", "edward"].contains($0) }
+    private var snapshot: ArchivistFollowUpResolver.Snapshot {
+        ArchivistFollowUpResolver.Snapshot(
+            ast: .graph(.init(people: ["john hastings"], operation: .birth)),
+            items: [], shownCount: 0, totalMatchCount: 0, chain: nil)
+    }
+    private func resolve(_ q: String) -> ArchivistFollowUpResolver.Resolution? {
+        ArchivistFollowUpResolver.graphAttributeResolution(
+            q, words: ArchivistFollowUpResolver.normalizedWords(q),
+            snapshot: snapshot, isKnownPerson: junkNames)
+    }
+
+    @Test func aFieldWordIsNeverANameWhateverTheTreeSays() throws {
+        guard case .localQuery(.graph(let g))? = resolve("what country?") else {
+            Issue.record("what country? refused: \(String(describing: resolve("what country?")))"); return
+        }
+        #expect(g.people == ["john hastings"])
+        #expect(g.operation == .birthPlace)
+        guard case .localQuery(.graph(let h))? = resolve("where was he born?") else {
+            Issue.record("where was he born? refused"); return
+        }
+        #expect(h.operation == .birthPlace)
+    }
+
+    @Test func aRealNameStillMakesAFreshQuestion() {
+        #expect(resolve("where was edward born?") == nil)
+    }
+}
+
