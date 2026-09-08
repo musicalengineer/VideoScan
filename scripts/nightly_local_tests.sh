@@ -74,7 +74,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-07-crash-verdict-r4"
+NIGHTLY_SCRIPT_VERSION="2026-09-08-hallie-replay-r5"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -83,6 +83,10 @@ METRICS_WT="/tmp/nightly-metrics-wt"
 PERSON_EVAL_MANIFEST="${VIDEOSCAN_PERSON_EVAL_MANIFEST:-$REPO/output/person-eval-private/nightly/manifest.json}"
 PERSON_EVAL_REPORT="${VIDEOSCAN_PERSON_EVAL_REPORT:-$REPO/output/person-eval-private/nightly/latest-report.json}"
 PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason":"quality-holdout-not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"poi_cycle_stream_status":"not-collected"}'
+# The Hallie replay lane (2026-09-08, Rick: "I thought we had an automated
+# hallie testbed"). Every row carries it, so a night where the replay never
+# ran says "not-run" in the row rather than showing nothing at all.
+HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
 NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-1800}"
 NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
 NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
@@ -327,10 +331,19 @@ refresh_person_metrics() {
 # Merge additive person fields into any normal/failure nightly JSON row. Python
 # owns JSON escaping so private dataset names cannot corrupt the public JSONL.
 with_person_metrics() {
-    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" python3 -c '
+    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" python3 -c '
 import json, os
 base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
+# The Hallie replay lane rides in the same row, and like the person lane it
+# may only ADD fields: it can never touch status, reason or the test counts.
+# Empty when unset — the shell default is NOT "{}" because ${v:-{}} closes
+# the expansion at the first brace and appends a stray "}" (caught by
+# test_nightly_failure_modes.sh 9b: "Extra data" at column 125).
+hallie = json.loads(os.environ["HALLIE_ROW"] or "{}")
+for key in ("status", "reason", "passed", "failed", "skipped", "total"):
+    hallie.pop(key, None)
+base.update(hallie)
 print(json.dumps(base, separators=(",", ":")))
 '
 }
@@ -406,6 +419,43 @@ collect_optional_post_test_metrics() {
 
     PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
     refresh_person_metrics "$PERSON_EVAL_APP"
+    refresh_hallie_replay "$PERSON_EVAL_APP"
+}
+
+# Replay Rick's recorded Hallie questions through the freshly built app and
+# the model host, and carry the verdict in the row. Rick, 2026-09-07: "I
+# thought we had an automated hallie testbed to identify and prevent
+# regressions?" — the recorder and the harness existed; nothing ran them.
+# Advisory to the TEST verdict by construction (with_person_metrics strips
+# status/reason/counts from the merged lane), but conspicuous on its own:
+# hallie_replay_status is ok | failed | incomplete | not-run, and the strict
+# lane's pass/fail/incomplete counts are separate from the advisory corpus.
+# Budget-bounded and watchdog-wrapped so a hung model host cannot hold the
+# row past the 04:30 reviewer; an overrun is INCOMPLETE with its completed
+# count, never a small subset presented as the whole (codex #1189).
+refresh_hallie_replay() {
+    local app="$1"
+    local out="/tmp/nightly-hallie-replay.json"
+    local budget="${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}"
+    if [ ! -x "$app" ]; then
+        log "Hallie replay skipped: no app binary at $app"
+        HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_replay_reason":"no-app-binary","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
+        return 0
+    fi
+    rm -f "$out"
+    log "Hallie replay: strict manifest + advisory corpus, budget ${budget}s, host ${NIGHTLY_HALLIE_HOST:-http://ricksm5.local:11434}"
+    run_with_process_group_watchdog         $((budget + 180)) "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS"         "$LOGFILE.hallie-replay"         "$REPO/scripts/nightly_hallie_replay.sh"             --out "$out" --bin "$app"             --host "${NIGHTLY_HALLIE_HOST:-http://ricksm5.local:11434}"             ${NIGHTLY_HALLIE_MODEL:+--model "$NIGHTLY_HALLIE_MODEL"}             --budget-seconds "$budget"
+    local rc=$?
+    if [ -s "$out" ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+        HALLIE_REPLAY_JSON=$(cat "$out")
+        log "Hallie replay: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("hallie_replay_status"), "strict", d.get("hallie_strict_pass"), "/", d.get("hallie_strict_expected"), "advisory", d.get("hallie_advisory_pass"), "/", d.get("hallie_advisory_expected"))' "$out") (rc=$rc)"
+    else
+        # A launch failure before any artifact is INCOMPLETE, never green and
+        # never absent (codex #1191).
+        log "Hallie replay produced no readable artifact (rc=$rc); recording incomplete"
+        HALLIE_REPLAY_JSON="{\"hallie_replay_status\":\"incomplete\",\"hallie_replay_reason\":\"no-artifact-rc-$rc\",\"hallie_strict_status\":\"incomplete\",\"hallie_advisory_status\":\"not-run\"}"
+    fi
+    return 0
 }
 
 # Return 124 after recording a timeout row, 2 for the existing zero-test path,

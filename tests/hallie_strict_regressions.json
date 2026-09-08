@@ -1,0 +1,281 @@
+{
+ "version": 1,
+ "created": "2026-09-07",
+ "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the 345-question hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190).",
+ "questions": [
+  {
+   "id": "strict-001",
+   "category": "strict",
+   "text": "what country was John Hastings born in?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Kenilworth"
+   ],
+   "mustNotContain": [
+    "resting in peace",
+    "passed away",
+    "passed on",
+    "no longer with us"
+   ],
+   "notes": "Rick asked four times on 2026-09-07 and got the birth DATE (model chose operation=birth). Fixed 6940c5d0/ea588b97: a sentence asking WHERE gets the place. Record: 2 PLAC Kenilworth, Warwickshire, England.",
+   "mustMatchQueryDescription": [
+    "operation=birth-place"
+   ]
+  },
+  {
+   "id": "strict-002",
+   "category": "strict",
+   "text": "what country?",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustContain": [
+    "England"
+   ],
+   "mustNotContain": [
+    "videos",
+    "catalog items",
+    "captioned"
+   ],
+   "notes": "Live 2026-09-07: searched VIDEOS for the word 'country'. Fixed 31cd14df: a bare field follow-up carries the previous graph subject."
+  },
+  {
+   "id": "strict-003",
+   "category": "strict",
+   "text": "where was he born?",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "mustContain": [
+    "Kenilworth"
+   ],
+   "mustNotContain": [
+    "resting in peace",
+    "passed away",
+    "passed on"
+   ],
+   "notes": "Live 2026-09-07: death prose. Fixed ea588b97 (place guard) + 31cd14df (follow-up)."
+  },
+  {
+   "id": "strict-004",
+   "category": "strict",
+   "text": "whom did he marry",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "mustMatch": [
+    "Mortimer|Lancaster"
+   ],
+   "mustNotContain": [
+    "resting in peace",
+    "passed away",
+    "passed on",
+    "no longer with us"
+   ],
+   "notes": "Live 2026-09-07: death prose for a marriage question. Fixed ea588b97: a relation the sentence ASKS FOR beats the model's operation. Hastings' recorded spouses: Philippa de Mortimer; Elizabeth of Lancaster (annulled)."
+  },
+  {
+   "id": "strict-005",
+   "category": "strict",
+   "text": "tell me all about Edward III",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Windsor"
+   ],
+   "mustNotContain": [
+    "resting in peace",
+    "passed away",
+    "passed on",
+    "no longer with us"
+   ],
+   "notes": "Live 2026-09-07: 'has passed on and has been resting in peace since 21 June 1377'. Fixed ea588b97: a request for the whole person is a biography, not a death notice."
+  },
+  {
+   "id": "strict-006",
+   "category": "strict",
+   "text": "how am I related to King Edward III of England?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "18th-great-grandfather",
+    "John of Gaunt"
+   ],
+   "mustNotContain": [
+    "within 12 steps",
+    "couldn't find a family-tree link"
+   ],
+   "notes": "Live 2026-09-07: 'no chain ... within 12 steps'. Edward III is 20 generations straight up. Fixed 9217b12f: a direct-line climb runs before the decline; chain must be shown.",
+   "mustMatchQueryDescription": [
+    "relationship|common ancestor|kinship"
+   ]
+  },
+  {
+   "id": "strict-007",
+   "category": "strict",
+   "text": "trace my line back to europe",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustMatch": [
+    "Ireland|Scotland|England|Wales|France|United Kingdom"
+   ],
+   "mustNotContain": [
+    "nobody born in Europe",
+    "born 4 March 1959"
+   ],
+   "notes": "Live 2026-09-07: 'the tree records nobody born in Europe. The places it does reach: ... Ireland, the United Kingdom'. Fixed c54e5c4c: a bare 'my line' is a trail, and a continent is not a country."
+  },
+  {
+   "id": "strict-008",
+   "category": "strict",
+   "text": "find the birthplaces of my maternal lines back to europe",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Ireland"
+   ],
+   "mustNotContain": [
+    "nobody born in",
+    "born 4 March 1959"
+   ],
+   "notes": "Plural 'lines' missed the trail cue (every noun was singular). Fixed c54e5c4c. Rick's maternal line reaches Mary Catherine O'Connor, born Ireland, at generation 2."
+  },
+  {
+   "id": "strict-009",
+   "category": "strict",
+   "text": "find the birthplaces of my materanl lines back to europe",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Ireland"
+   ],
+   "mustNotContain": [
+    "nobody born in",
+    "born 4 March 1959"
+   ],
+   "notes": "Rick's exact typo. One transposed letter fell through to a birth-date answer. Fixed c54e5c4c: edit-distance-1 on the side word when a line noun follows."
+  },
+  {
+   "id": "strict-010",
+   "category": "strict",
+   "text": "how many people in the tree were born in england in total?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustMatch": [
+    "\\d[\\d,]* of the \\d[\\d,]* people"
+   ],
+   "mustNotContain": [
+    "named England",
+    "which one"
+   ],
+   "notes": "Live 2026-09-07: '49 people named England — which one?'. Fixed 78396d76 + wiring: a count with its denominator. England means England, not the United Kingdom, and never New England."
+  },
+  {
+   "id": "strict-011",
+   "category": "strict",
+   "text": "tell me about dad",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Richard"
+   ],
+   "mustNotContain": [
+    "which person you meant",
+    "Ask about one of them"
+   ],
+   "notes": "Live 2026-09-06/07: the translator emitted ['my dad','dad'] and the graph route declined asking which. Fixed a880168b + 1b3e512a + 608f12ff: one relative resolved once is one entry."
+  },
+  {
+   "id": "strict-012",
+   "category": "strict",
+   "text": "how is richard h breen jr related to king henry 8th?",
+   "expect": "graceful_decline",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustMatch": [
+    "don.t find"
+   ],
+   "mustNotContain": [
+    "which person you meant",
+    "Philippa",
+    "great-grand"
+   ],
+   "notes": "Live 2026-09-07: a MISSING person was reported as an AMBIGUOUS one. Henry VIII is in neither tree. Fixed (detector): digits allowed in names so the two-person shape is recognised and the missing side declines by name."
+  },
+  {
+   "id": "strict-013",
+   "category": "strict",
+   "text": "how are we related, if at all, to king henry the 8th?",
+   "expect": "graceful_decline",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustMatch": [
+    "don.t find"
+   ],
+   "mustNotContain": [
+    "Philippa",
+    "great-grand",
+    "Line:"
+   ],
+   "notes": "Live 2026-09-07: a TRUE answer about the wrong person — Philippa de Hainaut's chain, inherited from conversation focus. Fixed (detector): a counterpart the sentence names always beats focus."
+  },
+  {
+   "id": "strict-014",
+   "category": "strict",
+   "text": "tell me about Nathaniel Caleb Parker",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "Shrewsbury"
+   ],
+   "notes": "Anchor turn for strict-015; passed live 2026-09-07."
+  },
+  {
+   "id": "strict-015",
+   "category": "strict",
+   "text": "tell me about his parents",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustMatch": [
+    "Abigail Wright|Stephen Parker"
+   ],
+   "mustNotContain": [
+    "born 14 July 1760"
+   ],
+   "notes": "Live 2026-09-07: repeated Nathaniel's OWN biography. Fixed ea588b97: a relation the sentence asks for is the operation. Parents recorded: Abigail Wright and Stephen Parker Jr."
+  }
+ ]
+}

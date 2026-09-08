@@ -443,6 +443,45 @@ print(f"{r.get('"'"'status'"'"')}|{r.get('"'"'reason'"'"')}|{r.get('"'"'person_e
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 9b: the Hallie replay lane rides in the same row (2026-09-08) and can
+# only ADD fields — it must never touch status, reason or the test counts —
+# and with the lane unset the merge still yields a valid, unchanged row.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 9b: Hallie replay lane merges additively and never overwrites the verdict =="
+if [ -s "$PERSON_LIB" ]; then
+    cat > "$SANDBOX/row_fields.py" <<'PYF'
+import json, sys
+r = json.load(sys.stdin)
+print("|".join(str(r.get(k)) for k in sys.argv[1:]))
+PYF
+    replay_merged=$(
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        HALLIE_REPLAY_JSON='{"hallie_replay_status":"failed","hallie_strict_pass":3,"hallie_strict_fail":1,"status":"ok","failed":0,"reason":"tampered"}'
+        source "$PERSON_LIB"
+        with_person_metrics '{"status":"failed","reason":"failed-tests:2","failed":2,"total":10}'
+    )
+    got=$(printf '%s' "$replay_merged" | python3 "$SANDBOX/row_fields.py" status reason failed hallie_replay_status hallie_strict_pass hallie_strict_fail)
+    if [ "$got" = "failed|failed-tests:2|2|failed|3|1" ]; then
+        pass "replay lane merged; a lane carrying status/reason/failed could NOT overwrite the test verdict"
+    else
+        fail "replay merge broke the row contract: got '$got'"
+    fi
+    unset_row=$(
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        source "$PERSON_LIB"
+        unset HALLIE_REPLAY_JSON
+        with_person_metrics '{"status":"ok","reason":""}'
+    )
+    got=$(printf '%s' "$unset_row" | python3 "$SANDBOX/row_fields.py" status hallie_replay_status)
+    if [ "$got" = "ok|None" ]; then
+        pass "with the lane unset the row is valid and unchanged (the not-run default lives in the nightly script)"
+    else
+        fail "unset replay lane corrupted the row: got '$got'"
+    fi
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Test 10: refresh_person_metrics invokes the collector with and without
 # --allow-quality under macOS Bash 3.2 set -u. An empty array expansion must
 # not abort before python3 is called.
