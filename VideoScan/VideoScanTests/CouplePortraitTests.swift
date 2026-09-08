@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AppKit
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -17,6 +18,8 @@ import UniformTypeIdentifiers
 // temp directory; nothing here can see or write real prefs or the real
 // App Support folder.
 
+// Serialized: two cases touch the process-wide decoded-image cache.
+@Suite(.serialized)
 struct CouplePortraitTests {
 
     // MARK: Fixtures
@@ -202,6 +205,38 @@ struct CouplePortraitTests {
             at: makeImage(width: 400, height: 500, type: .png, in: dir), into: dir, defaults: rick)
         #expect(CouplePortraitPreference.load(from: rick, directory: dir) != nil)
         #expect(CouplePortraitPreference.load(from: other, directory: dir) == nil)
+    }
+
+    // MARK: Decoded-image cache
+
+    /// The process-wide cache is global state: a stale decoded image must
+    /// not outlive the file it came from. Import and remove both clear it.
+    @Test func importAndRemoveInvalidateTheDecodedCache() throws {
+        let dir = try tempDirectory()
+        let defaults = suite()
+        let cache = CouplePortraitImageCache.shared
+        let poison = NSImage(size: NSSize(width: 4, height: 4))
+
+        cache.store(poison, for: "portrait-stale.jpg")
+        #expect(cache.image(for: "portrait-stale.jpg") != nil)
+        try CouplePortraitPreference.importPhoto(
+            at: makeImage(width: 400, height: 500, type: .png, in: dir), into: dir, defaults: defaults)
+        #expect(cache.image(for: "portrait-stale.jpg") == nil, "import clears the cache")
+
+        cache.store(poison, for: "portrait-stale.jpg")
+        CouplePortraitPreference.remove(from: defaults, directory: dir)
+        #expect(cache.count == 0, "remove clears the cache")
+    }
+
+    @Test func cacheRoundTripsByFileName() {
+        let cache = CouplePortraitImageCache.shared
+        cache.invalidate()
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        cache.store(image, for: "a.jpg")
+        #expect(cache.image(for: "a.jpg") === image)
+        #expect(cache.image(for: "b.jpg") == nil)
+        cache.invalidate()
+        #expect(cache.count == 0)
     }
 
     // MARK: Sensor — cost of the one-time import

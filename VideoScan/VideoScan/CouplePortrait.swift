@@ -101,6 +101,7 @@ enum CouplePortraitPreference {
 
         let previous = load(from: defaults, directory: dir, fileManager: fileManager)?.url
         defaults.set(name, forKey: fileNameKey)
+        CouplePortraitImageCache.shared.invalidate()
         if let previous, previous != destination {
             try? fileManager.removeItem(at: previous)
         }
@@ -117,7 +118,35 @@ enum CouplePortraitPreference {
             try? fileManager.removeItem(at: current)
         }
         defaults.removeObject(forKey: fileNameKey)
+        CouplePortraitImageCache.shared.invalidate()
     }
+}
+
+// MARK: - Decoded-image cache
+
+/// One decoded portrait per process. The tile is drawn on two tabs and
+/// every tab switch rebuilds the view, so without this the photo was
+/// re-decoded from disk on each visit and the tile sat empty meanwhile
+/// (Rick, 2026-09-08: "cache that family photo too"). Keyed by file name;
+/// import/remove invalidate it.
+final class CouplePortraitImageCache: @unchecked Sendable {
+    static let shared = CouplePortraitImageCache()
+    private let lock = NSLock()
+    private var images: [String: NSImage] = [:]
+
+    func image(for fileName: String) -> NSImage? {
+        lock.withLock { images[fileName] }
+    }
+
+    func store(_ image: NSImage, for fileName: String) {
+        lock.withLock { images[fileName] = image }
+    }
+
+    func invalidate() {
+        lock.withLock { images.removeAll() }
+    }
+
+    var count: Int { lock.withLock { images.count } }
 }
 
 // MARK: - View
@@ -139,6 +168,16 @@ struct CouplePortraitView: View {
     @AppStorage(CouplePortraitPreference.fileNameKey) private var fileName = ""
     @AppStorage(CouplePortraitPreference.captionKey) private var caption = ""
     @State private var image: NSImage?
+
+    init(placement: Placement, height: CGFloat = 44, showsCaption: Bool = true) {
+        self.placement = placement
+        self.height = height
+        self.showsCaption = showsCaption
+        // Already decoded once this process? Start with it, so a rebuilt
+        // view (every tab switch) never shows the empty tile first.
+        let name = UserDefaults.standard.string(forKey: CouplePortraitPreference.fileNameKey) ?? ""
+        _image = State(initialValue: CouplePortraitImageCache.shared.image(for: name))
+    }
     @State private var editingCaption = false
     @State private var captionDraft = ""
 
@@ -264,11 +303,17 @@ struct CouplePortraitView: View {
             return
         }
         let url = choice.url
+        let name = url.lastPathComponent
+        if let cached = CouplePortraitImageCache.shared.image(for: name) {
+            image = cached
+            return
+        }
         // Decode off the main actor, bounded to what a 2× tile can show.
-        let decoded = await Task.detached(priority: .utility) { () -> NSImage? in
+        let decoded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard let cg = CropRenderer.boundedImage(at: url, maxPixels: 480) else { return nil }
             return NSImage(cgImage: cg, size: .zero)
         }.value
+        if let decoded { CouplePortraitImageCache.shared.store(decoded, for: name) }
         if !Task.isCancelled { image = decoded }
     }
 }
