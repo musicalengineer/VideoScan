@@ -299,13 +299,13 @@ struct RemoteViewerReadOnlySensorTests {
     }
 
     @Test func viewerReturnCannotSubmitPronunciationButPreviewRemainsAvailable() {
-        #expect(FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: false))
-        #expect(!FamilyTreeDemoView.allowsPronunciationSubmit(viewerMode: true))
-        #expect(FamilyTreeDemoView.allowsPronunciationPreview(viewerMode: false))
-        #expect(FamilyTreeDemoView.allowsPronunciationPreview(viewerMode: true))
-        #expect(FamilyTreeDemoView.pronunciationPreviewText(
+        #expect(FamilyTreeView.allowsPronunciationSubmit(viewerMode: false))
+        #expect(!FamilyTreeView.allowsPronunciationSubmit(viewerMode: true))
+        #expect(FamilyTreeView.allowsPronunciationPreview(viewerMode: false))
+        #expect(FamilyTreeView.allowsPronunciationPreview(viewerMode: true))
+        #expect(FamilyTreeView.pronunciationPreviewText(
             word: "Latta", draft: "  LAH-tuh  ") == "LAH-tuh")
-        #expect(FamilyTreeDemoView.pronunciationPreviewText(
+        #expect(FamilyTreeView.pronunciationPreviewText(
             word: "Latta", draft: "   ") == "Latta")
     }
 

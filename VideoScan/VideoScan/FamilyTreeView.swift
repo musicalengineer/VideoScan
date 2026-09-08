@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 /// through `PersonPhotoResolver` (choice › bridged profile cover › derived).
 /// Nothing here writes to the catalog, POI profiles, Apple Photos, or
 /// FamilySearch.
-struct FamilyTreeDemoView: View {
+struct FamilyTreeView: View {
     // `@StateObject` ≈ the view owns this object for its lifetime (created
     // once, survives re-renders) — unlike `@State` for plain values.
     @StateObject private var model: FamilyTreeLiveModel
@@ -1355,7 +1355,7 @@ struct FamilyTreeDemoView: View {
                     .frame(maxWidth: 170)
                     .onSubmit {
                         guard Self.allowsPronunciationSubmit() else {
-                            ViewerWriteGuard.refuse("FamilyTreeDemoView.submitPronunciation")
+                            ViewerWriteGuard.refuse("FamilyTreeView.submitPronunciation")
                             return
                         }
                         savePronunciation(word)

@@ -139,7 +139,7 @@ struct PersonFinderView: View {
     /// tree-link reducer verdict is not `.pinned`. Session-scoped on purpose:
     /// a filter that survived relaunch would hide people silently.
     @State var showMissingGEDCOM = false
-    /// Exact-record hint for the Family Tree tab (same key FamilyTreeDemoView
+    /// Exact-record hint for the Family Tree tab (same key FamilyTreeView
     /// reads); set alongside `ftHighlight` when the profile is pinned.
     @AppStorage("ftHighlightedPersonID") var ftHighlightID: String = ""
     /// One-photo-per-person memo for the gallery cards (2026-08-29).

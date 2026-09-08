@@ -113,7 +113,7 @@ struct ContentView: View {
                 case 4:
                     ArchiveView()
                 case 5:
-                    FamilyTreeDemoView(sharedModel: familyTreeModel)
+                    FamilyTreeView(sharedModel: familyTreeModel)
                 case 6:
                     VolumesWindow(embedded: true)
                 default:

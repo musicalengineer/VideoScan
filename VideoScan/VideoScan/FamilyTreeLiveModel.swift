@@ -649,7 +649,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     ///     up over a tree that had just been compiled successfully.
     ///
     /// And the operation was invisible: `loadPhase` is only rendered by
-    /// FamilyTreeDemoView while `loadState == .loading`, which this method
+    /// FamilyTreeView while `loadState == .loading`, which this method
     /// never set — so for 25 seconds the UI showed no spinner, no caption
     /// and no message. "Pressing Recompile does nothing" was, from the
     /// screen, exactly true.

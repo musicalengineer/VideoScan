@@ -77,8 +77,8 @@ struct FamilyTreeModelReuseTests {
         let box = try Sandbox(); defer { box.tearDown() }
         let model = FamilyTreeLiveModel(originalsDirectory: box.originals)
         let suite = UserDefaults(suiteName: "FamilyTreeModelReuseTests.\(UUID().uuidString)")!
-        let shared = FamilyTreeDemoView(sharedModel: model, preferences: suite)
-        let injected = FamilyTreeDemoView(model: model, preferences: suite)
+        let shared = FamilyTreeView(sharedModel: model, preferences: suite)
+        let injected = FamilyTreeView(model: model, preferences: suite)
         #expect(!shared.usesInjectedModelForTesting)
         #expect(injected.usesInjectedModelForTesting)
     }

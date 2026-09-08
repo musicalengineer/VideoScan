@@ -87,7 +87,7 @@ struct CropRendererMemoryTests {
             .deletingLastPathComponent()            // VideoScanTests
             .deletingLastPathComponent()            // VideoScan (project dir)
             .appendingPathComponent("VideoScan", isDirectory: true)
-        for name in ["FamilyTreeDemoView.swift", "FamilyPhotoAdjustSheet.swift", "CropGeometry.swift"] {
+        for name in ["FamilyTreeView.swift", "FamilyPhotoAdjustSheet.swift", "CropGeometry.swift"] {
             let text = try String(contentsOf: sources.appendingPathComponent(name), encoding: .utf8)
             for forbidden in ["tiffRepresentation", "NSImage(contentsOf", "NSImage(data", "NSBitmapImageRep(data"] {
                 #expect(!text.contains(forbidden), "\(name) uses \(forbidden) — decode must go through CropRenderer.boundedImage")

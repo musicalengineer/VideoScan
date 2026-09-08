@@ -147,7 +147,7 @@ struct FamilyTreeRecompileButtonTests {
     }
 
     /// While the compile runs the tab must be `.loading`, because that is
-    /// the only state in which FamilyTreeDemoView renders `loadPhase`.
+    /// the only state in which FamilyTreeView renders `loadPhase`.
     /// Without this the whole 25-second operation is invisible.
     @Test @MainActor func theCompileIsVisibleWhileItRuns() async throws {
         let box = try Sandbox(); defer { box.tearDown() }

@@ -3,13 +3,13 @@
 // the canvas, its portrait, the note row, the sidebar row, and the
 // FamilySearch match card.
 //
-// Split out of FamilyTreeDemoView.swift on 2026-08-30, which had reached
+// Split out of FamilyTreeView.swift on 2026-08-30, which had reached
 // 1,978 lines against SwiftLint's 1,000. A pure move: no view changed, no
 // logic changed, nothing renamed. Each of these already reads its own
 // palette from the environment, so they carry no dependency back on the
 // parent beyond the data passed in.
 //
-// The larger violation is not addressed here — FamilyTreeDemoView's own
+// The larger violation is not addressed here — FamilyTreeView's own
 // body is ~1,300 lines against a 600 limit, and shrinking THAT means
 // lifting the inspector out, which is a real change to how state is
 // threaded rather than a move. Left deliberately for a session with
