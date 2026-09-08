@@ -75,6 +75,14 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Stop:** any change to the deterministic-composer rule (no LLM phrasing of facts); any GEDCOM place that needs geocoding to classify (file an issue instead — country/continent come from `BirthplaceClassifier`).
 - **Brief:** the questions, before/after pass, and the real-tree answers verbatim so Rick can check them against FamilySearch in the morning.
 
+### T9 — Static-analysis morning report (Rick's Coverity habit)
+- **Rick, 2026-09-08:** at his medical-software company Coverity ran overnight and the morning report flagged recent code — dataflow findings no lint, compiler or reviewer catches. Swift's nearest equivalents, layered: **GitHub CodeQL** (dataflow engine, 28 Swift security-and-quality queries, free on this public repo), the **Swift compiler with `-strict-concurrency=complete` + upcoming features** (the checker for the bug class this codebase actually ships: actor isolation, `nonisolated async` traps), **Thread/Address Sanitizer** under the test suite (dynamic, self-hosted Mac only), **Periphery** (dead code), SwiftLint analyzer rules. SonarCloud (free for public repos, has Swift rules) is an optional second opinion — Rick's call.
+- **State today:** `.github/workflows/nightly-analysis.yml` already implements this design and has been red every night since 2026-08-20; CodeQL scanned 1 of 1,283 files. GH #171.
+- **Goal:** the workflow green; CodeQL scanning all Swift files; a morning report that lists **new-since-yesterday** findings (fingerprint-deduped) as GH issues labelled `analysis`, which T1 tackles a few at a time. Then CodeQL on every push/PR.
+- **Cap:** night 1 = #171 (make the two jobs real) + a `workflow_dispatch` run as evidence; night 2 = PR trigger + issue emitter; night 3 = TSan lane on the M1 runner.
+- **Stop:** any finding that needs a design change (file it, do not fix); any runner cost surprise.
+- **Brief:** files scanned, warnings by category, new findings with file:line, and the false-positive rate from the owner's triage.
+
 ## Night protocol
 
 1. Rick picks the theme before bed (`/loop` with the theme id, or a line in the team channel).
