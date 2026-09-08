@@ -13,6 +13,15 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **05:15** — the nightly's 900 s stall is **not reproduced** by hand: the
+  wrong tag (`qwen3.8:27b-mlx`) declines in 2.3 s (`modelUnavailable`), and
+  the nightly's own binary on the harness's stdin path with the right tag
+  ran two turns in 35 s and quit. What's left: the launchd environment at
+  02:37, and the fact that the harness throws the child's partial output
+  away on timeout (asked codex to keep it, #1204 — his file). Tomorrow's
+  02:00 run, with the preflight in place, is the next evidence. Note the two
+  hand turns were wrong again (`presence … 1990` for a birthplace question)
+  — the brain, unchanged since 21:00; your M5 decision stands.
 - **05:05** — reviewer done: 90 commits, 0 flagged (#1202) — and quiet on
   `ea588b97`, which had a known real defect. Section below; decision line
   updated (recommend devstral:24b). Tree clean at this commit; nothing else
