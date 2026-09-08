@@ -131,7 +131,8 @@ extension ArchivistGraphExecutor {
         // deep it runs. Only when the general search finds nothing, and only
         // up parent edges.
         if graph.relationshipPath(from: a, to: b) == nil {
-            for (subject, ancestor, subjectVoice) in [(a, b, voiceA), (b, a, voiceB)] {
+            for (subject, ancestor, subjectVoice, subjectBridge) in
+                    [(a, b, voiceA, bridges[0]), (b, a, voiceB, bridges[1])] {
                 guard let line = graph.directAncestorLine(from: subject, to: ancestor) else { continue }
                 let term = GedcomFamilyGraph.directAncestorTerm(generations: line.generations,
                                                                sex: ancestor.sex)
@@ -148,7 +149,7 @@ extension ArchivistGraphExecutor {
                         + "as recorded in the imported tree, not independently verified.",
                     evidence: ArchivistGraphEvidence(
                         subjectID: subject.id, subjectName: subject.name, birthDate: nil,
-                        deathDate: nil, relationships: [], identityBridge: bridges[0],
+                        deathDate: nil, relationships: [], identityBridge: subjectBridge,
                         counterpart: .init(id: ancestor.id, name: ancestor.name)),
                     candidates: [], profileCandidates: [], ambiguityCandidates: [],
                     catalogPersonName: nil)

@@ -136,7 +136,18 @@ extension GedcomFamilyGraph {
         while !frontier.isEmpty, generation < maxGenerations {
             var next: [Person] = []
             for person in frontier {
-                for parent in allRecordedParents(of: person) where depth[parent.id] == nil {
+                // THE PRIMARY FAMILY ONLY (codex #1182). `allRecordedParents`
+                // is the audit union — every FAMC family, adoptive and step
+                // and duplicate included — and its own doc says "never for
+                // prose". Climbing it and then declaring an unqualified
+                // "18th-great-grandfather" would quietly convert a recorded
+                // alternative family into biological lineage. This follows
+                // the same primary-family ruling `relatives(.parents)` uses
+                // (Rick, 2026-09-02: a family FamilySearch itself knows
+                // outranks a stray local one).
+                let primary = primaryParentFamily(of: person)
+                let parents = [primary?.husband, primary?.wife].compactMap { $0 }.compactMap { people[$0] }
+                for parent in parents where depth[parent.id] == nil {
                     depth[parent.id] = generation + 1
                     cameFrom[parent.id] = person.id
                     if parent.id == target.id {
