@@ -167,7 +167,10 @@ struct HallieCommonAncestorDetectTests {
         // The bare form still means "us and whoever we were talking about".
         #expect(Q.detect("how are we related") == .commonAncestor(a: nil, b: nil))
         // The owner: "me and Donna".
-        #expect(Q.detect("how am i related to donna") == nil, "\"am i\" is not a shape we claim (yet)")
+        #expect(Q.detect("how am i related to donna") == .commonAncestor(a: nil, b: "Donna"),
+                "claimed since the first strict replay showed it going to the model and declining")
+        #expect(Q.detect("how am I related to King Edward III of England?")
+                == .commonAncestor(a: nil, b: "King Edward Iii Of England"))
         #expect(Q.detect("are me and donna related") == .commonAncestor(a: nil, b: "Donna"))
         #expect(Q.detect("how are donna and i related") == .commonAncestor(a: "Donna", b: nil))
     }
@@ -591,5 +594,64 @@ struct HallieTwoRootOwnerTests {
         #expect(r.outcome == .answered, "got: \(r.prose)")
         #expect(!r.prose.hasPrefix("Which Donna"))
         #expect(r.basisLine.contains("a root of this tree"))
+    }
+}
+
+/// First strict replay, 2026-09-07: "king edward iii of england" is recorded
+/// as "Edward III of Windsor King of England" and "richard h breen jr" as
+/// "Richard Harding Breen Jr"; both fell through every resolver rung to
+/// "I don't find". Every remaining token of what was typed must appear in
+/// the record (an initial matches a token's first letter); title and grammar
+/// words are not tokens; never for a bare given name.
+@Suite("Lineage resolver — a titled or initialled name is recovered")
+struct HallieTitledNameRecoveryTests {
+    let graph = GedcomFamilyGraph(gedcomText: """
+    0 HEAD
+    0 @I1@ INDI
+    1 NAME Edward III of Windsor /King of England/
+    1 SEX M
+    0 @I2@ INDI
+    1 NAME Richard Harding /Breen/ Jr
+    1 SEX M
+    0 @I3@ INDI
+    1 NAME Richard Harding /Breen/ Sr
+    1 SEX M
+    0 @I4@ INDI
+    1 NAME Edward /Windsor/
+    1 SEX M
+    0 TRLR
+    """)
+    private typealias L = HallieLineageAnswer
+
+    @Test func regnalNameWithTitleWords() throws {
+        guard case .success(let p, let note)? = L.titledNameRecovery("king edward iii of england", graph: graph) else {
+            Issue.record("expected Edward III"); return
+        }
+        #expect(p.id == "@I1@")
+        #expect(note?.contains("taken as Edward III of Windsor King of England") == true)
+    }
+
+    @Test func anInitialMatchesTheFirstLetterOfAToken() throws {
+        guard case .success(let p, _)? = L.titledNameRecovery("richard h breen jr", graph: graph) else {
+            Issue.record("expected Richard Harding Breen Jr"); return
+        }
+        #expect(p.id == "@I2@", "Jr, not Sr — every typed token must be present")
+    }
+
+    @Test func severalMatchesAreAmbiguousNotGuessed() {
+        guard case .ambiguous(let people)? = L.titledNameRecovery("richard h breen", graph: graph) else {
+            Issue.record("expected both Richards"); return
+        }
+        #expect(people.count == 2)
+    }
+
+    /// A bare given name is never widened (codex #1162's rule).
+    @Test func aBareGivenNameIsNotRecovered() {
+        #expect(L.titledNameRecovery("edward", graph: graph) == nil)
+        #expect(L.titledNameRecovery("king edward", graph: graph) == nil, "one real token after grammar is stripped")
+    }
+
+    @Test func nothingMatchesNothing() {
+        #expect(L.titledNameRecovery("king henry 8th", graph: graph) == nil)
     }
 }

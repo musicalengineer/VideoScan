@@ -586,7 +586,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // Hainaut instead of a decline about a man who is in neither tree. A
         // counterpart the sentence NAMES always beats whoever the conversation
         // was about. `(we)` is a placeholder the side reader maps to the owner.
-        if let m = lower.firstMatch(of: /\b(?:how|so how)\s+(?:are|were)\s+(we|us)\s+related(?:,?\s+if\s+at\s+all,?)?\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/) {
+        if let m = lower.firstMatch(of: /\b(?:how|so how)\s+(?:are|were|am|is)\s+(we|us|i|me)\s+related(?:,?\s+if\s+at\s+all,?)?\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/) {
+            // "how am I related to King Edward III of England?" — the first
+            // strict replay (2026-09-07) showed this going to the MODEL as a
+            // two-person graph query and declining "which person you meant —
+            // Rick Breen or king edward iii". The owner and a named
+            // counterpart is exactly the pair shape; "am I" was simply never
+            // claimed. Same rule as "we": the named side wins over focus.
             if let b = commonAncestorName(String(m.2)), let name = b.name {
                 return .commonAncestor(a: nil, b: name)
             }
@@ -1442,12 +1448,56 @@ enum HallieLineageAnswer {
                 }
                 return .ambiguous(namesakes)
             }
+            // A TITLED OR INITIALLED NAME, last (first strict replay, 2026-09-07):
+            // "king edward iii of england" is recorded as "Edward III of
+            // Windsor King of England" and "richard h breen jr" as "Richard
+            // Harding Breen Jr"; both fell through every rung above to "I
+            // don't find". Every remaining token of the typed name must
+            // appear in the record's name (an initial matches a token's first
+            // letter); title and grammar words are not tokens. Never for a
+            // bare given name — two or more real tokens — so it cannot widen
+            // the given-name-only rule codex #1162 guards; one match is the
+            // person, several is a which-one, none falls to the decline.
+            if let recovered = titledNameRecovery(name, graph: graph) {
+                return recovered
+            }
             // The resolver's own honest answer (not found / which one?).
             return .failure(Result(
                 route: .graph,
                 outcome: r.conclusion == .answered ? .answered : .declined,
                 prose: r.prose, basisLine: r.basisLine,
                 queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
+        }
+    }
+
+    /// Words a person adds around a name that are not part of it.
+    private static let nameGrammar: Set<String> = [
+        "king", "queen", "prince", "princess", "sir", "lord", "lady", "earl", "duke",
+        "of", "the", "and", "de", "von", "van",
+    ]
+
+    static func titledNameRecovery(_ typed: String, graph: GedcomFamilyGraph) -> Detailed? {
+        let wanted = typed.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !nameGrammar.contains($0) }
+        guard wanted.count >= 2 else { return nil }
+        func matches(_ person: GedcomFamilyGraph.Person) -> Bool {
+            let have = person.name.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+            return wanted.allSatisfy { token in
+                token.count == 1
+                    ? have.contains { $0.hasPrefix(token) && $0.count > 1 }
+                    : have.contains(token)
+            }
+        }
+        let found = graph.people.values.filter(matches).sorted { $0.id < $1.id }
+        switch found.count {
+        case 0: return nil
+        case 1:
+            return .success(found[0], note: "“\(typed)” taken as \(found[0].name) — every word of the name you typed is in that record.")
+        default: return .ambiguous(found)
         }
     }
 
