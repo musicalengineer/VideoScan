@@ -13,6 +13,13 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **23:30** — main at `b7f5ec39` (17 commits tonight, unpushed): row 17
+  fixed ("find videos with dad" now finds the videos tagged Dad, and never
+  Timmy's when you ask for Tim); third lineage extraction landed
+  (`8824a0f0`), a fourth (three more sections, HallieLineageQuestion.swift
+  → 1,776 lines) in its full-suite checkpoint. Metrics measured at
+  `8824a0f0`: 35 files >1000 (was 36), 331 violations (was 332). One more
+  checkpoint cycle fits before I leave the M4 at 02:00.
 - **22:30** — main at `534506ad` + one refactor in checkpoint (unpushed, 12
   commits tonight). Hallie: four live-path bugs fixed and pinned (question
   never reached the guards; "what country?" → Rick; "tell me about dad" →
@@ -44,6 +51,7 @@ _(filled in as the night goes; latest entry on top)_
 | `2a837e4f` | refactor: the eight field guards → `ArchivistGraphQuery+FieldGuards.swift` (1815 → 1689 lines; nothing widened) | route suites 50/50; full 6845 / 1 known sensor |
 | `534506ad` | refactor: translator-output decoding → `ArchivistQueryAST+TranslatorDecoding.swift` (1133 → 715 lines; no private helper crossed) | 71/71; full 6845 / 1 known sensor |
 | `8824a0f0` | refactor: GEDCOM awareness + common-ancestor answers → two `HallieLineageAnswer+…` extension files (2904 → 2306 lines; the one private helper moved with its section) | 86/86 on 11 suites; full 6845 / 1 known sensor |
+| `b7f5ec39` | ledger row 17: a resolved identity is searched by every name its People profile lists — minus any spelling another profile answers to (brother Tim / son Timmy) | `HalliePresenceAliasSearchTests` 3 + 5 neighbours 57/57; full 6848 / 1 known sensor |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
