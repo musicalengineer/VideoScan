@@ -43,6 +43,7 @@ _(filled in as the night goes; latest entry on top)_
 | `d9d8c808` | brief + ledger rows 18–21 | — |
 | `2a837e4f` | refactor: the eight field guards → `ArchivistGraphQuery+FieldGuards.swift` (1815 → 1689 lines; nothing widened) | route suites 50/50; full 6845 / 1 known sensor |
 | `534506ad` | refactor: translator-output decoding → `ArchivistQueryAST+TranslatorDecoding.swift` (1133 → 715 lines; no private helper crossed) | 71/71; full 6845 / 1 known sensor |
+| `8824a0f0` | refactor: GEDCOM awareness + common-ancestor answers → two `HallieLineageAnswer+…` extension files (2904 → 2306 lines; the one private helper moved with its section) | 86/86 on 11 suites; full 6845 / 1 known sensor |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
@@ -66,9 +67,9 @@ Baseline captured at `5398c6fa` before any refactoring (production Swift only):
 
 | metric | baseline | after the day's fixes (`fdd88038`) | after the refactors |
 |---|---|---|---|
-| files over the 1000-line guideline | 36 | 36 | 35 at `534506ad` (ArchivistQueryAST) |
-| swiftlint violations (all rules) | 332 | 332 | 332 — the moves carry their warnings with them; nothing was hidden |
-| cyclomatic complexity > 15 | 91 | 91 | 91 |
+| files over the 1000-line guideline | 36 | 36 | **35** at `8824a0f0` (ArchivistQueryAST under; HallieLineageQuestion still 2,306) |
+| swiftlint violations (all rules) | 332 | 332 | **331** at `8824a0f0` — one File Length gone; every other warning travelled with its code, none hidden |
+| cyclomatic complexity > 15 | 91 | 91 | 91 — no function was split; that is design work, not a night move |
 | function body > 80 lines | 100 | |
 | file length > 1000 | 36 | |
 | force unwraps | 33 | |

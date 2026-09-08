@@ -158,7 +158,7 @@ and "not in the tree" is a real answer that this tree can support.
 
 | # | asked | what came back | root cause | status |
 |---|-------|----------------|-----------|--------|
-| 17 | "find videos with dad" | "I took 'dad' to mean Richard. I don't have any videos tagged with Richard yet." | The People-tab binding correctly resolved "dad" → Richard, then the catalog was searched for the ONE bound spelling. The catalog tags carry the aliases ("Dad", "Richard Breen Sr"); a resolved identity must search by all of its names, not by whichever one won the binding. Rank-1 boundary (codex #1182). | **OPEN** |
+| 17 | "find videos with dad" | "I took 'dad' to mean Richard. I don't have any videos tagged with Richard yet." | The People-tab binding correctly resolved "dad" → Richard, then the catalog was searched for the ONE bound spelling. The catalog tags carry the aliases ("Dad", "Richard Breen Sr"); a resolved identity must search by all of its names, not by whichever one won the binding. Rank-1 boundary (codex #1182). | **FIXED** 09/07 late: `ArchivistPresenceQuery.Identity` carries the profile's other spellings; a spelling any OTHER profile answers to is never widened (brother Tim / son Timmy). `HalliePresenceAliasSearchTests`; checkpoint pending |
 
 ### Proposed fixes, smallest first
 
