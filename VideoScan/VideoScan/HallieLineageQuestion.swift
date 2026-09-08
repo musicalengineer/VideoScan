@@ -580,19 +580,30 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// owner (nil). A media noun anywhere means a catalog ask — not ours.
     static func commonAncestorQuestion(in lower: String) -> HallieLineageQuestion? {
         guard lower.firstMatch(of: mediaNoun) == nil else { return nil }
+        // "how are we related, if at all, to king henry the 8th?" — Rick, live
+        // 2026-09-07. The bare "we" form matched first and was filled from
+        // conversation FOCUS, so a true answer came back about Philippa de
+        // Hainaut instead of a decline about a man who is in neither tree. A
+        // counterpart the sentence NAMES always beats whoever the conversation
+        // was about. `(we)` is a placeholder the side reader maps to the owner.
+        if let m = lower.firstMatch(of: /\b(?:how|so how)\s+(?:are|were)\s+(we|us)\s+related(?:,?\s+if\s+at\s+all,?)?\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/) {
+            if let b = commonAncestorName(String(m.2)), let name = b.name {
+                return .commonAncestor(a: nil, b: name)
+            }
+        }
         let patterns: [Regex<(Substring, Substring, Substring)>] = [
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
-            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
-            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z(][a-z .,'()-]*?)\s+related\s+to\s+([a-z(][a-z .,'()-]*?)\s*$/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:related|connected|linked|kin)\b/,
+            /\b(?:how|so how)\s+(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:related|connected|kin|cousins|blood relatives|relatives)(?:\s+(?:at all|somehow|by blood))?\s*$/,
+            /^(?:so\s+)?(?:is|are|was|were)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+related\s+to\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s*$/,
             // "most recent" / "latest" / "recent" common ancestor, and a
             // trailing "born 1959" qualifier (Rick 2026-08-28 live).
-            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\b(?:do|did|does)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
-            /\bwhat\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
-            /\b([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
-            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z(][a-z .,'()-]*?)\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
-            /\bwhere\s+(?:do|does|did)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:and|&)\s+([a-z(][a-z .,'()-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
+            /\b(?:nearest|closest|common|shared|most recent|latest|recent|first)\s+(?:common\s+|shared\s+)?ancestors?\s+(?:of|between|for|shared by)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\b(?:do|did|does)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:share|have)\s+(?:an?\s+|any\s+)?(?:common\s+|shared\s+)?ancestors?\b/,
+            /\bwhat\s+(?:do|does|did)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+have\s+in\s+common\s+(?:ancestrally|genealogically|in the (?:family )?tree|as ancestors)\b/,
+            /\b([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)'?s?\s+(?:nearest\s+|closest\s+)?(?:common|shared)\s+ancestors?\b/,
+            /\bwho\s+(?:is|was)\s+(?:the\s+)?(?:nearest\s+|closest\s+|most recent\s+)?(?:common|shared)\s+ancestor\s+(?:of|between)\s+([a-z0-9(][a-z0-9 .,'()-]*?)\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:\s+(?:born|b\.)\s+(?:in\s+)?\d{4})?\s*$/,
+            /\bwhere\s+(?:do|does|did)\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:'s)?\s+(?:and|&)\s+([a-z0-9(][a-z0-9 .,'()-]*?)(?:'s)?\s+(?:lines?|trees?|famil(?:y|ies)|ancestr(?:y|ies))\s+(?:meet|cross|join|connect|converge)\b/,
         ]
         for pattern in patterns {
             guard let m = lower.firstMatch(of: pattern) else { continue }
@@ -661,7 +672,15 @@ enum HallieLineageQuestion: Equatable, Sendable {
         let nobody: Set<String> = ["they", "them", "we", "us", "you", "he", "she", "it", "family", "everyone", "anyone", "people", "each other"]
         if owner.contains(s) { return (nil, ()) }
         if nobody.contains(s) || s.isEmpty { return nil }
-        guard s.split(separator: " ").count <= 5 else { return nil }
+        // Eight words, not five (2026-09-07): a twenty-generation FamilySearch
+        // tree names people like "edward iii of windsor king of england", and
+        // the five-word cap rejected the counterpart of "how are we related to
+        // edward iii of windsor king of england" — so the bare "we" form took
+        // over and answered from conversation focus. The cap only guards a
+        // runaway lazy capture, and every pattern above is bounded by a
+        // relation word or the end of the sentence; a longer junk capture
+        // simply fails to resolve and declines by name.
+        guard s.split(separator: " ").count <= 8 else { return nil }
         return (capitalizedName(s), ())
     }
 
@@ -1030,7 +1049,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
     }
 
     static func capitalizedName(_ name: String) -> String {
-        name.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+        // "8th" stays "8th" — `capitalized` would make it "8Th" (Henry VIII
+        // tests, 2026-09-07), and that spelling reaches the decline prose.
+        name.split(separator: " ")
+            .map { $0.first?.isNumber == true ? String($0) : $0.capitalized }
+            .joined(separator: " ")
     }
 
     /// "maternal" / "mother's" → .maternal; "paternal" / "father's" →

@@ -152,6 +152,20 @@ struct HallieCommonAncestorDetectTests {
         #expect(Q.detect("rick and donna's common ancestor") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("who was the common ancestor between rick and donna") == .commonAncestor(a: "Rick", b: "Donna"))
         #expect(Q.detect("where do rick's and donna's lines meet") == .commonAncestor(a: "Rick", b: "Donna"))
+        // Rick, live 2026-09-07 — the Henry VIII pair. A regnal number is
+        // digits, which the name class excluded, so "king henry 8th" matched
+        // nothing and the turn fell to the model. And "how are we related,
+        // if at all, to X" matched the bare "we" form and was filled from
+        // conversation FOCUS — a true answer about Philippa de Hainaut in
+        // place of "Henry VIII is not in the tree".
+        #expect(Q.detect("how is richard h breen jr related to king henry 8th?")
+                == .commonAncestor(a: "Richard H Breen Jr", b: "King Henry 8th"))
+        #expect(Q.detect("how are we related, if at all, to king henry the 8th?")
+                == .commonAncestor(a: nil, b: "King Henry The 8th"))
+        #expect(Q.detect("how are we related to edward iii of windsor king of england")
+                == .commonAncestor(a: nil, b: "Edward Iii Of Windsor King Of England"))
+        // The bare form still means "us and whoever we were talking about".
+        #expect(Q.detect("how are we related") == .commonAncestor(a: nil, b: nil))
         // The owner: "me and Donna".
         #expect(Q.detect("how am i related to donna") == nil, "\"am i\" is not a shape we claim (yet)")
         #expect(Q.detect("are me and donna related") == .commonAncestor(a: nil, b: "Donna"))
