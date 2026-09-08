@@ -66,6 +66,14 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Loop:** rerun reds three times; classify flaky vs real; fix the test or file the bug; quarantine with a linked issue only as a last resort.
 - **Cap:** the nightly's red list.
 
+### T8 — Birthplace trails that a computer should find easy
+- **Rick, 2026-09-08:** Donna and Tim asked for birthplaces along a side of the family — "list all the birthplaces on my paternal side until you get to a place in England", "back 10 generations", countries/towns/whatever the GEDCOM has — and Hallie could not. `HallieBirthplaceTrail.swift` already handles the demo forms (maternal line until outside the USA; how many generations to Europe) but not: a **named stop** (England, Ireland, a town), an explicit **depth** ("back 10 generations", "10 generations of birthplaces"), **paternal** phrasing variants, and the plain **list** form ("list/read/give me the birthplaces …"). Codex's nightly review also found the continent stop-key bug (`replacingOccurrences(of: " ", with: " ")` no-op in `trailStopKey`).
+- **Goal:** every harvested birthplace question passes on the eval corpus AND against the real tree (Rick's paternal/maternal lines, Donna's), with the answer read in generation order, one line per person: name, year, place, and a final line naming where the stop was hit or that the trail ran out (with the last known place).
+- **Loop:** harvest the exact phrasings from Rick/Donna/Tim first (ask; do not invent); add them to `tests/hallie_eval_corpus.json` with answer-shaped expectations; extend the cue grammar (stop = country | continent | town | "outside <place>"; depth = N generations | until stop | whole line; side = paternal/maternal/father's/mother's/dad's/mom's/<name>'s <side>); fix the stop-key bug; verify on the real tree by replay.
+- **Cap:** one night for parser + list form + named stop; a second for depth/count variants if needed.
+- **Stop:** any change to the deterministic-composer rule (no LLM phrasing of facts); any GEDCOM place that needs geocoding to classify (file an issue instead — country/continent come from `BirthplaceClassifier`).
+- **Brief:** the questions, before/after pass, and the real-tree answers verbatim so Rick can check them against FamilySearch in the morning.
+
 ## Night protocol
 
 1. Rick picks the theme before bed (`/loop` with the theme id, or a line in the team channel).
