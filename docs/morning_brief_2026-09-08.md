@@ -13,6 +13,11 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **01:41** — quiet hold, nothing of mine on the M4. For the record: Adobe
+  Creative Cloud (IPCBroker 107 %, Creative Cloud 82 %, Desktop Service 82 %)
+  was pegging three cores twenty minutes before the 02:00 nightly; if the
+  timing sensors in tonight's nightly read slow, that is the likelier cause.
+  Not touched — your processes.
 - **00:00** — main at `d5ce38b2` + this brief (20 commits tonight, unpushed).
   Fourth lineage extraction landed; measured at `d5ce38b2`: 35 files >1000,
   330 violations, 91 / 100 complexity unchanged. Nothing further queued
