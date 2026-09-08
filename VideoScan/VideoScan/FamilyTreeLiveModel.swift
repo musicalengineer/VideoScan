@@ -503,6 +503,23 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     // MARK: Loading
 
+    /// The tab's source revision (archive root / online / identity /
+    /// read-only) at the last successful load. The model now outlives the
+    /// tab (ContentView owns it, 2026-09-08 — Rick: "cache it"), so a
+    /// re-appearance with the same revision keeps the tree it has instead
+    /// of flashing the demo tree and waiting on a reload.
+    private(set) var loadedRevision: String?
+
+    /// True when the tab must (re)load on appearance: never loaded, no
+    /// live graph, or the source revision changed while it was away.
+    func needsLoad(for revision: String) -> Bool {
+        !isLive || loadedRevision != revision
+    }
+
+    func markLoaded(revision: String) {
+        loadedRevision = revision
+    }
+
     /// Read the newest .ged off the main thread, then install it. Safe to
     /// call more than once (e.g. after the user drops a file in): loads
     /// are serialized, never concurrent, so two callers cannot race the

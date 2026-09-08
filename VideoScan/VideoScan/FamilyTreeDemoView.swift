@@ -100,6 +100,22 @@ struct FamilyTreeDemoView: View {
         usesInjectedModel = model != nil
         _model = StateObject(wrappedValue: model ?? FamilyTreeLiveModel())
         self.preferences = preferences
+        _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
+        _appearance = State(initialValue: FamilyTreeAppearancePreference.load(from: preferences))
+    }
+
+    /// Production: the model is owned by ContentView and outlives this
+    /// view, so switching tabs and back keeps the loaded tree (no demo
+    /// flash, no reload). Unlike `init(model:)` — the test seam — this
+    /// model is still configured from the production source and reloads
+    /// when the source revision changes.
+    /// Test sensor: which initialiser built this view.
+    var usesInjectedModelForTesting: Bool { usesInjectedModel }
+
+    init(sharedModel: FamilyTreeLiveModel, preferences: UserDefaults = .standard) {
+        usesInjectedModel = false
+        _model = StateObject(wrappedValue: sharedModel)
+        self.preferences = preferences
         // `State(initialValue:)` ≈ member initializer for @State storage;
         // it is read once when the view is first created.
         _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
@@ -316,10 +332,26 @@ struct FamilyTreeDemoView: View {
             }
         }
         .task(id: sourceRevision) {
+            let revision = sourceRevision
+            // A shared model that already holds this revision's tree keeps
+            // it: no demo flash, no graph reload on every tab switch. The
+            // notes index is still refreshed — Hallie may have learned
+            // something while the tab was away (codex #1210) — it is one
+            // small file, off the main actor.
+            guard model.needsLoad(for: revision) else {
+                await model.loadCyberBrain()
+                handleIncomingHighlight()
+                return
+            }
+            let clock = ContinuousClock()
+            let start = clock.now
             if !usesInjectedModel {
                 model.configure(source: FamilyAssetConfigurationCenter.shared.snapshot())
             }
             await model.loadFromDisk()
+            FamilyTreeLiveModel.logStep("tab: load on appear", took: clock.now - start,
+                                        people: model.peopleCount, always: true)
+            model.markLoaded(revision: revision)
             await model.loadCyberBrain()
             handleIncomingHighlight()
         }

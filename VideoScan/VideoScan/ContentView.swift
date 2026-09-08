@@ -7,6 +7,10 @@ struct ContentView: View {
     @EnvironmentObject var catalogSync: CatalogSync
     @StateObject private var personFinderModel = PersonFinderModel()
     @StateObject private var identifyFamilyModel = IdentifyFamilyModel()
+    /// Owned here, not by the tab, so the loaded tree survives switching
+    /// away and back (Rick 2026-09-08: the demo tree flashed for 3-4 s on
+    /// every switch while the tab rebuilt its model and reloaded).
+    @StateObject private var familyTreeModel = FamilyTreeLiveModel()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     /// Family Tree tab dot: pulsing while a FamilySearch download runs in
     /// Terminal, green when it's ready to install, orange on a problem.
@@ -109,7 +113,7 @@ struct ContentView: View {
                 case 4:
                     ArchiveView()
                 case 5:
-                    FamilyTreeDemoView()
+                    FamilyTreeDemoView(sharedModel: familyTreeModel)
                 case 6:
                     VolumesWindow(embedded: true)
                 default:
