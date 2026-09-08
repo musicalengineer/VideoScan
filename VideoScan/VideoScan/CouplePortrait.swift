@@ -158,6 +158,7 @@ struct CouplePortraitView: View {
     enum Placement: String {
         case familyTree
         case people
+        case archive
     }
 
     let placement: Placement

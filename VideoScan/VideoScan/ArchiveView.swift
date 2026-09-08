@@ -181,6 +181,21 @@ struct ArchiveView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
+                    // Whose archive this is, and the two people at its
+                    // centre (Rick 2026-09-08). Name from the designated
+                    // root folder; photo per-user (CouplePortrait.swift).
+                    VStack(spacing: 10) {
+                        Text(MasterArchiveLayout.displayName(forRootPath: model.masterArchive?.rootPath))
+                            .font(.system(size: 20, weight: .semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .accessibilityIdentifier("archive.familyName")
+                        CouplePortraitView(placement: .archive, height: 240)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .padding(.top, 10)
+                    .padding(.bottom, 14)
+
                     masterArchivePanel
                         .padding(.horizontal, 8)
                         .padding(.bottom, 12)

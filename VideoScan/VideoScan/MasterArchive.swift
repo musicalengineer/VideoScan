@@ -113,6 +113,18 @@ extension ArchivePathResolver {
 /// disk, which is the thing that is actually true.)
 enum MasterArchiveLayout {
     static let rootFolderName = "Breen_Family_Archive"
+
+    /// The archive's name as a person would say it: the root folder's name
+    /// with underscores as spaces ("Breen Family Archive"). Derived from
+    /// the designated path, not from `rootFolderName`, so another family
+    /// running this code sees their own name once the folder constant is
+    /// made configurable (Rick 2026-09-08). No designation → the generic.
+    static func displayName(forRootPath rootPath: String?) -> String {
+        guard let rootPath, !rootPath.isEmpty else { return "Family Archive" }
+        let leaf = (rootPath as NSString).lastPathComponent
+        let words = leaf.split(whereSeparator: { $0 == "_" || $0 == " " }).map(String.init)
+        return words.isEmpty ? "Family Archive" : words.joined(separator: " ")
+    }
     static let indexFolder = "00_Index"
     static let photosBucket = "10_Photos"
     static let audioBucket = "20_Audio"
