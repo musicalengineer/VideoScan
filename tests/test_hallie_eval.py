@@ -770,3 +770,179 @@ class SelectDirectiveTests(unittest.TestCase):
         ]).splitlines()
         self.assertEqual(batch, [":reset", ":select Christmas_1994_etc.mkv",
                                  "when was this filmed", "how old was Timmy in this", ":quit"])
+
+
+class NightlyReplayVerdictTests(unittest.TestCase):
+    def replay(self, returncode=0, turns=None, timeout=False, mutate_corpus=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus.json"
+            corpus.write_text(json.dumps({"questions": [
+                {"id": "q1", "text": "Where was Alpha born?", "expect": "biography"}
+            ]}))
+            binary = root / "VideoScan"
+            binary.touch()
+            output = root / "run.jsonl"
+            args = SimpleNamespace(corpus=str(corpus), limit=None, no_compose=True,
+                                   host="http://fixture", model="fixture-model",
+                                   bin=str(binary), timeout=1, out=str(output),
+                                   build_sha="built-source-sha")
+            result = (hallie_eval.subprocess.TimeoutExpired("fixture", 1) if timeout
+                      else SimpleNamespace(returncode=returncode, stdout="", stderr="fixture failure"))
+            original_hash = hallie_eval.hashlib.sha256(corpus.read_bytes()).hexdigest()
+            results = iter([result, SimpleNamespace(stdout="checkout-sha\n")])
+
+            def invoke(*args, **kwargs):
+                if mutate_corpus:
+                    corpus.write_text('{"questions": []}')
+                response = next(results)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+            with patch.object(hallie_eval.subprocess, "run", side_effect=invoke), \
+                    patch.object(hallie_eval, "read_run_turns", return_value=turns or []), \
+                    redirect_stdout(io.StringIO()), patch("sys.stderr", new_callable=io.StringIO):
+                code = hallie_eval.run(args)
+            meta = json.loads(output.read_text().splitlines()[0])["meta"]
+            self.assertEqual(meta["corpusSHA256"], original_hash)
+            return code, meta
+
+    def test_missing_answer_fails_and_records_completion(self):
+        code, meta = self.replay()
+        self.assertEqual(code, 2)
+        self.assertEqual(meta["questions"], 1)
+        self.assertEqual(meta["paired"], 0)
+        self.assertEqual(meta["expectedIDs"], ["q1"])
+
+    def test_nonzero_exit_fails_even_when_all_answers_arrived(self):
+        turns = [{"kind": "user", "text": "Where was Alpha born?"},
+                 {"kind": "assistant", "text": "Alpha was born in Ireland.",
+                  "route": "graph", "outcome": "answered"}]
+        code, meta = self.replay(returncode=65, turns=turns)
+        self.assertEqual(code, 2)
+        self.assertEqual(meta["paired"], 1)
+        self.assertEqual(meta["processReturnCode"], 65)
+
+    def test_timeout_preserves_failure_artifact(self):
+        code, meta = self.replay(timeout=True)
+        self.assertEqual(code, 2)
+        self.assertTrue(meta["timedOut"])
+        self.assertEqual(meta["processReturnCode"], 124)
+
+    def test_corpus_edited_during_replay_does_not_change_attestation(self):
+        _, meta = self.replay(mutate_corpus=True)
+        self.assertEqual(meta["questions"], 1)
+        self.assertEqual(meta["expectedIDs"], ["q1"])
+
+    def test_repair_cannot_borrow_old_process_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus.json"
+            corpus.write_text(json.dumps({"questions": [{"id": "q1", "text": "Hello"}]}))
+            previous = root / "old.jsonl"
+            previous.write_text(json.dumps({"meta": {
+                "runID": "old", "processReturnCode": 0, "corpusSHA256": "oldhash"
+            }}) + "\n")
+            output = root / "repaired.jsonl"
+            with patch.object(hallie_eval, "read_run_turns", return_value=[]), redirect_stdout(io.StringIO()):
+                hallie_eval.pair(SimpleNamespace(corpus=str(corpus), run=str(previous),
+                                                run_id="different", out=str(output)))
+            meta = json.loads(output.read_text().splitlines()[0])["meta"]
+            self.assertIsNone(meta["processReturnCode"])
+            self.assertIsNone(meta["corpusSHA256"])
+            self.assertEqual(meta["runID"], "different")
+
+    def test_complete_run_records_requested_configuration_and_attested_build(self):
+        turns = [{"kind": "user", "text": "Where was Alpha born?"},
+                 {"kind": "assistant", "text": "Alpha was born in Ireland.",
+                  "route": "graph", "outcome": "answered"}]
+        code, meta = self.replay(turns=turns)
+        self.assertEqual(code, 0)
+        self.assertEqual(meta["requestedModel"], "fixture-model")
+        self.assertEqual(meta["buildSHA"], "built-source-sha")
+        self.assertEqual(meta["git"], "checkout-sha")
+        self.assertEqual(len(meta["corpusSHA256"]), 64)
+
+    def grade(self, records, meta, strict=True):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run.jsonl"
+            run.write_text("\n".join(json.dumps(row) for row in
+                                     [{"meta": meta}] + records) + "\n")
+            with redirect_stdout(io.StringIO()):
+                code = hallie_eval.grade(SimpleNamespace(
+                    run=str(run), compare=None, show=0, strict=strict))
+            return code, json.loads(run.with_suffix(".summary.json").read_text())
+
+    def test_strict_mismatch_fails_advisory_is_not_called_passed(self):
+        records = [{"id": "q1", "answer": "Alpha was born in France.",
+                    "route": "graph", "outcome": "answered", "mustContain": ["Ireland"]}]
+        meta = {"questions": 1, "expectedIDs": ["q1"], "processReturnCode": 0}
+        code, report = self.grade(records, meta)
+        self.assertEqual((code, report["status"]), (1, "failed"))
+        code, report = self.grade(records, meta, strict=False)
+        self.assertEqual((code, report["status"]), (0, "advisory"))
+
+    def test_strict_completeness_checks_ids_not_just_count(self):
+        records = [{"id": "wrong-id", "answer": "Alpha was born in Ireland.",
+                    "route": "graph", "outcome": "answered"}]
+        code, report = self.grade(records, {
+            "questions": 1, "expectedIDs": ["q1"], "processReturnCode": 0})
+        self.assertEqual((code, report["status"]), (2, "incomplete"))
+
+    def test_zero_turns_and_legacy_unattested_run_cannot_pass_strict(self):
+        for records, meta in [([], {"questions": 0, "expectedIDs": [], "processReturnCode": 0}),
+                              ([{"id": "q1", "answer": "Alpha was born in Ireland.",
+                                 "route": "graph", "outcome": "answered"}], {})]:
+            with self.subTest(meta=meta):
+                code, report = self.grade(records, meta)
+                self.assertEqual((code, report["status"]), (2, "incomplete"))
+
+    def test_strict_correct_complete_run_passes(self):
+        code, report = self.grade([{
+            "id": "q1", "answer": "Alpha was born in Ireland.", "route": "graph",
+            "outcome": "answered", "mustContain": ["Ireland"]
+        }], {"questions": 1, "expectedIDs": ["q1"], "processReturnCode": 0})
+        self.assertEqual((code, report["status"]), (0, "passed"))
+
+    def test_query_and_card_contracts_survive_pairing_and_reject_wrong_person(self):
+        questions = [{"id": "q1", "text": "Where was Alpha born?",
+                      "mustMatchQueryDescription": [r"operation=birthPlace", r"person=Alpha"],
+                      "mustMatchAttachmentOutline": [r"@ALPHA@", r"Ireland"]}]
+        events = [{"kind": "user", "text": questions[0]["text"]},
+                  {"kind": "assistant", "route": "graph", "outcome": "answered",
+                   "text": "Alpha was born in Ireland.",
+                   "queryDescription": "shape=graph operation=birthPlace person=Beta",
+                   "attachmentOutline": ["Beta (@BETA@), France"]}]
+        records, _, _ = hallie_eval.build_records(questions, events)
+        flags = hallie_eval.grade_record(records[0])
+        self.assertIn("query_description_mismatch", flags)
+        self.assertIn("attachment_outline_mismatch", flags)
+        events[1].update(queryDescription="shape=graph operation=birthPlace person=Alpha",
+                         attachmentOutline=["Alpha (@ALPHA@), Ireland"])
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertEqual(hallie_eval.grade_record(records[0]), [])
+
+    def test_invalid_structural_regex_is_a_defect(self):
+        flags = hallie_eval.grade_record({
+            "answer": "Alpha was born in Ireland.", "route": "graph", "outcome": "answered",
+            "mustMatchQueryDescription": ["["]})
+        self.assertIn("invalid_expected_regex", flags)
+
+    def test_duplicate_completed_ids_do_not_pass(self):
+        record = {"id": "q1", "answer": "Alpha was born in Ireland.",
+                  "route": "graph", "outcome": "answered"}
+        code, report = self.grade([record, record], {
+            "questions": 2, "expectedIDs": ["q1", "q2"], "processReturnCode": 0})
+        self.assertEqual((code, report["status"]), (2, "incomplete"))
+
+    def test_grade_summary_reports_missing_separately_from_defects(self):
+        code, report = self.grade([], {
+            "questions": 12, "expectedIDs": [f"q{i}" for i in range(12)],
+            "processReturnCode": 124, "timedOut": True})
+        self.assertEqual(code, 2)
+        self.assertEqual(report["total"], 0)
+        self.assertEqual(report["missing"], 12)
+        self.assertEqual(report["clean"], 0)
+        self.assertEqual(report["defects"], 0)
+        self.assertTrue(report["incomplete"])

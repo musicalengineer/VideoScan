@@ -6,17 +6,22 @@ session (the 7k-record catalog loads once), then joins the questions to the
 structured turns Hallie writes to her JSONL conversation log — route, outcome,
 composedBy, basis, evidence — and grades them.
 
-The point is a repeatable before/after number for "does she feel like a person
-who knows this family", not a pass/fail gate. Grades are heuristic and
-deliberately conservative: they flag what a human should read, they do not
-pretend to judge warmth on their own.
+Default grading is advisory: a repeatable before/after signal, not a semantic
+truth oracle. --strict promotes defects to a failing exit for reviewed
+regression manifests. Both modes reject incomplete runs. GRADE_SUMMARY and
+the sibling .summary.json expose completion separately from answer defects.
 
 Usage:
   scripts/hallie_eval.py run   --corpus tests/hallie_eval_corpus.json --out runs/base.jsonl
   scripts/hallie_eval.py grade --run runs/base.jsonl [--compare runs/prev.jsonl]
+  scripts/hallie_eval.py grade --run runs/regressions.jsonl --strict
+
+Exit codes: run 0 complete / 2 incomplete; grade 0 complete advisory or strict
+pass / 1 strict defects / 2 incomplete. Invalid inputs may also fail nonzero.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -92,7 +97,7 @@ def pair_turns(turns):
                 part for part in (prev.get("text", ""), t.get("text", "")) if part
             )
             prev["outcomes"] = prev.get("outcomes", []) + [t.get("outcome")]
-            for key in ("mediaEvidence", "knowledgeEvidence"):
+            for key in ("mediaEvidence", "knowledgeEvidence", "attachmentOutline"):
                 if t.get(key):
                     prev[key] = list(prev.get(key) or []) + list(t[key])
             # A decline in ANY clause is a defect for the whole question:
@@ -104,9 +109,10 @@ def pair_turns(turns):
 
 
 
-def load_corpus(path):
-    with open(path) as f:
-        data = json.load(f)
+def load_corpus(path, *, source_text=None):
+    if source_text is None:
+        source_text = Path(path).read_text(encoding="utf-8")
+    data = json.loads(source_text)
     if isinstance(data, list):
         return data
     if "questions" in data:
@@ -283,6 +289,8 @@ def build_records(questions, turns):
                 "mustContain": q.get("mustContain", []),
                 "mustNotContain": q.get("mustNotContain", []),
                 "mustMatch": q.get("mustMatch", []),
+                "mustMatchQueryDescription": q.get("mustMatchQueryDescription", []),
+                "mustMatchAttachmentOutline": q.get("mustMatchAttachmentOutline", []),
                 "expectEvidenceCount": q.get("expectEvidenceCount"),
                 "noFabricatedPersonalMemory": bool(
                     q.get("noFabricatedPersonalMemory")),
@@ -294,6 +302,8 @@ def build_records(questions, turns):
                 "route": ans.get("route"),
                 "outcome": ans.get("outcome"),
                 "outcomes": ans.get("outcomes"),
+                "queryDescription": ans.get("queryDescription", ""),
+                "attachmentOutline": ans.get("attachmentOutline") or [],
                 "composedBy": ans.get("composedBy"),
                 "basis": ans.get("basisLine"),
                 "mediaEvidence": ans.get("mediaEvidence") or [],
@@ -323,6 +333,10 @@ def pair(args):
     records, used, unmatched = build_records(questions, read_run_turns(run_id))
     meta.update({"questions": len(questions), "paired": len(records),
                  "runID": run_id, "repaired": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    # Re-pairing is analysis, not a newly observed successful execution.
+    # Never inherit another run's process attestation or corpus identity.
+    meta.update({"processReturnCode": None, "expectedIDs": [q.get("id") for q in questions],
+                 "unmatchedTurns": len(unmatched), "corpusSHA256": None})
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
@@ -340,9 +354,16 @@ def pair(args):
 
 
 def run(args):
-    questions = load_corpus(args.corpus)
+    corpus_bytes = Path(args.corpus).read_bytes()
+    questions = load_corpus(args.corpus, source_text=corpus_bytes.decode("utf-8"))
+    corpus_sha = hashlib.sha256(corpus_bytes).hexdigest()
     if args.limit:
         questions = questions[: args.limit]
+    if not questions:
+        raise ValueError("refusing to run an empty corpus")
+    ids = [q.get("id") for q in questions]
+    if any(not isinstance(i, str) or not i for i in ids) or len(set(ids)) != len(ids):
+        raise ValueError("corpus requires unique, nonempty question IDs")
     run_id = f"hallie-eval-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     cmd = [str(HALLIE), "--no-actions", "--log-run-id", run_id]
@@ -375,15 +396,15 @@ def run(args):
 
     print(f"[eval] {len(questions)} questions → {' '.join(cmd)}", flush=True)
     t0 = time.time()
-    proc = subprocess.run(
-        cmd,
-        input=build_stdin(questions),
-        capture_output=True,
-        text=True,
-        timeout=args.timeout,
-        cwd=str(REPO),
-        env=env,
-    )
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            cmd, input=build_stdin(questions), capture_output=True, text=True,
+            timeout=args.timeout, cwd=str(REPO), env=env,
+        )
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc = subprocess.CompletedProcess(cmd, 124, "", "Hallie replay timed out")
     elapsed = time.time() - t0
     print(f"[eval] session finished in {elapsed:.0f}s (exit {proc.returncode})", flush=True)
 
@@ -397,6 +418,14 @@ def run(args):
             "elapsed_s": round(elapsed), "compose": not args.no_compose,
             "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "runID": run_id,
+            "expectedIDs": ids,
+            "processReturnCode": proc.returncode,
+            "timedOut": timed_out,
+            "unmatchedTurns": len(unmatched),
+            "requestedModel": args.model,
+            "requestedHost": args.host,
+            "buildSHA": getattr(args, "build_sha", None),
+            "corpusSHA256": corpus_sha,
             "binary": binary,
             "binary_built": time.strftime("%Y-%m-%dT%H:%M:%S",
                                           time.localtime(os.path.getmtime(binary)))
@@ -417,7 +446,7 @@ def run(args):
         print(f"[eval] WARNING: {len(unmatched)} logged turns matched no corpus question")
     if proc.returncode != 0:
         print(proc.stderr[-2000:], file=sys.stderr)
-    return 0
+    return 0 if proc.returncode == 0 and len(records) == len(questions) and not unmatched else 2
 
 
 # ---------------------------------------------------------------- grade
@@ -485,6 +514,22 @@ def grade_record(r):
     a = (r.get("answer") or "").strip()
     expect = r.get("expect")
     outcome = r.get("outcome")
+
+    for field, observed, flag in (
+        ("mustMatchQueryDescription", r.get("queryDescription") or "", "query_description_mismatch"),
+        ("mustMatchAttachmentOutline", "\n".join(r.get("attachmentOutline") or []), "attachment_outline_mismatch"),
+    ):
+        patterns = r.get(field) or []
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        if not isinstance(patterns, list) or any(not isinstance(p, str) for p in patterns):
+            flags.append("invalid_expected_regex")
+            continue
+        try:
+            if any(re.search(p, observed, re.I | re.S) is None for p in patterns):
+                flags.append(flag)
+        except re.error:
+            flags.append("invalid_expected_regex")
 
     if not a:
         flags.append("empty")
@@ -684,7 +729,33 @@ def grade(args):
         for r in recs:
             f.write(json.dumps(r) + "\n")
     print(f"\ngraded → {out}")
-    return 0
+    strict = getattr(args, "strict", False)
+    expected = m.get("expectedIDs")
+    actual = [r.get("id") for r in recs]
+    incomplete = (
+        not recs or m.get("timedOut", False)
+        or m.get("processReturnCode", 0) != 0
+        or m.get("unmatchedTurns", 0) != 0
+        or (m.get("questions") is not None and m["questions"] != total)
+        or (expected is not None and (
+            len(expected) != total or len(set(actual)) != total
+            or set(expected) != set(actual)))
+        or (strict and (not expected or "processReturnCode" not in m))
+    )
+    status = "incomplete" if incomplete else "failed" if strict and flagged else "passed" if strict else "advisory"
+    summary = {
+        "status": status, "strict": strict, "expected": m.get("questions"),
+        "completed": total, "flagged": len(flagged), "flags": flag_counts,
+        "total": total, "clean": clean, "defects": len(flagged),
+        "incomplete": bool(incomplete),
+        "missing": max(0, (m.get("questions") or total) - total),
+        "runID": m.get("runID"), "meta": m,
+    }
+    summary_path = Path(args.run).with_suffix(".summary.json")
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(f"verdict: {status} → {summary_path}")
+    print("GRADE_SUMMARY: " + json.dumps(summary, sort_keys=True))
+    return 2 if incomplete else 1 if strict and flagged else 0
 
 
 def main():
@@ -705,6 +776,7 @@ def main():
     pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
     pr.add_argument("--gedcom", help="tree file or folder of .ged pulls to parse instead of the compiled artifact")
     pr.add_argument("--timeout", type=int, default=5400)
+    pr.add_argument("--build-sha", help="source SHA attested by the build orchestrator (not inferred from HEAD)")
     pr.set_defaults(func=run)
 
     pp = sub.add_parser("pair", help="re-join an old run's transcript with the current pairing code")
@@ -718,6 +790,8 @@ def main():
     pg.add_argument("--run", required=True)
     pg.add_argument("--compare")
     pg.add_argument("--show", type=int, default=0)
+    pg.add_argument("--strict", action="store_true",
+                    help="fail on grading defects; require complete replay metadata")
     pg.set_defaults(func=grade)
 
     args = p.parse_args()
