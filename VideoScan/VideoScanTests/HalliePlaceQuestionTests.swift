@@ -95,7 +95,7 @@ struct HalliePlaceQuestionTests {
     /// After twenty turns about a dead earl the model answered `death` for
     /// everything, and nothing deterministic disagreed.
     @Test func aRelationTheSentenceNamesIsNotLeftToTheModel() {
-        let asks = ArchivistGraphQuery.asksForRelation
+        let asks: (String) -> ArchivistGraphQuery.Relation? = { ArchivistGraphQuery.asksForRelation($0) }
         #expect(asks("whom did he marry") == .spouse)
         #expect(asks("who was his spouse") == .spouse)
         #expect(asks("who did john hastings marry?") == .spouse)
@@ -131,7 +131,7 @@ struct HalliePlaceQuestionTests {
 
     /// Ambiguous or absent: left to the model rather than guessed at.
     @Test func twoRelationsOrNoneIsLeftAlone() {
-        let asks = ArchivistGraphQuery.asksForRelation
+        let asks: (String) -> ArchivistGraphQuery.Relation? = { ArchivistGraphQuery.asksForRelation($0) }
         #expect(asks("tell me about his mother and father") == nil, "two relations named")
         #expect(asks("tell me about John Hastings") == nil)
         #expect(asks("where was he born") == nil)
@@ -199,3 +199,40 @@ struct HalliePlaceQuestionTests {
         #expect(query(.birth, "tell me about John Hastings' birth").operation == .birth)
     }
 }
+
+/// "tell me about dad" (strict replay, 2026-09-07): the model resolved the
+/// subject as person=dad and chose `birth`; the relation guard then read
+/// "dad" as a relation ASKED FOR and answered "Richard Harding Breen Sr's
+/// father was George Breen" — dad's father, for a question about dad.
+@Suite struct HallieRelationGuardSubjectTests {
+    @Test func theSubjectsOwnRelativeWordIsNotARequest() {
+        #expect(ArchivistGraphQuery.asksForRelation("tell me about dad", subject: ["dad"]) == nil)
+        #expect(ArchivistGraphQuery.asksForRelation("tell me about my dad", subject: ["my dad"]) == nil)
+        #expect(ArchivistGraphQuery.asksForRelation("tell me about mom", subject: ["mom"]) == nil)
+    }
+
+    @Test func aRelativeOfTheSubjectIsStillARequest() {
+        #expect(ArchivistGraphQuery.asksForRelation("tell me about his dad", subject: ["rick"]) == .father)
+        #expect(ArchivistGraphQuery.asksForRelation("who did dad marry", subject: ["dad"]) == .spouse)
+        #expect(ArchivistGraphQuery.asksForRelation("tell me about his parents") == .parents)
+    }
+
+    @Test func tellMeAboutDadIsDadsBiography() {
+        let q = ArchivistGraphQuery(.init(people: ["dad"], operation: .birth), question: "tell me about dad")
+        #expect(q.operation == .biography)
+        #expect(q.relation == nil)
+    }
+
+    /// The description names the query that ran, and keeps the model's
+    /// choice beside it when a guard moved it.
+    @Test func theDescriptionNamesTheResolvedQuery() {
+        let payload = ArchivistQueryAST.Graph(people: ["john hastings"], operation: .birth)
+        let q = ArchivistGraphQuery(payload, question: "what country was John Hastings born in?")
+        let d = HallieTurnExecutor.graphQueryDescription(payload, resolved: q)
+        #expect(d.contains("operation=birth-place"), Comment(rawValue: d))
+        #expect(d.contains("model=birth"), Comment(rawValue: d))
+        let same = HallieTurnExecutor.graphQueryDescription(payload, resolved: ArchivistGraphQuery(payload, question: "when was he born"))
+        #expect(same == "shape=graph operation=birth person=john hastings", Comment(rawValue: same))
+    }
+}
+

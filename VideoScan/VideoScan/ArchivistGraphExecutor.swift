@@ -261,8 +261,15 @@ struct ArchivistGraphQuery: Sendable, Equatable {
     ///
     /// Only unambiguous single-relation asks: "his parents", "who did X
     /// marry". A sentence naming two relations, or none, is left alone.
-    static func asksForRelation(_ question: String) -> Relation? {
+    static func asksForRelation(_ question: String, subject people: [String] = []) -> Relation? {
         let q = question.lowercased()
+        // "tell me about dad" (strict replay, 2026-09-07): the relative word
+        // IS the resolved subject (person=dad), not a relation asked of him.
+        // Forcing `.father` answered "Richard Harding Breen Sr's father was
+        // George Breen" for a question about Rick's father himself.
+        let subjectWords = Set(people.flatMap {
+            $0.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        })
         let table: [(pattern: String, relation: Relation)] = [
             (#"\bgreat[- ]great[- ]grandparents?\b"#, .greatGreatGrandparents),
             (#"\bgreat[- ]grandparents?\b"#, .greatGrandparents),
@@ -285,11 +292,13 @@ struct ArchivistGraphQuery: Sendable, Equatable {
             (#"\buncles?\b"#, .uncle),
             (#"\baunts?\b"#, .aunt),
         ]
-        let hits = table.filter {
-            q.range(of: $0.pattern, options: .regularExpression) != nil
+        let hits = table.compactMap { entry -> Relation? in
+            guard let range = q.range(of: entry.pattern, options: .regularExpression) else { return nil }
+            if subjectWords.contains(String(q[range])) { return nil }
+            return entry.relation
         }
         guard hits.count == 1 else { return nil }
-        return hits[0].relation
+        return hits[0]
     }
 
     /// "tell me about X" / "tell me all about X" / "who is X" — a request for
@@ -433,7 +442,7 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         if let question, resolvedRelation == nil,
            !Self.asksForAPlace(question),
            !Self.asksForADateOrAge(question),
-           let asked = Self.asksForRelation(question) {
+           let asked = Self.asksForRelation(question, subject: payload.people) {
             resolvedRelation = asked
             switch resolved {
             case .biography, .birth, .death: resolved = .kinship
