@@ -162,6 +162,19 @@ actor OllamaLocalServerBootstrap {
         }
     }
 
+    /// The address to PROBE for an endpoint: loopback when the endpoint
+    /// names this Mac, otherwise the endpoint itself. The Hallie servers
+    /// pane used to probe `RicksM4.local` by name while the local server
+    /// bound loopback only, so the M4 showed "idle" and the model menu was
+    /// read from the M5 ("not installed") although the M4 was serving
+    /// (GH #172, 2026-09-08). The question path already routes this way.
+    static func probeEndpoint(
+        for endpoint: String,
+        localHostNames: Set<String> = currentLocalHostNames()
+    ) -> String {
+        routeLocalEndpointsToLoopback([endpoint], localHostNames: localHostNames).first ?? endpoint
+    }
+
     static func currentLocalHostNames() -> Set<String> {
         var names: Set<String> = ["localhost", "127.0.0.1", "::1"]
         if let localName = SCDynamicStoreCopyLocalHostName(nil) as String? {

@@ -44,6 +44,21 @@ struct OllamaLocalServerBootstrapTests {
             readinessAttempts: attempts)
     }
 
+    // GH #172: the servers pane must probe local endpoints on loopback,
+    // exactly as the question path dials them, or a loopback-bound local
+    // server shows "idle" and the model menu is read from the wrong Mac.
+    @Test func probeEndpointRoutesThisMacToLoopbackAndLeavesOthersAlone() {
+        let local: Set<String> = ["localhost", "127.0.0.1", "::1", "ricksm4", "ricksm4.local"]
+        #expect(OllamaLocalServerBootstrap.probeEndpoint(for: "RicksM4.local", localHostNames: local)
+                == "127.0.0.1:11434")
+        #expect(OllamaLocalServerBootstrap.probeEndpoint(for: "RicksM4.local:1234", localHostNames: local)
+                == "127.0.0.1:1234", "an explicit local port survives")
+        #expect(OllamaLocalServerBootstrap.probeEndpoint(for: "ricksm5.local", localHostNames: local)
+                == "ricksm5.local", "the laptop is dialled by name")
+        #expect(OllamaLocalServerBootstrap.probeEndpoint(for: "https://ollama.example.com", localHostNames: local)
+                == "https://ollama.example.com", "cloud endpoints are never rewritten")
+    }
+
     @Test func alreadyRunningLocalServerIsNotSpawned() async throws {
         let fixture = Fixture(probeResults: [true])
         let bootstrap = OllamaLocalServerBootstrap(

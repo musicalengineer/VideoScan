@@ -441,7 +441,7 @@ struct ArchivistEndpointSettings: View {
         defer { loadingModels = false }
         for host in hosts {
             var probe = OllamaQueryTranslator()
-            probe.host = host
+            probe.host = OllamaLocalServerBootstrap.probeEndpoint(for: host)   // GH #172
             let tags = await probe.installedModels()
             if !tags.isEmpty {
                 installed = tags
@@ -548,7 +548,7 @@ struct ArchivistEndpointSettings: View {
 
         for host in hosts {
             var probe = OllamaQueryTranslator()
-            probe.host = host
+            probe.host = OllamaLocalServerBootstrap.probeEndpoint(for: host)   // GH #172
             let installed = await probe.installedModelFacts()
             guard !installed.isEmpty else {
                 nextReadiness[host] = .unknown   // no answer: the host light already says so
@@ -733,7 +733,9 @@ struct ArchivistEndpointSettings: View {
             for host in snapshot {
                 group.addTask {
                     var probe = OllamaQueryTranslator()
-                    probe.host = host
+                    // Probe the way the question path dials, so a green
+                    // light is a promise about routing (GH #172).
+                    probe.host = OllamaLocalServerBootstrap.probeEndpoint(for: host)
                     if let down = await probe.probeLiveness() {
                         if OllamaLocalServerBootstrap.isLocalEndpoint(host) {
                             return (host, .idle(
