@@ -56,6 +56,18 @@ jobs:
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
 
+      # Xcode 26 ships the Metal compiler as a downloadable component. The
+      # GH runner image lacks it, and mlx-swift's Cmlx target has .metal
+      # kernels, so every build in this workflow died since 2026-08-20 and
+      # CodeQL scanned 1 of 1,283 files (GH #171). Idempotent; ~1-2 min.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          xcrun -f metal
+
       - name: Build with strict concurrency + all upcoming features + perf warnings
         run: |
           set -o pipefail
@@ -181,6 +193,18 @@ jobs:
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
 
+      # Xcode 26 ships the Metal compiler as a downloadable component. The
+      # GH runner image lacks it, and mlx-swift's Cmlx target has .metal
+      # kernels, so every build in this workflow died since 2026-08-20 and
+      # CodeQL scanned 1 of 1,283 files (GH #171). Idempotent; ~1-2 min.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          xcrun -f metal
+
       - name: Initialise CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -261,6 +285,18 @@ jobs:
       # See scripts/ci_select_xcode.sh for the history behind this.
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
+
+      # Xcode 26 ships the Metal compiler as a downloadable component. The
+      # GH runner image lacks it, and mlx-swift's Cmlx target has .metal
+      # kernels, so every build in this workflow died since 2026-08-20 and
+      # CodeQL scanned 1 of 1,283 files (GH #171). Idempotent; ~1-2 min.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          xcrun -f metal
 
       - name: Run unit tests under TSan
         run: |
@@ -356,6 +392,18 @@ jobs:
       # See scripts/ci_select_xcode.sh for the history behind this.
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
+
+      # Xcode 26 ships the Metal compiler as a downloadable component. The
+      # GH runner image lacks it, and mlx-swift's Cmlx target has .metal
+      # kernels, so every build in this workflow died since 2026-08-20 and
+      # CodeQL scanned 1 of 1,283 files (GH #171). Idempotent; ~1-2 min.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          xcrun -f metal
 
       - name: Install tools
         run: |
@@ -466,6 +514,18 @@ jobs:
       # See scripts/ci_select_xcode.sh for the history behind this.
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
+
+      # Xcode 26 ships the Metal compiler as a downloadable component. The
+      # GH runner image lacks it, and mlx-swift's Cmlx target has .metal
+      # kernels, so every build in this workflow died since 2026-08-20 and
+      # CodeQL scanned 1 of 1,283 files (GH #171). Idempotent; ~1-2 min.
+      - name: Download Metal Toolchain (mlx-swift kernels)
+        run: |
+          set -o pipefail
+          if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
+            sudo xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3
+          fi
+          xcrun -f metal
 
       - name: Install tools
         run: |
