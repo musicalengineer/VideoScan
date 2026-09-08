@@ -160,7 +160,8 @@ extension HallieTurnExecutor {
         }
 
         let query = ArchivistPresenceQuery(
-            effective, citationOffset: request.intent.citationOffset)
+            effective, citationOffset: request.intent.citationOffset,
+            aliases: presenceAliases(for: effective.people ?? [], context: context))
         let records = context.presenceRecords
         let execute = dependencies.executePresence
         var result = try await detached {
@@ -296,6 +297,38 @@ extension HallieTurnExecutor {
             payload.keywords = kept.isEmpty ? nil : kept
         }
         return dropped
+    }
+
+    /// The other names each person term is tagged under, from the People
+    /// tab: a term that is exactly one profile's own name, or an alias of
+    /// exactly one profile, brings that profile's other spellings — MINUS
+    /// any spelling a different profile also answers to. Rick's tab has a
+    /// brother "Tim" whose profile lists "Timmy", and a son "Timmy": widening
+    /// "Tim" to "Timmy" would hand the brother the son's videos. Never widen
+    /// a search across two people. Ledger row 17, 2026-09-07.
+    static func presenceAliases(for people: [String], context: Context) -> [String: [String]] {
+        guard let profiles = context.profiles, !profiles.isEmpty else { return [:] }
+        var out: [String: [String]] = [:]
+        for typed in people {
+            let key = PersonResolver.normalize(typed)
+            guard !key.isEmpty else { continue }
+            let byName = profiles.filter { PersonResolver.normalize($0.canonicalName) == key }
+            let matches = byName.isEmpty
+                ? profiles.filter { $0.aliases.contains { PersonResolver.normalize($0) == key } }
+                : byName
+            guard matches.count == 1, let profile = matches.first else { continue }
+            let othersClaim = Set(profiles.lazy
+                .filter { $0.stableID != profile.stableID }
+                .flatMap { [$0.canonicalName] + $0.aliases + $0.fullNameForms }
+                .map(PersonResolver.normalize))
+            let spellings = ([profile.canonicalName] + profile.aliases + profile.fullNameForms)
+                .filter {
+                    let k = PersonResolver.normalize($0)
+                    return k != key && !othersClaim.contains(k)
+                }
+            if !spellings.isEmpty { out[key] = spellings }
+        }
+        return out
     }
 
     private struct PresencePeopleRecovery {

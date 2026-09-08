@@ -21,6 +21,7 @@ extension HallieTurnExecutor {
         context: Context
     ) async throws -> Result {
         let records = context.presenceRecords
+        let aliases = presenceAliases(for: effective.people ?? [], context: context)
         var queries: [ArchivistPresenceQuery?] = []
         let scopeText: String
         switch request.scope {
@@ -32,10 +33,10 @@ extension HallieTurnExecutor {
                 queries = people.map { person in
                     var single = effective
                     single.people = [person]
-                    return ArchivistPresenceQuery(single)
+                    return ArchivistPresenceQuery(single, aliases: aliases)
                 }
             } else {
-                queries = [ArchivistPresenceQuery(effective)]
+                queries = [ArchivistPresenceQuery(effective, aliases: aliases)]
             }
             scopeText = describe(effective, anyOfPeople: anyOfPeople)
         }

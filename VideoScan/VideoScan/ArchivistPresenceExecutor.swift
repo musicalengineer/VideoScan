@@ -133,10 +133,22 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
     struct Identity: Sendable, Equatable {
         let original: String
         let tokens: [String]
+        /// The other names this SAME person is tagged under — the People
+        /// profile's aliases. Live 2026-09-07 ("find videos with dad", ledger
+        /// row 17): "dad" was correctly bound to Richard, then the catalog
+        /// was searched for the ONE bound spelling while every tag on his
+        /// videos said "Dad" or "Richard Breen Sr". A resolved identity is
+        /// searched by all of its names, not by whichever won the binding.
+        let aliasTokenLists: [[String]]
 
-        init(_ value: String) {
+        init(_ value: String, aliases: [String] = []) {
             original = value
-            tokens = value.folding(
+            tokens = Self.tokens(of: value)
+            aliasTokenLists = aliases.map(Self.tokens(of:)).filter { !$0.isEmpty }
+        }
+
+        private static func tokens(of value: String) -> [String] {
+            value.folding(
                 options: [.diacriticInsensitive, .caseInsensitive],
                 locale: Locale(identifier: "en_US"))
                 .lowercased()
@@ -184,12 +196,18 @@ struct ArchivistPresenceQuery: Sendable, Equatable {
         self.hasInvalidYearRange = false
     }
 
-    init(_ payload: ArchivistQueryAST.Presence, citationOffset: Int = 0) {
+    /// `aliases`: the other names each person term is tagged under, keyed by
+    /// `PersonResolver.normalize` of the term (ledger row 17). Empty means
+    /// the term is searched by its own spelling only, as before.
+    init(_ payload: ArchivistQueryAST.Presence, citationOffset: Int = 0,
+         aliases: [String: [String]] = [:]) {
         self.citationOffset = max(0, citationOffset)
         // Case-only / diacritic-only duplicates are ONE person term, never
         // two (2026-09-03). Two spellings of one person also doubled the
         // per-record tag scan for no additional matches.
-        people = PersonNameClaim.dedupe(payload.people ?? []).map(Identity.init)
+        people = PersonNameClaim.dedupe(payload.people ?? []).map {
+            Identity($0, aliases: aliases[PersonResolver.normalize($0)] ?? [])
+        }
         if let start = payload.yearStart ?? payload.yearEnd,
            let end = payload.yearEnd ?? payload.yearStart {
             if start <= end {
@@ -601,7 +619,11 @@ enum ArchivistPresenceExecutor {
     ) -> Bool {
         guard !identity.tokens.isEmpty else { return false }
         let available = Set(identityTokens(tagName))
-        return identity.tokens.allSatisfy(available.contains)
+        // Any of the person's names proves the tag — the bound spelling or
+        // an alias the People tab lists for the same profile (row 17).
+        return ([identity.tokens] + identity.aliasTokenLists).contains { name in
+            name.allSatisfy(available.contains)
+        }
     }
 
     /// Small bipartite maximum matching. Family queries are capped at six

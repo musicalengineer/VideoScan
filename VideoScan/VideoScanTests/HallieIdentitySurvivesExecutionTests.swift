@@ -584,3 +584,75 @@ struct HallieKinConjunctionSurvivalTests {
                                        in: "my dad and rick at the beach") == true)
     }
 }
+
+/// Ledger row 17, live 2026-09-07 evening: "find videos with dad" → "I took
+/// 'dad' to mean Richard. I don't have any videos tagged with Richard yet."
+/// The binding was right; the search then used the ONE bound spelling while
+/// the tags on his videos say "Dad". A resolved identity is searched by every
+/// name the People tab lists for it — and never by another profile's names.
+@Suite("A resolved identity is searched by all of its names")
+struct HalliePresenceAliasSearchTests {
+
+    private static let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private static func records() -> [ArchivistPresenceRecordSnapshot] {
+        [
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/1990/Christmas.mov",
+                directory: "/Volumes/X/1990", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Dad", confirmedAt: stamp)]),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/1988/Beach.mov",
+                directory: "/Volumes/X/1988", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Richard Breen Sr", confirmedAt: stamp)]),
+            ArchivistPresenceRecordSnapshot(
+                fullPath: "/Volumes/X/2001/Dicky.mov",
+                directory: "/Volumes/X/2001", volumeName: "X",
+                confirmedPeople: [ConfirmedTag(name: "Dicky", confirmedAt: stamp)]),
+        ]
+    }
+
+    private static func context() -> HallieTurnExecutor.Context {
+        HallieTurnExecutor.Context(
+            presenceRecords: records(),
+            profiles: [
+                .init(stableID: "richard", canonicalName: "Richard",
+                      aliases: ["Dad", "Dad Breen"], surname: "Breen",
+                      middleName: "Harding", suffix: "Sr"),
+                .init(stableID: "rick", canonicalName: "Rick",
+                      aliases: ["Dicky"], surname: "Breen", suffix: "Jr"),
+            ])
+    }
+
+    @Test func theBoundNameFindsTheVideosTaggedWithHisOtherNames() async throws {
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "find videos with dad",
+                                ast: .presence(.init(people: ["Richard"])))),
+            context: Self.context())
+        #expect(result.outcome == .answered, Comment(rawValue: result.prose))
+        let files = Set(result.citations.map(\.filename))
+        #expect(files.contains("Christmas.mov"), Comment(rawValue: "\(files)"))
+        #expect(files.contains("Beach.mov"), Comment(rawValue: "\(files)"))
+        // Rick's alias is not Dad's name.
+        #expect(!files.contains("Dicky.mov"), Comment(rawValue: "\(files)"))
+    }
+
+    /// Rick's tab: brother Tim (alias Timmy) and son Timmy (alias Tim).
+    /// Exact-name-wins binds each term to one profile, but the OTHER's name
+    /// is never widened into the search.
+    @Test func aNameTwoProfilesAnswerToBringsNoAliases() {
+        let ctx = HallieTurnExecutor.Context(profiles: [
+            .init(stableID: "tim", canonicalName: "Tim", aliases: ["Timmy"]),
+            .init(stableID: "timmy", canonicalName: "Timmy", aliases: ["Tim"]),
+        ])
+        #expect(HallieTurnExecutor.presenceAliases(for: ["Tim"], context: ctx)["tim"] == nil)
+        #expect(HallieTurnExecutor.presenceAliases(for: ["Timmy"], context: ctx)["timmy"] == nil)
+    }
+
+    @Test func theQueryStillMatchesByItsOwnSpellingAlone() {
+        let identity = ArchivistPresenceQuery.Identity("Richard", aliases: ["Dad"])
+        #expect(identity.tokens == ["richard"])
+        #expect(identity.aliasTokenLists == [["dad"]])
+    }
+}
+
