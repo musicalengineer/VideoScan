@@ -154,6 +154,12 @@ The rule it argues for: **an unresolved subject must never silently inherit
 the previous one.** A named person who cannot be found is a decline, always,
 and "not in the tree" is a real answer that this tree can support.
 
+### Evening, 09/07 — a media ask lost to identity binding
+
+| # | asked | what came back | root cause | status |
+|---|-------|----------------|-----------|--------|
+| 17 | "find videos with dad" | "I took 'dad' to mean Richard. I don't have any videos tagged with Richard yet." | The People-tab binding correctly resolved "dad" → Richard, then the catalog was searched for the ONE bound spelling. The catalog tags carry the aliases ("Dad", "Richard Breen Sr"); a resolved identity must search by all of its names, not by whichever one won the binding. Rank-1 boundary (codex #1182). | **OPEN** |
+
 ### Proposed fixes, smallest first
 
 1. **Continent destinations reach the continent stop** — match the captured
