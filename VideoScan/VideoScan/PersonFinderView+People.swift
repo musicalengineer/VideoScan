@@ -212,8 +212,12 @@ extension PersonFinderView {
             }
 
             if model.savedProfiles.isEmpty {
-                // Empty state — prominent Add Person button
+                // Empty state — the couple first, then a prominent Add
+                // Person button. A fresh user sees who this is about
+                // before any people exist.
                 VStack(spacing: 10) {
+                    CouplePortraitView(placement: .people, height: 220)
+                        .padding(.bottom, 4)
                     Button {
                         editingOriginalName = nil
                         editingProfile = POIProfile(name: "", referencePath: "")
@@ -235,6 +239,14 @@ extension PersonFinderView {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
+                        // The couple at the center of the roster, as the
+                        // first card — same photo as the Family Tree title
+                        // (CouplePortrait.swift). Scales with the gallery
+                        // slider like the person cards do.
+                        CouplePortraitView(placement: .people,
+                                           height: min(max(personImageSize * 1.5, 160), 300))
+                            .padding(.trailing, 4)
+
                         // Add Person — always left-aligned
                         Button {
                             editingOriginalName = nil
