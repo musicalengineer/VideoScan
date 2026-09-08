@@ -13,6 +13,12 @@ before every commit.
 
 _(filled in as the night goes; latest entry on top)_
 
+- **00:00** — main at `d5ce38b2` + this brief (20 commits tonight, unpushed).
+  Fourth lineage extraction landed; measured at `d5ce38b2`: 35 files >1000,
+  330 violations, 91 / 100 complexity unchanged. Nothing further queued
+  meets the night's bar (unit-tested, behaviour-preserving or ledger-pinned),
+  so the M4 goes quiet now — well before the 02:00 nightly and the 04:30
+  reviewer — and the loop holds at long idle ticks. Tree clean.
 - **23:30** — main at `b7f5ec39` (17 commits tonight, unpushed): row 17
   fixed ("find videos with dad" now finds the videos tagged Dad, and never
   Timmy's when you ask for Tim); third lineage extraction landed
@@ -52,6 +58,7 @@ _(filled in as the night goes; latest entry on top)_
 | `534506ad` | refactor: translator-output decoding → `ArchivistQueryAST+TranslatorDecoding.swift` (1133 → 715 lines; no private helper crossed) | 71/71; full 6845 / 1 known sensor |
 | `8824a0f0` | refactor: GEDCOM awareness + common-ancestor answers → two `HallieLineageAnswer+…` extension files (2904 → 2306 lines; the one private helper moved with its section) | 86/86 on 11 suites; full 6845 / 1 known sensor |
 | `b7f5ec39` | ledger row 17: a resolved identity is searched by every name its People profile lists — minus any spelling another profile answers to (brother Tim / son Timmy) | `HalliePresenceAliasSearchTests` 3 + 5 neighbours 57/57; full 6848 / 1 known sensor |
+| `d5ce38b2` | refactor: superlatives + deep ancestors + origin trail → three `HallieLineageAnswer+…` extension files (HallieLineageQuestion.swift 2904 → 1776 over the night; one private left in the answer enum, local) | 82/82 on 11 suites; full 6848 / 1 known sensor |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
@@ -75,9 +82,11 @@ Baseline captured at `5398c6fa` before any refactoring (production Swift only):
 
 | metric | baseline | after the day's fixes (`fdd88038`) | after the refactors |
 |---|---|---|---|
-| files over the 1000-line guideline | 36 | 36 | **35** at `8824a0f0` (ArchivistQueryAST under; HallieLineageQuestion still 2,306) |
-| swiftlint violations (all rules) | 332 | 332 | **331** at `8824a0f0` — one File Length gone; every other warning travelled with its code, none hidden |
+| files over the 1000-line guideline | 36 | 36 | **35** at `d5ce38b2` (ArchivistQueryAST 1133 → 715; HallieLineageQuestion 2904 → 1776, still over) |
+| swiftlint violations (all rules) | 332 | 332 | **330** at `d5ce38b2` — one File Length and one Type Body Length gone; every other warning travelled with its code, none hidden |
 | cyclomatic complexity > 15 | 91 | 91 | 91 — no function was split; that is design work, not a night move |
+| function body > 80 lines | 100 | 100 | 100 — same reason |
+| production lines | 229,996 | 230,475 | 230,598 (+602 over the day: fixes, tests' production hooks, file headers) |
 | function body > 80 lines | 100 | |
 | file length > 1000 | 36 | |
 | force unwraps | 33 | |
