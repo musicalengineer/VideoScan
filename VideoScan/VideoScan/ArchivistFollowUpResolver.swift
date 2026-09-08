@@ -258,7 +258,15 @@ enum ArchivistFollowUpResolver {
         // continuity path rewrites ("when did Rick get married") and
         // translates. Marriage, parents and children are relations; this
         // resolver only handles the birth/death fields of one person.
-        if ArchivistGraphQuery.asksForRelation(text) != nil { return nil }
+        // ANY relation word refuses, not only an unambiguous one (codex #1181,
+        // inherited from 31cd14df): "where were his mother and father born?"
+        // names TWO relations, so asksForRelation returned nil, the sentence
+        // was seven words, and the resolver claimed it as the PREVIOUS
+        // person's birthplace. A follow-up about somebody's relatives is not
+        // a follow-up about the same person.
+        if ArchivistGraphQuery.namesARelative(text) { return nil }
+        if text.range(of: #"\b(father|mother|dad|mom|parents?|grandfather|grandmother|grandparents?|brothers?|sisters?|siblings?|sons?|daughters?|children|kids|wife|husband|spouse|married|marriage|marry|uncles?|aunts?|cousins?)\b"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil { return nil }
 
         let operation: ArchivistQueryAST.Graph.Operation
         if ArchivistGraphQuery.asksForAPlace(text) {

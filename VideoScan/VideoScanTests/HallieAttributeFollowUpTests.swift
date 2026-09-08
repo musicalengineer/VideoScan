@@ -71,6 +71,11 @@ struct HallieAttributeFollowUpTests {
         #expect(resolve("what year?") == nil)
         #expect(resolve("how old was he?") == nil)
         #expect(resolve("who were his parents?") == nil, "a relation, not a field of this resolver")
+        // codex #1181, inherited from 31cd14df: TWO relations made
+        // asksForRelation return nil, the sentence was seven words, and it
+        // was claimed as the PREVIOUS person's birthplace.
+        #expect(resolve("where were his mother and father born?") == nil)
+        #expect(resolve("where was his father born?") == nil)
         // And the ones it SHOULD still claim are unaffected.
         #expect(operation(resolve("where was he born?")) == .birthPlace)
         #expect(operation(resolve("what country?")) == .birthPlace)

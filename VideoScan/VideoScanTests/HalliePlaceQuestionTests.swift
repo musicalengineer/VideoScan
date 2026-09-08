@@ -75,8 +75,12 @@ struct HalliePlaceQuestionTests {
         #expect(operation(.deathPlace, "where was he born?") == .birthPlace)
         #expect(operation(.birth, "where is he buried?") == .deathPlace)
         #expect(operation(.biography, "where did he die?") == .deathPlace)
-        // Both cues present: "born" wins, because that is what was asked.
-        #expect(operation(.death, "where was he born before he died in France?") == .birthPlace)
+        // BOTH cues present: the words do not settle it, so the guard does
+        // not override — the model's reading stands (codex #1181: "born
+        // wins" forced birthPlace where deathPlace was asked).
+        #expect(operation(.death, "where was he born before he died in France?") == .death)
+        #expect(operation(.deathPlace, "where did he die after being born in France?") == .deathPlace)
+        #expect(operation(.birthPlace, "where did he die after being born in France?") == .birthPlace)
         #expect(operation(.biography, "where was John Hastings born?") == .birthPlace)
         #expect(operation(.death, "what country did he die in?") == .deathPlace)
         // Unchanged without a place cue, and unchanged with no question at all.
@@ -100,6 +104,29 @@ struct HalliePlaceQuestionTests {
         #expect(asks("who were his children") == .children)
         #expect(asks("did he have any brothers") == .brother)
         #expect(asks("who was his mother") == .mother)
+    }
+
+    /// codex #1181: a relative MENTIONED as the subject of a field ask is not a
+    /// relation REQUEST. "when was his father born?" asks a date; forcing
+    /// kinship/father answered "who is his father" — the grandfather's name in
+    /// place of the father's birthday. Nested subjects are left to the model.
+    @Test func aRelativeAsTheSubjectOfAFieldAskIsNotForced() {
+        func query(_ op: ArchivistQueryAST.Graph.Operation,
+                   _ question: String) -> ArchivistGraphQuery {
+            ArchivistGraphQuery(
+                ArchivistQueryAST.Graph(people: ["John Hastings"], operation: op),
+                question: question)
+        }
+        let fatherBorn = query(.birth, "when was his father born?")
+        #expect(fatherBorn.operation == .birth)
+        #expect(fatherBorn.relation == nil)
+        let fatherWhere = query(.birth, "where was his father born")
+        #expect(fatherWhere.operation == .birth, "a nested subject is not this route's to express")
+        #expect(fatherWhere.relation == nil)
+        #expect(query(.death, "how old was his mother when she died").relation == nil)
+        // The genuine relation REQUESTS are still claimed.
+        #expect(query(.death, "who was his father").relation == .father)
+        #expect(query(.death, "whom did he marry").relation == .spouse)
     }
 
     /// Ambiguous or absent: left to the model rather than guessed at.

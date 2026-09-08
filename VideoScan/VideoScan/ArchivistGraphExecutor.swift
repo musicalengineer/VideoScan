@@ -307,13 +307,39 @@ struct ArchivistGraphQuery: Sendable, Equatable {
                        options: .regularExpression) != nil
     }
 
-    /// A death cue in the sentence itself. "born" wins when both appear —
-    /// "where was he born before he died in France" asks where he was BORN.
+    static func mentionsDeath(_ question: String) -> Bool {
+        question.lowercased().range(of: #"\b(die|died|dies|death|buried|burial|interred)\b"#,
+                                    options: .regularExpression) != nil
+    }
+
+    static func mentionsBirth(_ question: String) -> Bool {
+        question.lowercased().range(of: #"\b(born|birth|birthplace)\b"#,
+                                    options: .regularExpression) != nil
+    }
+
+    /// A death cue with no birth cue. Kept for the follow-up resolver; the
+    /// guard above now abstains outright when both appear.
     static func asksAboutDeath(_ question: String) -> Bool {
-        let q = question.lowercased()
-        guard q.range(of: #"\b(die|died|dies|death|buried|burial|interred)\b"#,
-                      options: .regularExpression) != nil else { return false }
-        return q.range(of: #"\b(born|birth|birthplace)\b"#, options: .regularExpression) == nil
+        mentionsDeath(question) && !mentionsBirth(question)
+    }
+
+    /// A relative appears as a POSSESSED subject — "his father", "her
+    /// parents", "John's mother" — which makes the sentence about someone
+    /// other than the resolved person. Nested subjects are not expressible on
+    /// this route (codex #1181).
+    static func namesARelative(_ question: String) -> Bool {
+        question.lowercased().range(
+            of: #"\b(his|her|their|my|our|[a-z]+'s)\s+(father|mother|dad|mom|parents?|grandfather|grandmother|grandparents?|brother|sister|siblings?|son|daughter|children|kids|wife|husband|spouse|uncle|aunt|cousins?)\b"#,
+            options: .regularExpression) != nil
+    }
+
+    /// The sentence asks WHEN or HOW OLD — a date or a derived age. A
+    /// relation word inside such a sentence is a subject, never the thing
+    /// being asked for.
+    static func asksForADateOrAge(_ question: String) -> Bool {
+        question.lowercased().range(
+            of: #"\bwhen\b|\bwhat\s+(year|date|age)\b|\bhow\s+old\b|\bage\s+(at|when)\b"#,
+            options: .regularExpression) != nil
     }
 
     static func asksForAPlace(_ question: String) -> Bool {
@@ -367,27 +393,46 @@ struct ArchivistGraphQuery: Sendable, Equatable {
         // route, and this one is decidable from the words. Deterministic
         // correction, applied after the model rather than instead of it, so
         // it holds whatever the model returns and whatever model is loaded.
-        if let question, Self.asksForAPlace(question) {
+        if let question, Self.asksForAPlace(question), !Self.namesARelative(question) {
             // WHICH place is decided by the QUESTION, not by the model's
             // birth/death guess (Rick, live 2026-09-07, minutes after the
             // first version of this shipped). "what country was John
             // Hastings born in?" reached here as `.death`, and taking the
             // model's word for it turned a question containing the word
-            // "born" into a DEATH answer — "he has been resting in peace
-            // since 30 December 1389". Deferring to the model on a point the
-            // sentence settles is the exact mistake this guard exists to
+            // "born" into a DEATH answer. Deferring to the model on a point
+            // the sentence settles is the exact mistake this guard exists to
             // correct; I made it inside the correction itself.
-            switch resolved {
-            case .birth, .death, .biography, .birthPlace, .deathPlace:
-                resolved = Self.asksAboutDeath(question) ? .deathPlace : .birthPlace
-            default: break
+            //
+            // A sentence carrying BOTH cues ("where did he die after being
+            // born in France?") is not settled by the words, so it is not
+            // overridden at all — the model's reading stands (codex #1181:
+            // "born wins" forced birthPlace where deathPlace was asked). And a
+            // place question ABOUT A RELATIVE ("where was his father born")
+            // is a nested subject this route cannot express; left alone.
+            switch (Self.mentionsBirth(question), Self.mentionsDeath(question)) {
+            case (true, true):
+                break
+            case (_, true):
+                if [.birth, .death, .biography, .birthPlace].contains(resolved) { resolved = .deathPlace }
+            default:
+                if [.birth, .death, .biography, .deathPlace].contains(resolved) { resolved = .birthPlace }
             }
         }
-        // A RELATION THE SENTENCE NAMES beats the model's operation, for the
-        // same reason the place cue does: it is not a judgement call.
+        // A RELATION THE SENTENCE ASKS FOR beats the model's operation, for
+        // the same reason the place cue does: it is not a judgement call.
+        //
+        // ASKS FOR, not merely mentions (codex #1181). "when was his father
+        // born?" mentions a father but asks for a DATE: the relative is the
+        // subject of a field ask, and forcing `.kinship/.father` answered
+        // "who is his father" — the grandfather's name in place of the
+        // father's birthday. That is a nested subject this route cannot
+        // express, so it is left to the model; only a sentence whose OBJECT
+        // is the relative ("who was his father", "tell me about his parents",
+        // "whom did he marry") is claimed.
         var resolvedRelation = payload.relation.flatMap { Relation(rawValue: $0.rawValue) }
         if let question, resolvedRelation == nil,
            !Self.asksForAPlace(question),
+           !Self.asksForADateOrAge(question),
            let asked = Self.asksForRelation(question) {
             resolvedRelation = asked
             switch resolved {
