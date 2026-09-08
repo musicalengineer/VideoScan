@@ -113,6 +113,7 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             SWIFT_STRICT_CONCURRENCY=complete \
             OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS" \
             2>&1 | tee strict-concurrency.log
@@ -231,6 +232,9 @@ jobs:
 
       - name: Build for CodeQL
         run: |
+          # pipefail: a failed build used to hide behind `| tail` and let
+          # CodeQL "succeed" on 1 of 1,283 files (GH #171).
+          set -o pipefail
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -238,6 +242,7 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             2>&1 | tail -50
 
       - name: Analyse with CodeQL
@@ -335,6 +340,7 @@ jobs:
             -resultBundlePath TSanResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             2>&1 | tee tsan.log || true
 
       - name: Count + summarise findings
@@ -445,6 +451,7 @@ jobs:
 
       - name: Build (Periphery needs the build for index data)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -452,6 +459,7 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             -derivedDataPath periphery-dd 2>&1 | tail -20
 
       - name: Periphery aggressive (no --retain-public)
@@ -574,6 +582,7 @@ jobs:
 
       - name: Build (Periphery needs index data)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -581,6 +590,7 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
+            EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             -derivedDataPath DerivedData 2>&1 | tail -20
 
       - name: Periphery (warn-only, default retention)
