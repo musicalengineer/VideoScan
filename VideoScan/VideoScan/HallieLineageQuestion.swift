@@ -28,6 +28,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
                       untilYear: Int? = nil)
     case surnameTree(surname: String)
     case originTrail(person: String?, country: String?, line: GedcomFamilyGraph.Line)
+    /// "how many people in the tree were born in England" — a count, a
+    /// statistic or a grouping over the whole tree or the owner's ancestors
+    /// (Rick, 2026-09-07). Recognised by HallieTreeStatisticsQuestion, which
+    /// abstains on any constraint the engine cannot honour.
+    case treeStatistics(HallieTreeStatisticsQuestion)
     case gedcomAwareness
     /// "get more of the family tree" / "download the tree from FamilySearch"
     /// — points at the Family Tree tab's Get Family Tree sheet (Rick
@@ -193,6 +198,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // back to find someone born in europe" — before the superlatives
         // ("first ancestor born outside america") and the trace shapes
         // (which would read the same sentence as a plain line walk).
+        // "how many people were born in england" / "average lifespan" — BEFORE
+        // the trail: the trail's bare-line cue ("my ancestors" + "born") was
+        // claiming "how many of my ancestors were born in ireland" and
+        // answering with a read-out list. The recognizer abstains on any
+        // sentence carrying "generation(s)", so it can never take the trail's
+        // own counting shape ("how many generations back …").
+        if let stats = HallieTreeStatisticsQuestion.detect(lower) { return .treeStatistics(stats) }
         if let trail = birthplaceTrailQuestion(in: lower) { return trail }
 
         // Superlatives BEFORE the photo shape: "photo of the oldest person
@@ -1198,6 +1210,8 @@ enum HallieLineageAnswer {
             }
         case .birthplaceTrail(let person, let line, let stop, let ask):
             return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
+        case .treeStatistics(let ask):
+            return treeStatistics(ask, context: context)
         case .birthplaceTrailPage(let personID, let personName, let treeToken, let line, let stop, let from):
             return birthplaceTrailPage(personID: personID, personName: personName, treeToken: treeToken,
                                        line: line, stop: stop, from: from, context: context)
