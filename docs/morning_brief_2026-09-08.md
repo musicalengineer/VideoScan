@@ -20,6 +20,12 @@ _(filled in as the night goes; latest entry on top)_
 | `73ab8e15` (codex) | hallie_eval.py fails closed: exit 2 on missing turn / dead app / timeout; `grade --strict`; .summary.json + GRADE_SUMMARY; 51 tests | own |
 | `3bfd62db` (codex) | DirectAncestorLineReviewTests — cycle, shortest chain, depth boundary | own |
 | `1eefb0ac` | nightly Hallie replay: runner, strict manifest (15), nightly hookup r5, harness 9b (41/41) | pending review |
+| `ce156726` | guards + follow-up resolver reach the LIVE single-person path; resolver never name-probes field words (`isKnownPerson("country")` is true on the tree) | checkpoint 6845 / 2 known sensors |
+| `e5448d0f` | "tell me about dad" is dad's biography (relation guard ignores the subject's own word); `queryDescription` names the resolved query, `model=` when a guard moved it | same checkpoint |
+| `a42d0f92` | "how am I related to <name>"; titled / initialled names resolve (`titledNameRecovery`) | same checkpoint |
+| `a6ccc1cc` | count prose: "were born in a place recorded as England" | same checkpoint |
+| `139a8dc2` | replay row `incomplete` is a count, not the harness bool | same checkpoint |
+| `d9d8c808` | brief + ledger rows 18–21 | — |
 | `6a24809c` | TreeStatistics: denominator = whole population; unrecorded vs unclassifiable; recordedText matches a whole component (England ≠ New England) | #1180/#1181 → corrected, pending re-review |
 | `5d83cbef` | statistics recognizer abstains on alive/dead, generations, sided scope; exact-year filter; region ≠ country | #1180 → corrected, pending |
 | `6065801a` | guards fire only on what the sentence settles: relation REQUESTS only, mixed cues abstain, follow-ups refuse any relative | #1181 → corrected, pending |
