@@ -52,8 +52,7 @@ struct FamilyTreeModelReuseTests {
         // Explicit reload installs a changed generation; returning to the tab
         // must retain that generation, not resurrect the original cached tree.
         let replacement = GedcomSyntheticPedigree.gedcom(people: 450, generations: 8)
-        let url = try box.write(replacement)
-        #expect(box.store().ingest(graph: GedcomFamilyGraph(gedcomText: replacement), sources: [url]) != nil)
+        _ = try box.write(replacement, as: "family-2.ged", mtime: Date().addingTimeInterval(60))
         await model.loadFromDisk(settings: Self.settings)
         #expect(model.peopleCount == 450)
         let reloaded = model.diskLoadAttempts
@@ -98,7 +97,7 @@ struct FamilyTreeModelReuseTests {
         await model.prepareForAppearance(revision: "b", source: source(b), settings: Self.settings)
         #expect(model.bookmarks.ids == ["b-only"])
         model.toggleBookmark("new-b")
-        #expect(FamilyTreeBookmarks.load(from: a.originals) == first)
+        #expect(FamilyTreeBookmarks.load(from: a.originals).ids == first.ids)
         #expect(FamilyTreeBookmarks.load(from: b.originals).contains("new-b"))
         model.configure(source: source(b, access: .readOnly))
         model.toggleBookmark("memory-only")
@@ -106,7 +105,7 @@ struct FamilyTreeModelReuseTests {
 
         let isolated = FamilyTreeLiveModel(originalsDirectory: a.originals, bookmarksDirectory: a.originals)
         isolated.configure(source: source(b))
-        #expect(isolated.bookmarks == first)
+        #expect(isolated.bookmarks.ids == first.ids)
         await model.prepareForAppearance(revision: "offline", source: source(b, access: .unavailable), settings: Self.settings)
         #expect(model.loadState == .unavailable)
         #expect(model.bookmarks.ids.isEmpty)

@@ -515,6 +515,10 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// of flashing the demo tree and waiting on a reload.
     private(set) var loadedRevision: String?
     private var loadedAppearanceSettings: FamilyTreeLaunchBundle.Settings?
+    /// What the queued (not yet running) load was asked for, so a later
+    /// caller with the same request can be covered by it.
+    private var queuedLoadSettings: FamilyTreeLaunchBundle.Settings?
+    private var queuedLoadRevision: String?
     private var appearanceGeneration = 0
     /// Diagnostic sensor: counts real loader entries, not cache-key decisions.
     private(set) var diskLoadAttempts = 0
@@ -530,12 +534,17 @@ final class FamilyTreeLiveModel: ObservableObject {
         let request = appearanceGeneration
         if let source { configure(source: source) }
         if needsLoad(for: revision) || loadedAppearanceSettings != settings {
-            await loadFromDisk(settings: settings)
-            guard request == appearanceGeneration, !Task.isCancelled else { return }
-            if isLive {
-                markLoaded(revision: revision)
-                loadedAppearanceSettings = settings
-            }
+            // The revision rides with the load and is recorded where the
+            // install happens, so a tab that is switched away from during
+            // the first load still counts as loaded when it comes back
+            // (Claude review N3, 2026-09-08).
+            let clock = ContinuousClock()
+            let start = clock.now
+            await loadFromDisk(settings: settings, revision: revision)
+            // Always on: this is the line that attributed today's 4.6 s
+            // first load (0.5 s hashing + 0.7 s decode + ~4 s first render).
+            Self.logStep("tab: load on appear", took: clock.now - start,
+                         people: peopleCount, always: true)
         }
         guard request == appearanceGeneration, !Task.isCancelled else { return }
         await loadCyberBrain()
@@ -557,27 +566,42 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// compiled store's ingest/prune (codex #792). A call that arrives
     /// while one is running still gets a load that STARTS after it (it
     /// may have been made because the files changed).
-    func loadFromDisk(settings: FamilyTreeLaunchBundle.Settings = .fromDefaults()) async {
+    func loadFromDisk(settings: FamilyTreeLaunchBundle.Settings = .fromDefaults(),
+                      revision: String? = nil) async {
         if let queued = loadQueued {
-            // A queued load can carry older speaker settings. Wait for it,
-            // then serialize this request rather than calling it satisfied.
+            // A pending reload covers us only if it carries the same
+            // speaker settings (and revision, when we have one); otherwise
+            // wait for it and serialize our own (codex #792 coalescing,
+            // kept; Claude review N2).
+            let covered = queuedLoadSettings == settings
+                && (revision == nil || queuedLoadRevision == revision)
             await queued.value
+            if covered { return }
         }
         let running = loadInFlight
         let isQueued = running != nil
         let task = Task { @MainActor [weak self] in
             await running?.value
             guard let self else { return }
-            if isQueued { self.loadQueued = nil }   // now running; the next caller may queue again
-            await self.performLoadFromDisk(settings: settings)
+            if isQueued {                          // now running; the next caller may queue again
+                self.loadQueued = nil
+                self.queuedLoadSettings = nil
+                self.queuedLoadRevision = nil
+            }
+            await self.performLoadFromDisk(settings: settings, revision: revision)
         }
-        if isQueued { loadQueued = task }
+        if isQueued {
+            loadQueued = task
+            queuedLoadSettings = settings
+            queuedLoadRevision = revision
+        }
         loadInFlight = task
         await task.value
         if loadInFlight == task { loadInFlight = nil }
     }
 
-    private func performLoadFromDisk(settings: FamilyTreeLaunchBundle.Settings) async {
+    private func performLoadFromDisk(settings: FamilyTreeLaunchBundle.Settings,
+                                     revision: String? = nil) async {
         diskLoadAttempts += 1
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -643,6 +667,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadPhase = nil
         install(outcome: loaded.0, bundle: loaded.1)
         loadedAppearanceSettings = settings
+        if isLive, let revision { loadedRevision = revision }
     }
 
     /// Every recompile the tab starts writes this line first, so the log
@@ -992,6 +1017,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     private func installUnavailable() {
         loadGeneration &+= 1
         graph = nil
+        bookmarkSourceTransition = false
         summariesInOrder = []
         peopleCount = 0
         filteredPeople = []
