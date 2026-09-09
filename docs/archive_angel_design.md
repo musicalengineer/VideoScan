@@ -273,3 +273,50 @@ Rick's real catalog before any file is transcoded.
    §4 step 5 loses its condition and the buffer sizing in §5 doubles.
 2. In-app `playCount` / `lastPlayedAt` on `VideoRecord` — additive fields, OK?
 3. `derivationKind` string values and a manifest `role` column — additive, OK?
+
+## 12. RAM scratch tier (Rick 2026-09-09 17:20, for the M5 Ultra / 96 GB Mac Studio)
+
+Rick: a performance option allocating 8 / 16 / 32 GB of RAM to Archive Angel
+as a fast conversion buffer, SSD for whatever won't fit; "any glitch that
+stops the RAM cache would also stop the AA anyway, so make it as fast as
+possible." Codex (#1252): keep the durable batch on SSD; RAM only for
+recomputable per-step scratch; at most one bounded in-flight output; persist
+and verify to SSD before a step is "done".
+
+Both are right, and they meet at the **read side**, which is where the time
+actually goes:
+
+- **Encoding is not disk-bound.** HEVC via VideoToolbox writes 10–50 MB/s;
+  FFV1 is CPU-bound (24 slices — the Ultra's cores matter, not the disk).
+  Writing outputs to RAM instead of the internal SSD gains little.
+- **Reading is.** A DV hour is ~13 GB and the Angel reads the ORIGINAL up to
+  four times (verify, balance, access, lossless) from a RAID or a LaCie at
+  150–300 MB/s: 3–6 min of I/O per file, repeated per pass. Read it ONCE into
+  RAM and every pass runs at memory speed. The app already has this seam:
+  `RAMDisk` (ref-counted `mount(sizeMB:)`, `memoryFloorGB`) and
+  `probeFile(prefetchToRAM:ramPath:)`.
+
+**Design:**
+- Setting "Archive Angel scratch RAM": Off / 8 / 16 / 32 GB (default Off on
+  64 GB machines, 16 GB when `hw.memsize` ≥ 96 GB). Lives with the other
+  performance settings; respects `memoryFloorGB`.
+- Per entry, if the source fits in (budget − in-flight outputs − 1 GB
+  headroom) AND its volume is not the internal SSD: copy the original to the
+  RAM disk once (`ArchiveAngelPlan.Entry.scratchPath`), verify size, and run
+  every step from the RAM copy via an input-override seam on Transcode /
+  Balance (they take a record; add `inputURLOverride`). Outputs go to the SSD
+  entry dir as today. When the entry is `.ready`, remove the RAM copy.
+- Oversized or unknown-size sources stay on SSD/source; RAM-full mid-entry
+  → retry the step from the original (recomputable); memory-pressure
+  warning → drain and fall back to SSD for the rest of the batch; RAM disk
+  is ejected at job end, never left mounted.
+- Nothing durable ever lives in RAM: plan.json, review edits and completed
+  companions are SSD-only, so a crash costs at most one in-flight step.
+
+**Measured gain to justify it (codex's question):** on this M4 with the
+LaCie, time one 1-hour DV entry with all four steps from the source volume
+vs from a RAM copy. Expected: 4× reads → 1× reads, i.e. minutes per file on
+spinning storage, near zero when the source is already on the internal SSD.
+Ship only if the measurement shows ≥ 25 % end-to-end on RAID sources.
+
+**Slice:** after Refile and the interaction gate; GH issue tracks it.
