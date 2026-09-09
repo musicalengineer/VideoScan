@@ -752,7 +752,7 @@ fi
 #
 # The ladder under test, in order:
 #   crashed>0            → failed  (outranks the ui-runner-hung excuse)
-#   ui_runner_hung       → ok      (KNOWN-benign nonzero rc; unchanged)
+#   ui_runner_hung       → failed  (incomplete execution, never green)
 #   test_rc != 0         → failed  (nothing explained it; fail closed)
 # ───────────────────────────────────────────────────────────────────
 echo
@@ -783,10 +783,10 @@ if [ "$UNEXPLAINED" = "failed|test-rc:65" ]; then
 else
     fail "unexplained rc does not fail closed: got '$UNEXPLAINED'"
 fi
-if [ "$UI_HANG" = "ok|ui-runner-hung" ]; then
-    pass "a known UI-runner hang keeps its pre-existing ok+reason classification"
+if [ "$UI_HANG" = "failed|ui-runner-hung" ]; then
+    pass "a runner hang cannot waive an incomplete run into green"
 else
-    fail "UI-runner-hang classification regressed: got '$UI_HANG', want 'ok|ui-runner-hung'"
+    fail "UI-runner-hang classification regressed: got '$UI_HANG', want 'failed|ui-runner-hung'"
 fi
 if [ "$UI_HANG_CRASH" = "failed|crashed-tests:2" ]; then
     pass "a real crash outranks the ui-runner-hung excuse"

@@ -243,9 +243,8 @@ with open(output_path, "wb") as output:
 #       never excused by a hung UI runner.
 #     * a nonzero `test_rc` that NOTHING else explained now fails closed. The
 #       text scrapers are best-effort; the exit code is the contract.
-#   ui_runner_hung keeps its rung ABOVE the bare-rc rule on purpose — that hang
-#   is a KNOWN-benign source of nonzero rc whose unit counts are still honest,
-#   and it stays ok exactly as before.
+#   A runner-hang marker is incomplete execution, not a waiver for nonzero rc.
+#   Keep the existing reason key for consumers, but never publish it as green.
 # Args: timed_out timeout_seconds total failed ui_runner_hung test_rc [crashed]
 classify_nightly_test_result() {
     local timed_out="$1"
@@ -270,6 +269,7 @@ classify_nightly_test_result() {
         STATUS="failed"
         REASON="crashed-tests:$crashed"
     elif $ui_runner_hung; then
+        STATUS="failed"
         REASON="ui-runner-hung"
     elif [ "$test_rc" -ne 0 ]; then
         STATUS="failed"
