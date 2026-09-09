@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import plistlib
 import signal
 import statistics
 import subprocess
@@ -19,6 +20,34 @@ import uuid
 
 
 MODES = ("direct", "ssd-staged", "ram-staged")
+
+
+def stop_group(process, grace=15, kill_wait=5):
+    """Bound cleanup even if the leader exits before its descendants."""
+    def alive():
+        try:
+            os.killpg(process.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + grace
+    while alive() and time.monotonic() < deadline:
+        process.poll()
+        time.sleep(0.05)
+    if alive():
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=kill_wait)
+    except subprocess.TimeoutExpired:
+        return False
+    return not alive()
 
 
 def atomic_json(path, data):
@@ -34,6 +63,18 @@ def digest(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
+
+
+def storage_info(path):
+    """Record physical backing evidence; a mode name alone doesn't prove RAM."""
+    try:
+        completed = subprocess.run(["/usr/sbin/diskutil", "info", "-plist", str(path)],
+                                   capture_output=True, check=True, timeout=15)
+        data = plistlib.loads(completed.stdout)
+        return {key: data.get(key) for key in (
+            "DeviceIdentifier", "VolumeUUID", "MountPoint", "FilesystemType", "BusProtocol", "Internal", "SolidState", "Virtual")}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {"unverified": True}
 
 
 def validate_paths(paths):
@@ -94,9 +135,14 @@ def compare_reports(baseline, candidate):
     for report in (baseline, candidate):
         if report.get("status") != "ok" or verdict(report.get("summary"), report.get("exitCode")) != "ok":
             raise ValueError("Only complete, successful 100-file runs may be compared")
-    for key in ("buildSHA", "corpusSHA256", "configuration", "machine", "makeLossless"):
+    for key in ("buildSHA", "corpusSHA256", "configuration", "machine", "makeLossless", "runRoot"):
         if key not in baseline or baseline[key] != candidate.get(key):
             raise ValueError(f"Comparison requires matching {key}")
+    for report in (baseline, candidate):
+        if not report.get("outputStorage", {}).get("DeviceIdentifier"):
+            raise ValueError("Comparison requires verified output storage")
+    if baseline["outputStorage"] != candidate["outputStorage"]:
+        raise ValueError("Comparison requires identical output storage")
     if baseline.get("mode") != "direct" or candidate.get("mode") not in MODES[1:]:
         raise ValueError("Compare direct with SSD-staged or RAM-staged")
     def timings(report):
@@ -134,9 +180,11 @@ def run(args):
     provenance = dict(buildSHA=args.build_sha, configuration="Release", machine=platform.node(),
                       platform=platform.platform(), mode=args.mode, runID=run_id,
                       corpusSHA256=digest(args.corpus), cacheCondition="uncontrolled OS cache",
-                      stagingRoot=manifest.get("stagingRoot"), outputRoot=str(outputs),
+                      stagingRoot=manifest.get("stagingRoot"), outputRoot=str(outputs), runRoot=str(root),
                       startedAt=time.time(), timeoutSeconds=args.timeout, makeLossless=args.lossless,
                       implementation="real ArchiveAngelJob with external per-file prefetch")
+    provenance["outputStorage"] = storage_info(outputs)
+    provenance["stagingStorage"] = storage_info(args.staging_root) if args.staging_root else None
     atomic_json(folder / "provenance.json", provenance)
     command = [args.xcodebuild, "test-without-building", "-project", str(args.project.resolve()),
                "-scheme", "VideoScan", "-configuration", "Release",
@@ -149,12 +197,7 @@ def run(args):
         try:
             code = process.wait(timeout=args.timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+            provenance["processGroupCleanupConfirmed"] = stop_group(process)
             code = 124
     summary_path = outputs / ("test_angel_" + run_id) / "summary.json"
     try:
