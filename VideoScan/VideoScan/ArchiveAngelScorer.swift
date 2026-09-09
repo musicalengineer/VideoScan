@@ -63,7 +63,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var lastUsed: Date?
 
     init(id: UUID = UUID(), filename: String = "clip.mov", fullPath: String = "/Volumes/X/clip.mov",
-         sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 600,
+         sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 60,
          streamTypeRaw: String = StreamType.videoAndAudio.rawValue, isPlayable: String = "Yes",
          starRating: Int = 0, mediaDisposition: MediaDisposition = .unreviewed,
          archiveStage: ArchiveStage = .none, junkScore: Int = 0,
