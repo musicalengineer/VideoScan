@@ -47,6 +47,24 @@ struct ArchiveAngelFloorTests {
         #expect(ArchiveAngelScorer.verdict(.init(starRating: 3, mediaDisposition: .confirmedJunk)) == .rejected(.junk))
     }
 
+    @Test("unmarked clips need a full minute; a star, a confirmed person, a note or a user date lowers the floor to 8 s")
+    func unmarkedMinuteFloor() {
+        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 40)) == .rejected(.tooShort))
+        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 59.9, detectedPeople: ["Donna"])) == .rejected(.tooShort),
+                "a machine-only person tag is not a human mark")
+        for marked in [ArchiveAngelCandidate(durationSeconds: 40, starRating: 1),
+                       ArchiveAngelCandidate(durationSeconds: 40, confirmedPeople: ["Donna"]),
+                       ArchiveAngelCandidate(durationSeconds: 40, hasUserNotes: true),
+                       ArchiveAngelCandidate(durationSeconds: 40, userDate: "1994")] {
+            guard case .eligible = ArchiveAngelScorer.verdict(marked) else {
+                Issue.record("human-marked 40 s clip must stay eligible: \(marked)"); return
+            }
+        }
+        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 60)) else {
+            Issue.record("60 s unmarked is the floor, inclusive"); return
+        }
+    }
+
     @Test("an ★★★ eight-second clip clears the floor; a seven-second one does not")
     func durationEdge() {
         guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 8, starRating: 3)) else {

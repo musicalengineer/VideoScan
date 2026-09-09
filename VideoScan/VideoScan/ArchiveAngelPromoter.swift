@@ -162,7 +162,11 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
 
         plan.status = .promoting
-        plan.log.append("Promote started: \(promotePlan.entries.count) file(s)")
+        let originals = intended.count, companions = intended.values.reduce(0) { $0 + $1.count }
+        let startLine = "Archive Angel: Promote started — \(originals) original(s) + \(companions) companion(s), "
+            + "\(promotePlan.skipped.count) skipped by Promote, \(ByteCountFormatter.string(fromByteCount: plan.bytesToCopy, countStyle: .file)) to copy"
+        model.log(startLine); appLog.write(startLine)
+        plan.log.append(startLine)
         try? ArchiveAngelPlanStore.save(plan)
 
         let job = center.startPromote(plan: promotePlan, model: model)
@@ -216,6 +220,9 @@ final class ArchiveAngelPromoter: ObservableObject {
                 }
             }
             plan.entries[i].promotedRelPath = rel
+            let landedLine = "Archive Angel: \(entry.filename) → \(rel)"
+                + (allCompanions ? " with \(made.access + made.lossless + made.balanced) companion(s)" : " — " + (plan.entries[i].failure ?? "companion missing"))
+            model.log(landedLine); appLog.write(landedLine); plan.log.append(landedLine)
             if allCompanions {
                 plan.entries[i].status = .promoted
                 plan.entries[i].failure = nil
@@ -236,6 +243,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         plan.finishedAt = Date()
         plan.log.append(report.summary)
         model.log("Archive Angel: " + report.summary)
+        appLog.write("Archive Angel: " + report.summary)
         try? ArchiveAngelPlanStore.save(plan)
     }
 
