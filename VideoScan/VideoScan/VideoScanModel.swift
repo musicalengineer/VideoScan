@@ -1090,6 +1090,9 @@ final class VideoScanModel: ObservableObject {
         configurePreviewSweep()
         // Archive Angel phase 2: evidence sidecar + background scoring sweep.
         configureArchiveAngelSweep()
+        // Archived date (2026-09-09): stamp copies promoted before the field
+        // existed, once, from their Promote note / manifest row / fixity.
+        backfillArchivedAtIfNeeded()
 
         // Detached Find and Tag daemon (2026-08-06): BUILD only — the
         // launch-resume respawn and catch-up ingest wait for

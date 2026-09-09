@@ -53,3 +53,44 @@ struct ArchivedAtTests {
         #expect(back.archivedAt == r.archivedAt)
     }
 }
+
+@Suite("Archived date — one-time backfill")
+struct ArchivedAtBackfillTests {
+
+    @Test("manifest column 0 is the promotion date, keyed by record id, first promotion wins")
+    func manifestDates() {
+        let id = UUID()
+        let header = "promotedAt,relPath,sha256,size,origPath,origVol,recordID,sourceID,date,conf,people,stars"
+        let row1 = "\"2026-08-16T20:11:03Z\",\"30_Video/x.mov\",\"ab\",\"1\",\"/a\",\"V\",\"\(id.uuidString)\",\"\(UUID().uuidString)\",\"1994\",\"known\",\"\",\"3\""
+        let row2 = "\"2026-08-20T09:00:00Z\",\"30_Video/x_1.mov\",\"cd\",\"1\",\"/a\",\"V\",\"\(id.uuidString)\",\"\(UUID().uuidString)\",\"1994\",\"known\",\"\",\"3\""
+        let junk = "\"yesterday\",\"30_Video/y.mov\",\"ef\",\"1\",\"/b\",\"V\",\"not-a-uuid\",\"\",\"\",\"\",\"\",\"0\""
+        let dates = ArchivedAtBackfill.manifestDates(text: [header, row1, row2, junk].joined(separator: "\n"))
+        #expect(dates.count == 1)
+        #expect(dates[id] == ISO8601DateFormatter().date(from: "2026-08-16T20:11:03Z"))
+    }
+
+    @MainActor
+    @Test("note → manifest → fixity → unresolved; already-stamped copies untouched")
+    func precedenceAndIdempotence() {
+        let noteDate = ISO8601DateFormatter().date(from: "2026-08-16T20:11:03Z")!
+        let manifestDate = Date(timeIntervalSince1970: 1_750_000_000)
+        let fixityDate = Date(timeIntervalSince1970: 1_760_000_000)
+        let keep = Date(timeIntervalSince1970: 1_000_000_000)
+
+        let a = VideoRecord(); a.notes = "Promote 2026-08-16T20:11:03Z: promoted from /a"
+        let b = VideoRecord()
+        let c = VideoRecord(); c.archiveFixity = ArchiveFixity(digest: "x", verifiedAt: fixityDate, sizeBytes: 1)
+        let d = VideoRecord()
+        let e = VideoRecord(); e.archivedAt = keep; e.notes = "Promote 2026-08-16T20:11:03Z: promoted from /e"
+
+        let tally = ArchivedAtBackfill.apply(to: [a, b, c, d, e], manifest: [b.id: manifestDate, e.id: manifestDate])
+        #expect(tally == .init(fromNote: 1, fromManifest: 1, fromFixity: 1, unresolved: 1))
+        #expect(a.archivedAt == noteDate)
+        #expect(b.archivedAt == manifestDate)
+        #expect(c.archivedAt == fixityDate)
+        #expect(d.archivedAt == nil)
+        #expect(e.archivedAt == keep)
+        #expect(tally.line.hasPrefix("Backfilled archived dates for 3 archive copies"))
+        #expect(ArchivedAtBackfill.apply(to: [a, b, c, e], manifest: [:]).filled == 0, "second pass changes nothing")
+    }
+}
