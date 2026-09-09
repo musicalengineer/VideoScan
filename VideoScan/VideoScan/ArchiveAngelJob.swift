@@ -121,8 +121,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let active = pfActiveRecords(model.records)
         var candidates: [ArchiveAngelCandidate] = []
         candidates.reserveCapacity(active.count)
-        for r in active {
+        for (i, r) in active.enumerated() {
             candidates.append(ArchiveAngelCandidate.project(r, model: model, policy: policy))
+            // O(records) on the main actor: yield every 500 so the UI keeps
+            // painting on an 18k-record catalog (no beachball, GH #104 class).
+            if i % 500 == 499 {
+                subtitleText = "Considering \(i + 1) of \(active.count) records…"
+                await Task.yield()
+                if stopRequested { finishCancelled(); return }
+            }
         }
         plan.consideredCount = candidates.count
         if stopRequested { finishCancelled(); return }

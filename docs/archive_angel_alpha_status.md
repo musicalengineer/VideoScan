@@ -24,3 +24,11 @@ Rick 9/09 12:20: "alpha version by 4:00pm"; AMPAS/LOC practice; FFV1 optional
 - 12:50 two forks dispatched: A = ArchiveAngelJob (walk + preparation + journal + MFO detail), B = start sheet + Archive-tab entry + review sheet + ArchiveAngelPromoter (identity re-check → buildPromotePlan → startPromote → report). Rick 12:20: AMPAS/LOC practice; FFV1 optional, off by default.
 - 13:00 1d923efe: both forks integrated; 32 tests / 6 suites green in one derivedData; codex checkpoint (a)+(b) posted (#1241). Full VideoScanTests target running for regression before merge.
 - 13:30 full VideoScanTests target on 1d923efe: 32/32 Angel tests green; 3 non-Angel failures, all pre-existing or environmental — ArchivistTranscriptRenderSensorTests.appendAndMutate… (row-rebuild sensor 17 vs 2, firing since 8/31 per memory + codex's CI baseline list), BalanceAudio real Clip 28.dv tests (60 s / 300 s time limits under a loaded M4), FamilyTreeLaunchBundleTests.prewarm… (63 s); run then stalled >15 min on MasterArchiveHardeningTests R5-B1 (viaBundle → true) with no output — stopped. Merge per 8/29 policy (focused suites green; full battery = nightly/codex M5).
+
+## How to try the alpha (Rick)
+1. Build **Release** (family-facing spot test) and launch. Archive tab → Master Archive panel → link row now has **Archive Angel…** beside "Verify copies…".
+2. Pick **10** for the first run; leave the FFV1 toggle off. Start opens the Media File Operations window behind the main window; the "Angel" row shows "3 of 10 — <file>: access copy" and expands to the per-entry step chips.
+3. When it finishes, the Archive tab shows an orange **"N ready to review"** badge; click it → "Recommended To Be Archived". Expand "Why" on a row, rename a stem, set a date, deselect one, add a note.
+4. **Promote N** runs the existing Promote job (originals from their source volume, companions from the buffer); the sheet shows the report line ("7 promoted (7 originals, 7 access copies, 0 lossless, 1 balanced audio); 1 original-only: …").
+5. Buffer lives at `~/Movies/VideoScan Buffer/ArchiveAngel/batch-<stamp>/`; `plan.json` is the journal. Cancel keeps prepared rows reviewable; Discard removes the batch folder.
+Expect on a first run: the access copy step takes real time (HEVC VideoToolbox per file); verify-audio may say "already verified" for files Verify Audio has seen.
