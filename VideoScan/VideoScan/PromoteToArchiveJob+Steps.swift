@@ -521,14 +521,7 @@ extension PromoteToArchiveJob {
                             relPath: String,
                             progress: @escaping @Sendable (Int64) -> Void,
                             phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in }) async throws -> ArchivePromoteEngine.PublishResult {
-        // A symlinked source (Rick's ~/Movies → /Volumes/Projects/MoviesExpansion
-        // since the 2026-08-31 move) is the user's own file: resolve the link
-        // chain first, then open the target O_NOFOLLOW exactly as before. The
-        // archive-tree contract (no symlink at any depth under the root) is
-        // untouched — this is the read side only. Surfaced by Archive Angel
-        // 2026-09-09 ("size changed 5.8 GB → 62 bytes").
-        let resolvedPath = URL(fileURLWithPath: sourcePath).resolvingSymlinksInPath().path
-        let source = try ArchivePromoteEngine.openSource(path: resolvedPath)
+        let source = try ArchivePromoteEngine.openSource(path: sourcePath)
         defer { source.close() }
         return try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
