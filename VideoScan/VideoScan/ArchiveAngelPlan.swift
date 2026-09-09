@@ -50,6 +50,9 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var note: String = ""
         /// Companion file in the buffer (relative to the batch folder).
         var outputRelPath: String?
+        /// Catalog record of the companion (Transcode/Balance jobs catalog
+        /// their outputs; Promote only accepts catalog record IDs).
+        var recordID: UUID?
         var id: StepKind { kind }
     }
 
@@ -67,6 +70,10 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         var sourcePath: String
         var filename: String
         var sizeBytes: Int64
+        /// Identity captured at preparation; Promote re-checks all three and
+        /// refuses the row if the source changed underneath (codex #1239 g1).
+        var sourceContentHash: String = ""
+        var sourceModifiedAt: Date?
         var durationSeconds: Double
         var score: Int
         var evidence: [ArchiveAngelEvidence]

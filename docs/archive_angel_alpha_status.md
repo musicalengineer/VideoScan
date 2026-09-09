@@ -19,3 +19,6 @@ Rick 9/09 12:20: "alpha version by 4:00pm"; AMPAS/LOC practice; FFV1 optional
 
 ## Progress log
 - 12:28 branch created; API map (Explore) running; scorer + tests written; plan model written.
+- 12:36 9c03b87d scorer suites green (14 tests, incl. 100k scale).
+- 12:45 API map done (MFO job pattern, Promote needs catalog IDs → companions are catalogued by Transcode/Balance jobs, startTranscode takes an outputURL, Balance takes plannedOutput). Plan gained sourceContentHash/sourceModifiedAt (codex guardrail 1) and StepOutcome.recordID.
+- 12:50 two forks dispatched: A = ArchiveAngelJob (walk + preparation + journal + MFO detail), B = start sheet + Archive-tab entry + review sheet + ArchiveAngelPromoter (identity re-check → buildPromotePlan → startPromote → report). Rick 12:20: AMPAS/LOC practice; FFV1 optional, off by default.
