@@ -487,7 +487,16 @@ struct CatalogView: View {
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
     @Environment(\.openWindow) var openWindow
 
+    // CI 2026-09-09 (GH #173): the runner's Swift 6.2.4 cannot type-check
+    // the former 495-line body ("unable to type-check this expression in
+    // reasonable time"). Pure extraction into named pieces — same shape as
+    // FamilyTreeView. Nothing here changes behaviour; the modifier order
+    // inside each piece is exactly what the single expression had.
     var body: some View {
+        withAlerts(withSheets(rootSplit))
+    }
+
+    private var rootSplit: some View {
         VerticalSplitView(
             topMinHeight: 60,
             topIdealHeight: scanTargetsPaneAutoHeight,
@@ -496,97 +505,15 @@ struct CatalogView: View {
                 scanTargetsPane
             },
             bottom: {
-                VStack(spacing: 0) {
+                bottomPane
+            }
+        )
+    }
 
+    private var bottomPane: some View {
+        VStack(spacing: 0) {
             // MARK: Toolbar (post-scan actions)
-            CatalogToolbar(
-                isScanning: model.isScanning,
-                isCombining: model.isCombining,
-                isCorrelating: model.isCorrelating,
-                isAnalyzingDuplicates: model.isAnalyzingDuplicates,
-                correlateStatus: model.correlateStatus,
-                duplicateStatus: model.duplicateStatus,
-                videoOnlyCount: streamTypeCounts.videoOnly,
-                audioOnlyCount: streamTypeCounts.audioOnly,
-                hasRecords: !model.records.isEmpty,
-                hasCorrelatedPairs: model.hasAnyPairs,
-                outputCSVPath: model.outputCSVPath,
-                selectedIDs: selectedIDs,
-                showCombineSheet: $showCombineSheet,
-                showRelocateSheet: $showRelocateSheet,
-                showDashboard: $showDashboard,
-                searchText: $searchText,
-                debouncedSearchText: debouncedSearchText,
-                searchHitCount: searchHitCount,
-                showInspector: $showInspector,
-                cacheCount: model.cacheCount,
-                dashboard: model.dashboard,
-                onStopCombine: { model.stopCombine() },
-                onCorrelateAll: {
-                    model.log("\nCorrelating all audio-only and video-only files...")
-                    Task { await model.correlate() }
-                },
-                onCorrelateSelected: {
-                    model.log("\nCorrelating \(selectedIDs.count) selected files...")
-                    Task { await model.correlate(selectedIDs: selectedIDs) }
-                },
-                onCorrelateAcrossVolumes: {
-                    model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
-                    Task { await model.correlateAcrossVolumes() }
-                },
-                onClearAndRecorrelateAll: {
-                    showClearRecorrelateConfirm = true
-                },
-                onAnalyzeDuplicatesAll: {
-                    model.log("\nAnalyzing duplicate candidates across all scanned media...")
-                    Task { await model.analyzeDuplicates() }
-                },
-                onAnalyzeDuplicatesSelected: {
-                    model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
-                    Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
-                },
-                volumesWithDeletableDups: model.deletableDupVolumes,
-                onDeleteDuplicates: { path, count in
-                    deleteTargetVolume = path
-                    deleteTargetCount = count
-                    // One O(records) pass at click time (not in a body) so
-                    // the alert can state the mode and the split honestly.
-                    let selection = model.duplicateDeletionSelection(onVolume: path)
-                    deleteTargetSummary = selection.confirmationText(
-                        volumeName: URL(fileURLWithPath: path).lastPathComponent)
-                    deleteTargetCrossMode = selection.crossVolumeMode
-                    showDeleteDuplicatesConfirm = true
-                },
-                onClearResults: { model.clearResults() },
-                onClearCache: { _ = model.clearCache() },
-                onScanAvidBins: { model.scanAvidBins() },
-                avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
-                avidBinFiles: model.avidBinResults.count,
-                showPairsOnly: $showPairsOnly,
-                viewFilters: $catalogViewFilters,
-                showDisconnectedMedia: $showDisconnectedMedia,
-                showRemoved: $showRemoved,
-                showSetAside: $showSetAside,
-                showSuperseded: $showSuperseded,
-                dashboardContent: {
-                    if model.isScanning || model.isCombining {
-                        CompactDashboard(
-                            dashboard: model.dashboard,
-                            isScanning: model.isScanning,
-                            isCombining: model.isCombining,
-                            isExpanded: $showDashboard
-                        )
-                        .popover(isPresented: $showDashboard, arrowEdge: .bottom) {
-                            ExpandedDashboard(
-                                dashboard: model.dashboard,
-                                isScanning: model.isScanning,
-                                isCombining: model.isCombining
-                            )
-                        }
-                    }
-                }
-            )
-
+            catalogToolbar
             Divider()
 
 
@@ -596,97 +523,197 @@ struct CatalogView: View {
             PreviewSweepStatusLine(sweep: model.previewSweep)
 
             // MARK: Split — Table + Player left, Inspector right
-            CatalogContent(
-                records: model.records,
-                selectedIDs: $selectedIDs,
-                sortOrder: $sortOrder,
-                searchText: debouncedSearchText,
-                searchHitCount: $searchHitCount,
-                filterTargetPaths: filterTargetPaths,
-                showPairsOnly: showPairsOnly,
-                viewFilters: catalogViewFilters,
-                showDisconnectedMedia: showDisconnectedMedia,
-                showRemoved: showRemoved,
-                showSetAside: showSetAside,
-                showSuperseded: showSuperseded,
-                // Media-kind facet (GH #124) — persisted on the model,
-                // flipped by the toolbar facet chip.
-                kindFacet: model.kindFacetSetting.facet,
-                filterByIDs: filterByIDs,
-                focusMatchScore: focusMatchScore,
-                focusLabel: focusLabel,
-                previewImage: model.previewImage,
-                previewFilename: model.previewFilename,
-                previewOfflineVolumeName: model.previewOfflineVolumeName,
-                previewUnavailable: model.previewUnavailable,
-                showInspector: $showInspector,
-                onSort: { model.records.sort(using: $0) },
-                onSelect: { id in
-                    // record(forID:) is the O(1) index lookup — this fires
-                    // on EVERY arrow-key step, so no linear scans here.
-                    if let id, let rec = model.record(forID: id),
-                       rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
-                        // Debounced (200 ms): holding an arrow key no longer
-                        // opens one media file per traversed row. Cache hits
-                        // still swap instantly inside the model.
-                        model.requestThumbnailDebounced(for: rec)
-                    } else {
-                        // clearPreview also cancels any pending debounce so
-                        // a stale generation can't repopulate the pane.
-                        model.clearPreview()
+            withCatalogObservers(catalogContent)
+        }
+    }
+
+    private var catalogToolbar: some View {
+        CatalogToolbar(
+            isScanning: model.isScanning,
+            isCombining: model.isCombining,
+            isCorrelating: model.isCorrelating,
+            isAnalyzingDuplicates: model.isAnalyzingDuplicates,
+            correlateStatus: model.correlateStatus,
+            duplicateStatus: model.duplicateStatus,
+            videoOnlyCount: streamTypeCounts.videoOnly,
+            audioOnlyCount: streamTypeCounts.audioOnly,
+            hasRecords: !model.records.isEmpty,
+            hasCorrelatedPairs: model.hasAnyPairs,
+            outputCSVPath: model.outputCSVPath,
+            selectedIDs: selectedIDs,
+            showCombineSheet: $showCombineSheet,
+            showRelocateSheet: $showRelocateSheet,
+            showDashboard: $showDashboard,
+            searchText: $searchText,
+            debouncedSearchText: debouncedSearchText,
+            searchHitCount: searchHitCount,
+            showInspector: $showInspector,
+            cacheCount: model.cacheCount,
+            dashboard: model.dashboard,
+            onStopCombine: { model.stopCombine() },
+            onCorrelateAll: {
+                model.log("\nCorrelating all audio-only and video-only files...")
+                Task { await model.correlate() }
+            },
+            onCorrelateSelected: {
+                model.log("\nCorrelating \(selectedIDs.count) selected files...")
+                Task { await model.correlate(selectedIDs: selectedIDs) }
+            },
+            onCorrelateAcrossVolumes: {
+                model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
+                Task { await model.correlateAcrossVolumes() }
+            },
+            onClearAndRecorrelateAll: {
+                showClearRecorrelateConfirm = true
+            },
+            onAnalyzeDuplicatesAll: {
+                model.log("\nAnalyzing duplicate candidates across all scanned media...")
+                Task { await model.analyzeDuplicates() }
+            },
+            onAnalyzeDuplicatesSelected: {
+                model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
+                Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
+            },
+            volumesWithDeletableDups: model.deletableDupVolumes,
+            onDeleteDuplicates: { path, count in
+                deleteTargetVolume = path
+                deleteTargetCount = count
+                // One O(records) pass at click time (not in a body) so
+                // the alert can state the mode and the split honestly.
+                let selection = model.duplicateDeletionSelection(onVolume: path)
+                deleteTargetSummary = selection.confirmationText(
+                    volumeName: URL(fileURLWithPath: path).lastPathComponent)
+                deleteTargetCrossMode = selection.crossVolumeMode
+                showDeleteDuplicatesConfirm = true
+            },
+            onClearResults: { model.clearResults() },
+            onClearCache: { _ = model.clearCache() },
+            onScanAvidBins: { model.scanAvidBins() },
+            avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
+            avidBinFiles: model.avidBinResults.count,
+            showPairsOnly: $showPairsOnly,
+            viewFilters: $catalogViewFilters,
+            showDisconnectedMedia: $showDisconnectedMedia,
+            showRemoved: $showRemoved,
+            showSetAside: $showSetAside,
+            showSuperseded: $showSuperseded,
+            dashboardContent: {
+                if model.isScanning || model.isCombining {
+                    CompactDashboard(
+                        dashboard: model.dashboard,
+                        isScanning: model.isScanning,
+                        isCombining: model.isCombining,
+                        isExpanded: $showDashboard
+                    )
+                    .popover(isPresented: $showDashboard, arrowEdge: .bottom) {
+                        ExpandedDashboard(
+                            dashboard: model.dashboard,
+                            isScanning: model.isScanning,
+                            isCombining: model.isCombining
+                        )
                     }
-                },
-                onClearPreview: {
-                    model.clearPreview()
-                },
-                onCombinePair: { video, audio in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        combinePairItem = CombinePairItem(video: video, audio: audio)
-                    }
-                },
-                onShowPair: { id1, id2 in
-                    searchText = ""
-                    selectedVolumeIDs = []
-                    showPairsOnly = false
-                    filterByIDs = [id1, id2]
-                    selectedIDs = [id1, id2]
-                    focusMatchScore = nil
-                    focusLabel = "A/V Pair focus"
-                },
-                onFindAVPair: { rec in
-                    findAVPairFocus(for: rec)
-                },
-                onClearFilter: {
-                    filterByIDs = []
-                    focusMatchScore = nil
-                },
-                onShowInArchive: { rec in
-                    model.focusedMediaIDs = model.focusSet(for: rec.id)
-                    model.pendingArchiveSelection = rec.id
-                    selectedTab = 2
-                },
-                onShowOnlineCopies: { focusIDs, selectID in
-                    searchText = ""
-                    selectedVolumeIDs = []
-                    showPairsOnly = false
-                    filterByIDs = focusIDs
-                    selectedIDs = [selectID]
-                    focusMatchScore = nil
-                    focusLabel = "Online copies"
-                },
-                onShowRepairedCopy: { repairID in
-                    // GH #132 — jump from a superseded original to the
-                    // repair that replaced it. Same focus mechanics as
-                    // Online copies.
-                    searchText = ""
-                    selectedVolumeIDs = []
-                    showPairsOnly = false
-                    filterByIDs = [repairID]
-                    selectedIDs = [repairID]
-                    focusMatchScore = nil
-                    focusLabel = "Repaired copy"
                 }
-            )
+            }
+        )
+    }
+
+    private var catalogContent: some View {
+        CatalogContent(
+            records: model.records,
+            selectedIDs: $selectedIDs,
+            sortOrder: $sortOrder,
+            searchText: debouncedSearchText,
+            searchHitCount: $searchHitCount,
+            filterTargetPaths: filterTargetPaths,
+            showPairsOnly: showPairsOnly,
+            viewFilters: catalogViewFilters,
+            showDisconnectedMedia: showDisconnectedMedia,
+            showRemoved: showRemoved,
+            showSetAside: showSetAside,
+            showSuperseded: showSuperseded,
+            // Media-kind facet (GH #124) — persisted on the model,
+            // flipped by the toolbar facet chip.
+            kindFacet: model.kindFacetSetting.facet,
+            filterByIDs: filterByIDs,
+            focusMatchScore: focusMatchScore,
+            focusLabel: focusLabel,
+            previewImage: model.previewImage,
+            previewFilename: model.previewFilename,
+            previewOfflineVolumeName: model.previewOfflineVolumeName,
+            previewUnavailable: model.previewUnavailable,
+            showInspector: $showInspector,
+            onSort: { model.records.sort(using: $0) },
+            onSelect: { id in
+                // record(forID:) is the O(1) index lookup — this fires
+                // on EVERY arrow-key step, so no linear scans here.
+                if let id, let rec = model.record(forID: id),
+                   rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
+                    // Debounced (200 ms): holding an arrow key no longer
+                    // opens one media file per traversed row. Cache hits
+                    // still swap instantly inside the model.
+                    model.requestThumbnailDebounced(for: rec)
+                } else {
+                    // clearPreview also cancels any pending debounce so
+                    // a stale generation can't repopulate the pane.
+                    model.clearPreview()
+                }
+            },
+            onClearPreview: {
+                model.clearPreview()
+            },
+            onCombinePair: { video, audio in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    combinePairItem = CombinePairItem(video: video, audio: audio)
+                }
+            },
+            onShowPair: { id1, id2 in
+                searchText = ""
+                selectedVolumeIDs = []
+                showPairsOnly = false
+                filterByIDs = [id1, id2]
+                selectedIDs = [id1, id2]
+                focusMatchScore = nil
+                focusLabel = "A/V Pair focus"
+            },
+            onFindAVPair: { rec in
+                findAVPairFocus(for: rec)
+            },
+            onClearFilter: {
+                filterByIDs = []
+                focusMatchScore = nil
+            },
+            onShowInArchive: { rec in
+                model.focusedMediaIDs = model.focusSet(for: rec.id)
+                model.pendingArchiveSelection = rec.id
+                selectedTab = 2
+            },
+            onShowOnlineCopies: { focusIDs, selectID in
+                searchText = ""
+                selectedVolumeIDs = []
+                showPairsOnly = false
+                filterByIDs = focusIDs
+                selectedIDs = [selectID]
+                focusMatchScore = nil
+                focusLabel = "Online copies"
+            },
+            onShowRepairedCopy: { repairID in
+                // GH #132 — jump from a superseded original to the
+                // repair that replaced it. Same focus mechanics as
+                // Online copies.
+                searchText = ""
+                selectedVolumeIDs = []
+                showPairsOnly = false
+                filterByIDs = [repairID]
+                selectedIDs = [repairID]
+                focusMatchScore = nil
+                focusLabel = "Repaired copy"
+            }
+        )
+    }
+
+    /// Selection/search/filter observers that used to trail CatalogContent.
+    private func withCatalogObservers<V: View>(_ view: V) -> some View {
+        view
             .onChange(of: selectedIDs) {
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
                     ? selectedIDs.first
@@ -787,9 +814,11 @@ struct CatalogView: View {
                     model.thumbnailPrecacher.cancel(reason: "scan started")
                 }
             }
-                }  // end bottom VStack
-            }  // end VerticalSplitView
-        )
+    }
+
+    /// Sheets (combine, tidy, relocate + progress/summary/retire, pair, migration).
+    private func withSheets<V: View>(_ view: V) -> some View {
+        view
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
         }
@@ -863,6 +892,11 @@ struct CatalogView: View {
         // setter routes stray dismissals (Esc, click-away) through the
         // model's dismiss handler so a "Not Now" on the ask tier sticks
         // for the session instead of re-nagging on the next rebuild.
+    }
+
+    /// Alerts and the remaining maintenance sheets, in their original order.
+    private func withAlerts<V: View>(_ view: V) -> some View {
+        view
         .alert(
             volumeRenameNoticeTitle(model.pendingVolumeRenameNotice),
             isPresented: Binding(

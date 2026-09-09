@@ -24,7 +24,8 @@ Owner: Claude (overnight lead). Reviewer: codex (files issues, no edits).
 - strict-concurrency's OTHER cause found from its artifact: FamilyTreeView.swift:144 "unable to type-check this expression in reasonable time" → body split (pure extraction), pushed; attempt 4 = run with the split
 - a4d57f50 EXCLUDED_SOURCE_FILE_NAMES='*.metal' in all 5 build steps + pipefail → attempt 5 = run 34290562942
 
-- f616dd4d · #173 CI Build & Test red since 09-01 (80/80): VolumeDetailPane optional Double; + FamilyTreeView 3-stage modifier chain; + arm64-only analysis builds → attempt 6
+- f616dd4d · #173 CI Build & Test red since 09-01 (80/80): VolumeDetailPane optional Double; + FamilyTreeView 3-stage modifier chain; + arm64-only analysis builds → attempt 6 = run 34295862360 (nightly) + 34295862288 (CI): BOTH RED, one cause — ContentView.swift:490 CatalogView.body (495 lines) "unable to type-check this expression in reasonable time" on the runner's Swift 6.2.4 (Xcode 26.3, same as local; local compiles it). All three nightly build jobs (strict, lint-warn Periphery build, lint-strict Periphery build) die on it.
+- (next SHA) · CatalogView.body split into rootSplit/bottomPane/catalogToolbar/catalogContent + withCatalogObservers/withSheets/withAlerts — pure extraction, modifier order preserved; local Debug build green → attempt 7
 
 ## Not done and why
 
