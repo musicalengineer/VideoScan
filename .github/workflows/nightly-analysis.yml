@@ -114,6 +114,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             SWIFT_STRICT_CONCURRENCY=complete \
             OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS" \
             2>&1 | tee strict-concurrency.log
@@ -243,7 +244,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
-            2>&1 | tail -50
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tail -300
 
       - name: Analyse with CodeQL
         id: analyze
@@ -341,6 +343,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             2>&1 | tee tsan.log || true
 
       - name: Count + summarise findings
@@ -460,7 +463,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
-            -derivedDataPath periphery-dd 2>&1 | tail -20
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            -derivedDataPath periphery-dd 2>&1 | tail -300
 
       - name: Periphery aggressive (no --retain-public)
         run: |
@@ -591,7 +595,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
-            -derivedDataPath DerivedData 2>&1 | tail -20
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            -derivedDataPath DerivedData 2>&1 | tail -300
 
       - name: Periphery (warn-only, default retention)
         continue-on-error: true

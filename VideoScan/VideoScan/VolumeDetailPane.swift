@@ -351,7 +351,9 @@ struct CapacityBar: View {
             let w = geo.size.width
             let capD = max(1, Double(capacity))
             let catW = w * min(1, Double(max(0, cataloged)) / capD)
-            let usedW = used.map { w * min(1, Double($0) / capD) } ?? catW
+            // Explicit type: the GH runner's Swift infers `Double?` here and
+            // refuses `max(usedW, catW)` (CI red since 2026-09-01, GH #173).
+            let usedW: Double = used.map { w * min(1, Double($0) / capD) } ?? catW
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.secondary.opacity(0.18))
                 Capsule().fill(Color.secondary.opacity(0.45)).frame(width: max(usedW, catW))

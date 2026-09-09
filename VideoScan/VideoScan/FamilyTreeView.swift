@@ -237,142 +237,166 @@ struct FamilyTreeView: View {
     }
 
     var body: some View {
+        // Three stages instead of one 14-modifier chain: under the nightly
+        // analysis flags the compiler gave up type-checking the single
+        // expression ("unable to type-check this expression in reasonable
+        // time", GH #171). Same modifiers, same order.
+        withLifecycle(withSheets(withChrome(rootStack)))
+    }
+
+    private var rootStack: some View {
         VStack(spacing: 0) {
             statusBanners
             splitContent
         }
-        // Shortcut carriers: zero-size, invisible buttons whose only job is
-        // the key equivalent (the visible toolbar buttons live inside the
-        // canvas header, which is rebuilt in chain mode). ⌘0 is taken
-        // app-wide by Window › Main Window, so Fit is ⌥⌘0.
-        .background {
-            Group {
-                Button("") { toggleSidebar() }
-                    .keyboardShortcut("s", modifiers: [.command, .option])
-                Button("") { revealSearch() }
-                    .keyboardShortcut("f", modifiers: [.command])
-                Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
-                    .keyboardShortcut("=", modifiers: [.command])
-                Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
-                    .keyboardShortcut("+", modifiers: [.command])
-                Button("") { zoom = FamilyTreeZoomMath.zoomOut(zoom) }
-                    .keyboardShortcut("-", modifiers: [.command])
-                Button("") { fitToViewport() }
-                    .keyboardShortcut("0", modifiers: [.command, .option])
+    }
+
+    /// Stage 1: shortcut carriers, search-focus peek.
+    private func withChrome<V: View>(_ view: V) -> some View {
+        view
+            // Shortcut carriers: zero-size, invisible buttons whose only job is
+            // the key equivalent (the visible toolbar buttons live inside the
+            // canvas header, which is rebuilt in chain mode). ⌘0 is taken
+            // app-wide by Window › Main Window, so Fit is ⌥⌘0.
+            .background {
+                Group {
+                    Button("") { toggleSidebar() }
+                        .keyboardShortcut("s", modifiers: [.command, .option])
+                    Button("") { revealSearch() }
+                        .keyboardShortcut("f", modifiers: [.command])
+                    Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
+                        .keyboardShortcut("=", modifiers: [.command])
+                    Button("") { zoom = FamilyTreeZoomMath.zoomIn(zoom) }
+                        .keyboardShortcut("+", modifiers: [.command])
+                    Button("") { zoom = FamilyTreeZoomMath.zoomOut(zoom) }
+                        .keyboardShortcut("-", modifiers: [.command])
+                    Button("") { fitToViewport() }
+                        .keyboardShortcut("0", modifiers: [.command, .option])
+                }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
             }
-            .buttonStyle(.plain)
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .accessibilityHidden(true)
-        }
-        .onChange(of: searchFocused) { _, focused in
-            // The ⌘F peek ends when focus leaves the field.
-            if !focused, sidebarRevealedForSearch { sidebarRevealedForSearch = false }
-        }
-        .alert("Export failed", isPresented: Binding(
-            get: { exportError != nil },
-            set: { if !$0 { exportError = nil } })) {
-            Button("OK", role: .cancel) { exportError = nil }
-        } message: {
-            Text(exportError ?? "")
-        }
-        .background(palette.window)
-        .preferredColorScheme(effectiveScheme == .dark ? .dark : .light)
-        .onChange(of: selectedPhotoItem) { _, item in
-            importApplePhoto(item)
-        }
-        .sheet(isPresented: $showVerifyReport) {
-            if let report = model.verification {
-                FamilyTreeVerifyReportView(report: report) { personID in
-                    model.select(personID)
-                    showVerifyReport = false
+            .onChange(of: searchFocused) { _, focused in
+                // The ⌘F peek ends when focus leaves the field.
+                if !focused, sidebarRevealedForSearch { sidebarRevealedForSearch = false }
+            }
+            .alert("Export failed", isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } })) {
+                Button("OK", role: .cancel) { exportError = nil }
+            } message: {
+                Text(exportError ?? "")
+            }
+    }
+
+    /// Stage 2: window background, colour scheme, every sheet and alert.
+    private func withSheets<V: View>(_ view: V) -> some View {
+        view
+            .background(palette.window)
+            .preferredColorScheme(effectiveScheme == .dark ? .dark : .light)
+            .onChange(of: selectedPhotoItem) { _, item in
+                importApplePhoto(item)
+            }
+            .sheet(isPresented: $showVerifyReport) {
+                if let report = model.verification {
+                    FamilyTreeVerifyReportView(report: report) { personID in
+                        model.select(personID)
+                        showVerifyReport = false
+                    }
                 }
             }
-        }
-        .photosPicker(isPresented: $showApplePhotosPicker,
-                      selection: $selectedPhotoItem, matching: .images)
-        .sheet(item: $adjustSource) { source in
-            FamilyPhotoAdjustSheet(
-                source: source,
-                onSaved: { cropped, url in
-                    // The crop wins on the card immediately (session
-                    // override) and on relaunch (recorded as THE choice).
-                    model.setPhotoOverride(cropped, for: source.personID)
-                    appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
-                    do {
-                        try source.store.recordPhotoChoice(
-                            url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
-                        model.notePhotoChoiceWritten()
-                        adjustError = nil
-                    } catch {
-                        adjustError = "Crop saved, but not recorded as the chosen photo: \(error.localizedDescription)"
-                    }
-                    adjustSource = nil
-                },
-                onCancel: { adjustSource = nil })
-        }
-        .sheet(item: $researchTarget) { target in
-            ResearchPersonSheet(
-                model: ResearchPersonModel(
-                    subject: target.subject,
-                    // People/<FSID>/research/ under the family assets root.
-                    store: ResearchStore(
-                        peopleRoot: FamilyAssetConfigurationCenter.shared.snapshot().makeStore().peopleDirectory),
-                    fetcher: URLSessionResearchFetcher(),
-                    speakerName: model.noteAuthor,
-                    record: { try model.recordTestimony($0) }),
-                onClose: { researchTarget = nil })
-        }
-        .alert("Can't research this person", isPresented: Binding(
-            get: { researchRefusal != nil },
-            set: { if !$0 { researchRefusal = nil } })) {
-            Button("OK", role: .cancel) { researchRefusal = nil }
-        } message: {
-            Text(researchRefusal ?? "")
-        }
-        .sheet(item: $identityPickTarget) { target in
-            TreeIdentityPickerSheet(target: target, center: identityCenter,
-                                    profiles: POIProfile.cachedSnapshot(),
-                                    onPinned: { candidate in
-                                        identityPickTarget = nil
-                                        identityCenter.showBanner(.pinned, profileName: target.profile.name,
-                                                                  candidate: candidate)
-                                        model.focus(onID: candidate.personID)
-                                    },
-                                    onDismiss: { identityPickTarget = nil })
-        }
-        .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
-            // The coordinator is created in presentGetFamilyTree() before the
-            // flag flips, so this `if let` only guards the impossible case.
-            if let coordinator = pullCenter.coordinator {
-                FamilySearchPullSheet(
-                    coordinator: coordinator,
-                    onInstalled: { _ in Task { await model.loadFromDisk() } },
-                    onForget: {
-                        showPullSheet = false
-                        pullCenter.forget()
-                    })
+            .photosPicker(isPresented: $showApplePhotosPicker,
+                          selection: $selectedPhotoItem, matching: .images)
+            .sheet(item: $adjustSource) { source in
+                FamilyPhotoAdjustSheet(
+                    source: source,
+                    onSaved: { cropped, url in
+                        // The crop wins on the card immediately (session
+                        // override) and on relaunch (recorded as THE choice).
+                        model.setPhotoOverride(cropped, for: source.personID)
+                        appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
+                        do {
+                            try source.store.recordPhotoChoice(
+                                url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
+                            model.notePhotoChoiceWritten()
+                            adjustError = nil
+                        } catch {
+                            adjustError = "Crop saved, but not recorded as the chosen photo: \(error.localizedDescription)"
+                        }
+                        adjustSource = nil
+                    },
+                    onCancel: { adjustSource = nil })
             }
-        }
-        .task(id: [sourceRevision, ownerSetting, archivistSetting,
-                   archivistPersonSetting, ownerPinSetting]) {
-            let revision = sourceRevision
-            await model.prepareForAppearance(
-                revision: revision,
-                source: usesInjectedModel ? nil : FamilyAssetConfigurationCenter.shared.snapshot())
-            guard !Task.isCancelled else { return }
-            handleIncomingHighlight()
-        }
-        .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
-        .onChange(of: incomingPersonID) { _, _ in handleIncomingHighlight() }
-        .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
-        .onChange(of: model.loadState) { _, _ in handleIncomingHighlight() }
-        .onChange(of: getFamilyTreeRequest) { _, token in
-            guard !token.isEmpty else { return }
-            getFamilyTreeRequest = ""
-            presentGetFamilyTree()
-        }
+            .sheet(item: $researchTarget) { target in
+                ResearchPersonSheet(
+                    model: ResearchPersonModel(
+                        subject: target.subject,
+                        // People/<FSID>/research/ under the family assets root.
+                        store: ResearchStore(
+                            peopleRoot: FamilyAssetConfigurationCenter.shared.snapshot().makeStore().peopleDirectory),
+                        fetcher: URLSessionResearchFetcher(),
+                        speakerName: model.noteAuthor,
+                        record: { try model.recordTestimony($0) }),
+                    onClose: { researchTarget = nil })
+            }
+            .alert("Can't research this person", isPresented: Binding(
+                get: { researchRefusal != nil },
+                set: { if !$0 { researchRefusal = nil } })) {
+                Button("OK", role: .cancel) { researchRefusal = nil }
+            } message: {
+                Text(researchRefusal ?? "")
+            }
+            .sheet(item: $identityPickTarget) { target in
+                TreeIdentityPickerSheet(target: target, center: identityCenter,
+                                        profiles: POIProfile.cachedSnapshot(),
+                                        onPinned: { candidate in
+                                            identityPickTarget = nil
+                                            identityCenter.showBanner(.pinned, profileName: target.profile.name,
+                                                                      candidate: candidate)
+                                            model.focus(onID: candidate.personID)
+                                        },
+                                        onDismiss: { identityPickTarget = nil })
+            }
+            .sheet(isPresented: $showPullSheet, onDismiss: { pullCenter.dismissIfSettled() }) {
+                // The coordinator is created in presentGetFamilyTree() before the
+                // flag flips, so this `if let` only guards the impossible case.
+                if let coordinator = pullCenter.coordinator {
+                    FamilySearchPullSheet(
+                        coordinator: coordinator,
+                        onInstalled: { _ in Task { await model.loadFromDisk() } },
+                        onForget: {
+                            showPullSheet = false
+                            pullCenter.forget()
+                        })
+                }
+            }
     }
+
+    /// Stage 3: the appearance task and the incoming-highlight observers.
+    private func withLifecycle<V: View>(_ view: V) -> some View {
+        view
+            .task(id: [sourceRevision, ownerSetting, archivistSetting,
+                       archivistPersonSetting, ownerPinSetting]) {
+                let revision = sourceRevision
+                await model.prepareForAppearance(
+                    revision: revision,
+                    source: usesInjectedModel ? nil : FamilyAssetConfigurationCenter.shared.snapshot())
+                guard !Task.isCancelled else { return }
+                handleIncomingHighlight()
+            }
+            .onChange(of: incomingHighlight) { _, _ in handleIncomingHighlight() }
+            .onChange(of: incomingPersonID) { _, _ in handleIncomingHighlight() }
+            .onChange(of: incomingSearchText) { _, _ in handleIncomingHighlight() }
+            .onChange(of: model.loadState) { _, _ in handleIncomingHighlight() }
+            .onChange(of: getFamilyTreeRequest) { _, token in
+                guard !token.isEmpty else { return }
+                getFamilyTreeRequest = ""
+                presentGetFamilyTree()
+            }
+    }
+
 
     /// If the People tab (or Hallie) dropped a name into AppStorage, find the
     /// matching person on this tree, select them, and clear the hint so it
