@@ -235,6 +235,18 @@ jobs:
         run: |
           # pipefail: a failed build used to hide behind `| tail` and let
           # CodeQL "succeed" on 1 of 1,283 files (GH #171).
+          #
+          # Explicitly built modules OFF (2026-09-09, GH #171 attempt 8):
+          # with the build green, CodeQL still scanned 82 of 1,311 files.
+          # The SARIF carried 1,875 extractor errors of one shape — "module
+          # file …/ModuleCache.noindex/_DarwinFoundation1-….pcm built from a
+          # different branch (clang-1700.6.4.2) than the compiler
+          # (swiftlang/llvm-project …)" and "failed to emit precompiled
+          # module '/dev/null'". Xcode 26 precompiles the SDK's clang
+          # modules itself and hands them to swift-frontend as explicit
+          # inputs; CodeQL's extractor is a different frontend build and
+          # refuses those PCMs, so every file that imports Foundation is
+          # dropped. With implicit modules the extractor builds its own.
           set -o pipefail
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
@@ -245,6 +257,9 @@ jobs:
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             EXCLUDED_SOURCE_FILE_NAMES='*.metal' \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+            _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO \
+            CLANG_ENABLE_EXPLICIT_MODULES=NO \
             2>&1 | tail -300
 
       - name: Analyse with CodeQL

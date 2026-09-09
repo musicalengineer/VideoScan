@@ -119,6 +119,14 @@ final class GedcomScaleSensorTests: XCTestCase {
             debugBuild: false, environment: optIn))
     }
 
+    func testDebugCeilingWidensOnlyOnGitHubHostedRunners() {
+        XCTAssertEqual(PerformanceLane.hostedRunnerFactor(environment: [:]), 1)
+        XCTAssertEqual(PerformanceLane.hostedRunnerFactor(environment: ["CI": "1"]), 1,
+                       "the CI test plan sets CI=1 locally; that must not widen budgets")
+        XCTAssertEqual(PerformanceLane.hostedRunnerFactor(environment: ["GITHUB_ACTIONS": "true"]), 3)
+        XCTAssertEqual(PerformanceLane.hostedRunnerFactor(environment: ["GITHUB_ACTIONS": "false"]), 1)
+    }
+
     func testSeventyMegabyteGedcomParsesWithinBudget() throws {
         try requireRealArtifactPerformanceLane()
         try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
@@ -421,7 +429,7 @@ final class GedcomScaleSensorTests: XCTestCase {
             .init(intent: intent), context: context)
         let elapsed = ContinuousClock.now - started
         #if DEBUG
-        let budget = Duration.milliseconds(500)
+        let budget = PerformanceLane.debugCeiling(.milliseconds(500))
         #else
         let budget = Duration.milliseconds(50)
         #endif
@@ -454,7 +462,7 @@ final class GedcomScaleSensorTests: XCTestCase {
             request, context: context)
         let elapsed = ContinuousClock.now - started
         #if DEBUG
-        let budget = Duration.seconds(2)
+        let budget = PerformanceLane.debugCeiling(.seconds(2))
         #else
         let budget = Duration.milliseconds(250)
         #endif
