@@ -116,37 +116,50 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     private func run() async {
         guard let model else { finish(failed: "Catalog went away."); return }
 
-        // ── Stage 1a: the walk (main actor, in the job's task — never a view body).
+        // ── Stage 1a: pick from FRESH evidence (phase 2 sweep) or walk.
         let policy = model.duplicateKeeperPolicy()
-        let active = pfActiveRecords(model.records)
-        var candidates: [ArchiveAngelCandidate] = []
-        candidates.reserveCapacity(active.count)
-        for (i, r) in active.enumerated() {
-            candidates.append(ArchiveAngelCandidate.project(r, model: model, policy: policy))
-            // O(records) on the main actor: yield every 500 so the UI keeps
-            // painting on an 18k-record catalog (no beachball, GH #104 class).
-            if i % 500 == 499 {
-                subtitleText = "Considering \(i + 1) of \(active.count) records…"
-                await Task.yield()
-                if stopRequested { finishCancelled(); return }
+        let selection: ArchiveAngelSelection
+        let consideredCount: Int
+        if let fromEvidence = Self.selectFromEvidence(
+            store: model.archiveAngelStore, count: requestedCount, now: Date(),
+            project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
+            selection = fromEvidence.selection
+            consideredCount = model.archiveAngelStore.consideredCount
+            let age = max(0, Int(Date().timeIntervalSince(fromEvidence.computedAt) / 60))
+            let line = "Archive Angel: picked from evidence computed \(age) min ago"
+            model.log(line); plan.log.append(line)
+        } else {
+            // The walk (main actor, in the job's task — never a view body).
+            let active = pfActiveRecords(model.records)
+            var candidates: [ArchiveAngelCandidate] = []
+            candidates.reserveCapacity(active.count)
+            for (i, r) in active.enumerated() {
+                candidates.append(ArchiveAngelCandidate.project(r, model: model, policy: policy))
+                // O(records) on the main actor: yield every 500 so the UI keeps
+                // painting on an 18k-record catalog (no beachball, GH #104 class).
+                if i % 500 == 499 {
+                    subtitleText = "Considering \(i + 1) of \(active.count) records…"
+                    await Task.yield()
+                    if stopRequested { finishCancelled(); return }
+                }
             }
-        }
-        plan.consideredCount = candidates.count
-        if stopRequested { finishCancelled(); return }
+            if stopRequested { finishCancelled(); return }
 
-        // Spotlight play history for the eligible ones only, off-main.
-        let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0) == nil }.map(\.fullPath)
-        subtitleText = "Reading play history for \(eligiblePaths.count) eligible files…"
-        let readings = await Self.readPlayHistoryOffMain(paths: eligiblePaths)
-        for i in candidates.indices {
-            if let r = readings[candidates[i].fullPath] {
-                candidates[i].useCount = r.useCount
-                candidates[i].lastUsed = r.lastUsed
+            // Spotlight play history for the eligible ones only, off-main.
+            let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0) == nil }.map(\.fullPath)
+            subtitleText = "Reading play history for \(eligiblePaths.count) eligible files…"
+            let readings = await Self.readPlayHistoryOffMain(paths: eligiblePaths)
+            for i in candidates.indices {
+                if let r = readings[candidates[i].fullPath] {
+                    candidates[i].useCount = r.useCount
+                    candidates[i].lastUsed = r.lastUsed
+                }
             }
+            if stopRequested { finishCancelled(); return }
+            selection = ArchiveAngelScorer.select(candidates, count: requestedCount)
+            consideredCount = candidates.count
         }
-        if stopRequested { finishCancelled(); return }
-
-        let selection = ArchiveAngelScorer.select(candidates, count: requestedCount)
+        plan.consideredCount = consideredCount
         plan.rejected = Dictionary(uniqueKeysWithValues: selection.rejected.map { ($0.key.rawValue, $0.value) })
         plan.overflow = selection.overflow
 
@@ -171,7 +184,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         plan.entries = entries
         plan.startedAt = Date()
-        let walkLine = "Archive Angel: considered \(candidates.count), \(entries.count) picked, "
+        let walkLine = "Archive Angel: considered \(consideredCount), \(entries.count) picked, "
             + "\(selection.rejectedTotal) rejected, \(selection.overflow) more would qualify"
         model.log(walkLine)
         plan.log.append(walkLine)

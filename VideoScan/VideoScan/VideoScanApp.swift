@@ -448,6 +448,14 @@ struct VideoScanApp: App {
                         // NOW the daemon may activate: master spawns/
                         // ingests, a viewer stays inert (codex #277 B).
                         catalogModel.activateFindTagBackground()
+                        // Archive Angel phase 2: the scoring sweep parks
+                        // while an Angel or Promote job is active.
+                        catalogModel.isMediaFileOperationBusyForAngel = { [weak fileOpsCenter] in
+                            guard let center = fileOpsCenter else { return false }
+                            return center.jobs.contains {
+                                $0.state.isActive && ($0 is ArchiveAngelJob || $0 is PromoteToArchiveJob)
+                            }
+                        }
                         // On the master, install the observer that
                         // refreshes manifest.sha256 after each save.
                         // On a viewer, kick off the initial sync.

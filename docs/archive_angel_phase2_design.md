@@ -53,3 +53,17 @@ not "make one thumbnail".
 | 2 | `ArchiveAngelSweep` service + model wiring (configure, triggers, gate, status) | synthetic 100k catalog scored under budget; pauses on interaction; skips while Angel job active |
 | 3 | Catalog filter "Archive candidates" + inspector line + "Rescore now" | predicate O(1); filter round-trips through CatalogShowingSummary encode |
 | 4 | Angel job uses fresh evidence (skips the walk), logs "from evidence computed 12 min ago" | freshness rule; stale → walk |
+
+## Rick's additions (9/09 ~16:20, folded into rev 1 implementation)
+1. **Name:** the feature is "Archive Angel Assessment" (AAA). Manual trigger = **Assess Now**; status line "Archive Angel Assessment: scored N · C candidates · updated <age>"; the user-facing word everywhere is "assessment".
+2. **Grade band** — pure `ArchiveAngelGrade.from(score:)` in ArchiveAngelEvidenceStore.swift: **A ready ≥ 100 · B nearly ready 60–99 · C candidate 25–59 · D weak 1–24 · X excluded** (a floor rejection). Stored on the evidence record (`grade`); inspector line "AAA grade B (72) — nearly ready" + why-lines. The **Archive candidates filter = A + B**; the Angel job ranks over A–D when it picks from evidence. No catalog column in this slice (the table's column code is O(records)-sensitive; deferred).
+3. **Logging** — exactly three kinds of console + file-log lines per run via the model's log and appLog: start ("Archive Angel Assessment: assessing 18,142 records (reason: launch)"), checkpoint every 5,000 ("… 5,000 of 18,142"), finish ("… done: A 120 · B 340 · C 700 · D 2,100 · excluded 14,800 in 12.3 s"). Per-record detail only to OSLog category `archiveAngelSweep` at debug level. Never per-record console lines (sensor: ArchiveAngelSweepTests.logContract).
+
+## Implemented (branch feature/archive-angel-phase2)
+- ArchiveAngelEvidenceStore.swift — grade + record + file + store (atomic, off-main load/save, wrong-version/malformed ignored).
+- ArchiveAngelSweep.swift — settings (ON by default), status, the run (500-record slices, Spotlight per slice off-main, checkpoints, parks while busy/interacting, 10-min give-up), triggers (launch +90 s, catalog change 5-min debounce, nightly 03:00, Assess Now).
+- VideoScanModel+ArchiveAngelSweep.swift + VideoScanModel.swift (store/sweep/settings; records.didSet hook; configure at launch) + VideoScanApp.swift (busy closure = active Angel/Promote job).
+- Catalog: CatalogViewFilter.archiveCandidates (Set lookup), CatalogShowingSummary words, InspectorPanel "Archive Angel Assessment" section (caller-resolved O(1) lookup).
+- ArchiveAngelJob+Evidence.swift — selectFromEvidence (fresh < 24 h, complete, eligible ≥ N; re-floors each pick; nil → walk) wired into the job; ArchiveAngelStartSheet shows the assessment line + Assess Now.
+- CatalogHelpers.swift: two pure extractions (noMatchesOverlay, inspectorPanelView) — the body hit the CI toolchain's type-check budget.
+- Tests: 49 across 11 Angel suites (17 new: grade edges, store round-trip/poison/freshness/scale, sweep scale + log contract + parking + disabled + settings, evidence picks + re-floor + fallbacks, filter round-trip + predicate).
