@@ -74,6 +74,9 @@ struct ArchiveDetailSheet: View {
                                     : record.backupDestinations.map { "\($0.name) (\($0.kind.rawValue))" }.joined(separator: ", "))
                         pipelineRow("Ready for Archive", record.archiveStage >= .readyForArchive)
                         pipelineRow("Archived", record.archiveStage >= .archived)
+                        if let archived = archivedAtForDetail {
+                            detailRow("Archived On", archived.formatted(date: .long, time: .shortened))
+                        }
                     }
 
                     if !record.notes.isEmpty {
@@ -117,6 +120,15 @@ struct ArchiveDetailSheet: View {
             }
         }
         .frame(width: 480, height: 520)
+    }
+
+    /// This record's archive date, or its promoted copy's (the copy is the
+    /// record whose derivedFrom points here with the Promote derivation).
+    private var archivedAtForDetail: Date? {
+        if let own = record.resolvedArchivedAt { return own }
+        return allRecords.first {
+            $0.derivedFrom == record.id && $0.derivationKind == ArchivePromotion.derivationKind
+        }?.resolvedArchivedAt
     }
 
     @ViewBuilder

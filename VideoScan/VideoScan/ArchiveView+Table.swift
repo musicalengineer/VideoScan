@@ -179,6 +179,14 @@ extension ArchiveView {
             }
             .width(min: 160, ideal: 260)
 
+            // Rick 2026-09-09: "we need to see the date a file or media
+            // artefact was archived." The date lives on the archive COPY; a
+            // source row shows its master copy's date.
+            TableColumn("Archived") { rec in
+                archivedDateCell(rec)
+            }
+            .width(min: 90, ideal: 100)
+
             TableColumn("Status") { rec in
                 statusCell(rec)
             }
@@ -211,6 +219,17 @@ extension ArchiveView {
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    /// Promote's stamp on the archive copy (this row, or this row's master
+    /// copy). O(1): masterArchiveCopy(of:) is the memoized index.
+    private func archivedDateCell(_ rec: VideoRecord) -> some View {
+        let copy = model.isArchiveCopy(rec) ? rec : model.masterArchiveCopy(of: rec)
+        let text = copy?.archivedDateText ?? "—"
+        return Text(text)
+            .font(.system(size: 14, design: .monospaced))
+            .foregroundColor(text == "—" ? .secondary : .primary)
+            .help(copy?.resolvedArchivedAt.map { "Archived \($0.formatted(date: .long, time: .shortened))" } ?? "Not archived")
     }
 
     // MARK: - Status cell (replaces the legacy H M B R A pills)

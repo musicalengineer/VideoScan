@@ -515,6 +515,13 @@ public class VideoRecord: Identifiable, Decodable {
     /// nil, the DTO encodes the key only when present, old catalog.json
     /// files round-trip byte-identical.
     public var archiveFixity: ArchiveFixity?
+    /// When this record landed in the Master Archive (Promote's stamp). Set
+    /// ONLY by Promote on the archive copy; never overwritten by Verify
+    /// (whose re-read refreshes `archiveFixity.verifiedAt`). Rick 2026-09-09:
+    /// "we need to see the date a file or media artefact was archived."
+    /// Older copies without it fall back to the Promote note / fixity date
+    /// (`resolvedArchivedAt` in the app).
+    public var archivedAt: Date?
 
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
@@ -692,6 +699,7 @@ public class VideoRecord: Identifiable, Decodable {
         repairConfirmedDate         = try c.decodeIfPresent(Date.self, forKey: .repairConfirmedDate)
         // Master Archive fixity (2026-08-15) — additive optional.
         archiveFixity               = try c.decodeIfPresent(ArchiveFixity.self, forKey: .archiveFixity)
+        archivedAt                  = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

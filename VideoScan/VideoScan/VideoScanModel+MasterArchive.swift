@@ -777,6 +777,7 @@ extension VideoScanModel {
         // `contentHash` (the segmented candidate signature).
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt,
                                            sizeBytes: copy.sizeBytes)
+        copy.archivedAt = promotedAt
         copy.starRating = max(source.starRating, 3)
         copy.archiveStage = .masterAssigned
         copy.lifecycleStage = .archived
@@ -872,6 +873,7 @@ extension VideoScanModel {
         copy.originalFullPath = sourcePath
         copy.originVolume = VolumeReachability.volumeName(forPath: sourcePath)
         copy.archiveFixity = ArchiveFixity(digest: sha256, verifiedAt: promotedAt, sizeBytes: copy.sizeBytes)
+        copy.archivedAt = promotedAt
         copy.starRating = 3
         copy.archiveStage = .masterAssigned
         copy.lifecycleStage = .archived
