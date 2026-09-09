@@ -25,6 +25,7 @@ class AngelBenchmarkTests(unittest.TestCase):
         with patch.object(bench.os, "killpg") as kill:
             bench.stop_group(process, grace=0, kill_wait=0.1)
         kill.assert_any_call(98765, signal.SIGKILL)
+        process.poll.assert_not_called()
         process.wait.assert_called_once_with(timeout=0.1)
 
     def test_unreapable_group_returns_without_unbounded_wait(self):

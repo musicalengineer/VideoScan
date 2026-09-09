@@ -36,7 +36,7 @@ def stop_group(process, grace=15, kill_wait=5):
         pass
     deadline = time.monotonic() + grace
     while alive() and time.monotonic() < deadline:
-        process.poll()
+        # Keep the leader unreaped until group signals finish, preventing PGID reuse.
         time.sleep(0.05)
     if alive():
         try:
