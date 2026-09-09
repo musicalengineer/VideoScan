@@ -119,6 +119,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// a mismatch LOUDLY (never restored — potential corruption).
     /// Read-only on media; catalog writes only. VerifyArchiveCopiesJob.
     case verifyArchive
+    /// "Archive Angel" — Stage 1 of the autonomous promoter (Rick
+    /// 2026-09-09, docs/archive_angel_design.md): walks the catalog for
+    /// important-but-unarchived videos, prepares companions in a buffer
+    /// on the fast SSD, and stops for review. Never touches the archive
+    /// itself — Stage 2 hands the selected rows to Promote.
+    case archiveAngel
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -142,6 +148,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .promote: return "Promote"
         case .assessCopies: return "Assess"
         case .verifyArchive: return "Fixity"
+        case .archiveAngel: return "Angel"
         }
     }
 
@@ -168,6 +175,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .promote: return "promote"
         case .assessCopies: return "assess copies"
         case .verifyArchive: return "verify archive"
+        case .archiveAngel: return "archive angel"
         }
     }
 }
