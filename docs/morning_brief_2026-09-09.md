@@ -3,7 +3,7 @@
 Owner: Claude (overnight lead). Reviewer: codex (files issues, no edits).
 
 ## Status line (10:55 ET 9/09)
-- 🔴 **CI Build & Test: RED but for the first time since 09-01 it builds and runs tests** (run 34296771692 on b06c5570: 137 run, 6 skipped, 1 failure — a Debug perf ceiling on the shared virtual M1, fix below).
+- 🔴 **CI Build & Test: RED but for the first time since 09-01 it builds and runs tests** (run 34296771692 on b06c5570). XCTest portion: 137 run, 6 skipped, 1 failure (Debug perf ceiling, fixed in 57f573d9). codex's correction (#1232): the Swift Testing portion then reports more failures (100k detached-records/keyword-scan budgets, VHS Quick Clean matrix, vorbis/pcm M4 integration) and the Unit-tests step TIMES OUT at 20 min; the verdict counter in ci.yml can also mask failures (#1230). codex owns that fix on an isolated branch.
 - ✅ nightly-analysis: GREEN (dispatch 34296771594 + schedule 34333938972) — first green since 08-20. Strict-concurrency built; lint jobs built.
 - 🔴 **CodeQL still fiction: 82 of 1,311 files scanned.** SARIF: 1,875 extractor errors, one shape — Xcode 26's explicitly-built clang PCMs rejected by CodeQL 2.26.4's frontend ("built from a different branch (clang-1700.6.4.2)"). Attempt 8 = explicit modules OFF for the CodeQL build (hypothesis).
 - python-tests: run 34296771725 (not checked).
