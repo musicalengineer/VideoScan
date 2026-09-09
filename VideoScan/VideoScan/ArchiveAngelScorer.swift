@@ -105,7 +105,7 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case alreadyArchived = "Already in the archive"
     case duplicateArchived = "A copy is already in the archive"
     case volumeOffline = "Volume offline"
-    case tooShort = "Too short (under 8 s)"
+    case tooShort = "Too short (under 1 min unrated, 8 s if you marked it)"
     case junk = "Marked junk"
     case suspectedJunk = "Looks like junk (machine evidence, unrated)"
     case notPlayable = "Not playable / un-probeable"
@@ -152,7 +152,13 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var formatAtRisk = 15
     var onlyCopy = 15
     var riskyVolume = 10
+    /// Floor for a clip with a HUMAN mark (star, confirmed person, note or
+    /// user date): a 20 s moment someone rated is still a moment.
     var minimumDurationSeconds = 8.0
+    /// Floor for an UNMARKED clip — Rick 2026-09-09: "videos under 1 minute
+    /// should be excluded due to lack of content"; below this, with no
+    /// human signal, it is a transition or a tail.
+    var minimumDurationUnmarkedSeconds = 60.0
     var sweetBandSeconds: ClosedRange<Double> = 120...7200
     var junkFloor = 5
     var dateConfidenceKnown: Float = 0.8
@@ -263,7 +269,10 @@ enum ArchiveAngelScorer {
             return .notPlayable
         }
         if c.isPairedHalf { return .pairedHalf }
-        if c.durationSeconds < w.minimumDurationSeconds { return .tooShort }
+        let humanMarked = c.starRating > 0 || !c.confirmedPeople.isEmpty || c.hasUserNotes
+            || !(c.userDate ?? "").isEmpty
+        let floor = humanMarked ? w.minimumDurationSeconds : w.minimumDurationUnmarkedSeconds
+        if c.durationSeconds < floor { return .tooShort }
         switch c.mediaDisposition {
         case .confirmedJunk: return .junk
         case .suspectedJunk where c.starRating == 0: return .suspectedJunk
