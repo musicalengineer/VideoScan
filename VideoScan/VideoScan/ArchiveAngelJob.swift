@@ -119,6 +119,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // ── Stage 1a: the walk (main actor, in the job's task — never a view body).
         let policy = model.duplicateKeeperPolicy()
         let active = pfActiveRecords(model.records)
+        note("Archive Angel: assessing \(active.count) records — want \(requestedCount), lossless \(makeLossless ? "on" : "off"), buffer \(plan.batchDir)")
         var candidates: [ArchiveAngelCandidate] = []
         candidates.reserveCapacity(active.count)
         for (i, r) in active.enumerated() {
@@ -171,6 +172,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         }
         plan.entries = entries
         plan.startedAt = Date()
+        for (n, pick) in selection.picks.enumerated() {
+            let why = pick.evidence.prefix(3).map(\.line).joined(separator: " · ")
+            note("Archive Angel pick \(n + 1)/\(entries.count) [\(pick.score)] \(pick.candidate.filename) — \(why)")
+        }
         let walkLine = "Archive Angel: considered \(candidates.count), \(entries.count) picked, "
             + "\(selection.rejectedTotal) rejected, \(selection.overflow) more would qualify"
         model.log(walkLine)
@@ -214,6 +219,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             }
             plan.entries[idx].status = .preparing
             _ = await savePlan()
+            note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — preparing (\(ByteCountFormatter.string(fromByteCount: entry.sizeBytes, countStyle: .file)), score \(entry.score))")
 
             let entryDir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(entry.id.uuidString, isDirectory: true)
             await Self.ensureDirectoryOffMain(entryDir)
@@ -222,6 +228,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             if stopRequested { break }
 
             plan.entries[idx].status = .ready
+            let made = plan.entries[idx].companionsMade.map { $0.kind.label.lowercased() }
+            note("Archive Angel [\(idx + 1)/\(total)] \(entry.filename) — ready to review"
+                 + (made.isEmpty ? " (original only)" : " with " + made.joined(separator: ", ")))
             fractionValue = Double(idx + 1) / Double(total)
             _ = await savePlan()
         }
@@ -251,9 +260,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         progress("verifying audio", 0)
         var diagnosis: AudioVerifyDiagnosis?
         if rec.streamType == .videoOnly {
-            plan.entries[idx].set(.verifyAudio, .skipped, note: "No audio track")
+            step(idx, .verifyAudio, .skipped, note: "No audio track")
         } else if !rec.audioVerifyStatus.isEmpty {
-            plan.entries[idx].set(.verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
+            step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
             diagnosis = center.verifyDiagnosis(forRecordID: rec.id)
         } else if let vj = center.startVerifyAudio(record: rec, model: model) {
             currentSubJob = vj
@@ -261,14 +270,14 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             currentSubJob = nil
             if let d = vj.diagnosis {
                 diagnosis = d
-                plan.entries[idx].set(.verifyAudio, .done, note: HelperAudioOutcome.from(d).headline)
+                step(idx, .verifyAudio, .done, note: HelperAudioOutcome.from(d).headline)
             } else if case .failed(let m) = vj.state {
-                plan.entries[idx].set(.verifyAudio, .failed, note: m)
+                step(idx, .verifyAudio, .failed, note: m)
             } else {
-                plan.entries[idx].set(.verifyAudio, .skipped, note: "Verify did not finish")
+                step(idx, .verifyAudio, .skipped, note: "Verify did not finish")
             }
         } else {
-            plan.entries[idx].set(.verifyAudio, .skipped, note: "A verify job for this file is already running")
+            step(idx, .verifyAudio, .skipped, note: "A verify job for this file is already running")
         }
         _ = await savePlan()
         if stopRequested { return }
@@ -278,7 +287,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         var balancedRecord: VideoRecord?
         if let d = diagnosis, let analysis = d.balanceAnalysis {
             if let reason = BalanceAudioFix.refusalReason(for: analysis) {
-                plan.entries[idx].set(.balanceAudio, .skipped, note: reason)
+                step(idx, .balanceAudio, .skipped, note: reason)
             } else {
                 let ext = BalanceAudioFix.balancedOutputURL(forSourcePath: rec.fullPath,
                                                             containerFormat: analysis.shape.containerFormat,
@@ -293,25 +302,24 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                        await Self.fileSizeOffMain(out) > 0 {
                         let companion = model.records.first { $0.fullPath == out.path }
                         balancedRecord = companion
-                        plan.entries[idx].set(.balanceAudio, .done,
-                                              note: "Audio balanced (\(analysis.classification.rawValue))",
+                        step(idx, .balanceAudio, .done, note: "Audio balanced (\(analysis.classification.rawValue))",
                                               output: Self.relPath(out, in: plan.batchDir))
                         if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
                             plan.entries[idx].steps[i].recordID = companion?.id
                         }
                     } else if case .failed(let m) = bj.state {
-                        plan.entries[idx].set(.balanceAudio, .failed, note: "Balance failed: \(m)")
+                        step(idx, .balanceAudio, .failed, note: "Balance failed: \(m)")
                     } else {
-                        plan.entries[idx].set(.balanceAudio, .failed, note: "Balance did not finish")
+                        step(idx, .balanceAudio, .failed, note: "Balance did not finish")
                     }
                 } else {
-                    plan.entries[idx].set(.balanceAudio, .skipped, note: "A balance job for this file is already running")
+                    step(idx, .balanceAudio, .skipped, note: "A balance job for this file is already running")
                 }
             }
         } else if rec.streamType == .videoOnly {
-            plan.entries[idx].set(.balanceAudio, .skipped, note: "No audio track")
+            step(idx, .balanceAudio, .skipped, note: "No audio track")
         } else {
-            plan.entries[idx].set(.balanceAudio, .skipped, note: "Audio OK — nothing to fix")
+            step(idx, .balanceAudio, .skipped, note: "Audio OK — nothing to fix")
         }
         _ = await savePlan()
         if stopRequested { return }
@@ -331,7 +339,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         progress("lossless copy", 3)
         let readiness = ArchiveReadiness.assess(record: rec)
         if !makeLossless {
-            plan.entries[idx].set(.losslessCopy, .skipped, note: "Lossless off (alpha default)")
+            step(idx, .losslessCopy, .skipped, note: "Lossless off (alpha default)")
         } else if case .atRisk = readiness.format {
             let out = entryDir.appendingPathComponent("\(stem).vs.preserve.mkv")
             await Self.removeIfPresentOffMain(out)
@@ -339,8 +347,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                                outputURL: out, model: model, center: center, doneNote: "FFV1 preservation copy")
         } else {
             let codec = rec.videoCodec.isEmpty ? "the" : rec.videoCodec
-            plan.entries[idx].set(.losslessCopy, .skipped,
-                                  note: "Lossless copy not needed — \(codec) original is the preservation master")
+            step(idx, .losslessCopy, .skipped, note: "Lossless copy not needed — \(codec) original is the preservation master")
         }
         _ = await savePlan()
     }
@@ -349,23 +356,53 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                               preset: TranscodePreset, outputURL: URL,
                               model: VideoScanModel, center: MediaFileOperationsCenter,
                               doneNote: String) async {
+        let startedAt = Date()
+        note("Archive Angel [\(idx + 1)/\(plan.entries.count)] \(plan.entries[idx].filename) — "
+             + "\(kind.label.lowercased()): starting \(preset.rawValue) → \(outputURL.lastPathComponent)")
         let tj = center.startTranscode(record: record, preset: preset, outputURL: outputURL, model: model)
         currentSubJob = tj
         await tj.task?.value
         currentSubJob = nil
-        if case .finished = tj.state, await Self.fileSizeOffMain(tj.outputURL) > 0 {
+        let outBytes = await Self.fileSizeOffMain(tj.outputURL)
+        if case .finished = tj.state, outBytes > 0 {
             let companion = model.records.first { $0.fullPath == tj.outputURL.path }
-            plan.entries[idx].set(kind, .done, note: doneNote, output: Self.relPath(tj.outputURL, in: plan.batchDir))
+            step(idx, kind, .done, note: doneNote, output: Self.relPath(tj.outputURL, in: plan.batchDir),
+                 startedAt: startedAt, outputBytes: outBytes)
             if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == kind }) {
                 plan.entries[idx].steps[i].recordID = companion?.id
             }
         } else if case .failed(let m) = tj.state {
-            plan.entries[idx].set(kind, .failed, note: "\(kind.label) failed: \(m) — original will still be promoted")
+            step(idx, kind, .failed, note: "\(kind.label) failed: \(m) — original will still be promoted")
         } else if stopRequested {
-            plan.entries[idx].set(kind, .failed, note: "\(kind.label) cancelled")
+            step(idx, kind, .failed, note: "\(kind.label) cancelled")
         } else {
-            plan.entries[idx].set(kind, .failed, note: "\(kind.label) did not finish — original will still be promoted")
+            step(idx, kind, .failed, note: "\(kind.label) did not finish — original will still be promoted")
         }
+    }
+
+    // MARK: Logging (Rick 2026-09-09: "good logging around archival steps")
+    //
+    // Every step outcome goes to FOUR places: the app console (model.log),
+    // the file log (appLog), OSLog category "archiveAngel", and plan.log so
+    // the batch folder tells its own story. Format:
+    //   Archive Angel [3/25] 1993_CapeCod.mov — access copy: done — HEVC access copy (41.2 s, 812 MB)
+
+    private func note(_ line: String) {
+        model?.log(line)
+        appLog.write(line)
+        angelLog.info("\(line, privacy: .public)")
+        plan.log.append(line)
+    }
+
+    private func step(_ idx: Int, _ kind: ArchiveAngelPlan.StepKind, _ state: ArchiveAngelPlan.StepState,
+                      note text: String, output: String? = nil, startedAt: Date? = nil, outputBytes: Int64 = 0) {
+        plan.entries[idx].set(kind, state, note: text, output: output)   // step-helper
+        var extra: [String] = []
+        if let startedAt { extra.append(String(format: "%.1f s", Date().timeIntervalSince(startedAt))) }
+        if outputBytes > 0 { extra.append(ByteCountFormatter.string(fromByteCount: outputBytes, countStyle: .file)) }
+        let tail = extra.isEmpty ? "" : " (" + extra.joined(separator: ", ") + ")"
+        note("Archive Angel [\(idx + 1)/\(plan.entries.count)] \(plan.entries[idx].filename) — "
+             + "\(kind.label.lowercased()): \(state.rawValue) — \(text)\(tail)")
     }
 
     // MARK: Plan persistence
