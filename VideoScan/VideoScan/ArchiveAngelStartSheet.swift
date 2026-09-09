@@ -73,6 +73,11 @@ struct ArchiveAngelStartSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
+            // Phase 2: Archive Angel Assessment (AAA) — the background
+            // assessment's evidence, its age, and "Assess Now". Fresh
+            // evidence (< 24 h) lets the Angel pick its batch without
+            // walking the catalog first.
+            ArchiveAngelEvidenceLine(store: model.archiveAngelStore, sweep: model.archiveAngelSweep)
             if model.masterArchiveRootPath == nil {
                 Label("Designate a Master Archive first (Archive tab → Initialize Master Archive…).", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
@@ -97,5 +102,44 @@ struct ArchiveAngelStartSheet: View {
         fileOpsCenter.startArchiveAngel(count: count, makeLossless: makeLossless, model: model)
         dismiss()
         MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+    }
+}
+
+
+/// "Evidence: 1,203 candidates of 18,142 · computed 12 min ago · Rescore now"
+struct ArchiveAngelEvidenceLine: View {
+    @ObservedObject var store: ArchiveAngelEvidenceStore
+    @ObservedObject var sweep: ArchiveAngelSweep
+
+    private var evidenceText: String {
+        if case .scoring(let done, let total) = sweep.status {
+            return "Scoring \(done.formatted()) of \(total.formatted())…"
+        }
+        guard let at = store.computedAt else {
+            return "Archive Angel Assessment: not run yet — the Angel will walk the catalog first."
+        }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        let fresh = store.isFresh(within: ArchiveAngelJob.evidenceFreshness)
+        return "Archive Angel Assessment: scored \(store.consideredCount.formatted())"
+            + " · \(store.candidateCount.formatted()) candidates"
+            + " · updated \(f.localizedString(for: at, relativeTo: Date()))"
+            + (fresh ? "" : " (stale — the Angel will walk)")
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.secondary)
+            Text(evidenceText)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Button("Assess Now") { sweep.rescoreNow() }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .disabled(sweep.status.isRunning)
+                .accessibilityIdentifier("archiveAngel.assessNow")
+        }
     }
 }

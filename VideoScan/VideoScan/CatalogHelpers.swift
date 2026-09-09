@@ -577,7 +577,72 @@ struct CatalogContent: View {
         if viewFilters.contains(.hasMasterCopy) {
             out = out.filter { model.pfHasMasterCopy($0) }
         }
+        // Archive Angel phase 2: Set lookup in the evidence sidecar — O(1).
+        if viewFilters.contains(.archiveCandidates) {
+            let ids = model.archiveAngelStore.candidateIDs
+            out = out.filter { ids.contains($0.id) }
+        }
         return out
+    }
+
+    /// Extracted (2026-09-09): the ternary + concatenation inside Text
+    /// tipped this body over the type-checker's budget on the CI toolchain.
+    private var noMatchesHint: String {
+        archivedSearchHitIDs.isEmpty
+            ? "Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated."
+            : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count) + " Use Show in Archive above."
+    }
+
+    /// Archive Angel Assessment verdict for the selected record — O(1)
+    /// sidecar lookup, resolved here (not in InspectorPanel).
+    private var selectedAngelEvidence: ArchiveAngelEvidenceRecord? {
+        selectedRecord.flatMap { model.archiveAngelStore.record(for: $0.id) }
+    }
+
+    /// Extracted 2026-09-09 (with `inspectorPanelView`): the body was one
+    /// expression too many for the CI toolchain's type-checker — same
+    /// class as the CatalogView and FamilyTreeView splits. Pure extraction.
+    private var noMatchesOverlay: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+            Text(archivedSearchHitIDs.isEmpty ? "No matches" : "No matches here")
+                .font(.title3.weight(.medium))
+                .foregroundColor(.secondary)
+            Text(noMatchesHint)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 16)
+        }
+        .padding(40)
+    }
+
+    private var inspectorPanelView: some View {
+        InspectorPanel(
+            record: selectedRecord,
+            onRecordEdited: { model.saveCatalogDebounced() },
+            duplicateGroupMembers: duplicateGroupMembers,
+            previewImage: previewImage,
+            previewOfflineVolumeName: previewOfflineVolumeName,
+            onSelectRecord: { id in
+                selectedIDs = [id]
+                onSelect(id)
+            },
+            trimSource: trimSource,
+            trimDerivatives: trimDerivatives,
+            repairSource: repairSource,
+            repairCopy: repairCopy,
+            onConfirmRepair: { id in
+                _ = model.confirmRepair(repairID: id)
+            },
+            masterCopy: masterCopyOfSelected,
+            promotionSource: promotionSourceOfSelected,
+            angelEvidence: selectedAngelEvidence
+        )
+        .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
     }
 
     var body: some View {
@@ -615,23 +680,7 @@ struct CatalogContent: View {
                     ZStack {
                         catalogTable
                         if tableData.isEmpty && !searchText.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(.secondary)
-                                Text(archivedSearchHitIDs.isEmpty ? "No matches" : "No matches here")
-                                    .font(.title3.weight(.medium))
-                                    .foregroundColor(.secondary)
-                                Text(archivedSearchHitIDs.isEmpty
-                                     ? "Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated."
-                                     : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count) + " Use Show in Archive above.")
-                                    .font(.callout)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: 420)
-                                    .padding(.horizontal, 16)
-                            }
-                            .padding(40)
+                            noMatchesOverlay
                         }
                     }
                 }
@@ -645,27 +694,7 @@ struct CatalogContent: View {
 
             // MARK: Right side — Inspector
             if showInspector {
-                InspectorPanel(
-                    record: selectedRecord,
-                    onRecordEdited: { model.saveCatalogDebounced() },
-                    duplicateGroupMembers: duplicateGroupMembers,
-                    previewImage: previewImage,
-                    previewOfflineVolumeName: previewOfflineVolumeName,
-                    onSelectRecord: { id in
-                        selectedIDs = [id]
-                        onSelect(id)
-                    },
-                    trimSource: trimSource,
-                    trimDerivatives: trimDerivatives,
-                    repairSource: repairSource,
-                    repairCopy: repairCopy,
-                    onConfirmRepair: { id in
-                        _ = model.confirmRepair(repairID: id)
-                    },
-                    masterCopy: masterCopyOfSelected,
-                    promotionSource: promotionSourceOfSelected
-                )
-                .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
+                inspectorPanelView
             }
         }
         .onChange(of: selectedIDs) {

@@ -35,6 +35,8 @@ final class VideoScanModel: ObservableObject {
             // disk cache once records settle. Debounced inside the
             // service; no-op while the checkbox is off.
             previewSweep.noteCatalogChanged()
+            // Archive Angel phase 2: rescore once the catalog settles (5-min debounce).
+            archiveAngelSweep.noteCatalogChanged()
         }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
@@ -699,6 +701,20 @@ final class VideoScanModel: ObservableObject {
     /// filmstrip request sites.
     let previewSweep = PreviewSweepService()
 
+    /// Archive Angel phase 2 (2026-09-09): the evidence sidecar and the
+    /// background scoring sweep. Wiring in VideoScanModel+ArchiveAngelSweep.swift.
+    let archiveAngelStore = ArchiveAngelEvidenceStore()
+    lazy var archiveAngelSweep = ArchiveAngelSweep(store: archiveAngelStore)
+    /// ON by default (scoring reads catalog fields + Spotlight, never media).
+    @Published var archiveAngelSweepSettings: ArchiveAngelSweepSettings =
+        TestEnvironment.isTestHost
+            ? ArchiveAngelSweepSettings()
+            : ArchiveAngelSweepSettings.restored(from: .standard)
+    /// "An Archive Angel or Promote job is active" — the model does not
+    /// hold the MediaFileOperationsCenter, so VideoScanApp installs this
+    /// once the center exists. Default: never busy.
+    var isMediaFileOperationBusyForAngel: @MainActor () -> Bool = { false }
+
     /// Stage 2 (2026-07-29): manages the DETACHED out-of-process helper
     /// (videoscan-preview-sweep) so preview prewarming survives app quit.
     /// Built in configurePreviewSweep with the real posix_spawn launcher +
@@ -1072,6 +1088,8 @@ final class VideoScanModel: ObservableObject {
         // fire inside init). Test hosts get the pristine OFF default,
         // so the ~200 model-constructing tests never start a sweep.
         configurePreviewSweep()
+        // Archive Angel phase 2: evidence sidecar + background scoring sweep.
+        configureArchiveAngelSweep()
 
         // Detached Find and Tag daemon (2026-08-06): BUILD only — the
         // launch-resume respawn and catch-up ingest wait for

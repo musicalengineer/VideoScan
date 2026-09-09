@@ -223,6 +223,10 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     case notYetArchived = "Not Yet Archived"
     /// Master Archive: sources that HAVE a promoted copy.
     case hasMasterCopy = "Has Master Copy"
+    /// Archive Angel phase 2 (2026-09-09): records the background scoring
+    /// sweep rates as archive candidates. O(1) per record — a Set lookup
+    /// in the evidence sidecar (ArchiveAngelEvidenceStore.candidateIDs).
+    case archiveCandidates = "Archive Candidates"
 
     var icon: String {
         switch self {
@@ -235,6 +239,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .awaitingConfirmation: return "checkmark.seal"
         case .notYetArchived:       return "archivebox"
         case .hasMasterCopy:        return "archivebox.fill"
+        case .archiveCandidates:    return "sparkles"
         }
     }
 }

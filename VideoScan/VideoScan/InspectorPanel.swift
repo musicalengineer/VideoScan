@@ -37,6 +37,9 @@ struct InspectorPanel: View {
     /// `promotionSource` = the record this archive copy came from.
     var masterCopy: VideoRecord?
     var promotionSource: VideoRecord?
+    /// Archive Angel phase 2: the background sweep's verdict for this
+    /// record (O(1) sidecar lookup by the CALLER). nil = not scored yet.
+    var angelEvidence: ArchiveAngelEvidenceRecord?
 
     var body: some View {
         if let rec = record {
@@ -326,6 +329,32 @@ struct InspectorPanel: View {
                             }
                             if let fixity = rec.archiveFixity, promotionSource != nil {
                                 inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))… · verified \(fixity.verifiedAt.formatted(date: .abbreviated, time: .shortened))")
+                            }
+                        }
+                    }
+
+                    // Archive Angel phase 2: what the background sweep
+                    // thinks — a candidate with its why-lines, or the
+                    // floor reason. Machine tier; the Angel batch decides
+                    // nothing, Rick does.
+                    if let ev = angelEvidence, masterCopy == nil, promotionSource == nil {
+                        inspectorSection("Archive Angel Assessment", systemImage: "sparkles") {
+                            if let r = ev.rejection {
+                                Text("Excluded — " + r.rawValue)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("inspector.angelRejection")
+                            } else {
+                                Text("AAA grade \(ev.grade.rawValue) (\(ev.score)) — \(ev.grade.label)")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color.orange)
+                                    .accessibilityIdentifier("inspector.angelScore")
+                                ForEach(Array(ev.lines.prefix(4).enumerated()), id: \.offset) { _, line in
+                                    Text("· " + line.line)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
                     }

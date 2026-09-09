@@ -78,6 +78,7 @@ enum CatalogShowingSummary {
         case .awaitingConfirmation: return "Repaired, waiting for your OK"
         case .notYetArchived:       return "Not yet archived"
         case .hasMasterCopy:        return "Already archived"
+        case .archiveCandidates:    return "Archive Angel candidates"
         }
     }
 
