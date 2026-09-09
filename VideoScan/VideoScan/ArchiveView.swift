@@ -60,6 +60,14 @@ struct ArchiveView: View {
 
     @Environment(\.openWindow) var openWindow
 
+    /// Archive Angel (2026-09-09): Stage 1 entry sheet + Stage 2 review
+    /// sheet, both `.sheet(item:)` with struct payloads. Ready batches are
+    /// read from the buffer OUTSIDE body (disk I/O) — refreshed on entry,
+    /// when a sheet closes, and when the MFO job list changes.
+    @State private var angelStartRequest: ArchiveAngelStartRequest?
+    @State private var angelReviewRequest: ArchiveAngelReviewRequest?
+    @State private var angelReadyBatches: [ArchiveAngelPlan] = []
+
     var body: some View {
         HSplitView {
             sidebar
@@ -87,6 +95,41 @@ struct ArchiveView: View {
         .sheet(item: $archiveDetailRecord) { rec in
             ArchiveDetailSheet(record: rec, allRecords: model.records)
         }
+        .sheet(item: $angelStartRequest) { _ in
+            ArchiveAngelStartSheet()
+                .environmentObject(model)
+                .environmentObject(fileOpsCenter)
+        }
+        .sheet(item: $angelReviewRequest, onDismiss: { refreshAngelBatches() }) { req in
+            ArchiveAngelReviewSheet(plan: req.plan)
+                .environmentObject(model)
+                .environmentObject(fileOpsCenter)
+        }
+        .task { refreshAngelBatches() }
+        .onChange(of: fileOpsCenter.jobs.map(\.id)) { _, _ in refreshAngelBatches() }
+        .onChange(of: angelFinishedJobCount) { _, _ in refreshAngelBatches() }
+    }
+
+    // MARK: - Archive Angel batches
+
+    /// Finished Angel jobs — a change means a batch just became ready.
+    private var angelFinishedJobCount: Int {
+        fileOpsCenter.jobs.filter { $0.kind == .archiveAngel && !$0.state.isActive }.count
+    }
+
+    private func refreshAngelBatches() {
+        let root = ArchiveAngelPlanStore.defaultBufferRoot
+        Task {
+            let ready = await Task.detached(priority: .utility) {
+                ArchiveAngelPlanStore.listBatches(bufferRoot: root).filter { $0.status == .ready }
+            }.value
+            await MainActor.run { angelReadyBatches = ready }
+        }
+    }
+
+    private func openNewestAngelBatch() {
+        guard let newest = angelReadyBatches.first else { return }
+        angelReviewRequest = ArchiveAngelReviewRequest(plan: newest)
     }
 
     // MARK: - Snapshot access
@@ -313,12 +356,44 @@ struct ArchiveView: View {
                     }
                     .disabled(model.isReadOnly)
                     .help("Re-read every Master Archive copy end to end and compare its SHA-256 against the manifest. Matches restore the catalog's fixity record; a mismatch is flagged and never papered over.")
+                    // Archive Angel (2026-09-09): autonomous proposer —
+                    // finds important-but-unarchived videos, prepares
+                    // companions in a buffer, then asks for review.
+                    Button("Archive Angel…") {
+                        angelStartRequest = ArchiveAngelStartRequest()
+                    }
+                    .disabled(model.isReadOnly)
+                    .accessibilityIdentifier("archive.angelStart")
+                    .help("Walk the catalog for important videos not yet archived, prepare each in a buffer (audio verified, balanced if needed, access copy), and present a batch for review. Nothing reaches the archive until you press Promote.")
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 13))
                 .disabled(!reachable)
                 .padding(.leading, 34)   // aligns under the volume name, not the icon
                 .padding(.top, 2)
+                if let newest = angelReadyBatches.first {
+                    // Nag-button pattern: the badge performs the action.
+                    Button {
+                        openNewestAngelBatch()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                            Text(angelReadyBatches.count == 1
+                                 ? "\(newest.readyCount) ready to review"
+                                 : "\(newest.readyCount) ready to review (+\(angelReadyBatches.count - 1) more batch\(angelReadyBatches.count == 2 ? "" : "es"))")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.orange.opacity(0.18)))
+                        .foregroundStyle(Color.orange)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("archive.angelReview")
+                    .help("Archive Angel prepared a batch. Review the recommendations, rename or deselect, then Promote.")
+                    .padding(.leading, 34)
+                    .padding(.top, 6)
+                }
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")

@@ -461,7 +461,7 @@ struct MediaFileOperationRow: View {
                 // 2026-08-04). Clicks INSIDE the expanded detail below
                 // must never reach here (Bug A).
                 if job is PairCompareJob || job is FindPersonJob || job is AssessCopiesJob
-                    || job is VerifyArchiveCopiesJob { onToggleExpand() }
+                    || job is VerifyArchiveCopiesJob || job is ArchiveAngelJob { onToggleExpand() }
             }
 
             if isExpanded, let compare = job as? PairCompareJob {
@@ -484,6 +484,12 @@ struct MediaFileOperationRow: View {
 
             if isExpanded, let verify = job as? VerifyArchiveCopiesJob {
                 VerifyArchiveDetailView(job: verify)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
+            if isExpanded, let angel = job as? ArchiveAngelJob {
+                ArchiveAngelDetailView(job: angel)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -823,6 +829,10 @@ extension MediaFileOperationKind {
         // blue; reads as "the auditor", apart from verifyAudio's
         // goldenrod despite sharing the verb.
         case .verifyArchive: return Color(red: 0.36, green: 0.42, blue: 0.60)
+        // Archive Angel (2026-09-09) — deep violet: the proposer that
+        // precedes Promote's bronze; apart from assessCopies' plum by
+        // leaning blue.
+        case .archiveAngel: return Color(red: 0.36, green: 0.20, blue: 0.62)
         }
     }
 }
