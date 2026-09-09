@@ -333,13 +333,23 @@ struct ArchiveAngelReviewSheet: View {
                     Button("Done") { dismiss() }
                         .keyboardShortcut(.defaultAction)
                 } else {
-                    Button("Cancel") { keepAndClose() }
+                    // Rick 2026-09-09: "Cancel makes me feel like it might
+                    // undo what just happened" — it never did; it is Close.
+                    Button("Close") { keepAndClose() }
                         .keyboardShortcut(.cancelAction)
                         .disabled(isPromoting)
-                    Button("Promote \(selectedCount)") { promote() }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(selectedCount == 0 || model.isReadOnly || isPromoting)
-                        .accessibilityIdentifier("archiveAngel.promote")
+                        .help("Closes the sheet and keeps the batch — nothing is undone. The remaining rows stay ready under the Archive tab.")
+                    if selectedCount == 0 && !isPromoting {
+                        // A greyed "Promote 0" after a promote reads as stuck.
+                        Button("Done") { keepAndClose() }
+                            .keyboardShortcut(.defaultAction)
+                            .accessibilityIdentifier("archiveAngel.done")
+                    } else {
+                        Button("Promote \(selectedCount)") { promote() }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(model.isReadOnly || isPromoting)
+                            .accessibilityIdentifier("archiveAngel.promote")
+                    }
                 }
             }
         }

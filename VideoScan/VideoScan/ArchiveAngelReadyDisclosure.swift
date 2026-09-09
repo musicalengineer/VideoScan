@@ -183,12 +183,15 @@ struct ArchiveAngelReadyDisclosure: View {
             }
             Button("Review & edit…") { openReview() }
                 .disabled(isPromoting)
-            if isDone {
-                Button("Done") { batchesChanged() }
+            if isDone || (selectedCount == 0 && !isPromoting) {
+                // Rick 2026-09-09: a greyed "Promote 0" after a promote reads
+                // as stuck — say Done. The batch stays for the rest.
+                Button("Done") { withAnimation { isOpen = false }; batchesChanged() }
+                    .keyboardShortcut(.defaultAction)
             } else {
                 Button("Promote \(selectedCount)") { promote() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(selectedCount == 0 || isPromoting || model.isReadOnly)
+                    .disabled(isPromoting || model.isReadOnly)
                     .help("Runs the normal Promote job: originals from their source volume, companions from the buffer. Byte-verified, manifest rows, linked catalog records.")
             }
         }

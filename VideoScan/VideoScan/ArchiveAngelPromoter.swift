@@ -68,7 +68,11 @@ final class ArchiveAngelPromoter: ObservableObject {
         guard fm.fileExists(atPath: entry.sourcePath) else {
             return "Source file not found at \(entry.sourcePath)"
         }
-        let attrs = (try? fm.attributesOfItem(atPath: entry.sourcePath)) ?? [:]
+        // attributesOfItem is lstat: a symlinked source (~/Movies → the
+        // Projects volume after the 8/31 move) measured 62 bytes and was
+        // refused as "size changed". Measure the file the link points at.
+        let resolved = URL(fileURLWithPath: entry.sourcePath).resolvingSymlinksInPath().path
+        let attrs = (try? fm.attributesOfItem(atPath: resolved)) ?? [:]
         let sizeNow = (attrs[.size] as? NSNumber)?.int64Value ?? -1
         if sizeNow != entry.sizeBytes {
             return "Source size changed since preparation (\(entry.sizeBytes) → \(sizeNow) bytes)"
