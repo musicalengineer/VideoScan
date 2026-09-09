@@ -50,6 +50,20 @@ extension ArchiveView {
             // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
             if selectedCategory == .archived {
                 ArchiveProgressBar(progress: archiveProgress)
+                // Archive Angel's PREPARED batch sits above the loose nudge
+                // (Rick 2026-09-09: "10 are actually preprocessed and really
+                // ready" must catch the eye before "it looks like 598…").
+                if let batch = angelReadyBatches.first {
+                    ArchiveAngelReadyDisclosure(
+                        plan: batch,
+                        openReview: { openNewestAngelBatch() },
+                        batchesChanged: { refreshAngelBatches() })
+                    // Re-seed the row's @State when the sheet edited the same
+                    // batch (same id, different content) — cheap fingerprint.
+                    .id("\(batch.id)-\(batch.status.rawValue)-" + batch.entries.map {
+                        "\($0.id)\($0.selected)\($0.proposedName)\($0.proposedDate ?? "")\($0.status.rawValue)"
+                    }.joined().hashValue.description)
+                }
                 ArchiveNudgeView(
                     nudge: archiveNudge,
                     openHelper: { id in

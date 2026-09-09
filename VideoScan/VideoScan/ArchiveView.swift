@@ -64,9 +64,9 @@ struct ArchiveView: View {
     /// sheet, both `.sheet(item:)` with struct payloads. Ready batches are
     /// read from the buffer OUTSIDE body (disk I/O) — refreshed on entry,
     /// when a sheet closes, and when the MFO job list changes.
-    @State private var angelStartRequest: ArchiveAngelStartRequest?
-    @State private var angelReviewRequest: ArchiveAngelReviewRequest?
-    @State private var angelReadyBatches: [ArchiveAngelPlan] = []
+    @State var angelStartRequest: ArchiveAngelStartRequest?
+    @State var angelReviewRequest: ArchiveAngelReviewRequest?
+    @State var angelReadyBatches: [ArchiveAngelPlan] = []
 
     var body: some View {
         HSplitView {
@@ -117,7 +117,7 @@ struct ArchiveView: View {
         fileOpsCenter.jobs.filter { $0.kind == .archiveAngel && !$0.state.isActive }.count
     }
 
-    private func refreshAngelBatches() {
+    func refreshAngelBatches() {
         let root = ArchiveAngelPlanStore.defaultBufferRoot
         Task {
             let ready = await Task.detached(priority: .utility) {
@@ -127,7 +127,7 @@ struct ArchiveView: View {
         }
     }
 
-    private func openNewestAngelBatch() {
+    func openNewestAngelBatch() {
         guard let newest = angelReadyBatches.first else { return }
         angelReviewRequest = ArchiveAngelReviewRequest(plan: newest)
     }

@@ -105,7 +105,7 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case alreadyArchived = "Already in the archive"
     case duplicateArchived = "A copy is already in the archive"
     case volumeOffline = "Volume offline"
-    case tooShort = "Too short (under 1 min unrated, 8 s if you marked it)"
+    case tooShort = "Too short (under 1 min unrated, 30 s if you marked it)"
     case junk = "Marked junk"
     case suspectedJunk = "Looks like junk (machine evidence, unrated)"
     case notPlayable = "Not playable / un-probeable"
@@ -153,8 +153,10 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var onlyCopy = 15
     var riskyVolume = 10
     /// Floor for a clip with a HUMAN mark (star, confirmed person, note or
-    /// user date): a 20 s moment someone rated is still a moment.
-    var minimumDurationSeconds = 8.0
+    /// user date). Rick 2026-09-09 after the first batch: a 13 s starred
+    /// "Donna-2.mov" was picked — "not worth archiving" — so the marked
+    /// floor is 30 s, not 8. A mark halves the bar; it does not remove it.
+    var minimumDurationSeconds = 30.0
     /// Floor for an UNMARKED clip — Rick 2026-09-09: "videos under 1 minute
     /// should be excluded due to lack of content"; below this, with no
     /// human signal, it is a transition or a tail.
