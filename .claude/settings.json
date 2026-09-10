@@ -117,6 +117,8 @@
             "Bash(echo:*)",
             "Bash(pwd)",
             "Bash(date)",
+            "Bash(date:*)",
+            "Bash(caffeinate:*)",
             "Bash(sqlite3 *.db .schema)",
             "Bash(sqlite3 *.db .tables)",
             "Bash(sqlite3 *.db .indexes)",
