@@ -196,9 +196,25 @@ extension HallieTurnExecutor {
         _ wordList: [String],
         candidates: [Candidate]
     ) -> ClarificationReplyMatch {
+        func tokensInOrder(_ text: String) -> String {
+            PersonResolver.normalize(text)
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ")
+        }
         func tokens(_ text: String) -> Set<String> {
             Set(PersonResolver.normalize(text)
                 .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        }
+        // A whole-phrase discriminator ("dad's mother", "mom's mother")
+        // is matched BEFORE the stop-word filter, which would otherwise
+        // erase every word of it — dad, mother and the possessive s are all
+        // stop words (2026-09-10, codex's relative-side aliases).
+        let phrase = wordList.joined(separator: " ")
+        if !phrase.isEmpty {
+            let byPhrase = candidates.filter { c in
+                c.discriminators.contains { tokensInOrder($0) == phrase }
+            }
+            if byPhrase.count == 1 { return .selected(byPhrase[0].id) }
+            if byPhrase.count > 1 { return .narrowed(byPhrase, discriminator: phrase) }
         }
         let names = candidates.map { tokens($0.canonicalName) }
         let shared = names.dropFirst().reduce(names.first ?? []) { $0.intersection($1) }
