@@ -83,6 +83,17 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - **Stop:** any finding that needs a design change (file it, do not fix); any runner cost surprise.
 - **Brief:** files scanned, warnings by category, new findings with file:line, and the false-positive rate from the owner's triage.
 
+### T10 — Archive Angel top-50 hygiene (added 2026-09-10; Rick's pick for the night of 9/10→11)
+- **Goal:** false-positive classes visible in the top 50 A/B candidates → 0; brief quotes A/B counts and the top-50 table before and after. Tonight's three known classes: (1) machine-only face evidence carrying non-camera files (Gladiator.mp4, Kill Bill Vol 2.mp4, downloaded spinning DVDs) into grade A; (2) both members of a duplicate group in one batch (FranklinAndCapeCod_July1991.mov ≡ DVD1992_5Chapters.mov); (3) derivative exports (`_balanced`, `_fixed`, `_NV12`, `.vs.edit`, `_preserve`) picked beside their originals.
+- **Loop:** one heuristic at a time: red test → scorer change → `rulesVersion` bump → 8 Angel suites green → commit on `fix/angel-hygiene-<n>` → checkpoint to codex → merge to main when green and no blocker within 30 min → re-profile the top 50 from `archive-angel/evidence.json` + `catalog.json` (headless Python, no app).
+- **Cap:** 3 heuristics or 4 hours; stop by 06:00 ET.
+- **Allowed files:** `ArchiveAngelScorer.swift`, `ArchiveAngelScorerTests.swift`, `ArchiveAngelCandidate+Record.swift` (projection only, additive), `docs/archive_angel_design.md`. Anything else → GH issue.
+- **Stop:** a red Angel suite not green after one bounded repair; any need to touch the promoter, Promote, the archive tree, `VideoRecord` schema, sweep scheduling, UI; any taste call (e.g. are Avid `clip-135-…` fragments worth archiving? is a 455 kbit/s 1.5 h export an original?) → brief as a question, not a change.
+- **Evidence:** 8 Angel suites (`ArchiveAngelFloor/Evidence/Selection/Sweep/EvidenceStore/EvidencePick/Promoter/PromoterIdentity`) green per merge; SHAs; top-50 before/after; rejected-by-reason deltas.
+- **Owner:** Claude. **Reviewer:** codex (or a local qwen if codex is unavailable) — issues only, never edits.
+- **Machine:** M4 after Rick steps away; own derivedData under /private/tmp; no app launches; the assessment sidecar is read, never written, overnight.
+- **Fallback (Rick):** if blocked or idle, T2 Hallie — harvest 9/10 live turns first (`scripts/hallie_harvest_queries.py`), run `scripts/hallie_eval.py`, one family per iteration, same reviewer rule.
+
 ## Night protocol
 
 1. Rick picks the theme before bed (`/loop` with the theme id, or a line in the team channel).
@@ -97,17 +108,6 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - Themes with a number (T1, T2, T3, T7) run well unattended. T4 and T6 need a decision or a fixture from Rick first; they are queued, not autonomous.
 - "Fix everything that breaks best practices" → T3 with a one-file cap. "Improve Hallie" → T2 with the harvest step first, because live misses outrank testbed wins.
 - If a theme's brief shows the same blocker two nights running, the theme is wrong, not the night.
-
-### T4 — Archive Angel top-50 hygiene (added 2026-09-10, Rick's pick for the night of 9/10→11)
-- **Goal:** false-positive classes visible in the top 50 A/B candidates → 0; brief quotes A/B counts and the top-50 table before and after. Tonight's three known classes: (1) machine-only face evidence carrying non-camera files (Gladiator.mp4, Kill Bill Vol 2.mp4, downloaded spinning DVDs) into grade A; (2) both members of a duplicate group in one batch (FranklinAndCapeCod_July1991.mov ≡ DVD1992_5Chapters.mov); (3) derivative exports (`_balanced`, `_fixed`, `_NV12`, `.vs.edit`, `_preserve`) picked beside their originals.
-- **Loop:** one heuristic at a time: red test → scorer change → `rulesVersion` bump → 8 Angel suites green → commit on `fix/angel-hygiene-<n>` → checkpoint to codex → merge to main when green and no blocker within 30 min → re-profile the top 50 from `archive-angel/evidence.json` + `catalog.json` (headless Python, no app).
-- **Cap:** 3 heuristics or 4 hours; stop by 06:00 ET.
-- **Allowed files:** `ArchiveAngelScorer.swift`, `ArchiveAngelScorerTests.swift`, `ArchiveAngelCandidate+Record.swift` (projection only, additive), `docs/archive_angel_design.md`. Anything else → GH issue.
-- **Stop:** a red Angel suite not green after one bounded repair; any need to touch the promoter, Promote, the archive tree, `VideoRecord` schema, sweep scheduling, UI; any taste call (e.g. are Avid `clip-135-…` fragments worth archiving? is a 455 kbit/s 1.5 h export an original?) → brief as a question, not a change.
-- **Evidence:** 8 Angel suites (`ArchiveAngelFloor/Evidence/Selection/Sweep/EvidenceStore/EvidencePick/Promoter/PromoterIdentity`) green per merge; SHAs; top-50 before/after; rejected-by-reason deltas.
-- **Owner:** Claude. **Reviewer:** codex (or a local qwen if codex is unavailable) — issues only, never edits.
-- **Machine:** M4 after Rick steps away; own derivedData under /private/tmp; no app launches; the assessment sidecar is read, never written, overnight.
-- **Fallback (Rick):** if blocked or idle, T2 Hallie — harvest 9/10 live turns first (`scripts/hallie_harvest_queries.py`), run `scripts/hallie_eval.py`, one family per iteration, same reviewer rule.
 
 ## Check-in protocol (added 2026-09-10 — Rick: "make sure you and codex check with each other and don't allow one or the other to drop off into silence")
 
