@@ -832,7 +832,7 @@ extension MediaFileOperationKind {
         // Archive Angel (2026-09-09) — deep violet: the proposer that
         // precedes Promote's bronze; apart from assessCopies' plum by
         // leaning blue.
-        case .archiveAngel: return Color(red: 0.36, green: 0.20, blue: 0.62)
+        case .archiveAngel: return Color(red: 0.70, green: 0.30, blue: 0.05)   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
         }
     }
 }
