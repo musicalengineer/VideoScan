@@ -39,3 +39,4 @@ Expect on a first run: the access copy step takes real time (HEVC VideoToolbox p
 - Duration tiers replace the flat 2 min–2 h band: 5–15 min +10, 15–30 +25, 30–60 +45, 60 min+ +60 (no ceiling). Tie-break: date, then longer, then larger, then name.
 - Show in Catalog / Show in Finder on every row of the review sheet and the chevron turndown (`ArchiveAngelRowActions`).
 - Old `evidence.json` sidecars fail to decode on the changed rejection text and are re-derived by the next sweep — by design ("fully re-derivable").
+- Continuous assessment (rev 2): launch + 1 min after edits + every 15 min; rules-version stamp forces re-score after criteria changes; Archive-tab assessment panel with top-25 turndown. Nightly 03:00 removed.

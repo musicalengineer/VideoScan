@@ -15,9 +15,22 @@ import SwiftUI
 struct ArchiveAngelRowActions: View {
     @EnvironmentObject var model: VideoScanModel
 
-    let entry: ArchiveAngelPlan.Entry
+    /// Catalog record id of the original.
+    let recordID: UUID
+    let filename: String
+    let sourcePath: String
     /// Runs before the tab switch (a sheet dismisses itself here).
     var beforeNavigate: () -> Void = {}
+
+    init(recordID: UUID, filename: String, sourcePath: String, beforeNavigate: @escaping () -> Void = {}) {
+        self.recordID = recordID; self.filename = filename; self.sourcePath = sourcePath
+        self.beforeNavigate = beforeNavigate
+    }
+
+    init(entry: ArchiveAngelPlan.Entry, beforeNavigate: @escaping () -> Void = {}) {
+        self.init(recordID: entry.id, filename: entry.filename, sourcePath: entry.sourcePath,
+                  beforeNavigate: beforeNavigate)
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -43,17 +56,17 @@ struct ArchiveAngelRowActions: View {
     }
 
     private func showInCatalog() {
-        guard model.canNavigateToRecord(id: entry.id) else {
-            model.log("Archive Angel: \(entry.filename) is no longer in the catalog — it may have been removed or replaced by a re-scan.")
+        guard model.canNavigateToRecord(id: recordID) else {
+            model.log("Archive Angel: \(filename) is no longer in the catalog — it may have been removed or replaced by a re-scan.")
             return
         }
         beforeNavigate()
-        Self.navigate(model: model, to: entry.id)
+        Self.navigate(model: model, to: recordID)
     }
 
     private func showInFinder() {
-        if !NSWorkspace.shared.selectFile(entry.sourcePath, inFileViewerRootedAtPath: "") {
-            model.log("Archive Angel: Finder could not show \(entry.sourcePath) — is the volume mounted?")
+        if !NSWorkspace.shared.selectFile(sourcePath, inFileViewerRootedAtPath: "") {
+            model.log("Archive Angel: Finder could not show \(sourcePath) — is the volume mounted?")
         }
     }
 

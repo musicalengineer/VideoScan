@@ -231,6 +231,10 @@ final class VideoScanModel: ObservableObject {
     /// loops. Coalesces any burst of catalog mutations into ONE
     /// recompute 250 ms later.
     func noteCatalogChangedForDossierCounts() {
+        // In-place record edits (stars, people, dates, notes, dossier
+        // writeback) reach the Archive Angel Assessment through here too —
+        // the sweep debounces, so a burst is one re-score (2026-09-10).
+        archiveAngelSweep.noteCatalogChanged()
         guard !dossierCountsRefreshScheduled else { return }
         dossierCountsRefreshScheduled = true
         Task { @MainActor [weak self] in

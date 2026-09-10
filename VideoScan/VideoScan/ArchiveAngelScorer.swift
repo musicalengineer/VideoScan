@@ -182,6 +182,13 @@ struct ArchiveAngelWeights: Sendable, Equatable {
 
 enum ArchiveAngelScorer {
 
+    /// Bump whenever the weights, the floor or the evidence lines change.
+    /// The assessment sidecar is stamped with it; a mismatch on load means
+    /// "assessed under old rules" and the sweep re-scores at once (Rick
+    /// 2026-09-10: "this will require updated assessments as we refine
+    /// selection criteria"). 2 = flat 60 s floor + duration tiers.
+    static let rulesVersion = 2
+
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
                         weights w: ArchiveAngelWeights = .standard,

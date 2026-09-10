@@ -67,3 +67,33 @@ not "make one thumbnail".
 - ArchiveAngelJob+Evidence.swift — selectFromEvidence (fresh < 24 h, complete, eligible ≥ N; re-floors each pick; nil → walk) wired into the job; ArchiveAngelStartSheet shows the assessment line + Assess Now.
 - CatalogHelpers.swift: two pure extractions (noMatchesOverlay, inspectorPanelView) — the body hit the CI toolchain's type-check budget.
 - Tests: 49 across 11 Angel suites (17 new: grade edges, store round-trip/poison/freshness/scale, sweep scale + log contract + parking + disabled + settings, evidence picks + re-floor + fallbacks, filter round-trip + predicate).
+
+## Rev 2 — continuous assessment (Rick 2026-09-10)
+
+Rick: "the assessment should continually run over the catalog … 3am is just
+arbitrary and, as long as the assessment is not taking up too much compute, we
+can do it 24/7 until all files assessed. This will require updated assessments
+as we refine selection criteria. Then the user can scroll thru AAA files in the
+catalog or look in the Archive window to see files that can be batch archived."
+
+Measured: a full pass over 11,687 records = 1.4–1.7 s (scores catalog fields +
+Spotlight play counts; never media bytes). So "continuous" is a cadence, not a
+crawl:
+
+- **Launch** (90 s after start; 15 s when the sidecar is missing or stale).
+- **One minute after any catalog change or in-place record edit** — stars,
+  people, dates, notes reach the sweep via `noteCatalogChangedForDossierCounts`.
+- **Every 15 minutes** while the app is up (`periodicSeconds`). The 03:00
+  nightly is gone.
+- Always parked behind the user (3 s quiet gate) and any scan / Angel /
+  Promote job, as before.
+- **Rules version.** `ArchiveAngelScorer.rulesVersion` is stamped into
+  `evidence.json`; a file from older rules (or unstamped) is ignored on load
+  and re-derived at once. Bump it with every weight/floor/line change.
+- **Archive tab panel** (`ArchiveAngelAssessmentPanel`): grades line (A ready ·
+  B nearly · C candidates · of N · freshness · live status), Assess now,
+  Show candidates in Catalog (focus set, label "Archive Angel candidates"),
+  Prepare batch… (the start sheet), "Assess continuously" checkbox, and a
+  turndown with the top 25 A/B rows (grade · name · length · first why-line ·
+  Show in Catalog / Finder · score).
+- Catalog: Show ▸ Archive Candidates is unchanged (A+B filter).

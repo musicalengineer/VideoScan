@@ -117,6 +117,20 @@ struct ArchiveAngelEvidenceStoreTests {
         await v99.load()
         #expect(!v99.isLoaded)
 
+        // Assessed under older scorer rules → ignored (the sweep re-derives).
+        #expect(await store.save())
+        var oldRules = try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as! [String: Any]
+        oldRules["rulesVersion"] = ArchiveAngelScorer.rulesVersion - 1
+        try JSONSerialization.data(withJSONObject: oldRules).write(to: store.fileURL)
+        let stale = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await stale.load() == false)
+        #expect(!stale.isLoaded)
+        // No stamp at all (pre-9/10 file) → ignored too.
+        oldRules.removeValue(forKey: "rulesVersion")
+        try JSONSerialization.data(withJSONObject: oldRules).write(to: store.fileURL)
+        let unstamped = ArchiveAngelEvidenceStore(directory: dir)
+        #expect(await unstamped.load() == false)
+
         // Malformed → ignored.
         try Data("{not json".utf8).write(to: store.fileURL)
         let bad = ArchiveAngelEvidenceStore(directory: dir)

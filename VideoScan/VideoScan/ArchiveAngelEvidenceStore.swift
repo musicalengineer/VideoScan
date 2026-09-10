@@ -91,6 +91,11 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
     static let currentVersion = 1
 
     var storeVersion: Int = ArchiveAngelEvidenceFile.currentVersion
+    /// Scorer rules the records were computed under. A file from older
+    /// rules (or one without the stamp) is ignored on load — the sweep
+    /// re-derives it in seconds — so a refined floor or weight table
+    /// never shows stale grades.
+    var rulesVersion: Int = ArchiveAngelScorer.rulesVersion
     var computedAt: Date
     var complete: Bool
     var considered: Int
@@ -195,11 +200,16 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         candidateIDs = []
     }
 
-    /// Load from disk off-main and publish. A missing, malformed or
-    /// wrong-version file leaves the store empty (poisoned-state rule).
-    func load() async {
+    /// Load from disk off-main and publish. A missing, malformed,
+    /// wrong-version or old-rules file leaves the store empty
+    /// (poisoned-state rule). Returns whether anything was loaded so the
+    /// caller can re-score straight away instead of waiting.
+    @discardableResult
+    func load() async -> Bool {
         let url = fileURL
-        if let loaded = await Self.loadOffMain(url) { replace(with: loaded) }
+        guard let loaded = await Self.loadOffMain(url) else { return false }
+        replace(with: loaded)
+        return true
     }
 
     /// Save the current file off-main (atomic replace). No-op when empty.
@@ -219,7 +229,8 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         guard let f = try? dec.decode(ArchiveAngelEvidenceFile.self, from: data),
-              f.storeVersion == ArchiveAngelEvidenceFile.currentVersion else { return nil }
+              f.storeVersion == ArchiveAngelEvidenceFile.currentVersion,
+              f.rulesVersion == ArchiveAngelScorer.rulesVersion else { return nil }
         return f
     }
 

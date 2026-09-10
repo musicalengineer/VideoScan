@@ -30,8 +30,10 @@ extension VideoScanModel {
         guard !TestEnvironment.isTestHost else { return }
         Task { [weak self] in
             guard let self else { return }
-            await self.archiveAngelStore.load()
-            self.archiveAngelSweep.scheduleLaunchRun()
+            let loaded = await self.archiveAngelStore.load()
+            // No sidecar, or one assessed under older rules: the grades
+            // are needed now, not in 90 s — a pass is under 2 s.
+            self.archiveAngelSweep.scheduleLaunchRun(delay: loaded ? nil : 15)
         }
     }
 

@@ -371,6 +371,12 @@ struct ArchiveView: View {
                 .disabled(!reachable)
                 .padding(.leading, 34)   // aligns under the volume name, not the icon
                 .padding(.top, 2)
+                // Archive Angel Assessment (2026-09-10): the always-on
+                // grades, right where the batches are reviewed.
+                ArchiveAngelAssessmentPanel(store: model.archiveAngelStore, sweep: model.archiveAngelSweep,
+                                            prepare: { angelStartRequest = ArchiveAngelStartRequest() })
+                    .padding(.leading, 34)
+                    .padding(.top, 8)
                 if let newest = angelReadyBatches.first {
                     // Nag-button pattern: the badge performs the action.
                     Button {

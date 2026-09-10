@@ -140,6 +140,39 @@ struct ArchiveAngelSweepTests {
         sweep.stop()
     }
 
+    @Test("continuous: re-scores on a period while enabled; stop() ends it")
+    @MainActor
+    func periodic() async {
+        var runs = 0
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_angel_sweep_periodic_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sweep = ArchiveAngelSweep(store: ArchiveAngelEvidenceStore(directory: dir))
+        var cfg = ArchiveAngelSweep.Configuration(candidates: { runs += 1; return synthetic(20) },
+                                                  isExternallyBusy: { false })
+        cfg.playHistory = { _ in [:] }
+        cfg.periodicSeconds = 0.15
+        sweep.configure(cfg, enabled: true)
+        for _ in 0..<60 {
+            if runs >= 2 { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(runs >= 2, "two periodic runs expected within 1.5 s, got \(runs)")
+        sweep.stop()
+        let after = runs
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        #expect(runs == after, "no runs after stop()")
+    }
+
+    @Test("cadence sensor: 15-minute period, 1-minute edit debounce, 90 s launch delay — Rick 2026-09-10 (no 3 am)")
+    @MainActor
+    func cadenceDefaults() {
+        let cfg = ArchiveAngelSweep.Configuration(candidates: { [] }, isExternallyBusy: { false })
+        #expect(cfg.periodicSeconds == 900)
+        #expect(cfg.catalogChangeDebounceSeconds == 60)
+        #expect(cfg.launchDelaySeconds == 90)
+    }
+
     @Test("settings: missing key = ON; explicit false = OFF; save round-trips")
     func settings() {
         let suite = UserDefaults(suiteName: "test_angel_sweep_settings_\(UUID().uuidString)")!

@@ -14,6 +14,13 @@
 // PARKS (re-polls) while the user is interacting, while a scan runs, or
 // while an Angel / Promote job is active. A checkpoint file (complete =
 // false) is written every 5,000 records; freshness needs a complete file.
+//
+// Cadence (Rick 2026-09-10: "3am is just arbitrary … as long as the
+// assessment is not taking up too much compute, we can do it 24/7 until
+// all files assessed"): a full pass over ~12k records takes under 2 s, so
+// the sweep runs at launch, one minute after any catalog change or record
+// edit, and every 15 minutes while the app is up — always parked behind
+// the user and any job. A rules-version bump re-scores at once.
 
 import Foundation
 import Combine
@@ -91,9 +98,14 @@ final class ArchiveAngelSweep: ObservableObject {
         var checkpointEvery = 5_000
         var quietSeconds: Double = 3
         var pausePollMilliseconds = 500
-        var catalogChangeDebounceSeconds: Double = 300
+        /// One minute after the last catalog change or record edit (a star,
+        /// a person, a date) the grades catch up. A scan parks the sweep
+        /// anyway, so its stream of appends costs one run when it ends.
+        var catalogChangeDebounceSeconds: Double = 60
         var launchDelaySeconds: Double = 90
-        var nightlyHour = 3
+        /// Re-score this often while the app is up, even with no signal —
+        /// Spotlight play counts and volume reachability change underneath.
+        var periodicSeconds: Double = 900
         var now: @Sendable () -> Date = { Date() }
         /// Console + file log. EXACTLY three lines per run (start,
         /// checkpoint every 5,000, finish) — never per record.
@@ -111,7 +123,7 @@ final class ArchiveAngelSweep: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
     private var launchTask: Task<Void, Never>?
-    private var nightlyTask: Task<Void, Never>?
+    private var periodicTask: Task<Void, Never>?
     private var rerunRequested = false
     /// Interaction gate: the model pings this from interactive paths.
     let gate = PreviewSweepGate()
@@ -135,7 +147,7 @@ final class ArchiveAngelSweep: ObservableObject {
             status = .disabled
         } else if !status.isRunning {
             status = .idle
-            scheduleNightly()
+            schedulePeriodic()
         }
     }
 
@@ -143,12 +155,14 @@ final class ArchiveAngelSweep: ObservableObject {
 
     // MARK: Triggers
 
-    /// Launch: score after a short delay so the catalog and the UI settle first.
-    func scheduleLaunchRun() {
+    /// Launch: score after a short delay so the catalog and the UI settle
+    /// first. `delay` overrides the configured one (a missing or old-rules
+    /// sidecar wants the grades back quickly).
+    func scheduleLaunchRun(delay override: Double? = nil) {
         guard enabled, let cfg = configuration else { return }
         launchTask?.cancel()
         status = .scheduled(reason: "launch")
-        let delay = cfg.launchDelaySeconds
+        let delay = override ?? cfg.launchDelaySeconds
         launchTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -156,8 +170,8 @@ final class ArchiveAngelSweep: ObservableObject {
         }
     }
 
-    /// Catalog changed: debounced (5 min) so a scan's stream of appends is
-    /// one rescore, after it settles.
+    /// Catalog changed or a record was edited: debounced (1 min) so a
+    /// burst of writes is one rescore, after it settles.
     func noteCatalogChanged() {
         guard enabled, let cfg = configuration else { return }
         debounceTask?.cancel()
@@ -189,25 +203,18 @@ final class ArchiveAngelSweep: ObservableObject {
     private func cancelScheduled() {
         debounceTask?.cancel(); debounceTask = nil
         launchTask?.cancel(); launchTask = nil
-        nightlyTask?.cancel(); nightlyTask = nil
+        periodicTask?.cancel(); periodicTask = nil
     }
 
-    private func scheduleNightly() {
+    private func schedulePeriodic() {
         guard let cfg = configuration else { return }
-        nightlyTask?.cancel()
-        let hour = cfg.nightlyHour
-        let now = cfg.now
-        nightlyTask = Task { [weak self] in
+        periodicTask?.cancel()
+        let every = max(0.05, cfg.periodicSeconds)   // floor is for tests; production is 15 min
+        periodicTask = Task { [weak self] in
             while !Task.isCancelled {
-                let current = now()
-                var comps = Calendar.current.dateComponents([.year, .month, .day], from: current)
-                comps.hour = hour; comps.minute = 0; comps.second = 0
-                var next = Calendar.current.date(from: comps) ?? current
-                if next <= current { next = Calendar.current.date(byAdding: .day, value: 1, to: next) ?? current }
-                let wait = max(60, next.timeIntervalSince(current))
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(every * 1_000_000_000))
                 guard !Task.isCancelled else { return }
-                self?.run(reason: "nightly")
+                self?.run(reason: "periodic")
             }
         }
     }
