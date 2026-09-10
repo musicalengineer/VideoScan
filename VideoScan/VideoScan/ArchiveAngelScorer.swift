@@ -115,6 +115,12 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// Assess 10, come back 5 minutes later and click Assess 10" must
     /// bring the NEXT ten, not the same ten again).
     case inAnotherBatch = "Already in a prepared batch"
+    /// Rick 2026-09-10: iMovie's "iMovie Cache/Cache.mov" and "iMovie Movie
+    /// Cache/Cache-30.mov" scored 120 — 2 h 39 min "whole tapes" that are
+    /// 5 MB thumbnail streams. Name/folder rule + a bytes-per-second sanity
+    /// floor no real original can fail.
+    case appCache = "An app's cache / render file (name or folder), not an original"
+    case proxyStream = "Too small for its length — a thumbnail or proxy stream, not the original"
 }
 
 enum ArchiveAngelVerdict: Sendable, Equatable {
@@ -179,6 +185,10 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var minimumDurationSeconds = 60.0
     var junkFloor = 5
     var dateConfidenceKnown: Float = 0.8
+    /// Average bitrate floor for anything a minute or longer. DV is
+    /// 25 Mbit/s, a poor web clip 300 kbit/s, iMovie's thumbnail stream
+    /// under 5 kbit/s — 100 kbit/s separates them by two orders either way.
+    var minimumAverageKilobitsPerSecond = 100.0
 
     static let standard = ArchiveAngelWeights()
 }
@@ -191,8 +201,9 @@ enum ArchiveAngelScorer {
     /// The assessment sidecar is stamped with it; a mismatch on load means
     /// "assessed under old rules" and the sweep re-scores at once (Rick
     /// 2026-09-10: "this will require updated assessments as we refine
-    /// selection criteria"). 2 = flat 60 s floor + duration tiers.
-    static let rulesVersion = 2
+    /// selection criteria"). 2 = flat 60 s floor + duration tiers; 3 = app-cache
+    /// and proxy-stream floors.
+    static let rulesVersion = 3
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
@@ -293,7 +304,13 @@ enum ArchiveAngelScorer {
             return .notPlayable
         }
         if c.isPairedHalf { return .pairedHalf }
+        // Machine evidence below here yields to a human star, like junk.
+        if c.starRating == 0, Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath) { return .appCache }
         if c.durationSeconds < w.minimumDurationSeconds { return .tooShort }
+        if c.starRating == 0, c.durationSeconds > 0, c.sizeBytes > 0,
+           Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < w.minimumAverageKilobitsPerSecond {
+            return .proxyStream
+        }
         switch c.mediaDisposition {
         case .confirmedJunk: return .junk
         case .suspectedJunk where c.starRating == 0: return .suspectedJunk
@@ -337,6 +354,26 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
+
+    /// Folder components an editing app writes for itself. Matched as
+    /// whole components (case-insensitive) so a family folder named
+    /// "Cache Cod" or "Thumbnails of Grandma" is untouched.
+    static let appCacheFolderNames: Set<String> = [
+        "imovie cache", "imovie movie cache", "imovie thumbnails", "imovie thumbnails.localized",
+        "render files", "transcoded media", "proxy media", "analysis files", "thumbnail media",
+        "cache", "caches", "renders", "proxies", "thumbnails", "temp", "tmp", ".cache", ".thumbnails",
+    ]
+
+    /// `Cache.mov`, `Cache-30.mov`, `render-12.mov`, `proxy_007.mov`,
+    /// `thumb.mov`… — a bare tool noun, optionally numbered. A real clip
+    /// named by a person ("Cache Cod 1998.mov") has more than the noun.
+    static func looksLikeAppCache(filename: String, fullPath: String) -> Bool {
+        let stem = (filename as NSString).deletingPathExtension.lowercased()
+        if stem.range(of: #"^(cache|render|proxy|proxies|preview|thumb|thumbnail|temp|tmp)([ _-]?\d+)?$"#,
+                      options: .regularExpression) != nil { return true }
+        let folders = (fullPath as NSString).deletingLastPathComponent.split(separator: "/")
+        return folders.contains { appCacheFolderNames.contains($0.lowercased()) }
+    }
 
     /// Points and the printed tier for a duration; nil under 5 min (a
     /// short clip earns nothing for its length — it must make the list on

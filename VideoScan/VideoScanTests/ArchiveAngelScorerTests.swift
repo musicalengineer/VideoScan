@@ -69,6 +69,46 @@ struct ArchiveAngelFloorTests {
         }
     }
 
+    @Test("iMovie caches and thumbnail streams never qualify — Rick 2026-09-10 (Cache.mov scored 120)")
+    func appCachesAndProxyStreams() {
+        let cache = ArchiveAngelCandidate(filename: "Cache.mov",
+            fullPath: "/Volumes/LaCie/Family Movies/Christmas1990/iMovie Thumbnails/iMovie Cache/Cache.mov",
+            sizeBytes: 4_800_000, durationSeconds: 9553, hasUserNotes: true, hasEmbeddedDate: true)
+        #expect(ArchiveAngelScorer.verdict(cache) == .rejected(.appCache))
+        let cache30 = ArchiveAngelCandidate(filename: "Cache-30.mov",
+            fullPath: "/Volumes/LaCie/iMovie Events.localized/Snowy Westford - Day 7/iMovie Movie Cache/Cache-30.mov",
+            sizeBytes: 900_000, durationSeconds: 330)
+        #expect(ArchiveAngelScorer.verdict(cache30) == .rejected(.appCache))
+        // Name alone, in an ordinary folder.
+        #expect(ArchiveAngelScorer.verdict(.init(filename: "render_12.mov", fullPath: "/v/Movies/render_12.mov",
+                                                  sizeBytes: 500_000_000, durationSeconds: 300)) == .rejected(.appCache))
+        // Folder alone, ordinary name.
+        #expect(ArchiveAngelScorer.verdict(.init(filename: "clip-004.mov", fullPath: "/v/Movies/Render Files/clip-004.mov",
+                                                  sizeBytes: 500_000_000, durationSeconds: 300)) == .rejected(.appCache))
+        // A person's name that CONTAINS the noun is not a cache.
+        for ok in [ArchiveAngelCandidate(filename: "Cache Cod 1998.mov", fullPath: "/v/Movies/Cache Cod 1998.mov",
+                                         sizeBytes: 9_000_000_000, durationSeconds: 3600),
+                   ArchiveAngelCandidate(filename: "Thumbnails of Grandma.mov", fullPath: "/v/Movies/Thumbnails of Grandma/tape1.mov",
+                                         sizeBytes: 9_000_000_000, durationSeconds: 3600)] {
+            guard case .eligible = ArchiveAngelScorer.verdict(ok) else { Issue.record("\(ok.filename) must be eligible"); return }
+        }
+        // Bitrate floor: 2 h 39 min in 4.8 MB is ~4 kbit/s — a thumbnail stream, whatever it is called.
+        let thin = ArchiveAngelCandidate(filename: "Christmas1990.mov", fullPath: "/v/Movies/Christmas1990.mov",
+                                         sizeBytes: 4_800_000, durationSeconds: 9553)
+        #expect(ArchiveAngelScorer.verdict(thin) == .rejected(.proxyStream))
+        // A poor web clip at 300 kbit/s and a DV tape at 25 Mbit/s both pass.
+        for ok in [ArchiveAngelCandidate(filename: "web.mp4", sizeBytes: 11_250_000, durationSeconds: 300),
+                   ArchiveAngelCandidate(filename: "tape.dv", sizeBytes: 11_000_000_000, durationSeconds: 3600)] {
+            guard case .eligible = ArchiveAngelScorer.verdict(ok) else { Issue.record("\(ok.filename) must be eligible"); return }
+        }
+        // A star is the human's word — machine floors yield to it, as with junk.
+        guard case .eligible = ArchiveAngelScorer.verdict(.init(filename: "Cache.mov", fullPath: "/v/iMovie Cache/Cache.mov",
+                                                                sizeBytes: 4_800_000, durationSeconds: 9553, starRating: 2)) else {
+            Issue.record("a starred file stays eligible"); return
+        }
+        #expect(ArchiveAngelScorer.rulesVersion >= 3, "floors changed → the sidecar must re-derive")
+    }
+
     @Test("the rejection line tells the user why short clips are skipped")
     func floorReasonText() {
         #expect(ArchiveAngelRejection.tooShort.rawValue.contains("under 1 min"))
@@ -204,14 +244,15 @@ struct ArchiveAngelSelectionTests {
 
     @Test("ties break oldest date first, then longer, then larger file, then name")
     func tieBreak() {
+        // Sizes in GB: the bitrate floor (2026-09-10) reads a 10-byte minute as a thumbnail stream.
         let old = Date(timeIntervalSince1970: 600_000_000)
         let new = Date(timeIntervalSince1970: 900_000_000)
         let cands = [
-            ArchiveAngelCandidate(filename: "b.mov", sizeBytes: 10, inferredRecordDate: new, inferredDateConfidence: 0.9),
-            ArchiveAngelCandidate(filename: "a.mov", sizeBytes: 10, inferredRecordDate: new, inferredDateConfidence: 0.9),
-            ArchiveAngelCandidate(filename: "c.mov", sizeBytes: 99, inferredRecordDate: new, inferredDateConfidence: 0.9),
-            ArchiveAngelCandidate(filename: "e.mov", sizeBytes: 1, durationSeconds: 200, inferredRecordDate: new, inferredDateConfidence: 0.9),
-            ArchiveAngelCandidate(filename: "d.mov", sizeBytes: 1, inferredRecordDate: old, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "b.mov", sizeBytes: 10_000_000_000, inferredRecordDate: new, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "a.mov", sizeBytes: 10_000_000_000, inferredRecordDate: new, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "c.mov", sizeBytes: 99_000_000_000, inferredRecordDate: new, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "e.mov", sizeBytes: 1_000_000_000, durationSeconds: 200, inferredRecordDate: new, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "d.mov", sizeBytes: 1_000_000_000, inferredRecordDate: old, inferredDateConfidence: 0.9),
         ]
         let names = ArchiveAngelScorer.select(cands, count: 5).picks.map(\.candidate.filename)
         #expect(names == ["d.mov", "e.mov", "c.mov", "a.mov", "b.mov"],

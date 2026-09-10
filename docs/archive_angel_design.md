@@ -83,7 +83,13 @@ point and live in one table so they can be tuned without touching logic.
 
 **3.2 Hard floor (never a candidate, reported as rejected with the reason):**
 duration < 60 s for EVERY clip, marked or not (rev 3, Rick 2026-09-10 — see
-§3.4); `mediaDisposition == .confirmedJunk` or `.junk`; `junkScore`
+§3.4); an app's cache/render file — bare tool-noun name (`Cache.mov`,
+`Cache-30.mov`, `render_12.mov`) or a folder component like `iMovie Cache`,
+`iMovie Thumbnails`, `Render Files`, `Proxies` (rev 4, 2026-09-10: iMovie
+thumbnail streams scored 120 as 2 h 39 min "whole tapes"); average bitrate
+under 100 kbit/s for anything a minute or longer (a thumbnail/proxy stream —
+DV is 25 Mbit/s, a poor web clip 300 kbit/s); both machine floors yield to a
+star, like junk; `mediaDisposition == .confirmedJunk` or `.junk`; `junkScore`
 ≥ 5 with `starRating == 0`; not playable / un-probeable; a paired MXF half
 (pair state computed) — the Combine result is the candidate, not the half;
 duplicate of a record already archived (same `contentHash` or confirmed dup
