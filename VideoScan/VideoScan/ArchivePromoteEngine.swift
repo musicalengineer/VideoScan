@@ -177,7 +177,21 @@ enum ArchivePromoteEngine {
     /// Open the source: O_NOFOLLOW (a symlink at the leaf is refused by
     /// the kernel), regular file only.
     static func openSource(path: String) throws -> SourceHandle {
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        // Rick 2026-09-10: "follow the links until you hit the actual file."
+        // The SOURCE side follows a symlink chain to its target (his
+        // ~/Movies entries are links into /Volumes/Projects/MoviesExpansion
+        // since the 8/31 move); the target is then opened O_NOFOLLOW and
+        // must be a regular file, exactly as before. The archive-tree side
+        // (every component under the root) still refuses symlinks. A
+        // dangling link is refused, not silently skipped.
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        if resolved != path || (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil {
+            var st = stat()
+            if lstat(resolved, &st) != 0 || (st.st_mode & S_IFMT) == S_IFLNK {
+                throw Failure.sourceNotRegularFile("\(path) → broken symlink")
+            }
+        }
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else {
             if errno == ELOOP { throw Failure.sourceNotRegularFile(path) }
             throw Failure.sourceUnreadable(path)

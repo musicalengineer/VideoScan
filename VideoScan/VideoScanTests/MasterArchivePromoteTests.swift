@@ -258,8 +258,8 @@ struct MasterArchivePromoteSensorTests {
                 != MasterArchiveTestSupport.sha256(ofFile: files[1].path))
     }
 
-    @Test("a symlinked source is refused (O_NOFOLLOW); nothing lands in the archive")
-    func symlinkedSourceRefused() async throws {
+    @Test("a symlinked source is FOLLOWED to the real file; the archive copy is the target's bytes (Rick 2026-09-10)")
+    func symlinkedSourceFollowed() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("symlink")
         defer { sb.cleanup() }
         let real = try seed(sb, count: 1)[0]
@@ -270,9 +270,33 @@ struct MasterArchivePromoteSensorTests {
         let rec = MasterArchiveTestSupport.makeRecord(path: link.path)
         model.records = [rec]
         let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
+        guard case .finished = job.state else { Issue.record("expected success, got \(job.state)"); return }
+        let archived = MasterArchiveTestSupport.archivedFiles(sb)
+        #expect(archived.count == 1, "\(archived)")
+        if let rel = archived.first {
+            #expect(MasterArchiveTestSupport.sha256(ofFile: sb.archiveRoot.appendingPathComponent(rel).path)
+                    == MasterArchiveTestSupport.sha256(ofFile: real.path), "archive copy must be the TARGET's bytes")
+        }
+        #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1)
+        // The catalog path (the link) is what the manifest records as the origin.
+        #expect(MasterArchiveTestSupport.manifestRows(sb).first?.contains(link.path) == true)
+        #expect(model.records.count == 2)
+    }
+
+    @Test("a DANGLING symlink source is refused; nothing lands in the archive")
+    func danglingSymlinkRefused() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("dangling")
+        defer { sb.cleanup() }
+        let missing = sb.sources.appendingPathComponent("gone.mov")
+        let link = sb.sources.appendingPathComponent("test_dangling.mov")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: missing)
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let rec = MasterArchiveTestSupport.makeRecord(path: link.path)
+        model.records = [rec]
+        let job = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
         guard case .failed(let msg) = job.state else { Issue.record("expected failure, got \(job.state)"); return }
-        #expect(msg.contains("failed 1"), "\(msg)")
-        #expect(job.outcomes.first?.detail.contains("not a regular file") == true, "\(job.outcomes.first?.detail ?? "")")
+        #expect(msg.contains("failed 1") || msg.contains("skipped"), "\(msg)")
         #expect(MasterArchiveTestSupport.archivedFiles(sb).isEmpty)
         #expect(MasterArchiveTestSupport.manifestRows(sb).isEmpty)
         #expect(model.records.count == 1)
@@ -340,7 +364,7 @@ struct MasterArchivePromoteSensorTests {
         #expect(result.sha256 == MasterArchiveTestSupport.sha256(ofFile: dest), "not clobbered")
     }
 
-    @Test("engine: destination escaping the root and a symlink source are refused before any I/O")
+    @Test("engine: destination escaping the root is refused before any I/O; a symlink SOURCE is followed (Rick 2026-09-10), a dangling one and a directory are refused")
     func engineContainment() throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("contain")
         defer { sb.cleanup() }
@@ -354,7 +378,12 @@ struct MasterArchivePromoteSensorTests {
         #expect(!FileManager.default.fileExists(atPath: sb.archiveVolume.appendingPathComponent("escaped.mov").path))
         let link = sb.sources.appendingPathComponent("lnk.mov")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: src)
-        #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.openSource(path: link.path) }
+        let viaLink = try ArchivePromoteEngine.openSource(path: link.path)
+        viaLink.close()
+        #expect(viaLink.identity == h.identity, "the link must open the SAME file (dev/ino) as the target")
+        let dangling = sb.sources.appendingPathComponent("dangling.mov")
+        try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: sb.sources.appendingPathComponent("gone.mov"))
+        #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.openSource(path: dangling.path) }
         #expect(throws: ArchivePromoteEngine.Failure.self) { _ = try ArchivePromoteEngine.openSource(path: sb.sources.path) }
     }
 
