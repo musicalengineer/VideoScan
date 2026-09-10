@@ -158,11 +158,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         selectedEntries.reduce(0) { $0 + $1.sizeBytes }
     }
 
-    /// Batch folder name — sortable, filesystem-safe.
+    /// Batch folder name — sortable, filesystem-safe. Second resolution:
+    /// two starts in the same minute used to land in ONE folder.
     static func batchFolderName(for date: Date = Date()) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd'T'HH-mm"
+        f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
         return "batch-" + f.string(from: date)
     }
 }
@@ -197,6 +198,36 @@ enum ArchiveAngelPlanStore {
         var plan = try dec.decode(ArchiveAngelPlan.self, from: Data(contentsOf: url))
         plan.batchDir = batchDir   // the folder may have been moved
         return plan
+    }
+
+    /// A batch folder path under `bufferRoot` that does not exist yet:
+    /// the stamped name, or `-2`, `-3`… when a start lands on a taken name.
+    nonisolated static func newBatchDir(bufferRoot: URL, now: Date = Date(),
+                                        fileManager fm: FileManager = .default) -> String {
+        let base = ArchiveAngelPlan.batchFolderName(for: now)
+        var candidate = base
+        var n = 2
+        while fm.fileExists(atPath: bufferRoot.appendingPathComponent(candidate).path) {
+            candidate = "\(base)-\(n)"; n += 1
+        }
+        return bufferRoot.appendingPathComponent(candidate, isDirectory: true).path
+    }
+
+    /// Records already spoken for by another batch: every entry that is
+    /// pending, preparing or ready in a plan that is preparing, ready or
+    /// promoting. Promoted, failed and discarded rows are free again.
+    nonisolated static func inFlightRecordIDs(bufferRoot: URL) -> Set<UUID> {
+        var ids: Set<UUID> = []
+        for plan in listBatches(bufferRoot: bufferRoot) {
+            switch plan.status {
+            case .preparing, .ready, .promoting: break
+            case .promoted, .discarded: continue
+            }
+            for e in plan.entries where e.status == .pending || e.status == .preparing || e.status == .ready {
+                ids.insert(e.id)
+            }
+        }
+        return ids
     }
 
     /// Every batch under the buffer root, newest first. Unreadable plans

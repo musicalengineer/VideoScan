@@ -68,7 +68,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         self.requestedCount = max(1, count)
         self.makeLossless = makeLossless
         self.bufferRoot = bufferRoot
-        let dir = bufferRoot.appendingPathComponent(ArchiveAngelPlan.batchFolderName(), isDirectory: true).path
+        let dir = ArchiveAngelPlanStore.newBatchDir(bufferRoot: bufferRoot)
         self.plan = ArchiveAngelPlan(batchDir: dir, requestedCount: max(1, count), makeLossless: makeLossless)
     }
 
@@ -121,8 +121,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         note("Archive Angel: want \(requestedCount), lossless \(makeLossless ? "on" : "off"), buffer \(plan.batchDir)")
         let selection: ArchiveAngelSelection
         let consideredCount: Int
+        // Rows already in another batch (preparing / ready / promoting) are
+        // not picked again — a second "10" brings the NEXT ten.
+        let root = bufferRoot
+        let inFlight = await Task.detached(priority: .utility) {
+            ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root)
+        }.value
+        if !inFlight.isEmpty { note("Archive Angel: \(inFlight.count) record(s) already in a prepared batch — skipping them") }
         if let fromEvidence = Self.selectFromEvidence(
-            store: model.archiveAngelStore, count: requestedCount, now: Date(),
+            store: model.archiveAngelStore, count: requestedCount, now: Date(), excluding: inFlight,
             project: { id in model.record(forID: id).map { ArchiveAngelCandidate.project($0, model: model, policy: policy) } }) {
             selection = fromEvidence.selection
             consideredCount = model.archiveAngelStore.consideredCount
@@ -157,7 +164,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 }
             }
             if stopRequested { finishCancelled(); return }
-            selection = ArchiveAngelScorer.select(candidates, count: requestedCount)
+            let skipped = candidates.filter { inFlight.contains($0.id) }.count
+            var walked = ArchiveAngelScorer.select(candidates.filter { !inFlight.contains($0.id) }, count: requestedCount)
+            if skipped > 0 { walked.rejected[.inAnotherBatch, default: 0] += skipped }
+            selection = walked
             consideredCount = candidates.count
         }
         plan.consideredCount = consideredCount

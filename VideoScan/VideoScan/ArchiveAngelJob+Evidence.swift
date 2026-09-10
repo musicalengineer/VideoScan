@@ -26,6 +26,7 @@ extension ArchiveAngelJob {
                                    freshness: TimeInterval = evidenceFreshness,
                                    now: Date,
                                    weights: ArchiveAngelWeights = .standard,
+                                   excluding: Set<UUID> = [],
                                    project: (UUID) -> ArchiveAngelCandidate?) -> EvidencePick? {
         guard count > 0, store.isFresh(within: freshness, now: now),
               store.eligibleCount >= count else { return nil }
@@ -35,6 +36,7 @@ extension ArchiveAngelJob {
         var projections = 0
         for id in store.rankedEligibleIDs() {
             if picks.count == count { break }
+            if excluding.contains(id) { rejected[.inAnotherBatch, default: 0] += 1; continue }
             guard let evidence = store.record(for: id), let candidate = project(id) else { continue }
             projections += 1
             if let reason = ArchiveAngelScorer.hardFloor(candidate, weights: weights) {

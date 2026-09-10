@@ -50,6 +50,48 @@ struct ArchiveAngelEvidencePickTests {
         #expect(pick?.computedAt == s.computedAt)
     }
 
+    @Test("rows already in another batch are skipped and counted — a second 10 brings the NEXT ten (Rick 2026-09-10)")
+    @MainActor
+    func excludesInFlightRows() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        let s = store(records: [a: rec(150, at: now), b: rec(90, at: now), c: rec(40, at: now), d: rec(10, at: now)], now: now)
+        let pick = ArchiveAngelJob.selectFromEvidence(store: s, count: 2, now: now, excluding: [a, b]) {
+            ArchiveAngelCandidate(id: $0)
+        }
+        #expect(pick?.selection.picks.map(\.candidate.id) == [c, d])
+        #expect(pick?.selection.rejected[.inAnotherBatch] == 2)
+    }
+
+    @Test("in-flight ids come from preparing/ready/promoting batches only; folder names never collide")
+    func inFlightIDsAndFolderNames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_angel_inflight_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func entry(_ status: ArchiveAngelPlan.EntryStatus) -> ArchiveAngelPlan.Entry {
+            .init(id: UUID(), sourcePath: "/v/x.mov", filename: "x.mov", sizeBytes: 1, durationSeconds: 120,
+                  score: 1, evidence: [], proposedName: "x.mov", proposedDate: nil, status: status)
+        }
+        let ready = entry(.ready), pending = entry(.pending), promoted = entry(.promoted), failed = entry(.failed)
+        var live = ArchiveAngelPlan(batchDir: root.appendingPathComponent("batch-live").path, requestedCount: 10,
+                                    makeLossless: false, entries: [ready, pending, promoted, failed])
+        live.status = .ready
+        var done = ArchiveAngelPlan(batchDir: root.appendingPathComponent("batch-done").path, requestedCount: 10,
+                                    makeLossless: false, entries: [entry(.ready)])
+        done.status = .discarded
+        try ArchiveAngelPlanStore.save(live)
+        try ArchiveAngelPlanStore.save(done)
+        #expect(ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root) == [ready.id, pending.id])
+
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = ArchiveAngelPlanStore.newBatchDir(bufferRoot: root, now: stamp)
+        try FileManager.default.createDirectory(atPath: first, withIntermediateDirectories: true)
+        let second = ArchiveAngelPlanStore.newBatchDir(bufferRoot: root, now: stamp)
+        #expect(second == first + "-2")
+        #expect((first as NSString).lastPathComponent.hasPrefix("batch-"))
+        #expect(ArchiveAngelPlan.batchFolderName(for: stamp).count == "batch-yyyy-MM-ddTHH-mm-ss".count)
+    }
+
     @Test("a pick that fails the floor NOW is skipped and counted; the next head fills in")
     @MainActor
     func refloorsAtPickTime() {

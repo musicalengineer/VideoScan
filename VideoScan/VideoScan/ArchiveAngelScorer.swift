@@ -110,6 +110,11 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case suspectedJunk = "Looks like junk (machine evidence, unrated)"
     case notPlayable = "Not playable / un-probeable"
     case pairedHalf = "Half of an A/V pair — combine first"
+    /// Job-level, not a scorer floor: the record is already sitting in a
+    /// batch that is preparing, ready or promoting (Rick 2026-09-10: "click
+    /// Assess 10, come back 5 minutes later and click Assess 10" must
+    /// bring the NEXT ten, not the same ten again).
+    case inAnotherBatch = "Already in a prepared batch"
 }
 
 enum ArchiveAngelVerdict: Sendable, Equatable {
