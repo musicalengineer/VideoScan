@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-08-21",
- "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 345 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
+ "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 351 questions across twelve categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness.",
  "expect_values": {
   "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
   "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -2790,6 +2790,66 @@
    "text": "tell me about Philippa de Hainaut Queen of England",
    "expect": "biography",
    "notes": "harvested 2026-09-07 from the app transcript (2026-09-07); expectation unconfirmed"
+  },
+  {
+   "id": "lv260910-001",
+   "category": "live",
+   "text": "show me Donna down the cape in the early 90s",
+   "expect": "catalog",
+   "notes": "Harvested client=app 2026-09-10T15:24:47Z. Advisory only: temporal filtering is outside the family-intent repair; expectation unconfirmed."
+  },
+  {
+   "id": "lv260910-002",
+   "category": "live",
+   "text": "where was my grandmother born?",
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["videos where someone says", "matching catalog items"],
+   "notes": "Reviewed client=app 2026-09-10T17:27:10Z. Ask which grandmother when ambiguous, or give grounded birthplace(s); never a transcript keyword search. No birthplace asserted by this routing sensor."
+  },
+  {
+   "id": "lv260910-003",
+   "category": "live",
+   "text": "where was mary o'connor born?",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Reviewed client=app 2026-09-10T17:27:52Z. Named-person clarification after grandmother question; graph birthplace query, allowing identity disambiguation."
+  },
+  {
+   "id": "lv260910-004",
+   "category": "live",
+   "text": "tell me about mary o'connor and where she was born",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Reviewed client=app 2026-09-10T17:29:03Z. Compound biography/birthplace request stays in family data, not video keywords. No invented vitals required."
+  },
+  {
+   "id": "lv260910-006",
+   "category": "live",
+   "text": "look in the family tree",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["matching catalog items", "10021", "I looked for videos"],
+   "notes": "Reviewed client=app 2026-09-10T17:29:56Z. Manually restored: harvester drops 'look' and deduplicates the immediately preceding repeated Mary birthplace question. The retained preceding turn still names Mary and requests her birthplace; preserve that subject/operation rather than search every video."
+  },
+  {
+   "id": "lv260910-005",
+   "category": "live",
+   "text": "tell me about ellen ronan",
+   "expect": "biography",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items", "searched it as a place or word"],
+   "notes": "Reviewed client=app 2026-09-10T17:30:55Z. A GEDCOM person absent from People tags must still resolve through the tree; ambiguity may clarify. Independent replay prevents inherited Mary identity."
   }
  ]
 }

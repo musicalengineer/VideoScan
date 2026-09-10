@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-09-07",
- "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the 345-question hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190).",
+ "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the advisory hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190).",
  "questions": [
   {
    "id": "strict-001",
@@ -276,6 +276,59 @@
     "born 14 July 1760"
    ],
    "notes": "Live 2026-09-07: repeated Nathaniel's OWN biography. Fixed ea588b97: a relation the sentence asks for is the operation. Parents recorded: Abigail Wright and Stephen Parker Jr."
+  },
+  {
+   "id": "strict-016",
+   "category": "strict",
+   "text": "where was my grandmother born?",
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["videos where someone says", "matching catalog items"],
+   "notes": "Live app 2026-09-10T17:27:10Z: answered with 10 transcript-matched videos. Family-intent routing regression: graph answer or grandmother disambiguation, not catalog fallback; paired with this change's Swift routing tests."
+  },
+  {
+   "id": "strict-017",
+   "category": "strict",
+   "text": "where was mary o'connor born?",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Live app 2026-09-10T17:27:52Z: searched birth place and Mary as video words. Preserve named identity and birthplace intent after grandmother clarification; no unverified birthplace constant."
+  },
+  {
+   "id": "strict-018",
+   "category": "strict",
+   "text": "tell me about mary o'connor and where she was born",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Live app 2026-09-10T17:29:03Z: compound request split into two video searches. Family-intent regression must stay in tree/People evidence; identity clarification remains valid."
+  },
+  {
+   "id": "strict-019",
+   "category": "strict",
+   "text": "look in the family tree",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["matching catalog items", "10021", "I looked for videos"],
+   "notes": "Live app 2026-09-10T17:29:56Z: returned 10021 catalog items. Resume previous Mary birthplace request. The exact repeated Mary question immediately before this correction was deduplicated; previous retained turn supplies the same identity/field."
+  },
+  {
+   "id": "strict-020",
+   "category": "strict",
+   "text": "tell me about ellen ronan",
+   "expect": "biography",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items", "searched it as a place or word"],
+   "notes": "Live app 2026-09-10T17:30:55Z: treated GEDCOM-only name as catalog keywords. Resolve biography from graph, or clarify identity, even without a People tag. Route sensor only, not a claim to grade biographical truth."
   }
  ]
 }

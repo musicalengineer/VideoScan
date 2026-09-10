@@ -880,7 +880,8 @@ enum HallieTurnExecutor {
     static func `continue`(
         pending: Clarification,
         selecting selectedID: CandidateID,
-        context: Context
+        context: Context,
+        dependencies: Dependencies = .production
     ) async throws -> Result {
         guard pending.continuationToken == context.continuationToken,
               let candidate = pending.candidates.first(where: {
@@ -892,7 +893,7 @@ enum HallieTurnExecutor {
         }
         return try await execute(
             Request(intent: pending.intent, selectedIdentity: selectedID),
-            context: context)
+            context: context, dependencies: dependencies)
     }
 
     static func execute(
@@ -1057,6 +1058,10 @@ enum HallieTurnExecutor {
                 catalogPersonName: nil)
 
         case .graph(let rawPayload):
+            if let relative = try await executeRelativeFact(
+                payload: rawPayload, request: request, context: context, dependencies: dependencies) {
+                return relative
+            }
             // The lineage common-ancestor shape resolves both names through
             // the lineage chain (owner pin, CyberBrain alias, tree index) —
             // not the graph preflight — and carries which-one chips that

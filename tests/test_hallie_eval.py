@@ -19,6 +19,23 @@ SPEC.loader.exec_module(hallie_eval)
 
 
 class HallieEvalTests(unittest.TestCase):
+    def test_family_intent_live_misses_reject_answered_catalog_fallback(self):
+        turns = hallie_eval.load_corpus(ROOT / "tests" / "hallie_strict_regressions.json")
+        cases = [turn for turn in turns if turn["id"] in {
+            "strict-016", "strict-017", "strict-018", "strict-019", "strict-020"}]
+        self.assertEqual(len(cases), 5)
+        for turn in cases:
+            for route in ("presence", "cross", "catalog"):
+                with self.subTest(case=turn["id"], route=route):
+                    record = dict(turn, answer="I found several results for that request.",
+                                  route=route, outcome="answered")
+                    self.assertIn("route_mismatch", hallie_eval.grade_record(record))
+            clarification = dict(turn, answer="Which person do you mean in your family tree?",
+                                 route="graph", outcome="needs-clarification")
+            flags = hallie_eval.grade_record(clarification)
+            self.assertNotIn("route_mismatch", flags)
+            self.assertNotIn("outcome_mismatch", flags)
+
     def test_canonical_corpus_expands_to_exact_balanced_200_turns(self):
         turns = hallie_eval.load_corpus(
             ROOT / "tests" / "hallie_interaction_corpus.json"

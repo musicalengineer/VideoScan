@@ -917,6 +917,20 @@ extension HallieTurnExecutor {
         if let surnameAnswer = HallieSurnameReference.answer(question) {
             return .answer(surnameAnswer)
         }
+        if HalliePersonFactQuestion.isTreeCorrection(question) {
+            let retried = memory.lastExchange.flatMap {
+                HalliePersonFactQuestion.detect($0.question, isKnownPerson: isKnownPerson)
+            }
+            let payload = retried ?? .init(
+                people: memory.lastSubject.map { [$0] } ?? [], operation: .familyTree)
+            return .run(Intent(
+                originalQuestion: retried == nil ? question : (memory.lastExchange?.question ?? question),
+                ast: .graph(payload), playAfterAnswer: false))
+        }
+        if !playAfterAnswer,
+           let payload = HalliePersonFactQuestion.detect(question, isKnownPerson: isKnownPerson) {
+            return .run(Intent(originalQuestion: question, ast: .graph(payload)))
+        }
         // "what is Dad's name and his birthdate?" (live miss #19): a
         // PROPERTY of a known person whose canonical name is itself a
         // kinship word was read as "father of Dad". A possessive subject the
