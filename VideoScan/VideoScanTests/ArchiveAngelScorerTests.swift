@@ -47,32 +47,32 @@ struct ArchiveAngelFloorTests {
         #expect(ArchiveAngelScorer.verdict(.init(starRating: 3, mediaDisposition: .confirmedJunk)) == .rejected(.junk))
     }
 
-    @Test("unmarked clips need a full minute; a star, a confirmed person, a note or a user date lowers the floor to 30 s")
-    func unmarkedMinuteFloor() {
+    @Test("under one minute is out for everyone — a star, a person, a note or a date no longer lowers the floor")
+    func minuteFloorForAll() {
+        // Rick 2026-09-10: "usually there's a longer video of the whole
+        // scene … a 60 s or less clip is just a small edit I made to send
+        // to someone" — the long original is the archive candidate.
         #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 40)) == .rejected(.tooShort))
-        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 13, starRating: 3, confirmedPeople: ["Donna"])) == .rejected(.tooShort),
-                "Donna-2.mov, 13 s, starred and tagged — Rick: not worth archiving")
-        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 59.9, detectedPeople: ["Donna"])) == .rejected(.tooShort),
-                "a machine-only person tag is not a human mark")
-        for marked in [ArchiveAngelCandidate(durationSeconds: 40, starRating: 1),
-                       ArchiveAngelCandidate(durationSeconds: 40, confirmedPeople: ["Donna"]),
-                       ArchiveAngelCandidate(durationSeconds: 40, hasUserNotes: true),
-                       ArchiveAngelCandidate(durationSeconds: 40, userDate: "1994")] {
-            guard case .eligible = ArchiveAngelScorer.verdict(marked) else {
-                Issue.record("human-marked 40 s clip must stay eligible: \(marked)"); return
-            }
+        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 35, starRating: 3, confirmedPeople: ["Donna"])) == .rejected(.tooShort),
+                "a starred 35 s Cape edit — the whole-tape original is what we want")
+        for marked in [ArchiveAngelCandidate(durationSeconds: 59.9, starRating: 1),
+                       ArchiveAngelCandidate(durationSeconds: 59.9, confirmedPeople: ["Donna"]),
+                       ArchiveAngelCandidate(durationSeconds: 59.9, hasUserNotes: true),
+                       ArchiveAngelCandidate(durationSeconds: 59.9, userDate: "1994")] {
+            #expect(ArchiveAngelScorer.verdict(marked) == .rejected(.tooShort), "\(marked)")
         }
         guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 60)) else {
-            Issue.record("60 s unmarked is the floor, inclusive"); return
+            Issue.record("60 s is the floor, inclusive"); return
+        }
+        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 60, starRating: 3)) else {
+            Issue.record("60 s starred is the floor, inclusive"); return
         }
     }
 
-    @Test("a marked thirty-second clip clears the floor; 29.9 s does not")
-    func durationEdge() {
-        guard case .eligible = ArchiveAngelScorer.verdict(.init(durationSeconds: 30, starRating: 3)) else {
-            Issue.record("30 s is the marked floor, inclusive"); return
-        }
-        #expect(ArchiveAngelScorer.verdict(.init(durationSeconds: 29.9, starRating: 3)) == .rejected(.tooShort))
+    @Test("the rejection line tells the user why short clips are skipped")
+    func floorReasonText() {
+        #expect(ArchiveAngelRejection.tooShort.rawValue.contains("under 1 min"))
+        #expect(ArchiveAngelRejection.tooShort.rawValue.contains("longer original"))
     }
 }
 
@@ -148,13 +148,37 @@ struct ArchiveAngelEvidenceTests {
         #expect(lines(.init(hasEmbeddedDate: true)).1.contains("Dated by the camera"))
     }
 
-    @Test("duration sweet band is 2 min – 2 h")
-    func sweetBand() {
-        #expect(lines(.init(durationSeconds: 119)).0 == 0)
-        #expect(lines(.init(durationSeconds: 120)).0 == 10)
-        #expect(lines(.init(durationSeconds: 7200)).0 == 10)
-        #expect(lines(.init(durationSeconds: 7201)).0 == 0)
-        #expect(lines(.init(durationSeconds: 5400)).1 == ["1 h 30 min"])
+    @Test("duration tiers: nothing under 5 min, then scene 10 / long scene 25 / half tape 45 / whole tape 60")
+    func durationTiers() {
+        #expect(lines(.init(durationSeconds: 60)).0 == 0)
+        #expect(lines(.init(durationSeconds: 299)).0 == 0)
+        #expect(lines(.init(durationSeconds: 300)).0 == 10)
+        #expect(lines(.init(durationSeconds: 899)).0 == 10)
+        #expect(lines(.init(durationSeconds: 900)).0 == 25)
+        #expect(lines(.init(durationSeconds: 1799)).0 == 25)
+        #expect(lines(.init(durationSeconds: 1800)).0 == 45)
+        #expect(lines(.init(durationSeconds: 3599)).0 == 45)
+        #expect(lines(.init(durationSeconds: 3600)).0 == 60)
+        #expect(lines(.init(durationSeconds: 3 * 3600)).0 == 60, "no ceiling — a two-tape capture is still the whole thing")
+        #expect(lines(.init(durationSeconds: 5400)).1 == ["Runs 1 h 30 min — likely a whole tape"])
+        #expect(lines(.init(durationSeconds: 1800)).1 == ["Runs 30 min 0 s — likely a whole tape or half"])
+        #expect(lines(.init(durationSeconds: 120)).1.isEmpty, "a 2 min clip prints no length line")
+    }
+
+    @Test("the whole tape outranks the short edit cut from it, unless the edit carries a human mark")
+    func wholeTapeBeatsEdit() {
+        // The 1998 Cape tape (55 min, dated by consensus) vs the 3 min
+        // "Remember the Cape" edit Rick sent around (same date evidence).
+        let d = Date(timeIntervalSince1970: 900_000_000)
+        let tape = lines(.init(durationSeconds: 55 * 60, inferredRecordDate: d, inferredDateConfidence: 0.9)).0
+        let edit = lines(.init(durationSeconds: 3 * 60, inferredRecordDate: d, inferredDateConfidence: 0.9)).0
+        #expect(tape > edit)
+        #expect(tape - edit == 45)
+        // An unrated whole tape with a date reaches grade B on its own; the edit stays C.
+        #expect(ArchiveAngelGrade.from(score: tape) == .b)
+        #expect(ArchiveAngelGrade.from(score: edit) == .c)
+        // Stars are still the human's word: a ★★★ edit outranks an unrated tape.
+        #expect(lines(.init(durationSeconds: 3 * 60, starRating: 3)).0 > tape)
     }
 }
 
@@ -178,7 +202,7 @@ struct ArchiveAngelSelectionTests {
         #expect(sel.picks.map(\.score) == sel.picks.map(\.score).sorted(by: >))
     }
 
-    @Test("ties break oldest date first, then larger file, then name")
+    @Test("ties break oldest date first, then longer, then larger file, then name")
     func tieBreak() {
         let old = Date(timeIntervalSince1970: 600_000_000)
         let new = Date(timeIntervalSince1970: 900_000_000)
@@ -186,10 +210,12 @@ struct ArchiveAngelSelectionTests {
             ArchiveAngelCandidate(filename: "b.mov", sizeBytes: 10, inferredRecordDate: new, inferredDateConfidence: 0.9),
             ArchiveAngelCandidate(filename: "a.mov", sizeBytes: 10, inferredRecordDate: new, inferredDateConfidence: 0.9),
             ArchiveAngelCandidate(filename: "c.mov", sizeBytes: 99, inferredRecordDate: new, inferredDateConfidence: 0.9),
+            ArchiveAngelCandidate(filename: "e.mov", sizeBytes: 1, durationSeconds: 200, inferredRecordDate: new, inferredDateConfidence: 0.9),
             ArchiveAngelCandidate(filename: "d.mov", sizeBytes: 1, inferredRecordDate: old, inferredDateConfidence: 0.9),
         ]
-        let names = ArchiveAngelScorer.select(cands, count: 4).picks.map(\.candidate.filename)
-        #expect(names == ["d.mov", "c.mov", "a.mov", "b.mov"])
+        let names = ArchiveAngelScorer.select(cands, count: 5).picks.map(\.candidate.filename)
+        #expect(names == ["d.mov", "e.mov", "c.mov", "a.mov", "b.mov"],
+                "e is longer (same score — under 5 min earns nothing) so it beats the bigger file")
     }
 
     @Test("count 0 and empty input are safe")

@@ -33,3 +33,9 @@ Rick 9/09 12:20: "alpha version by 4:00pm"; AMPAS/LOC practice; FFV1 optional
 5. Buffer lives at `~/Movies/VideoScan Buffer/ArchiveAngel/batch-<stamp>/`; `plan.json` is the journal. Cancel keeps prepared rows reviewable; Discard removes the batch folder.
 Expect on a first run: the access copy step takes real time (HEVC VideoToolbox per file); verify-audio may say "already verified" for files Verify Audio has seen.
 - 16:5x main: 48ca9848 (1-min floor for unrated clips), 24b71a8f (step logging, 4 sinks), phase 2 MERGED (Archive Angel Assessment: sweep + sidecar + AAA grades + catalog filter + evidence-first picks; 50 tests/11 suites). codex reviews requested (#1246 alpha, #1247/#now phase 2) + owns acceptance suite (#1248/#1249).
+
+## 2026-09-10 — length bias + row actions (Rick's second-batch feedback)
+- Floor is a flat 60 s for every clip (the 30 s marked exception is gone); rejection line now says why ("short clips are usually edits of a longer original").
+- Duration tiers replace the flat 2 min–2 h band: 5–15 min +10, 15–30 +25, 30–60 +45, 60 min+ +60 (no ceiling). Tie-break: date, then longer, then larger, then name.
+- Show in Catalog / Show in Finder on every row of the review sheet and the chevron turndown (`ArchiveAngelRowActions`).
+- Old `evidence.json` sidecars fail to decode on the changed rejection text and are re-derived by the next sweep — by design ("fully re-derivable").

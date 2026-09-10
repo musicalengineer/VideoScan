@@ -72,20 +72,42 @@ point and live in one table so they can be tuned without touching logic.
 | Metadata richness (§3.4) | 0–40 | "Notes, 3 tags, captions, transcript" |
 | Date known (confidence ≥ 0.8 or embedded/human date) | 20 | "Dated 1994-11-24 (OCR consensus 0.92)" |
 | Date low-confidence | 5 | "Date uncertain (0.55)" |
-| Duration in the sweet band (2 min – 2 h) | 10 | "12 min 40 s" |
+| Duration tier — 5–15 min | 10 | "Runs 12 min 40 s — a full scene" |
+| Duration tier — 15–30 min | 25 | "Runs 22 min 10 s — a long scene" |
+| Duration tier — 30–60 min | 45 | "Runs 41 min 3 s — likely a whole tape or half" |
+| Duration tier — 60 min and up (no ceiling) | 60 | "Runs 1 h 2 min — likely a whole tape" |
 | Format at risk (`ArchiveReadiness.format == .atRisk`) | 15 | "At-risk format (MJPEG) — archive sooner" |
 | Only copy (no duplicate group, single volume) | 15 | "This is the only copy" |
 | On a retired/insurance/scratch volume (`VolumeRole` ≠ workspace/backup) | 10 | "Lives on MyBook (retired drive)" |
 | Audio verified problem | 0 (informational) | "Audio: channel imbalance — will balance" |
 
 **3.2 Hard floor (never a candidate, reported as rejected with the reason):**
-duration < 8 s; `mediaDisposition == .confirmedJunk` or `.junk`; `junkScore`
+duration < 60 s for EVERY clip, marked or not (rev 3, Rick 2026-09-10 — see
+§3.4); `mediaDisposition == .confirmedJunk` or `.junk`; `junkScore`
 ≥ 5 with `starRating == 0`; not playable / un-probeable; a paired MXF half
 (pair state computed) — the Combine result is the candidate, not the half;
 duplicate of a record already archived (same `contentHash` or confirmed dup
 group with an archived member). "Transitions and weird teeny bits" fall to
 the duration and junk lines; the rejected list shows the count per reason so
 Rick can see the floor working.
+
+**3.4 Length is the "whole thing" signal (rev 3, Rick 2026-09-10).** "Usually
+there's a longer video of the whole scene, say down the Cape, and a 60 s or
+less clip is just a small edit I made to send to someone as 'Remember the
+Cape in 1998'. We need to archive the originals and/or the long versions,
+not these tiny segments." So: (a) the floor is a flat 60 s — a star, a
+person, a note or a date no longer halves it (the 30 s marked exception let
+a starred 35 s edit through, exactly the clip whose long original should be
+picked instead); short clips STAY in the catalog, they are just not Angel
+candidates for now; (b) duration is tiered, not a flat sweet band — a whole
+DV tape is 60 min and a half tape 30, so anything that long is almost
+certainly the capture, and an unrated, dated whole tape reaches grade B on
+its own (60 + 20 + 5); (c) ties break longer-first after the date.
+Deferred heuristics if this is not enough: a short clip whose folder or tape
+name holds a much longer sibling is "an edit of X"; a name that looks like a
+share-out ("for Mom", "…clip", "…edit") is demoted. Every row in the review
+sheet and the chevron turndown has Show in Catalog / Show in Finder so the
+short/long judgement can be made by eye.
 
 **3.3 Play history.** The catalog has no play counter today. Two sources:
 

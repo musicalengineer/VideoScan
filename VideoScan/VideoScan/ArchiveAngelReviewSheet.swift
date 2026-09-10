@@ -123,6 +123,7 @@ struct ArchiveAngelReviewSheet: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Spacer()
+                        ArchiveAngelRowActions(entry: entry, beforeNavigate: { keepAndClose() })
                         scoreBadge(entry.score)
                     }
                     if let failure = entry.failure {

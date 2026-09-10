@@ -105,7 +105,7 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     case alreadyArchived = "Already in the archive"
     case duplicateArchived = "A copy is already in the archive"
     case volumeOffline = "Volume offline"
-    case tooShort = "Too short (under 1 min unrated, 30 s if you marked it)"
+    case tooShort = "Too short (under 1 min — short clips are usually edits of a longer original)"
     case junk = "Marked junk"
     case suspectedJunk = "Looks like junk (machine evidence, unrated)"
     case notPlayable = "Not playable / un-probeable"
@@ -148,20 +148,30 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     var richnessCap = 40
     var dateKnown = 20
     var dateLowConfidence = 5
-    var durationSweetBand = 10
     var formatAtRisk = 15
     var onlyCopy = 15
     var riskyVolume = 10
-    /// Floor for a clip with a HUMAN mark (star, confirmed person, note or
-    /// user date). Rick 2026-09-09 after the first batch: a 13 s starred
-    /// "Donna-2.mov" was picked — "not worth archiving" — so the marked
-    /// floor is 30 s, not 8. A mark halves the bar; it does not remove it.
-    var minimumDurationSeconds = 30.0
-    /// Floor for an UNMARKED clip — Rick 2026-09-09: "videos under 1 minute
-    /// should be excluded due to lack of content"; below this, with no
-    /// human signal, it is a transition or a tail.
-    var minimumDurationUnmarkedSeconds = 60.0
-    var sweetBandSeconds: ClosedRange<Double> = 120...7200
+    /// Duration tiers — Rick 2026-09-10: "usually there's a longer video of
+    /// the whole scene … and a 60 s or less clip is just a small edit I made
+    /// to send to someone. We need to archive the originals and/or the long
+    /// versions, not these tiny segments." A whole DV tape is 60 min, a
+    /// half tape 30; anything that long is almost certainly the capture,
+    /// not an edit, so length is the strongest machine signal of
+    /// "this is the whole thing".
+    var durationWholeTape = 60        // ≥ 60 min
+    var durationHalfTape = 45         // 30 – 60 min
+    var durationLongScene = 25        // 15 – 30 min
+    var durationScene = 10            // 5 – 15 min
+    var wholeTapeSeconds = 3600.0
+    var halfTapeSeconds = 1800.0
+    var longSceneSeconds = 900.0
+    var sceneSeconds = 300.0
+    /// Hard floor for EVERY clip, marked or not — Rick 2026-09-10: "exclude
+    /// short videos under 1 minute for now … we'll keep these short videos
+    /// in the catalog". (Earlier: 60 s unmarked / 30 s marked; the marked
+    /// exception let a starred 35 s Cape edit through, which is exactly
+    /// the kind of clip whose long original should be picked instead.)
+    var minimumDurationSeconds = 60.0
     var junkFloor = 5
     var dateConfidenceKnown: Float = 0.8
 
@@ -241,8 +251,8 @@ enum ArchiveAngelScorer {
             add(w.dateKnown, "Dated by the camera")
         }
 
-        if w.sweetBandSeconds.contains(c.durationSeconds) {
-            add(w.durationSweetBand, Self.durationText(c.durationSeconds))
+        if let (pts, tier) = Self.durationTier(c.durationSeconds, weights: w) {
+            add(pts, "Runs \(Self.durationText(c.durationSeconds)) — \(tier)")
         }
         if c.formatAtRisk { add(w.formatAtRisk, "At-risk format — archive sooner") }
         if c.isOnlyCopy { add(w.onlyCopy, "This is the only copy") }
@@ -271,10 +281,7 @@ enum ArchiveAngelScorer {
             return .notPlayable
         }
         if c.isPairedHalf { return .pairedHalf }
-        let humanMarked = c.starRating > 0 || !c.confirmedPeople.isEmpty || c.hasUserNotes
-            || !(c.userDate ?? "").isEmpty
-        let floor = humanMarked ? w.minimumDurationSeconds : w.minimumDurationUnmarkedSeconds
-        if c.durationSeconds < floor { return .tooShort }
+        if c.durationSeconds < w.minimumDurationSeconds { return .tooShort }
         switch c.mediaDisposition {
         case .confirmedJunk: return .junk
         case .suspectedJunk where c.starRating == 0: return .suspectedJunk
@@ -286,7 +293,8 @@ enum ArchiveAngelScorer {
     }
 
     /// Score every candidate, sort, take `count`. Tie-break: older date first
-    /// (older tape is at more risk), then larger file (more to lose), then name.
+    /// (older tape is at more risk), then longer (more likely the whole
+    /// capture), then larger file (more to lose), then name.
     static func select(_ candidates: [ArchiveAngelCandidate], count: Int,
                        weights w: ArchiveAngelWeights = .standard,
                        now: Date = Date()) -> ArchiveAngelSelection {
@@ -306,6 +314,9 @@ enum ArchiveAngelScorer {
             let ad = a.candidate.inferredRecordDate ?? .distantFuture
             let bd = b.candidate.inferredRecordDate ?? .distantFuture
             if ad != bd { return ad < bd }
+            if a.candidate.durationSeconds != b.candidate.durationSeconds {
+                return a.candidate.durationSeconds > b.candidate.durationSeconds
+            }
             if a.candidate.sizeBytes != b.candidate.sizeBytes { return a.candidate.sizeBytes > b.candidate.sizeBytes }
             return a.candidate.filename < b.candidate.filename
         }
@@ -314,6 +325,20 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
+
+    /// Points and the printed tier for a duration; nil under 5 min (a
+    /// short clip earns nothing for its length — it must make the list on
+    /// stars, people or dates alone, and the floor already removes < 1 min).
+    static func durationTier(_ seconds: Double,
+                             weights w: ArchiveAngelWeights = .standard) -> (points: Int, tier: String)? {
+        switch seconds {
+        case w.wholeTapeSeconds...: return (w.durationWholeTape, "likely a whole tape")
+        case w.halfTapeSeconds..<w.wholeTapeSeconds: return (w.durationHalfTape, "likely a whole tape or half")
+        case w.longSceneSeconds..<w.halfTapeSeconds: return (w.durationLongScene, "a long scene")
+        case w.sceneSeconds..<w.longSceneSeconds: return (w.durationScene, "a full scene")
+        default: return nil
+        }
+    }
 
     static let dayFormatter: DateFormatter = {
         let f = DateFormatter()

@@ -6,6 +6,9 @@
 // review sheet shows, compact: checkbox · file · proposed archive name ·
 // date · score · companion chips · first why-line. Renaming, dating and
 // notes stay in the sheet ("Review & edit…"); Promote works from here.
+// Each row has Show in Catalog / Show in Finder (Rick 2026-09-10: needed
+// to judge whether a short clip is worth archiving or an edit of a longer
+// original).
 
 import SwiftUI
 
@@ -104,6 +107,7 @@ struct ArchiveAngelReadyDisclosure: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Spacer()
+                    ArchiveAngelRowActions(entry: entry)
                     Text("\(entry.score)")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .padding(.horizontal, 7).padding(.vertical, 2)
