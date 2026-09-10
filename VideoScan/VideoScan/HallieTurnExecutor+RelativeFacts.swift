@@ -10,7 +10,11 @@ extension HallieTurnExecutor {
     ) async throws -> Result? {
         guard request.selectedIdentity == nil, payload.people.count == 1,
               [.biography, .birthPlace, .deathPlace, .birth, .death].contains(payload.operation),
-              let relative = RelativeFactSubject.parse(payload.people[0]) else { return nil }
+              let relative = RelativeFactSubject.parse(payload.people[0]),
+              let recognized = HalliePersonFactQuestion.detect(
+                request.intent.originalQuestion, isKnownPerson: { _ in false }),
+              recognized.operation == payload.operation,
+              recognized.people.first.flatMap(RelativeFactSubject.parse) == relative else { return nil }
 
         func unavailable(_ prose: String) -> Result {
             Result(route: .graph, outcome: .declined, prose: prose,

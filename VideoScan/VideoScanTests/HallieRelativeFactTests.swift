@@ -55,12 +55,15 @@ struct HallieRelativeFactTests {
 
     private func ask(_ phrase: String, operation: ArchivistQueryAST.Graph.Operation = .birthPlace,
                      context: HallieTurnExecutor.Context) async throws -> HallieTurnExecutor.Result {
-        let payload = ArchivistQueryAST.Graph(people: [phrase], operation: operation)
-        let request = HallieTurnExecutor.Request(intent: .init(
-            originalQuestion: operation == .biography ? "Tell me about \(phrase)" : "Where was \(phrase) born?",
-            ast: .graph(payload), playAfterAnswer: false))
-        return try #require(await HallieTurnExecutor.executeRelativeFact(
-            payload: payload, request: request, context: context, dependencies: .production))
+        let question = operation == .biography ? "Tell me about \(phrase)" : "Where was \(phrase) born?"
+        let pre = HallieTurnExecutor.preTranslation(
+            question: question, playAfterAnswer: false, memory: .init(),
+            isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: context) })
+        guard case .run(let intent) = pre else {
+            Issue.record("Relative fact escaped deterministic routing")
+            throw NSError(domain: "HallieRelativeFactTests", code: 1)
+        }
+        return try await HallieTurnExecutor.execute(.init(intent: intent), context: context)
     }
 
     @Test func grandmotherClarificationRetainsBirthplaceAndStableIdentity() async throws {
@@ -119,5 +122,14 @@ struct HallieRelativeFactTests {
         #expect(HallieTurnExecutor.RelativeFactSubject.parse("Ellen Ronan") == nil)
         #expect(HallieTurnExecutor.RelativeFactSubject.parse("my grandmother Ellen") == nil)
         #expect(HallieTurnExecutor.RelativeFactSubject.parse("my great gramma")?.relation == .greatGrandmother)
+    }
+
+    @Test func translatedWeddingDateCannotBecomeRelativeBirthDate() async throws {
+        let payload = ArchivistQueryAST.Graph(people: ["my grandmother"], operation: .birth)
+        let request = HallieTurnExecutor.Request(intent: .init(
+            originalQuestion: "When was my grandmother married?", ast: .graph(payload)))
+        let result = try await HallieTurnExecutor.executeRelativeFact(
+            payload: payload, request: request, context: context(), dependencies: .production)
+        #expect(result == nil)
     }
 }
