@@ -74,4 +74,18 @@ struct HalliePersonFactRoutingTests {
             }) == nil)
         }
     }
+
+    @Test func treeCorrectionVariantsAndEmptyHistoryStayInGraphDomain() {
+        for question in ["look in the family tree", "look it up in the family tree",
+                         "try the tree", "please check the family tree"] {
+            #expect(HalliePersonFactQuestion.isTreeCorrection(question))
+            let pre = HallieTurnExecutor.preTranslation(
+                question: question, playAfterAnswer: false, memory: .init(), isKnownPerson: { _ in false })
+            guard case .run(let intent) = pre, case .graph(let payload) = intent.ast else {
+                Issue.record("Tree request escaped graph routing"); continue
+            }
+            #expect(payload.operation == .familyTree)
+        }
+        #expect(!HalliePersonFactQuestion.isTreeCorrection("show videos of the family tree"))
+    }
 }

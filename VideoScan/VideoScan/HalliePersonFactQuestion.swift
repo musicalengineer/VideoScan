@@ -28,7 +28,7 @@ enum HalliePersonFactQuestion {
                 subject = String(subject[..<suffix.lowerBound])
             }
             let relative = subject.range(
-                of: #"^(?:my|our) (?:(?:maternal|paternal) )?(?:great[ -]){0,2}(?:grandmother|grandma|gramma|grandfather|grandpa)$"#,
+                of: #"^(?:my|our) (?:(?:maternal|paternal) )?(?:great[ -]){0,2}(?:grandmother|grandma|gramma|granny|grandfather|grandpa|grampa)$"#,
                 options: [.regularExpression, .caseInsensitive]) != nil
             guard relative || isKnownPerson(subject) else { return nil }
             return .init(people: [subject], operation: operation)
@@ -37,9 +37,11 @@ enum HalliePersonFactQuestion {
     }
 
     static func isTreeCorrection(_ question: String) -> Bool {
+        guard question.count <= 512 else { return false }
         let text = question.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
-        return ["look in the family tree", "look in family tree", "check the family tree",
-                "use the family tree", "look at the family tree"].contains(text)
+        return text.range(
+            of: #"^(?:(?:please|can you|could you) )?(?:look(?: it)?(?: up)?(?: in| at)?|check|use|try)(?: the)? (?:family )?tree$"#,
+            options: .regularExpression) != nil
     }
 }

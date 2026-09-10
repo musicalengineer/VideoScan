@@ -77,18 +77,24 @@ extension HallieTurnExecutor {
             }
         }
         let candidates = people.map { person in
+            let base = gedcomCandidate(person, graph: graph)
             let sides = sidesByID[person.id] ?? []
             let prefix = sides.isEmpty ? "" : sides.joined(separator: "/") + " "
                 + relative.relation.rawValue.replacingOccurrences(of: "-", with: " ") + ": "
-            return Candidate(id: .gedcomPersonID(person.id), canonicalName: person.name,
-                             label: prefix + ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+            let relationAliases = relative.relation == .grandmother ? sides.flatMap {
+                $0 == "maternal" ? ["mom's mother", "mother's mother"] : ["dad's mother", "father's mother"]
+            } : []
+            return Candidate(id: base.id, canonicalName: base.canonicalName,
+                             label: prefix + base.label,
+                             discriminators: base.discriminators + relationAliases.map(PersonResolver.normalize))
         }
         let pending = makeClarification(intent: request.intent, stage: .gedcomPerson,
                                         candidates: candidates, context: context)
         if candidates.count == 1 {
             return try await Self.continue(pending: pending, selecting: candidates[0].id,
                                            context: context, dependencies: dependencies)
-                .prefixingBasis(ownerNote.replacingOccurrences(of: "Basis: ", with: ""))
+                .prefixingBasis("Resolved relative: \(candidates[0].label). "
+                    + ownerNote.replacingOccurrences(of: "Basis: ", with: ""))
         }
         let hasBothSides = people.contains { sidesByID[$0.id] == ["maternal"] }
             && people.contains { sidesByID[$0.id] == ["paternal"] }
