@@ -53,6 +53,13 @@ struct ArchiveAngelReviewSheet: View {
             footer
         }
         .frame(minWidth: 820, idealWidth: 900, minHeight: 520, idealHeight: 640)
+        .onAppear {
+            // Rows follow catalog renames (Rick 2026-09-10): Show in
+            // Catalog → rename → back here shows the new name.
+            if !ArchiveAngelPromoter.followRenames(plan: &plan, model: model).isEmpty {
+                try? ArchiveAngelPlanStore.save(plan)
+            }
+        }
         .alert("Discard this batch?", isPresented: $showDiscardConfirm) {
             Button("Discard", role: .destructive) { discard() }
             Button("Keep", role: .cancel) {}
@@ -443,6 +450,7 @@ struct ArchiveAngelReviewSheet: View {
             set: { newStem in
                 let cleaned = newStem.replacingOccurrences(of: "/", with: "-")
                 plan.entries[idx].proposedName = ext.isEmpty ? cleaned : "\(cleaned).\(ext)"
+                plan.entries[idx].userEditedName = true
             })
     }
 

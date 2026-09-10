@@ -65,6 +65,12 @@ final class ArchiveAngelPromoter: ObservableObject {
         guard let rec = model.record(forID: entry.id) else {
             return "The catalog record is gone — was the file purged or the volume removed?"
         }
+        if !VideoScanModel.samePath(rec.fullPath, entry.sourcePath) {
+            // followRenames() runs first; reaching here means the file at
+            // the record's new path is not the one that was prepared.
+            return "The record now points at \(rec.fullPath) but that file is not the one prepared "
+                + "(size or content hash differ) — discard the row or prepare again"
+        }
         guard fm.fileExists(atPath: entry.sourcePath) else {
             return "Source file not found at \(entry.sourcePath)"
         }
@@ -83,9 +89,6 @@ final class ArchiveAngelPromoter: ObservableObject {
         if !entry.sourceContentHash.isEmpty, !rec.contentHash.isEmpty,
            entry.sourceContentHash != rec.contentHash {
             return "Content hash changed since preparation — the file was rewritten"
-        }
-        if !VideoScanModel.samePath(rec.fullPath, entry.sourcePath) {
-            return "The record now points at \(rec.fullPath), not the prepared path"
         }
         return nil
     }
@@ -121,6 +124,10 @@ final class ArchiveAngelPromoter: ObservableObject {
         var dates: [UUID: ArchiveDateHint] = [:]
         var roles: [UUID: String] = [:]
         var intended: [UUID: [UUID]] = [:]   // original → companion record ids
+
+        // A catalog rename since preparation is followed, not refused
+        // (Rick 2026-09-10); only a changed file is refused below.
+        for line in Self.followRenames(plan: &plan, model: model) { model.log(line) }
 
         for i in plan.entries.indices where plan.entries[i].selected && plan.entries[i].status == .ready {
             let entry = plan.entries[i]

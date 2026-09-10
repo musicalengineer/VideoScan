@@ -117,6 +117,54 @@ struct ArchiveAngelPromoterIdentityTests {
         #expect(ArchiveAngelPromoter.identityProblem(for: entry, model: model)?.contains("record is gone") == true)
     }
 
+    @Test("a catalog rename is FOLLOWED: new path, new filename, new proposed name; identity passes")
+    @MainActor
+    func renameFollowed() throws {
+        let (sandbox, model, rec, entry) = try fixture()
+        defer { sandbox.cleanup() }
+        var plan = ArchiveAngelPlan(batchDir: sandbox.root.appendingPathComponent("batch-test").path,
+                                    requestedCount: 10, makeLossless: false, entries: [entry])
+        _ = try model.renameRecord(rec, toBaseName: "Cape Cod 1998 whole tape")
+        #expect(rec.filename == "Cape Cod 1998 whole tape.mov")
+        // Before: the row still names the old file and would be refused.
+        #expect(ArchiveAngelPromoter.identityProblem(for: plan.entries[0], model: model) != nil)
+        let lines = ArchiveAngelPromoter.followRenames(plan: &plan, model: model)
+        #expect(lines.count == 1)
+        #expect(lines[0].contains("clip.mov → Cape Cod 1998 whole tape.mov"))
+        #expect(plan.entries[0].sourcePath == rec.fullPath)
+        #expect(plan.entries[0].filename == "Cape Cod 1998 whole tape.mov")
+        #expect(plan.entries[0].proposedName.contains("Cape-Cod-1998-whole-tape"), "naming rule hyphenates the new stem: \(plan.entries[0].proposedName)")
+        #expect(ArchiveAngelPromoter.identityProblem(for: plan.entries[0], model: model) == nil)
+        // Idempotent.
+        #expect(ArchiveAngelPromoter.followRenames(plan: &plan, model: model).isEmpty)
+    }
+
+    @Test("a name typed in the sheet survives a catalog rename; a moved-then-rewritten file is refused with the reason")
+    @MainActor
+    func renameEdgeCases() throws {
+        let (sandbox, model, rec, entry) = try fixture()
+        defer { sandbox.cleanup() }
+        var edited = entry
+        edited.proposedName = "Donna at the Cape.mov"
+        edited.userEditedName = true
+        var plan = ArchiveAngelPlan(batchDir: sandbox.root.appendingPathComponent("batch-test").path,
+                                    requestedCount: 10, makeLossless: false, entries: [edited])
+        _ = try model.renameRecord(rec, toBaseName: "renamed")
+        ArchiveAngelPromoter.followRenames(plan: &plan, model: model)
+        #expect(plan.entries[0].filename == "renamed.mov")
+        #expect(plan.entries[0].proposedName == "Donna at the Cape.mov", "the user's word stands")
+
+        // Rewritten after the move → not followed, identity names the new path.
+        try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: rec.fullPath), bytes: 1, seed: 9)
+        rec.sizeBytes = 1
+        var plan2 = ArchiveAngelPlan(batchDir: plan.batchDir, requestedCount: 10, makeLossless: false, entries: [entry])
+        let lines = ArchiveAngelPromoter.followRenames(plan: &plan2, model: model)
+        #expect(lines.first?.contains("not followed") == true)
+        #expect(plan2.entries[0].sourcePath == entry.sourcePath, "left alone")
+        let problem = ArchiveAngelPromoter.identityProblem(for: plan2.entries[0], model: model)
+        #expect(problem?.contains("now points at") == true && problem?.contains("not the one prepared") == true)
+    }
+
     @Test("SENSOR: promote refuses the changed row, keeps it out of the plan, and leaves the batch reviewable")
     @MainActor
     func promoteRefusesChangedRow() throws {

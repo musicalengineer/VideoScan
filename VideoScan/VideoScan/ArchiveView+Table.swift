@@ -61,7 +61,7 @@ extension ArchiveView {
                     // Re-seed the row's @State when the sheet edited the same
                     // batch (same id, different content) — cheap fingerprint.
                     .id("\(batch.id)-\(batch.status.rawValue)-" + batch.entries.map {
-                        "\($0.id)\($0.selected)\($0.proposedName)\($0.proposedDate ?? "")\($0.status.rawValue)"
+                        "\($0.id)\($0.selected)\($0.filename)\($0.proposedName)\($0.proposedDate ?? "")\($0.status.rawValue)"
                     }.joined().hashValue.description)
                 }
                 ArchiveNudgeView(

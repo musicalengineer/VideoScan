@@ -83,6 +83,10 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// drives the decade/year folder at Promote time.
         var proposedDate: String?
         var selected: Bool = true
+        /// True once the user typed an archive name in the sheet — a
+        /// catalog rename then leaves `proposedName` alone. Optional so
+        /// batches written before 2026-09-10 still decode (nil = false).
+        var userEditedName: Bool?
         var userNotes: String = ""
         var steps: [StepOutcome] = StepKind.allCases.map { StepOutcome(kind: $0) }
         var status: EntryStatus = .pending

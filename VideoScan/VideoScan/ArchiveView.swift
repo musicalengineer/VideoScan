@@ -120,10 +120,21 @@ struct ArchiveView: View {
     func refreshAngelBatches() {
         let root = ArchiveAngelPlanStore.defaultBufferRoot
         Task {
-            let ready = await Task.detached(priority: .utility) {
+            var ready = await Task.detached(priority: .utility) {
                 ArchiveAngelPlanStore.listBatches(bufferRoot: root).filter { $0.status == .ready }
             }.value
-            await MainActor.run { angelReadyBatches = ready }
+            await MainActor.run {
+                // Rows follow catalog renames (Rick 2026-09-10) — the row
+                // and the sheet show the record's current name.
+                for i in ready.indices {
+                    let lines = ArchiveAngelPromoter.followRenames(plan: &ready[i], model: model)
+                    if !lines.isEmpty {
+                        lines.forEach { model.log($0) }
+                        try? ArchiveAngelPlanStore.save(ready[i])
+                    }
+                }
+                angelReadyBatches = ready
+            }
         }
     }
 
