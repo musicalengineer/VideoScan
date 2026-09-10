@@ -27,6 +27,10 @@ struct ArchiveAngelReviewSheet: View {
     @State private var showDiscardConfirm = false
     @State private var showRejected = false
     @State private var expandedWhy: Set<UUID> = []
+    /// Rick 2026-09-10: a batch that mixed promoted, failed and ready rows
+    /// "was very busy, hard to tell which were already archived, rejected".
+    /// Only the rows still waiting on a decision show by default.
+    @State private var showSettled = false
 
     init(plan: ArchiveAngelPlan) {
         _plan = State(initialValue: plan)
@@ -35,6 +39,8 @@ struct ArchiveAngelReviewSheet: View {
     private var isPromoting: Bool { plan.status == .promoting }
     private var isDone: Bool { plan.status == .promoted }
     private var readyEntries: [ArchiveAngelPlan.Entry] { plan.entries.filter { $0.status == .ready } }
+    private var settledEntries: [ArchiveAngelPlan.Entry] { plan.entries.filter { $0.status != .ready } }
+    private var visibleEntries: [ArchiveAngelPlan.Entry] { showSettled ? plan.entries : readyEntries }
     private var selectedCount: Int { plan.selectedEntries.count }
     private var deselectedCount: Int { readyEntries.count - selectedCount }
 
@@ -84,9 +90,12 @@ struct ArchiveAngelReviewSheet: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(plan.entries) { entry in
+                ForEach(visibleEntries) { entry in
                     row(entry)
                     Divider()
+                }
+                if !settledEntries.isEmpty {
+                    settledLine
                 }
                 if plan.entries.isEmpty {
                     Text("The Angel found nothing to recommend. \(rejectedLine)")
@@ -151,6 +160,31 @@ struct ArchiveAngelReviewSheet: View {
         .padding(.vertical, 10)
         .background(entry.status == .failed ? Color.red.opacity(0.06) : Color.clear)
         .opacity(entry.status == .ready && !entry.selected ? 0.55 : 1)
+    }
+
+    /// "5 promoted · 1 failed — Show" under the ready rows.
+    private var settledLine: some View {
+        let promoted = settledEntries.filter { $0.status == .promoted }.count
+        let failed = settledEntries.filter { $0.status == .failed }.count
+        let other = settledEntries.count - promoted - failed
+        var parts: [String] = []
+        if promoted > 0 { parts.append("\(promoted) already promoted") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        if other > 0 { parts.append("\(other) still preparing") }
+        return HStack(spacing: 6) {
+            Image(systemName: "checkmark.seal")
+                .foregroundStyle(.secondary)
+            Text(parts.joined(separator: " · "))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Button(showSettled ? "Hide" : "Show") { showSettled.toggle() }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .accessibilityIdentifier("archiveAngel.showSettled")
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     private func scoreBadge(_ score: Int) -> some View {
