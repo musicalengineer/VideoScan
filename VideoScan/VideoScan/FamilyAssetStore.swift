@@ -379,10 +379,19 @@ enum FamilyAssetImageValidator {
 
     /// Container-level "is this file whole?" for the formats the store
     /// admits. Unknown magic is NOT complete — the extension allow-list is
-    /// jpg/jpeg/png/heic, and anything else is refused by content too.
+    /// jpg/jpeg/png/heic/tif/tiff, and anything else is refused by content
+    /// too. TIFF (2026-09-10, Rick's `PaOConnorBritishArmy2x scale.tif`)
+    /// has no trailer: its IFD chain is offset-addressed, so the only
+    /// whole-file proof is that ImageIO can read the directory — which
+    /// `isVerifiedImageData` checks right after this (≥ 1 image + a
+    /// decoded thumbnail). Here a TIFF passes on its byte-order header.
     static func isStructurallyComplete(_ data: Data) -> Bool {
         guard data.count >= 12 else { return false }
         let head = [UInt8](data.prefix(12))
+        // TIFF: "II*\0" (little-endian) or "MM\0*" (big-endian).
+        if head.starts(with: [0x49, 0x49, 0x2A, 0x00]) || head.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) {
+            return true
+        }
         // PNG: signature, and the last chunk is IEND + its fixed CRC.
         if head.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
             return [UInt8](data.suffix(8)) == [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]
@@ -643,8 +652,159 @@ struct FamilyAssetStore {
         if let chosen = chosenPhoto(for: person) { add([chosen.url]) }
         if let folder = familySearchIDFolder(for: person) { add(verifiedImages(in: folder)) }
         if let folder = resolvedPersonFolder(for: person) { add(verifiedImages(in: folder)) }
+        // Every OTHER folder the read-side rule attributes to this person
+        // (an alias-named folder, an ID-suffixed twin; 2026-09-10). The
+        // resolved folder stays first so the portrait order is unchanged.
+        for folder in aliasPersonFolders(for: person) { add(verifiedImages(in: folder)) }
         let all = own + groupPhotoURLs(for: person).filter { !seen.contains($0) }
         return all.filter { !isPhotoExcluded($0, for: person) }
+    }
+
+    // MARK: Documents + the person's folders (2026-09-10: "show all photos of X")
+
+    /// Papers filed beside a person's photos — a birth certificate, a
+    /// letter, a scanned obituary. Same folders `photoURLs` reads (chosen /
+    /// FamilySearch-ID folder, name and alias folders, group folders); a
+    /// regular, non-symlink file with one of `allowedDocumentExtensions`;
+    /// the store's own sidecars excluded. Presentation only, never
+    /// evidence — the same rule as every photo here. Nothing is opened:
+    /// bytes are read only when a client displays the file.
+    func documentURLs(for person: GedcomFamilyGraph.Person) -> [URL] {
+        documentURLs(for: FamilyAssetPerson(person))
+    }
+
+    func documentURLs(for person: FamilyAssetPerson) -> [URL] {
+        guard access != .unavailable else { return [] }
+        var out: [URL] = []
+        var seen: Set<URL> = []
+        let folders = personFolders(for: person)
+            + safePersonFolders().filter { groupFolderMatches($0.lastPathComponent, person: person) }
+        for folder in folders {
+            for url in documents(in: folder) where seen.insert(url).inserted { out.append(url) }
+        }
+        return out
+    }
+
+    /// The folders under `People/` that are THIS person's, in the order
+    /// their contents are listed: the FamilySearch-ID folder, the resolved
+    /// name/pointer folder, then any alias-named or ID-suffixed twin. Group
+    /// folders are not included — they are several people's. Read side
+    /// only; `folderForPhotoRequest` (the write side) still insists on ONE
+    /// unambiguous folder or refuses.
+    func personFolders(for person: FamilyAssetPerson) -> [URL] {
+        guard access != .unavailable else { return [] }
+        var out: [URL] = []
+        var seen: Set<URL> = []
+        func add(_ folder: URL?) {
+            guard let folder, isSafeDirectory(folder), seen.insert(folder).inserted else { return }
+            out.append(folder)
+        }
+        add(familySearchIDFolder(for: person))
+        add(resolvedPersonFolder(for: person))
+        for folder in aliasPersonFolders(for: person) { add(folder) }
+        return out
+    }
+
+    /// Alias spellings the identity directory knows for this tree record
+    /// (CyberBrain / People-tab aliases). Empty without a directory, or
+    /// for a person the directory does not know.
+    func aliasNames(for person: FamilyAssetPerson) -> [String] {
+        identity?.member(person.gedcomID)?.aliasNames ?? []
+    }
+
+    /// The read-side rule, applied to the live folder list.
+    private func aliasPersonFolders(for person: FamilyAssetPerson) -> [URL] {
+        let folders = safePersonFolders()
+        let byName = Dictionary(folders.map { ($0.lastPathComponent, $0) },
+                                uniquingKeysWith: { first, _ in first })
+        return Self.readFolderNames(
+            for: person, aliases: aliasNames(for: person),
+            among: folders.map(\.lastPathComponent))
+            .compactMap { byName[$0] }
+    }
+
+    /// PURE read-side folder rule (unit-tested without a disk). Every
+    /// folder name whose identity is this person's:
+    ///   - a folder keyed to the person's GEDCOM pointer (`_I42` suffix or
+    ///     a bare `I42` folder) — always, and then ONLY those;
+    ///   - otherwise a folder whose name key equals the person's name OR one of the
+    ///     given `aliases` — unless it carries a DIFFERENT GEDCOM pointer,
+    ///     or a birth year that disagrees with the person's, or the name
+    ///     is shared by several bare (no year, no pointer) folders, which
+    ///     is an ambiguity the write side would also refuse.
+    /// A person with no birth year takes year-bearing folders only when
+    /// they all agree on one year (two `Mary_OConnor_b…` folders with
+    /// different years are two people; neither is chosen). Order is the
+    /// input order (callers pass the stable folder order).
+    static func readFolderNames(for person: FamilyAssetPerson,
+                                aliases: [String],
+                                among folderNames: [String]) -> [String] {
+        let rawID = person.gedcomID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let wantedID = rawID.isEmpty || safeGEDCOMIDComponent(rawID).isEmpty ? "" : gedcomIDKey(rawID)
+        let wantedKeys: [String] = ([person.name] + aliases)
+            .map(personNameKey).filter { !$0.isEmpty }
+        var out: [String] = []
+        var taken: Set<String> = []
+        func take(_ name: String) {
+            if taken.insert(name).inserted { out.append(name) }
+        }
+        let identities = folderNames.map { ($0, folderIdentity($0)) }
+        if !wantedID.isEmpty {
+            for (name, identity) in identities
+            where gedcomIDKey(name) == wantedID || identity.gedcomIDKey == wantedID {
+                take(name)
+            }
+            // GEDCOM identity WINS (FamilyAssetStoreTests pin: "the name
+            // is only a fallback"): once a pointer-keyed folder exists for
+            // this record, a bare same-name folder may be another person
+            // and is not read. Name and alias folders apply only when no
+            // folder is keyed to the pointer — Rick's real case
+            // (Christopher_OConnor + Christopher_Dennis_OConnor, neither
+            // suffixed).
+            if !out.isEmpty { return out }
+        }
+        for key in wantedKeys {
+            let matches = identities.filter { _, identity in
+                guard identity.nameKey == key else { return false }
+                // A folder pinned to a record by suffix is that record's:
+                // ours was taken above; another's is never ours, whatever
+                // its name says; and with no pointer on the person it is
+                // unknowable and skipped.
+                if identity.gedcomIDKey != nil { return false }
+                if let year = identity.birthYear, let wanted = person.birthYear, year != wanted { return false }
+                return true
+            }
+            let bare = matches.filter { $0.1.birthYear == nil }
+            let dated = matches.filter { $0.1.birthYear != nil }
+            if bare.count == 1 { take(bare[0].0) }
+            if person.birthYear != nil || Set(dated.compactMap { $0.1.birthYear }).count <= 1 {
+                for (name, _) in dated { take(name) }
+            }
+        }
+        return out
+    }
+
+    /// Regular, non-symlink document files directly inside `directory`,
+    /// stable order. Sidecars (`chosen-photo.json`, `*.notof.json`) are
+    /// `.json`, outside the allow-list — excluded by name as well so a
+    /// future allow-list edit cannot leak them.
+    private func documents(in directory: URL) -> [URL] {
+        guard isSafeDirectory(directory) else { return [] }
+        return safeChildren(of: directory)
+            .filter(isDocumentFile)
+            .sorted(by: Self.stableURLOrder)
+    }
+
+    private func isDocumentFile(_ url: URL) -> Bool {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        let name = fresh.lastPathComponent
+        guard Self.allowedDocumentExtensions.contains(fresh.pathExtension.lowercased()),
+              name != Self.chosenPhotoSidecarName,
+              !name.hasSuffix(Self.exclusionSidecarSuffix),
+              let values = try? fresh.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true
+        else { return false }
+        return true
     }
 
     /// GEDCOM IDs that People/ folder names are keyed to (`_I42` suffix or a
@@ -1543,6 +1703,13 @@ struct FamilyAssetStore {
     }
 
     fileprivate static let allowedImageExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "heic",
+        "jpg", "jpeg", "png", "heic", "tif", "tiff",
+    ]
+
+    /// What counts as a DOCUMENT in a person's folder (2026-09-10): the
+    /// papers a family keeps — PDF scans, plain and rich text, Word.
+    /// Images are photos, never documents; anything else is invisible.
+    static let allowedDocumentExtensions: Set<String> = [
+        "pdf", "txt", "rtf", "md", "doc", "docx",
     ]
 }

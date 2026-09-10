@@ -1093,6 +1093,33 @@ enum HallieAppTurnCoordinator {
                         appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error)")
                     }
                 }
+                // "I have 3 photos and 1 document of her in the archive —
+                // want to see them all?" (HallieGalleryOffer, 2026-09-10):
+                // one sentence and a one-candidate offer whose "yes"
+                // resumes the gallery ask. Only for an answered biography
+                // about ONE person with two or more files.
+                if result.outcome == .answered, result.clarification == nil {
+                    let graphMatches = context.graph?.people.values.filter {
+                        $0.name.compare(
+                            canonicalName,
+                            options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    } ?? []
+                    if let subject = HallieGalleryOffer.subject(
+                        canonicalName: canonicalName, graphMatches: graphMatches,
+                        profiles: context.profiles) {
+                        let assets = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+                        let gallery: ArchivistProfileGallery?
+                        if case .profile = subject {
+                            gallery = HallieTurnExecutor.Dependencies.production
+                                .resolveProfileGallery(canonicalName)
+                        } else {
+                            gallery = nil
+                        }
+                        result = HallieGalleryOffer.apply(
+                            to: result, subject: subject, store: assets,
+                            profileGallery: gallery, context: context)
+                    }
+                }
             } else {
                 photo = nil
             }

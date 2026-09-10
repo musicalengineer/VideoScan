@@ -111,6 +111,9 @@ struct ArchivistMessage: Identifiable, Equatable {
             case openPeopleTab
             /// Open one of the main app tabs through selectedTab.
             case openAppDestination(HallieAppNavigation.Destination)
+            /// Reveal a person's People/ folder in Finder (gallery answer,
+            /// 2026-09-10).
+            case revealFolder(URL)
             /// Remote viewer: continue the MASTER's pending which-one by
             /// stable identity (HallieRemoteClient.select).
             case remoteSelect(HallieTurnExecutor.CandidateID)
@@ -896,6 +899,8 @@ struct ArchivistChatWindow: View {
             MainWindowHelper.shared.openMainWindow()
             messages.append(ArchivistMessage(
                 role: .assistant, text: "Opening the People tab."))
+        case .revealFolder(let url):
+            HallieAttachmentOpener.reveal(url)
         case .openAppDestination(let destination):
             HallieAppNavigation.accept(destination) {
                 MainWindowHelper.shared.openMainWindow()
@@ -1070,13 +1075,12 @@ struct ArchivistChatWindow: View {
                     preface: "I need the name so I don't guess. ")
                 return
             }
-            if ["cancel", "never mind", "nevermind", "no"]
-                .contains(folded) {
+            if HallieClarificationDecline.matches(text) {
                 pendingHallieClarification = nil
                 messages.append(ArchivistMessage(role: .user, text: text))
                 messages.append(ArchivistMessage(
                     role: .assistant,
-                    text: "Okay — I won't guess which person you meant."))
+                    text: HallieClarificationDecline.reply(for: pending.clarification.stage)))
                 return
             }
             // A complaint about the list itself ("you presented me a list of
@@ -1345,6 +1349,8 @@ struct ArchivistChatWindow: View {
                 return ArchivistMessage.Chip(
                     label: label,
                     action: .openFamilyTreePerson(personID: id, personName: name))
+            case .revealFolder(let url, _):
+                return ArchivistMessage.Chip(label: label, action: .revealFolder(url))
             }
         }
         // The variations picker: one chip per way to say the name (click =

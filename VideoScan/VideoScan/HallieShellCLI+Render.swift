@@ -210,6 +210,8 @@ extension HallieShellCLI {
                     output("offer: open the \(destination.title) tab (app only)")
                 case .showPossibleDuplicate(_, let name):
                     output("offer: show the possible duplicate parent in the Family Tree, focused on \(name) (app only)")
+                case .revealFolder(let url, _):
+                    output("offer: show \(url.lastPathComponent) in Finder (app only)")
                 }
             }
         }

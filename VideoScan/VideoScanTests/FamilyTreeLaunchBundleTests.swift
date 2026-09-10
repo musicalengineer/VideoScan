@@ -71,7 +71,8 @@ struct FamilyTreeLaunchBundleTests {
                                                        givenTokens: draft.given,
                                                        surnameTokens: draft.surnames,
                                                        suffix: draft.suffix,
-                                                       aliasTokens: nick)
+                                                       aliasTokens: nick,
+                                                       aliasNames: aliases[draft.person.id] ?? [])
         }.sorted { $0.gedcomID < $1.gedcomID }
         return FamilyAssetIdentityDirectory(members: members, ownerGedcomID: ownerGedcomID,
                                             ownerTokens: ownerGedcomID == nil ? [] : ownerNick)

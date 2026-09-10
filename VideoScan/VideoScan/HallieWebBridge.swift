@@ -377,6 +377,9 @@ final class HallieWebBridge {
                 break
             case .showPossibleDuplicate(_, let name):
                 chips.append(["label": "Tell me about \(name)", "ask": "tell me about \(name)"])
+            case .revealFolder:
+                // Finder is Mac-only; the web client gets the prose alone.
+                break
             }
         }
         // The variations picker: the web client has no phoneme playback,
@@ -673,8 +676,32 @@ extension HallieWebBridge {
         case .photoRequest(let name, let folder):
             _ = folder // The remote client must never receive filesystem paths.
             return ["kind": "photoRequest", "name": name]
+        case .document(let d):
+            // Same token scheme as an image: the page sees a token, never
+            // the path; the endpoint serves the bytes with the right type.
+            return ["kind": "document", "name": d.personName, "title": d.title, "ext": d.kind,
+                    "url": "/api/attachment/" + attachmentToken(for: d.fileURL)]
         }
     }
+
+    /// MIME type for a document token by extension; nil for anything the
+    /// gallery does not list (`FamilyAssetStore.allowedDocumentExtensions`).
+    static func documentContentType(forExtension ext: String) -> String? {
+        switch ext.lowercased() {
+        case "pdf": return "application/pdf"
+        case "txt": return "text/plain; charset=utf-8"
+        case "md": return "text/markdown; charset=utf-8"
+        case "rtf": return "application/rtf"
+        case "doc": return "application/msword"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        default: return nil
+        }
+    }
+
+    /// Largest document the endpoint will serve (48 MB, the same bound the
+    /// store puts on a photo import). Worst-case memory: one 48 MB buffer
+    /// per in-flight request; the file is read only after its size passes.
+    static let maxDocumentBytes = 48 << 20
 
     func attachmentToken(for url: URL) -> String {
         if let existing = attachmentTokens.first(where: {
@@ -705,6 +732,20 @@ extension HallieWebBridge {
             }
         }
         let url = capability.url
+        // A document token (2026-09-10): the file bytes, typed by
+        // extension, bounded. Images keep the validated JPEG thumbnail.
+        if let contentType = Self.documentContentType(forExtension: url.pathExtension) {
+            let data = await Task.detached(priority: .utility) {
+                Self.documentData(url)
+            }.value
+            guard let data else { return .text(404, "no document") }
+            return HallieHTTPResponse(
+                status: 200, reason: "OK",
+                headers: [("Content-Type", contentType),
+                          ("Content-Length", String(data.count)),
+                          ("Cache-Control", "private, max-age=3600")],
+                body: .data(data))
+        }
         let data = await Task.detached(priority: .utility) {
             FamilyAssetImageValidator.thumbnailJPEGData(url)
         }.value
@@ -715,6 +756,21 @@ extension HallieWebBridge {
                       ("Content-Length", String(data.count)),
                       ("Cache-Control", "private, max-age=3600")],
             body: .data(data))
+    }
+
+    /// Re-checked at serve time, like an image: regular, non-symlink,
+    /// allow-listed extension, within the size cap. Nil otherwise.
+    nonisolated static func documentData(_ url: URL) -> Data? {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        guard FamilyAssetStore.allowedDocumentExtensions.contains(fresh.pathExtension.lowercased()),
+              let values = try? fresh.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size <= maxDocumentBytes,
+              let data = try? Data(contentsOf: fresh, options: .mappedIfSafe),
+              data.count <= maxDocumentBytes
+        else { return nil }
+        return data
     }
 
     private static func isDescendant(_ candidate: URL, of root: URL) -> Bool {

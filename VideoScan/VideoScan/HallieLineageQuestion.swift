@@ -217,8 +217,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // 1651", "who died in 1737" (HallieNameQualifier; TEMPORARY, see
         // that file); nothing else with digits, so "photos of donna from
         // 1992" stays a media search.
-        if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image)s?\s+of\s+([a-z][a-z .'-]+?(?:\s*\([^)]*\)|\s+(?:who\s+)?(?:born|b\.|died|d\.)\s+(?:in\s+)?\d{4})?)\s*$/),
-           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any|there)\b/) != nil,
+        // Photos AND papers (2026-09-10, "show all photos of X", "show
+        // documents of X", "show me pics of X"): the same gallery answer
+        // lists both, so every noun routes to `.personPhoto`. "all" /
+        // "every" are lead words too ("all photos of X"); a bare "photos
+        // of donna" still is not (a catalog search, pinned by test).
+        if let m = lower.firstMatch(of: /\b(?:photo|picture|portrait|image|pic|document|doc|paper)s?\s+of\s+([a-z][a-z .'-]+?(?:\s*\([^)]*\)|\s+(?:who\s+)?(?:born|b\.|died|d\.)\s+(?:in\s+)?\d{4})?)\s*$/),
+           lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any|there|all|every)\b/) != nil,
            // "photos of me and donna" is a catalog search for two people,
            // never a portrait of a person named "Me And Donna".
            m.1.firstMatch(of: /\b(?:and|with)\b|&|,/) == nil {
@@ -226,6 +231,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
             // is a lead word too.
             let name = mediaAskPerson(in: String(m.1))
             return .personPhoto(person: name)
+        }
+        // "what documents do we have for X" / "what photos do you have of X".
+        if let m = lower.firstMatch(of: /\bwhat\s+(?:photo|picture|pic|document|doc|paper)s?\s+(?:do|have)\s+(?:we|you|i)\s+(?:have|got)\s+(?:for|of|on|about)\s+([a-z][a-z .'-]+?)\s*\??\s*$/),
+           m.1.firstMatch(of: /\b(?:and|with)\b|&|,/) == nil {
+            return .personPhoto(person: mediaAskPerson(in: String(m.1)))
         }
         // "show me his photo" / "her picture" — the pronoun is the person;
         // preTranslation resolves it from conversation memory.

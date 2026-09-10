@@ -28,6 +28,10 @@ enum HallieAttachment: Sendable, Equatable {
     case tree(HallieTreeCard)
     /// "Do you have a photo of X? Put it here." — with the folder to reveal.
     case photoRequest(personName: String, folderURL: URL)
+    /// A paper filed in the person's folder — a birth certificate, a
+    /// letter, a scanned obituary (2026-09-10, "show all photos of X").
+    /// Opened by the client; never read by Hallie.
+    case document(HallieDocumentAttachment)
 
     /// Short kind tag for logs / JSON.
     var kind: String {
@@ -37,7 +41,33 @@ enum HallieAttachment: Sendable, Equatable {
         case .lineage: return "lineage"
         case .tree: return "tree"
         case .photoRequest: return "photoRequest"
+        case .document: return "document"
         }
+    }
+}
+
+/// One document beside a gallery answer. `title` is the filename stem with
+/// underscores as spaces ("CIA_recruitment_letter.pdf" → "CIA recruitment
+/// letter"); `kind` is the lowercased extension the renderers pick an
+/// icon / MIME type by.
+struct HallieDocumentAttachment: Sendable, Equatable {
+    let personName: String
+    let fileURL: URL
+    let title: String
+    let kind: String
+
+    init(personName: String, fileURL: URL) {
+        self.personName = personName
+        self.fileURL = fileURL
+        self.title = Self.title(for: fileURL)
+        self.kind = fileURL.pathExtension.lowercased()
+    }
+
+    static func title(for url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        return stem.isEmpty ? url.lastPathComponent : stem
     }
 }
 

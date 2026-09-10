@@ -10,19 +10,159 @@ import SwiftUI
 struct HallieAttachmentsView: View {
     let attachments: [HallieAttachment]
 
+    /// A gallery answer ("show all photos of X", 2026-09-10) carries many
+    /// photos; three or more render as a grid of thumbnails instead of a
+    /// column of 260 pt cards. Everything else keeps the column.
+    static let gridThreshold = 3
+
+    private var photos: [HalliePhotoAttachment] {
+        attachments.compactMap { if case .photo(let p) = $0 { return p } else { return nil } }
+    }
+
     var body: some View {
+        let photos = self.photos
+        let asGrid = photos.count >= Self.gridThreshold
         VStack(alignment: .leading, spacing: 10) {
+            if asGrid { HalliePhotoGrid(photos: photos) }
             ForEach(Array(attachments.enumerated()), id: \.offset) { _, a in
                 switch a {
-                case .photo(let p): HallieImageCard(url: p.fileURL, caption: p.caption ?? p.personName, maxHeight: 260)
+                case .photo(let p):
+                    if !asGrid {
+                        HallieImageCard(url: p.fileURL, caption: p.caption ?? p.personName, maxHeight: 260)
+                    }
                 case .crest(let surname, let url): HallieImageCard(url: url, caption: "Saved \(surname) crest reference", maxHeight: 160)
                 case .lineage(let card): HallieLineageCardView(card: card)
                 case .tree(let card): HallieTreeCardView(card: card)
                 case .photoRequest(let name, let folder): HalliePhotoRequestView(name: name, folder: folder)
+                case .document(let d): HallieDocumentCard(document: d)
                 }
             }
         }
         .padding(.top, 4)
+    }
+}
+
+/// Adaptive grid of ~160 pt thumbnails with captions, at most 520 pt wide
+/// (the card width). Each cell decodes a bounded 320 px thumbnail off-main
+/// — 24 cells (the gallery cap) ≈ 24 × 320² × 4 B ≈ 10 MB worst case.
+struct HalliePhotoGrid: View {
+    let photos: [HalliePhotoAttachment]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 170), spacing: 10)],
+                  alignment: .leading, spacing: 12) {
+            ForEach(Array(photos.enumerated()), id: \.offset) { _, p in
+                HalliePhotoGridCell(url: p.fileURL, caption: p.caption ?? p.personName)
+            }
+        }
+        .modifier(CardChrome())
+    }
+}
+
+private struct HalliePhotoGridCell: View {
+    let url: URL
+    let caption: String
+    @State private var image: NSImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Group {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Color.secondary.opacity(0.08)
+                        .overlay { ProgressView().controlSize(.small) }
+                }
+            }
+            .frame(width: 160, height: 160)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+            .onTapGesture { HallieAttachmentOpener.open(url) }
+            .onHover { HallieAttachmentOpener.hover($0) }
+            Text(caption).font(.system(size: 12)).foregroundStyle(.secondary)
+                .lineLimit(2).frame(width: 160, alignment: .leading)
+        }
+        .accessibilityLabel(caption)
+        .task(id: url) {
+            guard image == nil else { return }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                FamilyAssetImageValidator.thumbnail(url, maxPixelSize: 320)
+            }.value
+            if !Task.isCancelled, let decoded {
+                image = NSImage(cgImage: decoded, size: .zero)
+            }
+        }
+    }
+}
+
+/// Click-to-open for photo cards and grid cells (2026-09-10): the file is
+/// re-verified as a regular image at the moment of the click, then handed
+/// to the default app — never a path from a model, always a URL the
+/// executor attached.
+enum HallieAttachmentOpener {
+    @MainActor static func open(_ url: URL) {
+        guard let verified = FamilyAssetImageValidator.revalidatedURL(url) else { return }
+        NSWorkspace.shared.open(verified)
+    }
+
+    /// A document is not an image: regular, non-symlink, allow-listed
+    /// extension is the whole check — the bytes are the viewer app's.
+    @MainActor static func openDocument(_ url: URL) {
+        guard let verified = revalidatedDocumentURL(url) else { return }
+        NSWorkspace.shared.open(verified)
+    }
+
+    @MainActor static func reveal(_ url: URL) {
+        let fresh = URL(fileURLWithPath: url.path)
+        guard let values = try? fresh.resourceValues(forKeys: [.isSymbolicLinkKey]),
+              values.isSymbolicLink != true else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([fresh])
+    }
+
+    static func revalidatedDocumentURL(_ url: URL) -> URL? {
+        let fresh = URL(fileURLWithPath: url.path, isDirectory: false)
+        guard FamilyAssetStore.allowedDocumentExtensions.contains(fresh.pathExtension.lowercased()),
+              let values = try? fresh.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
+        return fresh
+    }
+
+    @MainActor static func hover(_ inside: Bool) {
+        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+    }
+}
+
+/// A paper in the person's folder: icon by extension, the title, Open and
+/// Reveal in Finder. The file is never read here.
+struct HallieDocumentCard: View {
+    let document: HallieDocumentAttachment
+
+    private var symbol: String {
+        switch document.kind {
+        case "pdf": return "doc.richtext"
+        case "doc", "docx": return "doc.text"
+        case "rtf": return "doc.append"
+        case "md", "txt": return "doc.plaintext"
+        default: return "doc"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(document.title).font(.system(size: 15, weight: .medium))
+                Text("\(document.kind.uppercased()) · \(document.personName)")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("Open") { HallieAttachmentOpener.openDocument(document.fileURL) }
+                .controlSize(.small)
+            Button("Reveal in Finder") { HallieAttachmentOpener.reveal(document.fileURL) }
+                .controlSize(.small)
+        }
+        .modifier(CardChrome())
+        .accessibilityLabel("Document: \(document.title)")
     }
 }
 
@@ -47,6 +187,11 @@ struct HallieImageCard: View {
                 Image(nsImage: image).resizable().scaledToFit()
                     .frame(maxHeight: maxHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
+                    // Click opens the original in its default app
+                    // (2026-09-10); the hand cursor says it is clickable.
+                    .contentShape(Rectangle())
+                    .onTapGesture { HallieAttachmentOpener.open(url) }
+                    .onHover { HallieAttachmentOpener.hover($0) }
             } else {
                 Color.secondary.opacity(0.08).frame(height: 120)
                     .overlay { ProgressView().controlSize(.small) }

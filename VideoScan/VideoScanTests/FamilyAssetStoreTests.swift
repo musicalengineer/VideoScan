@@ -490,13 +490,19 @@ struct FamilyAssetStoreTests {
         let (base, store) = try temporaryStore()
         let folder = try personFolder(store)
         let bytes = try pngBytes(base)
-        for ext in ["tif", "tiff", "gif", "bmp", "pdf"] {
+        for ext in ["gif", "bmp", "pdf"] {
             #expect(throws: (any Error).self, "\(ext) is not discoverable, so it must not be importable") {
                 try store.importPersonPhoto(bytes, fileExtension: ext, into: folder)
             }
         }
         let landed = try store.importPersonPhoto(bytes, fileExtension: "PNG", into: folder)
         #expect(store.revalidatedImageURL(landed) != nil, "what was imported is what the store shows")
+        // TIFF joined the discover set on 2026-09-10 (person gallery), so
+        // it is importable too — the two sets stay one set.
+        for ext in ["tif", "tiff"] {
+            let tiff = try store.importPersonPhoto(bytes, fileExtension: ext, into: folder)
+            #expect(store.revalidatedImageURL(tiff) != nil, "\(ext) is discoverable, so it is importable")
+        }
     }
 
     // MARK: Group folders (Rick 2026-08-25)

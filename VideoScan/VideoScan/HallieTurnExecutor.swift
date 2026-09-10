@@ -120,12 +120,19 @@ enum HallieTurnExecutor {
         /// (codex #663 — the stage used to be taken from the first choice,
         /// so a People chip under a GEDCOM first choice was refused).
         case suggestedIdentity
+        /// "I have 3 photos and 1 document of her — want to see them all?"
+        /// after a biography (2026-09-10): ONE candidate (the person the
+        /// biography was about, tree record or People profile); "yes"
+        /// selects it and resumes the carried gallery intent; "no" is the
+        /// client's to clear with an "Okay." (HallieClarificationDecline).
+        case galleryOffer
 
         func accepts(_ source: IdentitySource) -> Bool {
             switch (self, source) {
             case (.profileIdentity, .peopleProfile), (.gedcomPerson, .gedcom),
                  (.cyberBrainPerson, .cyberBrain),
-                 (.suggestedIdentity, .peopleProfile), (.suggestedIdentity, .gedcom):
+                 (.suggestedIdentity, .peopleProfile), (.suggestedIdentity, .gedcom),
+                 (.galleryOffer, .peopleProfile), (.galleryOffer, .gedcom):
                 return true
             default:
                 return false
@@ -523,6 +530,9 @@ enum HallieTurnExecutor {
         /// mothers / fathers (live miss #16), so the duplicate can be seen
         /// and merged upstream on FamilySearch.
         case showPossibleDuplicate(personID: String, personName: String)
+        /// Reveal a person's People/ folder in Finder after a gallery
+        /// answer (2026-09-10). Mac only; the shell and web list the label.
+        case revealFolder(url: URL, label: String)
     }
 
     struct Result: Sendable, Equatable {
@@ -640,6 +650,36 @@ enum HallieTurnExecutor {
                 refinableQuery: refinableQuery)
         }
 
+        /// The same answer with an OFFER appended (2026-09-10, the gallery
+        /// offer after a biography): the prose gains one sentence and the
+        /// answer carries a one-candidate clarification whose "yes" resumes
+        /// the offered intent. Facts, basis, citations, attachments and the
+        /// answer plan are untouched — the sentence is a question Hallie
+        /// asks, never a claim about the family.
+        func offering(_ sentence: String, clarification offer: Clarification) -> Result {
+            Result(
+                route: route,
+                outcome: outcome,
+                prose: prose.hasSuffix(" ") || prose.isEmpty ? prose + sentence : prose + " " + sentence,
+                basisLine: basisLine,
+                queryDescription: queryDescription,
+                citations: citations,
+                knowledgeCitations: knowledgeCitations,
+                catalogPersonName: catalogPersonName,
+                clarification: offer,
+                matchCount: matchCount,
+                mediaAction: mediaAction,
+                offeredActions: offeredActions,
+                answerPlan: answerPlan,
+                composedBy: composedBy,
+                transcriptText: transcriptText.map { $0 + " " + sentence },
+                attachments: attachments,
+                performsFirstOfferedAction: performsFirstOfferedAction,
+                immediateOfferedAction: immediateOfferedAction,
+                subjectLifeStatus: subjectLifeStatus,
+                refinableQuery: refinableQuery)
+        }
+
         /// The same answer carrying a PROVENANCE note — how Hallie read the
         /// question, not something she asserts about the family. The note is
         /// appended to the prose (what a template answer shows) and carried
@@ -733,6 +773,15 @@ enum HallieTurnExecutor {
             [ArchivistGraphSubjectSelection],
             ArchivistGraphSubjectSelection
         ) -> ArchivistGraphResult
+        /// Where the family's photos and documents live for a gallery
+        /// answer (2026-09-10). Production reads the published archive
+        /// snapshot; tests hand in a temp-root configuration so no test
+        /// touches the shared center or a real folder.
+        let assetConfiguration: @Sendable () -> FamilyAssetConfiguration
+        /// A People-tab person's reference folder as a gallery (cover
+        /// first), by canonical name — the only way profile FILES reach
+        /// the executor; `ProfileSnapshot` carries no paths on purpose.
+        let resolveProfileGallery: @Sendable (String) -> ArchivistProfileGallery?
 
         init(
             executePresence: @escaping @Sendable (
@@ -763,6 +812,13 @@ enum HallieTurnExecutor {
                 ArchivistGraphExecutor.executeRelationship(
                     query, inputs: inputs, subjects: subjects,
                     floatingSelection: floating)
+            },
+            assetConfiguration: @escaping @Sendable () -> FamilyAssetConfiguration = {
+                FamilyAssetConfigurationCenter.shared.snapshot()
+            },
+            resolveProfileGallery: @escaping @Sendable (String) -> ArchivistProfileGallery? = { name in
+                guard case .loaded(let profiles) = HallieShellCLI.loadProfilesReadOnly() else { return nil }
+                return ArchivistProfileGallery.resolve(personName: name, profiles: profiles)
             }
         ) {
             self.executePresence = executePresence
@@ -770,6 +826,8 @@ enum HallieTurnExecutor {
             self.executeAggregate = executeAggregate
             self.executeGraph = executeGraph
             self.executeRelationship = executeRelationship
+            self.assetConfiguration = assetConfiguration
+            self.resolveProfileGallery = resolveProfileGallery
         }
 
         static let production = Dependencies(
@@ -908,7 +966,8 @@ enum HallieTurnExecutor {
             // "photos of X" about a family-tree person: portrait /
             // photography floor / which-one chips, never a catalog search
             // (+PhotoAsk). Nil = not a photo ask about a tree person.
-            if let photo = photoAsk(payload, request: request, context: context) {
+            if let photo = photoAsk(payload, request: request, context: context,
+                                    dependencies: dependencies) {
                 return photo
             }
             guard request.selectedIdentity == nil else {

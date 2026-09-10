@@ -42,6 +42,8 @@ enum HallieAttachmentText {
                 for r in card.roots { walk(r, indent: 0) }
             case .photoRequest(let name, let folder):
                 out.append("[photo request] \(name): put a photo in \(folder.path)")
+            case .document(let d):
+                out.append("[document] \(d.personName): \(d.fileURL.path)")
             }
         }
         return out

@@ -67,6 +67,8 @@ enum HallieWebPage {
           .attach-tree ul { margin-left:18px; }
           .attach-img { max-width:100%; max-height:320px; border-radius:10px; display:block; }
           .attach-crest { max-width:160px; max-height:160px; display:block; }
+          .attach-doc { margin:4px 0; font-size:17px; }
+          .attach-doc-link { color:var(--accent); text-decoration:none; }
           .attach-person { width:32px; height:32px; object-fit:cover; border-radius:50%; vertical-align:middle; margin-right:7px; }
           .chips button { font-size:17px; padding:8px 12px; border-radius:12px; border:1px solid var(--accent); color:var(--accent); background:none; }
           .cite { display:flex; gap:10px; align-items:center; margin-top:8px; font-size:17px; }
@@ -411,6 +413,13 @@ extension HallieWebPage {
             } else if (a.kind === 'photoRequest') {
               var pr = document.createElement('div'); pr.className = 'tiny';
               pr.textContent = 'Do you have a photo of ' + a.name + '? You can add it from the Mac.'; box.appendChild(pr);
+            } else if (a.kind === 'document') {
+              var dl = document.createElement('div'); dl.className = 'attach-doc';
+              var link = document.createElement('a'); link.className = 'attach-doc-link';
+              link.href = a.url + (key ? ('?key=' + encodeURIComponent(key)) : '');
+              link.target = '_blank'; link.rel = 'noopener';
+              link.textContent = '📄 ' + (a.title || a.name) + ' (open)';
+              dl.appendChild(link); box.appendChild(dl);
             }
             return box;
           }

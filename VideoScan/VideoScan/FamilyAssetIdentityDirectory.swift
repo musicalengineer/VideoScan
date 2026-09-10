@@ -39,6 +39,12 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
         /// "dicky") from CyberBrain / POI aliases, or from the owner's
         /// configured name when this member is the owner.
         let aliasTokens: Set<String>
+        /// The alias SPELLINGS themselves ("Christopher Dennis O'Connor"),
+        /// in source order, for the store's read-side folder rule
+        /// (2026-09-10): a People/ folder named by an alias is that
+        /// person's folder too. Tokens above are for group folders; this
+        /// list is for whole-name folders. Empty when no source offered one.
+        var aliasNames: [String] = []
     }
 
     let members: [Member]
@@ -158,7 +164,8 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
                         givenTokens: Set(index.givenIDs(of: o).map { keys[Int($0)] }),
                         surnameTokens: Set(index.surnameTokenIDs(of: o).map { keys[Int($0)] }),
                         suffix: suffix < 0 ? nil : keys[Int(suffix)],
-                        aliasTokens: nick))
+                        aliasTokens: nick,
+                        aliasNames: aliases[id] ?? []))
                 }
             }
             initialized = count

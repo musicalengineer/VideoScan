@@ -2925,6 +2925,37 @@
    "mustMatch": [
     "Mary O'Connor"
    ]
+  },
+  {
+   "id": "gal001",
+   "category": "edge_cases",
+   "text": "show all photos of mary o'connor",
+   "expect": "kinship",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustMatch": ["photo|picture|Here"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Person gallery (2026-09-10, Rick: 'show all photos of <person>'). Advisory, not strict: the answer depends on the People folders on the M4 archive (People/Mary_OConnor holds one restored PNG today). Expect every photo and document in her folders as attachments, counts in the prose, and a Show-folder offer; never a catalog search."
+  },
+  {
+   "id": "gal002",
+   "category": "biography",
+   "text": "tell me about ellen ronan",
+   "expect": "biography",
+   "expectedRoutes": ["graph"],
+   "expectedOutcomes": ["answered", "needsClarification"],
+   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "notes": "Gallery offer (2026-09-10): with two or more files in her People folders the biography ends with 'I have N photos ... of her in the archive - want to see them all?'. With one file (today) no offer is made; the next turn then answers as a fresh question."
+  },
+  {
+   "id": "gal003",
+   "category": "biography",
+   "text": "yes",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": ["graph", "smalltalk", "conversation"],
+   "mustNotContain": ["I need the name so I don't guess", "I won't guess which person"],
+   "notes": "Gallery offer continuation (2026-09-10): a bare 'yes' after the offer selects the single candidate and returns the gallery ('Here are N photos of Ellen Ronan.'). When no offer was made (one file), 'yes' is an ordinary turn - it must never be answered with a which-one refusal."
   }
  ]
 }

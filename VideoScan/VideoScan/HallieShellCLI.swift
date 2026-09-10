@@ -928,6 +928,21 @@ enum HallieShellCLI {
             case .selected, .notASelection:
                 break
             }
+            // "no" / "not now" to an OFFER (the gallery offer after a
+            // biography, 2026-09-10) just closes it — same wording as the
+            // chat window (HallieClarificationDecline); a which-one keeps
+            // the policy below.
+            if pending.value.stage == .galleryOffer, HallieClarificationDecline.matches(question) {
+                state.pendingClarification = nil
+                let line = HallieClarificationDecline.reply(for: .galleryOffer)
+                output(line)
+                let event = transcriptEvent(
+                    kind: .assistant, text: line,
+                    basisLine: "The offer was declined; nothing was looked up.",
+                    outcome: "declined", state: &state)
+                await dependencies.recordTranscript([event])
+                return .declined
+            }
             // A clarifying question must expire when the person changes the
             // subject. Before this, a pending clarification was cleared only
             // by :cancel, so one "which Tim did you mean?" swallowed every

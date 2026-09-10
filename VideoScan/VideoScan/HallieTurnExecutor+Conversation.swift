@@ -1365,6 +1365,7 @@ extension HallieTurnExecutor {
         case .openPeopleTab: return "Open the People tab"
         case .openAppDestination(let destination): return "Open the \(destination.title) tab"
         case .showPossibleDuplicate: return "Show possible duplicate in Family Tree"
+        case .revealFolder(_, let label): return label
         }
     }
 

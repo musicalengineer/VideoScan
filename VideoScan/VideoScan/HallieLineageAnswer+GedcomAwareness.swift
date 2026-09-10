@@ -118,7 +118,12 @@ extension HallieLineageAnswer {
             return pronounAsk(typed)
         }
         switch resolveDetailed(typed, context: context, graph: graph) {
-        case .failure(let result): return result
+        case .failure(let result):
+            // Not in the tree but exactly one People-tab profile goes by
+            // that name (2026-09-10): the executor's photo ask answers
+            // from the profile's reference folder; not the tree's decline.
+            if HallieTurnExecutor.uniqueProfile(named: typed, in: context.profiles) != nil { return nil }
+            return result
         case .success(let person, _): return personPhoto(person: person)
         case .ambiguous:
             // Several namesakes: not answered here — the executor's photo
@@ -128,20 +133,26 @@ extension HallieLineageAnswer {
         }
     }
 
-    /// The photo answer for a RESOLVED tree person: the stored portrait, the
-    /// photography-floor line, or the folder card. Shared by the
-    /// deterministic shape and the executor's photo ask (chips path).
-    static func personPhoto(person: GedcomFamilyGraph.Person) -> Result {
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
-        if let url = store.photoURLs(for: person).first {
-            return Result(
-                route: .graph, outcome: .answered,
-                prose: "Here\u{2019}s \(person.name).",
-                basisLine: "Basis: portrait from the Master Archive\u{2019}s 40_Family_Tree folder for this person.",
-                queryDescription: "photo: \(person.name)",
-                citations: [], catalogPersonName: person.name,
-                offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)],
-                attachments: [.photo(HalliePhotoAttachment(personName: person.name, fileURL: url))])
+    /// The photo answer for a RESOLVED tree person: the whole gallery
+    /// (every photo and document in the person's folders, 2026-09-10 —
+    /// one photo still reads "Here's X."), the photography-floor line, or
+    /// the folder card. Shared by the deterministic shape and the
+    /// executor's photo ask (chips path). `store` defaults to the
+    /// published archive snapshot; tests pass a fixture.
+    static func personPhoto(person: GedcomFamilyGraph.Person,
+                            store: FamilyAssetStore? = nil) -> Result {
+        let store = store ?? FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        let asset = FamilyAssetPerson(person)
+        let photos = store.photoURLs(for: asset)
+        let documents = store.documentURLs(for: asset)
+        if !photos.isEmpty || !documents.isEmpty {
+            let folders = store.personFolders(for: asset)
+            return HallieGalleryAnswer.result(
+                personName: person.name, gedcomID: person.id,
+                photos: photos, documents: documents, folders: folders,
+                route: .graph,
+                source: HallieGalleryAnswer.archiveSource(folderCount: folders.count),
+                offeredActions: [.openFamilyTreePerson(personID: person.id, personName: person.name)])
         }
         // Died before photography (WorldKnowledge, photograph medium):
         // the honest line, and no folder card — there is nothing to ask
