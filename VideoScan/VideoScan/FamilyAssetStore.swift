@@ -641,21 +641,19 @@ struct FamilyAssetStore {
     /// GEDCOM identity wins, then birth year, then an unambiguous name. Folder
     /// matching is case/diacritic-insensitive, but never recursive.
     func photoURLs(for person: FamilyAssetPerson) -> [URL] {
-        guard access != .unavailable else { return [] }
-        // The explicit choice leads (2026-08-29), then the FamilySearch-ID
-        // folder, then the name/pointer folder, then group folders.
+        guard access != .unavailable, !Self.hasMalformedGEDCOMID(person) else { return [] }
+        // The explicit choice leads (2026-08-29), then the person's folders
+        // in `personFolders` order (FamilySearch-ID folder, the resolved
+        // name/pointer folder, alias twins), then group folders. Every
+        // folder comes through ONE identity rule (codex #1298, 2026-09-11):
+        // there is no second, looser path into a same-name folder here.
         var own: [URL] = []
         var seen: Set<URL> = []
         func add(_ urls: [URL]) {
             for url in urls where seen.insert(url).inserted { own.append(url) }
         }
         if let chosen = chosenPhoto(for: person) { add([chosen.url]) }
-        if let folder = familySearchIDFolder(for: person) { add(verifiedImages(in: folder)) }
-        if let folder = resolvedPersonFolder(for: person) { add(verifiedImages(in: folder)) }
-        // Every OTHER folder the read-side rule attributes to this person
-        // (an alias-named folder, an ID-suffixed twin; 2026-09-10). The
-        // resolved folder stays first so the portrait order is unchanged.
-        for folder in aliasPersonFolders(for: person) { add(verifiedImages(in: folder)) }
+        for folder in personFolders(for: person) { add(verifiedImages(in: folder)) }
         let all = own + groupPhotoURLs(for: person).filter { !seen.contains($0) }
         return all.filter { !isPhotoExcluded($0, for: person) }
     }
@@ -674,7 +672,7 @@ struct FamilyAssetStore {
     }
 
     func documentURLs(for person: FamilyAssetPerson) -> [URL] {
-        guard access != .unavailable else { return [] }
+        guard access != .unavailable, !Self.hasMalformedGEDCOMID(person) else { return [] }
         var out: [URL] = []
         var seen: Set<URL> = []
         let folders = personFolders(for: person)
@@ -691,18 +689,34 @@ struct FamilyAssetStore {
     /// folders are not included — they are several people's. Read side
     /// only; `folderForPhotoRequest` (the write side) still insists on ONE
     /// unambiguous folder or refuses.
+    ///
+    /// Every name/pointer folder passes the SAME rule, `readFolderNames`
+    /// (codex #1298, 2026-09-11): the resolved folder is listed first for
+    /// portrait order, but only when that rule also attributes it to this
+    /// person — a sole same-name folder carrying ANOTHER record's pointer
+    /// or a disagreeing birth year is never read. A malformed non-empty
+    /// GEDCOM id is corrupt identity data: nothing is read, from any source.
     func personFolders(for person: FamilyAssetPerson) -> [URL] {
-        guard access != .unavailable else { return [] }
+        guard access != .unavailable, !Self.hasMalformedGEDCOMID(person) else { return [] }
         var out: [URL] = []
         var seen: Set<URL> = []
         func add(_ folder: URL?) {
             guard let folder, isSafeDirectory(folder), seen.insert(folder).inserted else { return }
             out.append(folder)
         }
+        let byRule = aliasPersonFolders(for: person)
         add(familySearchIDFolder(for: person))
-        add(resolvedPersonFolder(for: person))
-        for folder in aliasPersonFolders(for: person) { add(folder) }
+        if let resolved = resolvedPersonFolder(for: person), byRule.contains(resolved) { add(resolved) }
+        for folder in byRule { add(folder) }
         return out
+    }
+
+    /// A non-empty GEDCOM pointer that `safeGEDCOMIDComponent` rejects.
+    /// Refused everywhere, never a name fallback (the pre-gallery resolver's
+    /// rule, restored to every read path 2026-09-11).
+    static func hasMalformedGEDCOMID(_ person: FamilyAssetPerson) -> Bool {
+        let rawID = person.gedcomID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !rawID.isEmpty && safeGEDCOMIDComponent(rawID).isEmpty
     }
 
     /// Alias spellings the identity directory knows for this tree record
@@ -740,7 +754,10 @@ struct FamilyAssetStore {
                                 aliases: [String],
                                 among folderNames: [String]) -> [String] {
         let rawID = person.gedcomID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let wantedID = rawID.isEmpty || safeGEDCOMIDComponent(rawID).isEmpty ? "" : gedcomIDKey(rawID)
+        // An unsafe pointer is corrupt identity data, not permission to
+        // fall through to a shared human name (codex #1298): no folders.
+        if !rawID.isEmpty, safeGEDCOMIDComponent(rawID).isEmpty { return [] }
+        let wantedID = rawID.isEmpty ? "" : gedcomIDKey(rawID)
         let wantedKeys: [String] = ([person.name] + aliases)
             .map(personNameKey).filter { !$0.isEmpty }
         var out: [String] = []
@@ -1198,7 +1215,7 @@ struct FamilyAssetStore {
 
     /// Where this person's choice sidecar lives (read side).
     func chosenPhotoFolder(for person: FamilyAssetPerson) -> URL? {
-        guard access != .unavailable else { return nil }
+        guard access != .unavailable, !Self.hasMalformedGEDCOMID(person) else { return nil }
         return familySearchIDFolder(for: person) ?? resolvedPersonFolder(for: person)
     }
 
@@ -1487,8 +1504,17 @@ struct FamilyAssetStore {
 
         let wantedName = Self.personNameKey(person.name)
         guard !wantedName.isEmpty else { return nil }
-        let nameMatches = folders.filter {
-            Self.folderIdentity($0.lastPathComponent).nameKey == wantedName
+        // The same identity rule as `readFolderNames` (codex #1298): a
+        // folder pinned to a record by pointer suffix is that record's —
+        // ours was matched above, another's is never ours whatever its name
+        // says, and with no pointer on the person it is unknowable. A
+        // folder whose birth year disagrees with the person's is someone
+        // else with the same name. Neither is a "sole name match".
+        let nameMatches = folders.filter { folder in
+            let identity = Self.folderIdentity(folder.lastPathComponent)
+            guard identity.nameKey == wantedName, identity.gedcomIDKey == nil else { return false }
+            if let year = identity.birthYear, let wanted = person.birthYear, year != wanted { return false }
+            return true
         }
         if let birthYear = person.birthYear {
             let yearMatches = nameMatches.filter {

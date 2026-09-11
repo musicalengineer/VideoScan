@@ -61,6 +61,10 @@ final class HallieWebBridge {
     private let record: @MainActor (UUID) -> VideoRecord?
     private let configuration: @MainActor () -> Configuration
     private let dependencies: HallieAppTurnCoordinator.Dependencies
+    /// The family archive configuration attachments are checked against.
+    /// Injectable so a test can point the bridge at a temp root without
+    /// touching the shared center; production reads the live snapshot.
+    private let familyConfiguration: @Sendable () -> FamilyAssetConfiguration
     /// Access copies for tapes Safari can't decode; nil = no proxies.
     private let proxy: HallieWebProxyCache?
     /// The HDD one-reader rule, answered by the catalog's volume roles.
@@ -79,12 +83,16 @@ final class HallieWebBridge {
         proxy: HallieWebProxyCache? = nil,
         isSpinningDisk: @escaping @MainActor (String) -> Bool = { _ in false },
         timeline: (@MainActor () -> [ArchiveTimelineItem])? = nil,
-        posters: HallieWebPosterCache? = nil
+        posters: HallieWebPosterCache? = nil,
+        familyConfiguration: @escaping @Sendable () -> FamilyAssetConfiguration = {
+            FamilyAssetConfigurationCenter.shared.snapshot()
+        }
     ) {
         self.records = records
         self.record = record
         self.configuration = configuration
         self.dependencies = dependencies
+        self.familyConfiguration = familyConfiguration
         self.proxy = proxy
         self.isSpinningDisk = isSpinningDisk
         self.timeline = timeline
@@ -711,8 +719,8 @@ extension HallieWebBridge {
             attachmentTokens.removeAll(keepingCapacity: true)
         }
         let token = UUID().uuidString.lowercased()
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
-        let familyRoot = Self.isDescendant(url, of: configuration.roots.assets)
+        let configuration = familyConfiguration()
+        let familyRoot = Self.isResolvedDescendant(url, of: configuration.roots.assets)
             ? configuration.roots.assets : nil
         attachmentTokens[token] = AttachmentCapability(
             url: url, familyRoot: familyRoot)
@@ -724,10 +732,15 @@ extension HallieWebBridge {
             return .text(404, "no image")
         }
         if let originalRoot = capability.familyRoot {
-            let current = FamilyAssetConfigurationCenter.shared.snapshot()
+            // Re-resolved at serve time (codex #1298, 2026-09-11): the file
+            // as it exists NOW, symlinks in every ancestor followed, must
+            // still lie inside the resolved family root. Lexical containment
+            // of the unresolved path would pass a `People/` folder that has
+            // since been replaced by a link pointing outside the archive.
+            let current = familyConfiguration()
             guard current.access != .unavailable,
                   current.roots.assets == originalRoot,
-                  Self.isDescendant(capability.url, of: originalRoot) else {
+                  Self.isResolvedDescendant(capability.url, of: originalRoot) else {
                 return .text(404, "no image")
             }
         }
@@ -773,9 +786,14 @@ extension HallieWebBridge {
         return data
     }
 
-    private static func isDescendant(_ candidate: URL, of root: URL) -> Bool {
-        let child = candidate.standardizedFileURL.pathComponents
-        let parent = root.standardizedFileURL.pathComponents
+    /// True when `candidate`, with every symlink on its path resolved,
+    /// lies strictly inside `root`, likewise resolved. A leaf-only symlink
+    /// check misses a replaced ancestor folder; this does not. Both sides
+    /// are resolved so a root reached through `/var` → `/private/var`
+    /// still contains its own files.
+    nonisolated static func isResolvedDescendant(_ candidate: URL, of root: URL) -> Bool {
+        let child = candidate.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let parent = root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
         return child.count > parent.count
             && Array(child.prefix(parent.count)) == parent
     }

@@ -252,6 +252,81 @@ struct HallieWebTests {
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         #expect(String(data: data, encoding: .utf8) == "{\"ok\":true}")
     }
+
+    // MARK: Serve-time containment follows symlinks in every ancestor (codex #1298, 2026-09-11)
+
+    @Test @MainActor
+    func attachmentInsideAReplacedAncestorFolderIsRefusedAtServeTime() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_HallieWebAncestorLink-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let familyRoot = base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true)
+        let people = familyRoot.appendingPathComponent("People", isDirectory: true)
+        let pdf = people.appendingPathComponent("Mary_OConnor/certificate.pdf")
+        try FileManager.default.createDirectory(at: pdf.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("%PDF-1.4\n%%EOF\n".utf8).write(to: pdf)
+        // Elsewhere, a same-shaped tree the archive must never serve from.
+        let outside = base.appendingPathComponent("outside/People", isDirectory: true)
+        let outsidePDF = outside.appendingPathComponent("Mary_OConnor/certificate.pdf")
+        try FileManager.default.createDirectory(at: outsidePDF.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("%PDF-1.4\n%%EOF\n".utf8).write(to: outsidePDF)
+
+        let configuration = FamilyAssetConfiguration(
+            roots: .init(assets: familyRoot, thumbnailCache: base.appendingPathComponent("thumbs", isDirectory: true)),
+            access: .readOnly, legacyGEDCOMDirectory: nil)
+        let deps = HallieAppTurnCoordinator.Dependencies(
+            startLocalBrain: { $0 },
+            translateAST: { _, _, _ in .init(ast: .presence(.init(people: ["Donna"])), responderHost: "fixture") },
+            loadProfiles: { [] }, loadGraph: { nil }, loadCyberBrain: { nil },
+            recordTestimony: { _ in },
+            loadSpeakers: { .init(ownerName: "Rick", archivistName: "Hallie Mae") },
+            executeRequest: { _, _ in
+                HallieTurnExecutor.Result(
+                    route: .presence, outcome: .declined, prose: "fixture",
+                    basisLine: "Basis: fixture", queryDescription: nil, citations: [], catalogPersonName: nil)
+            },
+            continueTurn: { pending, id, context in
+                try await HallieTurnExecutor.continue(pending: pending, selecting: id, context: context)
+            },
+            resolveBiographyPhoto: { _ in nil })
+        let b = HallieWebBridge(
+            records: { [] }, record: { _ in nil },
+            configuration: {
+                .init(passphrase: "", archivistName: "Hallie Mae", archivistPersonName: nil,
+                      hosts: ["fixture.invalid"], modelName: "fixture-model", composeWithModel: false)
+            },
+            dependencies: deps,
+            familyConfiguration: { configuration })
+
+        // Attached while `People/` is a real folder: served, and the token
+        // is bound to the family root (temporaryDirectory is itself reached
+        // through /var → /private/var, so the resolved check must hold here).
+        let token = b.attachmentToken(for: pdf)
+        #expect(b.attachmentTokens[token]?.familyRoot == familyRoot)
+        #expect(await b.attachmentImage(token: token).status == 200)
+
+        // Now the ANCESTOR is replaced by a link out of the archive. The
+        // unresolved path is unchanged and lexically inside; the file it
+        // names now lives outside. A leaf-only symlink check passes it.
+        try FileManager.default.removeItem(at: people)
+        try FileManager.default.createSymbolicLink(at: people, withDestinationURL: outside)
+        #expect(FileManager.default.fileExists(atPath: pdf.path))
+        #expect(!HallieWebBridge.isResolvedDescendant(pdf, of: familyRoot))
+        #expect(await b.attachmentImage(token: token).status == 404)
+        // Re-attaching the same path reuses the token (de-duplicated by
+        // URL); it stays refused rather than being re-minted unbound.
+        #expect(b.attachmentToken(for: pdf) == token)
+        #expect(await b.attachmentImage(token: token).status == 404)
+
+        // Pure rule: a link that stays inside the root still contains.
+        try FileManager.default.removeItem(at: people)
+        let realPeople = familyRoot.appendingPathComponent("People-real/Mary_OConnor", isDirectory: true)
+        try FileManager.default.createDirectory(at: realPeople, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: people, withDestinationURL: realPeople.deletingLastPathComponent())
+        #expect(HallieWebBridge.isResolvedDescendant(pdf, of: familyRoot))
+        #expect(!HallieWebBridge.isResolvedDescendant(familyRoot, of: familyRoot))
+    }
+
 }
 
 /// Browse: the Archive Timeline as JSON, same delivery facts as citations.

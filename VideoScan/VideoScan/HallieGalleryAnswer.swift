@@ -13,6 +13,13 @@ enum HallieGalleryAnswer {
     /// Photos shown in one chat answer. Beyond this the prose says so and
     /// points at the folder — 24 grid cells is the Mac view's bound too.
     static let photoCap = 24
+    /// Documents shown in one chat answer, the same bound. Together the
+    /// caps mean one answer mints at most 48 attachment tokens: the web
+    /// bridge's per-launch token map holds 256 and is cleared wholesale
+    /// when full (`HallieWebBridge.attachmentToken`), so an uncapped
+    /// 257-document answer would invalidate its own first 256 links
+    /// (codex #1298, 2026-09-11).
+    static let documentCap = 24
 
     /// "1 photo" / "3 photos" — numerals with English plurals.
     static func countPhrase(_ n: Int, _ noun: String) -> String {
@@ -28,10 +35,13 @@ enum HallieGalleryAnswer {
         if documents > 0 { parts.append(countPhrase(documents, "document")) }
         let total = photos + documents
         var line = "\(total == 1 ? "Here is" : "Here are") \(parts.joined(separator: " and ")) of \(name)"
-        if photos > photoCap {
-            line += " \u{2014} showing the first \(photoCap); the rest are in the folder."
-        } else {
+        var shown: [String] = []
+        if photos > photoCap { shown.append("the first \(photoCap)\(documents > documentCap ? " photos" : "")") }
+        if documents > documentCap { shown.append("the first \(documentCap) documents") }
+        if shown.isEmpty {
             line += "."
+        } else {
+            line += " \u{2014} showing \(shown.joined(separator: " and ")); the rest are in the folder."
         }
         return line
     }
@@ -43,7 +53,8 @@ enum HallieGalleryAnswer {
     }
 
     /// The answer. `photos` is expected in the store's order (chosen /
-    /// portrait first); only the first `photoCap` become attachments.
+    /// portrait first); only the first `photoCap` photos and the first
+    /// `documentCap` documents become attachments.
     /// `source` names where the files came from for the basis line.
     static func result(personName: String,
                        gedcomID: String?,
@@ -56,7 +67,9 @@ enum HallieGalleryAnswer {
         var attachments: [HallieAttachment] = photos.prefix(photoCap).map {
             .photo(HalliePhotoAttachment(personName: personName, fileURL: $0, personGedcomID: gedcomID))
         }
-        attachments += documents.map { .document(HallieDocumentAttachment(personName: personName, fileURL: $0)) }
+        attachments += documents.prefix(documentCap).map {
+            .document(HallieDocumentAttachment(personName: personName, fileURL: $0))
+        }
         let counts = "\(countPhrase(photos.count, "photo")) and \(countPhrase(documents.count, "document"))"
         return HallieTurnExecutor.Result(
             route: route, outcome: .answered,

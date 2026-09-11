@@ -396,4 +396,32 @@ struct HalliePersonGalleryAnswerTests {
             },
             dependencies: deps)
     }
+
+
+    // MARK: Document cap (codex #1298 advisory: 256-token map, 2026-09-11)
+
+    @Test func thirtyDocumentsAreCappedAtTwentyFourTooAndAnAnswerNeverMintsMoreThan48Tokens() throws {
+        let f = try fixture()
+        defer { try? fileManager.removeItem(at: f.base) }
+        for i in 0..<30 {
+            try writeText("%PDF-1.4\n%%EOF\n", to: f.people.appendingPathComponent(String(format: "Mary_OConnor/letter-%02d.pdf", i)))
+        }
+        let mary = try #require(graph.people["@I1@"])
+        let onlyDocuments = HallieLineageAnswer.personPhoto(person: mary, store: f.store)
+        #expect(onlyDocuments.attachments.count == 24)
+        #expect(onlyDocuments.prose == "Here are 30 documents of Mary O'Connor — showing the first 24 documents; the rest are in the folder.")
+        #expect(onlyDocuments.basisLine.hasPrefix("Basis: 0 photos and 30 documents from"))
+
+        for i in 0..<30 {
+            try writeImage(to: f.people.appendingPathComponent(String(format: "Mary_OConnor/photo-%02d.png", i)))
+        }
+        let both = HallieLineageAnswer.personPhoto(person: mary, store: f.store)
+        #expect(both.attachments.count == 48)
+        #expect(both.attachments.filter { if case .photo = $0 { return true } else { return false } }.count == 24)
+        #expect(both.attachments.filter { if case .document = $0 { return true } else { return false } }.count == 24)
+        #expect(both.prose == "Here are 30 photos and 30 documents of Mary O'Connor — showing the first 24 photos and the first 24 documents; the rest are in the folder.")
+        #expect(HallieGalleryAnswer.photoCap + HallieGalleryAnswer.documentCap < 256)
+        // Under both caps nothing is said about a cap.
+        #expect(HallieGalleryAnswer.prose(name: "X", photos: 24, documents: 24) == "Here are 24 photos and 24 documents of X.")
+    }
 }

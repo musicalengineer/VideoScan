@@ -163,4 +163,92 @@ struct HalliePersonGalleryStoreTests {
         #expect(offline.documentURLs(for: donna).isEmpty)
         #expect(offline.personFolders(for: donna).isEmpty)
     }
+
+
+    // MARK: One identity rule for every folder source (codex #1298, 2026-09-11)
+
+    /// The reviewer's exact case: subject @I1@ Mary O'Connor, and the ONLY
+    /// folder is `Mary_OConnor_I2/` — another record's, pinned by pointer.
+    /// A sole name match must not attribute I2's papers to I1, on any read
+    /// path, and the write side must not file I1's request into I2's folder.
+    @Test func anotherRecordsPointerFolderIsNeverReadForThisRecord() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let people = store.peopleDirectory
+        try writeText("%PDF-1.4\n%%EOF\n", to: people.appendingPathComponent("Mary_OConnor_I2/certificate.pdf"))
+        try writeImage(to: people.appendingPathComponent("Mary_OConnor_I2/portrait.png"), type: .png)
+
+        let i1 = FamilyAssetPerson(gedcomID: "@I1@", name: "Mary O'Connor")
+        #expect(store.documentURLs(for: i1).isEmpty)
+        #expect(store.photoURLs(for: i1).isEmpty)
+        #expect(store.personFolders(for: i1).isEmpty)
+        #expect(store.chosenPhotoFolder(for: i1) == nil)
+        // A person with NO pointer cannot claim a pointer-pinned folder either.
+        let unknown = FamilyAssetPerson(name: "Mary O'Connor")
+        #expect(store.documentURLs(for: unknown).isEmpty)
+        #expect(store.photoURLs(for: unknown).isEmpty)
+        // The folder's own record reads it.
+        let i2 = FamilyAssetPerson(gedcomID: "@I2@", name: "Mary O'Connor")
+        #expect(store.documentURLs(for: i2).map(\.lastPathComponent) == ["certificate.pdf"])
+        #expect(store.photoURLs(for: i2).map(\.lastPathComponent) == ["portrait.png"])
+        #expect(store.personFolders(for: i2).map(\.lastPathComponent) == ["Mary_OConnor_I2"])
+        // Write side: I1's request gets its own pointer-suffixed folder.
+        let requested = try store.folderForPhotoRequest(person: i1)
+        #expect(requested.lastPathComponent != "Mary_OConnor_I2")
+        #expect(requested.lastPathComponent.hasSuffix("I1"))
+    }
+
+    @Test func aConflictingBirthYearFolderIsNotRead() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let people = store.peopleDirectory
+        try writeText("%PDF-1.4\n%%EOF\n", to: people.appendingPathComponent("Mary_OConnor_b1904/baptism.pdf"))
+        try writeImage(to: people.appendingPathComponent("Mary_OConnor_b1904/portrait.png"), type: .png)
+
+        let born1905 = FamilyAssetPerson(gedcomID: "@I1@", name: "Mary O'Connor", birthYear: 1905)
+        #expect(store.documentURLs(for: born1905).isEmpty)
+        #expect(store.photoURLs(for: born1905).isEmpty)
+        #expect(store.personFolders(for: born1905).isEmpty)
+        #expect(store.chosenPhotoFolder(for: born1905) == nil)
+        let born1904 = FamilyAssetPerson(gedcomID: "@I3@", name: "Mary O'Connor", birthYear: 1904)
+        #expect(store.documentURLs(for: born1904).map(\.lastPathComponent) == ["baptism.pdf"])
+        #expect(store.photoURLs(for: born1904).map(\.lastPathComponent) == ["portrait.png"])
+        // No year on the record and one dated folder: readable (unchanged).
+        let undated = FamilyAssetPerson(gedcomID: "@I4@", name: "Mary O'Connor")
+        #expect(store.personFolders(for: undated).map(\.lastPathComponent) == ["Mary_OConnor_b1904"])
+        // The write side never files a b.1905 request into the b.1904 folder.
+        #expect(try store.folderForPhotoRequest(person: born1905).lastPathComponent != "Mary_OConnor_b1904")
+    }
+
+    /// A malformed NON-EMPTY pointer (one `safeGEDCOMIDComponent` rejects)
+    /// is corrupt identity data: every read path returns nothing, even
+    /// with a perfectly matching bare name folder on disk. Note `@I1` is
+    /// well-formed by the store's rule (`@`, letters, digits are allowed;
+    /// it keys to `I1`) — the malformed shapes carry a space or a slash.
+    @Test func aMalformedGEDCOMIDReadsNothingAndNeverFallsBackToTheName() throws {
+        let (base, store) = try temporaryStore()
+        defer { try? fileManager.removeItem(at: base) }
+        let people = store.peopleDirectory
+        try writeText("%PDF-1.4\n%%EOF\n", to: people.appendingPathComponent("Mary_OConnor/certificate.pdf"))
+        try writeImage(to: people.appendingPathComponent("Mary_OConnor/portrait.png"), type: .png)
+
+        for bad in ["@I 1@", "@I1@/..", "I1\u{0}"] {
+            let person = FamilyAssetPerson(gedcomID: bad, name: "Mary O'Connor")
+            let why = Comment(rawValue: "id \(bad.debugDescription) must be malformed and read nothing")
+            #expect(FamilyAssetStore.hasMalformedGEDCOMID(person), why)
+            #expect(store.documentURLs(for: person).isEmpty, why)
+            #expect(store.photoURLs(for: person).isEmpty, why)
+            #expect(store.personFolders(for: person).isEmpty, why)
+            #expect(store.chosenPhotoFolder(for: person) == nil, why)
+            #expect(FamilyAssetStore.readFolderNames(for: person, aliases: [], among: ["Mary_OConnor"]).isEmpty, why)
+            #expect(throws: FamilyAssetStore.StoreError.invalidPerson) {
+                try store.folderForPhotoRequest(person: person)
+            }
+        }
+        // The same name with a sound pointer, or none, still reads the folder.
+        #expect(store.documentURLs(for: FamilyAssetPerson(gedcomID: "@I1@", name: "Mary O'Connor"))
+                    .map(\.lastPathComponent) == ["certificate.pdf"])
+        #expect(store.photoURLs(for: FamilyAssetPerson(name: "Mary O'Connor"))
+                    .map(\.lastPathComponent) == ["portrait.png"])
+    }
 }
