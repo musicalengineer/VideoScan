@@ -152,6 +152,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                 }
             }
             if stopRequested { finishCancelled(); return }
+            ArchiveAngelScorer.markDerivatives(&candidates)   // T10 H3: same rule as the sweep
 
             // Spotlight play history for the eligible ones only, off-main.
             let eligiblePaths = candidates.filter { ArchiveAngelScorer.hardFloor($0) == nil }.map(\.fullPath)

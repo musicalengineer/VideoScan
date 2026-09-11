@@ -362,6 +362,66 @@ struct ArchiveAngelDownloadCapTests {
     }
 }
 
+@Suite("Archive Angel scorer — T10 H3 derivative exports (night of 2026-09-10)")
+struct ArchiveAngelDerivativeTests {
+
+    @Test("base-stem rule", arguments: [
+        ("Cape-1993-archive.vs.edit", "Cape-1993-archive"),
+        ("CapeCodJune1998-Peekaboo.vs.preserve_balanced", "CapeCodJune1998-Peekaboo"),
+        ("GrampaBreen with Dan and Mark.vs.archive", "GrampaBreen with Dan and Mark"),
+        ("Clip 08_converted.vs.edit", "Clip 08"),
+        ("cape-1992-edit_trimmed", "cape-1992-edit"),
+        ("Thanksgiving-Raw_Default_denoise_thm2_nyx3", "Thanksgiving-Raw_Default"),
+        ("Franklin_Dan_Kindergarten_NV12_2", "Franklin_Dan_Kindergarten"),
+        ("Rick-and-boys-1988-cleaned", "Rick-and-boys-1988"),
+        ("CapeCpd_1998_balanced", "CapeCpd_1998"),
+        ("Christmas1990 copy 2", "Christmas1990"),
+    ])
+    func baseStem(stem: String, base: String) {
+        #expect(ArchiveAngelNaming.derivativeBaseStem(stem) == base)
+    }
+
+    @Test("names that are NOT derivatives", arguments: ["cape-1992-edit", "Christmas_1990_partial", "Thanksgiving-Raw_Default", "Clip 08", "_balanced", "Kill Bill Vol 2", "DVD1992_5Chapters", "New TapeV01.6_4DD754DD88921"])
+    func notDerivative(stem: String) {
+        #expect(ArchiveAngelNaming.derivativeBaseStem(stem) == nil)
+    }
+
+    @Test("an export is rejected only when its original is present; same-folder original preferred; a star keeps it; a lone export stays")
+    func markAndFloor() {
+        var cands = [
+            ArchiveAngelCandidate(filename: "Cape-1993-archive.mkv", fullPath: "/v/Converted_VHS_Tapes_2026/Cape-1993/Cape-1993-archive.mkv", sizeBytes: 60_000_000_000, durationSeconds: 7338, videoCodec: "ffv1"),
+            ArchiveAngelCandidate(filename: "Cape-1993-archive.vs.edit.mov", fullPath: "/v/editable_versions/Cape-1993-archive.vs.edit.mov", sizeBytes: 46_000_000_000, durationSeconds: 7338, videoCodec: "prores"),
+            ArchiveAngelCandidate(filename: "cape-1992-edit.mov", fullPath: "/v/editable/cape-1992-edit.mov", sizeBytes: 50_000_000_000, durationSeconds: 7400, videoCodec: "prores"),
+            ArchiveAngelCandidate(filename: "cape-1992-edit_trimmed.mov", fullPath: "/v/editable/cape-1992-edit_trimmed.mov", sizeBytes: 50_000_000_000, durationSeconds: 7384, videoCodec: "prores"),
+            ArchiveAngelCandidate(filename: "Lonely_balanced.mov", fullPath: "/v/x/Lonely_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Starred.vs.edit.mov", fullPath: "/v/x/Starred.vs.edit.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, starRating: 2),
+            ArchiveAngelCandidate(filename: "Starred.mov", fullPath: "/v/x/Starred.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Junk.mov", fullPath: "/v/x/Junk.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600, mediaDisposition: .confirmedJunk),
+            ArchiveAngelCandidate(filename: "Junk_fixed.mov", fullPath: "/v/x/Junk_fixed.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Twin.mov", fullPath: "/v/a/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Twin.mov", fullPath: "/v/b/Twin.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+            ArchiveAngelCandidate(filename: "Twin_balanced.mov", fullPath: "/v/b/Twin_balanced.mov", sizeBytes: 9_000_000_000, durationSeconds: 3600),
+        ]
+        ArchiveAngelScorer.markDerivatives(&cands)
+        func by(_ name: String) -> ArchiveAngelCandidate { cands.first { $0.filename == name }! }
+        #expect(by("Cape-1993-archive.vs.edit.mov").derivativeOfOriginal == "Cape-1993-archive.mkv", "cross-folder original found")
+        #expect(by("cape-1992-edit_trimmed.mov").derivativeOfOriginal == "cape-1992-edit.mov")
+        #expect(by("cape-1992-edit.mov").derivativeOfOriginal == nil, "'edit' without .vs. is a name, not a token")
+        #expect(by("Lonely_balanced.mov").derivativeOfOriginal == nil, "no original in the catalog → the best copy the family has")
+        #expect(by("Junk_fixed.mov").derivativeOfOriginal == nil, "a confirmed-junk original does not count")
+        #expect(by("Twin_balanced.mov").derivativeOfOriginal == "Twin.mov")
+        #expect(cands.first { $0.filename == "Twin_balanced.mov" }.map { c in cands.contains { $0.filename == "Twin.mov" && $0.fullPath.hasPrefix("/v/b/") && c.derivativeOfOriginal == $0.filename } } == true, "same-folder twin preferred")
+        #expect(ArchiveAngelScorer.hardFloor(by("Cape-1993-archive.vs.edit.mov")) == .derivativeOfOriginal)
+        #expect(ArchiveAngelScorer.hardFloor(by("Cape-1993-archive.mkv")) == nil)
+        #expect(ArchiveAngelScorer.hardFloor(by("Starred.vs.edit.mov")) == nil, "a star is the human's word")
+        #expect(ArchiveAngelScorer.hardFloor(by("Lonely_balanced.mov")) == nil)
+        // Rejection is counted in a selection.
+        let sel = ArchiveAngelScorer.select(cands, count: 20)
+        #expect(sel.rejected[.derivativeOfOriginal] == 3)   // Cape .vs.edit, cape-1992 _trimmed, Twin_balanced
+        #expect(ArchiveAngelScorer.rulesVersion >= 6)
+    }
+}
+
 @Suite("Archive Angel scorer — selection")
 struct ArchiveAngelSelectionTests {
 

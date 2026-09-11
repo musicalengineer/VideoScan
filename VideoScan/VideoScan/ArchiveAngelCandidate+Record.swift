@@ -128,6 +128,28 @@ extension ArchiveAngelCandidate {
 
 enum ArchiveAngelNaming {
 
+    /// T10 H3 (night of 2026-09-10): the stem an export was cut from, or nil
+    /// when the name carries no derivative token. 300 catalog records carry
+    /// one of these with the original's stem present: `.vs.edit`,
+    /// `.vs.preserve`, `.vs.archive`, `_balanced`, `_preserve_balanced`,
+    /// `_fixed`, `_trimmed`, `_reformatted`, `_cleaned`, `_restored`,
+    /// `_corrections`, `_converted`, `_reencoded`, `_proxy`, `_copy`/` copy 2`,
+    /// `_denoise…`, `_NV12`/`_NV12_2`, `_nyx3`, `_thm2`. Tokens are stripped
+    /// from the END, repeatedly ("Clip 08_converted.vs.edit" → "Clip 08");
+    /// "cape-1992-edit" is NOT a derivative — "edit" only counts after
+    /// ".vs.". Pure, table-tested.
+    nonisolated static func derivativeBaseStem(_ stem: String) -> String? {
+        let pattern = #"(\.vs\.(edit|preserve|archive)(_balanced)?|[_-](balanced|preserve_balanced|fixed|trimmed|reformatted|cleaned|restored|corrections|converted|reencoded|proxy|copy)|_denoise[A-Za-z0-9]*|_nv12(_\d+)?|_nyx\d*|_thm\d*| copy( \d+)?)$"#
+        var current = stem
+        var stripped = 0
+        while let r = current.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+            current = String(current[..<r.lowerBound])
+            stripped += 1
+        }
+        let base = current.trimmingCharacters(in: .whitespaces)
+        return stripped > 0 && !base.isEmpty ? base : nil
+    }
+
     /// "1992-07-xx" → "1992-07"; "1992-xx-xx" → "1992"; "xxxx-xx-xx" → nil;
     /// "1992-07-15" → "1992-07-15".
     nonisolated static func proposedDate(fromFilenamePrefix prefix: String) -> String? {

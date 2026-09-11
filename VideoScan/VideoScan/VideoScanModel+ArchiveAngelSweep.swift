@@ -56,6 +56,7 @@ extension VideoScanModel {
         for r in active {
             out.append(ArchiveAngelCandidate.project(r, model: self, policy: policy))
         }
+        ArchiveAngelScorer.markDerivatives(&out)   // T10 H3: needs the whole set (one O(n) pass)
         return out
     }
 }

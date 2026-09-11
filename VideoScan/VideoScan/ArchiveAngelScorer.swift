@@ -66,6 +66,10 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     var videoCodec: String
     /// Catalog duplicate group — T10 H2: one member per group per batch.
     var duplicateGroupID: UUID?
+    /// T10 H3: the filename of the ORIGINAL this file was exported from,
+    /// when that original is in the catalog (set by `markDerivatives`);
+    /// nil for an original, or for an export whose source is gone.
+    var derivativeOfOriginal: String?
 
     /// A person's word on this file: a star, a confirmed person, a note they
     /// typed (machine text in userNotes is filtered by the projection) or a
@@ -87,7 +91,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          isPairedHalf: Bool = false, hasArchivedDuplicate: Bool = false, isOnlyCopy: Bool = false,
          volumeRole: VolumeRole = .workspace, volumeName: String = "X", volumeOnline: Bool = true,
          isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil,
-         videoCodec: String = "", duplicateGroupID: UUID? = nil) {
+         videoCodec: String = "", duplicateGroupID: UUID? = nil, derivativeOfOriginal: String? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -101,6 +105,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.volumeRole = volumeRole; self.volumeName = volumeName; self.volumeOnline = volumeOnline
         self.isOnMasterArchive = isOnMasterArchive; self.useCount = useCount; self.lastUsed = lastUsed
         self.videoCodec = videoCodec; self.duplicateGroupID = duplicateGroupID
+        self.derivativeOfOriginal = derivativeOfOriginal
     }
 }
 
@@ -138,6 +143,10 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// would have been promoted. One member per catalog duplicate group per
     /// batch: the best-ranked stays, the rest are counted here.
     case duplicateOfPick = "Same content as another pick (duplicate group) — one copy is enough"
+    /// T10 H3: `_balanced`, `.vs.edit`, `_NV12`, `_trimmed`… beside its
+    /// original. The Angel makes its own companions at Promote; the original
+    /// is the archive candidate. Only when the original IS in the catalog.
+    case derivativeOfOriginal = "A derivative export — its original is in the catalog"
     case appCache = "An app's cache / render file (name or folder), not an original"
     case proxyStream = "Too small for its length — a thumbnail or proxy stream, not the original"
 }
@@ -230,8 +239,8 @@ enum ArchiveAngelScorer {
     /// "assessed under old rules" and the sweep re-scores at once (Rick
     /// 2026-09-10: "this will require updated assessments as we refine
     /// selection criteria"). 2 = flat 60 s floor + duration tiers; 3 = app-cache
-    /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 5 = one per duplicate group (T10 H2).
-    static let rulesVersion = 5
+    /// and proxy-stream floors; 4 = download/rip cap (T10 H1); 5 = one per duplicate group (T10 H2); 6 = derivative exports (T10 H3).
+    static let rulesVersion = 6
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
@@ -341,6 +350,7 @@ enum ArchiveAngelScorer {
         if c.isPairedHalf { return .pairedHalf }
         // Machine evidence below here yields to a human star, like junk.
         if c.starRating == 0, Self.looksLikeAppCache(filename: c.filename, fullPath: c.fullPath) { return .appCache }
+        if c.starRating == 0, c.derivativeOfOriginal != nil { return .derivativeOfOriginal }
         if c.durationSeconds < w.minimumDurationSeconds { return .tooShort }
         if c.starRating == 0, c.durationSeconds > 0, c.sizeBytes > 0,
            Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < w.minimumAverageKilobitsPerSecond {
@@ -399,6 +409,33 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
+
+    /// T10 H3. One pass over a candidate set: every candidate whose stem
+    /// carries a derivative token, and whose base stem names ANOTHER
+    /// candidate that is a video and not confirmed junk, is marked with that
+    /// original's filename. Same-folder originals win over a namesake
+    /// elsewhere. An export whose original is absent is left alone — it is
+    /// the best copy the family has. O(n): a dictionary of lowercased stems.
+    static func markDerivatives(_ candidates: inout [ArchiveAngelCandidate]) {
+        struct Original { let index: Int; let folder: String }
+        var byStem: [String: [Original]] = [:]
+        for (i, c) in candidates.enumerated() {
+            let stem = (c.filename as NSString).deletingPathExtension
+            guard ArchiveAngelNaming.derivativeBaseStem(stem) == nil else { continue }   // an export is never an original
+            guard c.streamTypeRaw == StreamType.videoAndAudio.rawValue || c.streamTypeRaw == StreamType.videoOnly.rawValue,
+                  c.mediaDisposition != .confirmedJunk else { continue }
+            byStem[stem.lowercased(), default: []].append(.init(index: i, folder: (c.fullPath as NSString).deletingLastPathComponent))
+        }
+        for i in candidates.indices {
+            let stem = (candidates[i].filename as NSString).deletingPathExtension
+            guard let base = ArchiveAngelNaming.derivativeBaseStem(stem),
+                  let originals = byStem[base.lowercased()] else { continue }
+            let folder = (candidates[i].fullPath as NSString).deletingLastPathComponent
+            let pick = originals.first { $0.folder == folder } ?? originals[0]
+            guard candidates[pick.index].id != candidates[i].id else { continue }
+            candidates[i].derivativeOfOriginal = candidates[pick.index].filename
+        }
+    }
 
     /// The "Has notes, 2 tags, people…" items. `notes` means a HUMAN note
     /// (the projection filters machine text out of userNotes, T10 H1).
