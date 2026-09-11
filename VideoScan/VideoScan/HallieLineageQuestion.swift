@@ -786,8 +786,10 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// `extendedRelation(fromPhrase:)` table so nothing is named here that
     /// the traversal cannot walk; an unknown word ("grandson") → nil.
     static func kinshipQuestion(in lower: String) -> HallieLineageQuestion? {
-        if let fragment = kinFragmentQuestion(in: lower) { return fragment }
+        // Sentence forms first (GH #182): "identify rick's children" would
+        // otherwise be read by the fragment rule as the person "Identify Rick".
         if let sentence = namedKinSentenceQuestion(in: lower) { return sentence }
+        if let fragment = kinFragmentQuestion(in: lower) { return fragment }
         // The relation word: "(great )*grand<x>", "3rd great grand<x>",
         // "5x great grand<x>", "three times great grand<x>".
         let pattern = /(?:^|\s)(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+)(?:\s+on\s+(?:his|her|my|our|their|the)\s+(paternal|maternal|father'?s|mother'?s)\s+side)?\b/
@@ -850,7 +852,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     private static let kinFragmentSentenceWords: Set<String> = [
         "who", "whom", "whose", "what", "where", "when", "how", "why", "which",
         "is", "was", "are", "were", "did", "do", "does", "can", "could", "would",
-        "tell", "me", "us", "about", "show", "find", "list", "give", "name",
+        "tell", "me", "us", "about", "show", "find", "list", "give", "name", "identify",
         "have", "has", "had", "of", "for", "with", "to", "in", "on", "i", "we", "you",
     ]
 
