@@ -216,6 +216,67 @@ struct ArchiveCategoryTests {
         #expect(snap.volumeFileCounts["/Volumes/TestArchive"] == 1)
     }
 
+    // MARK: - GH #175 archived dates (resolved once per version, never per render)
+
+    @Test("archivedDates: 100k rows with 5k LEGACY Promote-note copies resolve once per RecordsVersion; source rows carry their copy's date, orphans their own", .timeLimit(.minutes(1)))
+    func archivedDatesOncePerVersion() throws {
+        let (model, dir) = try Self.makeModel(); defer { try? FileManager.default.removeItem(at: dir) }
+        var records: [VideoRecord] = []
+        records.reserveCapacity(105_100)
+        var sources: [VideoRecord] = []
+        for i in 0..<100_000 {
+            let r = Self.source("clip_\(i).mov", volume: "/Volumes/Src\(i % 4)")
+            records.append(r)
+            if i % 20 == 0 { sources.append(r) }
+        }
+        // Legacy copies: NO archivedAt field — the date lives only in the
+        // "Promote <ISO>:" note (the path that allocates ISO formatters).
+        var expected: [UUID: Date] = [:]
+        for (n, s) in sources.enumerated() {
+            let c = Self.copy(of: s, rel: "30_Video/1990/\(s.filename)", verified: false)
+            let stamp = "2026-08-\(String(format: "%02d", 1 + n % 28))T20:11:03Z"
+            c.notes = "Promote \(stamp): 30_Video/1990/\(s.filename)"
+            expected[s.id] = ISO8601DateFormatter().date(from: stamp)!
+            records.append(c)
+        }
+        // 100 orphan copies with their own archivedAt.
+        let orphanDate = Date(timeIntervalSince1970: 1_750_000_000)
+        var orphanIDs: [UUID] = []
+        for i in 0..<100 {
+            let o = VideoRecord()
+            o.filename = "orphan_\(i).mov"; o.fullPath = Self.archiveRoot + "/30_Video/1980/orphan_\(i).mov"
+            o.derivationKind = ArchivePromotion.derivationKind; o.derivedFrom = UUID()
+            o.streamTypeRaw = StreamType.videoAndAudio.rawValue; o.archivedAt = orphanDate
+            records.append(o); orphanIDs.append(o.id)
+        }
+        model.records = records
+        let volumes = ["/Volumes/Src0", "/Volumes/Src1", "/Volumes/Src2", "/Volumes/Src3", "/Volumes/TestArchive"]
+        let memo = RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>()
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let snap = ArchiveCategorySnapshot.cached(in: memo, model: model, volumeSearchPaths: volumes)
+        let computeMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        #expect(snap.archived.count == 5_100)
+        #expect(snap.archivedDates.count == 5_100)
+        #expect(computeMs < 3_000, "compute with 5k legacy note parses took \(Int(computeMs)) ms — budget 3 s")
+        for (id, d) in expected.prefix(50) { #expect(snap.archivedDates[id] == d) }
+        for id in orphanIDs.prefix(10) { #expect(snap.archivedDates[id] == orphanDate) }
+        #expect(snap.archivedDates[sources[0].id] != nil && snap.archivedDates[records[1].id] == nil, "unarchived rows have no date")
+        // 1,000 renders at the same version: the map is a lookup, never a re-parse.
+        let t1 = CFAbsoluteTimeGetCurrent()
+        var hits = 0
+        for _ in 0..<1_000 {
+            let s = ArchiveCategorySnapshot.cached(in: memo, model: model, volumeSearchPaths: volumes)
+            if s.archivedDates[sources[7].id] != nil { hits += 1 }
+        }
+        let renderMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000
+        #expect(memo.computeCount == 1 && hits == 1_000)
+        #expect(renderMs < 200, "1,000 memo hits + lookups took \(Int(renderMs)) ms")
+        // The sort policy over the archived rows uses the same map.
+        let newest = ArchiveSortPolicy.sortedByArchivedDate(snap.archived, order: .reverse) { snap.archivedDates[$0.id] }
+        #expect(newest.count == 5_100)
+        #expect(snap.archivedDates[newest[0].id]! >= snap.archivedDates[newest[5_099].id]!)
+    }
+
     // MARK: - 2. Scale + 5. Sensor
 
     @Test("100k records: one compute per RecordsVersion, under budget", .timeLimit(.minutes(1)))

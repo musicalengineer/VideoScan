@@ -112,6 +112,12 @@ struct ArchiveCategorySnapshot {
     /// Counts ALL catalog records under the path (component-boundary
     /// containment), one pass instead of one pass per row per render.
     var volumeFileCounts: [String: Int] = [:]
+    /// GH #175: the date each `archived` ROW shows — keyed by the row's id
+    /// (a source row → its master copy's date; an orphan copy → its own).
+    /// Resolved HERE, once per RecordsVersion: the legacy Promote-note path
+    /// allocates ISO formatters and parses notes, which must never run per
+    /// row per render (codex #1311). The table's sort and cell read this.
+    var archivedDates: [UUID: Date] = [:]
 
     func records(for category: ArchiveCategory) -> [VideoRecord] {
         switch category {
@@ -147,12 +153,14 @@ struct ArchiveCategorySnapshot {
                 if model.promotionSource(of: rec) == nil {
                     snap.archived.append(rec)
                     snap.activeAssetCount += 1
+                    if let d = rec.resolvedArchivedAt { snap.archivedDates[rec.id] = d }
                 }
                 continue
             }
             snap.activeAssetCount += 1
-            if model.masterArchiveCopy(of: rec) != nil {
+            if let copy = model.masterArchiveCopy(of: rec) {
                 snap.archived.append(rec)
+                if let d = copy.resolvedArchivedAt { snap.archivedDates[rec.id] = d }
             } else {
                 snap.notYetArchived.append(rec)
                 if needsDate(rec) { snap.needsDate.append(rec) }

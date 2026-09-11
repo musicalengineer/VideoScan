@@ -159,12 +159,12 @@ extension ArchiveView {
 
     private func fileTable(rows: [VideoRecord]) -> some View {
         // GH #175: the Archived column sorts by the date the CELL shows —
-        // a source row's master copy's date — which needs the model.
+        // a source row's master copy's date — read from the per-version
+        // snapshot (O(1) per row; nothing resolved in this body).
         let sorted: [VideoRecord]
         if ArchiveSortPolicy.isArchivedDateSort(sortOrder) {
-            sorted = ArchiveSortPolicy.sortedByArchivedDate(rows, order: sortOrder.first?.order ?? .reverse) { rec in
-                (model.isArchiveCopy(rec) ? rec : model.masterArchiveCopy(of: rec))?.resolvedArchivedAt
-            }
+            let dates = snapshot.archivedDates
+            sorted = ArchiveSortPolicy.sortedByArchivedDate(rows, order: sortOrder.first?.order ?? .reverse) { dates[$0.id] }
         } else {
             sorted = rows.sorted(using: sortOrder)
         }
@@ -250,12 +250,13 @@ extension ArchiveView {
     /// Promote's stamp on the archive copy (this row, or this row's master
     /// copy). O(1): masterArchiveCopy(of:) is the memoized index.
     private func archivedDateCell(_ rec: VideoRecord) -> some View {
-        let copy = model.isArchiveCopy(rec) ? rec : model.masterArchiveCopy(of: rec)
-        let text = copy?.archivedDateText ?? "—"
+        // Same source as the sort: the snapshot's per-version date map.
+        let date = snapshot.archivedDates[rec.id]
+        let text = date.map { VideoRecord.archivedDayFormatter.string(from: $0) } ?? "—"
         return Text(text)
             .font(.system(size: 14, design: .monospaced))
             .foregroundColor(text == "—" ? .secondary : .primary)
-            .help(copy?.resolvedArchivedAt.map { "Archived \($0.formatted(date: .long, time: .shortened))" } ?? "Not archived")
+            .help(date.map { "Archived \($0.formatted(date: .long, time: .shortened))" } ?? "Not archived")
     }
 
     // MARK: - Status cell (replaces the legacy H M B R A pills)
