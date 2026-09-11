@@ -196,8 +196,11 @@ extension VideoScanModel {
         if changed {
             let stamp = ISO8601DateFormatter().string(from: Date())
             let outcome = tier == .none ? "cleared" : "\(person)\(tier == .detected ? "*" : "?")"
-            let line = "FindPerson(\(person)) \(recipeID) \(stamp): score \(String(format: "%.3f", score)) → \(outcome)"
-            rec.notes = rec.notes.isEmpty ? line : rec.notes + "\n" + line
+            // GH #176: signed "recipe: FindPerson(…) …" — unsigned, this
+            // line was migrated into userNotes on 861 records (2026-08).
+            let line = MachineNote.line(author: .recipe,
+                text: "FindPerson(\(person)) \(recipeID) \(stamp): score \(String(format: "%.3f", score)) → \(outcome)")
+            rec.notes = MachineNote.append(line, to: rec.notes)
             finishPeopleMutation([rec])
         }
         return changed

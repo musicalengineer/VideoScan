@@ -232,7 +232,10 @@ enum ScanEngine {
                 o.probe = extractMetadata(probe: probe)
             }
             if !stderrTrimmed.isEmpty {
-                o.notes = stderrTrimmed
+                // GH #176: every stderr line signed "ffprobe: …" so the
+                // author is on the line and no later reader mistakes it
+                // for Rick's text.
+                o.notes = MachineNote.line(author: .ffprobe, text: stderrTrimmed)
             }
             return
         }
@@ -240,19 +243,19 @@ enum ScanEngine {
             if let mxf = MxfHeaderParser.parse(fileAt: path) {
                 applyMxfMetadata(mxf, into: &o.probe)
                 let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
-                o.notes = "MXF header parsed (ffprobe failed: \(reason))"
+                o.notes = MachineNote.line(author: .scan, text: "MXF header parsed (ffprobe failed: \(reason))")
             } else {
                 o.probe.isPlayable    = "Damaged MXF file"
-                o.notes               = stderrTrimmed.isEmpty
+                o.notes               = MachineNote.line(author: .scan, text: stderrTrimmed.isEmpty
                     ? "Neither ffprobe nor MXF header parser could read this file"
-                    : "Damaged MXF — both ffprobe and header parser failed (\(stderrTrimmed))"
+                    : "Damaged MXF — both ffprobe and header parser failed (\(stderrTrimmed))")
                 o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             }
             return
         }
         let diagnosis = humanReadableDiagnosis(stderr: stderrTrimmed)
         o.probe.isPlayable    = diagnosis.label
-        o.notes               = diagnosis.detail
+        o.notes               = MachineNote.line(author: .scan, text: diagnosis.detail)
         o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
     }
 }

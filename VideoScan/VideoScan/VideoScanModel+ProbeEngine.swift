@@ -621,7 +621,7 @@ extension VideoScanModel {
         o.fullPath            = url.path
         o.directory           = url.deletingLastPathComponent().path
         o.probe.isPlayable    = "Cancelled"
-        o.notes               = "Probe cancelled before acquiring a concurrency permit"
+        o.notes               = MachineNote.line(author: .scan, text: "Probe cancelled before acquiring a concurrency permit")
         o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         return o
     }
@@ -696,7 +696,7 @@ extension VideoScanModel {
             o.directory           = url.deletingLastPathComponent().path
             o.sizeBytes           = preSize
             o.probe.isPlayable    = "Timed out"
-            o.notes               = "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled"
+            o.notes               = MachineNote.line(author: .scan, text: "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled")
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             return o
         }
@@ -773,7 +773,7 @@ extension VideoScanModel {
             o.fullPath            = path
             o.directory           = url.deletingLastPathComponent().path
             o.probe.isPlayable    = "File not found"
-            o.notes               = "File was discovered during scan but is no longer accessible"
+            o.notes               = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             return o
         }
@@ -824,7 +824,7 @@ extension VideoScanModel {
             o.sizeBytes           = fileSize
             o.size                = Formatting.humanSize(fileSize)
             o.probe.isPlayable    = "No media signature"
-            o.notes               = "Content sniff found no media container signature in the file header — ffprobe skipped"
+            o.notes               = MachineNote.line(author: .scan, text: "Content sniff found no media container signature in the file header — ffprobe skipped")
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             o.sniffRejected       = true
             return o

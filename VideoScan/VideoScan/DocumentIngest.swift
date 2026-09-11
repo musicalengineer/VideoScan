@@ -112,7 +112,7 @@ enum DocumentIngest {
 
         rec.mediaDisposition = .unreviewed
         rec.archiveStage = .none
-        rec.notes = "Added as a document"
+        rec.notes = MachineNote.line(author: .scan, text: "Added as a document")
         return .success(rec)
     }
 

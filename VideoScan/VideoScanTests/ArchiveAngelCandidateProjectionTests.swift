@@ -102,6 +102,19 @@ struct ArchiveAngelCandidateProjectionTests {
         #expect(!c.hasCaptions)
     }
 
+    @Test("GH #176: a signed machine note in userNotes is not a human note; Rick's line is")
+    @MainActor
+    func signedMachineNoteIsNotHuman() throws {
+        let (sb, model, rec) = try fixture("signednote")
+        defer { sb.cleanup() }
+        rec.userNotes = "ffprobe: Unsupported codec with id 98314 for input stream 0\nrecipe: FindPerson(Donna) recipe-v1-native 2026-08-27T22:30:19Z: score 0.61 → Donna?"
+        let machineOnly = ArchiveAngelCandidate.project(rec, model: model, policy: model.duplicateKeeperPolicy())
+        #expect(!machineOnly.hasUserNotes)
+        rec.userNotes += "\nDonna and Libby on Porch"
+        let withHuman = ArchiveAngelCandidate.project(rec, model: model, policy: model.duplicateKeeperPolicy())
+        #expect(withHuman.hasUserNotes)
+    }
+
     @Test("proposedDate strips unknown trailing parts", arguments: [
         ("1992-07-15", "1992-07-15"), ("1992-07-xx", "1992-07"), ("1992-xx-xx", "1992"), ("xxxx-xx-xx", nil),
     ])

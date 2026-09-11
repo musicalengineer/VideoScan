@@ -1026,6 +1026,11 @@ final class VideoScanModel: ObservableObject {
             log("Moved your notes on \(notesMigrated) record(s) into the new Notes field (probe details stay separate).")
             catalogStore.scheduleSave(records: records)
         }
+        // GH #176 (2026-09-11): one-time repair of the machine text the
+        // split above pumped into userNotes before it knew every machine
+        // shape. Backup first, marker beside catalog.json, idempotent —
+        // see VideoScanModel+NotesRepair. Schedules its own save.
+        repairMachineTextInUserNotes()
         enforcePhaseConsistency()
         repairCorruptedPhases()
         // Volume-role taxonomy migration (2026-08-16): boot volume → System,

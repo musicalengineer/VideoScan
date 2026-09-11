@@ -101,18 +101,21 @@ extension ArchiveAngelCandidate {
     /// note and must stay one (codex #1303). ffmpeg/ffprobe log lines are
     /// matched by their `[<component> @ 0x<address>]` header, not by a
     /// leading bracket.
-    nonisolated static let machineNotePrefixes: [String] = [
-        "unsupported codec with", "could not open codec", "file could not be analy",
-        "consider increasing the", "last message repeated", "file is corrupt or inc",
-        "file contains invalid", "invalid data found when", "moov atom not found",
-        "findperson(", "copy at /", "promote 20",
-    ]
-    nonisolated static let ffmpegLogHeader = #"^\[[a-z0-9_,]+ @ 0x[0-9a-f]+\]"#
+    ///
+    /// GH #176 (2026-09-11): the table moved to VideoScanCore.MachineNote
+    /// (the one classifier — UserNotesMigration reads it too) and grew the
+    /// SIGNED shape every machine writer now produces ("ffprobe: …",
+    /// "recipe: …", "cleanup: …"). The names below stay as views onto it
+    /// so this reader keeps working on the legacy (unsigned) catalog.
+    nonisolated static var machineNotePrefixes: [String] {
+        MachineNote.ffprobePhrases + MachineNote.scanPhrases
+            + ["combined: ", "findperson(", "copy at /"]
+            + MachineNote.Author.allCases.map { $0.rawValue + ": " }
+    }
+    nonisolated static var ffmpegLogHeader: String { MachineNote.ffmpegLogHeader }
 
     nonisolated static func isMachineNoteLine(_ line: String) -> Bool {
-        let key = line.lowercased()
-        if machineNotePrefixes.contains(where: { key.hasPrefix($0) }) { return true }
-        return key.range(of: ffmpegLogHeader, options: .regularExpression) != nil
+        MachineNote.isMachineLine(line)
     }
 
     /// Lines of `notes` a person could have written. Pure; table-tested.

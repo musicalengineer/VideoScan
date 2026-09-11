@@ -87,11 +87,16 @@ public enum UserNotesMigration {
     ///      "MXF header parsed (" (ScanEngine.swift native-KLV fallback
     ///                             note, "MXF header parsed (ffprobe
     ///                             failed: ...)").
+    ///
+    /// GH #176 (2026-09-11): delegates to MachineNote.author(of:), the ONE
+    /// classifier. The three shapes above were the whole table once, and
+    /// that gap was the pump — every unsigned machine line ("Unsupported
+    /// codec with id …", "FindPerson(Donna) …") looked human here and was
+    /// moved into userNotes on the next catalog load. A bare "[" is no
+    /// longer machine on its own ("[1984] Dad and Donna at Thanksgiving"
+    /// is Rick's, codex #1303) — the ffprobe header "[aac @ 0x…]" is.
     public static func isMachineLine(_ line: Substring) -> Bool {
-        if line.hasPrefix("[") { return true }
-        if line.hasPrefix("Combined: ") { return true }
-        if line.hasPrefix("MXF header parsed (") { return true }
-        return isJourneyStampLine(line)
+        MachineNote.isMachineLine(line)
     }
 
     /// The verbs the MFO / relocate pipeline writes as File Journey

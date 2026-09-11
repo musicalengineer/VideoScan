@@ -85,13 +85,16 @@ extension VideoScanModel {
         return carried
     }
 
-    /// "copy at <path> (from <originalFullPath>) removed 2026-08-18; identical bytes"
+    /// "cleanup: copy at <path> (from <originalFullPath>) removed 2026-08-18; identical bytes"
+    /// (signed per GH #176 — the unsigned shape is still recognized by
+    /// MachineNote.author(of:) for the lines already in the catalog).
     static func removedCopyJourneyLine(extraPath: String, originalFullPath: String?,
                                        removedAt: Date) -> String {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "yyyy-MM-dd"
         let from = (originalFullPath?.isEmpty == false) ? " (from \(originalFullPath!))" : ""  // swiftlint:disable:this force_unwrapping
-        return "copy at \(extraPath)\(from) removed \(fmt.string(from: removedAt)); identical bytes"
+        return MachineNote.line(author: .cleanup,
+            text: "copy at \(extraPath)\(from) removed \(fmt.string(from: removedAt)); identical bytes")
     }
 }

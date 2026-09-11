@@ -134,7 +134,7 @@ struct DuplicateEnrichmentInheritanceTests {
         // Empty Avid sub-fields on the master DO fill (field-by-field).
         #expect(master.avidMobID == "mob-1")
         #expect(carried == ["Avid identity", "provenance note"], "\(carried)")
-        #expect(master.notes.hasPrefix("existing journey\ncopy at "))
+        #expect(master.notes.hasPrefix("existing journey\ncleanup: copy at "))
     }
 
     /// A bare extra carries only the provenance line; the human merge
@@ -147,7 +147,7 @@ struct DuplicateEnrichmentInheritanceTests {
         let carried = model.applyEnrichmentInheritance(from: extra, to: master)
         #expect(carried == ["provenance note"])
         #expect(master.starRating == 0 && master.userNotes.isEmpty)
-        #expect(master.notes.hasPrefix("copy at /Volumes/X/a.mov removed "))
+        #expect(master.notes.hasPrefix("cleanup: copy at /Volumes/X/a.mov removed "))
     }
 
     /// The real delete path runs BOTH merges on the verified outcome.
