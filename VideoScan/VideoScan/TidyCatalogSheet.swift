@@ -18,7 +18,7 @@ struct TidyCatalogSheet: View {
     @State private var csvSavedTo: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18))
@@ -32,17 +32,17 @@ struct TidyCatalogSheet: View {
                     Text("Nothing to tidy — every file in the catalog is a video or audio that belongs to one. 🎉")
                         .font(.body)
                 } else {
-                    Text("These files aren't home videos, so VideoScan can set them aside. They stay on your drives and in the catalog — just hidden from lists and searches until you want them.")
+                    // One paragraph, and an accurate one (Rick 2026-09-11):
+                    // the sheet used to say both "they stay in the catalog"
+                    // and "Tidy REMOVES entries from the catalog".
+                    // applyTidyCatalog only sets `setAsideReason` — files
+                    // and records both stay; the records are hidden.
+                    Text("These files aren't home videos, so VideoScan can set them aside. Your files are not touched, and their catalog entries stay — hidden from lists and searches until you put them back.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Tidy REMOVES entries from the catalog — your files are not touched, and anything set aside can be put back.")
-                        .font(.callout.weight(.medium))
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
                         countRow("photo.stack", .orange,
                                  "Photos and camera images", plan.stillCount)
                         countRow("music.note", .pink,
@@ -51,13 +51,13 @@ struct TidyCatalogSheet: View {
                                  "Audio with no matching video", plan.unlinkedAudioCount)
                         countRow("livephoto", .teal,
                                  "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
-                        Divider()
+                        Divider().padding(.vertical, 4)
                         countRow("checkmark.circle", .green,
                                  "Audio kept — belongs to a video", plan.keptLinkedAudio)
                         countRow("link.circle", .blue,
                                  "Kept — part of a recovered A/V pair", plan.keptPairProtected)
                     }
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
 
                     HStack(spacing: 8) {
                         Button {
@@ -115,8 +115,8 @@ struct TidyCatalogSheet: View {
                 }
             }
         }
-        .padding(20)
-        .frame(width: 480)
+        .padding(26)
+        .frame(width: 580)
         .task {
             // Dry run — off-main scoring; the sheet shows honest progress
             // until the plan lands (sub-second on M-series at 100k).
