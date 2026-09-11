@@ -222,6 +222,102 @@ struct ArchiveAngelEvidenceTests {
     }
 }
 
+@Suite("Archive Angel scorer — T10 H1 download/rip cap (night of 2026-09-10)")
+struct ArchiveAngelDownloadCapTests {
+
+    private func result(_ c: ArchiveAngelCandidate) -> (score: Int, lines: [String]) {
+        guard case .eligible(let score, let ev) = ArchiveAngelScorer.verdict(c) else { return (-1, []) }
+        return (score, ev.map(\.line))
+    }
+
+    @Test("Gladiator.mp4 — h264, 2.64 GB over 2 h 51 min, unmarked — is capped at grade C with the rate printed")
+    func filmIsCapped() {
+        let film = ArchiveAngelCandidate(filename: "Gladiator.mp4",
+            fullPath: "/Volumes/SanDisk/From_Breen_NetworkBackups/Movies/Gladiator.mp4",
+            sizeBytes: 2_640_000_000, durationSeconds: 10259, hasEmbeddedDate: true, isOnlyCopy: true,
+            videoCodec: "h264")
+        let r = result(film)
+        #expect(r.score == 59)
+        #expect(r.lines.last?.hasPrefix("Looks like a download or rip — h264 at 2059 kbit/s for 2 h 50 min") == true)
+        #expect(ArchiveAngelGrade.from(score: r.score) == .c)
+        // Every point still has a printed reason: the cap is a negative line.
+        guard case .eligible(let score, let ev) = ArchiveAngelScorer.verdict(film) else { Issue.record("eligible"); return }
+        #expect(score == ev.map(\.points).reduce(0, +))
+    }
+
+    @Test("a DivX CD rip (.avi, mpeg4, 0.73 GB, 2 h) and a 1 Mbit/s h264 download are capped")
+    func ripsAndDownloads() {
+        #expect(result(.init(filename: "Pulp Fiction.avi", sizeBytes: 730_000_000, durationSeconds: 8881, videoCodec: "mpeg4")).score == 59)
+        #expect(result(.init(filename: "SpinArt_Download.mp4", sizeBytes: 770_000_000, durationSeconds: 5419,
+                             hasEmbeddedDate: true, videoCodec: "h264")).score == 59)
+    }
+
+    @Test("family originals are never capped: preservation codecs at any rate, h264 from a camera, short phone clips, or anything a human marked")
+    func familyOriginalsUntouched() {
+        let cases: [(String, ArchiveAngelCandidate)] = [
+            ("Thanksgiving-Raw_Default.mov svq3 455 kbit/s", .init(sizeBytes: 320_000_000, durationSeconds: 5629, videoCodec: "svq3")),
+            ("Thanksgiving2009Sequence.mov prores 1.6 Mbit/s", .init(sizeBytes: 1_080_000_000, durationSeconds: 5422, videoCodec: "prores")),
+            ("Christmas_1990_partial.dv", .init(sizeBytes: 34_360_000_000, durationSeconds: 9553, videoCodec: "dvvideo")),
+            ("Cape-1993-archive.mkv ffv1", .init(sizeBytes: 60_670_000_000, durationSeconds: 7338, videoCodec: "ffv1")),
+            ("Kids2004.mpg mpeg2 6.3 Mbit/s", .init(sizeBytes: 2_940_000_000, durationSeconds: 3733, videoCodec: "mpeg2video")),
+            ("Christmas-1990-something.mov h264 27 Mbit/s", .init(sizeBytes: 5_840_000_000, durationSeconds: 1715, videoCodec: "h264")),
+            ("phone clip h264 3 Mbit/s but 4 min", .init(sizeBytes: 90_000_000, durationSeconds: 240, videoCodec: "h264")),
+            ("starred 2 Mbit/s h264 film", .init(sizeBytes: 2_640_000_000, durationSeconds: 10259, starRating: 1, videoCodec: "h264")),
+            ("confirmed person on a 2 Mbit/s h264 file", .init(sizeBytes: 2_640_000_000, durationSeconds: 10259, confirmedPeople: ["Donna"], videoCodec: "h264")),
+            ("codec unknown (empty)", .init(sizeBytes: 730_000_000, durationSeconds: 8881, videoCodec: "")),
+        ]
+        for (name, c) in cases {
+            let r = result(c)
+            #expect(r.score >= 0 && !r.lines.contains { $0.hasPrefix("Looks like a download or rip") }, "\(name): \(r.lines)")
+        }
+        #expect(ArchiveAngelScorer.rulesVersion >= 4, "H1 changed the rules → the sidecar must re-derive")
+    }
+
+    @Test("machine text in userNotes is not a human note — Gladiator's 'FindPerson(Donna) recipe…' does not exempt it")
+    func machineNotesAreNotHuman() {
+        let machine = [
+            "FindPerson(Donna) recipe-v1-native 2026-08-27T22:30:19Z: score 0.61 (3 hits / 40 frames)",
+            "Unsupported codec with id 98314 for input stream 0",
+            "[aac @ 0x7ac800a80] This stream seems to use a channel layout",
+            "Last message repeated 3 times",
+            "Could not open codec for stream 1",
+            "File could not be analyzed: moov atom not found",
+            "Consider increasing the value of the 'analyzeduration'",
+            "copy at /Volumes/Projects/MoviesExpansion/x.mov (Promote)",
+            "Promote 2026-09-09T17:20:11Z → BreenFamilyArchive/1990s/…",
+            "File is corrupt or incomplete",
+        ]
+        for m in machine {
+            #expect(!ArchiveAngelCandidate.hasHumanNote(m), "\(m)")
+            #expect(!ArchiveAngelCandidate.hasHumanNote(m + "\n" + m), "two machine lines")
+        }
+        let human = ["Mark’s first birthday, Nana's house", "Donna and Libby on Portland Head",
+                     "Sue, Barry, Ellen, Paul at the Cape", "Video of Rick and kids", "this is a test abcdefg"]
+        for h in human { #expect(ArchiveAngelCandidate.hasHumanNote(h), "\(h)") }
+        // Mixed: one human line among machine lines counts.
+        #expect(ArchiveAngelCandidate.humanNoteLines(machine[0] + "\nDan’s Kindergarten, Franklin\n" + machine[1]) == ["Dan’s Kindergarten, Franklin"])
+        #expect(!ArchiveAngelCandidate.hasHumanNote("   \n\n"))
+        // Through the scorer: the film with a machine note is still capped; with a human note it is not.
+        let film = ArchiveAngelCandidate(sizeBytes: 2_640_000_000, durationSeconds: 10259, videoCodec: "h264")
+        #expect(result(film).score == 59)
+        var noted = film; noted.hasUserNotes = true
+        #expect(result(noted).score > 59)
+    }
+
+    @Test("threshold edges: 3,999 kbit/s at 20 min is capped; 4,000 is not; 19 min 59 s is not")
+    func edges() {
+        func c(_ kbps: Double, _ secs: Double) -> ArchiveAngelCandidate {
+            .init(sizeBytes: Int64(kbps * 1000 * secs / 8), durationSeconds: secs, videoCodec: "h264")
+        }
+        #expect(ArchiveAngelScorer.looksLikeDownloadOrRip(c(3999, 1200)))
+        #expect(!ArchiveAngelScorer.looksLikeDownloadOrRip(c(4000, 1200)))
+        #expect(!ArchiveAngelScorer.looksLikeDownloadOrRip(c(1000, 1199)))
+        // The cap only lowers: a rip that scores under 59 anyway prints no line.
+        let low = c(1000, 1300)   // 21 min: scene tier only → 10 + only-copy? no → well under 59
+        #expect(!result(low).lines.contains { $0.hasPrefix("Looks like a download") })
+    }
+}
+
 @Suite("Archive Angel scorer — selection")
 struct ArchiveAngelSelectionTests {
 

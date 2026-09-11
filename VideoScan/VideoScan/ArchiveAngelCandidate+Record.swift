@@ -42,7 +42,7 @@ extension ArchiveAngelCandidate {
             confirmedPeople: r.confirmedByUserPeople.map(\.name),
             detectedPeople: r.detectedPeople,
             suspectedPeople: r.suspectedPeople,
-            hasUserNotes: !r.userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            hasUserNotes: Self.hasHumanNote(r.userNotes),
             tagCount: r.tags.count,
             hasCaptions: !r.sceneCaptions.isEmpty,
             hasOCRText: !r.ocrText.isEmpty,
@@ -61,7 +61,9 @@ extension ArchiveAngelCandidate {
             volumeOnline: volumeOnline,
             isOnMasterArchive: isOnMasterArchive,
             useCount: 0,
-            lastUsed: nil)
+            lastUsed: nil,
+            videoCodec: r.videoCodec,
+            duplicateGroupID: r.duplicateGroupID)
     }
 
     /// The projection the job uses: keeper policy built ONCE by the
@@ -82,6 +84,37 @@ extension ArchiveAngelCandidate {
                                      archivedCopyExists: archived, isOnMasterArchive: onMaster,
                                      volumeName: name, volumeOnline: online)
     }
+}
+
+// MARK: - Human vs machine notes (pure)
+
+extension ArchiveAngelCandidate {
+    /// T10 H1 (night of 2026-09-10): 9,977 of 13,842 records carry text in
+    /// `userNotes` that no person typed — ffprobe/ffmpeg stderr ("Unsupported
+    /// codec with id…", "[aac @ 0x…] …", "Last message repeated…"), the
+    /// Find-and-Tag recipe ("FindPerson(Donna) recipe-v1-native …: score …"),
+    /// Promote's "copy at /Volumes/…" line. About ten records hold a real
+    /// note ("Mark's first birthday, …"). Only those are a HUMAN mark: they
+    /// earn the richness point and exempt a file from the machine floors.
+    nonisolated static let machineNotePrefixes: [String] = [
+        "[", "unsupported codec", "could not open codec", "file could not be analy",
+        "consider increasing", "last message repeated", "file is corrupt", "file contains invalid",
+        "invalid data found", "moov atom not found", "error while", "could not find codec",
+        "findperson(", "find and tag", "findtag", "copy at /", "promote 20", "archive angel",
+        "balanced audio", "verify audio", "transcode ", "repair ", "ffprobe", "ffmpeg",
+    ]
+
+    /// Lines of `notes` a person could have written. Pure; table-tested.
+    nonisolated static func humanNoteLines(_ notes: String) -> [String] {
+        notes.split(whereSeparator: { $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in
+                guard !line.isEmpty else { return false }
+                let key = line.lowercased()
+                return !machineNotePrefixes.contains { key.hasPrefix($0) }
+            }
+    }
+
+    nonisolated static func hasHumanNote(_ notes: String) -> Bool { !humanNoteLines(notes).isEmpty }
 }
 
 // MARK: - Plan-entry helpers (pure)

@@ -61,6 +61,18 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// Spotlight `kMDItemUseCount` / in-app play count, whichever is larger.
     var useCount: Int
     var lastUsed: Date?
+    /// ffprobe codec name ("dvvideo", "prores", "h264", "mpeg4"…) — T10 H1:
+    /// delivery codecs at download rates are rips, preservation codecs never are.
+    var videoCodec: String
+    /// Catalog duplicate group — T10 H2: one member per group per batch.
+    var duplicateGroupID: UUID?
+
+    /// A person's word on this file: a star, a confirmed person, a note they
+    /// typed (machine text in userNotes is filtered by the projection) or a
+    /// user date. Machine floors and caps yield to it.
+    var isHumanMarked: Bool {
+        starRating > 0 || !confirmedPeople.isEmpty || hasUserNotes || !(userDate ?? "").isEmpty
+    }
 
     init(id: UUID = UUID(), filename: String = "clip.mov", fullPath: String = "/Volumes/X/clip.mov",
          sizeBytes: Int64 = 1_000_000_000, durationSeconds: Double = 60,
@@ -74,7 +86,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          formatAtRisk: Bool = false, audioProblem: String? = nil,
          isPairedHalf: Bool = false, hasArchivedDuplicate: Bool = false, isOnlyCopy: Bool = false,
          volumeRole: VolumeRole = .workspace, volumeName: String = "X", volumeOnline: Bool = true,
-         isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil) {
+         isOnMasterArchive: Bool = false, useCount: Int = 0, lastUsed: Date? = nil,
+         videoCodec: String = "", duplicateGroupID: UUID? = nil) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -87,6 +100,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.hasArchivedDuplicate = hasArchivedDuplicate; self.isOnlyCopy = isOnlyCopy
         self.volumeRole = volumeRole; self.volumeName = volumeName; self.volumeOnline = volumeOnline
         self.isOnMasterArchive = isOnMasterArchive; self.useCount = useCount; self.lastUsed = lastUsed
+        self.videoCodec = videoCodec; self.duplicateGroupID = duplicateGroupID
     }
 }
 
@@ -189,6 +203,15 @@ struct ArchiveAngelWeights: Sendable, Equatable {
     /// 25 Mbit/s, a poor web clip 300 kbit/s, iMovie's thumbnail stream
     /// under 5 kbit/s — 100 kbit/s separates them by two orders either way.
     var minimumAverageKilobitsPerSecond = 100.0
+    /// T10 H1 (night of 2026-09-10): the live top 50 held 15 commercial films
+    /// and 6 downloads — h264/DivX at 0.6–3.5 Mbit/s over 1–3 h, scoring
+    /// 103–113 on length alone. A family original is DV/ProRes/FFV1/MPEG-2/
+    /// SVQ3 at any rate, or h264 at 20+ Mbit/s from a camera. An UNMARKED
+    /// delivery-codec file under this rate and over this length is capped
+    /// at grade C — never rejected, never applied to a starred file.
+    var downloadMaxKilobitsPerSecond = 4000.0
+    var downloadMinimumDurationSeconds = 1200.0
+    var downloadCapScore = 59
 
     static let standard = ArchiveAngelWeights()
 }
@@ -202,8 +225,8 @@ enum ArchiveAngelScorer {
     /// "assessed under old rules" and the sweep re-scores at once (Rick
     /// 2026-09-10: "this will require updated assessments as we refine
     /// selection criteria"). 2 = flat 60 s floor + duration tiers; 3 = app-cache
-    /// and proxy-stream floors.
-    static let rulesVersion = 3
+    /// and proxy-stream floors; 4 = download/rip cap (T10 H1).
+    static let rulesVersion = 4
 
     /// The verdict for one record. Pure.
     static func verdict(_ c: ArchiveAngelCandidate,
@@ -244,16 +267,7 @@ enum ArchiveAngelScorer {
             add(pts, line)
         }
 
-        var richness: [String] = []
-        if c.hasUserNotes { richness.append("notes") }
-        if c.tagCount > 0 { richness.append(c.tagCount == 1 ? "1 tag" : "\(c.tagCount) tags") }
-        if !c.confirmedPeople.isEmpty { richness.append("people") }
-        if c.hasCaptions { richness.append("captions") }
-        if c.hasOCRText { richness.append("on-screen text") }
-        if c.inferredRecordDate != nil || c.userDate != nil { richness.append("date") }
-        if c.hasEmbeddedDate { richness.append("camera date") }
-        if c.hasTapeOrClipName { richness.append("tape/clip name") }
-        if c.starRating > 0 { richness.append("rating") }
+        let richness = Self.richnessItems(c)
         if !richness.isEmpty {
             add(min(w.richnessCap, w.richnessEach * richness.count),
                 "Has " + richness.joined(separator: ", "))
@@ -287,7 +301,23 @@ enum ArchiveAngelScorer {
             add(0, "Audio: \(problem) — will balance")
         }
 
+        if let cap = Self.downloadCapLine(c, lines: lines, weights: w) { lines.append(cap) }
+
         return .eligible(score: lines.reduce(0) { $0 + $1.points }, evidence: lines)
+    }
+
+    /// T10 H1: a download or rip can reach the top on length alone; cap it
+    /// at candidate grade unless a human has marked it. A negative line, so
+    /// the score is still the sum of its printed reasons. nil = no cap.
+    static func downloadCapLine(_ c: ArchiveAngelCandidate, lines: [ArchiveAngelEvidence],
+                                weights w: ArchiveAngelWeights) -> ArchiveAngelEvidence? {
+        guard !c.isHumanMarked, looksLikeDownloadOrRip(c, weights: w) else { return nil }
+        let total = lines.reduce(0) { $0 + $1.points }
+        guard total > w.downloadCapScore else { return nil }
+        let kbps = Int((Double(c.sizeBytes) * 8 / c.durationSeconds / 1000).rounded())
+        return .init(points: w.downloadCapScore - total,
+                     line: "Looks like a download or rip — \(c.videoCodec) at \(kbps) kbit/s for "
+                        + durationText(c.durationSeconds) + ", no star, person or note; capped at candidate grade")
     }
 
     /// Hard floor (design §3.2): the reasons a record is never a candidate.
@@ -354,6 +384,40 @@ enum ArchiveAngelScorer {
     }
 
     // MARK: helpers
+
+    /// The "Has notes, 2 tags, people…" items. `notes` means a HUMAN note
+    /// (the projection filters machine text out of userNotes, T10 H1).
+    static func richnessItems(_ c: ArchiveAngelCandidate) -> [String] {
+        var richness: [String] = []
+        if c.hasUserNotes { richness.append("notes") }
+        if c.tagCount > 0 { richness.append(c.tagCount == 1 ? "1 tag" : "\(c.tagCount) tags") }
+        if !c.confirmedPeople.isEmpty { richness.append("people") }
+        if c.hasCaptions { richness.append("captions") }
+        if c.hasOCRText { richness.append("on-screen text") }
+        if c.inferredRecordDate != nil || c.userDate != nil { richness.append("date") }
+        if c.hasEmbeddedDate { richness.append("camera date") }
+        if c.hasTapeOrClipName { richness.append("tape/clip name") }
+        if c.starRating > 0 { richness.append("rating") }
+        return richness
+    }
+
+    /// Codecs a rip or a download arrives in. Preservation and camera
+    /// codecs (dvvideo, prores, ffv1, mpeg2video, svq3, mjpeg, hevc from a
+    /// phone at 20 Mbit/s…) are deliberately NOT listed: only the rate
+    /// separates a phone hevc clip from a rip, and the rate rule below
+    /// keeps a 20 Mbit/s camera file well clear.
+    static let deliveryCodecs: Set<String> = [
+        "h264", "avc1", "mpeg4", "xvid", "divx", "msmpeg4v3", "msmpeg4v2", "msmpeg4",
+        "hevc", "h265", "vp8", "vp9", "av1", "wmv3", "wmv2", "vc1", "flv1", "theora",
+    ]
+
+    static func looksLikeDownloadOrRip(_ c: ArchiveAngelCandidate,
+                                       weights w: ArchiveAngelWeights = .standard) -> Bool {
+        guard c.durationSeconds >= w.downloadMinimumDurationSeconds, c.sizeBytes > 0 else { return false }
+        guard deliveryCodecs.contains(c.videoCodec.lowercased()) else { return false }
+        let kbps = Double(c.sizeBytes) * 8 / c.durationSeconds / 1000
+        return kbps < w.downloadMaxKilobitsPerSecond
+    }
 
     /// Folder components an editing app writes for itself. Matched as
     /// whole components (case-insensitive) so a family folder named
