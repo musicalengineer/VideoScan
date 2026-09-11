@@ -42,6 +42,13 @@ extension VideoRecord {
         return earliest
     }
 
+    /// Sort key for the Archive tab's "Archived" column (GH #175). A
+    /// KeyPathComparator needs a key path on the row type; the REAL date
+    /// for a source row lives on its master copy and needs the model, so
+    /// ArchiveView sorts through ArchiveSortPolicy when this key path is
+    /// selected — this value is only the marker (and the copy's own date).
+    var archivedSortDate: Date { resolvedArchivedAt ?? .distantPast }
+
     /// "2026-08-16" — the archive view's column text; "—" when unknown.
     var archivedDateText: String {
         guard let d = resolvedArchivedAt else { return "—" }

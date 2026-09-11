@@ -108,6 +108,11 @@ struct ArchiveView: View {
         .task { refreshAngelBatches() }
         .onChange(of: fileOpsCenter.jobs.map(\.id)) { _, _ in refreshAngelBatches() }
         .onChange(of: angelFinishedJobCount) { _, _ in refreshAngelBatches() }
+        // GH #175: landing on the Archived column sorts newest first.
+        .onChange(of: sortOrder) { old, new in
+            let adjusted = ArchiveSortPolicy.adjusted(new: new, previous: old)
+            if adjusted != new { sortOrder = adjusted }
+        }
     }
 
     // MARK: - Archive Angel batches

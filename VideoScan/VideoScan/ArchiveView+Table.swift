@@ -158,7 +158,16 @@ extension ArchiveView {
     // MARK: - Table
 
     private func fileTable(rows: [VideoRecord]) -> some View {
-        let sorted = rows.sorted(using: sortOrder)
+        // GH #175: the Archived column sorts by the date the CELL shows —
+        // a source row's master copy's date — which needs the model.
+        let sorted: [VideoRecord]
+        if ArchiveSortPolicy.isArchivedDateSort(sortOrder) {
+            sorted = ArchiveSortPolicy.sortedByArchivedDate(rows, order: sortOrder.first?.order ?? .reverse) { rec in
+                (model.isArchiveCopy(rec) ? rec : model.masterArchiveCopy(of: rec))?.resolvedArchivedAt
+            }
+        } else {
+            sorted = rows.sorted(using: sortOrder)
+        }
         return Table(sorted, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
                 Text(rec.filename)
@@ -196,7 +205,10 @@ extension ArchiveView {
             // Rick 2026-09-09: "we need to see the date a file or media
             // artefact was archived." The date lives on the archive COPY; a
             // source row shows its master copy's date.
-            TableColumn("Archived") { rec in
+            // GH #175: sortable — newest first on the first click
+            // (ArchiveSortPolicy); the key path is a marker, the real order
+            // is computed above from the copy's date.
+            TableColumn("Archived", value: \.archivedSortDate) { rec in
                 archivedDateCell(rec)
             }
             .width(min: 90, ideal: 100)
