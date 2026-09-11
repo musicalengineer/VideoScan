@@ -131,6 +131,15 @@ enum HallieProvenanceFollowUp {
         for lead in sourceLeads {
             if let rest = tail(after: lead), rest.allSatisfy({ backReferences.contains($0) }) { return .source }
         }
+        // "show me rick's biography source" / "rick breen's sources" / "the
+        // source for rick's biography" (GH #182, live 2026-09-11): a named
+        // possessive over the last answer's subject is still a provenance
+        // ask, never a co-occurrence anchor. The name is not checked here —
+        // the answer already speaks about whatever the last answer was.
+        if phrase.firstMatch(of: /^(?:show me |show |what is |what's |whats |give me |where is )?(?:the )?(?:[a-z]+(?: [a-z]+)?'s )(?:biography |bio |answer |last answer |vitals )?sources?$/) != nil
+            || phrase.firstMatch(of: /^(?:show me |show |what is |what's |whats |where is )?(?:the )?sources? (?:for|of|behind) (?:[a-z]+(?: [a-z]+)?'s )(?:biography|bio|answer|vitals)$/) != nil {
+            return .source
+        }
         return nil
     }
 

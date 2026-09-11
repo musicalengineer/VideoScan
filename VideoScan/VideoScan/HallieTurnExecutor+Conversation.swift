@@ -917,6 +917,16 @@ extension HallieTurnExecutor {
         if let surnameAnswer = HallieSurnameReference.answer(question) {
             return .answer(surnameAnswer)
         }
+        // "show rick playing guitar [video]" (GH #182): a known person doing
+        // something is a catalog search — person + keywords — never the
+        // translator's co-occurrence guess.
+        if let ask = HallieMediaActivityAsk.detect(question, isKnownPerson: isKnownPerson) {
+            return .run(Intent(
+                originalQuestion: question,
+                ast: .presence(.init(people: [ask.person], mediaKind: ask.wantsVideo ? .video : nil,
+                                     keywords: ask.keywords)),
+                playAfterAnswer: playAfterAnswer))
+        }
         if HalliePersonFactQuestion.isTreeCorrection(question) {
             let retried = memory.lastExchange.flatMap {
                 HalliePersonFactQuestion.detect($0.question, isKnownPerson: isKnownPerson)

@@ -48,6 +48,17 @@ struct HallieProvenanceFollowUpTests {
               catalogPersonName: "Donna", matchCount: 7, composedBy: .model)
     }
 
+    /// GH #182 (live 2026-09-11): "show me rick's biography source" went to
+    /// the co-occurrence lane. A named possessive over the last answer is
+    /// still a provenance ask.
+    @Test func possessiveBiographySourceIsAProvenanceAsk() {
+        #expect(HallieProvenanceFollowUp.detect("show me rick's biography source") == .source)
+        #expect(HallieProvenanceFollowUp.detect("rick breen’s sources") == .source)
+        #expect(HallieProvenanceFollowUp.detect("what's the source for rick's biography?") == .source)
+        #expect(HallieProvenanceFollowUp.detect("how do you know Donna") == nil, "a real question about a person")
+        #expect(HallieProvenanceFollowUp.detect("show me rick's biography") == nil, "no source word")
+    }
+
     @Test func sourceAnswerNamesTheCatalogTheTrailAndTheCitedFiles() {
         var memory = HallieTurnExecutor.ConversationMemory()
         let intent = HallieTurnExecutor.Intent(originalQuestion: "show me donna at the cape",

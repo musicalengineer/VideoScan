@@ -308,6 +308,35 @@ struct HallieLineageDetectTests {
         }
     }
 
+    /// GH #182 (live 2026-09-11): "what are the names of rick's sons?" reached
+    /// the translator and came back as a co-occurrence anchor. The common
+    /// sentence forms of a named one-hop kin question are claimed
+    /// deterministically; "who is X's brother" (singular) keeps its pin.
+    @Test func namedKinSentencesAreKinshipAsks() {
+        #expect(Q.detect("what are the names of rick's sons?") == .kinship(person: "Rick", relation: .son, side: nil))
+        #expect(Q.detect("What are the names of Rick's sons") == .kinship(person: "Rick", relation: .son, side: nil))
+        #expect(Q.detect("who are donna's children") == .kinship(person: "Donna", relation: .children, side: nil))
+        #expect(Q.detect("identify rick's children") == .kinship(person: "Rick", relation: .children, side: nil))
+        #expect(Q.detect("list the names of tim breen's kids") == .kinship(person: "Tim Breen", relation: .children, side: nil))
+        #expect(Q.detect("name rick's parents") == .kinship(person: "Rick", relation: .parents, side: nil))
+        #expect(Q.detect("who were martha lamson's daughters?") == .kinship(person: "Martha Lamson", relation: .daughter, side: nil))
+        // Kept as before: singular "who is …" keeps the translator route; pronoun/my forms are the fragment's.
+        #expect(Q.detect("who is tim's brother") == nil)
+        #expect(Q.detect("what are the names of my sons") == .kinship(person: nil, relation: .son, side: nil) || Q.detect("what are the names of my sons") == nil)
+        #expect(Q.detect("what are the names of the boys") == nil)
+        #expect(Q.detect("what are the names of rick's guitars") == nil)
+    }
+
+    /// GH #182: "tell me about the breen family" is the surname tree, not a
+    /// co-occurrence anchor; the answer falls through for an unknown surname.
+    @Test func aboutTheSurnameFamilyIsASurnameTree() {
+        #expect(Q.detect("tell me about the breen family") == .surnameTree(surname: "breen"))
+        #expect(Q.detect("What about the Latta family?") == .surnameTree(surname: "latta"))
+        #expect(Q.detect("who are the mcgills family") == nil)
+        #expect(Q.detect("tell me about the family") == nil)
+        #expect(Q.detect("tell me about the breen family reunion") == nil)
+    }
+
     @Test func surnameTreeShapes() {
         #expect(Q.detect("show the family tree for the latta family") == .surnameTree(surname: "latta"))
         #expect(Q.detect("show the family tree for the current breen family") == .surnameTree(surname: "breen"))

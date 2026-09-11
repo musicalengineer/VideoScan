@@ -369,6 +369,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if let m = lower.firstMatch(of: /\bthe ([a-z][a-z'-]+) family(?:'s)? tree\b/) {
             return .surnameTree(surname: String(m.1))
         }
+        // "tell me about the breen family" (GH #182, live 2026-09-11: went
+        // to co-occurrence with anchor "breen"): a surname family, the
+        // whole question, is the surname tree; the answer falls through
+        // when the tree knows no such surname.
+        if let m = lower.firstMatch(of: /^(?:(?:hallie|please|ok|okay|so),?\s+)*(?:tell (?:me|us) about|what about|who (?:are|were)|describe|show (?:me|us)|about)\s+the\s+([a-z][a-z'-]+)\s+(?:family|clan)\s*\??\s*$/) {
+            return .surnameTree(surname: String(m.1))
+        }
         // "videos of nathaniel parker sr" — last, and only so the answer
         // can decline for a pre-photography person; see `.personVideos`.
         if let m = lower.firstMatch(of: /\b(?:videos?|films?|footage|movies?|clips?|home movies)\s+of\s+([a-z][a-z .'-]+?)\s*$/) {
@@ -731,7 +738,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         "please ", "hallie ", "show me ", "show ", "tell me about ", "tell me ", "tell us about ",
         "give me ", "what about ", "what is ", "what's ", "who is ", "who was ", "who were ",
         "who's ", "about ", "list ", "can you ", "could you ", "draw ", "display ", "trace ",
-        "find ",
+        "find ", "identify ",
     ]
 
     static func possessor(in fragment: String) -> String? {
@@ -780,6 +787,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// the traversal cannot walk; an unknown word ("grandson") → nil.
     static func kinshipQuestion(in lower: String) -> HallieLineageQuestion? {
         if let fragment = kinFragmentQuestion(in: lower) { return fragment }
+        if let sentence = namedKinSentenceQuestion(in: lower) { return sentence }
         // The relation word: "(great )*grand<x>", "3rd great grand<x>",
         // "5x great grand<x>", "three times great grand<x>".
         let pattern = /(?:^|\s)(?:(my|our)|([a-z][a-z .'-]*?)'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+)(?:\s+on\s+(?:his|her|my|our|their|the)\s+(paternal|maternal|father'?s|mother'?s)\s+side)?\b/
@@ -868,6 +876,27 @@ enum HallieLineageQuestion: Equatable, Sendable {
         guard !words.isEmpty, words.count <= 5,
               !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
               possessor.firstMatch(of: /^[a-z][a-z .'-]*$/) != nil,
+              !possessor.hasPrefix("the ") else { return nil }
+        return .kinship(person: capitalizedName(possessor), relation: relation, side: nil)
+    }
+
+    /// GH #182 (live 2026-09-11): "what are the names of rick's sons?" went
+    /// to the translator, which chose the co-occurrence lane and dead-ended
+    /// on "could not resolve anchor". The common SENTENCE forms of a named
+    /// one-hop kin question are claimed here — "who are / what are the
+    /// names of / list / name / identify <name>'s <kin>" — with the same
+    /// possessor rules as the bare fragment. Pronoun and "my" forms are
+    /// the fragment's business; a name that contains a question word is
+    /// still refused.
+    static func namedKinSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
+        let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?([a-z][a-z .'-]*?)'s?\s+([a-z]+)\s*\??\s*$/
+        guard let m = lower.firstMatch(of: pattern),
+              let relation = kinFragmentNouns[String(m.2)] else { return nil }
+        let possessor = String(m.1).trimmingCharacters(in: .whitespaces)
+        let words = possessor.split(separator: " ").map(String.init)
+        guard !words.isEmpty, words.count <= 5,
+              !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
+              !["my", "our", "his", "her", "their"].contains(possessor),
               !possessor.hasPrefix("the ") else { return nil }
         return .kinship(person: capitalizedName(possessor), relation: relation, side: nil)
     }

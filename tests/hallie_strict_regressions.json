@@ -282,9 +282,17 @@
    "category": "strict",
    "text": "where was my grandmother born?",
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["videos where someone says", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "videos where someone says",
+    "matching catalog items"
+   ],
    "notes": "Live app 2026-09-10T17:27:10Z: answered with 10 transcript-matched videos. Family-intent routing regression: graph answer or grandmother disambiguation, not catalog fallback; paired with this change's Swift routing tests."
   },
   {
@@ -293,9 +301,17 @@
    "text": "where was mary o'connor born?",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items"
+   ],
    "notes": "Live app 2026-09-10T17:27:52Z: searched birth place and Mary as video words. Preserve named identity and birthplace intent after grandmother clarification; no unverified birthplace constant."
   },
   {
@@ -304,9 +320,17 @@
    "text": "tell me about mary o'connor and where she was born",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items"
+   ],
    "notes": "Live app 2026-09-10T17:29:03Z: compound request split into two video searches. Family-intent regression must stay in tree/People evidence; identity clarification remains valid."
   },
   {
@@ -315,9 +339,18 @@
    "text": "look in the family tree",
    "followsPrevious": true,
    "expect": "kinship",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["matching catalog items", "10021", "I looked for videos"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "matching catalog items",
+    "10021",
+    "I looked for videos"
+   ],
    "notes": "Live app 2026-09-10T17:29:56Z: returned 10021 catalog items. Resume previous Mary birthplace request. The exact repeated Mary question immediately before this correction was deduplicated; previous retained turn supplies the same identity/field."
   },
   {
@@ -325,10 +358,117 @@
    "category": "strict",
    "text": "tell me about ellen ronan",
    "expect": "biography",
-   "expectedRoutes": ["graph"],
-   "expectedOutcomes": ["answered", "needsClarification"],
-   "mustNotContain": ["I looked for videos", "matching catalog items", "searched it as a place or word"],
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcomes": [
+    "answered",
+    "needsClarification"
+   ],
+   "mustNotContain": [
+    "I looked for videos",
+    "matching catalog items",
+    "searched it as a place or word"
+   ],
    "notes": "Live app 2026-09-10T17:30:55Z: treated GEDCOM-only name as catalog keywords. Resolve biography from graph, or clarify identity, even without a People tag. Route sensor only, not a claim to grade biographical truth."
+  },
+  {
+   "id": "strict-021",
+   "category": "strict",
+   "text": "what are the names of rick's sons?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustNotContain": [
+    "resolve the anchor"
+   ],
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-022",
+   "category": "strict",
+   "text": "identify rick's children",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustNotContain": [
+    "resolve the anchor",
+    "Identify Rick"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-023",
+   "category": "strict",
+   "text": "tell me about rick breen",
+   "expect": "biography",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback).",
+   "expectedOutcomes": [
+    "answered"
+   ]
+  },
+  {
+   "id": "strict-024",
+   "category": "strict",
+   "text": "show me rick's biography source",
+   "expect": "provenance",
+   "expectedRoutes": [
+    "follow-up"
+   ],
+   "mustNotContain": [
+    "resolve the anchor"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-025",
+   "category": "strict",
+   "text": "show rick playing guitar",
+   "expect": "presence",
+   "expectedRoutes": [
+    "presence"
+   ],
+   "mustNotContain": [
+    "resolve the anchor"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-026",
+   "category": "strict",
+   "text": "show rick breen playing guitar video",
+   "expect": "presence",
+   "expectedRoutes": [
+    "presence"
+   ],
+   "mustNotContain": [
+    "resolve the anchor"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
+  },
+  {
+   "id": "strict-027",
+   "category": "strict",
+   "text": "tell me about the breen family",
+   "expect": "lineage",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "mustNotContain": [
+    "resolve the anchor"
+   ],
+   "followsPrevious": true,
+   "notes": "GH #182 live 2026-09-11 session 58A6E73C: routed to aggregate/coOccurrence and dead-ended on 'I couldn't resolve the anchor'. Fixed: deterministic shapes + aggregate anchor fallback (fix/gh-182-hallie-anchor-fallback)."
   }
  ]
 }

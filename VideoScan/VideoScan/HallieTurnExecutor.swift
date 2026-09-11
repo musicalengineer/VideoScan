@@ -1099,6 +1099,33 @@ enum HallieTurnExecutor {
             let query = ArchivistAggregateQuery(payload)
             let records = context.aggregateRecords
             let identities = aggregateIdentities(profiles: profiles)
+            // GH #182: an anchor the lane cannot resolve is not a dead end.
+            // A known person → presence search with the question's other
+            // words; a known surname → the surname tree; else the honest
+            // decline below.
+            let unresolved = payload.anchorPeople.filter {
+                if case .unknown = identities.resolve($0) { return true }
+                return false
+            }
+            switch HallieAggregateFallback.route(
+                question: request.intent.originalQuestion, anchors: payload.anchorPeople, unresolved: unresolved,
+                isKnownPerson: { isKnownPerson($0, context: context)
+                    || HallieOwnerResolver.isOwnerSpelling($0, owner: context.speakers.ownerName) },
+                isKnownSurname: { !isKnownPerson($0, context: context) && isKnownPerson($0, context: context, acceptSurname: true) }) {
+            case .presence(let people, let keywords, let wantsVideo):
+                var result = try await executePresenceLike(
+                    .init(people: people, mediaKind: wantsVideo ? .video : nil, keywords: keywords.isEmpty ? nil : keywords),
+                    route: .presence, request: request, context: context, dependencies: dependencies)
+                result = result.prefixingBasis(
+                    "\(people.joined(separator: ", ")) is a person, not a co-occurrence anchor here, so I searched the catalog. ")
+                return result
+            case .surnameTree(let surname):
+                if let answer = HallieLineageAnswer.answer(.surnameTree(surname: surname), context: context) {
+                    return answer.prefixingBasis("\"\(surname)\" is a family name, not a person, so I read the family tree. ")
+                }
+            case .decline:
+                break
+            }
             let execute = dependencies.executeAggregate
             let result = try await detached {
                 execute(query, records, identities)

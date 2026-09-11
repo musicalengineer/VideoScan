@@ -482,6 +482,33 @@ struct HallieTurnExecutorTests {
         ])
     }
 
+    /// GH #182 (live 2026-09-11): "show rick playing guitar" → aggregate with
+    /// anchor "rick", which the People-only identity catalog could not
+    /// resolve, and the lane declined "I couldn't resolve the anchor".
+    /// The owner's spelling is a known person → the turn becomes a presence
+    /// search; an unknown anchor still declines honestly.
+    @Test func aggregateAnchorThatIsAKnownPersonFallsThroughToPresence() async throws {
+        let profiles = [HallieTurnExecutor.ProfileSnapshot(
+            stableID: "rick", canonicalName: "Richard Harding Breen Jr", aliases: ["Dicky"])]
+        let context = HallieTurnExecutor.Context(
+            profiles: profiles,
+            speakers: .init(ownerName: "Rick Breen", archivistName: nil, archivistPersonName: nil))
+        let result = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "show rick playing guitar",
+                                ast: .aggregate(.init(operation: .coOccurrence, anchorPeople: ["rick"])))),
+            context: context)
+        #expect(result.route == .presence)
+        #expect(result.basisLine.contains("not a co-occurrence anchor"))
+        #expect(!result.prose.contains("resolve the anchor"))
+
+        let unknown = try await HallieTurnExecutor.execute(
+            .init(intent: .init(originalQuestion: "who appears with zorro",
+                                ast: .aggregate(.init(operation: .coOccurrence, anchorPeople: ["zorro"])))),
+            context: context)
+        #expect(unknown.route == .aggregate && unknown.outcome == .declined)
+        #expect(unknown.prose.contains("resolve the anchor"))
+    }
+
     @Test func aggregateReturnsRankedTypedCitationFromInjectedIdentities() async throws {
         let recordID = UUID()
         let records = [ArchivistAggregateRecordSnapshot(
