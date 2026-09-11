@@ -15,7 +15,11 @@ struct MonitorView: View {
                 Text(error).foregroundStyle(.red).font(.callout)
             } else if openRows.isEmpty {
                 Text("Nothing outstanding.").foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
             } else {
+                // A ScrollView inside a MenuBarExtra window collapses to
+                // nothing unless it is given a height: room for ~5 rows
+                // by default, growing with the list up to a cap.
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(openRows) { row in
@@ -24,13 +28,14 @@ struct MonitorView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 520)
+                .frame(minHeight: 5 * 34, maxHeight: 560)
+                .frame(height: min(CGFloat(max(openRows.count, 5)) * 34 + 8, 560))
             }
             Divider()
             footer
         }
         .padding(12)
-        .frame(width: 620)
+        .frame(width: 680)
     }
 
     /// Answered rows are noise; only unanswered and waiting ones are shown.

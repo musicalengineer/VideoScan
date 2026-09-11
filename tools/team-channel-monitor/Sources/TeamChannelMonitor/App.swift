@@ -3,8 +3,19 @@ import SwiftUI
 
 @main
 struct TeamChannelMonitorApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = MonitorModel()
+    /// `TeamChannelMonitor --check` prints today's counts and exits: a way to
+    /// verify the database opens from a given shell without a GUI.
+    init() {
+        guard CommandLine.arguments.contains("--check") else { return }
+        let snap = ChannelDB.loadToday()
+        if let error = snap.error {
+            print("ERROR: \(error)")
+            exit(1)
+        }
+        print("db: \(ChannelDB.path)")
+        print("today: \(snap.rows.count) rows — \(snap.red) unanswered, \(snap.yellow) waiting, \(snap.green) answered")
+        exit(0)
+    }
 
     var body: some Scene {
         MenuBarExtra {

@@ -67,8 +67,14 @@ enum ChannelDB {
     static func loadToday(now: Date = Date()) -> ChannelSnapshot {
         var snap = ChannelSnapshot(fetchedAt: now)
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
-            snap.error = "Cannot open \(path)"
+        // A WAL database needs its -shm file even for reads, so a strictly
+        // read-only open fails (SQLITE_CANTOPEN) when the process may not
+        // create it. Open like the CLI does; nothing here ever writes.
+        let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil)
+        guard rc == SQLITE_OK, let db else {
+            let why = db.map { String(cString: sqlite3_errmsg($0)) } ?? "sqlite rc \(rc)"
+            if let db { sqlite3_close(db) }
+            snap.error = "Cannot open team-channel.sqlite3 (\(why)) at \(path)"
             return snap
         }
         defer { sqlite3_close(db) }
