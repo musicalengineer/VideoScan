@@ -87,7 +87,11 @@ PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason"
 # hallie testbed"). Every row carries it, so a night where the replay never
 # ran says "not-run" in the row rather than showing nothing at all.
 HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
-NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-1800}"
+# 2026-09-11: the clean Release build of the test target takes ~27 min on the M4
+# (9/10: 1,645 s); with anything else on the CPU (Hallie replays at 02:07 on 9/11)
+# it crossed 1,800 s and the night published ZERO tests. 3,600 s leaves room; the
+# watchdog still catches a hung build.
+NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-3600}"
 NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
 NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
 NIGHTLY_WATCHDOG_DID_TIMEOUT=false
