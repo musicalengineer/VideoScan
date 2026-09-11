@@ -1,6 +1,6 @@
 # Morning brief — night of 2026-09-10 → 11 · Theme T10 (Archive Angel top-50 hygiene)
 
-**Owner:** Claude · **Reviewer:** codex (record: `docs/codex-t10-review-2026-09-11.md`) · **Cap:** 20:16–00:16 ET, closed ~22:00 · **main at close:** 12fdc2fb (pushed)
+**Owner:** Claude · **Reviewer:** codex (record: [review details](codex-t10-review-2026-09-11.md)) · **Cap:** 20:16–00:16 ET, closed ~22:00 · **implementation/corpus head:** 12fdc2fb (pushed; subsequent commits document the handoff)
 
 ## 🔴 CI / nightly status (baseline, NOT tonight's regressions)
 - **main CI was already red before T10:** run [34540926129](https://github.com/musicalengineer/VideoScan/actions/runs/34540926129) on 8308fa89 — unit step fails (possessorCandidates 2.047 s > 2 s budget; transcript render appendRows 28 > 2; cleanup-matrix ffmpeg cases; vorbis integration). Python tests + Pages green. `CICanary mustFail` is intentional.
@@ -13,7 +13,7 @@
 | Both halves of a duplicate group | 4 pairs in the top 50 | **PARKED — H2** → GH #178 (branch `fix/angel-hygiene-1` e622f68a, unmerged) |
 | Derivative exports beside originals | 6 in the top 50; 300 in the catalog | **PARKED — H3** → GH #179 (1cce19cb, unmerged) |
 
-**Projected effect of H1** (Python replay of the rule over the same evidence; the real numbers arrive at the next in-app assessment, which re-derives at rulesVersion 4): grade A 55 → 19, B 182 → 143 over the **eligible cohort of 968**; 46–50 rows capped; 21 films/downloads leave the top 50, 21 DV/FFV1/ProRes family originals enter. (The sidecar's X count is 10,773; the "X 14" in the before-table below is the zero-score subset of the eligible cohort, not the full-catalog rejection count.)
+**Projected effect of H1** (Python replay of the rule over the same evidence; the real numbers arrive at the next in-app assessment, which re-derives at rulesVersion 4): grade A 55 → 19, B 182 → 143 over the **eligible cohort of 968**; 46–50 rows capped across the owner's interim projections; 21 films/downloads leave the top 50. The 21 replacements are mostly family-media entries, but include **Silence.m4v with unknown codec**, an unresolved false positive. These are interim projection figures, not a verified production re-profile of final H1d. (The sidecar's X count is 10,773; the "X 14" in the before-table below is the zero-score subset of the eligible cohort, not the full-catalog rejection count.)
 
 **Second finding, bigger than the theme:** `userNotes` holds machine text on 9,977 of 13,842 records — ffprobe stderr, "Last message repeated", the FindPerson recipe output, Promote "copy at" lines; ~10 records hold a note a person typed. "Has notes" was therefore +5 on most of the catalog and, in H1's cap, would have counted as a human mark (the pre-existing hard floors key on stars only and were not affected). H1 ships a writer-signature classifier (exact census prefixes + the ffmpeg `[x @ 0x…]` header; "[1984] Dad and Donna…" stays human). → **GH #176 (High Priority)** for the writers + a migration.
 
@@ -29,6 +29,7 @@
 | T2 strict replay | binary bb172f6c (Debug, built 21:09); corpus at 12fdc2fb; host 127.0.0.1 | **18/20 clean** — `/private/tmp/hallie-strict-main-bb172f6c-localhost` |
 
 ## T2 findings (bounded; no Hallie code touched tonight)
+- Codex independently checked the result files: 20 completed, 18 clean, two flagged, no missing turns or timeout. The strict corpus SHA-256 is `2cd2b60f7de01c4923fad9162a18dbd5bdb1377a23875b7ab629158da104b2c3`. The **three newly harvested advisory questions were not exercised by this strict-only run**. Tree-backed answers in the result establish that this run had family data; they do not establish full fleet data parity.
 - Runs 1–2 of the strict set scored 16/20 with the SAME three "language helper unreachable" turns: **connectivity, not routing.** ollama on the M4 binds 127.0.0.1 only; `RicksM4.local` resolves to IPv6 link-local only; the headless shell's default host list `[RicksM4.local, ricksm5.local]` cannot reach the model from the M4 itself (the app is configured with 127.0.0.1, so it works). → **GH #181 (High Priority)**, incl. the fleet implication (M5/M1 cannot use the M4 as model host while it binds loopback) and a sensor (a run whose every translator turn fails must fail as "translator unreachable", not grade 80 %).
 - Run 3 with `--host 127.0.0.1`: 18/20. Remaining: `strict-011` "tell me about dad" → **Dafydd ab Einion (b. ~1360, Wales)** — a bare kin word bypasses the `my/our` relative regex and fuzzy-matches a tree name → **GH #180 (High Priority)**, codex's routing area; `strict-004` "whom did he marry" → known "passed away" wording flag.
 
@@ -40,10 +41,16 @@ codex replied to every checkpoint inside its cadence; no silent windows either w
 
 ## Decisions for Rick (max 3)
 1. **Scope for H2/H3:** the evidence pick path (`selectFromEvidence`) and the two candidate producers sit outside the scorer. Allow the Angel to touch them (then #178/#179 are a morning's work), or keep the scorer-only rule and accept duplicates/derivatives in batches for now?
-2. **The M4 as model host:** run ollama with `OLLAMA_HOST=0.0.0.0` so the fleet (and the eval harness) can reach it by name, or make the M5 the model host and take `RicksM4.local` out of the default list? (#181)
+2. **The M4 as a fleet model host:** is serving other Macs required? Local replay already works through `127.0.0.1`; fixing that local harness default need not expose the server to the network. If fleet access is wanted, choose the host and access controls deliberately; binding all interfaces is a separate network-exposure decision, not a prerequisite for local tests. (#181)
 3. **Photo question still open:** "Pa O'Connor British Army" — Christopher or Daniel? (changes what Hallie says about the photo)
 
 Morning list (authorized, no decision needed): gallery 4a82887f blocker fix before merge (codex #1298: personFolders ordering; malformed-ID fallback); #177 cancelled-batch settle; #175 advisory test (mutate archivedAt → revision bump → order refresh).
+
+## What was not done and why
+- H2/H3 were not merged: concrete rule defects and unapproved file-scope expansion; retained branches and issues contain the work.
+- No final in-app Archive Angel assessment was run: production sidecar remained read-only. Appendix B is the interim top-50 entry/exit delta, not a complete final-H1d ranked table.
+- No new full nightly or complete Hallie corpus run finished within this theme. At reviewer close, [CI on the brief commit](https://github.com/musicalengineer/VideoScan/actions/runs/34552566841) was still running; Python Tests and Pages had passed.
+- Gallery fixes, the remaining Hallie defects, and additional sort invalidation/UI tests were left for follow-up to keep the work bounded.
 
 ## Appendix A — top 50 BEFORE (live sidecar, rulesVersion 3, 2026-09-11 00:10 UTC)
 ```
