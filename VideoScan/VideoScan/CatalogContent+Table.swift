@@ -579,6 +579,20 @@ extension CatalogContent {
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.repairAudio")
+
+                        // Find Missing Audio — GH #111 (Rick 2026-09-11).
+                        // The aggressive hunt Tidy promised: set-aside /
+                        // removed records, nearby folders, then every
+                        // reachable scan root. Pair records the pair via
+                        // the normal Correlate; nothing muxed or moved.
+                        // Unpaired video-only rows only.
+                        if rec.pairedWith == nil {
+                            Button("Find Missing Audio…") {
+                                missingAudioTarget = rec
+                            }
+                            .help("Search set-aside and removed records, this file's folder and its neighbours, then every reachable scan root for the audio half — even if it is not in the catalog. Pairing records the pair like Correlate; Combine stays a separate step.")
+                            .accessibilityIdentifier("catalog.row.findMissingAudio")
+                        }
                     }
 
                     // Find Matching Video — symmetric verb for
