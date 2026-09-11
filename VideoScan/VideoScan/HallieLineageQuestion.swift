@@ -887,14 +887,26 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// on "could not resolve anchor". The common SENTENCE forms of a named
     /// one-hop kin question are claimed here — "who are / what are the
     /// names of / list / name / identify <name>'s <kin>" — with the same
-    /// possessor rules as the bare fragment. Pronoun and "my" forms are
-    /// the fragment's business; a name that contains a question word is
-    /// still refused.
+    /// possessor rules as the bare fragment. "My" forms are the fragment's
+    /// business; a name that contains a question word is still refused.
+    ///
+    /// A PRONOUN possessor is claimed too (live 2026-09-11 21:56Z, 22:00Z,
+    /// 22:10Z: "who was his wife" / "who was his wife?" / "who was his
+    /// father?" straight after a biography). The fragment took "his wife"
+    /// and this took "rick's wife", but "who was his wife" was neither, so
+    /// it fell through to the follow-up lane, whose pronoun rewrite hands
+    /// the question to the model translator — which read the kin word as
+    /// a search keyword ("shape=presence … keyword=wife"). The pronoun is
+    /// handed on as the person, exactly like the fragment does, and the
+    /// executor's pre-translation step resolves it from memory.
     static func namedKinSentenceQuestion(in lower: String) -> HallieLineageQuestion? {
-        let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?([a-z][a-z .'-]*?)'s?\s+([a-z]+)\s*\??\s*$/
+        let pattern = /^(?:(?:and|also|then|so|ok|okay|hallie|please),?\s+)*(?:(?:who|what)\s+(?:are|were|is|was)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?|(?:list|name|identify|give\s+me|show\s+me|tell\s+me)\s+(?:all\s+(?:of\s+)?)?(?:the\s+)?(?:names?\s+of\s+)?)(?:all\s+(?:of\s+)?)?(?:(his|her|their)|([a-z][a-z .'-]*?)'s?)\s+([a-z]+)\s*\??\s*$/
         guard let m = lower.firstMatch(of: pattern),
-              let relation = kinFragmentNouns[String(m.2)] else { return nil }
-        let possessor = String(m.1).trimmingCharacters(in: .whitespaces)
+              let relation = kinFragmentNouns[String(m.3)] else { return nil }
+        if let pronoun = m.1 {
+            return .kinship(person: capitalizedName(String(pronoun)), relation: relation, side: nil)
+        }
+        let possessor = String(m.2 ?? "").trimmingCharacters(in: .whitespaces)
         let words = possessor.split(separator: " ").map(String.init)
         guard !words.isEmpty, words.count <= 5,
               !words.contains(where: { kinFragmentSentenceWords.contains($0) }),
