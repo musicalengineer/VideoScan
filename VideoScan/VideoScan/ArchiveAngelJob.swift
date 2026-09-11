@@ -473,8 +473,20 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     }
 
     private func finishCancelled() {
+        // GH #177: settle the batch so it is either reviewable (ready rows
+        // kept, the rest marked failed) or gone (nothing prepared) — never a
+        // `preparing` ghost that hides from the Archive tab and reserves
+        // its rows from later batches.
+        let kept = plan.settleAfterInterruption(reason: "Cancelled before it was prepared")
+        let settled = plan
+        Task.detached(priority: .utility) {
+            try? await Self.savePlanOffMain(settled)
+            if !kept { try? ArchiveAngelPlanStore.removeBatchFolder(settled) }
+        }
         state = .cancelled
-        subtitleText = "Cancelled — \(plan.readyCount) prepared candidates stay reviewable"
+        subtitleText = kept
+            ? "Cancelled — \(plan.readyCount) prepared candidates stay reviewable"
+            : "Cancelled — nothing was prepared; the batch was discarded"
         isIndeterminateValue = false
     }
 

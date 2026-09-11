@@ -126,7 +126,10 @@ struct ArchiveView: View {
         let root = ArchiveAngelPlanStore.defaultBufferRoot
         Task {
             var ready = await Task.detached(priority: .utility) {
-                ArchiveAngelPlanStore.listBatches(bufferRoot: root).filter { $0.status == .ready }
+                // GH #177: a batch left `preparing` by a quit or a stop is
+                // settled here (ready rows kept → listed; none → removed).
+                _ = ArchiveAngelPlanStore.settleInterruptedBatches(bufferRoot: root)
+                return ArchiveAngelPlanStore.listBatches(bufferRoot: root).filter { $0.status == .ready }
             }.value
             await MainActor.run {
                 // Rows follow catalog renames (Rick 2026-09-10) — the row

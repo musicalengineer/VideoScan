@@ -144,7 +144,9 @@ struct ArchiveAngelEvidencePickTests {
         done.status = .discarded
         try ArchiveAngelPlanStore.save(live)
         try ArchiveAngelPlanStore.save(done)
-        #expect(ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root) == [ready.id, pending.id])
+        // GH #177: in a READY batch only prepared rows are reserved; a pending
+        // row there is a leftover that will never be prepared.
+        #expect(ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root) == [ready.id])
 
         let stamp = Date(timeIntervalSince1970: 1_800_000_000)
         let first = ArchiveAngelPlanStore.newBatchDir(bufferRoot: root, now: stamp)

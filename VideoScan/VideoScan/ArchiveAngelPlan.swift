@@ -153,6 +153,29 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
 
     var selectedEntries: [Entry] { entries.filter { $0.selected && $0.status == .ready } }
     var readyCount: Int { entries.filter { $0.status == .ready }.count }
+
+    /// GH #177 (Rick 2026-09-10 evening): three cancelled batches stayed
+    /// `preparing` forever — invisible in the Archive tab (only `ready`
+    /// batches are listed) yet their rows were reserved from later batches
+    /// by `inFlightRecordIDs`. Settling a batch that will not continue:
+    /// rows never prepared become `failed` with the reason; rows already
+    /// prepared keep the batch alive as `ready` (they are reviewable);
+    /// nothing prepared → `discarded`. Returns true when the batch stays.
+    @discardableResult
+    mutating func settleAfterInterruption(reason: String) -> Bool {
+        for i in entries.indices where entries[i].status == .pending || entries[i].status == .preparing {
+            entries[i].status = .failed
+            entries[i].failure = reason
+        }
+        if readyCount > 0 {
+            status = .ready
+            log.append("Settled after interruption: \(readyCount) ready, the rest marked failed — \(reason)")
+            return true
+        }
+        status = .discarded
+        log.append("Discarded after interruption: nothing was prepared — \(reason)")
+        return false
+    }
     var rejectedTotal: Int { rejected.values.reduce(0, +) }
     var bytesToCopy: Int64 {
         selectedEntries.reduce(0) { $0 + $1.sizeBytes }
@@ -213,18 +236,55 @@ enum ArchiveAngelPlanStore {
         return bufferRoot.appendingPathComponent(candidate, isDirectory: true).path
     }
 
-    /// Records already spoken for by another batch: every entry that is
-    /// pending, preparing or ready in a plan that is preparing, ready or
-    /// promoting. Promoted, failed and discarded rows are free again.
-    nonisolated static func inFlightRecordIDs(bufferRoot: URL) -> Set<UUID> {
+    /// A batch that is still `preparing` is a live job only while its
+    /// plan.json keeps moving (every step rewrites it); older than
+    /// `staleAfter` it is interrupted — the app quit or the job was stopped
+    /// before it could settle (GH #177).
+    nonisolated static func isInterrupted(_ plan: ArchiveAngelPlan, now: Date = Date(),
+                                          staleAfter: TimeInterval = 3600,
+                                          fileManager fm: FileManager = .default) -> Bool {
+        guard plan.status == .preparing else { return false }
+        let attrs = (try? fm.attributesOfItem(atPath: plan.planURL.path)) ?? [:]
+        let modified = (attrs[.modificationDate] as? Date) ?? plan.startedAt ?? plan.createdAt
+        return now.timeIntervalSince(modified) > staleAfter
+    }
+
+    /// Settle every interrupted batch under the buffer root (GH #177): rows
+    /// never prepared become failed, a batch with prepared rows becomes
+    /// `ready` (so the Archive tab lists it), one with none is discarded
+    /// and its folder removed. Returns the plans it changed. Safe to call
+    /// on every Archive-tab refresh; a live job's batch is never touched.
+    nonisolated static func settleInterruptedBatches(bufferRoot: URL, now: Date = Date(),
+                                                     staleAfter: TimeInterval = 3600,
+                                                     fileManager fm: FileManager = .default) -> [ArchiveAngelPlan] {
+        var settled: [ArchiveAngelPlan] = []
+        for var plan in listBatches(bufferRoot: bufferRoot) where isInterrupted(plan, now: now, staleAfter: staleAfter, fileManager: fm) {
+            let kept = plan.settleAfterInterruption(reason: "Interrupted — the app quit or the job was stopped before this row was prepared")
+            try? save(plan)
+            if !kept { try? removeBatchFolder(plan) }
+            settled.append(plan)
+        }
+        return settled
+    }
+
+    /// Records already spoken for by another batch: every ready row in a
+    /// ready or promoting plan, plus the pending/preparing rows of a plan
+    /// whose job is still LIVE (plan.json moving). Promoted, failed,
+    /// discarded and interrupted rows are free again (GH #177).
+    nonisolated static func inFlightRecordIDs(bufferRoot: URL, now: Date = Date(),
+                                              staleAfter: TimeInterval = 3600,
+                                              fileManager fm: FileManager = .default) -> Set<UUID> {
         var ids: Set<UUID> = []
         for plan in listBatches(bufferRoot: bufferRoot) {
             switch plan.status {
-            case .preparing, .ready, .promoting: break
+            case .ready, .promoting:
+                for e in plan.entries where e.status == .ready { ids.insert(e.id) }
+            case .preparing:
+                guard !isInterrupted(plan, now: now, staleAfter: staleAfter, fileManager: fm) else { continue }
+                for e in plan.entries where e.status == .pending || e.status == .preparing || e.status == .ready {
+                    ids.insert(e.id)
+                }
             case .promoted, .discarded: continue
-            }
-            for e in plan.entries where e.status == .pending || e.status == .preparing || e.status == .ready {
-                ids.insert(e.id)
             }
         }
         return ids
