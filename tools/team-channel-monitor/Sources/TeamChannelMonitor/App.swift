@@ -69,18 +69,47 @@ final class MonitorModel: ObservableObject {
 struct MenuBarLabel: View {
     let snapshot: ChannelSnapshot
 
-    /// Menu bar labels render monochrome, so the mark carries the state:
-    /// nothing outstanding → bare icon; "2" → two waiting (under 15 min);
-    /// "2!" → two outstanding and at least one unanswered past 15 min.
+    /// A status item shows real colour only from a NON-template NSImage
+    /// (the flag CyberPower/Adobe set); SF Symbols and SwiftUI text are
+    /// template-tinted. So the state is a hand-drawn badge: grey bubble
+    /// when nothing is outstanding, yellow "2" when two are waiting, red
+    /// "2!" when any is unanswered past 15 minutes.
     var body: some View {
-        let outstanding = snapshot.red + snapshot.yellow
-        HStack(spacing: 3) {
-            Image(systemName: snapshot.red > 0 ? "bubble.left.and.exclamationmark.bubble.right.fill"
-                                                : "bubble.left.and.bubble.right")
-            if outstanding > 0 {
-                Text(snapshot.red > 0 ? "\(outstanding)!" : "\(outstanding)")
-                    .monospacedDigit()
+        Image(nsImage: StatusBadge.image(red: snapshot.red, yellow: snapshot.yellow))
+    }
+}
+
+enum StatusBadge {
+    static func image(red: Int, yellow: Int) -> NSImage {
+        let outstanding = red + yellow
+        let text = outstanding == 0 ? "" : (red > 0 ? "\(outstanding)!" : "\(outstanding)")
+        // Colours chosen to read on both light and dark menu bars.
+        let fill: NSColor = red > 0 ? NSColor(srgbRed: 0.86, green: 0.16, blue: 0.16, alpha: 1)
+            : yellow > 0 ? NSColor(srgbRed: 0.95, green: 0.72, blue: 0.10, alpha: 1)
+            : NSColor(white: 0.55, alpha: 1)
+        let height: CGFloat = 16
+        let font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        let textSize = (text as NSString).size(withAttributes: attrs)
+        let width = text.isEmpty ? height : max(height, textSize.width + 10)
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: height / 2, yRadius: height / 2)
+            fill.setFill()
+            path.fill()
+            if text.isEmpty {
+                // Idle: a small hollow bubble.
+                NSColor.white.withAlphaComponent(0.9).setStroke()
+                let inner = NSBezierPath(ovalIn: rect.insetBy(dx: 4.5, dy: 4.5))
+                inner.lineWidth = 1.5
+                inner.stroke()
+            } else {
+                let origin = NSPoint(x: (rect.width - textSize.width) / 2,
+                                     y: (rect.height - textSize.height) / 2 + 0.5)
+                (text as NSString).draw(at: origin, withAttributes: attrs)
             }
+            return true
         }
+        image.isTemplate = false   // keep the colour
+        return image
     }
 }
