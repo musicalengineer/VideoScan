@@ -13,7 +13,8 @@ extension ArchiveAngelCandidate {
     /// volume (nil when the path is under no scan target); `readiness`
     /// = ArchiveReadiness.assess(record:); `archivedCopyExists` = the
     /// model already holds an archive copy of this content (or the
-    /// record IS an archive copy).
+    /// record IS an archive copy, or is a VERSION of something archived —
+    /// `VideoScanModel.isArchivedOrVersionOfArchived`, codex #1345).
     @MainActor
     init(record r: VideoRecord,
          facts: DuplicateKeeperPolicy.VolumeFacts?,
@@ -74,7 +75,13 @@ extension ArchiveAngelCandidate {
                         policy: DuplicateKeeperPolicy) -> ArchiveAngelCandidate {
         let facts = policy.facts(forPath: r.fullPath)
         let readiness = ArchiveReadiness.assess(record: r)
-        let archived = model.isArchiveCopy(r) || model.archivedCopy(of: r) != nil
+        // codex #1345: the SAME predicate the to-do view negates. A
+        // balance-audio/trim/transcode whose original is archived (via
+        // derivedFrom, up to four hops; repairs exempt) is `archived` here
+        // → hardFloor `.duplicateArchived` → never graded, badged or picked.
+        // markDerivatives is only a filename heuristic and cannot see
+        // provenance; this can.
+        let archived = model.isArchivedOrVersionOfArchived(r)
         let onMaster = facts?.isMasterArchive == true || model.isInsideMasterArchive(path: r.fullPath)
         let name = r.volumeName.isEmpty ? VolumeReachability.displayLabel(forPath: r.fullPath) : r.volumeName
         // A scan-target fact answers reachability without touching the

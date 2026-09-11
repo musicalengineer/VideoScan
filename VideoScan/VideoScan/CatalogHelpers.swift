@@ -159,6 +159,14 @@ struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State var tableData: [VideoRecord] = []
 
+    /// Archive Angel evidence revision the rows last drew against (codex
+    /// #1345). Bumped from the store's `revision` publisher so a sweep
+    /// that changes a grade/summary WITHOUT changing the A+B set still
+    /// re-renders the "Promote me" badge and its tooltip. Read by the Tag
+    /// column cell; never recomputes `tableData` (≈ a dirty counter the
+    /// cell painter compares, not a data reload).
+    @State var angelBadgeRevision: Int = 0
+
     // "Extract Facial Frames…" (Rick 2026-06-09, Donna's birthday-
     // print project) runs as an ExtractFramesJob in the Media File
     // Operations window since phase 2 — no view-local ripper state.

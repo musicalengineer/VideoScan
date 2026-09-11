@@ -31,6 +31,10 @@ struct ArchiveAngelCatalogBadge: Equatable {
 /// beside it, one size up so the eye lands on it.
 struct ArchiveAngelCatalogBadgeView: View {
     let badge: ArchiveAngelCatalogBadge
+    /// The evidence store revision this chip was drawn against (codex
+    /// #1345). Not rendered — it is an INPUT so SwiftUI sees a changed
+    /// view when a sweep regrades a row without changing the A+B set.
+    var revision: Int = 0
 
     var body: some View {
         HStack(spacing: 2) {

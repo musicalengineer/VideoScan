@@ -117,11 +117,31 @@ extension VideoScanModel {
     /// transcoded copy whose original — up the derivedFrom chain — is in
     /// the archive. Repairs of damaged media (external repair, rebuilt
     /// audio) stay visible: a fix is a candidate in its own right.
+    ///
+    /// codex #1345 (2026-09-11): this is the NEGATION of
+    /// `isArchivedOrVersionOfArchived` — the one definition the to-do
+    /// view and the Archive Angel projection share, so nothing the view
+    /// hides can grade A/B, wear a "Promote me" badge or be auto-picked.
     func pfNotYetArchived(_ rec: VideoRecord) -> Bool {
-        !isArchiveCopy(rec)
-            && !isInsideMasterArchive(path: rec.fullPath)
-            && archivedCopy(of: rec) == nil
-            && !isVersionOfArchived(rec)
+        !isArchivedOrVersionOfArchived(rec)
+    }
+
+    /// THE archived predicate (codex #1345): a promoted copy, anything
+    /// inside the Master Archive root, a source whose content already has
+    /// a master copy, OR a version (balance-audio, trim, transcode…) of
+    /// any of those. Every consumer — the to-do filter, the Angel
+    /// projection's `archivedCopyExists`, Promote's gates — asks this,
+    /// never a private subset of it. O(1) + at most four id lookups.
+    func isArchivedOrVersionOfArchived(_ rec: VideoRecord) -> Bool {
+        isArchived(rec) || isVersionOfArchived(rec)
+    }
+
+    /// The record ITSELF is archived (no provenance hop): a promoted copy,
+    /// inside the Master Archive root, or its content has a master copy.
+    func isArchived(_ rec: VideoRecord) -> Bool {
+        isArchiveCopy(rec)
+            || isInsideMasterArchive(path: rec.fullPath)
+            || archivedCopy(of: rec) != nil
     }
 
     /// Derivation kinds that FIX damaged media rather than re-express
@@ -140,10 +160,7 @@ extension VideoScanModel {
         for _ in 0..<maxHops {
             guard let parentID = cursor.derivedFrom, let parent = record(forID: parentID),
                   seen.insert(parent.id).inserted else { return false }
-            if isArchiveCopy(parent) || isInsideMasterArchive(path: parent.fullPath)
-                || archivedCopy(of: parent) != nil {
-                return true
-            }
+            if isArchived(parent) { return true }
             if let kind = parent.derivationKind, Self.repairDerivationKinds.contains(kind) { return false }
             cursor = parent
         }

@@ -147,6 +147,22 @@ extension CatalogContent {
     // onChange keys) pushed the combined type-check past Xcode's budget.
     // `catalogTableBase` isolates the columns; this var owns the chain.
     var catalogTable: some View {
+        // Second Archive Angel stage (codex #1345): a sweep that keeps the
+        // A+B set but flips a grade A↔B or rewrites a summary leaves
+        // `candidateIDs` silent, so the rows' badge/tooltip went stale.
+        // The store's `revision` bumps on every replace; here it only
+        // touches a @State the Tag cell reads — rows re-render, the
+        // filter is NOT recomputed (that is the stage below). Its own
+        // wrapper var, same reason as the grade stage (GH #132).
+        tableWithAngelGrades
+            .onReceive(angelRevisionPublisher) { angelBadgeRevision = $0 }
+    }
+
+    private var angelRevisionPublisher: AnyPublisher<Int, Never> {
+        model.archiveAngelStore.$revision.removeDuplicates().dropFirst().eraseToAnyPublisher()
+    }
+
+    private var tableWithAngelGrades: some View {
         // A finished Archive Angel sweep republishes its grade set: the
         // "Promote me" badges and the Archive-candidates filter follow it
         // (2026-09-11). The store is a nested ObservableObject, which the
@@ -1609,9 +1625,11 @@ extension CatalogContent {
                     .foregroundColor(rec.archiveHealth.color)
             }
             // "Promote me" / "Worth a look" — the Archive Angel grade made
-            // visible (Rick 2026-09-11). O(1) sidecar read per row.
+            // visible (Rick 2026-09-11). O(1) sidecar read per row. The
+            // revision is a real input of the chip so a grade change with
+            // the same A+B set re-renders it (codex #1345).
             if let badge = ArchiveAngelCatalogBadge.make(for: model.archiveAngelStore.record(for: rec.id)) {
-                ArchiveAngelCatalogBadgeView(badge: badge)
+                ArchiveAngelCatalogBadgeView(badge: badge, revision: angelBadgeRevision)
             }
         }
         .help(tagColumnHelp(for: rec))
