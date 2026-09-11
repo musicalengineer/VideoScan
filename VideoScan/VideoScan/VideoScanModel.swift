@@ -709,6 +709,15 @@ final class VideoScanModel: ObservableObject {
     /// background scoring sweep. Wiring in VideoScanModel+ArchiveAngelSweep.swift.
     let archiveAngelStore = ArchiveAngelEvidenceStore()
     lazy var archiveAngelSweep = ArchiveAngelSweep(store: archiveAngelStore)
+
+    /// Content-keyed ignore list (2026-09-11): set-aside / removed content
+    /// is never re-ingested under a new path. `var` so tests inject a
+    /// directory; the default directory is a scratch folder under a test
+    /// host. Wiring in VideoScanModel+IgnoredContent.swift.
+    var ignoredContentStore = IgnoredContentStore()
+    /// Bumped on every ignore-list change so menu labels re-render on
+    /// the count without observing the store directly.
+    @Published var ignoredContentRevision: Int = 0
     /// ON by default (scoring reads catalog fields + Spotlight, never media).
     @Published var archiveAngelSweepSettings: ArchiveAngelSweepSettings =
         TestEnvironment.isTestHost
@@ -1099,6 +1108,9 @@ final class VideoScanModel: ObservableObject {
         configurePreviewSweep()
         // Archive Angel phase 2: evidence sidecar + background scoring sweep.
         configureArchiveAngelSweep()
+        // Content-keyed ignore list (2026-09-11): load so the first scan
+        // already knows what not to re-ingest.
+        configureIgnoredContent()
         // Archived date (2026-09-09): stamp copies promoted before the field
         // existed, once, from their Promote note / manifest row / fixity.
         backfillArchivedAtIfNeeded()

@@ -679,6 +679,19 @@ extension CatalogView {
                         .help("Scan for Avid .avb bin files and extract clip metadata.")
                     }
 
+                    // Content-keyed ignore list (2026-09-11): the override
+                    // for everything Tidy / Remove from Catalog remembered.
+                    // O(1) count; the model's @Published
+                    // `ignoredContentRevision` re-renders this label.
+                    Section("Tidy") {
+                        Button {
+                            showIgnoredContentSheet = true
+                        } label: {
+                            Label("Ignored content… (\(model.ignoredContentStore.count))", systemImage: "eye.slash")
+                        }
+                        .help("Files you set aside or removed are remembered by their contents so a rescan won't bring another copy back. Open to put any of them back. Files were never deleted.")
+                    }
+
                     Section("Delete") {
                         ForEach(model.scanTargets.filter { target in
                             model.records.contains { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
