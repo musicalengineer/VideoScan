@@ -286,14 +286,21 @@ struct ArchiveAngelDownloadCapTests {
             "copy at /Volumes/Projects/MoviesExpansion/x.mov (Promote)",
             "Promote 2026-09-09T17:20:11Z → BreenFamilyArchive/1990s/…",
             "File is corrupt or incomplete",
+            "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7e3018000] moov atom not found",
+            "[h264 @ 0x12345abc] no frame!",
         ]
         for m in machine {
             #expect(!ArchiveAngelCandidate.hasHumanNote(m), "\(m)")
             #expect(!ArchiveAngelCandidate.hasHumanNote(m + "\n" + m), "two machine lines")
         }
         let human = ["Mark’s first birthday, Nana's house", "Donna and Libby on Portland Head",
-                     "Sue, Barry, Ellen, Paul at the Cape", "Video of Rick and kids", "this is a test abcdefg"]
+                     "Sue, Barry, Ellen, Paul at the Cape", "Video of Rick and kids", "this is a test abcdefg",
+                     "[1984] Dad and Donna at Thanksgiving",            // a bracketed human note (codex #1303)
+                     "[cape] the whole tape, promote this one", "Repair this one when you can", "transcode later",
+                     "Archive Angel picked this — I agree"]                // words the machine also uses, written by a person
         for h in human { #expect(ArchiveAngelCandidate.hasHumanNote(h), "\(h)") }
+        // Mixed: a bracketed human line between machine lines counts.
+        #expect(ArchiveAngelCandidate.humanNoteLines("[aac @ 0x7ac800a80] x\n[1984] Dad and Donna at Thanksgiving\nLast message repeated 2 times") == ["[1984] Dad and Donna at Thanksgiving"])
         // Mixed: one human line among machine lines counts.
         #expect(ArchiveAngelCandidate.humanNoteLines(machine[0] + "\nDan’s Kindergarten, Franklin\n" + machine[1]) == ["Dan’s Kindergarten, Franklin"])
         #expect(!ArchiveAngelCandidate.hasHumanNote("   \n\n"))
@@ -319,6 +326,22 @@ struct ArchiveAngelDownloadCapTests {
         #expect(ArchiveAngelScorer.looksLikeDownloadOrRip(moved))
         // The marker is a folder component, never the filename.
         #expect(!ArchiveAngelScorer.hasFamilyOriginPath("/v/Movies/Family Movies.mp4"))
+    }
+
+    @Test("SCALE: the note classifier over 100k projection-sized notes stays under 1 s (Debug ceiling)")
+    func classifierScale() {
+        let machine = "Unsupported codec with id 98314 for input stream 0\n[aac @ 0x7ac800a80] This stream seems to use a channel layout\nLast message repeated 3 times"
+        var notes: [String] = []
+        notes.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            notes.append(i % 1000 == 0 ? machine + "\n[19\(i % 90 + 10)] Family note \(i)" : (i % 3 == 0 ? "" : machine))
+        }
+        let started = ContinuousClock.now
+        var humans = 0
+        for n in notes where ArchiveAngelCandidate.hasHumanNote(n) { humans += 1 }
+        let elapsed = ContinuousClock.now - started
+        #expect(humans == 100)
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(1)), "100k notes took \(elapsed)")
     }
 
     @Test("threshold edges: 3,999 kbit/s at 20 min is capped; 4,000 is not; 19 min 59 s is not")

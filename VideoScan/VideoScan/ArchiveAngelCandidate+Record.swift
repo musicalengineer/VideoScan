@@ -96,22 +96,29 @@ extension ArchiveAngelCandidate {
     /// Promote's "copy at /Volumes/…" line. About ten records hold a real
     /// note ("Mark's first birthday, …"). Only those are a HUMAN mark: they
     /// earn the richness point and exempt a file from the machine floors.
+    /// Exact writer signatures seen in the live catalog census (2026-09-10),
+    /// nothing broader: "[1984] Dad and Donna at Thanksgiving" is a human
+    /// note and must stay one (codex #1303). ffmpeg/ffprobe log lines are
+    /// matched by their `[<component> @ 0x<address>]` header, not by a
+    /// leading bracket.
     nonisolated static let machineNotePrefixes: [String] = [
-        "[", "unsupported codec", "could not open codec", "file could not be analy",
-        "consider increasing", "last message repeated", "file is corrupt", "file contains invalid",
-        "invalid data found", "moov atom not found", "error while", "could not find codec",
-        "findperson(", "find and tag", "findtag", "copy at /", "promote 20", "archive angel",
-        "balanced audio", "verify audio", "transcode ", "repair ", "ffprobe", "ffmpeg",
+        "unsupported codec with", "could not open codec", "file could not be analy",
+        "consider increasing the", "last message repeated", "file is corrupt or inc",
+        "file contains invalid", "invalid data found when", "moov atom not found",
+        "findperson(", "copy at /", "promote 20",
     ]
+    nonisolated static let ffmpegLogHeader = #"^\[[a-z0-9_,]+ @ 0x[0-9a-f]+\]"#
+
+    nonisolated static func isMachineNoteLine(_ line: String) -> Bool {
+        let key = line.lowercased()
+        if machineNotePrefixes.contains(where: { key.hasPrefix($0) }) { return true }
+        return key.range(of: ffmpegLogHeader, options: .regularExpression) != nil
+    }
 
     /// Lines of `notes` a person could have written. Pure; table-tested.
     nonisolated static func humanNoteLines(_ notes: String) -> [String] {
         notes.split(whereSeparator: { $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { line in
-                guard !line.isEmpty else { return false }
-                let key = line.lowercased()
-                return !machineNotePrefixes.contains { key.hasPrefix($0) }
-            }
+            .filter { !$0.isEmpty && !isMachineNoteLine($0) }
     }
 
     nonisolated static func hasHumanNote(_ notes: String) -> Bool { !humanNoteLines(notes).isEmpty }
